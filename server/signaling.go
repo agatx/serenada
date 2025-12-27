@@ -187,6 +187,9 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 	switch msg.Type {
 	case "join":
 		log.Printf("[JOIN] Client %s joining room %s", c.sid, msg.RID)
+		if c.rid != "" {
+			h.removeClientFromRoom(c)
+		}
 		h.handleJoin(c, msg)
 	case "leave":
 		log.Printf("[LEAVE] Client %s leaving", c.cid)

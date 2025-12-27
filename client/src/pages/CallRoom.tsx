@@ -15,7 +15,8 @@ const CallRoom: React.FC = () => {
         roomState,
         clientId,
         isConnected,
-        error: signalingError
+        error: signalingError,
+        clearError
     } = useSignaling();
     const {
         startLocalMedia,
@@ -37,7 +38,7 @@ const CallRoom: React.FC = () => {
         if (localVideoRef.current && localStream) {
             localVideoRef.current.srcObject = localStream;
         }
-    }, [localStream]);
+    }, [localStream, hasJoined]);
 
     useEffect(() => {
         if (remoteVideoRef.current && remoteStream) {
@@ -51,17 +52,51 @@ const CallRoom: React.FC = () => {
             navigate('/');
             return;
         }
-        // If room ended (roomState becomes null while joined), navigate out?
-        // Actually roomState tells us if room exists or we are in it.
-        // UseSignaling handles roomState logic.
     }, [roomId, navigate]);
+
+    // Auto-start local media for preview when not joined
+    const mediaStartedRef = useRef(false);
+
+    useEffect(() => {
+        if (!hasJoined && isConnected && !mediaStartedRef.current) {
+            mediaStartedRef.current = true;
+            startLocalMedia().catch(err => {
+                console.error("Initial media start failed", err);
+                mediaStartedRef.current = false;
+            });
+        }
+
+        // Cleanup on unmount - always stop media
+        return () => {
+            stopLocalMedia();
+            mediaStartedRef.current = false;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [hasJoined, isConnected]);
 
     const handleJoin = async () => {
         if (!roomId) return;
-        await startLocalMedia();
-        joinRoom(roomId);
-        setHasJoined(true);
+        try {
+            clearError();
+            await startLocalMedia();
+            // Tiny delay to ensure state propagates
+            setTimeout(() => {
+                joinRoom(roomId);
+                setHasJoined(true);
+            }, 50);
+        } catch (err) {
+            console.error("Failed to join room", err);
+            showToast('error', "Could not access camera/microphone.");
+        }
     };
+
+    // If we receive a signaling error while trying to join, or if we are joined but room state becomes null
+    useEffect(() => {
+        if (signalingError && hasJoined && !roomState) {
+            setHasJoined(false);
+            stopLocalMedia();
+        }
+    }, [signalingError, hasJoined, roomState, stopLocalMedia]);
 
     const handleLeave = () => {
         leaveRoom();
@@ -103,6 +138,16 @@ const CallRoom: React.FC = () => {
                             {signalingError}
                         </div>
                     )}
+                    <div className="video-preview-container">
+                        <video
+                            ref={localVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="video-preview"
+                        />
+                        {!localStream && <div className="video-placeholder">Camera Off</div>}
+                    </div>
                     <div className="button-group">
                         <button className="btn-primary" onClick={handleJoin} disabled={!isConnected}>
                             {isConnected ? 'Join Call' : 'Connecting...'}

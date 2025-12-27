@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { useToast } from './ToastContext';
 
 // Types (Protocol v1)
 export type RoomState = {
@@ -27,6 +28,7 @@ interface SignalingContextValue {
     lastMessage: SignalingMessage | null;
     subscribeToMessages: (cb: (msg: SignalingMessage) => void) => () => void;
     error: string | null;
+    clearError: () => void;
 }
 
 const SignalingContext = createContext<SignalingContextValue | null>(null);
@@ -45,6 +47,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [lastMessage, setLastMessage] = useState<SignalingMessage | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const { showToast } = useToast();
 
     const listenersRef = useRef<((msg: SignalingMessage) => void)[]>([]);
 
@@ -108,6 +111,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     case 'error':
                         if (msg.payload && msg.payload.message) {
                             setError(msg.payload.message);
+                            showToast('error', msg.payload.message);
                         }
                         break;
                 }
@@ -143,11 +147,16 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
     };
 
+    const clearError = () => setError(null);
+
     const joinRoom = (roomId: string) => {
+        console.log(`[Signaling] joinRoom call for ${roomId}`);
+        setError(null);
         currentRoomIdRef.current = roomId;
-        if (isConnected) {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             sendMessage('join', { capabilities: { trickleIce: true } });
         } else {
+            console.log('[Signaling] WS not ready, buffering join');
             pendingJoinRef.current = roomId;
         }
     };
@@ -180,7 +189,8 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             sendMessage,
             lastMessage,
             subscribeToMessages,
-            error
+            error,
+            clearError
         }}>
             {children}
         </SignalingContext.Provider>
