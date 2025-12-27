@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSignaling } from '../contexts/SignalingContext';
 import { useWebRTC } from '../contexts/WebRTCContext';
+import { useToast } from '../contexts/ToastContext';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Copy, AlertCircle } from 'lucide-react';
 
 const CallRoom: React.FC = () => {
@@ -22,6 +23,7 @@ const CallRoom: React.FC = () => {
         localStream,
         remoteStream
     } = useWebRTC();
+    const { showToast } = useToast();
 
     const [hasJoined, setHasJoined] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
@@ -85,7 +87,7 @@ const CallRoom: React.FC = () => {
 
     const copyLink = () => {
         navigator.clipboard.writeText(window.location.href);
-        alert("Link copied!");
+        showToast('success', "Link copied to clipboard!");
     };
 
     // Render Pre-Join

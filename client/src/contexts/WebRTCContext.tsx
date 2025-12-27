@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useSignaling } from './SignalingContext';
+import { useToast } from './ToastContext';
 
 // RTC Config
 // RTC Config moved to state
@@ -25,6 +26,7 @@ export const useWebRTC = () => {
 
 export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { sendMessage, roomState, clientId, isConnected, subscribeToMessages } = useSignaling();
+    const { showToast } = useToast();
 
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -197,7 +199,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const startLocalMedia = async () => {
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                alert("Camera/App access blocked! Access via 'http://localhost' on Mac, or enable 'Insecure origins' flag.");
+                showToast('error', "Camera/Mic access blocked! Please ensure you are using a secure context (HTTPS or localhost).");
                 return;
             }
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
