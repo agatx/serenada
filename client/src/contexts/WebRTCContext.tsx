@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { useSignaling } from './SignalingContext';
 import { useToast } from './ToastContext';
 
@@ -34,6 +34,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const requestingMediaRef = useRef(false);
     const cancelMediaRef = useRef(false);
     const unmountedRef = useRef(false);
+    const localStreamRef = useRef<MediaStream | null>(null);
 
     // RTC Config State
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
@@ -207,6 +208,11 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Actually usually we stop it on leave.
     };
 
+    // Keep ref in sync with state
+    useEffect(() => {
+        localStreamRef.current = localStream;
+    }, [localStream]);
+
     const startLocalMedia = async () => {
         // If we already have (or are fetching) an active stream, reuse it to avoid creating parallel streams
         if (localStream || requestingMediaRef.current) {
@@ -244,14 +250,16 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
     };
 
-    const stopLocalMedia = () => {
+    // Use useCallback to make this stable, but access stream via ref to avoid stale closure
+    const stopLocalMedia = useCallback(() => {
         cancelMediaRef.current = true;
-        if (localStream) {
-            localStream.getTracks().forEach(t => t.stop());
+        const stream = localStreamRef.current;
+        if (stream) {
+            stream.getTracks().forEach(t => t.stop());
             setLocalStream(null);
         }
         requestingMediaRef.current = false;
-    };
+    }, []);
 
     const createOffer = async () => {
         try {

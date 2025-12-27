@@ -65,14 +65,15 @@ const CallRoom: React.FC = () => {
                 mediaStartedRef.current = false;
             });
         }
+    }, [hasJoined, isConnected, startLocalMedia]);
 
-        // Cleanup on unmount - always stop media
+    // Separate effect for cleanup on unmount only - not on state changes
+    useEffect(() => {
         return () => {
             stopLocalMedia();
             mediaStartedRef.current = false;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [hasJoined, isConnected]);
+    }, [stopLocalMedia]);
 
     const handleJoin = async () => {
         if (!roomId) return;
