@@ -31,6 +31,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
     const pcRef = useRef<RTCPeerConnection | null>(null);
+    const requestingMediaRef = useRef(false);
 
     // RTC Config State
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
@@ -197,13 +198,20 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     const startLocalMedia = async () => {
+        // If we already have (or are fetching) an active stream, reuse it to avoid creating parallel streams
+        if (localStream || requestingMediaRef.current) {
+            return;
+        }
+        requestingMediaRef.current = true;
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 showToast('error', "Camera/Mic access blocked! Please ensure you are using a secure context (HTTPS or localhost).");
+                requestingMediaRef.current = false;
                 return;
             }
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             setLocalStream(stream);
+            requestingMediaRef.current = false;
 
             if (pcRef.current) {
                 stream.getTracks().forEach(track => {
@@ -213,6 +221,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return;
         } catch (err) {
             console.error("Error accessing media", err);
+            requestingMediaRef.current = false;
         }
     };
 
