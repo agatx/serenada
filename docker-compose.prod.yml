@@ -3,6 +3,11 @@ services:
     network_mode: "host"
     volumes:
       - ./coturn/turnserver.prod.conf:/etc/coturn/turnserver.conf
+    command:
+      - /usr/bin/turnserver
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET}
 
   nginx:
     ports:

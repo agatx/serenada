@@ -19,6 +19,11 @@ services:
     restart: unless-stopped
     volumes:
       - ./coturn/turnserver.dev.conf:/etc/coturn/turnserver.conf
+    command:
+      - /usr/bin/turnserver
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET}
     ports:
       - "3478:3478/udp"
       - "3478:3478/tcp"

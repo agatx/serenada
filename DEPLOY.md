@@ -23,10 +23,17 @@ The app will be accessible at `http://localhost`. It uses `nginx/nginx.dev.conf`
 ### 1. Configuration
 
 #### Environment Variables
-Create a `.env` file in the project root on the VPS.
+The repository includes a [.env.example](file:///Users/alexeygavrilov/Developer/src/connected/.env.example) template. Create your local environment file by copying it:
+
+```bash
+cp .env.example .env
+```
+
+Note: `.env` and `.env.production` are ignored by git to protect your secrets.
 
 ```bash
 TURN_HOST=connected.dowhile.fun
+# Generate a secure secret: openssl rand -hex 32
 TURN_SECRET=your_secure_random_secret
 ```
 
