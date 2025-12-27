@@ -32,9 +32,19 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const requestingMediaRef = useRef(false);
+    const cancelMediaRef = useRef(false);
+    const unmountedRef = useRef(false);
 
     // RTC Config State
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
+
+    // Ensure media is stopped when the provider unmounts
+    useEffect(() => {
+        return () => {
+            unmountedRef.current = true;
+            stopLocalMedia();
+        };
+    }, []);
 
     // Fetch ICE Servers on mount
     useEffect(() => {
@@ -202,6 +212,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (localStream || requestingMediaRef.current) {
             return;
         }
+        cancelMediaRef.current = false;
         requestingMediaRef.current = true;
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -210,6 +221,14 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 return;
             }
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+            // If we navigated away or requested stop while the prompt was open, immediately clean up
+            if (cancelMediaRef.current || unmountedRef.current) {
+                stream.getTracks().forEach(t => t.stop());
+                requestingMediaRef.current = false;
+                return;
+            }
+
             setLocalStream(stream);
             requestingMediaRef.current = false;
 
@@ -226,10 +245,12 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     const stopLocalMedia = () => {
+        cancelMediaRef.current = true;
         if (localStream) {
             localStream.getTracks().forEach(t => t.stop());
             setLocalStream(null);
         }
+        requestingMediaRef.current = false;
     };
 
     const createOffer = async () => {
