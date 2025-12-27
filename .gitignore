@@ -1,0 +1,14 @@
+# Environment variables
+.env
+.env.production
+.env.local
+
+# Node
+node_modules/
+dist/
+
+# Go
+server/server
+
+# OS
+.DS_Store
