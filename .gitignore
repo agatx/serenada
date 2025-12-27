@@ -12,3 +12,4 @@ server/server
 
 # OS
 .DS_Store
+.env.production
