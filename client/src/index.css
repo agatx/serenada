@@ -246,6 +246,10 @@ body {
   transform: translate(-50%, -50%);
   text-align: center;
   color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
 }
 
 .btn-small {
