@@ -31,9 +31,20 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
     const pcRef = useRef<RTCPeerConnection | null>(null);
+    const requestingMediaRef = useRef(false);
+    const cancelMediaRef = useRef(false);
+    const unmountedRef = useRef(false);
 
     // RTC Config State
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
+
+    // Ensure media is stopped when the provider unmounts
+    useEffect(() => {
+        return () => {
+            unmountedRef.current = true;
+            stopLocalMedia();
+        };
+    }, []);
 
     // Fetch ICE Servers on mount
     useEffect(() => {
@@ -197,13 +208,29 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     const startLocalMedia = async () => {
+        // If we already have (or are fetching) an active stream, reuse it to avoid creating parallel streams
+        if (localStream || requestingMediaRef.current) {
+            return;
+        }
+        cancelMediaRef.current = false;
+        requestingMediaRef.current = true;
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 showToast('error', "Camera/Mic access blocked! Please ensure you are using a secure context (HTTPS or localhost).");
+                requestingMediaRef.current = false;
                 return;
             }
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+            // If we navigated away or requested stop while the prompt was open, immediately clean up
+            if (cancelMediaRef.current || unmountedRef.current) {
+                stream.getTracks().forEach(t => t.stop());
+                requestingMediaRef.current = false;
+                return;
+            }
+
             setLocalStream(stream);
+            requestingMediaRef.current = false;
 
             if (pcRef.current) {
                 stream.getTracks().forEach(track => {
@@ -213,14 +240,17 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return;
         } catch (err) {
             console.error("Error accessing media", err);
+            requestingMediaRef.current = false;
         }
     };
 
     const stopLocalMedia = () => {
+        cancelMediaRef.current = true;
         if (localStream) {
             localStream.getTracks().forEach(t => t.stop());
             setLocalStream(null);
         }
+        requestingMediaRef.current = false;
     };
 
     const createOffer = async () => {
