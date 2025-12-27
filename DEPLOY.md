@@ -59,10 +59,17 @@ Ensure the following ports are open on your VPS firewall (e.g., UFW or Hetzner C
     ```
 3.  The certificates are mounted into the Nginx container via `docker-compose.prod.yml`.
 
-### 3. Deploying the Stack
+### 4. Deploying the Stack
 
-To deploy in production, use both the base and production compose files:
+A convenience script is provided for deployment. From the project root:
 
+```bash
+./deploy.sh
+```
+
+This will build the frontend, sync files to the VPS, and restart all services.
+
+**Manual alternative:**
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
