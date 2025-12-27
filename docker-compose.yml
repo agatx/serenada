@@ -18,9 +18,7 @@ services:
     container_name: connected-coturn
     restart: unless-stopped
     volumes:
-      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf
-    # network_mode: "host" # Needed for huge UDP port ranges efficiently, or map ports explicitly but that is verbose
-    # If host mode is not preferred, we need to map 3478:3478/udp and range
+      - ./coturn/turnserver.dev.conf:/etc/coturn/turnserver.conf
     ports:
       - "3478:3478/udp"
       - "3478:3478/tcp"
@@ -32,11 +30,9 @@ services:
     container_name: connected-nginx
     ports:
       - "80:80"
-      - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf
       - ./client/dist:/var/www/connected/dist
-      - /etc/letsencrypt:/etc/letsencrypt
     depends_on:
       - app-server
     networks:

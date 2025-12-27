@@ -1,6 +1,6 @@
 # Deployment Guide: self-hosted on Hetzner
 
-This guide covers deploying the Connected app on a single linux VPS (e.g., Hetzner, DigitalOcean) using Docker Compose. This includes the Go backend, React frontend (via Nginx), and a self-hosted Coturn STUN/TURN server.
+This guide covers deploying the Connected app on a single linux VPS using Docker Compose. The project is structured to support both local development and production deployment.
 
 ## Prerequisites
 
@@ -8,64 +8,54 @@ This guide covers deploying the Connected app on a single linux VPS (e.g., Hetzn
 2.  **Domain Name**: Pointed to your VPS IP (e.g., `connected.dowhile.fun`).
 3.  **Docker & Docker Compose**: Installed on the VPS.
 
-## Configuration
+## Local Development
 
-### 1. Environment Variables
-Create a `.env` file in the project root (same level as `docker-compose.yml`) or set these variables in your shell/CI.
+To run the application locally for development:
 
 ```bash
-# Domain name for the application
+docker-compose up -d --build
+```
+
+The app will be accessible at `http://localhost`. It uses `nginx/nginx.dev.conf` and `coturn/turnserver.dev.conf`.
+
+## Production Deployment
+
+### 1. Configuration
+
+#### Environment Variables
+Create a `.env` file in the project root on the VPS.
+
+```bash
 TURN_HOST=connected.dowhile.fun
-
-# Shared secret for TURN authentication (Generate a long random string)
-TURN_SECRET=super_secret_string_change_me
+TURN_SECRET=your_secure_random_secret
 ```
 
-### 2. Coturn Configuration
-Edit `coturn/turnserver.conf`.
-**Important**: Ensure `static-auth-secret` matches `TURN_SECRET`.
+#### Nginx & Coturn
+- Production Nginx config: [nginx.prod.conf](file:///Users/alexeygavrilov/Developer/src/connected/nginx/nginx.prod.conf)
+- Production Coturn config: [turnserver.prod.conf](file:///Users/alexeygavrilov/Developer/src/connected/coturn/turnserver.prod.conf)
 
-```ini
-# coturn/turnserver.conf
-realm=connected.dowhile.fun
-static-auth-secret=super_secret_string_change_me
-```
+### 2. HTTPS (SSL) Setup
 
-### 3. Firewall
-Ensure the following ports are open on your VPS firewall (e.g., UFW or Hetzner Cloud Firewall):
--   **80/tcp** (HTTP)
--   **443/tcp** (HTTPS)
--   **3478/udp & tcp** (STUN/TURN Signaling)
--   **49152-65535/udp** (WebRTC Media Range)
+SSL is mandatory for WebRTC (camera/mic access).
 
-## Deployment
-
-1.  Clone the repository to your VPS.
-2.  Build and run the stack:
+1.  Stop Nginx if running: `docker stop connected-nginx`
+2.  Install Certbot and generate certificates:
     ```bash
-    docker-compose up -d --build
+    sudo apt install certbot
+    sudo certbot certonly --standalone -d connected.dowhile.fun
     ```
+3.  The certificates are mounted into the Nginx container via `docker-compose.prod.yml`.
 
-## HTTPS (SSL) Setup
+### 3. Deploying the Stack
 
-This setup assumes `nginx` is running on port 80. For production, you **must** use HTTPS for WebRTC to work (camera/mic permissions require secure context).
+To deploy in production, use both the base and production compose files:
 
-### Quick Option: Certbot on Host
-If you don't use an automated Nginx sidecar (like `nginx-proxy` or `traefik`), you can run Certbot on the host to generate certs and mount them into the Nginx container.
-
-1.  Install Certbot: `sudo apt install certbot`
-2.  Generate Certs: `sudo certbot certonly --standalone -d connected.dowhile.fun`
-3.  Update `docker-compose.yml` to mount the certs:
-    ```yaml
-    nginx:
-      volumes:
-        - /etc/letsencrypt:/etc/letsencrypt
-        # ... other volumes
-    ```
-4.  Update `nginx/nginx.conf` to listen on 443 and include ssl_certificate paths.
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
 
 ## Verification
+
 1.  Navigate to `https://connected.dowhile.fun`.
-2.  Open the browser console.
-3.  Create a room.
-4.  Check logs: You should see `[WebRTC] Loaded ICE Servers` with your custom TURN server URI.
+2.  Verify camera/microphone permissions are requested.
+3.  Check logs if issues arise: `docker compose logs -f`.
