@@ -34,9 +34,15 @@ TURN_SECRET=your_secure_random_secret
 - Production Nginx config: [nginx.prod.conf](file:///Users/alexeygavrilov/Developer/src/connected/nginx/nginx.prod.conf)
 - Production Coturn config: [turnserver.prod.conf](file:///Users/alexeygavrilov/Developer/src/connected/coturn/turnserver.prod.conf)
 
-### 2. HTTPS (SSL) Setup
+### 2. Firewall
 
-SSL is mandatory for WebRTC (camera/mic access).
+Ensure the following ports are open on your VPS firewall (e.g., UFW or Hetzner Cloud Firewall):
+-   **80/tcp** (HTTP)
+-   **443/tcp** (HTTPS)
+-   **3478/udp & tcp** (STUN/TURN Signaling)
+-   **49152-65535/udp** (WebRTC Media Range)
+
+### 3. HTTPS (SSL) Setup
 
 1.  Stop Nginx if running: `docker stop connected-nginx`
 2.  Install Certbot and generate certificates:

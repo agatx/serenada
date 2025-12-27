@@ -1,5 +1,6 @@
 services:
   coturn:
+    network_mode: "host"
     volumes:
       - ./coturn/turnserver.prod.conf:/etc/coturn/turnserver.conf
 
