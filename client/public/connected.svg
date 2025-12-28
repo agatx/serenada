@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="64"
+   height="64"
+   viewBox="0 0 64 64"
+   aria-label="Connected favicon"
+   version="1.1"
+   id="svg3"
+   sodipodi:docname="connected.svg"
+   inkscape:version="1.4.3 (0d15f75, 2025-12-25)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview3"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="3.9363842"
+     inkscape:cx="16.004535"
+     inkscape:cy="30.865889"
+     inkscape:window-width="1799"
+     inkscape:window-height="914"
+     inkscape:window-x="0"
+     inkscape:window-y="25"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg3" />
+  <defs
+     id="defs2">
+    <linearGradient
+       id="bg"
+       x1="2"
+       y1="2"
+       x2="62"
+       y2="62"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="matrix(1.059276,0,0,1.050808,-1.8968338,-1.6258575)">
+      <stop
+         offset="0%"
+         stop-color="#4F7CFF"
+         id="stop1" />
+      <stop
+         offset="100%"
+         stop-color="#8B5CF6"
+         id="stop2" />
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect
+     x="0.22171831"
+     y="0.47575855"
+     width="63.556564"
+     height="63.048485"
+     rx="14.829865"
+     fill="url(#bg)"
+     id="rect2"
+     style="fill:url(#bg);stroke-width:1.05504" />
+  <!-- Camera body (flatter, wider) -->
+  <rect
+     x="14.50808"
+     y="17.903034"
+     width="36.580914"
+     height="28.193932"
+     rx="5.2258449"
+     fill="#ffffff"
+     id="rect3"
+     style="stroke-width:1.51728" />
+  <!-- Camera lens (smaller, tighter) -->
+  <path
+     d="M 63.718173,42.572724 51.088995,35.524241 q -3.157294,-3.524241 0,-7.048482 l 12.629178,-7.048483 z"
+     fill="#ffffff"
+     id="path3"
+     style="stroke-width:1.66786" />
+</svg>
