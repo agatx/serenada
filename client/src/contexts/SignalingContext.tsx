@@ -56,75 +56,123 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const pendingJoinRef = useRef<string | null>(null);
 
     useEffect(() => {
-        // Connect to WS
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // Allow configuring WS URL via environment variable for production (e.g. separate backend)
-        // Fallback to same-host:8080 for local development if not specified
-        const wsUrl = import.meta.env.VITE_WS_URL || `${protocol}//${window.location.host}/ws`;
+        const reconnectAttemptsRef = { current: 0 };
+        let reconnectTimeout: number | null = null;
+        let closedByUnmount = false;
 
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            console.log('WS Connected');
-            setIsConnected(true);
-            if (pendingJoinRef.current) {
-                joinRoom(pendingJoinRef.current);
-                pendingJoinRef.current = null;
+        const clearReconnectTimeout = () => {
+            if (reconnectTimeout !== null) {
+                window.clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
             }
         };
 
-        ws.onclose = () => {
-            console.log('WS Disconnected');
-            setIsConnected(false);
-            setClientId(null);
-            setRoomState(null);
+        const scheduleReconnect = () => {
+            if (closedByUnmount) return;
+            if (reconnectTimeout !== null) return;
+            const attempt = reconnectAttemptsRef.current + 1;
+            reconnectAttemptsRef.current = attempt;
+            const backoff = Math.min(500 * Math.pow(2, attempt - 1), 5000);
+
+            reconnectTimeout = window.setTimeout(() => {
+                reconnectTimeout = null;
+                connect();
+            }, backoff);
         };
 
-        ws.onerror = (err) => {
-            console.error('WS Error', err);
-        };
+        const connect = () => {
+            if (closedByUnmount) return;
+            // Prevent duplicate sockets if a reconnect is already in flight
+            if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
 
-        ws.onmessage = (event) => {
-            try {
-                const msg: SignalingMessage = JSON.parse(event.data);
-                console.log('RX:', msg);
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            // Allow configuring WS URL via environment variable for production (e.g. separate backend)
+            // Fallback to same-host:8080 for local development if not specified
+            const wsUrl = import.meta.env.VITE_WS_URL || `${protocol}//${window.location.host}/ws`;
 
-                switch (msg.type) {
-                    case 'joined':
-                        if (msg.cid) setClientId(msg.cid);
-                        if (msg.payload) {
-                            // In Go server we send "participants" and "hostCid" in payload for joined AND room_state
-                            setRoomState(msg.payload as RoomState);
-                        }
-                        break;
-                    case 'room_state':
-                        if (msg.payload) {
-                            setRoomState(msg.payload as RoomState);
-                        }
-                        break;
-                    case 'room_ended':
-                        setRoomState(null);
-                        currentRoomIdRef.current = null;
-                        // Optional: set some "ended" state to show UI
-                        break;
-                    case 'error':
-                        if (msg.payload && msg.payload.message) {
-                            setError(msg.payload.message);
-                            showToast('error', msg.payload.message);
-                        }
-                        break;
+            const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
+
+            const handleDisconnect = (reason: string, err?: any) => {
+                if (closedByUnmount) return;
+                console.error(`[WS] Disconnected via ${reason}`, err);
+                setIsConnected(false);
+                setClientId(null);
+                setRoomState(null);
+                wsRef.current = null;
+                scheduleReconnect();
+            };
+
+            ws.onopen = () => {
+                console.log('WS Connected');
+                reconnectAttemptsRef.current = 0;
+                setIsConnected(true);
+                if (pendingJoinRef.current) {
+                    joinRoom(pendingJoinRef.current);
+                    pendingJoinRef.current = null;
+                } else if (currentRoomIdRef.current) {
+                    // If we lost the connection mid-call, automatically rejoin
+                    joinRoom(currentRoomIdRef.current);
                 }
+            };
 
-                setLastMessage(msg);
-                listenersRef.current.forEach(listener => listener(msg));
-            } catch (e) {
-                console.error('Failed to parse message', e);
-            }
+            ws.onclose = (evt) => {
+                handleDisconnect('close', evt);
+            };
+
+            ws.onerror = (err) => {
+                handleDisconnect('error', err);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg: SignalingMessage = JSON.parse(event.data);
+                    console.log('RX:', msg);
+
+                    switch (msg.type) {
+                        case 'joined':
+                            if (msg.cid) setClientId(msg.cid);
+                            if (msg.payload) {
+                                // In Go server we send "participants" and "hostCid" in payload for joined AND room_state
+                                setRoomState(msg.payload as RoomState);
+                            }
+                            break;
+                        case 'room_state':
+                            if (msg.payload) {
+                                setRoomState(msg.payload as RoomState);
+                            }
+                            break;
+                        case 'room_ended':
+                            setRoomState(null);
+                            currentRoomIdRef.current = null;
+                            // Optional: set some "ended" state to show UI
+                            break;
+                        case 'error':
+                            if (msg.payload && msg.payload.message) {
+                                setError(msg.payload.message);
+                                showToast('error', msg.payload.message);
+                            }
+                            break;
+                    }
+
+                    setLastMessage(msg);
+                    listenersRef.current.forEach(listener => listener(msg));
+                } catch (e) {
+                    console.error('Failed to parse message', e);
+                }
+            };
         };
+
+        connect();
 
         return () => {
-            ws.close();
+            closedByUnmount = true;
+            clearReconnectTimeout();
+            if (wsRef.current) {
+                wsRef.current.close();
+            }
         };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
