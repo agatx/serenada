@@ -50,9 +50,10 @@ type Participant struct {
 }
 
 type Hub struct {
-	rooms   map[string]*Room
-	mu      sync.RWMutex
-	clients map[*Client]bool
+	rooms    map[string]*Room
+	watchers map[string]map[*Client]bool // roomID -> set of clients
+	mu       sync.RWMutex
+	clients  map[*Client]bool
 }
 
 type Room struct {
@@ -73,8 +74,9 @@ type Client struct {
 
 func newHub() *Hub {
 	return &Hub{
-		rooms:   make(map[string]*Room),
-		clients: make(map[*Client]bool),
+		rooms:    make(map[string]*Room),
+		watchers: make(map[string]map[*Client]bool),
+		clients:  make(map[*Client]bool),
 	}
 }
 
@@ -197,6 +199,8 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 	case "end_room":
 		log.Printf("[END_ROOM] Client %s ending room %s", c.cid, c.rid)
 		h.handleEndRoom(c, msg)
+	case "watch_rooms":
+		h.handleWatchRooms(c, msg)
 	case "offer", "answer", "ice":
 		// log.Printf("[%s] Relay from %s to room %s", msg.Type, c.cid, c.rid) // verbose
 		h.handleRelay(c, msg)
@@ -275,6 +279,9 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Broadcast room_state to others
 	h.broadcastRoomState(room)
+
+	// Notify watchers
+	h.broadcastRoomStatusUpdate(rid)
 }
 
 func (h *Hub) handleLeave(c *Client, msg Message) {
@@ -355,6 +362,9 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 	room.Participants = make(map[*Client]string)
 	room.HostCID = ""
 	room.mu.Unlock()
+
+	// Notify watchers
+	h.broadcastRoomStatusUpdate(rid)
 }
 
 func (h *Hub) handleRelay(c *Client, msg Message) {
@@ -425,6 +435,13 @@ func (h *Hub) handleDisconnect(c *Client) {
 	log.Printf("[DISCONNECT] Client %s disconnected", c.sid)
 	h.mu.Lock()
 	delete(h.clients, c)
+	// Remove from all watchers
+	for rid, clientSet := range h.watchers {
+		delete(clientSet, c)
+		if len(clientSet) == 0 {
+			delete(h.watchers, rid)
+		}
+	}
 	h.mu.Unlock()
 
 	if c.rid != "" {
@@ -443,6 +460,7 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 		return
 	}
 
+	rid := c.rid // Store RID for broadcast
 	room.mu.Lock()
 	delete(room.Participants, c)
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, c.cid, c.rid, len(room.Participants))
@@ -466,21 +484,16 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	c.cid = ""
 
 	if isEmpty {
-		log.Printf("[REMOVE_FROM_ROOM] Room %s is now empty. Deleting room.", room.RID)
-		// Keep room for retention? PRD says rooms expire after inactivity.
-		// For MVP simplicity and memory, maybe delete empty rooms immediately or rely on map cleanup?
-		// Protocol 7.4: "If room becomes empty: keep room metadata until retention expiry"
-		// implementation detail. I will keep it for now, but to avoid leak I should probably clean it up if truly empty for a while.
-		// For very strict MVP, let's just leave it in the map, OR delete it if we want to save memory.
-		// Given "Reopening the same link rejoins the room" -> "Starts a new session if no one is connected".
-		// This implies the room *concept* persists (the ID is valid), but the state is empty.
-		// Since we create room on join if not exists, deleting it from memory is fine.
+		log.Printf("[REMOVE_FROM_ROOM] Room %s is now empty. Deleting room.", rid)
 		h.mu.Lock()
-		delete(h.rooms, room.RID)
+		delete(h.rooms, rid)
 		h.mu.Unlock()
 	} else {
 		h.broadcastRoomState(room)
 	}
+
+	// Notify watchers
+	h.broadcastRoomStatusUpdate(rid)
 }
 
 func (h *Hub) broadcastRoomState(room *Room) {
@@ -539,16 +552,25 @@ func generateID(prefix string) string {
 	return prefix + hex.EncodeToString(b)
 }
 
-func (h *Hub) handleRoomStatus(w http.ResponseWriter, r *http.Request) {
-	rids := r.URL.Query()["rids"]
-	if len(rids) == 0 {
-		json.NewEncoder(w).Encode(map[string]int{})
+func (h *Hub) handleWatchRooms(c *Client, msg Message) {
+	var payload struct {
+		RIDs []string `json:"rids"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		c.sendError(msg.RID, "BAD_REQUEST", "Invalid payload")
 		return
 	}
 
+	h.mu.Lock()
 	status := make(map[string]int)
-	h.mu.RLock()
-	for _, rid := range rids {
+	for _, rid := range payload.RIDs {
+		// Add to watchers
+		if h.watchers[rid] == nil {
+			h.watchers[rid] = make(map[*Client]bool)
+		}
+		h.watchers[rid][c] = true
+
+		// Get current count
 		if room, ok := h.rooms[rid]; ok {
 			room.mu.Lock()
 			status[rid] = len(room.Participants)
@@ -557,8 +579,53 @@ func (h *Hub) handleRoomStatus(w http.ResponseWriter, r *http.Request) {
 			status[rid] = 0
 		}
 	}
+	h.mu.Unlock()
+
+	statusBytes, _ := json.Marshal(status)
+	c.sendMessage(Message{
+		V:       1,
+		Type:    "room_statuses",
+		Payload: statusBytes,
+	})
+}
+
+func (h *Hub) broadcastRoomStatusUpdate(rid string) {
+	h.mu.RLock()
+	clients, exists := h.watchers[rid]
+	if !exists {
+		h.mu.RUnlock()
+		return
+	}
+
+	// Get current count
+	count := 0
+	if room, ok := h.rooms[rid]; ok {
+		room.mu.Lock()
+		count = len(room.Participants)
+		room.mu.Unlock()
+	}
 	h.mu.RUnlock()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"rid":   rid,
+		"count": count,
+	})
+
+	msg := Message{
+		V:       1,
+		Type:    "room_status_update",
+		Payload: payload,
+	}
+
+	// Copy clients to avoid holding hub lock while sending
+	h.mu.RLock()
+	targets := make([]*Client, 0, len(clients))
+	for client := range clients {
+		targets = append(targets, client)
+	}
+	h.mu.RUnlock()
+
+	for _, client := range targets {
+		client.sendMessage(msg)
+	}
 }

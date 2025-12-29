@@ -36,7 +36,6 @@ func main() {
 	}))
 
 	http.HandleFunc("/api/turn-credentials", rateLimitMiddleware(apiLimiter, enableCors(handleTurnCredentials)))
-	http.HandleFunc("/api/rooms/status", rateLimitMiddleware(apiLimiter, enableCors(hub.handleRoomStatus)))
 
 	port := os.Getenv("PORT")
 	if port == "" {

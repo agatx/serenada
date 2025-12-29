@@ -373,6 +373,54 @@ Standard error message.
 - `ROOM_FULL` — capacity exceeded (2 participants)
 - `NOT_HOST` — non-host attempted `end_room`
 - `INTERNAL` — unexpected server error
+- `BAD_REQUEST` — invalid JSON or payload
+
+---
+
+### 4.11 Room Status Monitoring (WebSocket)
+
+Used to aggregate real-time occupancy for a list of rooms (e.g., recent calls list).
+
+#### `watch_rooms` (client → server)
+Subscribe to updates for a list of rooms.
+
+```json
+{
+  "v": 1,
+  "type": "watch_rooms",
+  "payload": {
+    "rids": ["AbC123", "XyZ789"]
+  }
+}
+```
+
+#### `room_statuses` (server → client)
+Immediate response to `watch_rooms` with current counts.
+
+```json
+{
+  "v": 1,
+  "type": "room_statuses",
+  "payload": {
+    "AbC123": 1,
+    "XyZ789": 2
+  }
+}
+```
+
+#### `room_status_update` (server → client)
+Pushed whenever a watched room's participant count changes.
+
+```json
+{
+  "v": 1,
+  "type": "room_status_update",
+  "payload": {
+    "rid": "AbC123",
+    "count": 0
+  }
+}
+```
 
 ---
 

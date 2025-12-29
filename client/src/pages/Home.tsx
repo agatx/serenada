@@ -5,35 +5,22 @@ import { Video } from 'lucide-react';
 import RecentCalls from '../components/RecentCalls';
 import { getRecentCalls } from '../utils/callHistory';
 import type { RecentCall } from '../utils/callHistory';
+import { useSignaling } from '../contexts/SignalingContext';
 
 const Home: React.FC = () => {
     const navigate = useNavigate();
     const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
-    const [roomStatuses, setRoomStatuses] = useState<Record<string, number>>({});
+    const { watchRooms, roomStatuses, isConnected } = useSignaling();
 
     useEffect(() => {
         const calls = getRecentCalls();
         setRecentCalls(calls);
 
-        if (calls.length > 0) {
-            const fetchStatuses = async () => {
-                try {
-                    const rids = calls.map(c => `rids=${c.roomId}`).join('&');
-                    const response = await fetch(`/api/rooms/status?${rids}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        setRoomStatuses(data);
-                    }
-                } catch (error) {
-                    console.error('Failed to fetch room statuses:', error);
-                }
-            };
-
-            fetchStatuses();
-            const interval = setInterval(fetchStatuses, 15000); // Poll every 15s
-            return () => clearInterval(interval);
+        if (calls.length > 0 && isConnected) {
+            const rids = calls.map(c => c.roomId);
+            watchRooms(rids);
         }
-    }, []);
+    }, [isConnected]);
 
     const startCall = () => {
         const roomId = uuidv4();

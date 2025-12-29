@@ -29,6 +29,8 @@ interface SignalingContextValue {
     subscribeToMessages: (cb: (msg: SignalingMessage) => void) => () => void;
     error: string | null;
     clearError: () => void;
+    watchRooms: (rids: string[]) => void;
+    roomStatuses: Record<string, number>;
 }
 
 const SignalingContext = createContext<SignalingContextValue | null>(null);
@@ -47,6 +49,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [lastMessage, setLastMessage] = useState<SignalingMessage | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [roomStatuses, setRoomStatuses] = useState<Record<string, number>>({});
     const { showToast } = useToast();
 
     const listenersRef = useRef<((msg: SignalingMessage) => void)[]>([]);
@@ -149,6 +152,19 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                             currentRoomIdRef.current = null;
                             // Optional: set some "ended" state to show UI
                             break;
+                        case 'room_statuses':
+                            if (msg.payload) {
+                                setRoomStatuses(prev => ({ ...prev, ...msg.payload }));
+                            }
+                            break;
+                        case 'room_status_update':
+                            if (msg.payload) {
+                                setRoomStatuses(prev => ({
+                                    ...prev,
+                                    [msg.payload.rid]: msg.payload.count
+                                }));
+                            }
+                            break;
                         case 'error':
                             if (msg.payload && msg.payload.message) {
                                 setError(msg.payload.message);
@@ -219,6 +235,11 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         sendMessage('end_room');
     }
 
+    const watchRooms = (rids: string[]) => {
+        if (rids.length === 0) return;
+        sendMessage('watch_rooms', { rids });
+    };
+
     const subscribeToMessages = (cb: (msg: SignalingMessage) => void) => {
         listenersRef.current.push(cb);
         return () => {
@@ -238,7 +259,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             lastMessage,
             subscribeToMessages,
             error,
-            clearError
+            clearError,
+            watchRooms,
+            roomStatuses
         }}>
             {children}
         </SignalingContext.Provider>
