@@ -36,6 +36,25 @@ const CallRoom: React.FC = () => {
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
     const idleTimeoutRef = useRef<number | null>(null);
 
+    const isMobileDevice = () => {
+        if (typeof window === 'undefined') return false;
+        return (
+            window.matchMedia('(pointer: coarse)').matches ||
+            /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+        );
+    };
+
+    const exitFullscreenIfActive = () => {
+        const doc = document as Document & {
+            webkitExitFullscreen?: () => Promise<void>;
+            msExitFullscreen?: () => Promise<void>;
+        };
+        const exitFullscreen = document.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+        if (exitFullscreen && document.fullscreenElement) {
+            exitFullscreen.call(document).catch(() => {});
+        }
+    };
+
     // Handle stream attachment
     useEffect(() => {
         if (localVideoRef.current && localStream) {
@@ -82,6 +101,19 @@ const CallRoom: React.FC = () => {
         if (!roomId) return;
         try {
             clearError();
+            if (isMobileDevice()) {
+                const rootElement = document.documentElement as HTMLElement & {
+                    webkitRequestFullscreen?: () => Promise<void>;
+                    msRequestFullscreen?: () => Promise<void>;
+                };
+                const requestFullscreen =
+                    rootElement.requestFullscreen ||
+                    rootElement.webkitRequestFullscreen ||
+                    rootElement.msRequestFullscreen;
+                if (requestFullscreen) {
+                    requestFullscreen.call(rootElement).catch(() => {});
+                }
+            }
             await startLocalMedia();
             // Tiny delay to ensure state propagates
             setTimeout(() => {
@@ -105,6 +137,7 @@ const CallRoom: React.FC = () => {
     const handleLeave = () => {
         leaveRoom();
         stopLocalMedia();
+        exitFullscreenIfActive();
         navigate('/');
     };
 
@@ -143,8 +176,14 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         if (!hasJoined) return;
         scheduleIdleHide();
+        const handleBeforeUnload = () => {
+            exitFullscreenIfActive();
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
         return () => {
             clearIdleHide();
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            exitFullscreenIfActive();
         };
     }, [hasJoined]);
 
