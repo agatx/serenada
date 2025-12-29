@@ -4,6 +4,7 @@ import { useSignaling } from '../contexts/SignalingContext';
 import { useWebRTC } from '../contexts/WebRTCContext';
 import { useToast } from '../contexts/ToastContext';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Copy, AlertCircle } from 'lucide-react';
+import QRCode from 'react-qr-code';
 
 const CallRoom: React.FC = () => {
     const { roomId } = useParams<{ roomId: string }>();
@@ -206,6 +207,7 @@ const CallRoom: React.FC = () => {
 
     // Render In-Call
     const otherParticipant = roomState?.participants?.find(p => p.cid !== clientId);
+    const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
 
 
     return (
@@ -224,6 +226,9 @@ const CallRoom: React.FC = () => {
                 {!remoteStream && (
                     <div className="waiting-message">
                         {otherParticipant ? 'Connecting...' : 'Waiting for someone to join...'}
+                        <div className="qr-code-container" aria-hidden={!shareUrl}>
+                            {shareUrl && <QRCode value={shareUrl} size={184} />}
+                        </div>
                         <button
                             className="btn-small"
                             onClick={copyLink}
