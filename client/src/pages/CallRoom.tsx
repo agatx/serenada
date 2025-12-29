@@ -29,9 +29,11 @@ const CallRoom: React.FC = () => {
     const [hasJoined, setHasJoined] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const [isCameraOff, setIsCameraOff] = useState(false);
+    const [areControlsVisible, setAreControlsVisible] = useState(true);
 
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
+    const idleTimeoutRef = useRef<number | null>(null);
 
     // Handle stream attachment
     useEffect(() => {
@@ -105,6 +107,46 @@ const CallRoom: React.FC = () => {
         navigate('/');
     };
 
+    const scheduleIdleHide = () => {
+        if (idleTimeoutRef.current) {
+            window.clearTimeout(idleTimeoutRef.current);
+        }
+        idleTimeoutRef.current = window.setTimeout(() => {
+            setAreControlsVisible(false);
+        }, 10000);
+    };
+
+    const clearIdleHide = () => {
+        if (idleTimeoutRef.current) {
+            window.clearTimeout(idleTimeoutRef.current);
+        }
+    };
+
+    const handleScreenTap = () => {
+        setAreControlsVisible(prev => {
+            const next = !prev;
+            if (next) {
+                scheduleIdleHide();
+            } else {
+                clearIdleHide();
+            }
+            return next;
+        });
+    };
+
+    const handleControlsInteraction = () => {
+        setAreControlsVisible(true);
+        scheduleIdleHide();
+    };
+
+    useEffect(() => {
+        if (!hasJoined) return;
+        scheduleIdleHide();
+        return () => {
+            clearIdleHide();
+        };
+    }, [hasJoined]);
+
 
 
     const toggleMute = () => {
@@ -167,7 +209,10 @@ const CallRoom: React.FC = () => {
 
 
     return (
-        <div className="call-container">
+        <div
+            className={`call-container ${areControlsVisible ? '' : 'controls-hidden'}`}
+            onPointerUp={handleScreenTap}
+        >
             {/* Remote Video (Full Screen) */}
             <div className="video-remote-container">
                 <video
@@ -179,7 +224,16 @@ const CallRoom: React.FC = () => {
                 {!remoteStream && (
                     <div className="waiting-message">
                         {otherParticipant ? 'Connecting...' : 'Waiting for someone to join...'}
-                        <button className="btn-small" onClick={copyLink}>Copy Link to Share</button>
+                        <button
+                            className="btn-small"
+                            onClick={copyLink}
+                            onPointerUp={event => {
+                                event.stopPropagation();
+                                handleControlsInteraction();
+                            }}
+                        >
+                            Copy Link to Share
+                        </button>
                     </div>
                 )}
             </div>
@@ -196,7 +250,13 @@ const CallRoom: React.FC = () => {
             </div>
 
             {/* Controls */}
-            <div className="controls-bar">
+            <div
+                className="controls-bar"
+                onPointerUp={event => {
+                    event.stopPropagation();
+                    handleControlsInteraction();
+                }}
+            >
                 <button onClick={toggleMute} className={`btn-control ${isMuted ? 'active' : ''}`}>
                     {isMuted ? <MicOff /> : <Mic />}
                 </button>

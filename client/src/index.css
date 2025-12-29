@@ -153,21 +153,23 @@ body {
   bottom: 100px;
   /* Above controls */
   right: 20px;
-  width: 160px;
+  width: min(160px, 30vw);
   /* Mobile size */
-  height: 240px;
+  height: min(240px, 30vh);
   background: #333;
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
   border: 2px solid rgba(255, 255, 255, 0.1);
   z-index: 10;
+  transform-origin: bottom right;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
 }
 
 @media (min-width: 768px) {
   .video-local-container {
-    width: 240px;
-    height: 180px;
+    width: min(240px, 30vw);
+    height: min(180px, 30vh);
     /* Landscape on desktop */
     bottom: 100px;
     right: 32px;
@@ -186,7 +188,7 @@ body {
   position: absolute;
   bottom: 20px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(0);
   display: flex;
   gap: 1rem;
   background: rgba(22, 27, 34, 0.8);
@@ -194,6 +196,19 @@ body {
   padding: 1rem 2rem;
   border-radius: 50px;
   z-index: 20;
+  opacity: 1;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.controls-hidden .controls-bar {
+  opacity: 0;
+  transform: translateX(-50%) translateY(20px);
+  pointer-events: none;
+}
+
+.controls-hidden .video-local-container {
+  transform: scale(0.5);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
 }
 
 .btn-control {
