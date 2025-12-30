@@ -30,13 +30,13 @@ const resources = {
     ru: {
         translation: {
             "app_title": "Connected",
-            "app_subtitle_1": "Простые, мгновенные видеозвонки для всех.",
+            "app_subtitle_1": "Видеозвонки для всех.",
             "app_subtitle_2": "Без регистрации, без скачивания.",
             "start_call": "Начать звонок",
-            "ready_to_join": "Готовы присоединиться?",
+            "ready_to_join": "Готовы подключиться?",
             "room_id": "ID комнаты:",
             "camera_off": "Камера выключена",
-            "join_call": "Присоединиться",
+            "join_call": "Подключиться",
             "connecting": "Подключение...",
             "copy_link": "Копировать ссылку",
             "waiting_message": "Ожидание собеседника...",
