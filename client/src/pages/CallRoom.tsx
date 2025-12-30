@@ -6,8 +6,10 @@ import { useToast } from '../contexts/ToastContext';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Copy, AlertCircle } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { saveCall } from '../utils/callHistory';
+import { useTranslation } from 'react-i18next';
 
 const CallRoom: React.FC = () => {
+    const { t } = useTranslation();
     const { roomId } = useParams<{ roomId: string }>();
     const navigate = useNavigate();
     const {
@@ -126,7 +128,7 @@ const CallRoom: React.FC = () => {
             }, 50);
         } catch (err) {
             console.error("Failed to join room", err);
-            showToast('error', "Could not access camera/microphone.");
+            showToast('error', t('toast_camera_error'));
         }
     };
 
@@ -232,7 +234,7 @@ const CallRoom: React.FC = () => {
 
     const copyLink = () => {
         navigator.clipboard.writeText(window.location.href);
-        showToast('success', "Link copied to clipboard!");
+        showToast('success', t('toast_link_copied'));
     };
 
     // Render Pre-Join
@@ -240,8 +242,8 @@ const CallRoom: React.FC = () => {
         return (
             <div className="page-container center-content">
                 <div className="card">
-                    <h2>Ready to join?</h2>
-                    <p>Room ID: {roomId}</p>
+                    <h2>{t('ready_to_join')}</h2>
+                    <p>{t('room_id')} {roomId}</p>
                     {signalingError && (
                         <div className="error-message">
                             <AlertCircle size={20} />
@@ -256,14 +258,14 @@ const CallRoom: React.FC = () => {
                             muted
                             className="video-preview"
                         />
-                        {!localStream && <div className="video-placeholder">Camera Off</div>}
+                        {!localStream && <div className="video-placeholder">{t('camera_off')}</div>}
                     </div>
                     <div className="button-group">
                         <button className="btn-primary" onClick={handleJoin} disabled={!isConnected}>
-                            {isConnected ? 'Join Call' : 'Connecting...'}
+                            {isConnected ? t('join_call') : t('connecting')}
                         </button>
                         <button className="btn-secondary" onClick={copyLink}>
-                            <Copy size={16} /> Copy Link
+                            <Copy size={16} /> {t('copy_link')}
                         </button>
                     </div>
                 </div>
@@ -291,7 +293,7 @@ const CallRoom: React.FC = () => {
                 />
                 {!remoteStream && (
                     <div className="waiting-message">
-                        {otherParticipant ? 'Connecting...' : 'Waiting for someone to join...'}
+                        {otherParticipant ? t('waiting_message_person') : t('waiting_message')}
                         <div className="qr-code-container" aria-hidden={!shareUrl}>
                             {shareUrl && <QRCode value={shareUrl} size={184} />}
                         </div>
@@ -303,7 +305,7 @@ const CallRoom: React.FC = () => {
                                 handleControlsInteraction();
                             }}
                         >
-                            Copy Link to Share
+                            {t('copy_link_share')}
                         </button>
                     </div>
                 )}

@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, Calendar } from 'lucide-react';
 import type { RecentCall } from '../utils/callHistory';
+import { useTranslation } from 'react-i18next';
 
 interface RecentCallsProps {
     calls: RecentCall[];
@@ -9,6 +10,7 @@ interface RecentCallsProps {
 }
 
 const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses }) => {
+    const { t, i18n } = useTranslation();
     const navigate = useNavigate();
 
     const formatDuration = (seconds: number) => {
@@ -20,12 +22,12 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses }) => {
 
     const formatDate = (timestamp: number) => {
         const date = new Date(timestamp);
-        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        return date.toLocaleDateString(i18n.language, { month: 'short', day: 'numeric' });
     };
 
     const formatTime = (timestamp: number) => {
         const date = new Date(timestamp);
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return date.toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' });
     };
 
     const renderStatusDot = (roomId: string) => {
@@ -33,7 +35,7 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses }) => {
         if (count === 0) return null;
 
         const statusClass = count === 1 ? 'status-waiting' : 'status-full';
-        const title = count === 1 ? 'Someone is waiting' : 'Room is full';
+        const title = count === 1 ? t('someone_waiting') : t('room_full');
 
         return (
             <div className={`status-dot ${statusClass}`} title={title} />
@@ -44,13 +46,13 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses }) => {
 
     return (
         <div className="recent-calls">
-            <h3 className="recent-calls-label">Recent calls</h3>
+            <h3 className="recent-calls-label">{t('recent_calls')}</h3>
             <div className="recent-calls-table-container">
                 <table className="recent-calls-table">
                     <thead>
                         <tr>
-                            <th>Date & Time</th>
-                            <th className="text-right">Duration</th>
+                            <th>{t('date_time')}</th>
+                            <th className="text-right">{t('duration')}</th>
                         </tr>
                     </thead>
                     <tbody>
