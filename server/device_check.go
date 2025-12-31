@@ -271,7 +271,7 @@ const deviceCheckHTML = `
                         throw new Error('No compatible ICE servers found for this test mode.');
                     }
                     logIce('Credentials received. Starting ICE gathering...');
-                    testIceConfig(config);
+                    testIceConfig(config, turnsOnly);
                 })
                 .catch(function(err) {
                     logIce('Error: ' + err.message);
@@ -282,7 +282,7 @@ const deviceCheckHTML = `
                 });
         }
 
-        function testIceConfig(config) {
+        function testIceConfig(config, turnsOnly) {
             logIce('ICE Servers: ' + JSON.stringify(config.uris));
             
             var iceServers = [];

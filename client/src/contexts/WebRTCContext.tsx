@@ -73,18 +73,35 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     const data = await res.json();
                     console.log('[WebRTC] Loaded ICE Servers:', data);
 
+                    const params = new URLSearchParams(window.location.search);
+                    const turnsOnly = params.get('turnsonly') === '1';
+
                     const servers: RTCIceServer[] = [];
                     if (data.uris) {
-                        servers.push({
-                            urls: data.uris,
-                            username: data.username,
-                            credential: data.password
-                        });
+                        let uris = data.uris;
+                        if (turnsOnly) {
+                            console.log('[WebRTC] Forced TURNS mode active. Filtering URIs.');
+                            uris = uris.filter((u: string) => u.startsWith('turns:'));
+                        }
+
+                        if (uris.length > 0) {
+                            servers.push({
+                                urls: uris,
+                                username: data.username,
+                                credential: data.password
+                            });
+                        }
                     }
 
-                    setRtcConfig({
+                    const config: RTCConfiguration = {
                         iceServers: servers.length > 0 ? servers : [{ urls: 'stun:stun.l.google.com:19302' }]
-                    });
+                    };
+
+                    if (turnsOnly) {
+                        config.iceTransportPolicy = 'relay';
+                    }
+
+                    setRtcConfig(config);
                 } else {
                     console.warn('[WebRTC] Failed to fetch ICE servers, using default Google STUN');
                     setRtcConfig({
