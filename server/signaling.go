@@ -4,19 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
-	"regexp"
-
 	"github.com/gorilla/websocket"
-)
-
-var (
-	uuidRegex   = regexp.MustCompile("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$")
-	uuidV4Regex = regexp.MustCompile("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-4[a-fA-F0-9]{3}-[89abAB][a-fA-F0-9]{3}-[a-fA-F0-9]{12}$")
 )
 
 // Constants
@@ -235,12 +229,12 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		return
 	}
 
-	if !uuidRegex.MatchString(rid) {
-		c.sendError(rid, "INVALID_ROOM_ID", "Room ID must be a valid UUID")
-		return
-	}
-	if !uuidV4Regex.MatchString(rid) {
-		c.sendError(rid, "INVALID_ROOM_ID", "Room ID must be a UUIDv4")
+	if err := validateRoomID(rid); err != nil {
+		if errors.Is(err, ErrRoomIDSecretMissing) {
+			c.sendError(rid, "SERVER_NOT_CONFIGURED", "Room ID service is not configured")
+			return
+		}
+		c.sendError(rid, "INVALID_ROOM_ID", "Room ID must be a valid room token")
 		return
 	}
 
@@ -587,6 +581,9 @@ func (h *Hub) handleWatchRooms(c *Client, msg Message) {
 	h.mu.Lock()
 	status := make(map[string]int)
 	for _, rid := range payload.RIDs {
+		if err := validateRoomID(rid); err != nil {
+			continue
+		}
 		// Add to watchers
 		if h.watchers[rid] == nil {
 			h.watchers[rid] = make(map[*Client]bool)

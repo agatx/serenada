@@ -24,6 +24,7 @@ const resources = {
             "someone_waiting": "Someone is waiting",
             "room_full": "Room is full",
             "toast_camera_error": "Could not access camera/microphone.",
+            "toast_room_create_error": "Failed to create a room. Please try again.",
             "toast_link_copied": "Link copied to clipboard!"
         }
     },
@@ -48,6 +49,7 @@ const resources = {
             "someone_waiting": "Кто-то ждет",
             "room_full": "Комната заполнена",
             "toast_camera_error": "Не удалось получить доступ к камере/микрофону.",
+            "toast_room_create_error": "Не удалось создать комнату. Попробуйте еще раз.",
             "toast_link_copied": "Ссылка скопирована в буфер обмена!"
         }
     },
@@ -72,6 +74,7 @@ const resources = {
             "someone_waiting": "Alguien está esperando",
             "room_full": "La sala está llena",
             "toast_camera_error": "No se pudo acceder a la cámara/micrófono.",
+            "toast_room_create_error": "No se pudo crear la sala. Inténtalo de nuevo.",
             "toast_link_copied": "¡Enlace copiado al portapapeles!"
         }
     },
@@ -96,6 +99,7 @@ const resources = {
             "someone_waiting": "Quelqu'un attend",
             "room_full": "La salle est pleine",
             "toast_camera_error": "Impossible d'accéder à la caméra/au microphone.",
+            "toast_room_create_error": "Impossible de créer la salle. Veuillez réessayer.",
             "toast_link_copied": "Lien copié dans le presse-papiers !"
         }
     }

@@ -44,6 +44,8 @@ func main() {
 	// API: 5 requests per minute per IP
 	turnCredsLimiter := NewIPLimiter(5.0/60.0, 5)
 	diagnosticLimiter := NewIPLimiter(5.0/60.0, 5)
+	// Room ID: 30 requests per minute per IP
+	roomIDLimiter := NewIPLimiter(30.0/60.0, 10)
 
 	http.HandleFunc("/ws", rateLimitMiddleware(wsLimiter, func(w http.ResponseWriter, r *http.Request) {
 		serveWs(hub, w, r)
@@ -51,6 +53,7 @@ func main() {
 
 	http.HandleFunc("/api/turn-credentials", rateLimitMiddleware(turnCredsLimiter, enableCors(handleTurnCredentials(turnTokenStore, diagnosticTokenStore))))
 	http.HandleFunc("/api/diagnostic-token", rateLimitMiddleware(diagnosticLimiter, enableCors(handleDiagnosticToken(diagnosticTokenStore))))
+	http.HandleFunc("/api/room-id", rateLimitMiddleware(roomIDLimiter, enableCors(handleRoomID())))
 
 	http.HandleFunc("/device-check", handleDeviceCheck)
 
