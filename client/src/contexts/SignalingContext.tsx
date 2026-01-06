@@ -143,6 +143,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                             if (msg.payload) {
                                 // In Go server we send "participants" and "hostCid" in payload for joined AND room_state
                                 setRoomState(msg.payload as RoomState);
+                                // TURN token is now included in joined response (gated by valid room ID)
+                                if (msg.payload.turnToken) {
+                                    setTurnToken(msg.payload.turnToken as string);
+                                }
                             }
                             break;
                         case 'room_state':
@@ -166,11 +170,6 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                                     ...prev,
                                     [msg.payload.rid]: msg.payload.count
                                 }));
-                            }
-                            break;
-                        case 'turn_token':
-                            if (msg.payload?.token) {
-                                setTurnToken(msg.payload.token as string);
                             }
                             break;
                         case 'error':

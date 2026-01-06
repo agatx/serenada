@@ -41,6 +41,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // RTC Config State
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
+    const rtcConfigRef = useRef<RTCConfiguration | null>(null);
+    const signalingBufferRef = useRef<any[]>([]);
     const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
     const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
 
@@ -144,6 +146,20 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         fetchIceServers();
     }, [turnToken]);
 
+    // Sync rtcConfig to ref and flush buffered messages
+    useEffect(() => {
+        rtcConfigRef.current = rtcConfig;
+        if (rtcConfig && signalingBufferRef.current.length > 0) {
+            console.log(`[WebRTC] Flushing ${signalingBufferRef.current.length} buffered signaling messages`);
+            const msgs = [...signalingBufferRef.current];
+            signalingBufferRef.current = [];
+            msgs.forEach(msg => {
+                // We use setTimeout to ensure we don't block the effect and allow state updates to settle if needed
+                setTimeout(() => processSignalingMessage(msg), 0);
+            });
+        }
+    }, [rtcConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Buffer ICE candidates if remote description not set
     const iceBufferRef = useRef<RTCIceCandidateInit[]>([]);
 
@@ -154,45 +170,60 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
     }, [isConnected]);
 
+    const processSignalingMessage = useCallback(async (msg: any) => {
+        const { type, payload } = msg;
+        try {
+            switch (type) {
+                case 'offer':
+                    if (payload && payload.sdp) {
+                        await handleOffer(payload.sdp);
+                    } else {
+                        console.warn('[WebRTC] Offer received without SDP');
+                    }
+                    break;
+                case 'answer':
+                    if (payload && payload.sdp) {
+                        await handleAnswer(payload.sdp);
+                    }
+                    break;
+                case 'ice':
+                    if (payload && payload.candidate) {
+                        await handleIce(payload.candidate);
+                    }
+                    break;
+            }
+        } catch (err) {
+            console.error(`[WebRTC] Error processing message ${type}:`, err);
+        }
+    }, [roomState, clientId, rtcConfig]); // Depends on state used in handlers
+
     // Handle incoming signaling messages
     useEffect(() => {
-        const handleMessage = async (msg: any) => {
-            const { type, payload } = msg; // Use msg from callback
-            console.log(`[WebRTC] Received message: ${type}`, payload);
-
-            try {
-                switch (type) {
-                    case 'offer':
-                        if (payload && payload.sdp) {
-                            await handleOffer(payload.sdp);
-                        } else {
-                            console.warn('[WebRTC] Offer received without SDP');
-                        }
-                        break;
-                    case 'answer':
-                        if (payload && payload.sdp) {
-                            await handleAnswer(payload.sdp);
-                        }
-                        break;
-                    case 'ice':
-                        if (payload && payload.candidate) {
-                            await handleIce(payload.candidate);
-                        }
-                        break;
+        const handleMessage = (msg: any) => {
+            const { type } = msg;
+            // Only buffer WebRTC negotiation messages
+            if (['offer', 'answer', 'ice'].includes(type)) {
+                if (!rtcConfigRef.current) {
+                    console.log(`[WebRTC] Buffering signaling message: ${type}`);
+                    signalingBufferRef.current.push(msg);
+                    return;
                 }
-            } catch (err) {
-                console.error(`[WebRTC] Error handling message ${type}:`, err);
             }
+            processSignalingMessage(msg);
         };
 
         const unsubscribe = subscribeToMessages(handleMessage);
         return () => {
             unsubscribe();
         };
-    }, [subscribeToMessages]); // Dependency on subscribeToMessages (stable)
+    }, [subscribeToMessages, processSignalingMessage]);
 
     // Logic to initiate offer if we are HOST and have 2 participants
     useEffect(() => {
+        // Wait for ICE config to be loaded before attempting to create peer connection
+        if (!rtcConfig) {
+            return;
+        }
         if (roomState && roomState.participants && roomState.participants.length === 2 && roomState.hostCid === clientId) {
             // ... (existing logic)
             const pc = getOrCreatePC();
@@ -214,7 +245,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 cleanupPC();
             }
         }
-    }, [roomState, clientId, remoteStream]);
+    }, [roomState, clientId, remoteStream, rtcConfig]);
 
 
     const getOrCreatePC = () => {

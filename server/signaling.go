@@ -100,19 +100,6 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	go client.writePump()
 	go client.readPump()
-
-	if hub.turnTokens != nil {
-		token, expiresAt := hub.turnTokens.Issue(client.ip)
-		payload, _ := json.Marshal(map[string]interface{}{
-			"token":     token,
-			"expiresAt": expiresAt.Unix(),
-		})
-		client.sendMessage(Message{
-			V:       1,
-			Type:    "turn_token",
-			Payload: payload,
-		})
-	}
 }
 
 func (c *Client) readPump() {
@@ -281,6 +268,13 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	payload := map[string]interface{}{
 		"hostCid":      room.HostCID,
 		"participants": participants,
+	}
+
+	// Include TURN token in joined response (gated by valid room ID)
+	if h.turnTokens != nil {
+		token, expiresAt := h.turnTokens.Issue(c.ip)
+		payload["turnToken"] = token
+		payload["turnTokenExpiresAt"] = expiresAt.Unix()
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
