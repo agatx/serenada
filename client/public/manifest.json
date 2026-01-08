@@ -1,0 +1,23 @@
+{
+  "name": "Serenada",
+  "short_name": "Serenada",
+  "description": "Simple, privacy-focused 1:1 video calls.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#2f81f7",
+  "icons": [
+    {
+      "src": "/serenada.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/serenada.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

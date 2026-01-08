@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Video } from 'lucide-react';
+import { Video, Zap, Shield, Lock, Smartphone, Code } from 'lucide-react';
 import RecentCalls from '../components/RecentCalls';
+import Footer from '../components/Footer';
 import { getRecentCalls } from '../utils/callHistory';
 import type { RecentCall } from '../utils/callHistory';
 import { useSignaling } from '../contexts/SignalingContext';
@@ -58,9 +59,17 @@ const Home: React.FC = () => {
         }
     };
 
+    const benefits = [
+        { icon: <Zap className="benefit-icon" />, title: t('benefit_instant_title'), desc: t('benefit_instant_desc') },
+        { icon: <Shield className="benefit-icon" />, title: t('benefit_privacy_title'), desc: t('benefit_privacy_desc') },
+        { icon: <Lock className="benefit-icon" />, title: t('benefit_secure_title'), desc: t('benefit_secure_desc') },
+        { icon: <Smartphone className="benefit-icon" />, title: t('benefit_universal_title'), desc: t('benefit_universal_desc') },
+        { icon: <Code className="benefit-icon" />, title: t('benefit_opensource_title'), desc: t('benefit_opensource_desc') },
+    ];
+
     return (
-        <div className={`page-container center-content ${recentCalls.length > 0 ? 'compact' : ''}`}>
-            <div className="home-content">
+        <div className={`page-container ${recentCalls.length > 0 ? 'compact' : ''}`}>
+            <div className="home-content center-content">
                 <h1 className="title">{t('app_title')}</h1>
                 <p className="subtitle">
                     {t('app_subtitle_1')} <br />
@@ -74,6 +83,22 @@ const Home: React.FC = () => {
 
                 <RecentCalls calls={recentCalls} roomStatuses={roomStatuses} />
             </div>
+
+            <div className="benefits-container">
+                <div className="benefits-grid">
+                    {benefits.map((b, i) => (
+                        <div key={i} className="benefit-card">
+                            {b.icon}
+                            <div className="benefit-content">
+                                <h3 className="benefit-title">{b.title}</h3>
+                                <p className="benefit-desc">{b.desc}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <Footer />
         </div>
     );
 };

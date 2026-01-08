@@ -25,7 +25,22 @@ const resources = {
             "room_full": "Room is full",
             "toast_camera_error": "Could not access camera/microphone.",
             "toast_room_create_error": "Failed to create a room. Please try again.",
-            "toast_link_copied": "Link copied to clipboard!"
+            "toast_link_copied": "Link copied to clipboard!",
+            "benefit_instant_title": "Instant",
+            "benefit_instant_desc": "No account or downloads required. Start a call in one tap.",
+            "benefit_privacy_title": "Privacy-Focused",
+            "benefit_privacy_desc": "No tracking, no analytics. Your data belongs to you.",
+            "benefit_secure_title": "End-to-End Encrypted",
+            "benefit_secure_desc": "Peer-to-peer video calls with end-to-end encryption.",
+            "benefit_universal_title": "Mobile-Friendly",
+            "benefit_universal_desc": "Works across Android, iOS, and desktops seamlessly.",
+            "benefit_opensource_title": "Free & Open-Source",
+            "benefit_opensource_desc": "Host it yourself for full control. Open to everyone.",
+            "footer_github": "GitHub",
+            "footer_device_check": "Device Check",
+            "footer_install": "Install App",
+            "install_ios_prompt": "To install Serenada on iOS, tap the share icon and then 'Add to Home Screen'.",
+            "install_not_supported": "Direct installation is not supported on this browser. Try Chrome on Android or Safari on iOS."
         }
     },
     ru: {
@@ -50,7 +65,22 @@ const resources = {
             "room_full": "Комната заполнена",
             "toast_camera_error": "Не удалось получить доступ к камере/микрофону.",
             "toast_room_create_error": "Не удалось создать комнату. Попробуйте еще раз.",
-            "toast_link_copied": "Ссылка скопирована в буфер обмена!"
+            "toast_link_copied": "Ссылка скопирована в буфер обмена!",
+            "benefit_instant_title": "Мгновенно",
+            "benefit_instant_desc": "Без регистрации и загрузок. Начните звонок в один клик.",
+            "benefit_privacy_title": "Приватность",
+            "benefit_privacy_desc": "Без слежки и аналитики. Ваши данные принадлежат вам.",
+            "benefit_secure_title": "Шифрование",
+            "benefit_secure_desc": "Звонки напрямую (P2P) со сквозным шифрованием.",
+            "benefit_universal_title": "Мобильность",
+            "benefit_universal_desc": "Работает на Android, iOS и компьютерах.",
+            "benefit_opensource_title": "Open Source",
+            "benefit_opensource_desc": "Бесплатно и открыто. Разверните на своем сервере.",
+            "footer_github": "GitHub",
+            "footer_device_check": "Проверка",
+            "footer_install": "Установить",
+            "install_ios_prompt": "Чтобы установить на iOS, нажмите 'Поделиться' и затем 'На экран Домой'.",
+            "install_not_supported": "Прямая установка не поддерживается. Попробуйте Chrome на Android или Safari на iOS."
         }
     },
     es: {
@@ -75,7 +105,22 @@ const resources = {
             "room_full": "La sala está llena",
             "toast_camera_error": "No se pudo acceder a la cámara/micrófono.",
             "toast_room_create_error": "No se pudo crear la sala. Inténtalo de nuevo.",
-            "toast_link_copied": "¡Enlace copiado al portapapeles!"
+            "toast_link_copied": "¡Enlace copiado al portapapeles!",
+            "benefit_instant_title": "Instantáneo",
+            "benefit_instant_desc": "Sin cuentas ni descargas. Inicia una llamada con un toque.",
+            "benefit_privacy_title": "Privacidad",
+            "benefit_privacy_desc": "Sin rastreo ni analítica. Tus datos son tuyos.",
+            "benefit_secure_title": "Cifrado",
+            "benefit_secure_desc": "Llamadas P2P con cifrado de extremo a extremo.",
+            "benefit_universal_title": "Universal",
+            "benefit_universal_desc": "Funciona en Android, iOS y escritorio sin problemas.",
+            "benefit_opensource_title": "Software Libre",
+            "benefit_opensource_desc": "Instálalo tú mismo para un control total. Abierto a todos.",
+            "footer_github": "GitHub",
+            "footer_device_check": "Diagnóstico",
+            "footer_install": "Instalar App",
+            "install_ios_prompt": "Para instalar en iOS, toca el icono de compartir y 'Añadir a la pantalla de inicio'.",
+            "install_not_supported": "La instalación directa no es compatible. Prueba Chrome en Android o Safari en iOS."
         }
     },
     fr: {
@@ -100,7 +145,22 @@ const resources = {
             "room_full": "La salle est pleine",
             "toast_camera_error": "Impossible d'accéder à la caméra/au microphone.",
             "toast_room_create_error": "Impossible de créer la salle. Veuillez réessayer.",
-            "toast_link_copied": "Lien copié dans le presse-papiers !"
+            "toast_link_copied": "Lien copié dans le presse-papiers !",
+            "benefit_instant_title": "Instantané",
+            "benefit_instant_desc": "Sans compte ni téléchargement. Lancez un appel en un clic.",
+            "benefit_privacy_title": "Vie Privée",
+            "benefit_privacy_desc": "Pas de suivi ni d'analyse. Vos données vous appartiennent.",
+            "benefit_secure_title": "Sécurisé",
+            "benefit_secure_desc": "Appels vidéo P2P avec chiffrement de bout en bout.",
+            "benefit_universal_title": "Mobile-Friendly",
+            "benefit_universal_desc": "Fonctionne sur Android, iOS et ordinateur sans accroc.",
+            "benefit_opensource_title": "Open Source",
+            "benefit_opensource_desc": "Hébergez-le vous-même pour un contrôle total. Ouvert à tous.",
+            "footer_github": "GitHub",
+            "footer_device_check": "Diagnostic",
+            "footer_install": "Installer l'App",
+            "install_ios_prompt": "Pour installer sur iOS, appuyez sur l'icône de partage et 'Sur l'écran d'accueil'.",
+            "install_not_supported": "L'installation directe n'est pas supportée. Essayez Chrome sur Android ou Safari sur iOS."
         }
     }
 };
