@@ -199,6 +199,10 @@ const deviceCheckHTML = `
                 <span class="label">WebSocket Support</span>
                 <span id="ws-support">-</span>
             </div>
+            <div class="item">
+                <span class="label">WebSocket Connection</span>
+                <span id="ws-status">-</span>
+            </div>
         </div>
 
             <div class="card-title">
@@ -410,9 +414,47 @@ const deviceCheckHTML = `
             // Check WS
             if (window.WebSocket) {
                 updateStatus('ws-support', 'ok');
+                checkWebSocket();
             } else {
                 updateStatus('ws-support', 'error');
+                updateStatus('ws-status', 'error', 'NOT SUPPORTED');
             }
+        }
+
+        function checkWebSocket() {
+            var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var wsUrl = protocol + '//' + window.location.host + '/ws';
+            var start = Date.now();
+            var ws = new WebSocket(wsUrl);
+            var finished = false;
+
+            updateStatus('ws-status', 'warning', 'CONNECTING...');
+
+            var timeout = setTimeout(function() {
+                if (!finished) {
+                    finished = true;
+                    updateStatus('ws-status', 'error', 'TIMEOUT');
+                    try { ws.close(); } catch(e) {}
+                }
+            }, 5000);
+
+            ws.onopen = function() {
+                if (!finished) {
+                    finished = true;
+                    clearTimeout(timeout);
+                    var lat = Date.now() - start;
+                    updateStatus('ws-status', 'ok', 'OK (' + lat + 'ms)');
+                    ws.close();
+                }
+            };
+
+            ws.onerror = function() {
+                if (!finished) {
+                    finished = true;
+                    clearTimeout(timeout);
+                    updateStatus('ws-status', 'error', 'FAILED');
+                }
+            };
         }
 
         function requestMediaPermissions() {
