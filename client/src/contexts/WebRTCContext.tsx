@@ -35,7 +35,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const requestingMediaRef = useRef(false);
-    const cancelMediaRef = useRef(false);
     const unmountedRef = useRef(false);
     const localStreamRef = useRef<MediaStream | null>(null);
 
@@ -312,12 +311,19 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         localStreamRef.current = localStream;
     }, [localStream]);
 
-    const startLocalMedia = async () => {
-        // If we already have (or are fetching) an active stream, reuse it to avoid creating parallel streams
-        if (localStream || requestingMediaRef.current) {
+    const mediaRequestIdRef = useRef<number>(0);
+
+    const startLocalMedia = useCallback(async () => {
+        // Increment request ID for the new attempt
+        const requestId = mediaRequestIdRef.current + 1;
+        mediaRequestIdRef.current = requestId;
+
+        // If we already have a stream, checks below will decide what to do.
+        // But if localStream exists, we usually return.
+        if (localStream) {
             return;
         }
-        cancelMediaRef.current = false;
+
         requestingMediaRef.current = true;
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -330,10 +336,12 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 audio: true
             });
 
-            // If we navigated away or requested stop while the prompt was open, immediately clean up
-            if (cancelMediaRef.current || unmountedRef.current) {
+            // Check validity:
+            // 1. Component unmounted
+            // 2. Request was obsolete (new request started or stop called)
+            if (unmountedRef.current || mediaRequestIdRef.current !== requestId) {
+                console.log(`[WebRTC] Media request ${requestId} stale or cancelled. Stopping tracks.`);
                 stream.getTracks().forEach(t => t.stop());
-                requestingMediaRef.current = false;
                 return;
             }
 
@@ -350,11 +358,13 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             console.error("Error accessing media", err);
             requestingMediaRef.current = false;
         }
-    };
+    }, [localStream, facingMode, showToast]);
 
     // Use useCallback to make this stable, but access stream via ref to avoid stale closure
     const stopLocalMedia = useCallback(() => {
-        cancelMediaRef.current = true;
+        // Invalidate any pending requests
+        mediaRequestIdRef.current += 1; // Incrementing invalidates previous ID
+
         const stream = localStreamRef.current;
         if (stream) {
             stream.getTracks().forEach(t => t.stop());

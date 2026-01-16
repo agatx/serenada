@@ -31,6 +31,11 @@ func isOriginAllowed(r *http.Request) bool {
 		return true
 	}
 
+	// Allow any localhost origin for local development
+	if strings.HasPrefix(origin, "http://localhost:") || origin == "http://localhost" {
+		return true
+	}
+
 	host := strings.TrimSpace(r.Host)
 	if host == "" {
 		return false
