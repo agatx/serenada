@@ -37,6 +37,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const requestingMediaRef = useRef(false);
     const unmountedRef = useRef(false);
     const localStreamRef = useRef<MediaStream | null>(null);
+    const remoteStreamRef = useRef<MediaStream | null>(null);
+    const isMakingOfferRef = useRef(false);
 
     // RTC Config State
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
@@ -44,6 +46,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const signalingBufferRef = useRef<any[]>([]);
     const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
     const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
+    const roomStateRef = useRef(roomState);
+    const clientIdRef = useRef(clientId);
 
     // Detect multiple cameras
     useEffect(() => {
@@ -268,10 +272,23 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             console.log('Remote track received', event.streams);
             if (event.streams && event.streams[0]) {
                 const stream = event.streams[0];
+                remoteStreamRef.current = stream;
                 console.log(`[WebRTC] Stream active: ${stream.active}`);
                 stream.getTracks().forEach(t => console.log(`[WebRTC] Track ${t.kind}: enabled=${t.enabled}, muted=${t.muted}, state=${t.readyState}`));
                 setRemoteStream(stream);
+                return;
             }
+
+            // Safari may not populate event.streams; build a stream from tracks.
+            let stream = remoteStreamRef.current;
+            if (!stream) {
+                stream = new MediaStream();
+                remoteStreamRef.current = stream;
+            }
+            if (!stream.getTracks().some(t => t.id === event.track.id)) {
+                stream.addTrack(event.track);
+            }
+            setRemoteStream(stream);
         };
 
         pc.oniceconnectionstatechange = () => {
@@ -288,9 +305,15 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
         };
 
-        pc.onnegotiationneeded = () => {
-            // Handled manually for now to align with protocol roles? 
-            // Or we can simple trigger offer if we are host. Use variable?
+        pc.onnegotiationneeded = async () => {
+            const state = roomStateRef.current;
+            if (!state || !state.participants || state.participants.length < 2) {
+                return;
+            }
+            if (!state.hostCid || state.hostCid !== clientIdRef.current) {
+                return;
+            }
+            await createOffer();
         };
 
         return pc;
@@ -301,6 +324,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             pcRef.current.close();
             pcRef.current = null;
         }
+        remoteStreamRef.current = null;
         setRemoteStream(null);
         // We do NOT stop local stream here to allow reuse? 
         // Actually usually we stop it on leave.
@@ -310,6 +334,14 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     useEffect(() => {
         localStreamRef.current = localStream;
     }, [localStream]);
+
+    useEffect(() => {
+        roomStateRef.current = roomState;
+    }, [roomState]);
+
+    useEffect(() => {
+        clientIdRef.current = clientId;
+    }, [clientId]);
 
     const mediaRequestIdRef = useRef<number>(0);
 
@@ -416,9 +448,17 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     const createOffer = async () => {
+        if (isMakingOfferRef.current) {
+            return;
+        }
         try {
             console.log('[WebRTC] Creating offer...');
             const pc = getOrCreatePC();
+            if (pc.signalingState !== 'stable') {
+                console.log('[WebRTC] Skipping offer; signaling state is not stable');
+                return;
+            }
+            isMakingOfferRef.current = true;
             const offer = await pc.createOffer();
 
             // Force/Prefer VP8 for compatibility with older Android devices
@@ -430,6 +470,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             sendMessage('offer', { sdp: offerWithVP8.sdp });
         } catch (err) {
             console.error('[WebRTC] Error creating offer:', err);
+        } finally {
+            isMakingOfferRef.current = false;
         }
     };
 
