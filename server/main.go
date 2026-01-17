@@ -32,7 +32,7 @@ func main() {
 			}
 			if r.Method == "OPTIONS" {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Turn-Token")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Turn-Token, X-SSE-SID")
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -43,6 +43,8 @@ func main() {
 	// Rate Limiters
 	// WS: 10 connections per minute per IP
 	wsLimiter := NewIPLimiter(10.0/60.0, 5)
+	// SSE: allow bursts for signaling messages
+	sseLimiter := NewIPLimiter(1200.0/60.0, 200)
 
 	// API: 5 requests per minute per IP
 	turnCredsLimiter := NewIPLimiter(5.0/60.0, 5)
@@ -53,6 +55,7 @@ func main() {
 	http.HandleFunc("/ws", rateLimitMiddleware(wsLimiter, func(w http.ResponseWriter, r *http.Request) {
 		serveWs(hub, w, r)
 	}))
+	http.HandleFunc("/sse", rateLimitMiddleware(sseLimiter, enableCors(handleSSE(hub))))
 
 	http.HandleFunc("/api/turn-credentials", rateLimitMiddleware(turnCredsLimiter, enableCors(handleTurnCredentials())))
 	http.HandleFunc("/api/diagnostic-token", rateLimitMiddleware(diagnosticLimiter, enableCors(handleDiagnosticToken())))

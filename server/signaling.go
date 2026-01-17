@@ -19,6 +19,7 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 65536 // 64KB
+	sseGracePeriod = 5 * time.Second
 )
 
 var upgrader = websocket.Upgrader{
@@ -46,10 +47,11 @@ type Participant struct {
 }
 
 type Hub struct {
-	rooms    map[string]*Room
-	watchers map[string]map[*Client]bool // roomID -> set of clients
-	mu       sync.RWMutex
-	clients  map[*Client]bool
+	rooms        map[string]*Room
+	watchers     map[string]map[*Client]bool // roomID -> set of clients
+	mu           sync.RWMutex
+	clients      map[*Client]bool
+	clientsBySID map[string]*Client
 }
 
 type Room struct {
@@ -60,25 +62,73 @@ type Room struct {
 }
 
 type Client struct {
-	hub  *Hub
-	conn *websocket.Conn
-	send chan []byte
-	sid  string
-	cid  string // assigned on join
-	rid  string // current room
-	ip   string
+	hub      *Hub
+	conn     *websocket.Conn
+	send     chan []byte
+	sid      string
+	cid      string // assigned on join
+	rid      string // current room
+	ip       string
+	replaced bool
 }
 
 func newHub() *Hub {
 	return &Hub{
-		rooms:    make(map[string]*Room),
-		watchers: make(map[string]map[*Client]bool),
-		clients:  make(map[*Client]bool),
+		rooms:        make(map[string]*Room),
+		watchers:     make(map[string]map[*Client]bool),
+		clients:      make(map[*Client]bool),
+		clientsBySID: make(map[string]*Client),
 	}
 }
 
 func (h *Hub) run() {
 	// Simple run loop if needed, for MVP we handle events directly
+}
+
+func (h *Hub) registerClient(c *Client) {
+	h.mu.Lock()
+	h.clients[c] = true
+	h.clientsBySID[c.sid] = c
+	h.mu.Unlock()
+}
+
+func (h *Hub) getClientBySID(sid string) *Client {
+	h.mu.RLock()
+	client := h.clientsBySID[sid]
+	h.mu.RUnlock()
+	return client
+}
+
+func (h *Hub) replaceClient(oldClient, newClient *Client) {
+	h.mu.Lock()
+	delete(h.clients, oldClient)
+	h.clients[newClient] = true
+	h.clientsBySID[newClient.sid] = newClient
+	for _, clientSet := range h.watchers {
+		if clientSet[oldClient] {
+			delete(clientSet, oldClient)
+			clientSet[newClient] = true
+		}
+	}
+	h.mu.Unlock()
+
+	if oldClient.rid != "" {
+		h.mu.RLock()
+		room := h.rooms[oldClient.rid]
+		h.mu.RUnlock()
+		if room != nil {
+			room.mu.Lock()
+			if cid, ok := room.Participants[oldClient]; ok {
+				delete(room.Participants, oldClient)
+				room.Participants[newClient] = cid
+				newClient.cid = cid
+				newClient.rid = oldClient.rid
+			}
+			room.mu.Unlock()
+		}
+	}
+
+	oldClient.replaced = true
 }
 
 func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
@@ -92,9 +142,7 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	sid := generateID("S-")
 	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256), sid: sid, ip: ip}
 
-	hub.mu.Lock()
-	hub.clients[client] = true
-	hub.mu.Unlock()
+	hub.registerClient(client)
 
 	go client.writePump()
 	go client.readPump()
@@ -500,9 +548,35 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 }
 
 func (h *Hub) handleDisconnect(c *Client) {
+	if c.replaced {
+		h.mu.Lock()
+		delete(h.clients, c)
+		h.mu.Unlock()
+		return
+	}
+	if c.conn == nil {
+		go h.delayDisconnectSSE(c)
+		return
+	}
+	h.disconnectClient(c)
+}
+
+func (h *Hub) delayDisconnectSSE(c *Client) {
+	time.Sleep(sseGracePeriod)
+	h.mu.RLock()
+	current := h.clientsBySID[c.sid]
+	h.mu.RUnlock()
+	if current != c {
+		return
+	}
+	h.disconnectClient(c)
+}
+
+func (h *Hub) disconnectClient(c *Client) {
 	log.Printf("[DISCONNECT] Client %s disconnected", c.sid)
 	h.mu.Lock()
 	delete(h.clients, c)
+	delete(h.clientsBySID, c.sid)
 	// Remove from all watchers
 	for rid, clientSet := range h.watchers {
 		delete(clientSet, c)

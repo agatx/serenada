@@ -195,13 +195,21 @@ const deviceCheckHTML = `
                 <span class="label">Server Connection (REST)</span>
                 <span id="api-status">-</span>
             </div>
-             <div class="item">
+            <div class="item">
                 <span class="label">WebSocket Support</span>
                 <span id="ws-support">-</span>
             </div>
             <div class="item">
                 <span class="label">WebSocket Connection</span>
                 <span id="ws-status">-</span>
+            </div>
+            <div class="item">
+                <span class="label">SSE Support</span>
+                <span id="sse-support">-</span>
+            </div>
+            <div class="item">
+                <span class="label">SSE Connection</span>
+                <span id="sse-status">-</span>
             </div>
         </div>
 
@@ -419,6 +427,15 @@ const deviceCheckHTML = `
                 updateStatus('ws-support', 'error');
                 updateStatus('ws-status', 'error', 'NOT SUPPORTED');
             }
+
+            // Check SSE (SSE + POST)
+            if (window.EventSource) {
+                updateStatus('sse-support', 'ok');
+                checkSSE();
+            } else {
+                updateStatus('sse-support', 'error');
+                updateStatus('sse-status', 'error', 'NOT SUPPORTED');
+            }
         }
 
         function checkWebSocket() {
@@ -453,6 +470,43 @@ const deviceCheckHTML = `
                     finished = true;
                     clearTimeout(timeout);
                     updateStatus('ws-status', 'error', 'FAILED');
+                }
+            };
+        }
+
+        function checkSSE() {
+            var start = Date.now();
+            var sid = 'S-' + Math.random().toString(16).slice(2, 10) + Math.random().toString(16).slice(2, 10);
+            var sseUrl = window.location.protocol + '//' + window.location.host + '/sse?sid=' + encodeURIComponent(sid);
+            var es = new EventSource(sseUrl);
+            var finished = false;
+
+            updateStatus('sse-status', 'warning', 'CONNECTING...');
+
+            var timeout = setTimeout(function() {
+                if (!finished) {
+                    finished = true;
+                    updateStatus('sse-status', 'error', 'TIMEOUT');
+                    try { es.close(); } catch(e) {}
+                }
+            }, 5000);
+
+            es.onopen = function() {
+                if (!finished) {
+                    finished = true;
+                    clearTimeout(timeout);
+                    var lat = Date.now() - start;
+                    updateStatus('sse-status', 'ok', 'OK (' + lat + 'ms)');
+                    es.close();
+                }
+            };
+
+            es.onerror = function() {
+                if (!finished) {
+                    finished = true;
+                    clearTimeout(timeout);
+                    updateStatus('sse-status', 'error', 'FAILED');
+                    try { es.close(); } catch(e) {}
                 }
             };
         }
