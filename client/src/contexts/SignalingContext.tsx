@@ -44,6 +44,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const listenersRef = useRef<((msg: SignalingMessage) => void)[]>([]);
     const isConnectedRef = useRef(false);
     const roomStateRef = useRef<RoomState | null>(null);
+    const activeTransportKindRef = useRef<TransportKind>('ws');
 
     const transportRef = useRef<ReturnType<typeof createSignalingTransport> | null>(null);
     const transportKindRef = useRef<TransportKind>('ws');
@@ -136,6 +137,19 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
     }, []);
 
+    useEffect(() => {
+        if (!isConnected) return;
+        if (activeTransportKindRef.current !== 'sse') return;
+
+        const interval = window.setInterval(() => {
+            sendMessage('ping', { ts: Date.now() });
+        }, 20000);
+
+        return () => {
+            window.clearInterval(interval);
+        };
+    }, [isConnected, sendMessage]);
+
     const joinRoom = useCallback((roomId: string) => {
         console.log(`[Signaling] joinRoom call for ${roomId}`);
         setError(null);
@@ -144,8 +158,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (transportRef.current && transportRef.current.isOpen()) {
             const payload: any = { capabilities: { trickleIce: true } };
             // If we have a previous client ID, send it to help server evict ghosts
-            if (lastClientIdRef.current) {
-                payload.reconnectCid = lastClientIdRef.current;
+            const reconnectCid = clientIdRef.current || lastClientIdRef.current;
+            if (reconnectCid) {
+                payload.reconnectCid = reconnectCid;
             }
             sendMessage('join', payload);
         } else {
@@ -216,6 +231,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     if (connectionId !== transportIdRef.current) return;
                     connectingRef.current = false;
                     reconnectAttemptsRef.current = 0;
+                    activeTransportKindRef.current = targetKind;
                     const wasConnected = isConnectedRef.current;
                     setIsConnected(true);
                     if (targetKind === 'ws') {

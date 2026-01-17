@@ -6,29 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"net/http"
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
-// Constants
+const maxMessageSize = 65536 // 64KB
+
+type TransportKind string
+
 const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
-	maxMessageSize = 65536 // 64KB
-	sseGracePeriod = 5 * time.Second
+	TransportWS  TransportKind = "ws"
+	TransportSSE TransportKind = "sse"
 )
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return isOriginAllowed(r)
-	},
-}
 
 // Protocol structures
 type Message struct {
@@ -62,14 +51,15 @@ type Room struct {
 }
 
 type Client struct {
-	hub      *Hub
-	conn     *websocket.Conn
-	send     chan []byte
-	sid      string
-	cid      string // assigned on join
-	rid      string // current room
-	ip       string
-	replaced bool
+	hub       *Hub
+	send      chan []byte
+	sid       string
+	cid       string // assigned on join
+	rid       string // current room
+	ip        string
+	replaced  bool
+	lastSeen  int64
+	transport TransportKind
 }
 
 func newHub() *Hub {
@@ -79,10 +69,6 @@ func newHub() *Hub {
 		clients:      make(map[*Client]bool),
 		clientsBySID: make(map[string]*Client),
 	}
-}
-
-func (h *Hub) run() {
-	// Simple run loop if needed, for MVP we handle events directly
 }
 
 func (h *Hub) registerClient(c *Client) {
@@ -131,80 +117,6 @@ func (h *Hub) replaceClient(oldClient, newClient *Client) {
 	oldClient.replaced = true
 }
 
-func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	ip := getClientIP(r)
-	sid := generateID("S-")
-	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256), sid: sid, ip: ip}
-
-	hub.registerClient(client)
-
-	go client.writePump()
-	go client.readPump()
-}
-
-func (c *Client) readPump() {
-	defer func() {
-		c.hub.handleDisconnect(c)
-		c.conn.Close()
-	}()
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
-
-	for {
-		_, message, err := c.conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
-			}
-			break
-		}
-		c.hub.handleMessage(c, message)
-	}
-}
-
-func (c *Client) writePump() {
-	ticker := time.NewTicker(pingPeriod)
-	defer func() {
-		ticker.Stop()
-		c.conn.Close()
-	}()
-	for {
-		select {
-		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-
-			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				return
-			}
-			w.Write(message)
-
-			// Coalescing disabled to prevent JSON parsing errors on client
-			// if multiple messages are sent in one frame.
-
-			if err := w.Close(); err != nil {
-				return
-			}
-		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-		}
-	}
-}
-
 func (c *Client) sendMessage(msg interface{}) {
 	b, err := json.Marshal(msg)
 	if err != nil {
@@ -233,6 +145,8 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 	}
 
 	switch msg.Type {
+	case "ping":
+		return
 	case "join":
 		log.Printf("[JOIN] Client %s joining room %s", c.sid, msg.RID)
 		if c.rid != "" {
@@ -284,20 +198,43 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	h.mu.Unlock()
 
 	room.mu.Lock()
-	// Checks...
-	if len(room.Participants) >= 2 {
-		// Room is full. Check for reconnection/ghost eviction.
-		// Parse payload for reconnectCid
-		var joinPayload struct {
-			ReconnectCID string `json:"reconnectCid"`
+	var joinPayload struct {
+		ReconnectCID string `json:"reconnectCid"`
+	}
+	if len(msg.Payload) > 0 {
+		if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
+			log.Printf("[JOIN] Failed to parse payload: %v", err)
 		}
-		if len(msg.Payload) > 0 {
-			if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
-				log.Printf("[JOIN] Failed to parse payload: %v", err)
+	}
+
+	reconnectCID := joinPayload.ReconnectCID
+	reusedCID := false
+
+	if reconnectCID != "" {
+		var ghostClient *Client
+		for client, cid := range room.Participants {
+			if cid == reconnectCID {
+				ghostClient = client
+				break
 			}
 		}
 
-		reconnectCID := joinPayload.ReconnectCID
+		if ghostClient != nil {
+			delete(room.Participants, ghostClient)
+			ghostClient.cid = ""
+			ghostClient.rid = ""
+			reusedCID = true
+
+			if room.HostCID == reconnectCID {
+				room.HostCID = reconnectCID
+			} else if room.HostCID == "" {
+				room.HostCID = ""
+			}
+		}
+	}
+
+	// Checks...
+	if len(room.Participants) >= 2 {
 		evicted := false
 
 		if reconnectCID != "" {
@@ -350,6 +287,9 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	cid := generateID("C-")
+	if reusedCID && reconnectCID != "" {
+		cid = reconnectCID
+	}
 	c.cid = cid
 	c.rid = rid
 	room.Participants[c] = cid
@@ -545,31 +485,6 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 		}
 	}
 	log.Printf("[RELAY] Client %s (CID: %s) relayed %s message to %d participants in room %s", c.sid, c.cid, msg.Type, relayedCount, c.rid)
-}
-
-func (h *Hub) handleDisconnect(c *Client) {
-	if c.replaced {
-		h.mu.Lock()
-		delete(h.clients, c)
-		h.mu.Unlock()
-		return
-	}
-	if c.conn == nil {
-		go h.delayDisconnectSSE(c)
-		return
-	}
-	h.disconnectClient(c)
-}
-
-func (h *Hub) delayDisconnectSSE(c *Client) {
-	time.Sleep(sseGracePeriod)
-	h.mu.RLock()
-	current := h.clientsBySID[c.sid]
-	h.mu.RUnlock()
-	if current != c {
-		return
-	}
-	h.disconnectClient(c)
 }
 
 func (h *Hub) disconnectClient(c *Client) {

@@ -6,10 +6,24 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-const ssePingPeriod = 15 * time.Second
+const (
+	ssePingPeriod     = 15 * time.Second
+	sseGracePeriod    = 5 * time.Second
+	sseStaleTimeout   = 60 * time.Second
+	sseReaperInterval = 15 * time.Second
+)
+
+func (h *Hub) run() {
+	ticker := time.NewTicker(sseReaperInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		h.evictStaleSSE()
+	}
+}
 
 func handleSSE(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -42,17 +56,18 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	ip := getClientIP(r)
-	client := &Client{hub: hub, send: make(chan []byte, 256), sid: sid, ip: ip}
+	client := &Client{hub: hub, send: make(chan []byte, 256), sid: sid, ip: ip, transport: TransportSSE}
 	if existing := hub.getClientBySID(sid); existing != nil {
 		hub.replaceClient(existing, client)
 	} else {
 		hub.registerClient(client)
 	}
+	hub.markSSESeen(client)
 
 	log.Printf("[SSE] Client %s connected", client.sid)
 
 	if _, err := w.Write([]byte(": ready\n\n")); err != nil {
-		hub.handleDisconnect(client)
+		hub.handleDisconnectSSE(client)
 		return
 	}
 	flusher.Flush()
@@ -61,7 +76,7 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	ctxDone := r.Context().Done()
 	client.writeSSE(w, flusher, ctxDone)
 
-	hub.handleDisconnect(client)
+	hub.handleDisconnectSSE(client)
 }
 
 func handleSSEPost(hub *Hub, w http.ResponseWriter, r *http.Request) {
@@ -92,6 +107,7 @@ func handleSSEPost(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	hub.markSSESeen(client)
 	hub.handleMessage(client, body)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -138,4 +154,51 @@ func writeSSEMessage(w http.ResponseWriter, flusher http.Flusher, data []byte) e
 	}
 	flusher.Flush()
 	return nil
+}
+
+func (h *Hub) markSSESeen(c *Client) {
+	atomic.StoreInt64(&c.lastSeen, time.Now().UnixNano())
+}
+
+func (h *Hub) handleDisconnectSSE(c *Client) {
+	if c.replaced {
+		h.mu.Lock()
+		delete(h.clients, c)
+		h.mu.Unlock()
+		return
+	}
+	go h.delayDisconnectSSE(c)
+}
+
+func (h *Hub) delayDisconnectSSE(c *Client) {
+	time.Sleep(sseGracePeriod)
+	h.mu.RLock()
+	current := h.clientsBySID[c.sid]
+	h.mu.RUnlock()
+	if current != c {
+		return
+	}
+	h.disconnectClient(c)
+}
+
+func (h *Hub) evictStaleSSE() {
+	now := time.Now().UnixNano()
+	cutoff := now - sseStaleTimeout.Nanoseconds()
+	stale := make([]*Client, 0)
+
+	h.mu.RLock()
+	for client := range h.clients {
+		if client.transport != TransportSSE || client.replaced {
+			continue
+		}
+		lastSeen := atomic.LoadInt64(&client.lastSeen)
+		if lastSeen > 0 && lastSeen < cutoff {
+			stale = append(stale, client)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, client := range stale {
+		h.disconnectClient(client)
+	}
 }
