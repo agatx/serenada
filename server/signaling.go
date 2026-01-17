@@ -240,10 +240,67 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	room.mu.Lock()
 	// Checks...
 	if len(room.Participants) >= 2 {
-		room.mu.Unlock()
-		log.Printf("[JOIN] Room %s is full", rid)
-		c.sendError(rid, "ROOM_FULL", "Room is full")
-		return
+		// Room is full. Check for reconnection/ghost eviction.
+		// Parse payload for reconnectCid
+		var joinPayload struct {
+			ReconnectCID string `json:"reconnectCid"`
+		}
+		if len(msg.Payload) > 0 {
+			if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
+				log.Printf("[JOIN] Failed to parse payload: %v", err)
+			}
+		}
+
+		reconnectCID := joinPayload.ReconnectCID
+		evicted := false
+
+		if reconnectCID != "" {
+			var ghostClient *Client
+			for client, cid := range room.Participants {
+				if cid == reconnectCID {
+					ghostClient = client
+					break
+				}
+			}
+
+			if ghostClient != nil {
+				log.Printf("[JOIN] Reconnection detected for CID %s. Evicting ghost client %s", reconnectCID, ghostClient.sid)
+				// Evict ghost. MUST unlock room before calling removeClientFromRoom because it locks hub then room.
+				// Wait, removeClientFromRoom locks hub then room. We currently hold room lock.
+				// We CANNOT call removeClientFromRoom here directly without deadlock or complex unlocking.
+				// Alternative: Mark for removal, unlock, remove, retry join?
+				// Or: Just remove from room.Participants manually here?
+				// Removing manually requires updating Hub.watchers and Hub.rooms if empty, which needs Hub lock.
+				// We do NOT hold Hub lock here (unlocked at line 238).
+
+				// Best strategy: Unlock, remove ghost, retry logic?
+				// But we are in middle of function.
+
+				// Let's do this: Release room lock, call removeClientFromRoom, re-acquire room lock.
+				room.mu.Unlock()
+
+				// We need to ensure we don't race.
+				// Actually, handleDisconnect might be running for ghost.
+				h.removeClientFromRoom(ghostClient)
+
+				room.mu.Lock()
+				// Re-check state after re-lock
+				if len(room.Participants) >= 2 {
+					// Still full? Maybe someone else joined or ghost removal failed (already gone).
+					// If ghost is gone, len should be < 2.
+					// Let's just fall through to check again.
+				} else {
+					evicted = true
+				}
+			}
+		}
+
+		if !evicted && len(room.Participants) >= 2 {
+			room.mu.Unlock()
+			log.Printf("[JOIN] Room %s is full", rid)
+			c.sendError(rid, "ROOM_FULL", "Room is full")
+			return
+		}
 	}
 
 	cid := generateID("C-")
@@ -485,7 +542,11 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 			break // pick any
 		}
 		room.HostCID = newHost
-		log.Printf("[REMOVE_FROM_ROOM] Host %s left room %s. New host: %s", c.cid, c.rid, newHost)
+		if newHost != "" {
+			log.Printf("[REMOVE_FROM_ROOM] Host %s left room %s. New host: %s", c.cid, c.rid, newHost)
+		} else {
+			// No participants left, host is empty
+		}
 	}
 
 	isEmpty := len(room.Participants) == 0

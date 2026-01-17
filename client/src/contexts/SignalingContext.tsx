@@ -60,6 +60,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const currentRoomIdRef = useRef<string | null>(null);
     const pendingJoinRef = useRef<string | null>(null);
     const clientIdRef = useRef<string | null>(null);
+    const lastClientIdRef = useRef<string | null>(null);
 
     // Sync ref
     useEffect(() => {
@@ -110,6 +111,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 if (closedByUnmount) return;
                 console.error(`[WS] Disconnected via ${reason}`, err);
                 setIsConnected(false);
+                // Keep lastClientIdRef for reconnection attempt
+                if (clientIdRef.current) {
+                    lastClientIdRef.current = clientIdRef.current;
+                }
                 setClientId(null);
                 setRoomState(null);
                 setTurnToken(null);
@@ -126,6 +131,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     pendingJoinRef.current = null;
                 } else if (currentRoomIdRef.current) {
                     // If we lost the connection mid-call, automatically rejoin
+                    console.log(`[WS] Auto-rejoining room ${currentRoomIdRef.current}`);
                     joinRoom(currentRoomIdRef.current);
                 }
             };
@@ -229,8 +235,14 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         console.log(`[Signaling] joinRoom call for ${roomId}`);
         setError(null);
         currentRoomIdRef.current = roomId;
+        currentRoomIdRef.current = roomId;
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            sendMessage('join', { capabilities: { trickleIce: true } });
+            const payload: any = { capabilities: { trickleIce: true } };
+            // If we have a previous client ID, send it to help server evict ghosts
+            if (lastClientIdRef.current) {
+                payload.reconnectCid = lastClientIdRef.current;
+            }
+            sendMessage('join', payload);
         } else {
             console.log('[Signaling] WS not ready, buffering join');
             pendingJoinRef.current = roomId;
@@ -240,6 +252,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const leaveRoom = useCallback(() => {
         sendMessage('leave');
         currentRoomIdRef.current = null;
+        lastClientIdRef.current = null; // Clear last ID on explicit leave
         setRoomState(null);
     }, [sendMessage]);
 
