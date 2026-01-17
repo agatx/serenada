@@ -166,9 +166,20 @@ export class SseTransport implements SignalingTransport {
                 'X-SSE-SID': this.sid
             },
             body: JSON.stringify(msg)
-        }).catch(err => {
-            console.error('[SSE] Failed to send message', err);
-        });
+        })
+            .then(res => {
+                if (res.status === 410) {
+                    this.open = false;
+                    if (this.es) {
+                        this.es.close();
+                        this.es = null;
+                    }
+                    this.handlers.onClose('gone');
+                }
+            })
+            .catch(err => {
+                console.error('[SSE] Failed to send message', err);
+            });
     }
 }
 
