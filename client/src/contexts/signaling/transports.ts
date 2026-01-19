@@ -48,6 +48,7 @@ export class WebSocketTransport implements SignalingTransport {
     private ws: WebSocket | null = null;
     private handlers: TransportHandlers;
     private open = false;
+    private connectTimeout: number | null = null;
 
     constructor(handlers: TransportHandlers) {
         this.handlers = handlers;
@@ -57,17 +58,39 @@ export class WebSocketTransport implements SignalingTransport {
         const wsUrl = getWsUrl();
         this.ws = new WebSocket(wsUrl);
 
+        // 2-second timeout for connection to open (handles hanging connections)
+        this.connectTimeout = window.setTimeout(() => {
+            if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
+                console.warn('[WS] Connection timeout after 2s, falling back to SSE');
+                this.ws.close();
+                this.open = false;
+                this.handlers.onClose('timeout');
+            }
+        }, 2000);
+
         this.ws.onopen = () => {
+            if (this.connectTimeout) {
+                window.clearTimeout(this.connectTimeout);
+                this.connectTimeout = null;
+            }
             this.open = true;
             this.handlers.onOpen();
         };
 
         this.ws.onclose = (evt) => {
+            if (this.connectTimeout) {
+                window.clearTimeout(this.connectTimeout);
+                this.connectTimeout = null;
+            }
             this.open = false;
             this.handlers.onClose('close', evt);
         };
 
         this.ws.onerror = (err) => {
+            if (this.connectTimeout) {
+                window.clearTimeout(this.connectTimeout);
+                this.connectTimeout = null;
+            }
             this.open = false;
             this.handlers.onClose('error', err);
         };
@@ -83,6 +106,10 @@ export class WebSocketTransport implements SignalingTransport {
     }
 
     close() {
+        if (this.connectTimeout) {
+            window.clearTimeout(this.connectTimeout);
+            this.connectTimeout = null;
+        }
         if (this.ws) {
             this.ws.close();
             this.ws = null;

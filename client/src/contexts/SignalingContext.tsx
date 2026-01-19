@@ -207,6 +207,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 return;
             }
             console.warn('[Signaling] WS failed, falling back to SSE');
+            showToast('info', 'Connection slow, trying alternative...');
             reconnectAttemptsRef.current = 0;
             connect('sse');
         };
@@ -266,6 +267,12 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     transportRef.current = null;
 
                     if (targetKind === 'ws' && !wsConnectedOnceRef.current) {
+                        switchToSSE();
+                        return;
+                    }
+
+                    // Also fall back to SSE on timeout (hanging WS connection)
+                    if (targetKind === 'ws' && reason === 'timeout') {
                         switchToSSE();
                         return;
                     }
