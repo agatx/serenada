@@ -13,6 +13,7 @@ services:
       - TURN_HOST=${TURN_HOST}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - TRUST_PROXY=${TRUST_PROXY}
+      - BLOCK_WEBSOCKET=${BLOCK_WEBSOCKET}
     restart: unless-stopped
 
   # Coturn Server

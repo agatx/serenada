@@ -314,7 +314,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	// Include TURN token in joined response (gated by valid room ID)
-	token, expiresAt, err := issueTurnToken(c.ip, 5*time.Minute, turnTokenKindCall)
+	token, expiresAt, err := issueTurnToken(5*time.Minute, turnTokenKindCall)
 	if err != nil {
 		log.Printf("[TURN] Failed to issue token: %v", err)
 	} else {

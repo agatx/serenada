@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -54,6 +55,9 @@ func main() {
 	wsLimiter := NewIPLimiter(10.0/60.0, 5)
 	// SSE: allow bursts for signaling messages
 	sseLimiter := NewIPLimiter(1200.0/60.0, 200)
+	wsBlockMode := strings.TrimSpace(os.Getenv("BLOCK_WEBSOCKET"))
+	wsHang := strings.EqualFold(wsBlockMode, "hang")
+	wsBlocked := !wsHang && strings.EqualFold(wsBlockMode, "block")
 
 	// API: 5 requests per minute per IP
 	turnCredsLimiter := NewIPLimiter(5.0/60.0, 5)
@@ -62,6 +66,14 @@ func main() {
 	roomIDLimiter := NewIPLimiter(30.0/60.0, 10)
 
 	http.HandleFunc("/ws", rateLimitMiddleware(wsLimiter, func(w http.ResponseWriter, r *http.Request) {
+		if wsHang {
+			hangWebSocket(w)
+			return
+		}
+		if wsBlocked {
+			http.Error(w, "WebSocket blocked (simulated)", http.StatusForbidden)
+			return
+		}
 		serveWs(hub, w, r)
 	}))
 	http.HandleFunc("/sse", rateLimitMiddleware(sseLimiter, enableCors(handleSSE(hub))))
@@ -88,4 +100,16 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
+}
+
+func hangWebSocket(w http.ResponseWriter) {
+	if hj, ok := w.(http.Hijacker); ok {
+		conn, _, err := hj.Hijack()
+		if err == nil {
+			time.Sleep(30 * time.Second)
+			conn.Close()
+			return
+		}
+	}
+	time.Sleep(30 * time.Second)
 }

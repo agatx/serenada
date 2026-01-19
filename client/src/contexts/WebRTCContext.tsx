@@ -221,6 +221,35 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         };
     }, [subscribeToMessages, processSignalingMessage]);
 
+    const applySpeechTrackHints = (stream: MediaStream) => {
+        const audioTrack = stream.getAudioTracks()[0];
+        if (!audioTrack) return;
+        if ('contentHint' in audioTrack) {
+            try {
+                audioTrack.contentHint = 'speech';
+            } catch (err) {
+                console.warn('[WebRTC] Failed to set audio contentHint', err);
+            }
+        }
+    };
+
+    const applyAudioSenderParameters = async (pc: RTCPeerConnection) => {
+        const sender = pc.getSenders().find(s => s.track?.kind === 'audio');
+        if (!sender || !sender.getParameters || !sender.setParameters) return;
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || params.encodings.length === 0) {
+                params.encodings = [{}];
+            }
+            if (params.encodings[0]) {
+                params.encodings[0].maxBitrate = 32000; // Speech-optimized bitrate (bps)
+            }
+            await sender.setParameters(params);
+        } catch (err) {
+            console.warn('[WebRTC] Failed to apply audio sender parameters', err);
+        }
+    };
+
     // Logic to initiate offer if we are HOST and have 2 participants
     useEffect(() => {
         // Wait for ICE config to be loaded before attempting to create peer connection
@@ -266,6 +295,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             localStream.getTracks().forEach(track => {
                 pc.addTrack(track, localStream);
             });
+            void applyAudioSenderParameters(pc);
         }
 
         pc.ontrack = (event) => {
@@ -363,9 +393,16 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 requestingMediaRef.current = false;
                 return;
             }
+            const audioConstraints: MediaTrackConstraints = {
+                echoCancellation: { ideal: true },
+                noiseSuppression: { ideal: true },
+                autoGainControl: { ideal: true },
+                channelCount: { ideal: 1 },
+                sampleRate: { ideal: 48000 }
+            };
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: facingMode },
-                audio: true
+                audio: audioConstraints
             });
 
             // Check validity:
@@ -377,6 +414,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 return;
             }
 
+            applySpeechTrackHints(stream);
             setLocalStream(stream);
             requestingMediaRef.current = false;
 
@@ -384,6 +422,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 stream.getTracks().forEach(track => {
                     pcRef.current?.addTrack(track, stream);
                 });
+                void applyAudioSenderParameters(pcRef.current);
             }
             return;
         } catch (err) {

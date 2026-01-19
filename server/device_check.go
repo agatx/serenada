@@ -178,6 +178,16 @@ const deviceCheckHTML = `
         </div>
 
         <div class="card">
+            <div class="card-title">Audio Processing Capabilities</div>
+            <div id="audio-constraints"></div>
+            <div class="item">
+                <span class="label">Track Capabilities</span>
+                <span id="audio-track-status" class="value">Run "Test Permissions"</span>
+            </div>
+            <div id="audio-track-info"></div>
+        </div>
+
+        <div class="card">
             <div class="card-title">
                 Media Devices
                 <button class="btn" onclick="requestMediaPermissions()" style="margin: 0; padding: 0.25rem 0.5rem; font-size: 0.75rem;">Test Permissions</button>
@@ -241,6 +251,38 @@ const deviceCheckHTML = `
             if (!el) return;
             el.className = 'status-badge status-' + status;
             el.textContent = text || status.toUpperCase();
+        }
+
+        function appendItem(container, label, value) {
+            if (!container) return;
+            var div = document.createElement('div');
+            div.className = 'item';
+            var labelEl = document.createElement('span');
+            labelEl.className = 'label';
+            labelEl.textContent = label;
+            var valueEl = document.createElement('span');
+            valueEl.className = 'value';
+            valueEl.textContent = value;
+            div.appendChild(labelEl);
+            div.appendChild(valueEl);
+            container.appendChild(div);
+        }
+
+        function formatValue(value) {
+            if (value === undefined || value === null) return 'N/A';
+            if (typeof value === 'boolean') return value ? 'YES' : 'NO';
+            if (Array.isArray(value)) return JSON.stringify(value);
+            if (typeof value === 'object') {
+                if (value.min !== undefined || value.max !== undefined) {
+                    var minVal = value.min !== undefined ? value.min : '';
+                    var maxVal = value.max !== undefined ? value.max : '';
+                    if (minVal !== '' && maxVal !== '') return minVal + ' - ' + maxVal;
+                    if (minVal !== '') return '>= ' + minVal;
+                    if (maxVal !== '') return '<= ' + maxVal;
+                }
+                return JSON.stringify(value);
+            }
+            return String(value);
         }
 
         function logIce(msg) {
@@ -407,6 +449,79 @@ const deviceCheckHTML = `
             updateStatus('enumerate-support', enumDev ? 'ok' : 'error');
         }
 
+        function checkAudioCapabilities() {
+            var container = document.getElementById('audio-constraints');
+            if (!container) return;
+            container.innerHTML = '';
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getSupportedConstraints) {
+                appendItem(container, 'getSupportedConstraints', 'NOT SUPPORTED');
+                return;
+            }
+
+            var supported = navigator.mediaDevices.getSupportedConstraints();
+            appendItem(container, 'echoCancellation', formatValue(supported.echoCancellation));
+            appendItem(container, 'noiseSuppression', formatValue(supported.noiseSuppression));
+            appendItem(container, 'autoGainControl', formatValue(supported.autoGainControl));
+            appendItem(container, 'channelCount', formatValue(supported.channelCount));
+            appendItem(container, 'sampleRate', formatValue(supported.sampleRate));
+            appendItem(container, 'sampleSize', formatValue(supported.sampleSize));
+            appendItem(container, 'latency', formatValue(supported.latency));
+            appendItem(container, 'contentHint', formatValue(!!(window.MediaStreamTrack && MediaStreamTrack.prototype && 'contentHint' in MediaStreamTrack.prototype)));
+            appendItem(container, 'getCapabilities()', formatValue(!!(window.MediaStreamTrack && MediaStreamTrack.prototype && MediaStreamTrack.prototype.getCapabilities)));
+        }
+
+        function updateAudioTrackDiagnostics(stream) {
+            var statusEl = document.getElementById('audio-track-status');
+            var infoEl = document.getElementById('audio-track-info');
+            if (!infoEl) return;
+            infoEl.innerHTML = '';
+
+            if (!stream) {
+                if (statusEl) statusEl.textContent = 'NO STREAM';
+                return;
+            }
+            var audioTrack = stream.getAudioTracks()[0];
+            if (!audioTrack) {
+                if (statusEl) statusEl.textContent = 'NO AUDIO TRACK';
+                return;
+            }
+
+            if (statusEl) statusEl.textContent = 'AVAILABLE';
+            appendItem(infoEl, 'track.label', audioTrack.label || 'N/A');
+            appendItem(infoEl, 'track.enabled', formatValue(audioTrack.enabled));
+            appendItem(infoEl, 'track.muted', formatValue(audioTrack.muted));
+            if ('contentHint' in audioTrack) {
+                appendItem(infoEl, 'track.contentHint', audioTrack.contentHint || '(empty)');
+            }
+
+            if (audioTrack.getSettings) {
+                var settings = audioTrack.getSettings();
+                appendItem(infoEl, 'settings.echoCancellation', formatValue(settings.echoCancellation));
+                appendItem(infoEl, 'settings.noiseSuppression', formatValue(settings.noiseSuppression));
+                appendItem(infoEl, 'settings.autoGainControl', formatValue(settings.autoGainControl));
+                appendItem(infoEl, 'settings.channelCount', formatValue(settings.channelCount));
+                appendItem(infoEl, 'settings.sampleRate', formatValue(settings.sampleRate));
+                appendItem(infoEl, 'settings.sampleSize', formatValue(settings.sampleSize));
+                appendItem(infoEl, 'settings.latency', formatValue(settings.latency));
+            } else {
+                appendItem(infoEl, 'getSettings()', 'NOT SUPPORTED');
+            }
+
+            if (audioTrack.getCapabilities) {
+                var caps = audioTrack.getCapabilities();
+                appendItem(infoEl, 'caps.echoCancellation', formatValue(caps.echoCancellation));
+                appendItem(infoEl, 'caps.noiseSuppression', formatValue(caps.noiseSuppression));
+                appendItem(infoEl, 'caps.autoGainControl', formatValue(caps.autoGainControl));
+                appendItem(infoEl, 'caps.channelCount', formatValue(caps.channelCount));
+                appendItem(infoEl, 'caps.sampleRate', formatValue(caps.sampleRate));
+                appendItem(infoEl, 'caps.sampleSize', formatValue(caps.sampleSize));
+                appendItem(infoEl, 'caps.latency', formatValue(caps.latency));
+            } else {
+                appendItem(infoEl, 'getCapabilities()', 'NOT SUPPORTED');
+            }
+        }
+
         function checkNetwork() {
             // Check API
             var start = Date.now();
@@ -528,10 +643,12 @@ const deviceCheckHTML = `
                 .then(function(stream) {
                     statusEl.textContent = 'GRANTED';
                     statusEl.style.color = '#22c55e';
-                    
+
+                    updateAudioTrackDiagnostics(stream);
+
                     // Stop the stream immediately
                     stream.getTracks().forEach(function(track) { track.stop(); });
-                    
+
                     listDevices();
                 })
                 .catch(function(err) {
@@ -637,6 +754,7 @@ const deviceCheckHTML = `
         // Run core checks on load
         checkBrowser();
         checkWebRTC();
+        checkAudioCapabilities();
         checkNetwork();
         listDevices();
     </script>

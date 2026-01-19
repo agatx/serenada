@@ -42,6 +42,7 @@ const resources = {
             "footer_install": "Install App",
             "home": "Home",
             "install_ios_prompt": "To install Serenada on iOS, tap the share icon and then 'Add to Home Screen'.",
+            "install_mac_safari_prompt": "To install on macOS, go to File > Add to Dock.",
             "install_not_supported": "Direct installation is not supported on this browser. Try Chrome on Android or Safari on iOS."
         }
     },
@@ -84,6 +85,7 @@ const resources = {
             "footer_install": "Установить",
             "home": "На главную",
             "install_ios_prompt": "Чтобы установить на iOS, нажмите 'Поделиться' и затем 'На экран Домой'.",
+            "install_mac_safari_prompt": "Чтобы установить на macOS, перейдите в Файл > Добавить в Dock.",
             "install_not_supported": "Прямая установка не поддерживается. Попробуйте Chrome на Android или Safari на iOS."
         }
     },
@@ -126,6 +128,7 @@ const resources = {
             "footer_install": "Instalar App",
             "home": "Inicio",
             "install_ios_prompt": "Para instalar en iOS, toca el icono de compartir y 'Añadir a la pantalla de inicio'.",
+            "install_mac_safari_prompt": "Para instalar en macOS, ve a Archivo > Añadir al Dock.",
             "install_not_supported": "La instalación directa no es compatible. Prueba Chrome en Android o Safari en iOS."
         }
     },
@@ -168,6 +171,7 @@ const resources = {
             "footer_install": "Installer l'App",
             "home": "Accueil",
             "install_ios_prompt": "Pour installer sur iOS, appuyez sur l'icône de partage et 'Sur l'écran d'accueil'.",
+            "install_mac_safari_prompt": "Pour installer sur macOS, allez dans Fichier > Ajouter au Dock.",
             "install_not_supported": "L'installation directe n'est pas supportée. Essayez Chrome sur Android ou Safari sur iOS."
         }
     }

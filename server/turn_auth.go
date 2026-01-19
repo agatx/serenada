@@ -27,11 +27,11 @@ const (
 	turnTokenKindDiagnostic = "diagnostic"
 )
 
+// Token claims no longer include IP for robustness
 type turnTokenClaims struct {
 	V    int    `json:"v"`
 	Kind string `json:"k"`
 	Exp  int64  `json:"exp"`
-	IP   string `json:"ip,omitempty"`
 }
 
 func getTurnTokenSecret() (string, error) {
@@ -45,7 +45,7 @@ func getTurnTokenSecret() (string, error) {
 	return secret, nil
 }
 
-func issueTurnToken(ip string, ttl time.Duration, kind string) (string, time.Time, error) {
+func issueTurnToken(ttl time.Duration, kind string) (string, time.Time, error) {
 	secret, err := getTurnTokenSecret()
 	if err != nil {
 		return "", time.Time{}, err
@@ -56,7 +56,6 @@ func issueTurnToken(ip string, ttl time.Duration, kind string) (string, time.Tim
 		V:    turnTokenVersion,
 		Kind: kind,
 		Exp:  expiresAt.Unix(),
-		IP:   ip,
 	}
 
 	payloadBytes, err := json.Marshal(claims)
@@ -108,7 +107,7 @@ func parseTurnToken(token string) (turnTokenClaims, bool) {
 	return claims, true
 }
 
-func validateTurnToken(token, ip, kind string) bool {
+func validateTurnToken(token, kind string) bool {
 	claims, ok := parseTurnToken(token)
 	if !ok {
 		return false
@@ -122,9 +121,7 @@ func validateTurnToken(token, ip, kind string) bool {
 	if time.Now().Unix() > claims.Exp {
 		return false
 	}
-	if claims.IP != "" && claims.IP != ip {
-		return false
-	}
+	// IP check removed
 	return true
 }
 
@@ -145,9 +142,9 @@ func handleTurnCredentials() http.HandlerFunc {
 		credentialTTL := 15 * 60 // default: 15 minutes
 		isAuthorized := false
 
-		if validateTurnToken(token, clientIP, turnTokenKindCall) {
+		if validateTurnToken(token, turnTokenKindCall) {
 			isAuthorized = true
-		} else if validateTurnToken(token, clientIP, turnTokenKindDiagnostic) {
+		} else if validateTurnToken(token, turnTokenKindDiagnostic) {
 			isAuthorized = true
 			credentialTTL = 5
 		}
@@ -210,7 +207,7 @@ func handleDiagnosticToken() http.HandlerFunc {
 			return
 		}
 
-		token, expires, err := issueTurnToken(getClientIP(r), 5*time.Second, turnTokenKindDiagnostic)
+		token, expires, err := issueTurnToken(5*time.Second, turnTokenKindDiagnostic)
 		if err != nil {
 			http.Error(w, "TURN token unavailable", http.StatusServiceUnavailable)
 			return
