@@ -294,6 +294,54 @@ const deviceCheckHTML = `
             logEl.scrollTop = logEl.scrollHeight;
         }
 
+        // Helper: Make XHR request with callbacks (more reliable than fetch in old browsers)
+        function xhrRequest(method, url, headers, onSuccess, onError) {
+            try {
+                var xhr = new XMLHttpRequest();
+                xhr.open(method, url, true);
+                
+                if (headers) {
+                    for (var key in headers) {
+                        if (headers.hasOwnProperty(key)) {
+                            xhr.setRequestHeader(key, headers[key]);
+                        }
+                    }
+                }
+                
+                xhr.onreadystatechange = function() {
+                    if (xhr.readyState === 4) {
+                        logIce('XHR ' + method + ' ' + url + ' -> ' + xhr.status);
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            try {
+                                var data = JSON.parse(xhr.responseText);
+                                onSuccess(data);
+                            } catch (e) {
+                                onError('Failed to parse response: ' + e.message);
+                            }
+                        } else {
+                            onError('HTTP ' + xhr.status + ': ' + xhr.statusText);
+                        }
+                    }
+                };
+                
+                xhr.onerror = function() {
+                    logIce('XHR network error for ' + url);
+                    onError('Network error');
+                };
+                
+                xhr.ontimeout = function() {
+                    logIce('XHR timeout for ' + url);
+                    onError('Request timed out');
+                };
+                
+                xhr.timeout = 15000; // 15 second timeout
+                xhr.send();
+            } catch (e) {
+                logIce('XHR exception: ' + e.message);
+                onError('Exception: ' + e.message);
+            }
+        }
+
         function runIceTest(turnsOnly) {
             var btn = document.getElementById('ice-test-btn');
             var btnT = document.getElementById('ice-test-turns-btn');
@@ -305,121 +353,202 @@ const deviceCheckHTML = `
             var logEl = document.getElementById('ice-log');
             if (logEl) logEl.innerHTML = '';
             
+            logIce('Starting ICE test (turnsOnly=' + !!turnsOnly + ')...');
             logIce('Requesting diagnostic token...');
             
-            fetch('/api/diagnostic-token', { method: 'POST' })
-                .then(function(res) {
-                    if (!res.ok) throw new Error('Failed to fetch diagnostic token: ' + res.status);
-                    return res.json();
-                })
-                .then(function(data) {
-                    var token = data.token;
-                    logIce('Token received. Fetching TURN credentials...');
-                    return fetch('/api/turn-credentials', {
-                        headers: { 'X-Turn-Token': token }
-                    });
-                })
-                .then(function(res) {
-                    if (!res.ok) throw new Error('Failed to fetch credentials: ' + res.status);
-                    return res.json();
-                })
-                .then(function(config) {
-                    if (turnsOnly) {
-                        config.uris = config.uris.filter(function(u) { return u.startsWith('turns:'); });
-                        logIce('Filtered for TURNS only.');
+            function handleError(msg) {
+                logIce('Error: ' + msg);
+                updateStatus('stun-status', 'error', 'FAILED');
+                updateStatus('turn-status', 'error', 'FAILED');
+                if (btn) btn.disabled = false;
+                if (btnT) btnT.disabled = false;
+            }
+            
+            // Step 1: Get diagnostic token
+            xhrRequest('POST', '/api/diagnostic-token', null, 
+                function(data) {
+                    logIce('Token received: ' + (data.token ? data.token.substring(0, 20) + '...' : 'EMPTY'));
+                    if (!data.token) {
+                        handleError('No token in response');
+                        return;
                     }
-                    if (config.uris.length === 0) {
-                        throw new Error('No compatible ICE servers found for this test mode.');
-                    }
-                    logIce('Credentials received. Starting ICE gathering...');
-                    testIceConfig(config, turnsOnly);
-                })
-                .catch(function(err) {
-                    logIce('Error: ' + err.message);
-                    updateStatus('stun-status', 'error', 'FAILED');
-                    updateStatus('turn-status', 'error', 'FAILED');
-                    if (btn) btn.disabled = false;
-                    if (btnT) btnT.disabled = false;
-                });
+                    
+                    // Step 2: Get TURN credentials
+                    logIce('Fetching TURN credentials...');
+                    // Use query parameter instead of header to avoid CORS preflight (OPTIONS) which fails on old WebViews
+                    xhrRequest('GET', '/api/turn-credentials?token=' + encodeURIComponent(data.token), null,
+                        function(config) {
+                            logIce('Credentials received.');
+                            if (!config.uris || config.uris.length === 0) {
+                                handleError('No ICE servers in response');
+                                return;
+                            }
+                            
+                            // Filter for TURNS only if requested
+                            if (turnsOnly) {
+                                var filtered = [];
+                                for (var i = 0; i < config.uris.length; i++) {
+                                    if (config.uris[i].indexOf('turns:') === 0) {
+                                        filtered.push(config.uris[i]);
+                                    }
+                                }
+                                config.uris = filtered;
+                                logIce('Filtered for TURNS only: ' + filtered.length + ' servers');
+                            }
+                            
+                            if (config.uris.length === 0) {
+                                handleError('No compatible ICE servers found for this test mode.');
+                                return;
+                            }
+                            
+                            logIce('Starting ICE gathering with ' + config.uris.length + ' servers...');
+                            testIceConfig(config, turnsOnly, btn, btnT);
+                        },
+                        handleError
+                    );
+                },
+                handleError
+            );
         }
 
-        function testIceConfig(config, turnsOnly) {
-            logIce('ICE Servers: ' + JSON.stringify(config.uris));
+        function testIceConfig(config, turnsOnly, btn, btnT) {
+            try {
+                logIce('ICE Servers: ' + JSON.stringify(config.uris));
+            } catch(e) {
+                logIce('ICE Servers: (could not stringify)');
+            }
             
             var iceServers = [];
-            if (config.uris) {
-                config.uris.forEach(function(url) {
+            try {
+                for (var i = 0; i < config.uris.length; i++) {
+                    var url = config.uris[i];
                     var server = { urls: url };
                     if (url.indexOf('stun:') !== 0) {
                         server.username = config.username;
                         server.credential = config.password;
                     }
                     iceServers.push(server);
-                });
+                }
+            } catch(e) {
+                logIce('Error building ICE servers: ' + e.message);
             }
             
-            var pc = new RTCPeerConnection({ iceServers: iceServers });
+            var pc;
+            try {
+                var RTCPeer = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+                if (!RTCPeer) {
+                    logIce('ERROR: RTCPeerConnection not supported');
+                    updateStatus('stun-status', 'error', 'NOT SUPPORTED');
+                    updateStatus('turn-status', 'error', 'NOT SUPPORTED');
+                    if (btn) btn.disabled = false;
+                    if (btnT) btnT.disabled = false;
+                    return;
+                }
+                pc = new RTCPeer({ iceServers: iceServers });
+                logIce('RTCPeerConnection created successfully');
+            } catch(e) {
+                logIce('ERROR creating RTCPeerConnection: ' + e.message);
+                updateStatus('stun-status', 'error', 'PC ERROR');
+                updateStatus('turn-status', 'error', 'PC ERROR');
+                if (btn) btn.disabled = false;
+                if (btnT) btnT.disabled = false;
+                return;
+            }
 
             var stunFound = false;
             var turnFound = false;
+            var finished = false;
             var timeout = setTimeout(function() {
-                logIce('ICE Gathering timed out (10s)');
+                logIce('ICE Gathering timed out (15s)');
                 finish();
-            }, 10000);
+            }, 15000);
 
             var isTurnsTest = turnsOnly;
+            
             pc.onicecandidate = function(event) {
-                if (event.candidate) {
-                    var c = event.candidate.candidate;
-                    var parts = c.split(' ');
-                    var ip = parts[4];
-                    var port = parts[5];
-                    var type = event.candidate.type;
-                    var proto = event.candidate.protocol;
-                    var relayProto = parts[2].toLowerCase(); // e.g. 'udp', 'tcp'
-                    
-                    var logMsg = 'Found candidate: ' + type + ' (' + proto + ') -> ' + ip + ':' + port;
-                    if (type === 'relay') {
-                        logMsg += ' [relay-proto: ' + relayProto + ']';
-                        turnFound = true;
-                        updateStatus('turn-status', 'ok', isTurnsTest ? 'TURNS SUCCESS' : 'SUCCESS');
+                try {
+                    if (event.candidate && event.candidate.candidate) {
+                        var c = event.candidate.candidate;
+                        var parts = c.split(' ');
+                        var ip = parts[4] || 'unknown';
+                        var port = parts[5] || 'unknown';
+                        var type = event.candidate.type || 'unknown';
+                        var proto = event.candidate.protocol || 'unknown';
+                        var relayProto = (parts[2] || '').toLowerCase();
+                        
+                        var logMsg = 'Candidate: ' + type + ' (' + proto + ') -> ' + ip + ':' + port;
+                        if (type === 'relay') {
+                            logMsg += ' [' + relayProto + ']';
+                            turnFound = true;
+                            updateStatus('turn-status', 'ok', isTurnsTest ? 'TURNS OK' : 'OK');
+                        }
+                        logIce(logMsg);
+                        
+                        if (type === 'srflx') {
+                            stunFound = true;
+                            updateStatus('stun-status', 'ok', 'OK');
+                        }
+                    } else if (event.candidate === null) {
+                        logIce('ICE Gathering complete.');
+                        if (isTurnsTest && turnFound) {
+                            logIce('NOTE: relay (udp) with TURNS = TLS connection, UDP relay (ideal).');
+                        }
+                        finish();
                     }
-                    logIce(logMsg);
-                    
-                    if (event.candidate.type === 'srflx') {
-                        stunFound = true;
-                        updateStatus('stun-status', 'ok', 'SUCCESS');
-                    }
-                } else {
-                    logIce('ICE Gathering complete.');
-                    if (isTurnsTest && turnFound) {
-                        logIce('NOTE: "relay (udp)" with TURNS means you connected via TLS, but the server is relaying media via UDP (ideal).');
-                    }
-                    finish();
+                } catch(e) {
+                    logIce('Error processing candidate: ' + e.message);
                 }
+            };
+            
+            pc.onicegatheringstatechange = function() {
+                logIce('ICE gathering state: ' + pc.iceGatheringState);
             };
 
             // Trigger ICE gathering
-            pc.createDataChannel('test');
-            pc.createOffer().then(function(offer) {
-                return pc.setLocalDescription(offer);
-            }).catch(function(err) {
-                logIce('Offer error: ' + err.message);
+            try {
+                pc.createDataChannel('test');
+                logIce('DataChannel created');
+            } catch(e) {
+                logIce('DataChannel error: ' + e.message);
+            }
+            
+            try {
+                pc.createOffer(
+                    function(offer) {
+                        logIce('Offer created');
+                        pc.setLocalDescription(
+                            offer,
+                            function() {
+                                logIce('Local description set, gathering candidates...');
+                            },
+                            function(err) {
+                                logIce('setLocalDescription error: ' + (err.message || err));
+                                finish();
+                            }
+                        );
+                    },
+                    function(err) {
+                        logIce('createOffer error: ' + (err.message || err));
+                        finish();
+                    }
+                );
+            } catch(e) {
+                logIce('Offer exception: ' + e.message);
                 finish();
-            });
+            }
 
             function finish() {
+                if (finished) return;
+                finished = true;
                 clearTimeout(timeout);
                 if (!stunFound) updateStatus('stun-status', 'error', 'FAILED');
                 if (!turnFound) updateStatus('turn-status', 'error', 'FAILED');
                 
-                var btn = document.getElementById('ice-test-btn');
-                var btnT = document.getElementById('ice-test-turns-btn');
                 if (btn) btn.disabled = false;
                 if (btnT) btnT.disabled = false;
                 
-                // Cleanup
                 try { pc.close(); } catch(e) {}
+                logIce('Test finished. STUN: ' + (stunFound ? 'OK' : 'FAILED') + ', TURN: ' + (turnFound ? 'OK' : 'FAILED'));
             }
         }
 

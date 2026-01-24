@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -132,13 +133,15 @@ func handleTurnCredentials() http.HandlerFunc {
 			return
 		}
 
-		token := r.Header.Get("X-Turn-Token")
+		token := r.URL.Query().Get("token")
+		clientIP := getClientIP(r)
+
 		if token == "" {
+			log.Printf("[AUTH_FAIL] TURN Credentials requested by %s: No token provided", clientIP)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		clientIP := getClientIP(r)
 		credentialTTL := 15 * 60 // default: 15 minutes
 		isAuthorized := false
 
@@ -150,9 +153,12 @@ func handleTurnCredentials() http.HandlerFunc {
 		}
 
 		if !isAuthorized {
+			log.Printf("[AUTH_FAIL] TURN Credentials requested by %s: Invalid token", clientIP)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+
+		log.Printf("[AUTH_OK] TURN Credentials requested by %s", clientIP)
 
 		// 1. Get Secret and Host from Env
 		secret := os.Getenv("TURN_SECRET")

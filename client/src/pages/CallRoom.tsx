@@ -60,6 +60,7 @@ const CallRoom: React.FC = () => {
             /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
         );
     };
+    const shouldMirrorLocalVideo = facingMode === 'user';
 
     const exitFullscreenIfActive = () => {
         const doc = document as Document & {
@@ -279,7 +280,7 @@ const CallRoom: React.FC = () => {
                             autoPlay
                             playsInline
                             muted
-                            className="video-preview"
+                            className={`video-preview ${shouldMirrorLocalVideo ? 'mirrored' : ''}`}
                         />
                         {!localStream && <div className="video-placeholder">{t('camera_off')}</div>}
                     </div>
@@ -381,7 +382,7 @@ const CallRoom: React.FC = () => {
                     autoPlay
                     playsInline
                     muted
-                    className="video-local"
+                    className={`video-local ${shouldMirrorLocalVideo ? 'mirrored' : ''}`}
                 />
             </div>
 
