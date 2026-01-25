@@ -3,6 +3,7 @@ import { useToast } from './ToastContext';
 import { createSignalingTransport } from './signaling/transports';
 import type { TransportKind } from './signaling/transports';
 import type { RoomState, SignalingMessage } from './signaling/types';
+import { getConfiguredTransportOrder, parseTransportOrder } from './signaling/transportConfig';
 
 interface SignalingContextValue {
     isConnected: boolean;
@@ -47,9 +48,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const activeTransportKindRef = useRef<TransportKind>('ws');
 
     const transportRef = useRef<ReturnType<typeof createSignalingTransport> | null>(null);
-    const transportKindRef = useRef<TransportKind>('ws');
-    const forceSseRef = useRef(false);
-    const wsConnectedOnceRef = useRef(false);
+    const transportOrderRef = useRef<TransportKind[]>(getConfiguredTransportOrder());
+    const transportIndexRef = useRef(0);
+    const transportConnectedOnceRef = useRef<Record<TransportKind, boolean>>({ ws: false, sse: false });
     const transportIdRef = useRef(0);
     const currentRoomIdRef = useRef<string | null>(null);
     const pendingJoinRef = useRef<string | null>(null);
@@ -175,8 +176,12 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         let closedByUnmount = false;
         const connectingRef = { current: false };
         const params = new URLSearchParams(window.location.search);
-        const forceSse = params.get('sse') === '1' || params.get('signaling') === 'sse';
-        forceSseRef.current = forceSse;
+        const paramTransports = params.get('transports');
+        transportOrderRef.current = paramTransports
+            ? parseTransportOrder(paramTransports)
+            : getConfiguredTransportOrder();
+        transportIndexRef.current = 0;
+        transportConnectedOnceRef.current = { ws: false, sse: false };
 
         const clearReconnectTimeout = () => {
             if (reconnectTimeout !== null) {
@@ -185,7 +190,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             }
         };
 
-        const scheduleReconnect = (kind?: TransportKind) => {
+        const scheduleReconnect = () => {
             if (closedByUnmount) return;
             if (reconnectTimeout !== null) return;
             const attempt = reconnectAttemptsRef.current + 1;
@@ -194,30 +199,39 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
             reconnectTimeout = window.setTimeout(() => {
                 reconnectTimeout = null;
-                connect(kind);
+                connect();
             }, backoff);
         };
 
-        const switchToSSE = () => {
-            if (forceSseRef.current) return;
-            if (transportKindRef.current === 'sse') return;
-            if (typeof EventSource === 'undefined') {
-                console.error('[Signaling] SSE not supported in this browser');
-                scheduleReconnect('ws');
-                return;
-            }
-            console.warn('[Signaling] WS failed, falling back to SSE');
-            showToast('info', 'Connection slow, trying alternative...');
-            reconnectAttemptsRef.current = 0;
-            connect('sse');
+        const shouldFallback = (kind: TransportKind, reason: string) => {
+            const order = transportOrderRef.current;
+            if (order.length <= 1) return false;
+            if (transportIndexRef.current >= order.length - 1) return false;
+            if (reason === 'unsupported' || reason === 'timeout') return true;
+            if (!transportConnectedOnceRef.current[kind]) return true;
+            return false;
         };
 
-        const connect = (kind?: TransportKind) => {
+        const tryNextTransport = (reason: string) => {
+            const order = transportOrderRef.current;
+            const nextIndex = transportIndexRef.current + 1;
+            if (nextIndex >= order.length) return false;
+            console.warn(`[Signaling] ${order[transportIndexRef.current]} failed (${reason}), trying ${order[nextIndex]}`);
+            showToast('info', 'Connection issue, trying alternative...');
+            reconnectAttemptsRef.current = 0;
+            connect(nextIndex);
+            return true;
+        };
+
+        const connect = (index?: number) => {
             if (closedByUnmount) return;
             if (connectingRef.current) return;
 
-            const targetKind = kind || transportKindRef.current;
-            transportKindRef.current = targetKind;
+            const order = transportOrderRef.current;
+            const targetIndex = index ?? transportIndexRef.current;
+            const targetKind = order[targetIndex];
+            if (!targetKind) return;
+            transportIndexRef.current = targetIndex;
             connectingRef.current = true;
 
             if (transportRef.current) {
@@ -235,9 +249,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     activeTransportKindRef.current = targetKind;
                     const wasConnected = isConnectedRef.current;
                     setIsConnected(true);
-                    if (targetKind === 'ws') {
-                        wsConnectedOnceRef.current = true;
-                    }
+                    transportConnectedOnceRef.current[targetKind] = true;
                     if (!wasConnected) {
                         if (pendingJoinRef.current) {
                             joinRoom(pendingJoinRef.current);
@@ -266,18 +278,11 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     }
                     transportRef.current = null;
 
-                    if (targetKind === 'ws' && !wsConnectedOnceRef.current) {
-                        switchToSSE();
+                    if (shouldFallback(targetKind, reason) && tryNextTransport(reason)) {
                         return;
                     }
 
-                    // Also fall back to SSE on timeout (hanging WS connection)
-                    if (targetKind === 'ws' && reason === 'timeout') {
-                        switchToSSE();
-                        return;
-                    }
-
-                    scheduleReconnect(targetKind);
+                    scheduleReconnect();
                 },
                 onMessage: (msg) => {
                     if (connectionId !== transportIdRef.current) return;
@@ -289,7 +294,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             transport.connect();
         };
 
-        connect(forceSse ? 'sse' : 'ws');
+        connect(0);
 
         return () => {
             closedByUnmount = true;

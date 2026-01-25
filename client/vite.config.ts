@@ -4,6 +4,8 @@ import legacy from '@vitejs/plugin-legacy'
 
 // https://vite.dev/config/
 export default defineConfig({
+  envDir: '..',
+  envPrefix: ['VITE_', 'TRANSPORTS'],
   plugins: [
     react(),
     legacy({
