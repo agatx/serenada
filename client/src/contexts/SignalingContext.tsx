@@ -4,6 +4,7 @@ import { createSignalingTransport } from './signaling/transports';
 import type { TransportKind } from './signaling/transports';
 import type { RoomState, SignalingMessage } from './signaling/types';
 import { getConfiguredTransportOrder, parseTransportOrder } from './signaling/transportConfig';
+import { useTranslation } from 'react-i18next';
 
 interface SignalingContextValue {
     isConnected: boolean;
@@ -43,6 +44,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const [roomStatuses, setRoomStatuses] = useState<Record<string, number>>({});
     const [turnToken, setTurnToken] = useState<string | null>(null);
     const { showToast } = useToast();
+    const { t } = useTranslation();
 
     const listenersRef = useRef<((msg: SignalingMessage) => void)[]>([]);
     const isConnectedRef = useRef(false);
@@ -244,7 +246,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             const nextIndex = transportIndexRef.current + 1;
             if (nextIndex >= order.length) return false;
             console.warn(`[Signaling] ${order[transportIndexRef.current]} failed (${reason}), trying ${order[nextIndex]}`);
-            showToast('info', 'Connection issue, trying alternative...');
+            showToast('info', t('toast_connection_fallback'));
             reconnectAttemptsRef.current = 0;
             connect(nextIndex);
             return true;
@@ -328,7 +330,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 transportRef.current.close();
             }
         };
-    }, [handleIncomingMessage, joinRoom]);
+    }, [handleIncomingMessage, joinRoom, showToast, t]);
 
     const clearError = useCallback(() => setError(null), []);
 

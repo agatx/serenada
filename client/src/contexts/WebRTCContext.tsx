@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { useSignaling } from './SignalingContext';
 import { useToast } from './ToastContext';
+import { useTranslation } from 'react-i18next';
 
 // RTC Config
 // RTC Config moved to state
@@ -33,6 +34,7 @@ export const useWebRTC = () => {
 export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { sendMessage, roomState, clientId, isConnected, subscribeToMessages, turnToken } = useSignaling();
     const { showToast } = useToast();
+    const { t } = useTranslation();
 
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -534,7 +536,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         requestingMediaRef.current = true;
         try {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                showToast('error', "Camera/Mic access blocked! Please ensure you are using a secure context (HTTPS or localhost).");
+                showToast('error', t('toast_media_blocked'));
                 requestingMediaRef.current = false;
                 return;
             }
@@ -575,7 +577,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             console.error("Error accessing media", err);
             requestingMediaRef.current = false;
         }
-    }, [localStream, facingMode, showToast]);
+    }, [localStream, facingMode, showToast, t]);
 
     // Use useCallback to make this stable, but access stream via ref to avoid stale closure
     const stopLocalMedia = useCallback(() => {
@@ -628,7 +630,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setLocalStream(combinedStream);
         } catch (err) {
             console.error('[WebRTC] Failed to flip camera', err);
-            showToast('error', 'Failed to flip camera');
+            showToast('error', t('toast_flip_camera_error'));
         }
     };
 
