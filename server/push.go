@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/SherClockHolmes/webpush-go"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type PushService struct {
@@ -53,7 +53,7 @@ func InitPushService() error {
 
 	// 1. Setup SQLite
 	dbPath := fmt.Sprintf("%s/subscriptions.db", dataDir)
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to open sqlite db: %v", err)
 	}
