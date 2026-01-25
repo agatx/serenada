@@ -224,12 +224,9 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			ghostClient.cid = ""
 			ghostClient.rid = ""
 			reusedCID = true
-
-			if room.HostCID == reconnectCID {
-				room.HostCID = reconnectCID
-			} else if room.HostCID == "" {
-				room.HostCID = ""
-			}
+			// Note: room.HostCID is intentionally left unchanged here so that
+			// the host assignment is preserved across reconnects via the
+			// reused client ID (reconnectCID).
 		}
 	}
 
