@@ -19,6 +19,7 @@ const CallRoom: React.FC = () => {
         roomState,
         clientId,
         isConnected,
+        activeTransport,
         error: signalingError,
         clearError
     } = useSignaling();
@@ -415,6 +416,7 @@ const CallRoom: React.FC = () => {
             {showDebug && (
                 <div className="debug-panel">
                     <div>Signaling: {isConnected ? 'connected' : 'disconnected'}</div>
+                    <div>Transport: {activeTransport ?? 'n/a'}</div>
                     <div>ICE: {iceConnectionState}</div>
                     <div>PC: {connectionState}</div>
                     <div>SDP: {signalingState}</div>

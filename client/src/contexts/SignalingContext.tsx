@@ -7,6 +7,7 @@ import { getConfiguredTransportOrder, parseTransportOrder } from './signaling/tr
 
 interface SignalingContextValue {
     isConnected: boolean;
+    activeTransport: TransportKind | null;
     clientId: string | null;
     roomState: RoomState | null;
     turnToken: string | null;
@@ -34,6 +35,7 @@ export const useSignaling = () => {
 
 export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [isConnected, setIsConnected] = useState(false);
+    const [activeTransport, setActiveTransport] = useState<TransportKind | null>(null);
     const [clientId, setClientId] = useState<string | null>(null);
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [lastMessage, setLastMessage] = useState<SignalingMessage | null>(null);
@@ -273,6 +275,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     reconnectAttemptsRef.current = 0;
                     const wasConnected = isConnectedRef.current;
                     setIsConnected(true);
+                    setActiveTransport(targetKind);
                     transportConnectedOnceRef.current[targetKind] = true;
                     if (!wasConnected) {
                         if (pendingJoinRef.current) {
@@ -292,6 +295,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     if (closedByUnmount) return;
                     console.error(`[Signaling] Disconnected via ${reason}`, err);
                     setIsConnected(false);
+                    setActiveTransport(null);
                     // Keep lastClientIdRef for reconnection attempt
                     if (clientIdRef.current) {
                         lastClientIdRef.current = clientIdRef.current;
@@ -356,6 +360,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return (
         <SignalingContext.Provider value={{
             isConnected,
+            activeTransport,
             clientId,
             roomState,
             turnToken,
