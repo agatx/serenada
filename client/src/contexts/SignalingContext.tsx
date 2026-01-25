@@ -56,6 +56,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const pendingJoinRef = useRef<string | null>(null);
     const clientIdRef = useRef<string | null>(null);
     const lastClientIdRef = useRef<string | null>(null);
+    const needsRejoinRef = useRef(false);
 
     // Sync ref
     useEffect(() => {
@@ -93,6 +94,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             case 'room_ended':
                 setRoomState(null);
                 currentRoomIdRef.current = null;
+                needsRejoinRef.current = false;
                 // Optional: set some "ended" state to show UI
                 break;
             case 'room_statuses':
@@ -140,11 +142,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     useEffect(() => {
         if (!isConnected) return;
-        if (activeTransportKindRef.current !== 'sse') return;
 
         const interval = window.setInterval(() => {
             sendMessage('ping', { ts: Date.now() });
-        }, 20000);
+        }, 12000);
 
         return () => {
             window.clearInterval(interval);
@@ -154,6 +155,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const joinRoom = useCallback((roomId: string) => {
         console.log(`[Signaling] joinRoom call for ${roomId}`);
         setError(null);
+        needsRejoinRef.current = false;
         currentRoomIdRef.current = roomId;
         currentRoomIdRef.current = roomId;
         if (transportRef.current && transportRef.current.isOpen()) {
@@ -254,9 +256,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                         if (pendingJoinRef.current) {
                             joinRoom(pendingJoinRef.current);
                             pendingJoinRef.current = null;
-                        } else if (currentRoomIdRef.current && !roomStateRef.current) {
+                        } else if (needsRejoinRef.current && currentRoomIdRef.current) {
                             // If we lost the connection mid-call, automatically rejoin
                             console.log(`[Signaling] Auto-rejoining room ${currentRoomIdRef.current}`);
+                            needsRejoinRef.current = false;
                             joinRoom(currentRoomIdRef.current);
                         }
                     }
@@ -271,12 +274,8 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     if (clientIdRef.current) {
                         lastClientIdRef.current = clientIdRef.current;
                     }
-                    if (targetKind === 'ws') {
-                        setClientId(null);
-                        setRoomState(null);
-                        setTurnToken(null);
-                    }
                     transportRef.current = null;
+                    needsRejoinRef.current = !!currentRoomIdRef.current;
 
                     if (shouldFallback(targetKind, reason) && tryNextTransport(reason)) {
                         return;
@@ -311,6 +310,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         sendMessage('leave');
         currentRoomIdRef.current = null;
         lastClientIdRef.current = null; // Clear last ID on explicit leave
+        needsRejoinRef.current = false;
         setRoomState(null);
     }, [sendMessage]);
 

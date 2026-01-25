@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	ssePingPeriod     = 15 * time.Second
+	ssePingPeriod     = 12 * time.Second
 	sseGracePeriod    = 5 * time.Second
 	sseStaleTimeout   = 60 * time.Second
 	sseReaperInterval = 15 * time.Second

@@ -10,8 +10,8 @@ import (
 
 const (
 	wsWriteWait  = 10 * time.Second
-	wsPongWait   = 60 * time.Second
-	wsPingPeriod = (wsPongWait * 9) / 10
+	wsPongWait   = 30 * time.Second
+	wsPingPeriod = 12 * time.Second
 )
 
 var wsUpgrader = websocket.Upgrader{
