@@ -192,7 +192,36 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             if (reconnectCid) {
                 payload.reconnectCid = reconnectCid;
             }
-            sendMessage('join', payload);
+            let sent = false;
+            const sendJoin = (endpoint?: string) => {
+                if (sent) return;
+                if (endpoint) {
+                    payload.pushEndpoint = endpoint;
+                }
+                sendMessage('join', payload);
+                sent = true;
+            };
+
+            const hasPushSupport =
+                typeof window !== 'undefined' &&
+                'serviceWorker' in navigator &&
+                'PushManager' in window;
+
+            if (hasPushSupport) {
+                const fallbackTimer = window.setTimeout(() => sendJoin(), 250);
+                navigator.serviceWorker.ready
+                    .then((reg) => reg.pushManager.getSubscription())
+                    .then((sub) => {
+                        window.clearTimeout(fallbackTimer);
+                        sendJoin(sub?.endpoint);
+                    })
+                    .catch(() => {
+                        window.clearTimeout(fallbackTimer);
+                        sendJoin();
+                    });
+            } else {
+                sendJoin();
+            }
         } else {
             console.log('[Signaling] Transport not ready, buffering join');
             pendingJoinRef.current = roomId;

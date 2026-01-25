@@ -200,6 +200,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	room.mu.Lock()
 	var joinPayload struct {
 		ReconnectCID string `json:"reconnectCid"`
+		PushEndpoint string `json:"pushEndpoint"`
 	}
 	if len(msg.Payload) > 0 {
 		if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
@@ -208,6 +209,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	reconnectCID := joinPayload.ReconnectCID
+	excludeEndpoint := joinPayload.PushEndpoint
 	reusedCID := false
 
 	if reconnectCID != "" {
@@ -307,7 +309,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Trigger Push Notification when anyone joins (subscribed users waiting offline should get notified)
 	if pushService != nil {
-		go pushService.SendNotificationToRoom(rid, "")
+		go pushService.SendNotificationToRoom(rid, excludeEndpoint)
 	}
 
 	payload := map[string]interface{}{
