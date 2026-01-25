@@ -14,6 +14,9 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - TRUST_PROXY=${TRUST_PROXY}
       - BLOCK_WEBSOCKET=${BLOCK_WEBSOCKET}
+      - DATA_DIR=/app/data
+    volumes:
+      - ./server/data:/app/data
     restart: unless-stopped
 
   # Coturn Server

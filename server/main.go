@@ -19,6 +19,11 @@ func main() {
 	hub := newHub()
 	go hub.run()
 
+	// Initialize Push Service
+	if err := InitPushService(); err != nil {
+		log.Fatal("Failed to init push service: ", err)
+	}
+
 	// Simple CORS middleware for API
 	enableCors := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +37,7 @@ func main() {
 				w.Header().Set("Vary", "Origin")
 			}
 			if r.Method == "OPTIONS" {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -64,6 +69,8 @@ func main() {
 	diagnosticLimiter := NewIPLimiter(5.0/60.0, 5)
 	// Room ID: 30 requests per minute per IP
 	roomIDLimiter := NewIPLimiter(30.0/60.0, 10)
+	// Push: 10 requests per minute
+	pushLimiter := NewIPLimiter(10.0/60.0, 5)
 
 	http.HandleFunc("/ws", rateLimitMiddleware(wsLimiter, func(w http.ResponseWriter, r *http.Request) {
 		if wsHang {
@@ -81,6 +88,10 @@ func main() {
 	http.HandleFunc("/api/turn-credentials", withTimeout(rateLimitMiddleware(turnCredsLimiter, enableCors(handleTurnCredentials())), 15*time.Second))
 	http.HandleFunc("/api/diagnostic-token", withTimeout(rateLimitMiddleware(diagnosticLimiter, enableCors(handleDiagnosticToken())), 15*time.Second))
 	http.HandleFunc("/api/room-id", withTimeout(rateLimitMiddleware(roomIDLimiter, enableCors(handleRoomID())), 15*time.Second))
+
+	// Push Routes
+	http.HandleFunc("/api/push/vapid-public-key", withTimeout(enableCors(handlePushVapidKey), 5*time.Second))
+	http.HandleFunc("/api/push/subscribe", withTimeout(rateLimitMiddleware(pushLimiter, enableCors(handlePushSubscribe)), 10*time.Second))
 
 	http.HandleFunc("/device-check", withTimeout(handleDeviceCheck, 15*time.Second))
 

@@ -305,6 +305,11 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	room.mu.Unlock() // <--- CRITICAL FIX: Unlock before broadcast/send to avoid deadlock/blocking
 
+	// Trigger Push Notification when anyone joins (subscribed users waiting offline should get notified)
+	if pushService != nil {
+		go pushService.SendNotificationToRoom(rid, "")
+	}
+
 	payload := map[string]interface{}{
 		"hostCid":      room.HostCID,
 		"participants": participants,

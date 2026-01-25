@@ -3,11 +3,25 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useSignaling } from '../contexts/SignalingContext';
 import { useWebRTC } from '../contexts/WebRTCContext';
 import { useToast } from '../contexts/ToastContext';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Copy, AlertCircle, RotateCcw, Maximize2, Minimize2 } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Copy, AlertCircle, RotateCcw, Maximize2, Minimize2, CheckSquare, Square } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { saveCall } from '../utils/callHistory';
 import { useTranslation } from 'react-i18next';
 import { playJoinChime } from '../utils/audio';
+
+function urlBase64ToUint8Array(base64String: string) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+        .replace(/\-/g, '+')
+        .replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+}
+
 
 const CallRoom: React.FC = () => {
     const { t } = useTranslation();
@@ -46,7 +60,72 @@ const CallRoom: React.FC = () => {
     const [remoteVideoFit, setRemoteVideoFit] = useState<'cover' | 'contain'>('cover');
     const [showReconnecting, setShowReconnecting] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
+
     const lastFacingModeRef = useRef(facingMode);
+
+    // Push Notifications State
+    const [isSubscribed, setIsSubscribed] = useState(false);
+    const [pushSupported, setPushSupported] = useState(false);
+    const [vapidKey, setVapidKey] = useState<string | null>(null);
+
+    useEffect(() => {
+        if ('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window) {
+            setPushSupported(true);
+            fetch('/api/push/vapid-public-key')
+                .then(res => res.json())
+                .then(data => setVapidKey(data.publicKey))
+                .catch(console.error);
+
+            navigator.serviceWorker.ready.then(reg => {
+                reg.pushManager.getSubscription().then(sub => {
+                    if (sub) setIsSubscribed(true);
+                });
+            });
+        }
+    }, []);
+
+    const handlePushToggle = async (e: React.MouseEvent | React.PointerEvent) => {
+        e.stopPropagation();
+        handleControlsInteraction(); // Keep controls visible
+
+        if (!vapidKey) return;
+        try {
+            const reg = await navigator.serviceWorker.ready;
+            if (isSubscribed) {
+                const sub = await reg.pushManager.getSubscription();
+                if (sub) {
+                    await sub.unsubscribe();
+                    await fetch('/api/push/subscribe?roomId=' + roomId, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ endpoint: sub.endpoint })
+                    });
+                    setIsSubscribed(false);
+                    showToast('success', 'Unsubscribed');
+                }
+            } else {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    showToast('error', 'Notifications blocked');
+                    return;
+                }
+                const sub = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(vapidKey)
+                });
+                await fetch('/api/push/subscribe?roomId=' + roomId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...sub.toJSON(), locale: navigator.language })
+                });
+                setIsSubscribed(true);
+                showToast('success', 'You will be notified!');
+            }
+        } catch (err) {
+            console.error(err);
+            showToast('error', 'Failed to update subscription');
+        }
+    };
 
     // Track participant count to play chime on join
     const prevParticipantsCountRef = useRef(0);
@@ -491,16 +570,22 @@ const CallRoom: React.FC = () => {
                                 >
                                     {t('copy_link_share')}
                                 </button>
-                                <button
-                                    className="btn-small"
-                                    onClick={handleLeave}
-                                    onPointerUp={event => {
-                                        event.stopPropagation();
-                                        handleControlsInteraction();
-                                    }}
-                                >
-                                    {t('home')}
-                                </button>
+
+                                {pushSupported && (
+                                    <button
+                                        className={`btn-small ${isSubscribed ? 'active' : ''}`}
+                                        onClick={handlePushToggle}
+                                        onPointerUp={event => {
+                                            event.stopPropagation();
+                                            handleControlsInteraction();
+                                        }}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                                    >
+                                        {isSubscribed ? <CheckSquare size={16} /> : <Square size={16} />}
+                                        {isSubscribed ? t('notify_me_on') : t('notify_me')}
+                                    </button>
+                                )}
+
                             </>
                         )}
                     </div>
@@ -547,7 +632,7 @@ const CallRoom: React.FC = () => {
                     <PhoneOff />
                 </button>
             </div>
-        </div>
+        </div >
     );
 };
 
