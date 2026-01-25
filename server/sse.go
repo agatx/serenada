@@ -80,10 +80,7 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 }
 
 func handleSSEPost(hub *Hub, w http.ResponseWriter, r *http.Request) {
-	sid := strings.TrimSpace(r.Header.Get("X-SSE-SID"))
-	if sid == "" {
-		sid = strings.TrimSpace(r.URL.Query().Get("sid"))
-	}
+	sid := strings.TrimSpace(r.URL.Query().Get("sid"))
 	if sid == "" {
 		http.Error(w, "Missing SSE session", http.StatusBadRequest)
 		return

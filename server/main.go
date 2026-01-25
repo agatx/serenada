@@ -33,7 +33,7 @@ func main() {
 			}
 			if r.Method == "OPTIONS" {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Turn-Token, X-SSE-SID")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}

@@ -186,11 +186,12 @@ export class SseTransport implements SignalingTransport {
     }
 
     send(msg: SignalingMessage) {
-        fetch(this.sseUrl, {
+        const url = new URL(this.sseUrl);
+        url.searchParams.set('sid', this.sid);
+        fetch(url.toString(), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-SSE-SID': this.sid
             },
             body: JSON.stringify(msg)
         })
