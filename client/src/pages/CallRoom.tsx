@@ -84,7 +84,9 @@ const CallRoom: React.FC = () => {
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
     const idleTimeoutRef = useRef<number | null>(null);
     const waitingTimerRef = useRef<number | null>(null);
-    const debugEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1';
+    const [showDebug, setShowDebug] = useState(false);
+    const debugTapRef = useRef<number>(0);
+    const debugTapTimeoutRef = useRef<number | null>(null);
 
     const isMobileDevice = () => {
         if (typeof window === 'undefined') return false;
@@ -321,6 +323,35 @@ const CallRoom: React.FC = () => {
         showToast('success', t('toast_link_copied'));
     };
 
+    const handleDebugToggle = () => {
+        setShowDebug(prev => !prev);
+    };
+
+    const handleDebugCornerTap = (event: React.PointerEvent | React.MouseEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const now = Date.now();
+        if (debugTapTimeoutRef.current) {
+            window.clearTimeout(debugTapTimeoutRef.current);
+            debugTapTimeoutRef.current = null;
+        }
+        if (now - debugTapRef.current < 450) {
+            debugTapRef.current = 0;
+            handleDebugToggle();
+            return;
+        }
+        debugTapRef.current = now;
+        debugTapTimeoutRef.current = window.setTimeout(() => {
+            debugTapRef.current = 0;
+            debugTapTimeoutRef.current = null;
+        }, 500);
+    };
+
+    const handleDebugCornerPointerUp = (event: React.PointerEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
     const toggleRemoteVideoFit = (e: React.PointerEvent | React.MouseEvent) => {
         e.stopPropagation();
         setRemoteVideoFit(prev => prev === 'cover' ? 'contain' : 'cover');
@@ -375,7 +406,13 @@ const CallRoom: React.FC = () => {
             className={`call-container ${areControlsVisible ? '' : 'controls-hidden'} ${isLocalLarge ? 'local-large' : ''}`}
             onPointerUp={handleScreenTap}
         >
-            {debugEnabled && (
+            <div
+                className="debug-toggle-zone"
+                onPointerDown={handleDebugCornerTap}
+                onPointerUp={handleDebugCornerPointerUp}
+                onPointerCancel={handleDebugCornerPointerUp}
+            />
+            {showDebug && (
                 <div className="debug-panel">
                     <div>Signaling: {isConnected ? 'connected' : 'disconnected'}</div>
                     <div>ICE: {iceConnectionState}</div>

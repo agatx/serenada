@@ -371,7 +371,7 @@ body {
 
 .debug-panel {
   position: absolute;
-  bottom: 16px;
+  top: 16px;
   left: 16px;
   z-index: 40;
   background: rgba(0, 0, 0, 0.65);
@@ -383,6 +383,18 @@ body {
   line-height: 1.35;
   pointer-events: none;
   backdrop-filter: blur(6px);
+}
+
+.debug-toggle-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 72px;
+  height: 72px;
+  z-index: 41;
+  pointer-events: auto;
+  touch-action: manipulation;
+  user-select: none;
 }
 
 .qr-code-container {
