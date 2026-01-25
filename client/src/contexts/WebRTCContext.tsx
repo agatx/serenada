@@ -15,6 +15,9 @@ interface WebRTCContextValue {
     facingMode: 'user' | 'environment';
     hasMultipleCameras: boolean;
     peerConnection: RTCPeerConnection | null;
+    iceConnectionState: RTCIceConnectionState;
+    connectionState: RTCPeerConnectionState;
+    signalingState: RTCSignalingState;
 }
 
 const WebRTCContext = createContext<WebRTCContextValue | null>(null);
@@ -39,6 +42,11 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const localStreamRef = useRef<MediaStream | null>(null);
     const remoteStreamRef = useRef<MediaStream | null>(null);
     const isMakingOfferRef = useRef(false);
+    const pendingIceRestartRef = useRef(false);
+    const lastIceRestartAtRef = useRef(0);
+    const iceRestartTimerRef = useRef<number | null>(null);
+    const offerTimeoutRef = useRef<number | null>(null);
+    const isConnectedRef = useRef(isConnected);
 
     // RTC Config State
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
@@ -48,6 +56,30 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
     const roomStateRef = useRef(roomState);
     const clientIdRef = useRef(clientId);
+    const [iceConnectionState, setIceConnectionState] = useState<RTCIceConnectionState>('new');
+    const [connectionState, setConnectionState] = useState<RTCPeerConnectionState>('new');
+    const [signalingState, setSignalingState] = useState<RTCSignalingState>('stable');
+
+    useEffect(() => {
+        isConnectedRef.current = isConnected;
+    }, [isConnected]);
+
+    useEffect(() => {
+        if (!isConnected || !pendingIceRestartRef.current) {
+            return;
+        }
+        if (!isHost()) {
+            return;
+        }
+        const pc = pcRef.current;
+        if (!pc) return;
+        if (pc.signalingState === 'stable') {
+            pendingIceRestartRef.current = false;
+            lastIceRestartAtRef.current = Date.now();
+            void createOffer({ iceRestart: true });
+            return;
+        }
+    }, [isConnected]);
 
     const detectCameras = useCallback(async () => {
         if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
@@ -166,13 +198,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Buffer ICE candidates if remote description not set
     const iceBufferRef = useRef<RTCIceCandidateInit[]>([]);
 
-    // Initialize or Cleanup PC based on connection
-    useEffect(() => {
-        if (!isConnected) {
-            cleanupPC();
-        }
-    }, [isConnected]);
-
     const processSignalingMessage = useCallback(async (msg: any) => {
         const { type, payload } = msg;
         try {
@@ -250,6 +275,64 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
     };
 
+    const isHost = () => {
+        const state = roomStateRef.current;
+        return !!state && !!state.hostCid && state.hostCid === clientIdRef.current;
+    };
+
+    const clearIceRestartTimer = () => {
+        if (iceRestartTimerRef.current) {
+            window.clearTimeout(iceRestartTimerRef.current);
+            iceRestartTimerRef.current = null;
+        }
+    };
+
+    const clearOfferTimeout = () => {
+        if (offerTimeoutRef.current) {
+            window.clearTimeout(offerTimeoutRef.current);
+            offerTimeoutRef.current = null;
+        }
+    };
+
+    const scheduleIceRestart = (reason: string, delayMs: number) => {
+        if (!pcRef.current) return;
+        if (!isHost()) return;
+        if (!isConnectedRef.current) {
+            pendingIceRestartRef.current = true;
+            return;
+        }
+        if (iceRestartTimerRef.current) return;
+
+        const now = Date.now();
+        if (now - lastIceRestartAtRef.current < 10000) {
+            return;
+        }
+
+        iceRestartTimerRef.current = window.setTimeout(() => {
+            iceRestartTimerRef.current = null;
+            void triggerIceRestart(reason);
+        }, delayMs);
+    };
+
+    const triggerIceRestart = async (reason: string) => {
+        if (!pcRef.current) return;
+        if (!isHost()) return;
+        if (!isConnectedRef.current) {
+            pendingIceRestartRef.current = true;
+            return;
+        }
+
+        if (isMakingOfferRef.current) {
+            pendingIceRestartRef.current = true;
+            return;
+        }
+
+        lastIceRestartAtRef.current = Date.now();
+        pendingIceRestartRef.current = false;
+        console.warn(`[WebRTC] ICE restart triggered (${reason})`);
+        await createOffer({ iceRestart: true });
+    };
+
     // Logic to initiate offer if we are HOST and have 2 participants
     useEffect(() => {
         // Wait for ICE config to be loaded before attempting to create peer connection
@@ -289,6 +372,9 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         const pc = new RTCPeerConnection(rtcConfig);
         pcRef.current = pc;
+        setIceConnectionState(pc.iceConnectionState);
+        setConnectionState(pc.connectionState);
+        setSignalingState(pc.signalingState);
 
         // Add local tracks if available
         if (localStream) {
@@ -323,10 +409,53 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         pc.oniceconnectionstatechange = () => {
             console.log(`[WebRTC] ICE Connection State: ${pc.iceConnectionState}`);
+            setIceConnectionState(pc.iceConnectionState);
+
+            if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                clearIceRestartTimer();
+                pendingIceRestartRef.current = false;
+                return;
+            }
+
+            if (pc.iceConnectionState === 'disconnected') {
+                scheduleIceRestart('ice-disconnected', 2000);
+            } else if (pc.iceConnectionState === 'failed') {
+                scheduleIceRestart('ice-failed', 0);
+            }
         };
 
         pc.onconnectionstatechange = () => {
             console.log(`[WebRTC] Connection State: ${pc.connectionState}`);
+            setConnectionState(pc.connectionState);
+
+            if (pc.connectionState === 'connected') {
+                clearIceRestartTimer();
+                pendingIceRestartRef.current = false;
+                return;
+            }
+
+            if (pc.connectionState === 'disconnected') {
+                scheduleIceRestart('conn-disconnected', 2000);
+            } else if (pc.connectionState === 'failed') {
+                scheduleIceRestart('conn-failed', 0);
+            }
+        };
+
+        pc.onsignalingstatechange = () => {
+            console.log(`[WebRTC] Signaling State: ${pc.signalingState}`);
+            setSignalingState(pc.signalingState);
+            if (pc.signalingState === 'stable') {
+                clearOfferTimeout();
+            }
+            if (pc.signalingState === 'stable' && pendingIceRestartRef.current) {
+                clearOfferTimeout();
+                if (!isConnectedRef.current || !isHost()) {
+                    return;
+                }
+                pendingIceRestartRef.current = false;
+                lastIceRestartAtRef.current = Date.now();
+                void createOffer({ iceRestart: true });
+            }
         };
 
         pc.onicecandidate = (event) => {
@@ -354,6 +483,12 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             pcRef.current.close();
             pcRef.current = null;
         }
+        clearIceRestartTimer();
+        clearOfferTimeout();
+        pendingIceRestartRef.current = false;
+        setIceConnectionState('closed');
+        setConnectionState('closed');
+        setSignalingState('closed');
         remoteStreamRef.current = null;
         setRemoteStream(null);
         // We do NOT stop local stream here to allow reuse? 
@@ -372,6 +507,16 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     useEffect(() => {
         clientIdRef.current = clientId;
     }, [clientId]);
+
+    useEffect(() => {
+        const handleOnline = () => {
+            scheduleIceRestart('network-online', 0);
+        };
+        window.addEventListener('online', handleOnline);
+        return () => {
+            window.removeEventListener('online', handleOnline);
+        };
+    }, []);
 
     const mediaRequestIdRef = useRef<number>(0);
 
@@ -487,8 +632,11 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
     };
 
-    const createOffer = async () => {
+    const createOffer = async (options?: { iceRestart?: boolean }) => {
         if (isMakingOfferRef.current) {
+            if (options?.iceRestart) {
+                pendingIceRestartRef.current = true;
+            }
             return;
         }
         try {
@@ -496,10 +644,13 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const pc = getOrCreatePC();
             if (pc.signalingState !== 'stable') {
                 console.log('[WebRTC] Skipping offer; signaling state is not stable');
+                if (options?.iceRestart) {
+                    pendingIceRestartRef.current = true;
+                }
                 return;
             }
             isMakingOfferRef.current = true;
-            const offer = await pc.createOffer();
+            const offer = await pc.createOffer(options);
 
             // Force/Prefer VP8 for compatibility with older Android devices
             const sdpWithVP8 = forceVP8(offer.sdp);
@@ -508,10 +659,31 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             await pc.setLocalDescription(offerWithVP8 as RTCSessionDescriptionInit);
             console.log('[WebRTC] Sending offer (VP8 preferred)');
             sendMessage('offer', { sdp: offerWithVP8.sdp });
+            clearOfferTimeout();
+            offerTimeoutRef.current = window.setTimeout(() => {
+                const currentPc = pcRef.current;
+                if (!currentPc) return;
+                if (currentPc.signalingState !== 'have-local-offer') {
+                    return;
+                }
+                console.warn('[WebRTC] Offer timeout; rolling back and retrying');
+                pendingIceRestartRef.current = true;
+                currentPc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
+                    .catch(err => {
+                        console.warn('[WebRTC] Rollback failed', err);
+                    })
+                    .finally(() => {
+                        scheduleIceRestart('offer-timeout', 0);
+                    });
+            }, 8000);
         } catch (err) {
             console.error('[WebRTC] Error creating offer:', err);
         } finally {
             isMakingOfferRef.current = false;
+            if (pendingIceRestartRef.current) {
+                pendingIceRestartRef.current = false;
+                scheduleIceRestart('pending-retry', 500);
+            }
         }
     };
 
@@ -522,6 +694,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const pc = getOrCreatePC();
             await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
             console.log('[WebRTC] Remote description set (offer)');
+            clearOfferTimeout();
 
             // Process buffered ICE
             while (iceBufferRef.current.length > 0) {
@@ -547,6 +720,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const pc = getOrCreatePC();
             await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
             console.log('[WebRTC] Remote description set (answer)');
+            clearOfferTimeout();
         } catch (err) {
             console.error('[WebRTC] Error handling answer:', err);
         }
@@ -575,7 +749,10 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             flipCamera: flipCamera,
             facingMode: facingMode,
             hasMultipleCameras: hasMultipleCameras,
-            peerConnection: pcRef.current
+            peerConnection: pcRef.current,
+            iceConnectionState,
+            connectionState,
+            signalingState
         }}>
             {children}
         </WebRTCContext.Provider>

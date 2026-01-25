@@ -349,6 +349,42 @@ body {
   gap: 1rem;
 }
 
+.reconnect-overlay {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  pointer-events: none;
+}
+
+.reconnect-badge {
+  background: rgba(22, 27, 34, 0.7);
+  color: #fff;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(8px);
+}
+
+.debug-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.65);
+  color: #e6edf3;
+  font-size: 0.75rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  line-height: 1.35;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+
 .qr-code-container {
   width: 200px;
   height: 200px;

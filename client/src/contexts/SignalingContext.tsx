@@ -44,8 +44,6 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const listenersRef = useRef<((msg: SignalingMessage) => void)[]>([]);
     const isConnectedRef = useRef(false);
-    const roomStateRef = useRef<RoomState | null>(null);
-    const activeTransportKindRef = useRef<TransportKind>('ws');
 
     const transportRef = useRef<ReturnType<typeof createSignalingTransport> | null>(null);
     const transportOrderRef = useRef<TransportKind[]>(getConfiguredTransportOrder());
@@ -57,19 +55,43 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const clientIdRef = useRef<string | null>(null);
     const lastClientIdRef = useRef<string | null>(null);
     const needsRejoinRef = useRef(false);
+    const reconnectStorageKey = 'serenada.reconnectCid';
+
+    const clearReconnectStorage = useCallback(() => {
+        try {
+            window.sessionStorage.removeItem(reconnectStorageKey);
+        } catch (err) {
+            console.warn('[Signaling] Failed to clear reconnectCid', err);
+        }
+    }, []);
 
     // Sync ref
     useEffect(() => {
         clientIdRef.current = clientId;
+        if (clientId) {
+            try {
+                window.sessionStorage.setItem(reconnectStorageKey, clientId);
+            } catch (err) {
+                console.warn('[Signaling] Failed to persist reconnectCid', err);
+            }
+        }
     }, [clientId]);
+
+    useEffect(() => {
+        try {
+            const stored = window.sessionStorage.getItem(reconnectStorageKey);
+            if (stored && !lastClientIdRef.current) {
+                lastClientIdRef.current = stored;
+            }
+        } catch (err) {
+            console.warn('[Signaling] Failed to load reconnectCid', err);
+        }
+    }, []);
 
     useEffect(() => {
         isConnectedRef.current = isConnected;
     }, [isConnected]);
 
-    useEffect(() => {
-        roomStateRef.current = roomState;
-    }, [roomState]);
 
     const handleIncomingMessage = useCallback((msg: SignalingMessage) => {
         console.log('RX:', msg);
@@ -95,6 +117,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 setRoomState(null);
                 currentRoomIdRef.current = null;
                 needsRejoinRef.current = false;
+                clearReconnectStorage();
                 // Optional: set some "ended" state to show UI
                 break;
             case 'room_statuses':
@@ -120,7 +143,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
         setLastMessage(msg);
         listenersRef.current.forEach(listener => listener(msg));
-    }, [showToast]);
+    }, [clearReconnectStorage, showToast]);
 
     const sendMessage = useCallback((type: string, payload?: any, to?: string) => {
         if (transportRef.current && transportRef.current.isOpen()) {
@@ -248,7 +271,6 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     if (connectionId !== transportIdRef.current) return;
                     connectingRef.current = false;
                     reconnectAttemptsRef.current = 0;
-                    activeTransportKindRef.current = targetKind;
                     const wasConnected = isConnectedRef.current;
                     setIsConnected(true);
                     transportConnectedOnceRef.current[targetKind] = true;
@@ -311,8 +333,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         currentRoomIdRef.current = null;
         lastClientIdRef.current = null; // Clear last ID on explicit leave
         needsRejoinRef.current = false;
+        clearReconnectStorage();
         setRoomState(null);
-    }, [sendMessage]);
+    }, [clearReconnectStorage, sendMessage]);
 
     const endRoom = useCallback(() => {
         sendMessage('end_room');

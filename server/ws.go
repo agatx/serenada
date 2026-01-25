@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	wsWriteWait  = 10 * time.Second
-	wsPongWait   = 30 * time.Second
-	wsPingPeriod = 12 * time.Second
+	wsWriteWait   = 10 * time.Second
+	wsPongWait    = 30 * time.Second
+	wsPingPeriod  = 12 * time.Second
+	wsGracePeriod = 6 * time.Second
 )
 
 var wsUpgrader = websocket.Upgrader{
@@ -67,6 +68,17 @@ func (c *wsClient) readPump() {
 }
 
 func (h *Hub) handleDisconnectWS(c *Client) {
+	go h.delayDisconnectWS(c)
+}
+
+func (h *Hub) delayDisconnectWS(c *Client) {
+	time.Sleep(wsGracePeriod)
+	h.mu.RLock()
+	_, exists := h.clients[c]
+	h.mu.RUnlock()
+	if !exists {
+		return
+	}
 	h.disconnectClient(c)
 }
 

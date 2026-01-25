@@ -29,7 +29,10 @@ const CallRoom: React.FC = () => {
         facingMode,
         hasMultipleCameras,
         localStream,
-        remoteStream
+        remoteStream,
+        iceConnectionState,
+        connectionState,
+        signalingState
     } = useWebRTC();
     const { showToast } = useToast();
 
@@ -39,6 +42,8 @@ const CallRoom: React.FC = () => {
     const [areControlsVisible, setAreControlsVisible] = useState(true);
     const [isLocalLarge, setIsLocalLarge] = useState(false);
     const [remoteVideoFit, setRemoteVideoFit] = useState<'cover' | 'contain'>('cover');
+    const [showReconnecting, setShowReconnecting] = useState(false);
+    const [showWaiting, setShowWaiting] = useState(true);
     const lastFacingModeRef = useRef(facingMode);
 
     // Auto-swap videos based on camera facing mode
@@ -49,9 +54,37 @@ const CallRoom: React.FC = () => {
         }
     }, [facingMode]);
 
+    useEffect(() => {
+        if (!hasJoined) {
+            setShowReconnecting(false);
+            return;
+        }
+        const reconnecting =
+            !isConnected ||
+            iceConnectionState === 'disconnected' ||
+            iceConnectionState === 'failed' ||
+            connectionState === 'disconnected' ||
+            connectionState === 'failed';
+
+        if (!reconnecting) {
+            setShowReconnecting(false);
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            setShowReconnecting(true);
+        }, 800);
+
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, [hasJoined, isConnected, iceConnectionState, connectionState]);
+
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
     const idleTimeoutRef = useRef<number | null>(null);
+    const waitingTimerRef = useRef<number | null>(null);
+    const debugEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1';
 
     const isMobileDevice = () => {
         if (typeof window === 'undefined') return false;
@@ -85,6 +118,38 @@ const CallRoom: React.FC = () => {
             remoteVideoRef.current.srcObject = remoteStream;
         }
     }, [remoteStream]);
+
+    useEffect(() => {
+        const clearWaitingTimer = () => {
+            if (waitingTimerRef.current) {
+                window.clearTimeout(waitingTimerRef.current);
+                waitingTimerRef.current = null;
+            }
+        };
+
+        clearWaitingTimer();
+
+        if (!hasJoined) {
+            setShowWaiting(true);
+            return clearWaitingTimer;
+        }
+
+        if (remoteStream) {
+            setShowWaiting(false);
+            return clearWaitingTimer;
+        }
+
+        if (showReconnecting) {
+            setShowWaiting(false);
+            waitingTimerRef.current = window.setTimeout(() => {
+                setShowWaiting(true);
+            }, 8000);
+            return clearWaitingTimer;
+        }
+
+        setShowWaiting(true);
+        return clearWaitingTimer;
+    }, [hasJoined, remoteStream, showReconnecting]);
 
     // Handle room state changes
     useEffect(() => {
@@ -310,6 +375,21 @@ const CallRoom: React.FC = () => {
             className={`call-container ${areControlsVisible ? '' : 'controls-hidden'} ${isLocalLarge ? 'local-large' : ''}`}
             onPointerUp={handleScreenTap}
         >
+            {debugEnabled && (
+                <div className="debug-panel">
+                    <div>Signaling: {isConnected ? 'connected' : 'disconnected'}</div>
+                    <div>ICE: {iceConnectionState}</div>
+                    <div>PC: {connectionState}</div>
+                    <div>SDP: {signalingState}</div>
+                    <div>Room: {roomState ? `${roomState.participants.length} participants` : 'none'}</div>
+                    <div>Reconnecting: {showReconnecting ? 'yes' : 'no'}</div>
+                </div>
+            )}
+            {showReconnecting && (
+                <div className="reconnect-overlay" aria-live="polite">
+                    <div className="reconnect-badge">{t('connecting')}</div>
+                </div>
+            )}
             {/* Primary Video (Full Screen) */}
             <div
                 className={`video-remote-container ${isLocalLarge ? 'pip' : 'primary'}`}
@@ -335,7 +415,7 @@ const CallRoom: React.FC = () => {
                         {remoteVideoFit === 'cover' ? <Minimize2 /> : <Maximize2 />}
                     </button>
                 )}
-                {!remoteStream && (
+                {showWaiting && (
                     <div className="waiting-message">
                         {otherParticipant ? t('waiting_message_person') : t('waiting_message')}
                         {!isLocalLarge && (
