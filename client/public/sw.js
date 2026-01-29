@@ -15,9 +15,8 @@ function base64ToBytes(base64) {
 
 function bytesToBase64(bytes) {
     let binary = '';
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    for (let i = 0; i < bytes.length; i += 1) {
+        binary += String.fromCharCode(bytes[i]);
     }
     return btoa(binary);
 }

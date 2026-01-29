@@ -330,9 +330,11 @@ func (s *PushService) sendOne(roomID string, target struct {
 		},
 	}
 
+	// Determine subscriber email for VAPID; configurable via environment variable.
+	subscriber := os.Getenv("PUSH_SUBSCRIBER_EMAIL")
 	// Send Notification
 	resp, err := webpush.SendNotification(payloadBytes, sub, &webpush.Options{
-		Subscriber:      "mailto:admin@connected.app", // Should probably be configurable
+		Subscriber:      subscriber,
 		VAPIDPublicKey:  s.publicKey,
 		VAPIDPrivateKey: s.privateKey,
 		TTL:             60, // 1 minute TTL
