@@ -45,14 +45,14 @@ http {
 
     server {
         listen 80;
-        listen [::]:80;
+        ${IPV6_Run_HTTP}
         server_name ${DOMAIN};
         return 301 https://$host$request_uri;
     }
 
     server {
         listen 443 ssl http2;
-        listen [::]:443 ssl http2;
+        ${IPV6_Run_HTTPS}
         server_name ${DOMAIN};
 
         ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;

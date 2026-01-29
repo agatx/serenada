@@ -12,10 +12,10 @@ realm=${DOMAIN}
 use-auth-secret
 
 relay-ip=${IPV4}
-relay-ip=${IPV6}
+${IPV6_Run_RELAY}
 
 listening-ip=${IPV4}
-listening-ip=${IPV6}
+${IPV6_Run_LISTENING}
 
 # Min/Max ports for media relay
 min-port=49152

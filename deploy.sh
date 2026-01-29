@@ -10,7 +10,7 @@ else
 fi
 
 # Validate required variables
-REQUIRED_VARS=("VPS_HOST" "DOMAIN" "REMOTE_DIR" "IPV4" "IPV6")
+REQUIRED_VARS=("VPS_HOST" "DOMAIN" "REMOTE_DIR" "IPV4")
 for var in "${REQUIRED_VARS[@]}"; do
     if [ -z "${!var}" ]; then
         echo "❌ Error: $var is not set in .env.production"
@@ -27,8 +27,22 @@ echo "📦 Building frontend..."
 # 2. Generate configuration files from templates
 echo "⚙️ Generating configuration files..."
 export DOMAIN IPV4 IPV6 REMOTE_DIR
-envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR' < nginx/nginx.prod.conf.template > nginx/nginx.prod.conf
-envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR' < coturn/turnserver.prod.conf.template > coturn/turnserver.prod.conf
+
+# Prepare IPv6 variables for templates
+if [ -n "$IPV6" ]; then
+    export IPV6_Run_HTTP="listen [::]:80;"
+    export IPV6_Run_HTTPS="listen [::]:443 ssl http2;"
+    export IPV6_Run_RELAY="relay-ip=${IPV6}"
+    export IPV6_Run_LISTENING="listening-ip=${IPV6}"
+else
+    export IPV6_Run_HTTP=""
+    export IPV6_Run_HTTPS=""
+    export IPV6_Run_RELAY=""
+    export IPV6_Run_LISTENING=""
+fi
+
+envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR $IPV6_Run_HTTP $IPV6_Run_HTTPS' < nginx/nginx.prod.conf.template > nginx/nginx.prod.conf
+envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR $IPV6_Run_RELAY $IPV6_Run_LISTENING' < coturn/turnserver.prod.conf.template > coturn/turnserver.prod.conf
 
 # Optional: Legacy redirects
 if [ -f nginx/nginx.legacy.conf.template ]; then
@@ -42,6 +56,7 @@ rsync -avzR \
     --exclude 'server/server' \
     --exclude 'server/server_test' \
     --exclude '*.template' \
+    --exclude 'server/data' \
     docker-compose.yml \
     docker-compose.prod.yml \
     .env.production \
