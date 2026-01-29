@@ -185,7 +185,6 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setError(null);
         needsRejoinRef.current = false;
         currentRoomIdRef.current = roomId;
-        currentRoomIdRef.current = roomId;
         if (transportRef.current && transportRef.current.isOpen()) {
             const payload: any = { capabilities: { trickleIce: true } };
             if (opts?.snapshotId) {
