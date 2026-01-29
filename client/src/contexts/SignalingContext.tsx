@@ -12,7 +12,7 @@ interface SignalingContextValue {
     clientId: string | null;
     roomState: RoomState | null;
     turnToken: string | null;
-    joinRoom: (roomId: string) => void;
+    joinRoom: (roomId: string, opts?: { snapshotId?: string }) => void;
     leaveRoom: () => void;
     endRoom: () => void;
     sendMessage: (type: string, payload?: any, to?: string) => void;
@@ -56,6 +56,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const transportIdRef = useRef(0);
     const currentRoomIdRef = useRef<string | null>(null);
     const pendingJoinRef = useRef<string | null>(null);
+    const pendingJoinPayloadRef = useRef<{ snapshotId?: string } | null>(null);
     const clientIdRef = useRef<string | null>(null);
     const lastClientIdRef = useRef<string | null>(null);
     const needsRejoinRef = useRef(false);
@@ -179,7 +180,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         };
     }, [isConnected, sendMessage]);
 
-    const joinRoom = useCallback((roomId: string) => {
+    const joinRoom = useCallback((roomId: string, opts?: { snapshotId?: string }) => {
         console.log(`[Signaling] joinRoom call for ${roomId}`);
         setError(null);
         needsRejoinRef.current = false;
@@ -187,6 +188,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         currentRoomIdRef.current = roomId;
         if (transportRef.current && transportRef.current.isOpen()) {
             const payload: any = { capabilities: { trickleIce: true } };
+            if (opts?.snapshotId) {
+                payload.snapshotId = opts.snapshotId;
+            }
             // If we have a previous client ID, send it to help server evict ghosts
             const reconnectCid = clientIdRef.current || lastClientIdRef.current;
             if (reconnectCid) {
@@ -225,6 +229,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         } else {
             console.log('[Signaling] Transport not ready, buffering join');
             pendingJoinRef.current = roomId;
+            pendingJoinPayloadRef.current = opts ?? null;
         }
     }, [sendMessage]);
 
@@ -310,8 +315,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     transportConnectedOnceRef.current[targetKind] = true;
                     if (!wasConnected) {
                         if (pendingJoinRef.current) {
-                            joinRoom(pendingJoinRef.current);
+                            joinRoom(pendingJoinRef.current, pendingJoinPayloadRef.current ?? undefined);
                             pendingJoinRef.current = null;
+                            pendingJoinPayloadRef.current = null;
                         } else if (needsRejoinRef.current && currentRoomIdRef.current) {
                             // If we lost the connection mid-call, automatically rejoin
                             console.log(`[Signaling] Auto-rejoining room ${currentRoomIdRef.current}`);

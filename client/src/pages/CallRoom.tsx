@@ -8,6 +8,7 @@ import QRCode from 'react-qr-code';
 import { saveCall } from '../utils/callHistory';
 import { useTranslation } from 'react-i18next';
 import { playJoinChime } from '../utils/audio';
+import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 
 function urlBase64ToUint8Array(base64String: string) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -22,6 +23,169 @@ function urlBase64ToUint8Array(base64String: string) {
     return outputArray;
 }
 
+function base64FromBytes(bytes: Uint8Array): string {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return window.btoa(binary);
+}
+
+async function fetchRecipients(roomId: string): Promise<{ id: number; publicKey: JsonWebKey }[]> {
+    const res = await fetch(`/api/push/recipients?roomId=${encodeURIComponent(roomId)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.filter((item: any) => typeof item?.id === 'number' && item?.publicKey);
+}
+
+async function buildEncryptedSnapshot(stream: MediaStream, roomId: string): Promise<string | null> {
+    if (!('crypto' in window) || !window.crypto.subtle) return null;
+
+    const recipients = await fetchRecipients(roomId);
+    if (recipients.length === 0) return null;
+
+    const snapshot = await captureSnapshotBytes(stream);
+    if (!snapshot) return null;
+    if (snapshot.bytes.length > 200 * 1024) return null;
+
+    const snapshotKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+    );
+    const snapshotIv = crypto.getRandomValues(new Uint8Array(12));
+    const snapshotBuffer = snapshot.bytes.buffer.slice(
+        snapshot.bytes.byteOffset,
+        snapshot.bytes.byteOffset + snapshot.bytes.byteLength
+    ) as ArrayBuffer;
+    const ciphertext = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: snapshotIv },
+        snapshotKey,
+        snapshotBuffer
+    );
+    const snapshotKeyRaw = new Uint8Array(await crypto.subtle.exportKey('raw', snapshotKey));
+
+    const ephemeral = await crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true,
+        ['deriveBits']
+    );
+    const ephemeralPubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const info = new TextEncoder().encode('serenada-push-snapshot');
+
+    const recipientsPayload: { id: number; wrappedKey: string; wrappedKeyIv: string }[] = [];
+
+    for (const recipient of recipients) {
+        try {
+            const recipientKey = await crypto.subtle.importKey(
+                'jwk',
+                recipient.publicKey,
+                { name: 'ECDH', namedCurve: 'P-256' },
+                false,
+                []
+            );
+            const sharedBits = await crypto.subtle.deriveBits(
+                { name: 'ECDH', public: recipientKey },
+                ephemeral.privateKey,
+                256
+            );
+            const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+            const wrapKey = await crypto.subtle.deriveKey(
+                { name: 'HKDF', hash: 'SHA-256', salt, info },
+                hkdfKey,
+                { name: 'AES-GCM', length: 256 },
+                false,
+                ['encrypt', 'decrypt']
+            );
+            const wrapIv = crypto.getRandomValues(new Uint8Array(12));
+            const wrappedKey = await crypto.subtle.encrypt(
+                { name: 'AES-GCM', iv: wrapIv },
+                wrapKey,
+                snapshotKeyRaw
+            );
+            recipientsPayload.push({
+                id: recipient.id,
+                wrappedKey: base64FromBytes(new Uint8Array(wrappedKey)),
+                wrappedKeyIv: base64FromBytes(wrapIv)
+            });
+        } catch (err) {
+            console.warn('[Push] Failed to encrypt snapshot for recipient', err);
+        }
+    }
+
+    if (recipientsPayload.length === 0) return null;
+
+    const res = await fetch('/api/push/snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            ciphertext: base64FromBytes(new Uint8Array(ciphertext)),
+            snapshotIv: base64FromBytes(snapshotIv),
+            snapshotSalt: base64FromBytes(salt),
+            snapshotEphemeralPubKey: base64FromBytes(ephemeralPubRaw),
+            snapshotMime: snapshot.mime,
+            recipients: recipientsPayload
+        })
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.id || null;
+}
+
+async function captureSnapshotBytes(stream: MediaStream): Promise<{ bytes: Uint8Array; mime: string } | null> {
+    const track = stream.getVideoTracks()[0];
+    if (!track) return null;
+
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = new MediaStream([track]);
+
+    try {
+        await video.play();
+    } catch {
+        // Ignore autoplay restrictions; we'll still try to grab a frame.
+    }
+
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+        await new Promise<void>((resolve) => {
+            const onLoaded = () => {
+                video.removeEventListener('loadedmetadata', onLoaded);
+                resolve();
+            };
+            video.addEventListener('loadedmetadata', onLoaded);
+        });
+    }
+
+    const maxWidth = 320;
+    const width = video.videoWidth || 320;
+    const height = video.videoHeight || 240;
+    const scale = width > maxWidth ? maxWidth / width : 1;
+    const targetWidth = Math.round(width * scale);
+    const targetHeight = Math.round(height * scale);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+
+    video.pause();
+    video.srcObject = null;
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((result) => resolve(result), 'image/jpeg', 0.7);
+    });
+    if (!blob) return null;
+
+    const buffer = await blob.arrayBuffer();
+    return { bytes: new Uint8Array(buffer), mime: 'image/jpeg' };
+}
 
 const CallRoom: React.FC = () => {
     const { t } = useTranslation();
@@ -78,7 +242,16 @@ const CallRoom: React.FC = () => {
 
             navigator.serviceWorker.ready.then(reg => {
                 reg.pushManager.getSubscription().then(sub => {
-                    if (sub) setIsSubscribed(true);
+                    if (sub) {
+                        setIsSubscribed(true);
+                        getOrCreatePushKeyPair()
+                            .then(({ publicJwk }) => fetch('/api/push/subscribe?roomId=' + roomId, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ ...sub.toJSON(), locale: navigator.language, encPublicKey: publicJwk })
+                            }))
+                            .catch(() => { });
+                    }
                 });
             });
         }
@@ -109,6 +282,7 @@ const CallRoom: React.FC = () => {
                     showToast('error', 'Notifications blocked');
                     return;
                 }
+                const { publicJwk } = await getOrCreatePushKeyPair();
                 const sub = await reg.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey: urlBase64ToUint8Array(vapidKey)
@@ -116,7 +290,7 @@ const CallRoom: React.FC = () => {
                 await fetch('/api/push/subscribe?roomId=' + roomId, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ...sub.toJSON(), locale: navigator.language })
+                    body: JSON.stringify({ ...sub.toJSON(), locale: navigator.language, encPublicKey: publicJwk })
                 });
                 setIsSubscribed(true);
                 showToast('success', 'You will be notified!');
@@ -317,10 +491,21 @@ const CallRoom: React.FC = () => {
                     requestFullscreen.call(rootElement).catch(() => { });
                 }
             }
-            await startLocalMedia();
+            const stream = await startLocalMedia();
+            let snapshotId: string | null = null;
+            if (stream) {
+                const snapshotPromise = buildEncryptedSnapshot(stream, roomId).catch((err) => {
+                    console.warn('[Push] Failed to build encrypted snapshot', err);
+                    return null;
+                });
+                snapshotId = await Promise.race([
+                    snapshotPromise,
+                    new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200))
+                ]);
+            }
             // Tiny delay to ensure state propagates
             setTimeout(() => {
-                joinRoom(roomId);
+                joinRoom(roomId, snapshotId ? { snapshotId } : undefined);
                 setHasJoined(true);
                 callStartTimeRef.current = Date.now();
             }, 50);

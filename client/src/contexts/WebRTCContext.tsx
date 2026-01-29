@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 interface WebRTCContextValue {
     localStream: MediaStream | null;
     remoteStream: MediaStream | null;
-    startLocalMedia: () => Promise<void>;
+    startLocalMedia: () => Promise<MediaStream | null>;
     stopLocalMedia: () => void;
     flipCamera: () => Promise<void>;
     facingMode: 'user' | 'environment';
@@ -522,7 +522,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const mediaRequestIdRef = useRef<number>(0);
 
-    const startLocalMedia = useCallback(async () => {
+    const startLocalMedia = useCallback(async (): Promise<MediaStream | null> => {
         // Increment request ID for the new attempt
         const requestId = mediaRequestIdRef.current + 1;
         mediaRequestIdRef.current = requestId;
@@ -530,7 +530,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // If we already have a stream, checks below will decide what to do.
         // But if localStream exists, we usually return.
         if (localStream) {
-            return;
+            return localStream;
         }
 
         requestingMediaRef.current = true;
@@ -538,7 +538,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 showToast('error', t('toast_media_blocked'));
                 requestingMediaRef.current = false;
-                return;
+                return null;
             }
             const audioConstraints: MediaTrackConstraints = {
                 echoCancellation: { ideal: true },
@@ -558,7 +558,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (unmountedRef.current || mediaRequestIdRef.current !== requestId) {
                 console.log(`[WebRTC] Media request ${requestId} stale or cancelled. Stopping tracks.`);
                 stream.getTracks().forEach(t => t.stop());
-                return;
+                return null;
             }
 
             applySpeechTrackHints(stream);
@@ -572,10 +572,11 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 });
                 void applyAudioSenderParameters(pcRef.current);
             }
-            return;
+            return stream;
         } catch (err) {
             console.error("Error accessing media", err);
             requestingMediaRef.current = false;
+            return null;
         }
     }, [localStream, facingMode, showToast, t]);
 

@@ -48,6 +48,9 @@ envsubst '$DOMAIN $IPV4 $IPV6 $REMOTE_DIR $IPV6_Run_RELAY $IPV6_Run_LISTENING' <
 if [ -f nginx/nginx.legacy.conf.template ]; then
     mkdir -p nginx/conf.d
     envsubst '$DOMAIN' < nginx/nginx.legacy.conf.template > nginx/conf.d/legacy.extra
+else
+    # Cleanup if template doesn't exist
+    rm -f nginx/conf.d/legacy.extra
 fi
 
 # 3. Sync files to VPS

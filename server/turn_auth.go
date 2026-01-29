@@ -198,6 +198,8 @@ func handleTurnCredentials() http.HandlerFunc {
 
 		if turn_host != "" {
 			config.URIs = append(config.URIs, "turns:"+turn_host+":443?transport=tcp")
+		} else {
+			config.URIs = append(config.URIs, "turns:"+stun_host+":5349?transport=tcp")
 		}
 
 		w.Header().Set("Content-Type", "application/json")

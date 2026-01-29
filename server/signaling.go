@@ -201,6 +201,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	var joinPayload struct {
 		ReconnectCID string `json:"reconnectCid"`
 		PushEndpoint string `json:"pushEndpoint"`
+		SnapshotID   string `json:"snapshotId"`
 	}
 	if len(msg.Payload) > 0 {
 		if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
@@ -210,6 +211,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	reconnectCID := joinPayload.ReconnectCID
 	excludeEndpoint := joinPayload.PushEndpoint
+	snapshotID := joinPayload.SnapshotID
 	reusedCID := false
 
 	if reconnectCID != "" {
@@ -309,7 +311,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Trigger Push Notification when anyone joins (subscribed users waiting offline should get notified)
 	if pushService != nil {
-		go pushService.SendNotificationToRoom(rid, excludeEndpoint)
+		go pushService.SendNotificationToRoom(rid, excludeEndpoint, snapshotID)
 	}
 
 	payload := map[string]interface{}{

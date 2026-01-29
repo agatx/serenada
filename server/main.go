@@ -92,6 +92,9 @@ func main() {
 	// Push Routes
 	http.HandleFunc("/api/push/vapid-public-key", withTimeout(enableCors(handlePushVapidKey), 5*time.Second))
 	http.HandleFunc("/api/push/subscribe", withTimeout(rateLimitMiddleware(pushLimiter, enableCors(handlePushSubscribe)), 10*time.Second))
+	http.HandleFunc("/api/push/recipients", withTimeout(rateLimitMiddleware(pushLimiter, enableCors(handlePushRecipients)), 10*time.Second))
+	http.HandleFunc("/api/push/snapshot", withTimeout(rateLimitMiddleware(pushLimiter, enableCors(handlePushSnapshot)), 10*time.Second))
+	http.HandleFunc("/api/push/snapshot/", withTimeout(enableCors(handlePushSnapshot), 10*time.Second))
 
 	http.HandleFunc("/device-check", withTimeout(handleDeviceCheck, 15*time.Second))
 
