@@ -1,0 +1,491 @@
+package app.serenada.android.call
+
+import android.content.Context
+import android.util.Log
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
+import org.webrtc.CameraVideoCapturer
+import org.webrtc.Camera2Enumerator
+import org.webrtc.DefaultVideoDecoderFactory
+import org.webrtc.DefaultVideoEncoderFactory
+import org.webrtc.EglBase
+import org.webrtc.IceCandidate
+import org.webrtc.MediaConstraints
+import org.webrtc.MediaStreamTrack
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpTransceiver
+import org.webrtc.SessionDescription
+import org.webrtc.SurfaceTextureHelper
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoCapturer
+import org.webrtc.VideoSource
+import org.webrtc.VideoTrack
+
+class WebRtcEngine(
+    context: Context,
+    private val onLocalIceCandidate: (IceCandidate) -> Unit,
+    private val onConnectionState: (PeerConnection.PeerConnectionState) -> Unit,
+    private val onIceConnectionState: (PeerConnection.IceConnectionState) -> Unit,
+    private val onSignalingState: (PeerConnection.SignalingState) -> Unit,
+    private val onRenegotiationNeededCallback: () -> Unit,
+    private val onRemoteVideoTrack: (VideoTrack?) -> Unit
+) {
+    private val appContext = context.applicationContext
+    private val eglBase: EglBase = EglBase.create()
+    private val peerConnectionFactory: PeerConnectionFactory
+
+    private var peerConnection: PeerConnection? = null
+    private var localVideoTrack: VideoTrack? = null
+    private var localAudioTrack: AudioTrack? = null
+    private var videoCapturer: VideoCapturer? = null
+    private var videoSource: VideoSource? = null
+    private var audioSource: AudioSource? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
+
+    private var localRenderer: SurfaceViewRenderer? = null
+    private var remoteRenderer: SurfaceViewRenderer? = null
+    private var remoteVideoTrack: VideoTrack? = null
+
+    private var iceServers: List<PeerConnection.IceServer>? = null
+    private var remoteDescriptionSet = false
+    private val pendingIceCandidates = mutableListOf<IceCandidate>()
+    private var iceCandidateCount = 0
+
+    init {
+        val initOptions = PeerConnectionFactory.InitializationOptions.builder(appContext)
+            .setEnableInternalTracer(false)
+            .createInitializationOptions()
+        PeerConnectionFactory.initialize(initOptions)
+
+        val encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
+        val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+        peerConnectionFactory = PeerConnectionFactory.builder()
+            .setVideoEncoderFactory(encoderFactory)
+            .setVideoDecoderFactory(decoderFactory)
+            .createPeerConnectionFactory()
+    }
+
+    fun getEglContext(): EglBase.Context = eglBase.eglBaseContext
+
+    fun startLocalMedia() {
+        if (localAudioTrack != null || localVideoTrack != null) return
+        val audioConstraints = MediaConstraints()
+        audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+        localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
+        applyAudioTrackHints()
+
+        val capturer = createVideoCapturer() ?: run {
+            Log.w("WebRtcEngine", "No camera capturer available")
+            return
+        }
+        videoCapturer = capturer
+        val textureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+        surfaceTextureHelper = textureHelper
+        videoSource = peerConnectionFactory.createVideoSource(false)
+        capturer.initialize(textureHelper, appContext, videoSource?.capturerObserver)
+        try {
+            capturer.startCapture(640, 480, 30)
+        } catch (e: Exception) {
+            Log.w("WebRtcEngine", "Failed to start capture", e)
+        }
+        localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
+        localVideoTrack?.setEnabled(true)
+        localRenderer?.let { renderer ->
+            localVideoTrack?.addSink(renderer)
+        }
+        createPeerConnectionIfReady()
+    }
+
+    fun stopLocalMedia() {
+        localVideoTrack?.setEnabled(false)
+        localAudioTrack?.setEnabled(false)
+        try {
+            videoCapturer?.stopCapture()
+        } catch (e: Exception) {
+            Log.w("WebRtcEngine", "Failed to stop capture", e)
+        }
+        videoCapturer?.dispose()
+        videoCapturer = null
+        surfaceTextureHelper?.dispose()
+        surfaceTextureHelper = null
+        videoSource?.dispose()
+        videoSource = null
+        audioSource?.dispose()
+        audioSource = null
+        localVideoTrack = null
+        localAudioTrack = null
+    }
+
+    fun closePeerConnection() {
+        peerConnection?.close()
+        peerConnection?.dispose()
+        peerConnection = null
+        remoteVideoTrack = null
+        remoteDescriptionSet = false
+        pendingIceCandidates.clear()
+        iceCandidateCount = 0
+        onRemoteVideoTrack(null)
+    }
+
+    fun release() {
+        stopLocalMedia()
+        closePeerConnection()
+    }
+
+    fun setIceServers(servers: List<PeerConnection.IceServer>) {
+        Log.d("WebRtcEngine", "ICE servers set: ${servers.size}")
+        iceServers = servers
+        createPeerConnectionIfReady()
+    }
+
+    fun isReady(): Boolean = peerConnection != null
+    fun ensurePeerConnection() {
+        createPeerConnectionIfReady()
+    }
+    fun getSignalingState(): PeerConnection.SignalingState? = peerConnection?.signalingState()
+    fun hasRemoteDescription(): Boolean = peerConnection?.remoteDescription != null
+
+    fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)? = null) {
+        val pc = peerConnection ?: return
+        val desc = SessionDescription(SessionDescription.Type.ROLLBACK, "")
+        pc.setLocalDescription(object : SdpObserverAdapter() {
+            override fun onSetSuccess() {
+                Log.d("WebRtcEngine", "Local description rolled back")
+                onComplete?.invoke(true)
+            }
+
+            override fun onSetFailure(error: String?) {
+                Log.w("WebRtcEngine", "Failed to rollback local description: $error")
+                onComplete?.invoke(false)
+            }
+        }, desc)
+    }
+
+    fun flipCamera() {
+        val capturer = videoCapturer as? CameraVideoCapturer ?: return
+        capturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
+            override fun onCameraSwitchDone(isFrontCamera: Boolean) {
+                Log.d("WebRtcEngine", "Camera switched. Front=$isFrontCamera")
+            }
+
+            override fun onCameraSwitchError(errorDescription: String?) {
+                Log.w("WebRtcEngine", "Camera switch failed: $errorDescription")
+            }
+        })
+    }
+
+    fun createOffer(
+        iceRestart: Boolean = false,
+        onSdp: (String) -> Unit,
+        onComplete: ((Boolean) -> Unit)? = null
+    ): Boolean {
+        val pc = peerConnection ?: return false
+        if (pc.signalingState() != PeerConnection.SignalingState.STABLE) {
+            Log.d("WebRtcEngine", "Skipping offer; signaling state is ${pc.signalingState()}")
+            onComplete?.invoke(false)
+            return false
+        }
+        Log.d("WebRtcEngine", "Creating offer")
+        val constraints = MediaConstraints()
+        if (iceRestart) {
+            constraints.optional.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+        }
+        pc.createOffer(object : SdpObserverAdapter() {
+            override fun onCreateSuccess(desc: SessionDescription?) {
+                if (desc == null) {
+                    onComplete?.invoke(false)
+                    return
+                }
+                val mungedSdp = forceVp8(desc.description)
+                val finalDesc = SessionDescription(desc.type, mungedSdp)
+                pc.setLocalDescription(object : SdpObserverAdapter() {
+                    override fun onSetSuccess() {
+                        Log.d("WebRtcEngine", "Local description set (offer)")
+                        onSdp(finalDesc.description)
+                        onComplete?.invoke(true)
+                    }
+
+                    override fun onSetFailure(error: String?) {
+                        Log.w("WebRtcEngine", "Failed to set local offer: $error")
+                        onComplete?.invoke(false)
+                    }
+                }, finalDesc)
+            }
+
+            override fun onCreateFailure(error: String?) {
+                Log.w("WebRtcEngine", "Offer creation failed: $error")
+                onComplete?.invoke(false)
+            }
+        }, constraints)
+        return true
+    }
+
+    fun createAnswer(onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)? = null) {
+        val pc = peerConnection ?: return
+        Log.d("WebRtcEngine", "Creating answer")
+        val constraints = MediaConstraints()
+        pc.createAnswer(object : SdpObserverAdapter() {
+            override fun onCreateSuccess(desc: SessionDescription?) {
+                if (desc == null) {
+                    onComplete?.invoke(false)
+                    return
+                }
+                pc.setLocalDescription(object : SdpObserverAdapter() {
+                    override fun onSetSuccess() {
+                        Log.d("WebRtcEngine", "Local description set (answer)")
+                        onSdp(desc.description)
+                        onComplete?.invoke(true)
+                    }
+
+                    override fun onSetFailure(error: String?) {
+                        Log.w("WebRtcEngine", "Failed to set local answer: $error")
+                        onComplete?.invoke(false)
+                    }
+                }, desc)
+            }
+
+            override fun onCreateFailure(error: String?) {
+                Log.w("WebRtcEngine", "Answer creation failed: $error")
+                onComplete?.invoke(false)
+            }
+        }, constraints)
+    }
+
+    fun setRemoteDescription(type: SessionDescription.Type, sdp: String, onComplete: (() -> Unit)? = null) {
+        val pc = peerConnection ?: return
+        val desc = SessionDescription(type, sdp)
+        pc.setRemoteDescription(object : SdpObserverAdapter() {
+            override fun onSetSuccess() {
+                remoteDescriptionSet = true
+                flushPendingIceCandidates()
+                Log.d("WebRtcEngine", "Remote description set ($type)")
+                onComplete?.invoke()
+            }
+
+            override fun onSetFailure(error: String?) {
+                Log.w("WebRtcEngine", "Failed to set remote description ($type): $error")
+            }
+        }, desc)
+    }
+
+    fun addIceCandidate(candidate: IceCandidate) {
+        val pc = peerConnection ?: return
+        if (!remoteDescriptionSet) {
+            pendingIceCandidates.add(candidate)
+            return
+        }
+        pc.addIceCandidate(candidate)
+    }
+
+    fun toggleAudio(enabled: Boolean) {
+        localAudioTrack?.setEnabled(enabled)
+    }
+
+    fun toggleVideo(enabled: Boolean) {
+        localVideoTrack?.setEnabled(enabled)
+    }
+
+    fun attachLocalRenderer(renderer: SurfaceViewRenderer) {
+        initRenderer(renderer, mirror = true)
+        localRenderer = renderer
+        localVideoTrack?.addSink(renderer)
+    }
+
+    fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {
+        initRenderer(renderer, mirror = false)
+        remoteRenderer = renderer
+        remoteVideoTrack?.addSink(renderer)
+    }
+
+    fun detachLocalRenderer(renderer: SurfaceViewRenderer) {
+        localVideoTrack?.removeSink(renderer)
+        renderer.release()
+        if (localRenderer == renderer) {
+            localRenderer = null
+        }
+    }
+
+    fun detachRemoteRenderer(renderer: SurfaceViewRenderer) {
+        remoteVideoTrack?.removeSink(renderer)
+        renderer.release()
+        if (remoteRenderer == renderer) {
+            remoteRenderer = null
+        }
+    }
+
+    private fun initRenderer(renderer: SurfaceViewRenderer, mirror: Boolean) {
+        renderer.init(eglBase.eglBaseContext, null)
+        renderer.setEnableHardwareScaler(true)
+        renderer.setMirror(mirror)
+    }
+
+    private fun createPeerConnectionIfReady() {
+        if (peerConnection != null) return
+        val servers = iceServers ?: return
+        if (localAudioTrack == null && localVideoTrack == null) return
+
+        remoteDescriptionSet = false
+        pendingIceCandidates.clear()
+        val config = PeerConnection.RTCConfiguration(servers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        }
+        peerConnection = peerConnectionFactory.createPeerConnection(config, object : PeerConnection.Observer {
+            override fun onIceCandidate(candidate: IceCandidate) {
+                iceCandidateCount += 1
+                if (iceCandidateCount <= 5 || iceCandidateCount % 25 == 0) {
+                    Log.d("WebRtcEngine", "Local ICE candidate #$iceCandidateCount")
+                }
+                onLocalIceCandidate(candidate)
+            }
+
+            override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+                Log.d("WebRtcEngine", "Connection state: $newState")
+                onConnectionState(newState)
+            }
+
+            override fun onTrack(transceiver: RtpTransceiver?) {
+                val track = transceiver?.receiver?.track()
+                if (track is VideoTrack) {
+                    remoteVideoTrack = track
+                    remoteRenderer?.let { track.addSink(it) }
+                    onRemoteVideoTrack(track)
+                }
+            }
+
+            override fun onSignalingChange(newState: PeerConnection.SignalingState) {
+                Log.d("WebRtcEngine", "Signaling state: $newState")
+                onSignalingState(newState)
+            }
+
+            override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
+                Log.d("WebRtcEngine", "ICE state: $newState")
+                onIceConnectionState(newState)
+            }
+
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {
+            }
+
+            override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {
+                Log.d("WebRtcEngine", "ICE gathering: $newState")
+            }
+
+            override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {
+            }
+
+            override fun onAddStream(stream: org.webrtc.MediaStream) {
+            }
+
+            override fun onRemoveStream(stream: org.webrtc.MediaStream) {
+            }
+
+            override fun onDataChannel(dc: org.webrtc.DataChannel) {
+            }
+
+            override fun onRenegotiationNeeded() {
+                onRenegotiationNeededCallback()
+            }
+        })
+
+        peerConnection?.let { pc ->
+            localAudioTrack?.let { pc.addTrack(it, listOf("serenada")) }
+            localVideoTrack?.let { pc.addTrack(it, listOf("serenada")) }
+            ensureReceiveTransceivers(pc)
+            applyAudioSenderParameters(pc)
+        }
+    }
+
+    private fun ensureReceiveTransceivers(pc: PeerConnection) {
+        if (localAudioTrack == null) {
+            pc.addTransceiver(
+                MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+            )
+        }
+        if (localVideoTrack == null) {
+            pc.addTransceiver(
+                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+            )
+        }
+    }
+
+    private fun flushPendingIceCandidates() {
+        val pc = peerConnection ?: return
+        if (pendingIceCandidates.isEmpty()) return
+        val pending = pendingIceCandidates.toList()
+        pendingIceCandidates.clear()
+        pending.forEach { pc.addIceCandidate(it) }
+    }
+
+    private fun applyAudioTrackHints() {
+        val track = localAudioTrack ?: return
+        runCatching {
+            val method = track.javaClass.getMethod("setContentHint", String::class.java)
+            method.invoke(track, "speech")
+        }.onFailure {
+            Log.d("WebRtcEngine", "Audio content hint not supported")
+        }
+    }
+
+    private fun applyAudioSenderParameters(pc: PeerConnection) {
+        val sender = pc.senders.firstOrNull { it.track()?.kind() == "audio" } ?: return
+        try {
+            val params = sender.parameters
+            val encodings = params.encodings
+            if (encodings.isNullOrEmpty()) return
+            encodings[0].maxBitrateBps = 32_000
+            sender.setParameters(params)
+        } catch (e: Exception) {
+            Log.w("WebRtcEngine", "Failed to apply audio sender parameters", e)
+        }
+    }
+
+    private fun forceVp8(sdp: String): String {
+        return try {
+            val lines = sdp.split("\r\n").toMutableList()
+            val mLineIndex = lines.indexOfFirst { it.startsWith("m=video") }
+            if (mLineIndex == -1) return sdp
+            val mLine = lines[mLineIndex]
+            val parts = mLine.split(" ")
+            if (parts.size <= 3) return sdp
+
+            val payloadTypes = parts.drop(3)
+            val vp8Pts = mutableListOf<String>()
+            lines.forEach { line ->
+                if (line.startsWith("a=rtpmap:")) {
+                    val values = line.substring(9).split(" ")
+                    if (values.size >= 2) {
+                        val pt = values[0]
+                        val name = values[1].split("/")[0]
+                        if (name.equals("VP8", ignoreCase = true)) {
+                            vp8Pts.add(pt)
+                        }
+                    }
+                }
+            }
+            if (vp8Pts.isEmpty()) return sdp
+            val newPtList = vp8Pts + payloadTypes.filter { it !in vp8Pts }
+            lines[mLineIndex] = (parts.take(3) + newPtList).joinToString(" ")
+            lines.joinToString("\r\n")
+        } catch (e: Exception) {
+            Log.w("WebRtcEngine", "VP8 SDP munging failed", e)
+            sdp
+        }
+    }
+
+    private fun createVideoCapturer(): VideoCapturer? {
+        val enumerator = Camera2Enumerator(appContext)
+        for (deviceName in enumerator.deviceNames) {
+            if (enumerator.isFrontFacing(deviceName)) {
+                return enumerator.createCapturer(deviceName, null)
+            }
+        }
+        for (deviceName in enumerator.deviceNames) {
+            if (enumerator.isBackFacing(deviceName)) {
+                return enumerator.createCapturer(deviceName, null)
+            }
+        }
+        return null
+    }
+}
