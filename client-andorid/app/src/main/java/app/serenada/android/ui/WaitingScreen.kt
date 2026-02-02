@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -48,54 +49,59 @@ fun WaitingScreen(
         generateQrCode(link)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
     ) {
-        Text(
-            text = "Waiting for someone to join",
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(32.dp))
-        
-        Box(
+        Column(
             modifier = Modifier
-                .size(240.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color.White)
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            qrBitmap?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = "Share link QR code",
-                    modifier = Modifier.fillMaxSize()
-                )
+            Text(
+                text = "Waiting for someone to join",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            Box(
+                modifier = Modifier
+                    .size(240.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White)
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                qrBitmap?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = "Share link QR code",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
-        }
-        
-        Spacer(modifier = Modifier.height(32.dp))
-        
-        Button(
-            onClick = { shareLink(context, link) },
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth(0.7f)
-        ) {
-            Text("Share invitation", fontSize = 16.sp)
-        }
+            
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            Button(
+                onClick = { shareLink(context, link) },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(0.7f)
+            ) {
+                Text("Share invitation", fontSize = 16.sp)
+            }
 
-        Spacer(modifier = Modifier.height(32.dp))
-        Button(
-            onClick = onEndCall,
-            modifier = Modifier.padding(bottom = 16.dp)
-        ) {
-            Text(if (isHost) "End call" else "Leave")
+            Spacer(modifier = Modifier.height(32.dp))
+            Button(
+                onClick = onEndCall,
+                modifier = Modifier.padding(bottom = 16.dp)
+            ) {
+                Text(if (isHost) "End call" else "Leave")
+            }
         }
     }
 }

@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -19,19 +21,24 @@ fun ErrorScreen(
     message: String,
     onDismiss: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
     ) {
-        Text("Something went wrong", fontSize = 20.sp)
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(message)
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(onClick = onDismiss) {
-            Text("Back")
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Something went wrong", fontSize = 20.sp)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(message)
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = onDismiss) {
+                Text("Back")
+            }
         }
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -50,7 +51,7 @@ fun CallScreen(
                 .align(Alignment.TopEnd)
                 .padding(12.dp)
                 .size(120.dp, 180.dp)
-                .background(Color.DarkGray)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
             VideoSurface(
                 modifier = Modifier.fillMaxSize(),
