@@ -9,5 +9,12 @@ data class CallUiState(
     val participantCount: Int = 0,
     val localAudioEnabled: Boolean = true,
     val localVideoEnabled: Boolean = true,
-    val remoteVideoEnabled: Boolean = false
+    val remoteVideoEnabled: Boolean = false,
+    val isReconnecting: Boolean = false,
+    val isSignalingConnected: Boolean = false,
+    val iceConnectionState: String = "NEW",
+    val connectionState: String = "NEW",
+    val signalingState: String = "STABLE",
+    val activeTransport: String? = null,
+    val isFrontCamera: Boolean = true
 )

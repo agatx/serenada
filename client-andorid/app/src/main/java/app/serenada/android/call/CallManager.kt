@@ -81,7 +81,10 @@ class CallManager(context: Context) {
                     PeerConnection.PeerConnectionState.CLOSED -> "Call ended"
                     else -> ""
                 }
-                updateState(_uiState.value.copy(statusMessage = message))
+                updateState(_uiState.value.copy(
+                    statusMessage = message,
+                    connectionState = state.name
+                ))
                 when (state) {
                     PeerConnection.PeerConnectionState.CONNECTED -> {
                         clearIceRestartTimer()
@@ -95,6 +98,7 @@ class CallManager(context: Context) {
         },
         onIceConnectionState = { state ->
             handler.post {
+                updateState(_uiState.value.copy(iceConnectionState = state.name))
                 when (state) {
                     PeerConnection.IceConnectionState.DISCONNECTED -> scheduleIceRestart("ice-disconnected", 2000)
                     PeerConnection.IceConnectionState.FAILED -> scheduleIceRestart("ice-failed", 0)
@@ -116,6 +120,7 @@ class CallManager(context: Context) {
                         triggerIceRestart("pending-retry")
                     }
                 }
+                updateState(_uiState.value.copy(signalingState = state.name))
             }
         },
         onRenegotiationNeededCallback = {
@@ -125,12 +130,18 @@ class CallManager(context: Context) {
             handler.post {
                 updateState(_uiState.value.copy(remoteVideoEnabled = track != null))
             }
+        },
+        onCameraFacingChanged = { isFront ->
+            handler.post {
+                updateState(_uiState.value.copy(isFrontCamera = isFront))
+            }
         }
     )
 
     private val signalingClient = SignalingClient(okHttpClient, handler, object : SignalingClient.Listener {
         override fun onOpen() {
             reconnectAttempts = 0
+            updateState(_uiState.value.copy(isSignalingConnected = true))
             pendingJoinRoom?.let { join ->
                 pendingJoinRoom = null
                 sendJoin(join)
@@ -145,6 +156,7 @@ class CallManager(context: Context) {
         }
 
         override fun onClosed(reason: String) {
+            updateState(_uiState.value.copy(isSignalingConnected = false))
             val activeRoom = currentRoomId
             if (activeRoom != null && _uiState.value.phase != CallPhase.Ending) {
                 scheduleReconnect()

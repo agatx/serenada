@@ -29,7 +29,8 @@ class WebRtcEngine(
     private val onIceConnectionState: (PeerConnection.IceConnectionState) -> Unit,
     private val onSignalingState: (PeerConnection.SignalingState) -> Unit,
     private val onRenegotiationNeededCallback: () -> Unit,
-    private val onRemoteVideoTrack: (VideoTrack?) -> Unit
+    private val onRemoteVideoTrack: (VideoTrack?) -> Unit,
+    private val onCameraFacingChanged: (Boolean) -> Unit
 ) {
     private val appContext = context.applicationContext
     private val eglBase: EglBase = EglBase.create()
@@ -167,6 +168,7 @@ class WebRtcEngine(
         capturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
             override fun onCameraSwitchDone(isFrontCamera: Boolean) {
                 Log.d("WebRtcEngine", "Camera switched. Front=$isFrontCamera")
+                onCameraFacingChanged(isFrontCamera)
             }
 
             override fun onCameraSwitchError(errorDescription: String?) {
@@ -478,11 +480,13 @@ class WebRtcEngine(
         val enumerator = Camera2Enumerator(appContext)
         for (deviceName in enumerator.deviceNames) {
             if (enumerator.isFrontFacing(deviceName)) {
+                onCameraFacingChanged(true)
                 return enumerator.createCapturer(deviceName, null)
             }
         }
         for (deviceName in enumerator.deviceNames) {
             if (enumerator.isBackFacing(deviceName)) {
+                onCameraFacingChanged(false)
                 return enumerator.createCapturer(deviceName, null)
             }
         }

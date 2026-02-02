@@ -126,19 +126,11 @@ fun SerenadaAppRoot(callManager: CallManager) {
                     }
                 )
             }
-            CallPhase.Waiting -> {
-                WaitingScreen(
-                    roomId = uiState.roomId.orEmpty(),
-                    host = serverHost,
-                    isHost = uiState.isHost,
-                    onEndCall = { callManager.endCall() }
-                )
-            }
-            CallPhase.InCall -> {
+            CallPhase.Waiting, CallPhase.InCall -> {
                 CallScreen(
                     roomId = uiState.roomId.orEmpty(),
-                    localAudioEnabled = uiState.localAudioEnabled,
-                    localVideoEnabled = uiState.localVideoEnabled,
+                    uiState = uiState,
+                    serverHost = serverHost,
                     onToggleAudio = { callManager.toggleAudio() },
                     onToggleVideo = { callManager.toggleVideo() },
                     onFlipCamera = { callManager.flipCamera() },
