@@ -26,9 +26,17 @@ fun SerenadaAppRoot(callManager: CallManager) {
     var roomInput by remember { mutableStateOf("") }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var showSettings by remember { mutableStateOf(false) }
+    var showJoinWithCode by remember { mutableStateOf(false) }
 
     LaunchedEffect(serverHost) {
         hostInput = serverHost
+    }
+
+    LaunchedEffect(uiState.phase) {
+        if (uiState.phase == CallPhase.Waiting || uiState.phase == CallPhase.InCall) {
+            showJoinWithCode = false
+            roomInput = ""
+        }
     }
 
     val permissions = remember {
@@ -80,22 +88,41 @@ fun SerenadaAppRoot(callManager: CallManager) {
             return@SerenadaTheme
         }
 
+        if (showJoinWithCode) {
+            JoinWithCodeScreen(
+                roomInput = roomInput,
+                isBusy = uiState.phase == CallPhase.Joining || uiState.phase == CallPhase.CreatingRoom,
+                statusMessage = uiState.statusMessage,
+                errorMessage = uiState.errorMessage,
+                onRoomInputChange = {
+                    roomInput = it
+                    if (uiState.errorMessage != null) callManager.dismissError()
+                },
+                onJoinCall = {
+                    callManager.updateServerHost(hostInput)
+                    runWithPermissions {
+                        callManager.joinFromInput(roomInput)
+                    }
+                },
+                onBack = {
+                    if (uiState.errorMessage != null) callManager.dismissError()
+                    showJoinWithCode = false
+                    roomInput = ""
+                }
+            )
+            return@SerenadaTheme
+        }
+
         when (uiState.phase) {
             CallPhase.Idle, CallPhase.CreatingRoom, CallPhase.Joining, CallPhase.Ending -> {
                 JoinScreen(
-                    roomInput = roomInput,
                     isBusy = uiState.phase == CallPhase.CreatingRoom || uiState.phase == CallPhase.Joining,
                     statusMessage = uiState.statusMessage,
-                    serverHost = serverHost,
+                    onOpenJoinWithCode = { showJoinWithCode = true },
                     onOpenSettings = { showSettings = true },
-                    onRoomInputChange = { roomInput = it },
                     onStartCall = {
                         callManager.updateServerHost(hostInput)
                         runWithPermissions { callManager.startNewCall() }
-                    },
-                    onJoinCall = {
-                        callManager.updateServerHost(hostInput)
-                        runWithPermissions { callManager.joinFromInput(roomInput) }
                     }
                 )
             }
