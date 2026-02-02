@@ -1,7 +1,11 @@
 package app.serenada.android.call
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -23,6 +27,18 @@ class CallManager(context: Context) {
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = ApiClient(okHttpClient)
     private val settingsStore = SettingsStore(appContext)
+    private val connectivityManager =
+        appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private var networkCallbackRegistered = false
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            handler.post {
+                if (_uiState.value.phase == CallPhase.InCall) {
+                    scheduleIceRestart("network-online", 0)
+                }
+            }
+        }
+    }
 
     private val _uiState = mutableStateOf(CallUiState())
     val uiState: State<CallUiState> = _uiState
@@ -135,6 +151,10 @@ class CallManager(context: Context) {
             }
         }
     })
+
+    init {
+        registerConnectivityListener()
+    }
 
     fun updateServerHost(host: String) {
         val trimmed = host.trim().ifBlank { SettingsStore.DEFAULT_HOST }
@@ -283,7 +303,8 @@ class CallManager(context: Context) {
         val payload = JSONObject().apply {
             put("device", "android")
             put("capabilities", JSONObject().apply { put("trickleIce", true) })
-            clientId?.let { put("reconnectCid", it) }
+            val reconnectCid = clientId ?: settingsStore.reconnectCid
+            reconnectCid?.let { put("reconnectCid", it) }
         }
         val msg = SignalingMessage(
             type = "join",
@@ -322,6 +343,7 @@ class CallManager(context: Context) {
 
     private fun handleJoined(msg: SignalingMessage) {
         clientId = msg.cid
+        clientId?.let { settingsStore.reconnectCid = it }
         val roomState = parseRoomState(msg.payload)
         if (roomState != null) {
             hostCid = roomState.hostCid
@@ -606,6 +628,7 @@ class CallManager(context: Context) {
                 statusMessage = message
             )
         )
+        settingsStore.reconnectCid = null
         resetResources()
         updateState(CallUiState(phase = CallPhase.Idle, statusMessage = ""))
     }
@@ -637,6 +660,22 @@ class CallManager(context: Context) {
                 signalingClient.connect(serverHost.value)
             }
         }, backoff)
+    }
+
+    private fun registerConnectivityListener() {
+        if (networkCallbackRegistered) return
+        networkCallbackRegistered = true
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                connectivityManager.registerDefaultNetworkCallback(networkCallback)
+            } else {
+                val request = NetworkRequest.Builder().build()
+                connectivityManager.registerNetworkCallback(request, networkCallback)
+            }
+        } catch (e: Exception) {
+            networkCallbackRegistered = false
+            Log.w("CallManager", "Failed to register network callback", e)
+        }
     }
 
     private fun extractRoomId(uri: Uri): String? {

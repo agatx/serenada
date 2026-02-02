@@ -12,8 +12,21 @@ class SettingsStore(context: Context) {
             prefs.edit().putString(KEY_HOST, value.trim()).apply()
         }
 
+    var reconnectCid: String?
+        get() = prefs.getString(KEY_RECONNECT_CID, null)
+        set(value) {
+            val editor = prefs.edit()
+            if (value.isNullOrBlank()) {
+                editor.remove(KEY_RECONNECT_CID)
+            } else {
+                editor.putString(KEY_RECONNECT_CID, value)
+            }
+            editor.apply()
+        }
+
     companion object {
         const val DEFAULT_HOST = "serenada.app"
         private const val KEY_HOST = "host"
+        private const val KEY_RECONNECT_CID = "reconnect_cid"
     }
 }

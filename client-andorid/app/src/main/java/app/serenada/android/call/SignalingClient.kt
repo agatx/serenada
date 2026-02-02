@@ -22,6 +22,10 @@ class SignalingClient(
     private var webSocket: WebSocket? = null
     private var connected = false
     private var pingRunnable: Runnable? = null
+    private var connectTimeoutRunnable: Runnable? = null
+    private var connectionAttemptId = 0
+    private var activeAttemptId = 0
+    private var closeNotifiedAttemptId: Int? = null
 
     fun connect(host: String) {
         if (connected) return
@@ -29,9 +33,15 @@ class SignalingClient(
             handler.post { listener.onClosed("invalid_host") }
             return
         }
+        connectionAttemptId += 1
+        val attemptId = connectionAttemptId
+        activeAttemptId = attemptId
+        closeNotifiedAttemptId = null
         val request = Request.Builder().url(url).build()
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (activeAttemptId != attemptId) return
+                clearConnectTimeout()
                 connected = true
                 handler.post { listener.onOpen() }
                 startPing()
@@ -51,19 +61,26 @@ class SignalingClient(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (activeAttemptId != attemptId) return
                 connected = false
                 stopPing()
+                clearConnectTimeout()
                 this@SignalingClient.webSocket = null
+                if (closeNotifiedAttemptId == attemptId) return
                 handler.post { listener.onClosed(reason) }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (activeAttemptId != attemptId) return
                 connected = false
                 stopPing()
+                clearConnectTimeout()
                 this@SignalingClient.webSocket = null
+                if (closeNotifiedAttemptId == attemptId) return
                 handler.post { listener.onClosed(t.message ?: "failure") }
             }
         })
+        scheduleConnectTimeout(attemptId)
     }
 
     fun isConnected(): Boolean = connected
@@ -74,6 +91,7 @@ class SignalingClient(
 
     fun close() {
         stopPing()
+        clearConnectTimeout()
         webSocket?.close(1000, "client_close")
         webSocket = null
         connected = false
@@ -103,6 +121,27 @@ class SignalingClient(
     private fun stopPing() {
         pingRunnable?.let { handler.removeCallbacks(it) }
         pingRunnable = null
+    }
+
+    private fun scheduleConnectTimeout(attemptId: Int) {
+        clearConnectTimeout()
+        val runnable = Runnable {
+            if (activeAttemptId != attemptId) return@Runnable
+            if (connected) return@Runnable
+            activeAttemptId = -attemptId
+            closeNotifiedAttemptId = attemptId
+            webSocket?.cancel()
+            webSocket?.close(1000, "timeout")
+            webSocket = null
+            handler.post { listener.onClosed("timeout") }
+        }
+        connectTimeoutRunnable = runnable
+        handler.postDelayed(runnable, 2000)
+    }
+
+    private fun clearConnectTimeout() {
+        connectTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        connectTimeoutRunnable = null
     }
 
     private fun buildWssUrl(hostInput: String): String? {
