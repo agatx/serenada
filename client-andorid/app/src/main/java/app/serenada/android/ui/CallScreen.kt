@@ -22,18 +22,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import app.serenada.android.call.CallPhase
 import app.serenada.android.call.CallUiState
 import com.google.zxing.BarcodeFormat
@@ -61,13 +59,20 @@ fun CallScreen(
     var remoteVideoFitCover by remember { mutableStateOf(true) }
     var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
 
-    val isReconnecting = remember(uiState.iceConnectionState, uiState.connectionState, uiState.isSignalingConnected) {
-        val iceState = uiState.iceConnectionState
-        val connState = uiState.connectionState
-        !uiState.isSignalingConnected ||
-                iceState == "DISCONNECTED" || iceState == "FAILED" ||
-                connState == "DISCONNECTED" || connState == "FAILED"
-    }
+    val isReconnecting =
+        remember(
+            uiState.iceConnectionState,
+            uiState.connectionState,
+            uiState.isSignalingConnected
+        ) {
+            val iceState = uiState.iceConnectionState
+            val connState = uiState.connectionState
+            !uiState.isSignalingConnected ||
+                    iceState == "DISCONNECTED" ||
+                    iceState == "FAILED" ||
+                    connState == "DISCONNECTED" ||
+                    connState == "FAILED"
+        }
 
     // Auto-hide controls
     LaunchedEffect(areControlsVisible, uiState.phase) {
@@ -88,30 +93,30 @@ fun CallScreen(
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {
-                areControlsVisible = !areControlsVisible
-            }
-    ) {
-        // Primary Video
-        Box(
-            modifier = Modifier
+        modifier =
+            Modifier
                 .fillMaxSize()
+                .background(Color.Black)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) {
-                    if (isLocalLarge) {
-                        isLocalLarge = false
-                    } else {
-                        areControlsVisible = !areControlsVisible
+                ) { areControlsVisible = !areControlsVisible }
+    ) {
+        // Primary Video
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        if (isLocalLarge) {
+                            isLocalLarge = false
+                        } else {
+                            areControlsVisible = !areControlsVisible
+                        }
                     }
-                }
         ) {
             if (isLocalLarge) {
                 if (uiState.localVideoEnabled) {
@@ -132,7 +137,9 @@ fun CallScreen(
                         modifier = Modifier.fillMaxSize(),
                         onAttach = attachRemoteRenderer,
                         onDetach = detachRemoteRenderer,
-                        contentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
+                        contentScale =
+                            if (remoteVideoFitCover) ContentScale.Crop
+                            else ContentScale.Fit,
                         id = "large-remote"
                     )
                 } else {
@@ -146,28 +153,36 @@ fun CallScreen(
         // PIP Video (Lower Right)
         if (uiState.phase == CallPhase.InCall || uiState.phase == CallPhase.Waiting) {
             Box(
-                modifier = Modifier
-                    .padding(bottom = if (areControlsVisible) 160.dp else 48.dp, end = 16.dp)
-                    .align(Alignment.BottomEnd)
-                    .size(100.dp, 150.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF222222))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        isLocalLarge = !isLocalLarge
-                    }
-                    .zIndex(1f)
+                modifier =
+                    Modifier
+                        .padding(
+                            bottom = if (areControlsVisible) 160.dp else 48.dp,
+                            end = 16.dp
+                        )
+                        .align(Alignment.BottomEnd)
+                        .size(100.dp, 150.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF222222))
+                        .clickable(
+                            interactionSource =
+                                remember { MutableInteractionSource() },
+                            indication = null
+                        ) { isLocalLarge = !isLocalLarge }
+                        .zIndex(1f)
             ) {
                 if (isLocalLarge) {
                     if (uiState.remoteVideoEnabled) {
                         VideoSurface(
-                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(12.dp)),
                             onAttach = attachRemoteRenderer,
                             onDetach = detachRemoteRenderer,
-                            contentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
-                            id = "pip-remote"
+                            contentScale =
+                                if (remoteVideoFitCover) ContentScale.Crop
+                                else ContentScale.Fit,
+                            id = "pip-remote",
+                            isOverlay = true
                         )
                     } else {
                         VideoPlaceholder("Video off", fontSize = 10.sp)
@@ -175,12 +190,15 @@ fun CallScreen(
                 } else {
                     if (uiState.localVideoEnabled) {
                         VideoSurface(
-                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(12.dp)),
                             onAttach = attachLocalRenderer,
                             onDetach = detachLocalRenderer,
                             mirror = uiState.isFrontCamera,
                             contentScale = ContentScale.Crop,
-                            id = "pip-local"
+                            id = "pip-local",
+                            isOverlay = true
                         )
                     } else {
                         VideoPlaceholder("Camera off", fontSize = 10.sp)
@@ -191,10 +209,7 @@ fun CallScreen(
 
         // Waiting State Overlay
         if (uiState.phase == CallPhase.Waiting && !isLocalLarge) {
-            WaitingOverlay(
-                roomId = roomId,
-                serverHost = serverHost
-            )
+            WaitingOverlay(roomId = roomId, serverHost = serverHost)
         }
 
         // Reconnecting Indicator
@@ -202,12 +217,11 @@ fun CallScreen(
             visible = isReconnecting && uiState.phase == CallPhase.InCall,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp)
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 64.dp)
         ) {
-            Surface(
-                color = Color.Black.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(20.dp)
-            ) {
+            Surface(color = Color.Black.copy(alpha = 0.6f), shape = RoundedCornerShape(20.dp)) {
                 Text(
                     text = "Reconnecting...",
                     color = Color.White,
@@ -220,19 +234,20 @@ fun CallScreen(
         // Zoom/Fit Button (Top Right)
         if (uiState.remoteVideoEnabled && uiState.phase == CallPhase.InCall && !isLocalLarge) {
             IconButton(
-                onClick = { 
-                    remoteVideoFitCover = !remoteVideoFitCover
-                },
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(top = 16.dp, end = 16.dp)
-                    .size(44.dp)
-                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                    .zIndex(2f)
+                onClick = { remoteVideoFitCover = !remoteVideoFitCover },
+                modifier =
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(top = 16.dp, end = 16.dp)
+                        .size(44.dp)
+                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                        .zIndex(2f)
             ) {
                 Icon(
-                    imageVector = if (remoteVideoFitCover) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    imageVector =
+                        if (remoteVideoFitCover) Icons.Default.FullscreenExit
+                        else Icons.Default.Fullscreen,
                     contentDescription = "Toggle Video Fit",
                     tint = Color.White
                 )
@@ -247,14 +262,25 @@ fun CallScreen(
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .background(
+                            brush =
+                                androidx.compose.ui.graphics.Brush
+                                    .verticalGradient(
+                                        colors =
+                                            listOf(
+                                                Color.Transparent,
+                                                Color.Black
+                                                    .copy(
+                                                        alpha =
+                                                            0.7f
+                                                    )
+                                            )
+                                    )
                         )
-                    )
-                    .padding(bottom = 48.dp, top = 24.dp),
+                        .padding(bottom = 48.dp, top = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Row(
@@ -262,7 +288,7 @@ fun CallScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Order: Flip, Mute, Camera, End call
-                    
+
                     // Flip Camera
                     ControlButton(
                         onClick = onFlipCamera,
@@ -273,15 +299,23 @@ fun CallScreen(
                     // Mute Button
                     ControlButton(
                         onClick = onToggleAudio,
-                        icon = if (uiState.localAudioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
-                        backgroundColor = if (uiState.localAudioEnabled) Color.White.copy(alpha = 0.2f) else Color.Red
+                        icon =
+                            if (uiState.localAudioEnabled) Icons.Default.Mic
+                            else Icons.Default.MicOff,
+                        backgroundColor =
+                            if (uiState.localAudioEnabled) Color.White.copy(alpha = 0.2f)
+                            else Color.Red
                     )
 
                     // Video Toggle Button
                     ControlButton(
                         onClick = onToggleVideo,
-                        icon = if (uiState.localVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                        backgroundColor = if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f) else Color.Red
+                        icon =
+                            if (uiState.localVideoEnabled) Icons.Default.Videocam
+                            else Icons.Default.VideocamOff,
+                        backgroundColor =
+                            if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
+                            else Color.Red
                     )
 
                     // End Call Button
@@ -323,10 +357,7 @@ private fun ControlButton(
 }
 
 @Composable
-private fun WaitingOverlay(
-    roomId: String,
-    serverHost: String
-) {
+private fun WaitingOverlay(roomId: String, serverHost: String) {
     val link = "https://$serverHost/call/$roomId"
     val qrBitmap = remember(link) { generateQrCode(link) }
     val context = LocalContext.current
@@ -345,9 +376,9 @@ private fun WaitingOverlay(
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center
         )
-        
+
         Spacer(modifier = Modifier.height(32.dp))
-        
+
         Surface(
             modifier = Modifier
                 .size(200.dp)
@@ -358,16 +389,21 @@ private fun WaitingOverlay(
                 Image(
                     bitmap = it.asImageBitmap(),
                     contentDescription = "QR Code",
-                    modifier = Modifier.fillMaxSize().padding(16.dp)
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
                 )
             }
         }
-        
+
         Spacer(modifier = Modifier.height(32.dp))
-        
+
         Button(
             onClick = { shareLink(context, link) },
-            colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.2f)),
+            colors =
+                ButtonDefaults.buttonColors(
+                    containerColor = Color.White.copy(alpha = 0.2f)
+                ),
             shape = RoundedCornerShape(12.dp)
         ) {
             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -384,33 +420,39 @@ private fun VideoSurface(
     onDetach: (SurfaceViewRenderer) -> Unit,
     mirror: Boolean = false,
     contentScale: ContentScale = ContentScale.Crop,
-    id: String = ""
+    id: String = "",
+    isOverlay: Boolean = false
 ) {
     val context = LocalContext.current
-    val renderer = remember(id) { SurfaceViewRenderer(context) }
+    val renderer =
+        remember(id) {
+            SurfaceViewRenderer(context).apply { if (isOverlay) setZOrderMediaOverlay(true) }
+        }
 
     DisposableEffect(renderer) {
         onAttach(renderer)
-        onDispose {
-            onDetach(renderer)
-        }
+        onDispose { onDetach(renderer) }
     }
 
     AndroidView(
         modifier = modifier,
-        factory = { 
+        factory = {
             renderer.apply {
                 setMirror(mirror)
-                setScalingType(if (contentScale == ContentScale.Crop) 
-                    RendererCommon.ScalingType.SCALE_ASPECT_FILL 
-                    else RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                setScalingType(
+                    if (contentScale == ContentScale.Crop)
+                        RendererCommon.ScalingType.SCALE_ASPECT_FILL
+                    else RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                )
             }
         },
         update = { view ->
             view.setMirror(mirror)
-            view.setScalingType(if (contentScale == ContentScale.Crop) 
-                RendererCommon.ScalingType.SCALE_ASPECT_FILL 
-                else RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            view.setScalingType(
+                if (contentScale == ContentScale.Crop)
+                    RendererCommon.ScalingType.SCALE_ASPECT_FILL
+                else RendererCommon.ScalingType.SCALE_ASPECT_FIT
+            )
         }
     )
 }
@@ -418,7 +460,9 @@ private fun VideoSurface(
 @Composable
 private fun VideoPlaceholder(text: String, fontSize: androidx.compose.ui.unit.TextUnit = 16.sp) {
     Box(
-        modifier = Modifier.fillMaxSize().background(Color(0xFF111111)),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF111111)),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -448,7 +492,11 @@ private fun generateQrCode(text: String): Bitmap? {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
         for (x in 0 until width) {
             for (y in 0 until height) {
-                bitmap.setPixel(x, y, if (bitMatrix[x, y]) AndroidColor.BLACK else AndroidColor.WHITE)
+                bitmap.setPixel(
+                    x,
+                    y,
+                    if (bitMatrix[x, y]) AndroidColor.BLACK else AndroidColor.WHITE
+                )
             }
         }
         bitmap
@@ -458,10 +506,11 @@ private fun generateQrCode(text: String): Bitmap? {
 }
 
 private fun shareLink(context: Context, text: String) {
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_TEXT, text)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
+    val intent =
+        Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
     context.startActivity(Intent.createChooser(intent, "Share call link"))
 }
