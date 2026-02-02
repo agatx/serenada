@@ -2,6 +2,8 @@ package app.serenada.android.call
 
 import android.content.Context
 import android.util.Log
+import java.util.Collections
+import java.util.WeakHashMap
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.CameraVideoCapturer
@@ -14,6 +16,7 @@ import org.webrtc.MediaConstraints
 import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RendererCommon
 import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
@@ -52,6 +55,8 @@ class WebRtcEngine(
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private var iceCandidateCount = 0
+    private val initializedRenderers =
+        Collections.newSetFromMap(WeakHashMap<SurfaceViewRenderer, Boolean>())
 
     init {
         val initOptions = PeerConnectionFactory.InitializationOptions.builder(appContext)
@@ -288,21 +293,26 @@ class WebRtcEngine(
         localVideoTrack?.setEnabled(enabled)
     }
 
-    fun attachLocalRenderer(renderer: SurfaceViewRenderer) {
-        initRenderer(renderer, mirror = true)
+    fun attachLocalRenderer(
+        renderer: SurfaceViewRenderer,
+        rendererEvents: RendererCommon.RendererEvents? = null
+    ) {
+        initRenderer(renderer, rendererEvents)
         localRenderer = renderer
         localVideoTrack?.addSink(renderer)
     }
 
-    fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {
-        initRenderer(renderer, mirror = false)
+    fun attachRemoteRenderer(
+        renderer: SurfaceViewRenderer,
+        rendererEvents: RendererCommon.RendererEvents? = null
+    ) {
+        initRenderer(renderer, rendererEvents)
         remoteRenderer = renderer
         remoteVideoTrack?.addSink(renderer)
     }
 
     fun detachLocalRenderer(renderer: SurfaceViewRenderer) {
         localVideoTrack?.removeSink(renderer)
-        renderer.release()
         if (localRenderer == renderer) {
             localRenderer = null
         }
@@ -310,16 +320,20 @@ class WebRtcEngine(
 
     fun detachRemoteRenderer(renderer: SurfaceViewRenderer) {
         remoteVideoTrack?.removeSink(renderer)
-        renderer.release()
         if (remoteRenderer == renderer) {
             remoteRenderer = null
         }
     }
 
-    private fun initRenderer(renderer: SurfaceViewRenderer, mirror: Boolean) {
-        renderer.init(eglBase.eglBaseContext, null)
+    private fun initRenderer(
+        renderer: SurfaceViewRenderer,
+        rendererEvents: RendererCommon.RendererEvents?
+    ) {
+        if (!initializedRenderers.add(renderer)) {
+            return
+        }
+        renderer.init(eglBase.eglBaseContext, rendererEvents)
         renderer.setEnableHardwareScaler(true)
-        renderer.setMirror(mirror)
     }
 
     private fun createPeerConnectionIfReady() {

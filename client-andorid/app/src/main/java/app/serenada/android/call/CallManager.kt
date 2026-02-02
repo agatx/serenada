@@ -281,16 +281,22 @@ class CallManager(context: Context) {
         webRtcEngine.flipCamera()
     }
 
-    fun attachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
-        webRtcEngine.attachLocalRenderer(renderer)
+    fun attachLocalRenderer(
+        renderer: org.webrtc.SurfaceViewRenderer,
+        rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null
+    ) {
+        webRtcEngine.attachLocalRenderer(renderer, rendererEvents)
     }
 
     fun detachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
         webRtcEngine.detachLocalRenderer(renderer)
     }
 
-    fun attachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
-        webRtcEngine.attachRemoteRenderer(renderer)
+    fun attachRemoteRenderer(
+        renderer: org.webrtc.SurfaceViewRenderer,
+        rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null
+    ) {
+        webRtcEngine.attachRemoteRenderer(renderer, rendererEvents)
     }
 
     fun detachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {

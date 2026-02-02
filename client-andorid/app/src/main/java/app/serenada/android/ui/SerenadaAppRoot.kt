@@ -135,9 +135,13 @@ fun SerenadaAppRoot(callManager: CallManager) {
                     onToggleVideo = { callManager.toggleVideo() },
                     onFlipCamera = { callManager.flipCamera() },
                     onEndCall = { callManager.endCall() },
-                    attachLocalRenderer = { callManager.attachLocalRenderer(it) },
+                    attachLocalRenderer = { renderer, events ->
+                        callManager.attachLocalRenderer(renderer, events)
+                    },
                     detachLocalRenderer = { callManager.detachLocalRenderer(it) },
-                    attachRemoteRenderer = { callManager.attachRemoteRenderer(it) },
+                    attachRemoteRenderer = { renderer, events ->
+                        callManager.attachRemoteRenderer(renderer, events)
+                    },
                     detachRemoteRenderer = { callManager.detachRemoteRenderer(it) }
                 )
             }
