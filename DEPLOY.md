@@ -80,7 +80,17 @@ From the project root on your local machine:
 ./deploy.sh
 ```
 
-### 5. Advanced: Legacy Redirects
+### 5. Android App Links (assetlinks.json)
+
+Android deep links require `/.well-known/assetlinks.json` to be served from your domain. The file lives at:
+
+```
+client/public/.well-known/assetlinks.json
+```
+
+Update it with your **release** signing certificate SHA-256 fingerprint before deployment.
+
+### 6. Advanced: Legacy Redirects
 If you need to support redirects from old domains (e.g. `connected.dowhile.fun`), you can create a template at `nginx/nginx.legacy.conf.template`. The deployment script will automatically generate an `extra` configuration for Nginx if this file exists.
 
 ## Verification

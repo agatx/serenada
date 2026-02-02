@@ -62,7 +62,7 @@ The native Android app lives in `client-andorid/`.
 2. Sync Gradle.
 3. Run on a device or emulator (minSdk 26).
 
-By default the app targets `https://serenada.app`, and the server host can be changed in the join screen.
+By default the app targets `https://serenada.app`, and the server host can be changed in Settings.
 
 ### Production Deployment
 

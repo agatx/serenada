@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.serenada.android",
+      "sha256_cert_fingerprints": [
+        "F3:49:1D:56:9F:A5:C9:2C:E7:23:C2:D0:A1:F9:5E:10:8D:50:07:9F:B1:88:21:A4:9B:4F:3D:2E:03:77:0E:3A",
+        "0E:34:7C:B5:5D:C3:E4:79:47:CA:A9:3E:AF:0D:A9:DE:2B:97:50:A4:43:D0:AE:7D:F5:70:50:CA:26:C6:2F:71"
+      ]
+    }
+  }
+]

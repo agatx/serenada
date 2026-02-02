@@ -21,11 +21,11 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun JoinScreen(
-    host: String,
     roomInput: String,
     isBusy: Boolean,
     statusMessage: String,
-    onHostChange: (String) -> Unit,
+    serverHost: String,
+    onOpenSettings: () -> Unit,
     onRoomInputChange: (String) -> Unit,
     onStartCall: () -> Unit,
     onJoinCall: () -> Unit
@@ -42,13 +42,17 @@ fun JoinScreen(
         Text("Private 1:1 video calls, no accounts.")
         Spacer(modifier = Modifier.height(24.dp))
 
-        OutlinedTextField(
-            value = host,
-            onValueChange = onHostChange,
-            label = { Text("Server host") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Server: $serverHost")
+            Button(onClick = onOpenSettings, enabled = !isBusy) {
+                Text("Settings")
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = roomInput,
             onValueChange = onRoomInputChange,

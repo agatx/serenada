@@ -25,6 +25,7 @@ fun SerenadaAppRoot(callManager: CallManager) {
     var hostInput by remember { mutableStateOf(serverHost) }
     var roomInput by remember { mutableStateOf("") }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
 
     LaunchedEffect(serverHost) {
         hostInput = serverHost
@@ -63,14 +64,30 @@ fun SerenadaAppRoot(callManager: CallManager) {
     }
 
     SerenadaTheme {
+        if (showSettings) {
+            SettingsScreen(
+                host = hostInput,
+                onHostChange = { hostInput = it },
+                onSave = {
+                    callManager.updateServerHost(hostInput)
+                    showSettings = false
+                },
+                onCancel = {
+                    hostInput = serverHost
+                    showSettings = false
+                }
+            )
+            return@SerenadaTheme
+        }
+
         when (uiState.phase) {
             CallPhase.Idle, CallPhase.CreatingRoom, CallPhase.Joining, CallPhase.Ending -> {
                 JoinScreen(
-                    host = hostInput,
                     roomInput = roomInput,
                     isBusy = uiState.phase == CallPhase.CreatingRoom || uiState.phase == CallPhase.Joining,
                     statusMessage = uiState.statusMessage,
-                    onHostChange = { hostInput = it },
+                    serverHost = serverHost,
+                    onOpenSettings = { showSettings = true },
                     onRoomInputChange = { roomInput = it },
                     onStartCall = {
                         callManager.updateServerHost(hostInput)
