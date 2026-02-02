@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.io.File
 
 plugins {
     id("com.android.application")
@@ -75,6 +76,38 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+}
+
+val renameDebugApk = tasks.register("renameDebugApk") {
+    dependsOn("assembleDebug")
+    doLast {
+        val apk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
+        if (apk.exists()) {
+            val target = File(apk.parentFile, "serenada-debug.apk")
+            target.delete()
+            apk.renameTo(target)
+        }
+    }
+}
+
+val renameReleaseApk = tasks.register("renameReleaseApk") {
+    dependsOn("assembleRelease")
+    doLast {
+        val apk = layout.buildDirectory.file("outputs/apk/release/app-release.apk").get().asFile
+        if (apk.exists()) {
+            val target = File(apk.parentFile, "serenada.apk")
+            target.delete()
+            apk.renameTo(target)
+        }
+    }
+}
+
+tasks.matching { it.name == "assembleDebug" }.configureEach {
+    finalizedBy(renameDebugApk)
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    finalizedBy(renameReleaseApk)
 }
 
 dependencies {
