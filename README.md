@@ -104,7 +104,7 @@ bash setup-serenada.sh
 - [Deployment Guide](DEPLOY.md) – Self-hosting instructions
 - [Protocol Specification](serenada_protocol_v1.md) – Signaling protocol (WebSocket + SSE)
 - [Push Notifications](push-notifications.md) – Encrypted snapshot notifications
-- [Android Port Plan](client-andorid/PROJECT_PLAN.md) – Kotlin native app project plan
+- [Android Client README](client-andorid/README.md) – Kotlin native app setup and build notes
 
 ## Technology
 
