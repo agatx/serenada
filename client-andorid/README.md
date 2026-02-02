@@ -47,6 +47,19 @@ Release output:
 app/build/outputs/apk/release/app-release.apk
 ```
 
+## Install on a physical device
+Enable USB debugging on the device and connect it. Then run:
+
+Debug:
+```bash
+adb install -r app/build/outputs/apk/debug/serenada-debug.apk
+```
+
+Release:
+```bash
+adb install -r app/build/outputs/apk/release/serenada.apk
+```
+
 ## Release signing
 Release signing reads `keystore/keystore.properties` if present. This file is ignored by git.
 
