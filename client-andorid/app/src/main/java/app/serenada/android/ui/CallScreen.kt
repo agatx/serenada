@@ -3,10 +3,13 @@ package app.serenada.android.ui
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.graphics.Outline
+import android.graphics.SurfaceTexture
 import android.graphics.Color as AndroidColor
 import android.os.Handler
 import android.os.Looper
+import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
@@ -51,22 +54,32 @@ import com.google.zxing.qrcode.QRCodeWriter
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import org.webrtc.EglBase
+import org.webrtc.EglRenderer
+import org.webrtc.GlRectDrawer
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoFrame
+import org.webrtc.VideoSink
 
 @Composable
 fun CallScreen(
         roomId: String,
         uiState: CallUiState,
         serverHost: String,
+        eglContext: EglBase.Context,
         onToggleAudio: () -> Unit,
         onToggleVideo: () -> Unit,
         onFlipCamera: () -> Unit,
         onEndCall: () -> Unit,
         attachLocalRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
         detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
+        attachLocalSink: (VideoSink) -> Unit,
+        detachLocalSink: (VideoSink) -> Unit,
         attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
-        detachRemoteRenderer: (SurfaceViewRenderer) -> Unit
+        detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
+        attachRemoteSink: (VideoSink) -> Unit,
+        detachRemoteSink: (VideoSink) -> Unit
 ) {
     var areControlsVisible by remember { mutableStateOf(true) }
     var isLocalLarge by rememberSaveable { mutableStateOf(false) }
@@ -76,6 +89,8 @@ fun CallScreen(
     val context = LocalContext.current
     val localRenderer = remember { SurfaceViewRenderer(context) }
     val remoteRenderer = remember { SurfaceViewRenderer(context) }
+    val localPipRenderer = remember { PipTextureRendererView(context, "local-pip") }
+    val remotePipRenderer = remember { PipTextureRendererView(context, "remote-pip") }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val remoteRendererEvents = remember {
         object : RendererCommon.RendererEvents {
@@ -102,9 +117,13 @@ fun CallScreen(
     }
 
     DisposableEffect(Unit) {
+        localPipRenderer.init(eglContext)
+        remotePipRenderer.init(eglContext)
         onDispose {
             localRenderer.release()
             remoteRenderer.release()
+            localPipRenderer.release()
+            remotePipRenderer.release()
         }
     }
 
@@ -155,9 +174,11 @@ fun CallScreen(
         val pipBackgroundColor = Color(0xFF222222)
         // For a square inset inside rounded corners, bleed-free geometry needs:
         // padding >= radius * (1 - 1/sqrt(2)) ~= 0.293 * radius.
-        // 8dp radius + 2.5dp inset keeps the frame thin while eliminating corner bleed.
-        val pipCornerRadius = 8.dp
+        // Texture-based PIP supports real clipping, so we can use a stronger radius.
+        val pipCornerRadius = 12.dp
         val pipContentPadding = 2.5.dp
+        val pipInnerCornerRadius =
+                if (pipCornerRadius > pipContentPadding) pipCornerRadius - pipContentPadding else 0.dp
         val mainModifier =
                 Modifier.fillMaxSize().clickable(
                                 interactionSource = remember { MutableInteractionSource() },
@@ -183,7 +204,8 @@ fun CallScreen(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                         ) { isLocalLarge = !isLocalLarge }
-        val pipVideoModifier = pipBaseModifier.padding(pipContentPadding)
+        val pipVideoModifier =
+                pipBaseModifier.padding(pipContentPadding).clip(RoundedCornerShape(pipInnerCornerRadius))
 
         val localModifier = if (isLocalLarge) mainModifier else pipVideoModifier
         val remoteModifier = if (isLocalLarge) pipVideoModifier else mainModifier
@@ -201,14 +223,13 @@ fun CallScreen(
                     contentScale = ContentScale.Crop,
                     isMediaOverlay = false
             )
-            VideoSurface(
+            TextureVideoSurface(
                     modifier = remoteModifier,
-                    renderer = remoteRenderer,
-                    onAttach = { renderer -> attachRemoteRenderer(renderer, remoteRendererEvents) },
-                    onDetach = detachRemoteRenderer,
-                    contentScale = ContentScale.Crop,
-                    cornerRadius = pipCornerRadius,
-                    isMediaOverlay = true
+                    renderer = remotePipRenderer,
+                    onAttach = attachRemoteSink,
+                    onDetach = detachRemoteSink,
+                    mirror = false,
+                    contentScale = ContentScale.Crop
             )
         } else {
             val ratio = remoteAspectRatio ?: 0f
@@ -256,15 +277,13 @@ fun CallScreen(
                         isMediaOverlay = false
                 )
             }
-            VideoSurface(
+            TextureVideoSurface(
                     modifier = localModifier,
-                    renderer = localRenderer,
-                    onAttach = { renderer -> attachLocalRenderer(renderer, null) },
-                    onDetach = detachLocalRenderer,
+                    renderer = localPipRenderer,
+                    onAttach = attachLocalSink,
+                    onDetach = detachLocalSink,
                     mirror = uiState.isFrontCamera,
-                    contentScale = ContentScale.Crop,
-                    cornerRadius = pipCornerRadius,
-                    isMediaOverlay = true
+                    contentScale = ContentScale.Crop
             )
         }
 
@@ -311,12 +330,7 @@ fun CallScreen(
         }
 
         // Zoom/Fit Button (Top Right)
-        if (
-                uiState.remoteVideoEnabled &&
-                        (uiState.phase == CallPhase.InCall ||
-                                uiState.connectionState == "CONNECTED") &&
-                        !isLocalLarge
-        ) {
+        if (uiState.remoteVideoEnabled && !isLocalLarge) {
             IconButton(
                     onClick = { remoteVideoFitCover = !remoteVideoFitCover },
                     modifier =
@@ -487,6 +501,34 @@ private fun WaitingOverlay(roomId: String, serverHost: String) {
 }
 
 @Composable
+private fun TextureVideoSurface(
+        modifier: Modifier,
+        renderer: PipTextureRendererView,
+        onAttach: (VideoSink) -> Unit,
+        onDetach: (VideoSink) -> Unit,
+        mirror: Boolean = false,
+        contentScale: ContentScale = ContentScale.Crop
+) {
+    DisposableEffect(renderer) {
+        onAttach(renderer)
+        onDispose { onDetach(renderer) }
+    }
+
+    AndroidView(
+            modifier = modifier,
+            factory = { renderer },
+            update = {
+                it.setMirror(mirror)
+                it.setScalingType(
+                        if (contentScale == ContentScale.Crop)
+                                RendererCommon.ScalingType.SCALE_ASPECT_FILL
+                        else RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                )
+            }
+    )
+}
+
+@Composable
 private fun VideoSurface(
         modifier: Modifier,
         renderer: SurfaceViewRenderer,
@@ -528,6 +570,130 @@ private fun VideoSurface(
                 }
             }
     )
+}
+
+private class PipTextureRendererView(
+        context: Context,
+        name: String
+) : TextureView(context), TextureView.SurfaceTextureListener, VideoSink {
+    private val eglRenderer = EglRenderer(name)
+    private val drawer = GlRectDrawer()
+    private val transformMatrix = Matrix()
+    private var initialized = false
+    private var firstFrameRendered = false
+    private var frameWidth = 0
+    private var frameHeight = 0
+    private var mirror = false
+    private var scalingType = RendererCommon.ScalingType.SCALE_ASPECT_FILL
+    private var rendererEvents: RendererCommon.RendererEvents? = null
+
+    init {
+        surfaceTextureListener = this
+        isOpaque = false
+    }
+
+    fun init(
+            eglContext: EglBase.Context,
+            rendererEvents: RendererCommon.RendererEvents? = null
+    ) {
+        if (initialized) {
+            this.rendererEvents = rendererEvents
+            return
+        }
+        this.rendererEvents = rendererEvents
+        eglRenderer.init(eglContext, EglBase.CONFIG_PLAIN, drawer)
+        eglRenderer.setMirror(mirror)
+        initialized = true
+        if (isAvailable) {
+            surfaceTexture?.let { eglRenderer.createEglSurface(it) }
+        }
+    }
+
+    fun release() {
+        if (!initialized) return
+        initialized = false
+        firstFrameRendered = false
+        frameWidth = 0
+        frameHeight = 0
+        eglRenderer.releaseEglSurface {}
+        eglRenderer.release()
+    }
+
+    fun setMirror(mirror: Boolean) {
+        this.mirror = mirror
+        if (initialized) {
+            eglRenderer.setMirror(mirror)
+        }
+    }
+
+    fun setScalingType(scalingType: RendererCommon.ScalingType) {
+        this.scalingType = scalingType
+        updateTransform()
+    }
+
+    override fun onFrame(frame: VideoFrame) {
+        val rotatedWidth = if (frame.rotation % 180 == 0) frame.buffer.width else frame.buffer.height
+        val rotatedHeight = if (frame.rotation % 180 == 0) frame.buffer.height else frame.buffer.width
+        if (!firstFrameRendered) {
+            firstFrameRendered = true
+            rendererEvents?.onFirstFrameRendered()
+        }
+        if (frameWidth != rotatedWidth || frameHeight != rotatedHeight) {
+            frameWidth = rotatedWidth
+            frameHeight = rotatedHeight
+            rendererEvents?.onFrameResolutionChanged(frame.buffer.width, frame.buffer.height, frame.rotation)
+            post { updateTransform() }
+        }
+        eglRenderer.onFrame(frame)
+    }
+
+    override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        if (!initialized) return
+        eglRenderer.createEglSurface(surface)
+        updateTransform()
+    }
+
+    override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+        updateTransform()
+    }
+
+    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+        if (initialized) {
+            eglRenderer.releaseEglSurface {}
+        }
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        updateTransform()
+    }
+
+    private fun updateTransform() {
+        if (width == 0 || height == 0 || frameWidth == 0 || frameHeight == 0) return
+        val viewAspect = width.toFloat() / height.toFloat()
+        val frameAspect = frameWidth.toFloat() / frameHeight.toFloat()
+        var sx = 1f
+        var sy = 1f
+        if (scalingType == RendererCommon.ScalingType.SCALE_ASPECT_FILL) {
+            if (frameAspect > viewAspect) {
+                sx = frameAspect / viewAspect
+            } else {
+                sy = viewAspect / frameAspect
+            }
+        } else {
+            if (frameAspect > viewAspect) {
+                sy = viewAspect / frameAspect
+            } else {
+                sx = frameAspect / viewAspect
+            }
+        }
+        transformMatrix.reset()
+        transformMatrix.setScale(sx, sy, width / 2f, height / 2f)
+        setTransform(transformMatrix)
+    }
 }
 
 private class RendererContainer(

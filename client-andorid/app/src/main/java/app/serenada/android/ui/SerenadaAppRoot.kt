@@ -130,6 +130,7 @@ fun SerenadaAppRoot(callManager: CallManager) {
                 roomId = uiState.roomId.orEmpty(),
                 uiState = uiState,
                 serverHost = serverHost,
+                eglContext = callManager.eglContext(),
                 onToggleAudio = { callManager.toggleAudio() },
                 onToggleVideo = { callManager.toggleVideo() },
                 onFlipCamera = { callManager.flipCamera() },
@@ -138,10 +139,14 @@ fun SerenadaAppRoot(callManager: CallManager) {
                     callManager.attachLocalRenderer(renderer, events)
                 },
                 detachLocalRenderer = { callManager.detachLocalRenderer(it) },
+                attachLocalSink = { callManager.attachLocalSink(it) },
+                detachLocalSink = { callManager.detachLocalSink(it) },
                 attachRemoteRenderer = { renderer, events ->
                     callManager.attachRemoteRenderer(renderer, events)
                 },
-                detachRemoteRenderer = { callManager.detachRemoteRenderer(it) }
+                detachRemoteRenderer = { callManager.detachRemoteRenderer(it) },
+                attachRemoteSink = { callManager.attachRemoteSink(it) },
+                detachRemoteSink = { callManager.detachRemoteSink(it) }
             )
         } else {
             when (uiState.phase) {

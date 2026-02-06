@@ -303,6 +303,22 @@ class CallManager(context: Context) {
         webRtcEngine.detachRemoteRenderer(renderer)
     }
 
+    fun attachLocalSink(sink: org.webrtc.VideoSink) {
+        webRtcEngine.attachLocalSink(sink)
+    }
+
+    fun detachLocalSink(sink: org.webrtc.VideoSink) {
+        webRtcEngine.detachLocalSink(sink)
+    }
+
+    fun attachRemoteSink(sink: org.webrtc.VideoSink) {
+        webRtcEngine.attachRemoteSink(sink)
+    }
+
+    fun detachRemoteSink(sink: org.webrtc.VideoSink) {
+        webRtcEngine.detachRemoteSink(sink)
+    }
+
     fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
 
     private fun ensureSignalingConnection() {

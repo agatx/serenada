@@ -22,6 +22,7 @@ import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
+import org.webrtc.VideoSink
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 
@@ -47,8 +48,8 @@ class WebRtcEngine(
     private var audioSource: AudioSource? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
 
-    private var localRenderer: SurfaceViewRenderer? = null
-    private var remoteRenderer: SurfaceViewRenderer? = null
+    private var localSink: VideoSink? = null
+    private var remoteSink: VideoSink? = null
     private var remoteVideoTrack: VideoTrack? = null
 
     private var iceServers: List<PeerConnection.IceServer>? = null
@@ -97,8 +98,8 @@ class WebRtcEngine(
         }
         localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
         localVideoTrack?.setEnabled(true)
-        localRenderer?.let { renderer ->
-            localVideoTrack?.addSink(renderer)
+        localSink?.let { sink ->
+            localVideoTrack?.addSink(sink)
         }
         createPeerConnectionIfReady()
     }
@@ -298,8 +299,7 @@ class WebRtcEngine(
         rendererEvents: RendererCommon.RendererEvents? = null
     ) {
         initRenderer(renderer, rendererEvents)
-        localRenderer = renderer
-        localVideoTrack?.addSink(renderer)
+        attachLocalSink(renderer)
     }
 
     fun attachRemoteRenderer(
@@ -307,21 +307,42 @@ class WebRtcEngine(
         rendererEvents: RendererCommon.RendererEvents? = null
     ) {
         initRenderer(renderer, rendererEvents)
-        remoteRenderer = renderer
-        remoteVideoTrack?.addSink(renderer)
+        attachRemoteSink(renderer)
     }
 
     fun detachLocalRenderer(renderer: SurfaceViewRenderer) {
-        localVideoTrack?.removeSink(renderer)
-        if (localRenderer == renderer) {
-            localRenderer = null
-        }
+        detachLocalSink(renderer)
     }
 
     fun detachRemoteRenderer(renderer: SurfaceViewRenderer) {
-        remoteVideoTrack?.removeSink(renderer)
-        if (remoteRenderer == renderer) {
-            remoteRenderer = null
+        detachRemoteSink(renderer)
+    }
+
+    fun attachLocalSink(sink: VideoSink) {
+        if (localSink === sink) return
+        localSink?.let { previous -> localVideoTrack?.removeSink(previous) }
+        localSink = sink
+        localVideoTrack?.addSink(sink)
+    }
+
+    fun detachLocalSink(sink: VideoSink) {
+        localVideoTrack?.removeSink(sink)
+        if (localSink === sink) {
+            localSink = null
+        }
+    }
+
+    fun attachRemoteSink(sink: VideoSink) {
+        if (remoteSink === sink) return
+        remoteSink?.let { previous -> remoteVideoTrack?.removeSink(previous) }
+        remoteSink = sink
+        remoteVideoTrack?.addSink(sink)
+    }
+
+    fun detachRemoteSink(sink: VideoSink) {
+        remoteVideoTrack?.removeSink(sink)
+        if (remoteSink === sink) {
+            remoteSink = null
         }
     }
 
@@ -364,7 +385,7 @@ class WebRtcEngine(
                 val track = transceiver?.receiver?.track()
                 if (track is VideoTrack) {
                     remoteVideoTrack = track
-                    remoteRenderer?.let { track.addSink(it) }
+                    remoteSink?.let { sink -> track.addSink(sink) }
                     onRemoteVideoTrack(track)
                 }
             }
