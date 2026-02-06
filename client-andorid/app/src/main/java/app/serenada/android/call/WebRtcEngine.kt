@@ -34,7 +34,8 @@ class WebRtcEngine(
     private val onSignalingState: (PeerConnection.SignalingState) -> Unit,
     private val onRenegotiationNeededCallback: () -> Unit,
     private val onRemoteVideoTrack: (VideoTrack?) -> Unit,
-    private val onCameraFacingChanged: (Boolean) -> Unit
+    private val onCameraFacingChanged: (Boolean) -> Unit,
+    private var isRemoteBlackFrameAnalysisEnabled: Boolean = true
 ) {
     private val appContext = context.applicationContext
     private val eglBase: EglBase = EglBase.create()
@@ -51,6 +52,8 @@ class WebRtcEngine(
     private var localSink: VideoSink? = null
     private var remoteSink: VideoSink? = null
     private var remoteVideoTrack: VideoTrack? = null
+    private val remoteBlackFrameAnalyzer = RemoteBlackFrameAnalyzer()
+    private val remoteVideoStateSink = VideoSink { frame -> onRemoteVideoFrame(frame) }
 
     private var iceServers: List<PeerConnection.IceServer>? = null
     private var remoteDescriptionSet = false
@@ -128,7 +131,9 @@ class WebRtcEngine(
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
+        remoteVideoTrack?.removeSink(remoteVideoStateSink)
         remoteVideoTrack = null
+        remoteBlackFrameAnalyzer.onTrackDetached()
         remoteDescriptionSet = false
         pendingIceCandidates.clear()
         iceCandidateCount = 0
@@ -294,6 +299,27 @@ class WebRtcEngine(
         localVideoTrack?.setEnabled(enabled)
     }
 
+    fun setRemoteBlackFrameAnalysisEnabled(enabled: Boolean) {
+        isRemoteBlackFrameAnalysisEnabled = enabled
+    }
+
+    fun isRemoteVideoTrackEnabled(): Boolean {
+        val track = remoteVideoTrack ?: return false
+        if (!track.enabled()) return false
+        if (remoteBlackFrameAnalyzer.isVideoConsideredOff()) {
+            return false
+        }
+        return true
+    }
+
+    fun remoteVideoDiagnostics(): String {
+        val track = remoteVideoTrack
+        return remoteBlackFrameAnalyzer.diagnostics(
+            trackPresent = track != null,
+            trackEnabled = track?.enabled() == true
+        )
+    }
+
     fun attachLocalRenderer(
         renderer: SurfaceViewRenderer,
         rendererEvents: RendererCommon.RendererEvents? = null
@@ -384,7 +410,14 @@ class WebRtcEngine(
             override fun onTrack(transceiver: RtpTransceiver?) {
                 val track = transceiver?.receiver?.track()
                 if (track is VideoTrack) {
+                    remoteVideoTrack?.removeSink(remoteVideoStateSink)
                     remoteVideoTrack = track
+                    remoteBlackFrameAnalyzer.onTrackAttached()
+                    Log.d(
+                        "WebRtcEngine",
+                        "[RemoteVideo] onTrack attached, trackEnabled=${track.enabled()}"
+                    )
+                    track.addSink(remoteVideoStateSink)
                     remoteSink?.let { sink -> track.addSink(sink) }
                     onRemoteVideoTrack(track)
                 }
@@ -526,5 +559,20 @@ class WebRtcEngine(
             }
         }
         return null
+    }
+
+    private fun onRemoteVideoFrame(frame: org.webrtc.VideoFrame) {
+        val stateChanged =
+            remoteBlackFrameAnalyzer.onFrame(
+                frame = frame,
+                blackFrameAnalysisEnabled = isRemoteBlackFrameAnalysisEnabled
+            )
+        if (stateChanged) {
+            val syntheticBlackNow = remoteBlackFrameAnalyzer.isSyntheticBlackDetected()
+            Log.d(
+                "WebRtcEngine",
+                "[RemoteVideo] syntheticBlack=$syntheticBlackNow trackEnabled=${remoteVideoTrack?.enabled()} analyzerEnabled=$isRemoteBlackFrameAnalysisEnabled"
+            )
+        }
     }
 }

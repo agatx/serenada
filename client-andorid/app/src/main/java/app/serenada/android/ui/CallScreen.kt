@@ -225,23 +225,27 @@ fun CallScreen(
         }
 
         if (isLocalLarge) {
-            VideoSurface(
-                    modifier = localModifier,
-                    renderer = localRenderer,
-                    onAttach = { renderer -> attachLocalRenderer(renderer, null) },
-                    onDetach = detachLocalRenderer,
-                    mirror = uiState.isFrontCamera,
-                    contentScale = ContentScale.Crop,
-                    isMediaOverlay = false
-            )
-            TextureVideoSurface(
-                    modifier = remoteModifier,
-                    renderer = remotePipRenderer,
-                    onAttach = attachRemoteSink,
-                    onDetach = detachRemoteSink,
-                    mirror = false,
-                    contentScale = ContentScale.Crop
-            )
+            if (uiState.localVideoEnabled) {
+                VideoSurface(
+                        modifier = localModifier,
+                        renderer = localRenderer,
+                        onAttach = { renderer -> attachLocalRenderer(renderer, null) },
+                        onDetach = detachLocalRenderer,
+                        mirror = uiState.isFrontCamera,
+                        contentScale = ContentScale.Crop,
+                        isMediaOverlay = false
+                )
+            }
+            if (uiState.remoteVideoEnabled) {
+                TextureVideoSurface(
+                        modifier = remoteModifier,
+                        renderer = remotePipRenderer,
+                        onAttach = attachRemoteSink,
+                        onDetach = detachRemoteSink,
+                        mirror = false,
+                        contentScale = ContentScale.Crop
+                )
+            }
         } else {
             val ratio = remoteAspectRatio ?: 0f
             val containerRatio = if (maxHeight == 0.dp) 1f else maxWidth / maxHeight
@@ -270,32 +274,36 @@ fun CallScreen(
                             animationSpec = tween(durationMillis = 260),
                             label = "remote_video_scale"
                     )
-            Box(modifier = remoteModifier.clipToBounds()) {
-                VideoSurface(
-                        modifier =
-                                Modifier.size(fitWidth, fitHeight)
-                                        .align(Alignment.Center)
-                                        .graphicsLayer {
-                                            scaleX = animatedRemoteScale
-                                            scaleY = animatedRemoteScale
-                                        },
-                        renderer = remoteRenderer,
-                        onAttach = { renderer ->
-                            attachRemoteRenderer(renderer, remoteRendererEvents)
-                        },
-                        onDetach = detachRemoteRenderer,
-                        contentScale = ContentScale.Crop,
-                        isMediaOverlay = false
+            if (uiState.remoteVideoEnabled) {
+                Box(modifier = remoteModifier.clipToBounds()) {
+                    VideoSurface(
+                            modifier =
+                                    Modifier.size(fitWidth, fitHeight)
+                                            .align(Alignment.Center)
+                                            .graphicsLayer {
+                                                scaleX = animatedRemoteScale
+                                                scaleY = animatedRemoteScale
+                                            },
+                            renderer = remoteRenderer,
+                            onAttach = { renderer ->
+                                attachRemoteRenderer(renderer, remoteRendererEvents)
+                            },
+                            onDetach = detachRemoteRenderer,
+                            contentScale = ContentScale.Crop,
+                            isMediaOverlay = false
+                    )
+                }
+            }
+            if (uiState.localVideoEnabled) {
+                TextureVideoSurface(
+                        modifier = localModifier,
+                        renderer = localPipRenderer,
+                        onAttach = attachLocalSink,
+                        onDetach = detachLocalSink,
+                        mirror = uiState.isFrontCamera,
+                        contentScale = ContentScale.Crop
                 )
             }
-            TextureVideoSurface(
-                    modifier = localModifier,
-                    renderer = localPipRenderer,
-                    onAttach = attachLocalSink,
-                    onDetach = detachLocalSink,
-                    mirror = uiState.isFrontCamera,
-                    contentScale = ContentScale.Crop
-            )
         }
 
         if (!uiState.localVideoEnabled) {

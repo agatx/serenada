@@ -57,6 +57,7 @@ class CallManager(context: Context) {
     private var lastIceRestartAt = 0L
     private var iceRestartRunnable: Runnable? = null
     private var offerTimeoutRunnable: Runnable? = null
+    private var remoteVideoStatePollRunnable: Runnable? = null
     private val pendingMessages = ArrayDeque<SignalingMessage>()
 
     private val webRtcEngine = WebRtcEngine(
@@ -126,9 +127,9 @@ class CallManager(context: Context) {
         onRenegotiationNeededCallback = {
             handler.post { maybeSendOffer(force = true, iceRestart = false) }
         },
-        onRemoteVideoTrack = { track ->
+        onRemoteVideoTrack = { _ ->
             handler.post {
-                updateState(_uiState.value.copy(remoteVideoEnabled = track != null))
+                refreshRemoteVideoEnabled()
             }
         },
         onCameraFacingChanged = { isFront ->
@@ -176,6 +177,15 @@ class CallManager(context: Context) {
 
     fun handleDeepLink(uri: Uri) {
         val roomId = extractRoomId(uri) ?: return
+        val state = _uiState.value
+        val isSameActiveRoom = (state.roomId == roomId || currentRoomId == roomId) &&
+            state.phase != CallPhase.Idle &&
+            state.phase != CallPhase.Error &&
+            state.phase != CallPhase.Ending
+        if (isSameActiveRoom) {
+            Log.d("CallManager", "Ignoring duplicate deep link for active room $roomId")
+            return
+        }
         val linkHost = uri.host
         if (!linkHost.isNullOrBlank()) {
             updateServerHost(linkHost)
@@ -239,6 +249,7 @@ class CallManager(context: Context) {
             )
         )
         webRtcEngine.startLocalMedia()
+        startRemoteVideoStatePolling()
         ensureSignalingConnection()
         CallService.start(appContext, roomId)
     }
@@ -653,6 +664,34 @@ class CallManager(context: Context) {
         _uiState.value = state
     }
 
+    private fun refreshRemoteVideoEnabled() {
+        val remoteVideoEnabled = webRtcEngine.isRemoteVideoTrackEnabled()
+        if (_uiState.value.remoteVideoEnabled != remoteVideoEnabled) {
+            Log.d(
+                "CallManager",
+                "[RemoteVideo] uiEnabled->$remoteVideoEnabled ${webRtcEngine.remoteVideoDiagnostics()}"
+            )
+            updateState(_uiState.value.copy(remoteVideoEnabled = remoteVideoEnabled))
+        }
+    }
+
+    private fun startRemoteVideoStatePolling() {
+        if (remoteVideoStatePollRunnable != null) return
+        val runnable = object : Runnable {
+            override fun run() {
+                refreshRemoteVideoEnabled()
+                handler.postDelayed(this, 500)
+            }
+        }
+        remoteVideoStatePollRunnable = runnable
+        handler.post(runnable)
+    }
+
+    private fun stopRemoteVideoStatePolling() {
+        remoteVideoStatePollRunnable?.let { handler.removeCallbacks(it) }
+        remoteVideoStatePollRunnable = null
+    }
+
     private fun isHost(): Boolean = clientId != null && clientId == hostCid
 
     private fun cleanupCall(message: String) {
@@ -668,6 +707,7 @@ class CallManager(context: Context) {
     }
 
     private fun resetResources() {
+        stopRemoteVideoStatePolling()
         signalingClient.close()
         webRtcEngine.release()
         CallService.stop(appContext)
