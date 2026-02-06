@@ -21,6 +21,10 @@ fun SerenadaAppRoot(callManager: CallManager) {
     val uiState by callManager.uiState
     val serverHost by callManager.serverHost
     val context = LocalContext.current
+    val showActiveCallScreen =
+        uiState.phase == CallPhase.Waiting ||
+            uiState.phase == CallPhase.InCall ||
+            uiState.connectionState == "CONNECTED"
 
     var hostInput by remember { mutableStateOf(serverHost) }
     var roomInput by remember { mutableStateOf("") }
@@ -35,6 +39,14 @@ fun SerenadaAppRoot(callManager: CallManager) {
     LaunchedEffect(uiState.phase) {
         if (uiState.phase == CallPhase.Waiting || uiState.phase == CallPhase.InCall) {
             showJoinWithCode = false
+            roomInput = ""
+        }
+    }
+
+    LaunchedEffect(showActiveCallScreen) {
+        if (showActiveCallScreen) {
+            showJoinWithCode = false
+            showSettings = false
             roomInput = ""
         }
     }
@@ -113,43 +125,47 @@ fun SerenadaAppRoot(callManager: CallManager) {
             return@SerenadaTheme
         }
 
-        when (uiState.phase) {
-            CallPhase.Idle, CallPhase.CreatingRoom, CallPhase.Joining, CallPhase.Ending -> {
-                JoinScreen(
-                    isBusy = uiState.phase == CallPhase.CreatingRoom || uiState.phase == CallPhase.Joining,
-                    statusMessage = uiState.statusMessage,
-                    onOpenJoinWithCode = { showJoinWithCode = true },
-                    onOpenSettings = { showSettings = true },
-                    onStartCall = {
-                        callManager.updateServerHost(hostInput)
-                        runWithPermissions { callManager.startNewCall() }
-                    }
-                )
-            }
-            CallPhase.Waiting, CallPhase.InCall -> {
-                CallScreen(
-                    roomId = uiState.roomId.orEmpty(),
-                    uiState = uiState,
-                    serverHost = serverHost,
-                    onToggleAudio = { callManager.toggleAudio() },
-                    onToggleVideo = { callManager.toggleVideo() },
-                    onFlipCamera = { callManager.flipCamera() },
-                    onEndCall = { callManager.endCall() },
-                    attachLocalRenderer = { renderer, events ->
-                        callManager.attachLocalRenderer(renderer, events)
-                    },
-                    detachLocalRenderer = { callManager.detachLocalRenderer(it) },
-                    attachRemoteRenderer = { renderer, events ->
-                        callManager.attachRemoteRenderer(renderer, events)
-                    },
-                    detachRemoteRenderer = { callManager.detachRemoteRenderer(it) }
-                )
-            }
-            CallPhase.Error -> {
-                ErrorScreen(
-                    message = uiState.errorMessage ?: "Something went wrong",
-                    onDismiss = { callManager.dismissError() }
-                )
+        if (showActiveCallScreen) {
+            CallScreen(
+                roomId = uiState.roomId.orEmpty(),
+                uiState = uiState,
+                serverHost = serverHost,
+                onToggleAudio = { callManager.toggleAudio() },
+                onToggleVideo = { callManager.toggleVideo() },
+                onFlipCamera = { callManager.flipCamera() },
+                onEndCall = { callManager.endCall() },
+                attachLocalRenderer = { renderer, events ->
+                    callManager.attachLocalRenderer(renderer, events)
+                },
+                detachLocalRenderer = { callManager.detachLocalRenderer(it) },
+                attachRemoteRenderer = { renderer, events ->
+                    callManager.attachRemoteRenderer(renderer, events)
+                },
+                detachRemoteRenderer = { callManager.detachRemoteRenderer(it) }
+            )
+        } else {
+            when (uiState.phase) {
+                CallPhase.Idle, CallPhase.CreatingRoom, CallPhase.Joining, CallPhase.Ending -> {
+                    JoinScreen(
+                        isBusy = uiState.phase == CallPhase.CreatingRoom || uiState.phase == CallPhase.Joining,
+                        statusMessage = uiState.statusMessage,
+                        onOpenJoinWithCode = { showJoinWithCode = true },
+                        onOpenSettings = { showSettings = true },
+                        onStartCall = {
+                            callManager.updateServerHost(hostInput)
+                            runWithPermissions { callManager.startNewCall() }
+                        }
+                    )
+                }
+                CallPhase.Waiting, CallPhase.InCall -> {
+                    // Covered by showActiveCallScreen branch.
+                }
+                CallPhase.Error -> {
+                    ErrorScreen(
+                        message = uiState.errorMessage ?: "Something went wrong",
+                        onDismiss = { callManager.dismissError() }
+                    )
+                }
             }
         }
     }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +49,7 @@ import app.serenada.android.call.CallUiState
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -67,8 +69,8 @@ fun CallScreen(
         detachRemoteRenderer: (SurfaceViewRenderer) -> Unit
 ) {
     var areControlsVisible by remember { mutableStateOf(true) }
-    var isLocalLarge by remember { mutableStateOf(false) }
-    var remoteVideoFitCover by remember { mutableStateOf(true) }
+    var isLocalLarge by rememberSaveable { mutableStateOf(false) }
+    var remoteVideoFitCover by rememberSaveable { mutableStateOf(true) }
     var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     val context = LocalContext.current
@@ -83,10 +85,15 @@ fun CallScreen(
                 val rotatedWidth = if (rotation % 180 == 0) width else height
                 val rotatedHeight = if (rotation % 180 == 0) height else width
                 if (rotatedWidth == 0 || rotatedHeight == 0) return
-                val ratio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+                val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+                // Quantize minor encoder size swings so we don't keep relaying out the SurfaceView.
+                val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
                 mainHandler.post {
                     val current = remoteAspectRatio
-                    if (current == null || abs(current - ratio) > 0.01f) {
+                    val orientationChanged =
+                            current != null && ((current > 1f) != (ratio > 1f))
+                    val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
+                    if (current == null || abs(current - ratio) > deltaThreshold) {
                         remoteAspectRatio = ratio
                     }
                 }
@@ -141,10 +148,15 @@ fun CallScreen(
                                     indication = null
                             ) { areControlsVisible = !areControlsVisible }
     ) {
-        val showPip = uiState.phase == CallPhase.InCall || uiState.phase == CallPhase.Waiting
+        val showPip =
+                uiState.phase == CallPhase.InCall ||
+                        uiState.phase == CallPhase.Waiting ||
+                        uiState.connectionState == "CONNECTED"
         val pipBackgroundColor = Color(0xFF222222)
         val pipCornerRadius = 12.dp
-        val pipContentPadding = 2.dp
+        // SurfaceView cannot be truly corner-clipped on all devices. Keep the rendered
+        // surface inset enough so its square corners stay inside the rounded frame.
+        val pipContentPadding = 2.5.dp
         val mainModifier =
                 Modifier.fillMaxSize().clickable(
                                 interactionSource = remember { MutableInteractionSource() },
@@ -298,7 +310,12 @@ fun CallScreen(
         }
 
         // Zoom/Fit Button (Top Right)
-        if (uiState.remoteVideoEnabled && uiState.phase == CallPhase.InCall && !isLocalLarge) {
+        if (
+                uiState.remoteVideoEnabled &&
+                        (uiState.phase == CallPhase.InCall ||
+                                uiState.connectionState == "CONNECTED") &&
+                        !isLocalLarge
+        ) {
             IconButton(
                     onClick = { remoteVideoFitCover = !remoteVideoFitCover },
                     modifier =
