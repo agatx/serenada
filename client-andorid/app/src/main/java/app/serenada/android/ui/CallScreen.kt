@@ -153,9 +153,10 @@ fun CallScreen(
                         uiState.phase == CallPhase.Waiting ||
                         uiState.connectionState == "CONNECTED"
         val pipBackgroundColor = Color(0xFF222222)
-        val pipCornerRadius = 12.dp
-        // SurfaceView cannot be truly corner-clipped on all devices. Keep the rendered
-        // surface inset enough so its square corners stay inside the rounded frame.
+        // For a square inset inside rounded corners, bleed-free geometry needs:
+        // padding >= radius * (1 - 1/sqrt(2)) ~= 0.293 * radius.
+        // 8dp radius + 2.5dp inset keeps the frame thin while eliminating corner bleed.
+        val pipCornerRadius = 8.dp
         val pipContentPadding = 2.5.dp
         val mainModifier =
                 Modifier.fillMaxSize().clickable(
