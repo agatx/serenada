@@ -15,10 +15,14 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -167,10 +171,17 @@ fun CallScreen(
                                     indication = null
                             ) { areControlsVisible = !areControlsVisible }
     ) {
+        val controlsAnimationDuration = 320
         val showPip =
                 uiState.phase == CallPhase.InCall ||
                         uiState.phase == CallPhase.Waiting ||
                         uiState.connectionState == "CONNECTED"
+        val animatedPipBottomPadding by
+                animateDpAsState(
+                        targetValue = if (areControlsVisible) 160.dp else 48.dp,
+                        animationSpec = tween(durationMillis = controlsAnimationDuration),
+                        label = "pip_bottom_padding"
+                )
         val pipBackgroundColor = Color(0xFF222222)
         // For a square inset inside rounded corners, bleed-free geometry needs:
         // padding >= radius * (1 - 1/sqrt(2)) ~= 0.293 * radius.
@@ -188,7 +199,7 @@ fun CallScreen(
         val pipBaseModifier =
                 if (showPip) {
                     Modifier.padding(
-                                    bottom = if (areControlsVisible) 160.dp else 48.dp,
+                                    bottom = animatedPipBottomPadding,
                                     end = 16.dp
                             )
                             .align(Alignment.BottomEnd)
@@ -354,13 +365,27 @@ fun CallScreen(
         // Controls Bar
         AnimatedVisibility(
                 visible = areControlsVisible,
-                enter = fadeIn(animationSpec = tween(300)),
-                exit = fadeOut(animationSpec = tween(300)),
+                enter =
+                        fadeIn(animationSpec = tween(durationMillis = controlsAnimationDuration)) +
+                                slideInVertically(
+                                        animationSpec = tween(durationMillis = controlsAnimationDuration),
+                                        initialOffsetY = { fullHeight -> fullHeight / 3 }
+                                ),
+                exit =
+                        fadeOut(animationSpec = tween(durationMillis = controlsAnimationDuration)) +
+                                slideOutVertically(
+                                        animationSpec = tween(durationMillis = controlsAnimationDuration),
+                                        targetOffsetY = { fullHeight -> fullHeight / 3 }
+                                ),
                 modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             Column(
                     modifier =
                             Modifier.fillMaxWidth()
+                                    .animateContentSize(
+                                            animationSpec =
+                                                    tween(durationMillis = controlsAnimationDuration)
+                                    )
                                     .background(
                                             brush =
                                                     androidx.compose.ui.graphics.Brush
