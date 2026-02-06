@@ -3,17 +3,16 @@ package app.serenada.android.ui
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
+import android.graphics.Outline
 import android.graphics.Color as AndroidColor
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,9 +30,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -144,6 +144,7 @@ fun CallScreen(
         val showPip = uiState.phase == CallPhase.InCall || uiState.phase == CallPhase.Waiting
         val pipBackgroundColor = Color(0xFF222222)
         val pipCornerRadius = 12.dp
+        val pipContentPadding = 2.dp
         val mainModifier =
                 Modifier.fillMaxSize().clickable(
                                 interactionSource = remember { MutableInteractionSource() },
@@ -169,10 +170,10 @@ fun CallScreen(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                         ) { isLocalLarge = !isLocalLarge }
+        val pipVideoModifier = pipBaseModifier.padding(pipContentPadding)
 
-        val localModifier = if (isLocalLarge) mainModifier else pipBaseModifier
-        val remoteModifier = if (isLocalLarge) pipBaseModifier else mainModifier
-
+        val localModifier = if (isLocalLarge) mainModifier else pipVideoModifier
+        val remoteModifier = if (isLocalLarge) pipVideoModifier else mainModifier
         if (showPip) {
             Box(modifier = pipBackgroundModifier)
         }
@@ -185,7 +186,7 @@ fun CallScreen(
                     onDetach = detachLocalRenderer,
                     mirror = uiState.isFrontCamera,
                     contentScale = ContentScale.Crop,
-                    maskCornerRadius = null
+                    isMediaOverlay = false
             )
             VideoSurface(
                     modifier = remoteModifier,
@@ -193,38 +194,53 @@ fun CallScreen(
                     onAttach = { renderer -> attachRemoteRenderer(renderer, remoteRendererEvents) },
                     onDetach = detachRemoteRenderer,
                     contentScale = ContentScale.Crop,
-                    maskCornerRadius = pipCornerRadius,
-                    maskColor = pipBackgroundColor
+                    cornerRadius = pipCornerRadius,
+                    isMediaOverlay = true
             )
         } else {
             val ratio = remoteAspectRatio ?: 0f
             val containerRatio = if (maxHeight == 0.dp) 1f else maxWidth / maxHeight
-            val targetWidth: androidx.compose.ui.unit.Dp
-            val targetHeight: androidx.compose.ui.unit.Dp
-            if (!remoteVideoFitCover && ratio > 0f) {
-                if (containerRatio > ratio) {
-                    targetHeight = maxHeight
-                    targetWidth = maxHeight * ratio
+            val safeContainerRatio = if (containerRatio > 0f) containerRatio else 1f
+            val fitWidth: androidx.compose.ui.unit.Dp
+            val fitHeight: androidx.compose.ui.unit.Dp
+            val coverScale: Float
+            if (ratio > 0f) {
+                if (safeContainerRatio > ratio) {
+                    fitHeight = maxHeight
+                    fitWidth = maxHeight * ratio
+                    coverScale = safeContainerRatio / ratio
                 } else {
-                    targetWidth = maxWidth
-                    targetHeight = maxWidth / ratio
+                    fitWidth = maxWidth
+                    fitHeight = maxWidth / ratio
+                    coverScale = ratio / safeContainerRatio
                 }
             } else {
-                targetWidth = maxWidth
-                targetHeight = maxHeight
+                fitWidth = maxWidth
+                fitHeight = maxHeight
+                coverScale = 1f
             }
-            Box(modifier = remoteModifier) {
+            val animatedRemoteScale by
+                    animateFloatAsState(
+                            targetValue = if (remoteVideoFitCover) coverScale else 1f,
+                            animationSpec = tween(durationMillis = 260),
+                            label = "remote_video_scale"
+                    )
+            Box(modifier = remoteModifier.clipToBounds()) {
                 VideoSurface(
                         modifier =
-                                Modifier.size(targetWidth, targetHeight)
-                                        .align(Alignment.Center),
+                                Modifier.size(fitWidth, fitHeight)
+                                        .align(Alignment.Center)
+                                        .graphicsLayer {
+                                            scaleX = animatedRemoteScale
+                                            scaleY = animatedRemoteScale
+                                        },
                         renderer = remoteRenderer,
                         onAttach = { renderer ->
                             attachRemoteRenderer(renderer, remoteRendererEvents)
                         },
                         onDetach = detachRemoteRenderer,
                         contentScale = ContentScale.Crop,
-                        maskCornerRadius = null
+                        isMediaOverlay = false
                 )
             }
             VideoSurface(
@@ -234,8 +250,8 @@ fun CallScreen(
                     onDetach = detachLocalRenderer,
                     mirror = uiState.isFrontCamera,
                     contentScale = ContentScale.Crop,
-                    maskCornerRadius = pipCornerRadius,
-                    maskColor = pipBackgroundColor
+                    cornerRadius = pipCornerRadius,
+                    isMediaOverlay = true
             )
         }
 
@@ -258,8 +274,6 @@ fun CallScreen(
                 VideoPlaceholder(text = text, fontSize = if (isLocalLarge) 10.sp else 16.sp)
             }
         }
-
-        // PIP overlay handled by VideoSurface mask when needed.
 
         // Waiting State Overlay
         if (uiState.phase == CallPhase.Waiting && !isLocalLarge) {
@@ -462,14 +476,13 @@ private fun VideoSurface(
         onDetach: (SurfaceViewRenderer) -> Unit,
         mirror: Boolean = false,
         contentScale: ContentScale = ContentScale.Crop,
-        maskCornerRadius: androidx.compose.ui.unit.Dp? = null,
-        maskColor: Color = Color.Transparent
+        cornerRadius: androidx.compose.ui.unit.Dp? = null,
+        isMediaOverlay: Boolean = false
 ) {
     val density = LocalDensity.current
-    val maskRadiusPx = remember(maskCornerRadius, density) {
-        maskCornerRadius?.let { with(density) { it.toPx() } }
+    val cornerRadiusPx = remember(cornerRadius, density) {
+        cornerRadius?.let { with(density) { it.toPx() } }
     }
-    val maskColorInt = remember(maskColor) { maskColor.toArgb() }
 
     DisposableEffect(renderer) {
         onAttach(renderer)
@@ -480,14 +493,14 @@ private fun VideoSurface(
             modifier = modifier,
             factory = {
                 RendererContainer(it, renderer).apply {
-                    updateMask(maskRadiusPx, maskColorInt)
+                    updateCornerRadius(cornerRadiusPx)
                 }
             },
             update = { container ->
-                container.updateMask(maskRadiusPx, maskColorInt)
+                container.updateCornerRadius(cornerRadiusPx)
                 renderer.apply {
                     setZOrderOnTop(false)
-                    setZOrderMediaOverlay(false)
+                    setZOrderMediaOverlay(isMediaOverlay)
                     setMirror(mirror)
                     setScalingType(
                         if (contentScale == ContentScale.Crop)
@@ -503,7 +516,13 @@ private class RendererContainer(
         context: Context,
         renderer: SurfaceViewRenderer
 ) : FrameLayout(context) {
-    private val maskView = CornerMaskView(context)
+    private var cornerRadiusPx: Float = 0f
+    private val roundedOutlineProvider =
+            object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, cornerRadiusPx)
+                }
+            }
 
     init {
         if (renderer.parent is ViewGroup) {
@@ -516,54 +535,20 @@ private class RendererContainer(
                         ViewGroup.LayoutParams.MATCH_PARENT
                 )
         )
-        addView(
-                maskView,
-                LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                )
-        )
         isClickable = false
         isFocusable = false
-        maskView.isClickable = false
-        maskView.isFocusable = false
     }
 
-    fun updateMask(cornerRadiusPx: Float?, color: Int) {
-        if (cornerRadiusPx == null || cornerRadiusPx <= 0f) {
-            maskView.visibility = View.GONE
+    fun updateCornerRadius(cornerRadiusPx: Float?) {
+        val radius = cornerRadiusPx ?: 0f
+        if (radius <= 0f) {
+            clipToOutline = false
             return
         }
-        maskView.visibility = View.VISIBLE
-        maskView.updateMask(cornerRadiusPx, color)
-    }
-}
-
-private class CornerMaskView(context: Context) : View(context) {
-    private val paint =
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.FILL
-            }
-    private val path = Path()
-    private val rect = RectF()
-    private var cornerRadiusPx: Float = 0f
-    private var maskColor: Int = AndroidColor.TRANSPARENT
-
-    fun updateMask(cornerRadiusPx: Float, color: Int) {
-        this.cornerRadiusPx = cornerRadiusPx
-        this.maskColor = color
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        if (cornerRadiusPx <= 0f) return
-        rect.set(0f, 0f, width.toFloat(), height.toFloat())
-        path.reset()
-        path.fillType = Path.FillType.EVEN_ODD
-        path.addRect(rect, Path.Direction.CW)
-        path.addRoundRect(rect, cornerRadiusPx, cornerRadiusPx, Path.Direction.CW)
-        paint.color = maskColor
-        canvas.drawPath(path, paint)
+        this.cornerRadiusPx = radius
+        outlineProvider = roundedOutlineProvider
+        clipToOutline = true
+        invalidateOutline()
     }
 }
 
