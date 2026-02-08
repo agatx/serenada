@@ -26,20 +26,20 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - `keystore/` — Release keystore + properties (ignored by git)
 
 ## Run (debug)
-1. Open `client-andorid/` in Android Studio.
+1. Open `client-android/` in Android Studio.
 2. Sync Gradle.
 3. Run on a device or emulator.
 
 ## Build (CLI)
 Debug APK:
 ```bash
-cd client-andorid
+cd client-android
 ./gradlew :app:assembleDebug
 ```
 
 Release APK (signed):
 ```bash
-cd client-andorid
+cd client-android
 ./gradlew :app:assembleRelease
 ```
 
@@ -75,7 +75,7 @@ keyPassword=YOUR_PASSWORD
 ### Generate a release keystore
 Create the keystore (choose your own password and alias):
 ```bash
-cd client-andorid
+cd client-android
 keytool -genkeypair -v \
   -keystore keystore/serenada-release.keystore \
   -alias serenada-release \
@@ -89,7 +89,7 @@ keytool -genkeypair -v \
 
 Then create `keystore/keystore.properties`:
 ```bash
-cd client-andorid
+cd client-android
 cat > keystore/keystore.properties <<'EOF'
 storeFile=../keystore/serenada-release.keystore
 storePassword=YOUR_PASSWORD

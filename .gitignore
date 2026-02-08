@@ -21,4 +21,4 @@ server/data/subscriptions.db
 /server/data/snapshots
 nginx/conf.d/legacy.extra
 nginx/nginx.legacy.conf.template
-client-andorid/keystore/
+client-android/keystore/

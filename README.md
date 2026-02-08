@@ -57,9 +57,9 @@ go run .
 Requires Go 1.24+ and a `.env` file in the root directory.
 
 ### Android Client (Kotlin)
-The native Android app lives in `client-andorid/` (directory name retained for compatibility with existing scripts).
+The native Android app lives in `client-android/`.
 
-1. Open `client-andorid/` in Android Studio.
+1. Open `client-android/` in Android Studio.
 2. Sync Gradle.
 3. Run on a device or emulator (minSdk 26).
 
@@ -106,7 +106,7 @@ bash setup-serenada.sh
 - [Deployment Guide](DEPLOY.md) – Self-hosting instructions
 - [Protocol Specification](serenada_protocol_v1.md) – Signaling protocol (WebSocket + SSE)
 - [Push Notifications](push-notifications.md) – Encrypted snapshot notifications
-- [Android Client README](client-andorid/README.md) – Kotlin native app setup and build notes
+- [Android Client README](client-android/README.md) – Kotlin native app setup and build notes
 
 ## Technology
 

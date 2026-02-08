@@ -10,6 +10,7 @@ This repository is production-critical.
 ## Code
 - Follow existing style and patterns
 - Prioritize clarity over cleverness
+- Native Android client directory is `client-android/`
 
 ## Documentation
 - Update all relevant documentation when making changes:
