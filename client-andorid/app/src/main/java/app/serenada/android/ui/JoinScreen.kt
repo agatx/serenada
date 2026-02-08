@@ -28,10 +28,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.serenada.android.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,7 +60,7 @@ fun JoinScreen(
                         contentAlignment = Alignment.CenterStart
                     ) {
                         Text(
-                            text = "Enter a code or link",
+                            text = stringResource(R.string.join_enter_code_or_link),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -66,7 +68,10 @@ fun JoinScreen(
                 },
                 actions = {
                     IconButton(onClick = onOpenSettings, enabled = !isBusy) {
-                        Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.join_settings)
+                        )
                     }
                 }
             )
@@ -84,9 +89,9 @@ fun JoinScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("Serenada", fontSize = 40.sp, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.app_name), fontSize = 40.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Private 1:1 video calls, no accounts.")
+                Text(stringResource(R.string.join_subtitle))
                 Spacer(modifier = Modifier.height(32.dp))
 
                 Button(
@@ -101,7 +106,7 @@ fun JoinScreen(
                         modifier = Modifier.size(28.dp)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("Start call", fontSize = 18.sp)
+                    Text(stringResource(R.string.join_start_call), fontSize = 18.sp)
                 }
 
                 if (isBusy) {

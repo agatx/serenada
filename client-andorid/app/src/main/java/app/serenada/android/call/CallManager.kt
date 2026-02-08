@@ -11,7 +11,9 @@ import android.os.Looper
 import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import app.serenada.android.R
 import app.serenada.android.data.SettingsStore
+import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.ApiClient
 import app.serenada.android.network.TurnCredentials
 import app.serenada.android.service.CallService
@@ -45,6 +47,8 @@ class CallManager(context: Context) {
 
     private val _serverHost = mutableStateOf(settingsStore.host)
     val serverHost: State<String> = _serverHost
+    private val _selectedLanguage = mutableStateOf(settingsStore.language)
+    val selectedLanguage: State<String> = _selectedLanguage
 
     private var currentRoomId: String? = null
     private var clientId: String? = null
@@ -74,16 +78,16 @@ class CallManager(context: Context) {
         },
         onConnectionState = { state ->
             handler.post {
-                val message = when (state) {
-                    PeerConnection.PeerConnectionState.CONNECTED -> "Connected"
-                    PeerConnection.PeerConnectionState.CONNECTING -> "Connecting"
-                    PeerConnection.PeerConnectionState.DISCONNECTED -> "Disconnected"
-                    PeerConnection.PeerConnectionState.FAILED -> "Connection failed"
-                    PeerConnection.PeerConnectionState.CLOSED -> "Call ended"
-                    else -> ""
+                val messageResId = when (state) {
+                    PeerConnection.PeerConnectionState.CONNECTED -> R.string.call_status_connected
+                    PeerConnection.PeerConnectionState.CONNECTING -> R.string.call_status_connecting
+                    PeerConnection.PeerConnectionState.DISCONNECTED -> R.string.call_status_disconnected
+                    PeerConnection.PeerConnectionState.FAILED -> R.string.call_status_connection_failed
+                    PeerConnection.PeerConnectionState.CLOSED -> R.string.call_status_call_ended
+                    else -> null
                 }
                 updateState(_uiState.value.copy(
-                    statusMessage = message,
+                    statusMessageResId = messageResId,
                     connectionState = state.name
                 ))
                 when (state) {
@@ -175,6 +179,14 @@ class CallManager(context: Context) {
         _serverHost.value = trimmed
     }
 
+    fun updateLanguage(language: String) {
+        val normalized = SettingsStore.normalizeLanguage(language)
+        if (normalized == _selectedLanguage.value) return
+        settingsStore.language = normalized
+        _selectedLanguage.value = normalized
+        AppLocaleManager.applyLanguage(normalized)
+    }
+
     fun handleDeepLink(uri: Uri) {
         val roomId = extractRoomId(uri) ?: return
         val state = _uiState.value
@@ -196,7 +208,13 @@ class CallManager(context: Context) {
     fun joinFromInput(input: String) {
         val trimmed = input.trim()
         if (trimmed.isBlank()) {
-            updateState(_uiState.value.copy(phase = CallPhase.Error, errorMessage = "Enter a room link or ID"))
+            updateState(
+                _uiState.value.copy(
+                    phase = CallPhase.Error,
+                    errorMessageResId = R.string.error_enter_room_or_id,
+                    errorMessageText = null
+                )
+            )
             return
         }
         val uri = runCatching { Uri.parse(trimmed) }.getOrNull()
@@ -213,7 +231,12 @@ class CallManager(context: Context) {
 
     fun startNewCall() {
         if (_uiState.value.phase != CallPhase.Idle) return
-        updateState(_uiState.value.copy(phase = CallPhase.CreatingRoom, statusMessage = "Creating room..."))
+        updateState(
+            _uiState.value.copy(
+                phase = CallPhase.CreatingRoom,
+                statusMessageResId = R.string.call_status_creating_room
+            )
+        )
         apiClient.createRoomId(serverHost.value) { result ->
             handler.post {
                 result
@@ -221,10 +244,13 @@ class CallManager(context: Context) {
                         joinRoom(roomId)
                     }
                     .onFailure { err ->
+                        val fallback = appContext.getString(R.string.error_failed_create_room)
+                        val message = err.message?.ifBlank { null } ?: fallback
                         updateState(
                             _uiState.value.copy(
                                 phase = CallPhase.Error,
-                                errorMessage = err.message ?: "Failed to create room"
+                                errorMessageResId = if (message == fallback) R.string.error_failed_create_room else null,
+                                errorMessageText = if (message == fallback) null else message
                             )
                         )
                     }
@@ -234,7 +260,13 @@ class CallManager(context: Context) {
 
     fun joinRoom(roomId: String) {
         if (roomId.isBlank()) {
-            updateState(_uiState.value.copy(phase = CallPhase.Error, errorMessage = "Invalid room ID"))
+            updateState(
+                _uiState.value.copy(
+                    phase = CallPhase.Error,
+                    errorMessageResId = R.string.error_invalid_room_id,
+                    errorMessageText = null
+                )
+            )
             return
         }
         currentRoomId = roomId
@@ -244,8 +276,9 @@ class CallManager(context: Context) {
             _uiState.value.copy(
                 phase = CallPhase.Joining,
                 roomId = roomId,
-                statusMessage = "Joining room...",
-                errorMessage = null
+                statusMessageResId = R.string.call_status_joining_room,
+                errorMessageResId = null,
+                errorMessageText = null
             )
         )
         webRtcEngine.startLocalMedia()
@@ -257,7 +290,7 @@ class CallManager(context: Context) {
     fun leaveCall() {
         if (_uiState.value.phase == CallPhase.Idle) return
         sendMessage("leave", null)
-        cleanupCall("Left room")
+        cleanupCall(R.string.call_status_left_room)
     }
 
     fun dismissError() {
@@ -273,7 +306,7 @@ class CallManager(context: Context) {
         } else {
             sendMessage("leave", null)
         }
-        cleanupCall("Call ended")
+        cleanupCall(R.string.call_status_call_ended)
     }
 
     fun toggleAudio() {
@@ -409,13 +442,19 @@ class CallManager(context: Context) {
     }
 
     private fun handleRoomEnded(@Suppress("UNUSED_PARAMETER") msg: SignalingMessage) {
-        cleanupCall("Room ended")
+        cleanupCall(R.string.call_status_room_ended)
     }
 
     private fun handleError(msg: SignalingMessage) {
-        val message = msg.payload?.optString("message", "Unknown error") ?: "Unknown error"
+        val rawMessage = msg.payload?.optString("message").orEmpty().ifBlank { null }
         resetResources()
-        updateState(CallUiState(phase = CallPhase.Error, errorMessage = message))
+        updateState(
+            CallUiState(
+                phase = CallPhase.Error,
+                errorMessageResId = if (rawMessage == null) R.string.error_unknown else null,
+                errorMessageText = rawMessage
+            )
+        )
     }
 
     private fun handleSignalingPayload(msg: SignalingMessage) {
@@ -481,7 +520,12 @@ class CallManager(context: Context) {
                 phase = phase,
                 isHost = isHostNow,
                 participantCount = count,
-                statusMessage = if (count <= 1) "Waiting for someone to join" else "In call"
+                statusMessageResId =
+                    if (count <= 1) {
+                        R.string.call_status_waiting_for_join
+                    } else {
+                        R.string.call_status_in_call
+                    }
             )
         )
         if (count > 1) {
@@ -694,16 +738,16 @@ class CallManager(context: Context) {
 
     private fun isHost(): Boolean = clientId != null && clientId == hostCid
 
-    private fun cleanupCall(message: String) {
+    private fun cleanupCall(messageResId: Int) {
         updateState(
             _uiState.value.copy(
                 phase = CallPhase.Ending,
-                statusMessage = message
+                statusMessageResId = messageResId
             )
         )
         settingsStore.reconnectCid = null
         resetResources()
-        updateState(CallUiState(phase = CallPhase.Idle, statusMessage = ""))
+        updateState(CallUiState(phase = CallPhase.Idle))
     }
 
     private fun resetResources() {

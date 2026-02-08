@@ -1,0 +1,58 @@
+<resources>
+    <string name="app_name">Serenada</string>
+    <string name="common_back">Назад</string>
+
+    <string name="settings_title">Настройки</string>
+    <string name="settings_save">Сохранить</string>
+    <string name="settings_server_host">Хост сервера</string>
+    <string name="settings_language">Язык</string>
+    <string name="settings_language_auto">Авто (по умолчанию)</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_russian">Русский</string>
+    <string name="settings_language_spanish">Español</string>
+    <string name="settings_language_french">Français</string>
+    <string name="settings_language_help">Авто использует язык устройства. Неподдерживаемые языки переключаются на английский.</string>
+
+    <string name="join_enter_code_or_link">Введите код или ссылку</string>
+    <string name="join_settings">Настройки</string>
+    <string name="join_subtitle">Приватные видеозвонки 1:1 без аккаунтов.</string>
+    <string name="join_start_call">Начать звонок</string>
+    <string name="join_with_code_title">Вход по коду</string>
+    <string name="join_with_code_action">Войти</string>
+    <string name="join_with_code_hint">Введите код или ссылку от организатора встречи</string>
+    <string name="join_with_code_placeholder">Код встречи или ссылка</string>
+
+    <string name="error_something_went_wrong">Что-то пошло не так</string>
+    <string name="error_enter_room_or_id">Введите ссылку или ID комнаты</string>
+    <string name="error_failed_create_room">Не удалось создать комнату</string>
+    <string name="error_invalid_room_id">Неверный ID комнаты</string>
+    <string name="error_unknown">Неизвестная ошибка</string>
+
+    <string name="call_status_connected">Подключено</string>
+    <string name="call_status_connecting">Подключение</string>
+    <string name="call_status_disconnected">Отключено</string>
+    <string name="call_status_connection_failed">Сбой подключения</string>
+    <string name="call_status_call_ended">Звонок завершен</string>
+    <string name="call_status_creating_room">Создание комнаты...</string>
+    <string name="call_status_joining_room">Подключение к комнате...</string>
+    <string name="call_status_waiting_for_join">Ожидание собеседника</string>
+    <string name="call_status_in_call">В звонке</string>
+    <string name="call_status_left_room">Вы вышли из комнаты</string>
+    <string name="call_status_room_ended">Комната завершена</string>
+
+    <string name="call_local_camera_off">Ваша камера выключена</string>
+    <string name="call_camera_off">Камера выключена</string>
+    <string name="call_waiting_short">Ожидание...</string>
+    <string name="call_video_off">Видео выключено</string>
+    <string name="call_reconnecting">Переподключение...</string>
+    <string name="call_toggle_video_fit">Переключить режим видео</string>
+    <string name="call_waiting_overlay">Ожидание собеседника...</string>
+    <string name="call_qr_code">QR-код</string>
+    <string name="call_share_invitation">Поделиться приглашением</string>
+    <string name="call_share_link_chooser">Поделиться ссылкой на звонок</string>
+
+    <string name="notification_call_title">Звонок Serenada</string>
+    <string name="notification_call_status_channel">Статус звонка</string>
+    <string name="notification_room">Комната %1$s</string>
+    <string name="notification_in_call">В звонке</string>
+</resources>

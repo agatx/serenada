@@ -45,12 +45,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import app.serenada.android.R
 import app.serenada.android.call.CallPhase
 import app.serenada.android.call.CallUiState
 import com.google.zxing.BarcodeFormat
@@ -309,7 +311,9 @@ fun CallScreen(
         if (!uiState.localVideoEnabled) {
             Box(modifier = localModifier) {
                 VideoPlaceholder(
-                        text = if (isLocalLarge) "Your camera is off" else "Camera off",
+                        text =
+                                if (isLocalLarge) stringResource(R.string.call_local_camera_off)
+                                else stringResource(R.string.call_camera_off),
                         fontSize = if (isLocalLarge) 16.sp else 10.sp
                 )
             }
@@ -320,7 +324,9 @@ fun CallScreen(
                         (uiState.phase == CallPhase.InCall ||
                                 (uiState.phase == CallPhase.Waiting && isLocalLarge))
         if (showRemotePlaceholder) {
-            val text = if (uiState.phase == CallPhase.Waiting) "Waiting..." else "Video off"
+            val text =
+                    if (uiState.phase == CallPhase.Waiting) stringResource(R.string.call_waiting_short)
+                    else stringResource(R.string.call_video_off)
             Box(modifier = remoteModifier) {
                 VideoPlaceholder(text = text, fontSize = if (isLocalLarge) 10.sp else 16.sp)
             }
@@ -340,7 +346,7 @@ fun CallScreen(
         ) {
             Surface(color = Color.Black.copy(alpha = 0.6f), shape = RoundedCornerShape(20.dp)) {
                 Text(
-                        text = "Reconnecting...",
+                        text = stringResource(R.string.call_reconnecting),
                         color = Color.White,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         fontSize = 14.sp
@@ -364,7 +370,7 @@ fun CallScreen(
                         imageVector =
                                 if (remoteVideoFitCover) Icons.Default.FullscreenExit
                                 else Icons.Default.Fullscreen,
-                        contentDescription = "Toggle Video Fit",
+                        contentDescription = stringResource(R.string.call_toggle_video_fit),
                         tint = Color.White
                 )
             }
@@ -487,6 +493,7 @@ private fun WaitingOverlay(roomId: String, serverHost: String) {
     val link = "https://$serverHost/call/$roomId"
     val qrBitmap = remember(link) { generateQrCode(link) }
     val context = LocalContext.current
+    val chooserTitle = stringResource(R.string.call_share_link_chooser)
 
     Column(
             modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -494,7 +501,7 @@ private fun WaitingOverlay(roomId: String, serverHost: String) {
             verticalArrangement = Arrangement.Center
     ) {
         Text(
-                text = "Waiting for someone to join...",
+                text = stringResource(R.string.call_waiting_overlay),
                 color = Color.White,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Medium,
@@ -510,7 +517,7 @@ private fun WaitingOverlay(roomId: String, serverHost: String) {
             qrBitmap?.let {
                 Image(
                         bitmap = it.asImageBitmap(),
-                        contentDescription = "QR Code",
+                        contentDescription = stringResource(R.string.call_qr_code),
                         modifier = Modifier.fillMaxSize().padding(16.dp)
                 )
             }
@@ -519,7 +526,7 @@ private fun WaitingOverlay(roomId: String, serverHost: String) {
         Spacer(modifier = Modifier.height(32.dp))
 
         Button(
-                onClick = { shareLink(context, link) },
+                onClick = { shareLink(context, link, chooserTitle) },
                 colors =
                         ButtonDefaults.buttonColors(
                                 containerColor = Color.White.copy(alpha = 0.2f)
@@ -528,7 +535,7 @@ private fun WaitingOverlay(roomId: String, serverHost: String) {
         ) {
             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Share Invitation")
+            Text(stringResource(R.string.call_share_invitation))
         }
     }
 }
@@ -815,12 +822,12 @@ private fun generateQrCode(text: String): Bitmap? {
     }
 }
 
-private fun shareLink(context: Context, text: String) {
+private fun shareLink(context: Context, text: String, chooserTitle: String) {
     val intent =
             Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_TEXT, text)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-    context.startActivity(Intent.createChooser(intent, "Share call link"))
+    context.startActivity(Intent.createChooser(intent, chooserTitle))
 }

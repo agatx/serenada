@@ -1,0 +1,58 @@
+<resources>
+    <string name="app_name">Serenada</string>
+    <string name="common_back">Retour</string>
+
+    <string name="settings_title">Paramètres</string>
+    <string name="settings_save">Enregistrer</string>
+    <string name="settings_server_host">Hôte du serveur</string>
+    <string name="settings_language">Langue</string>
+    <string name="settings_language_auto">Auto (par défaut)</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_russian">Русский</string>
+    <string name="settings_language_spanish">Español</string>
+    <string name="settings_language_french">Français</string>
+    <string name="settings_language_help">Auto utilise la langue de l\'appareil. Les langues non prises en charge reviennent à l\'anglais.</string>
+
+    <string name="join_enter_code_or_link">Saisir un code ou un lien</string>
+    <string name="join_settings">Paramètres</string>
+    <string name="join_subtitle">Appels vidéo privés 1:1, sans compte.</string>
+    <string name="join_start_call">Démarrer l\'appel</string>
+    <string name="join_with_code_title">Rejoindre avec un code</string>
+    <string name="join_with_code_action">Rejoindre</string>
+    <string name="join_with_code_hint">Saisissez le code ou le lien fourni par l\'organisateur</string>
+    <string name="join_with_code_placeholder">Code ou lien de réunion</string>
+
+    <string name="error_something_went_wrong">Une erreur s\'est produite</string>
+    <string name="error_enter_room_or_id">Saisissez un lien ou un ID de salle</string>
+    <string name="error_failed_create_room">Impossible de créer la salle</string>
+    <string name="error_invalid_room_id">ID de salle invalide</string>
+    <string name="error_unknown">Erreur inconnue</string>
+
+    <string name="call_status_connected">Connecté</string>
+    <string name="call_status_connecting">Connexion</string>
+    <string name="call_status_disconnected">Déconnecté</string>
+    <string name="call_status_connection_failed">Échec de connexion</string>
+    <string name="call_status_call_ended">Appel terminé</string>
+    <string name="call_status_creating_room">Création de la salle...</string>
+    <string name="call_status_joining_room">Connexion à la salle...</string>
+    <string name="call_status_waiting_for_join">En attente de quelqu\'un</string>
+    <string name="call_status_in_call">En appel</string>
+    <string name="call_status_left_room">Salle quittée</string>
+    <string name="call_status_room_ended">Salle terminée</string>
+
+    <string name="call_local_camera_off">Votre caméra est désactivée</string>
+    <string name="call_camera_off">Caméra désactivée</string>
+    <string name="call_waiting_short">En attente...</string>
+    <string name="call_video_off">Vidéo désactivée</string>
+    <string name="call_reconnecting">Reconnexion...</string>
+    <string name="call_toggle_video_fit">Changer l\'ajustement vidéo</string>
+    <string name="call_waiting_overlay">En attente de quelqu\'un...</string>
+    <string name="call_qr_code">Code QR</string>
+    <string name="call_share_invitation">Partager l\'invitation</string>
+    <string name="call_share_link_chooser">Partager le lien d\'appel</string>
+
+    <string name="notification_call_title">Appel Serenada</string>
+    <string name="notification_call_status_channel">Statut de l\'appel</string>
+    <string name="notification_room">Salle %1$s</string>
+    <string name="notification_in_call">En appel</string>
+</resources>

@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import app.serenada.android.MainActivity
+import app.serenada.android.R
 import app.serenada.android.SerenadaApp
 
 class CallService : Service() {
@@ -46,9 +47,14 @@ class CallService : Service() {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val contentText = if (roomId.isNotBlank()) "Room $roomId" else "In call"
+        val contentText =
+            if (roomId.isNotBlank()) {
+                getString(R.string.notification_room, roomId)
+            } else {
+                getString(R.string.notification_in_call)
+            }
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Serenada call")
+            .setContentTitle(getString(R.string.notification_call_title))
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentIntent(pendingIntent)
@@ -61,7 +67,7 @@ class CallService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Call status",
+            getString(R.string.notification_call_status_channel),
             NotificationManager.IMPORTANCE_LOW
         )
         manager.createNotificationChannel(channel)

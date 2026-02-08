@@ -63,6 +63,7 @@ The native Android app lives in `client-andorid/`.
 3. Run on a device or emulator (minSdk 26).
 
 By default the app targets `https://serenada.app`, and the server host can be changed in Settings.
+The Android app language can also be set in Settings: `Auto (default)`, `English`, `Русский`, `Español`, `Français`. `Auto` follows the device language and falls back to English.
 
 ### Production Deployment
 

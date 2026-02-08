@@ -1,0 +1,58 @@
+<resources>
+    <string name="app_name">Serenada</string>
+    <string name="common_back">Atrás</string>
+
+    <string name="settings_title">Ajustes</string>
+    <string name="settings_save">Guardar</string>
+    <string name="settings_server_host">Servidor</string>
+    <string name="settings_language">Idioma</string>
+    <string name="settings_language_auto">Automático (predeterminado)</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_russian">Русский</string>
+    <string name="settings_language_spanish">Español</string>
+    <string name="settings_language_french">Français</string>
+    <string name="settings_language_help">Automático usa el idioma del dispositivo. Los idiomas no compatibles vuelven a inglés.</string>
+
+    <string name="join_enter_code_or_link">Introduce un código o enlace</string>
+    <string name="join_settings">Ajustes</string>
+    <string name="join_subtitle">Videollamadas privadas 1:1, sin cuentas.</string>
+    <string name="join_start_call">Iniciar llamada</string>
+    <string name="join_with_code_title">Unirse con código</string>
+    <string name="join_with_code_action">Unirse</string>
+    <string name="join_with_code_hint">Introduce el código o enlace del organizador</string>
+    <string name="join_with_code_placeholder">Código o enlace de la reunión</string>
+
+    <string name="error_something_went_wrong">Algo salió mal</string>
+    <string name="error_enter_room_or_id">Introduce un enlace o ID de sala</string>
+    <string name="error_failed_create_room">No se pudo crear la sala</string>
+    <string name="error_invalid_room_id">ID de sala no válido</string>
+    <string name="error_unknown">Error desconocido</string>
+
+    <string name="call_status_connected">Conectado</string>
+    <string name="call_status_connecting">Conectando</string>
+    <string name="call_status_disconnected">Desconectado</string>
+    <string name="call_status_connection_failed">Error de conexión</string>
+    <string name="call_status_call_ended">Llamada finalizada</string>
+    <string name="call_status_creating_room">Creando sala...</string>
+    <string name="call_status_joining_room">Uniéndose a la sala...</string>
+    <string name="call_status_waiting_for_join">Esperando a que alguien se una</string>
+    <string name="call_status_in_call">En llamada</string>
+    <string name="call_status_left_room">Saliste de la sala</string>
+    <string name="call_status_room_ended">La sala terminó</string>
+
+    <string name="call_local_camera_off">Tu cámara está apagada</string>
+    <string name="call_camera_off">Cámara apagada</string>
+    <string name="call_waiting_short">Esperando...</string>
+    <string name="call_video_off">Video apagado</string>
+    <string name="call_reconnecting">Reconectando...</string>
+    <string name="call_toggle_video_fit">Cambiar ajuste de video</string>
+    <string name="call_waiting_overlay">Esperando a que alguien se una...</string>
+    <string name="call_qr_code">Código QR</string>
+    <string name="call_share_invitation">Compartir invitación</string>
+    <string name="call_share_link_chooser">Compartir enlace de llamada</string>
+
+    <string name="notification_call_title">Llamada de Serenada</string>
+    <string name="notification_call_status_channel">Estado de llamada</string>
+    <string name="notification_room">Sala %1$s</string>
+    <string name="notification_in_call">En llamada</string>
+</resources>

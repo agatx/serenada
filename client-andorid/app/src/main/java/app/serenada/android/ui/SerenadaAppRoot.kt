@@ -11,8 +11,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
+import app.serenada.android.R
 import app.serenada.android.call.CallManager
 import app.serenada.android.call.CallPhase
 
@@ -20,17 +23,18 @@ import app.serenada.android.call.CallPhase
 fun SerenadaAppRoot(callManager: CallManager) {
     val uiState by callManager.uiState
     val serverHost by callManager.serverHost
+    val selectedLanguage by callManager.selectedLanguage
     val context = LocalContext.current
     val showActiveCallScreen =
         uiState.phase == CallPhase.Waiting ||
             uiState.phase == CallPhase.InCall ||
             uiState.connectionState == "CONNECTED"
 
-    var hostInput by remember { mutableStateOf(serverHost) }
-    var roomInput by remember { mutableStateOf("") }
+    var hostInput by rememberSaveable { mutableStateOf(serverHost) }
+    var roomInput by rememberSaveable { mutableStateOf("") }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
-    var showSettings by remember { mutableStateOf(false) }
-    var showJoinWithCode by remember { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showJoinWithCode by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(serverHost) {
         hostInput = serverHost
@@ -84,10 +88,16 @@ fun SerenadaAppRoot(callManager: CallManager) {
     }
 
     SerenadaTheme {
+        val statusMessage = uiState.statusMessageResId?.let { stringResource(it) }.orEmpty()
+        val errorMessage = uiState.errorMessageResId?.let { stringResource(it) } ?: uiState.errorMessageText
+        val hasError = !errorMessage.isNullOrBlank()
+
         if (showSettings) {
             SettingsScreen(
                 host = hostInput,
+                selectedLanguage = selectedLanguage,
                 onHostChange = { hostInput = it },
+                onLanguageSelect = { callManager.updateLanguage(it) },
                 onSave = {
                     callManager.updateServerHost(hostInput)
                     showSettings = false
@@ -104,11 +114,11 @@ fun SerenadaAppRoot(callManager: CallManager) {
             JoinWithCodeScreen(
                 roomInput = roomInput,
                 isBusy = uiState.phase == CallPhase.Joining || uiState.phase == CallPhase.CreatingRoom,
-                statusMessage = uiState.statusMessage,
-                errorMessage = uiState.errorMessage,
+                statusMessage = statusMessage,
+                errorMessage = errorMessage,
                 onRoomInputChange = {
                     roomInput = it
-                    if (uiState.errorMessage != null) callManager.dismissError()
+                    if (hasError) callManager.dismissError()
                 },
                 onJoinCall = {
                     callManager.updateServerHost(hostInput)
@@ -117,7 +127,7 @@ fun SerenadaAppRoot(callManager: CallManager) {
                     }
                 },
                 onBack = {
-                    if (uiState.errorMessage != null) callManager.dismissError()
+                    if (hasError) callManager.dismissError()
                     showJoinWithCode = false
                     roomInput = ""
                 }
@@ -153,7 +163,7 @@ fun SerenadaAppRoot(callManager: CallManager) {
                 CallPhase.Idle, CallPhase.CreatingRoom, CallPhase.Joining, CallPhase.Ending -> {
                     JoinScreen(
                         isBusy = uiState.phase == CallPhase.CreatingRoom || uiState.phase == CallPhase.Joining,
-                        statusMessage = uiState.statusMessage,
+                        statusMessage = statusMessage,
                         onOpenJoinWithCode = { showJoinWithCode = true },
                         onOpenSettings = { showSettings = true },
                         onStartCall = {
@@ -167,7 +177,7 @@ fun SerenadaAppRoot(callManager: CallManager) {
                 }
                 CallPhase.Error -> {
                     ErrorScreen(
-                        message = uiState.errorMessage ?: "Something went wrong",
+                        message = errorMessage ?: stringResource(R.string.error_something_went_wrong),
                         onDismiss = { callManager.dismissError() }
                     )
                 }

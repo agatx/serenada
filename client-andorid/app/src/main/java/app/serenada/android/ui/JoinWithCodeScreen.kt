@@ -23,7 +23,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.serenada.android.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,12 +41,12 @@ fun JoinWithCodeScreen(
     Scaffold(
             topBar = {
                 TopAppBar(
-                        title = { Text("Join with a code") },
+                        title = { Text(stringResource(R.string.join_with_code_title)) },
                         navigationIcon = {
                             IconButton(onClick = onBack) {
                                 Icon(
                                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "Back"
+                                        contentDescription = stringResource(R.string.common_back)
                                 )
                             }
                         },
@@ -52,7 +54,7 @@ fun JoinWithCodeScreen(
                             TextButton(
                                     onClick = onJoinCall,
                                     enabled = !isBusy && roomInput.isNotBlank()
-                            ) { Text("Join") }
+                            ) { Text(stringResource(R.string.join_with_code_action)) }
                         }
                 )
             }
@@ -60,13 +62,13 @@ fun JoinWithCodeScreen(
         Box(modifier = Modifier.fillMaxSize().padding(paddingValues).padding(24.dp)) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                        text = "Enter the code or link provided by the meeting organizer",
+                        text = stringResource(R.string.join_with_code_hint),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
                 )
                 OutlinedTextField(
                         value = roomInput,
                         onValueChange = onRoomInputChange,
-                        placeholder = { Text("Meeting code or link") },
+                        placeholder = { Text(stringResource(R.string.join_with_code_placeholder)) },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
                         enabled = !isBusy

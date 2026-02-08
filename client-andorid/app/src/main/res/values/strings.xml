@@ -1,3 +1,58 @@
 <resources>
     <string name="app_name">Serenada</string>
+    <string name="common_back">Back</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_server_host">Server host</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_auto">Auto (default)</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_russian">Russian</string>
+    <string name="settings_language_spanish">Spanish</string>
+    <string name="settings_language_french">French</string>
+    <string name="settings_language_help">Auto uses your device language. Unsupported languages fall back to English.</string>
+
+    <string name="join_enter_code_or_link">Enter a code or link</string>
+    <string name="join_settings">Settings</string>
+    <string name="join_subtitle">Private 1:1 video calls, no accounts.</string>
+    <string name="join_start_call">Start call</string>
+    <string name="join_with_code_title">Join with a code</string>
+    <string name="join_with_code_action">Join</string>
+    <string name="join_with_code_hint">Enter the code or link provided by the meeting organizer</string>
+    <string name="join_with_code_placeholder">Meeting code or link</string>
+
+    <string name="error_something_went_wrong">Something went wrong</string>
+    <string name="error_enter_room_or_id">Enter a room link or ID</string>
+    <string name="error_failed_create_room">Failed to create room</string>
+    <string name="error_invalid_room_id">Invalid room ID</string>
+    <string name="error_unknown">Unknown error</string>
+
+    <string name="call_status_connected">Connected</string>
+    <string name="call_status_connecting">Connecting</string>
+    <string name="call_status_disconnected">Disconnected</string>
+    <string name="call_status_connection_failed">Connection failed</string>
+    <string name="call_status_call_ended">Call ended</string>
+    <string name="call_status_creating_room">Creating room...</string>
+    <string name="call_status_joining_room">Joining room...</string>
+    <string name="call_status_waiting_for_join">Waiting for someone to join</string>
+    <string name="call_status_in_call">In call</string>
+    <string name="call_status_left_room">Left room</string>
+    <string name="call_status_room_ended">Room ended</string>
+
+    <string name="call_local_camera_off">Your camera is off</string>
+    <string name="call_camera_off">Camera off</string>
+    <string name="call_waiting_short">Waiting...</string>
+    <string name="call_video_off">Video off</string>
+    <string name="call_reconnecting">Reconnecting...</string>
+    <string name="call_toggle_video_fit">Toggle video fit</string>
+    <string name="call_waiting_overlay">Waiting for someone to join...</string>
+    <string name="call_qr_code">QR code</string>
+    <string name="call_share_invitation">Share invitation</string>
+    <string name="call_share_link_chooser">Share call link</string>
+
+    <string name="notification_call_title">Serenada call</string>
+    <string name="notification_call_status_channel">Call status</string>
+    <string name="notification_room">Room %1$s</string>
+    <string name="notification_in_call">In call</string>
 </resources>
