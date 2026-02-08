@@ -5,26 +5,29 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import app.serenada.android.ui.SerenadaAppRoot
 
 class MainActivity : AppCompatActivity() {
     private val callManager by lazy { (application as SerenadaApp).callManager }
+    private var pendingDeepLinkUri by mutableStateOf<Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleDeepLink(intent?.data)
+        pendingDeepLinkUri = intent?.data
         setContent {
-            SerenadaAppRoot(callManager = callManager)
+            SerenadaAppRoot(
+                callManager = callManager,
+                deepLinkUri = pendingDeepLinkUri,
+                onDeepLinkConsumed = { pendingDeepLinkUri = null }
+            )
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleDeepLink(intent.data)
-    }
-
-    private fun handleDeepLink(uri: Uri?) {
-        if (uri == null) return
-        callManager.handleDeepLink(uri)
+        pendingDeepLinkUri = intent.data
     }
 }

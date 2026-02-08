@@ -79,7 +79,6 @@ android {
 }
 
 val renameDebugApk = tasks.register("renameDebugApk") {
-    dependsOn("assembleDebug")
     doLast {
         val apk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
         if (apk.exists()) {
@@ -91,7 +90,6 @@ val renameDebugApk = tasks.register("renameDebugApk") {
 }
 
 val renameReleaseApk = tasks.register("renameReleaseApk") {
-    dependsOn("assembleRelease")
     doLast {
         val apk = layout.buildDirectory.file("outputs/apk/release/app-release.apk").get().asFile
         if (apk.exists()) {

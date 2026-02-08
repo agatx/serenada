@@ -18,15 +18,9 @@ class CallService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> {
-                val roomId = intent.getStringExtra(EXTRA_ROOM_ID).orEmpty()
-                startForeground(NOTIFICATION_ID, buildNotification(roomId))
-            }
-            ACTION_STOP -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+        if (intent?.action == ACTION_START) {
+            val roomId = intent.getStringExtra(EXTRA_ROOM_ID).orEmpty()
+            startForeground(NOTIFICATION_ID, buildNotification(roomId))
         }
         return START_NOT_STICKY
     }
@@ -77,7 +71,6 @@ class CallService : Service() {
         private const val CHANNEL_ID = "serenada_call"
         private const val NOTIFICATION_ID = 42
         private const val ACTION_START = "app.serenada.android.action.START_CALL"
-        private const val ACTION_STOP = "app.serenada.android.action.STOP_CALL"
         private const val EXTRA_ROOM_ID = "room_id"
 
         fun start(context: Context, roomId: String) {
@@ -93,10 +86,7 @@ class CallService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, CallService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
+            context.stopService(Intent(context, CallService::class.java))
         }
     }
 }

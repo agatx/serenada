@@ -2,6 +2,7 @@ package app.serenada.android.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,7 +38,11 @@ private enum class RootScreen {
 }
 
 @Composable
-fun SerenadaAppRoot(callManager: CallManager) {
+fun SerenadaAppRoot(
+    callManager: CallManager,
+    deepLinkUri: Uri?,
+    onDeepLinkConsumed: () -> Unit
+) {
     val uiState by callManager.uiState
     val serverHost by callManager.serverHost
     val selectedLanguage by callManager.selectedLanguage
@@ -74,14 +79,37 @@ fun SerenadaAppRoot(callManager: CallManager) {
         }
     }
 
-    val permissions = remember {
-        buildList {
-            add(Manifest.permission.CAMERA)
-            add(Manifest.permission.RECORD_AUDIO)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }.toTypedArray()
+    var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
+
+    val callPermissions = remember {
+        arrayOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        )
+    }
+    val notificationPermission =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.POST_NOTIFICATIONS
+        } else {
+            null
+        }
+
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        notificationPermissionRequested = true
+    }
+
+    fun requestNotificationPermissionIfNeeded() {
+        val permission = notificationPermission ?: return
+        if (notificationPermissionRequested) return
+        val granted = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            notificationPermissionRequested = true
+            return
+        }
+        notificationPermissionRequested = true
+        notificationLauncher.launch(permission)
     }
 
     val launcher = rememberLauncherForActivityResult(
@@ -94,16 +122,28 @@ fun SerenadaAppRoot(callManager: CallManager) {
         pendingAction = null
     }
 
-    fun runWithPermissions(action: () -> Unit) {
-        val allGranted = permissions.all { perm ->
+    fun runWithCallPermissions(action: () -> Unit) {
+        val allGranted = callPermissions.all { perm ->
             ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
         }
         if (allGranted) {
+            requestNotificationPermissionIfNeeded()
             action()
         } else {
-            pendingAction = action
-            launcher.launch(permissions)
+            pendingAction = {
+                requestNotificationPermissionIfNeeded()
+                action()
+            }
+            launcher.launch(callPermissions)
         }
+    }
+
+    LaunchedEffect(deepLinkUri) {
+        val uri = deepLinkUri ?: return@LaunchedEffect
+        runWithCallPermissions {
+            callManager.handleDeepLink(uri)
+        }
+        onDeepLinkConsumed()
     }
 
     SerenadaTheme {
@@ -202,7 +242,7 @@ fun SerenadaAppRoot(callManager: CallManager) {
                         },
                         onJoinCall = {
                             callManager.updateServerHost(hostInput)
-                            runWithPermissions {
+                            runWithCallPermissions {
                                 callManager.joinFromInput(roomInput)
                             }
                         },
@@ -253,11 +293,11 @@ fun SerenadaAppRoot(callManager: CallManager) {
                         onOpenSettings = { showSettings = true },
                         onStartCall = {
                             callManager.updateServerHost(hostInput)
-                            runWithPermissions { callManager.startNewCall() }
+                            runWithCallPermissions { callManager.startNewCall() }
                         },
                         onJoinRecentCall = { roomId ->
                             callManager.updateServerHost(hostInput)
-                            runWithPermissions { callManager.joinRoom(roomId) }
+                            runWithCallPermissions { callManager.joinRoom(roomId) }
                         },
                         onRemoveRecentCall = { roomId ->
                             callManager.removeRecentCall(roomId)

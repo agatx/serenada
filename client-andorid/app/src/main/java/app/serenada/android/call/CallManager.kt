@@ -770,7 +770,9 @@ class CallManager(context: Context) {
                 val participantObj = participantsJson.optJSONObject(i)
                 val cid = participantObj?.optString("cid", "") ?: ""
                 if (cid.isNotBlank()) {
-                    participants.add(Participant(cid, participantObj.optLong("joinedAt")))
+                    val rawJoinedAt = participantObj?.optLong("joinedAt") ?: 0L
+                    val joinedAt = rawJoinedAt.takeIf { it > 0L }
+                    participants.add(Participant(cid, joinedAt))
                 }
             }
         }

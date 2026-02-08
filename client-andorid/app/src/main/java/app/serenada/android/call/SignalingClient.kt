@@ -51,8 +51,12 @@ class SignalingClient(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (activeAttemptId != attemptId) return
                 val msg = SignalingMessage.fromJson(text) ?: return
-                handler.post { listener.onMessage(msg) }
+                handler.post {
+                    if (activeAttemptId != attemptId) return@post
+                    listener.onMessage(msg)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {

@@ -57,7 +57,7 @@ go run .
 Requires Go 1.24+ and a `.env` file in the root directory.
 
 ### Android Client (Kotlin)
-The native Android app lives in `client-andorid/`.
+The native Android app lives in `client-andorid/` (directory name retained for compatibility with existing scripts).
 
 1. Open `client-andorid/` in Android Studio.
 2. Sync Gradle.
