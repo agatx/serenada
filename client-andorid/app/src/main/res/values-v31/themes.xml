@@ -1,9 +1,11 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
+<resources>
     <style name="Theme.Serenada" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowBackground">#0d1117</item>
         <item name="android:statusBarColor">#000000</item>
         <item name="android:navigationBarColor">#0d1117</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowSplashScreenBackground">#0d1117</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#0d1117</item>
     </style>
 </resources>
