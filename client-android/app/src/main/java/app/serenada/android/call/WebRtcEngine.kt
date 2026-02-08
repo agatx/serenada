@@ -6,7 +6,6 @@ import java.util.Collections
 import java.util.WeakHashMap
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
-import org.webrtc.CameraVideoCapturer
 import org.webrtc.Camera2Enumerator
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -37,6 +36,17 @@ class WebRtcEngine(
     private val onCameraFacingChanged: (Boolean) -> Unit,
     private var isRemoteBlackFrameAnalysisEnabled: Boolean = true
 ) {
+    private enum class LocalCameraSource {
+        SELFIE,
+        WORLD,
+        COMPOSITE
+    }
+
+    private data class CapturerSelection(
+        val capturer: VideoCapturer,
+        val isFrontFacing: Boolean
+    )
+
     private val appContext = context.applicationContext
     private val eglBase: EglBase = EglBase.create()
     private val peerConnectionFactory: PeerConnectionFactory
@@ -48,6 +58,7 @@ class WebRtcEngine(
     private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
+    private var currentCameraSource = LocalCameraSource.SELFIE
 
     private var localSink: VideoSink? = null
     private var remoteSink: VideoSink? = null
@@ -85,19 +96,17 @@ class WebRtcEngine(
         localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
         applyAudioTrackHints()
 
-        val capturer = createVideoCapturer() ?: run {
-            Log.w("WebRtcEngine", "No camera capturer available")
-            return
-        }
-        videoCapturer = capturer
-        val textureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
-        surfaceTextureHelper = textureHelper
         videoSource = peerConnectionFactory.createVideoSource(false)
-        capturer.initialize(textureHelper, appContext, videoSource?.capturerObserver)
-        try {
-            capturer.startCapture(640, 480, 30)
-        } catch (e: Exception) {
-            Log.w("WebRtcEngine", "Failed to start capture", e)
+        currentCameraSource = LocalCameraSource.SELFIE
+        if (!restartVideoCapturer(currentCameraSource)) {
+            Log.w("WebRtcEngine", "No camera capturer available for $currentCameraSource")
+            videoSource?.dispose()
+            videoSource = null
+            localAudioTrack?.setEnabled(false)
+            localAudioTrack = null
+            audioSource?.dispose()
+            audioSource = null
+            return
         }
         localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
         localVideoTrack?.setEnabled(true)
@@ -110,15 +119,7 @@ class WebRtcEngine(
     fun stopLocalMedia() {
         localVideoTrack?.setEnabled(false)
         localAudioTrack?.setEnabled(false)
-        try {
-            videoCapturer?.stopCapture()
-        } catch (e: Exception) {
-            Log.w("WebRtcEngine", "Failed to stop capture", e)
-        }
-        videoCapturer?.dispose()
-        videoCapturer = null
-        surfaceTextureHelper?.dispose()
-        surfaceTextureHelper = null
+        disposeVideoCapturer()
         videoSource?.dispose()
         videoSource = null
         audioSource?.dispose()
@@ -175,17 +176,24 @@ class WebRtcEngine(
     }
 
     fun flipCamera() {
-        val capturer = videoCapturer as? CameraVideoCapturer ?: return
-        capturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
-            override fun onCameraSwitchDone(isFrontCamera: Boolean) {
-                Log.d("WebRtcEngine", "Camera switched. Front=$isFrontCamera")
-                onCameraFacingChanged(isFrontCamera)
-            }
-
-            override fun onCameraSwitchError(errorDescription: String?) {
-                Log.w("WebRtcEngine", "Camera switch failed: $errorDescription")
-            }
-        })
+        if (videoSource == null) return
+        val target = when (currentCameraSource) {
+            LocalCameraSource.SELFIE -> LocalCameraSource.WORLD
+            LocalCameraSource.WORLD -> LocalCameraSource.COMPOSITE
+            LocalCameraSource.COMPOSITE -> LocalCameraSource.SELFIE
+        }
+        if (restartVideoCapturer(target)) {
+            return
+        }
+        Log.w("WebRtcEngine", "Failed to switch camera source to $target")
+        val fallback = if (target == LocalCameraSource.COMPOSITE) {
+            LocalCameraSource.SELFIE
+        } else {
+            currentCameraSource
+        }
+        if (fallback != target && restartVideoCapturer(fallback)) {
+            Log.w("WebRtcEngine", "Camera source fallback applied: $fallback")
+        }
     }
 
     fun createOffer(
@@ -544,21 +552,93 @@ class WebRtcEngine(
         }
     }
 
-    private fun createVideoCapturer(): VideoCapturer? {
+    private fun restartVideoCapturer(source: LocalCameraSource): Boolean {
+        val observer = videoSource?.capturerObserver ?: return false
+        disposeVideoCapturer()
+        val selection = createVideoCapturer(source) ?: return false
+        val textureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+        try {
+            selection.capturer.initialize(textureHelper, appContext, observer)
+            selection.capturer.startCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT, CAPTURE_FPS)
+        } catch (e: Exception) {
+            Log.w("WebRtcEngine", "Failed to start capture for $source", e)
+            runCatching { selection.capturer.dispose() }
+            runCatching { textureHelper.dispose() }
+            return false
+        }
+        videoCapturer = selection.capturer
+        surfaceTextureHelper = textureHelper
+        currentCameraSource = source
+        onCameraFacingChanged(selection.isFrontFacing)
+        Log.d("WebRtcEngine", "Camera source active: $source")
+        return true
+    }
+
+    private fun disposeVideoCapturer() {
+        try {
+            videoCapturer?.stopCapture()
+        } catch (e: Exception) {
+            Log.w("WebRtcEngine", "Failed to stop capture", e)
+        }
+        runCatching { videoCapturer?.dispose() }
+        videoCapturer = null
+        runCatching { surfaceTextureHelper?.dispose() }
+        surfaceTextureHelper = null
+    }
+
+    private fun createVideoCapturer(source: LocalCameraSource): CapturerSelection? {
         val enumerator = Camera2Enumerator(appContext)
-        for (deviceName in enumerator.deviceNames) {
-            if (enumerator.isFrontFacing(deviceName)) {
-                onCameraFacingChanged(true)
-                return enumerator.createCapturer(deviceName, null)
+        val front = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
+        val back = enumerator.deviceNames.firstOrNull { enumerator.isBackFacing(it) }
+        return when (source) {
+            LocalCameraSource.SELFIE -> {
+                if (front != null) {
+                    enumerator.createCapturer(front, null)?.let {
+                        CapturerSelection(capturer = it, isFrontFacing = true)
+                    }
+                } else if (back != null) {
+                    enumerator.createCapturer(back, null)?.let {
+                        CapturerSelection(capturer = it, isFrontFacing = false)
+                    }
+                } else {
+                    null
+                }
+            }
+
+            LocalCameraSource.WORLD -> {
+                if (back == null) {
+                    null
+                } else {
+                    enumerator.createCapturer(back, null)?.let {
+                        CapturerSelection(capturer = it, isFrontFacing = false)
+                    }
+                }
+            }
+
+            LocalCameraSource.COMPOSITE -> {
+                if (front == null || back == null) {
+                    null
+                } else {
+                    val mainCapturer = enumerator.createCapturer(back, null)
+                    val overlayCapturer = enumerator.createCapturer(front, null)
+                    if (mainCapturer == null || overlayCapturer == null) {
+                        mainCapturer?.dispose()
+                        overlayCapturer?.dispose()
+                        null
+                    } else {
+                        CapturerSelection(
+                            capturer = CompositeCameraCapturer(
+                                context = appContext,
+                                eglContext = eglBase.eglBaseContext,
+                                mainCapturer = mainCapturer,
+                                overlayCapturer = overlayCapturer
+                            ),
+                            isFrontFacing = false
+                        )
+                    }
+                }
             }
         }
-        for (deviceName in enumerator.deviceNames) {
-            if (enumerator.isBackFacing(deviceName)) {
-                onCameraFacingChanged(false)
-                return enumerator.createCapturer(deviceName, null)
-            }
-        }
-        return null
     }
 
     private fun onRemoteVideoFrame(frame: org.webrtc.VideoFrame) {
@@ -574,5 +654,11 @@ class WebRtcEngine(
                 "[RemoteVideo] syntheticBlack=$syntheticBlackNow trackEnabled=${remoteVideoTrack?.enabled()} analyzerEnabled=$isRemoteBlackFrameAnalysisEnabled"
             )
         }
+    }
+
+    private companion object {
+        const val CAPTURE_WIDTH = 640
+        const val CAPTURE_HEIGHT = 480
+        const val CAPTURE_FPS = 30
     }
 }

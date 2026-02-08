@@ -11,6 +11,7 @@ This repository is production-critical.
 - Follow existing style and patterns
 - Prioritize clarity over cleverness
 - Native Android client directory is `client-android/`
+- In `client-android/`, camera source switching is mode-based (`selfie -> world -> composite`) rather than binary front/back flip
 
 ## Documentation
 - Update all relevant documentation when making changes:

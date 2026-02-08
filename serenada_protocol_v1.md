@@ -10,7 +10,7 @@
 - Room capacity enforcement (max 2)
 - Basic error handling
 
-**Out of scope:** analytics, auth accounts, multi-party calling, chat, recording, presence across devices, etc.
+**Out of scope:** analytics, auth accounts, multi-party calling, chat, recording, presence across devices, client-local camera source/compositing modes, etc.
 
 ---
 

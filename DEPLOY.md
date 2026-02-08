@@ -93,6 +93,9 @@ Update it with your **release** signing certificate SHA-256 fingerprint before d
 ### 6. Advanced: Legacy Redirects
 If you need to support redirects from old domains (e.g. `connected.dowhile.fun`), you can create a template at `nginx/nginx.legacy.conf.template`. The deployment script will automatically generate an `extra` configuration for Nginx if this file exists.
 
+### 7. Android camera source modes
+The Android in-call camera source cycle (`selfie -> world -> composite`) is fully client-side and does not require server, TURN, or deployment configuration changes.
+
 ## Verification
 
 1.  Navigate to `https://your-domain.com`.
