@@ -1,6 +1,5 @@
 package app.serenada.android.ui
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -29,56 +28,48 @@ import androidx.compose.ui.unit.dp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JoinWithCodeScreen(
-    roomInput: String,
-    isBusy: Boolean,
-    statusMessage: String,
-    errorMessage: String?,
-    onRoomInputChange: (String) -> Unit,
-    onJoinCall: () -> Unit,
-    onBack: () -> Unit
+        roomInput: String,
+        isBusy: Boolean,
+        statusMessage: String,
+        errorMessage: String?,
+        onRoomInputChange: (String) -> Unit,
+        onJoinCall: () -> Unit,
+        onBack: () -> Unit
 ) {
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Join with a code") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    TextButton(
-                        onClick = onJoinCall,
-                        enabled = !isBusy && roomInput.isNotBlank()
-                    ) {
-                        Text("Join")
-                    }
-                }
-            )
-        }
+            topBar = {
+                TopAppBar(
+                        title = { Text("Join with a code") },
+                        navigationIcon = {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back"
+                                )
+                            }
+                        },
+                        actions = {
+                            TextButton(
+                                    onClick = onJoinCall,
+                                    enabled = !isBusy && roomInput.isNotBlank()
+                            ) { Text("Join") }
+                        }
+                )
+            }
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(24.dp)
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues).padding(24.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Enter the code or link provided by the meeting organizer",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp)
+                        text = "Enter the code or link provided by the meeting organizer",
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
                 )
                 OutlinedTextField(
-                    value = roomInput,
-                    onValueChange = onRoomInputChange,
-                    placeholder = { Text("Example: abc-mnop-xyz") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    enabled = !isBusy
+                        value = roomInput,
+                        onValueChange = onRoomInputChange,
+                        placeholder = { Text("Meeting code or link") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        enabled = !isBusy
                 )
 
                 if (isBusy) {
@@ -93,9 +84,9 @@ fun JoinWithCodeScreen(
                 if (!errorMessage.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(32.dp))
                     Text(
-                        text = errorMessage,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium
+                            text = errorMessage,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }
