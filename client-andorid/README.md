@@ -5,6 +5,7 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 ## Features
 - 1:1 WebRTC audio/video calls
 - WebSocket signaling (protocol v1)
+- Recent calls on home (max 3, deduped) with live room occupancy status and long-press remove
 - Deep links for `https://serenada.app/call/*`
 - Foreground service to keep active calls running in the background
 - Settings screen to change server host

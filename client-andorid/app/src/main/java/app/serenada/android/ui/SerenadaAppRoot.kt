@@ -41,6 +41,8 @@ fun SerenadaAppRoot(callManager: CallManager) {
     val uiState by callManager.uiState
     val serverHost by callManager.serverHost
     val selectedLanguage by callManager.selectedLanguage
+    val recentCalls by callManager.recentCalls
+    val roomStatuses by callManager.roomStatuses
     val context = LocalContext.current
     val showActiveCallScreen =
         uiState.phase == CallPhase.Waiting ||
@@ -245,11 +247,20 @@ fun SerenadaAppRoot(callManager: CallManager) {
                     JoinScreen(
                         isBusy = uiState.phase == CallPhase.CreatingRoom || uiState.phase == CallPhase.Joining,
                         statusMessage = statusMessage,
+                        recentCalls = recentCalls,
+                        roomStatuses = roomStatuses,
                         onOpenJoinWithCode = { showJoinWithCode = true },
                         onOpenSettings = { showSettings = true },
                         onStartCall = {
                             callManager.updateServerHost(hostInput)
                             runWithPermissions { callManager.startNewCall() }
+                        },
+                        onJoinRecentCall = { roomId ->
+                            callManager.updateServerHost(hostInput)
+                            runWithPermissions { callManager.joinRoom(roomId) }
+                        },
+                        onRemoveRecentCall = { roomId ->
+                            callManager.removeRecentCall(roomId)
                         }
                     )
                 }

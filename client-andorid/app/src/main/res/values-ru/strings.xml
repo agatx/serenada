@@ -17,6 +17,9 @@
     <string name="join_settings">Настройки</string>
     <string name="join_subtitle">Приватные видеозвонки 1:1 без аккаунтов.</string>
     <string name="join_start_call">Начать звонок</string>
+    <string name="recent_calls_title">Ваши недавние звонки</string>
+    <string name="recent_calls_at">в</string>
+    <string name="recent_calls_remove">Удалить</string>
     <string name="join_with_code_title">Вход по коду</string>
     <string name="join_with_code_action">Войти</string>
     <string name="join_with_code_hint">Введите код или ссылку от организатора встречи</string>

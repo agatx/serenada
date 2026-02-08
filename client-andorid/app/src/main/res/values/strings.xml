@@ -17,6 +17,9 @@
     <string name="join_settings">Settings</string>
     <string name="join_subtitle">Private 1:1 video calls, no accounts.</string>
     <string name="join_start_call">Start call</string>
+    <string name="recent_calls_title">Your recent calls</string>
+    <string name="recent_calls_at">at</string>
+    <string name="recent_calls_remove">Remove</string>
     <string name="join_with_code_title">Join with a code</string>
     <string name="join_with_code_action">Join</string>
     <string name="join_with_code_hint">Enter the code or link provided by the meeting organizer</string>

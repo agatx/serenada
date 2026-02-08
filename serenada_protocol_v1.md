@@ -408,6 +408,7 @@ Client keepalive. Server ignores.
 ### 4.12 Room Status Monitoring (WebSocket/SSE)
 
 Used to aggregate real-time occupancy for a list of rooms (e.g., recent calls list).
+Currently consumed by both the React web home screen and the native Android home screen recent-calls UX.
 
 #### `watch_rooms` (client → server)
 Subscribe to updates for a list of rooms.

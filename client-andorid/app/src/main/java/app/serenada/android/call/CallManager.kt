@@ -12,12 +12,15 @@ import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import app.serenada.android.R
+import app.serenada.android.data.RecentCall
+import app.serenada.android.data.RecentCallStore
 import app.serenada.android.data.SettingsStore
 import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.ApiClient
 import app.serenada.android.network.TurnCredentials
 import app.serenada.android.service.CallService
 import okhttp3.OkHttpClient
+import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
@@ -29,6 +32,7 @@ class CallManager(context: Context) {
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = ApiClient(okHttpClient)
     private val settingsStore = SettingsStore(appContext)
+    private val recentCallStore = RecentCallStore(appContext)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var networkCallbackRegistered = false
@@ -50,9 +54,16 @@ class CallManager(context: Context) {
     private val _selectedLanguage = mutableStateOf(settingsStore.language)
     val selectedLanguage: State<String> = _selectedLanguage
 
+    private val _recentCalls = mutableStateOf<List<RecentCall>>(emptyList())
+    val recentCalls: State<List<RecentCall>> = _recentCalls
+    private val _roomStatuses = mutableStateOf<Map<String, Int>>(emptyMap())
+    val roomStatuses: State<Map<String, Int>> = _roomStatuses
+
     private var currentRoomId: String? = null
     private var clientId: String? = null
     private var hostCid: String? = null
+    private var callStartTimeMs: Long? = null
+    private var watchedRoomIds: List<String> = emptyList()
     private var pendingJoinRoom: String? = null
     private var reconnectAttempts = 0
     private var sentOffer = false
@@ -151,6 +162,7 @@ class CallManager(context: Context) {
                 pendingJoinRoom = null
                 sendJoin(join)
             }
+            sendWatchRoomsIfNeeded()
             if (pendingIceRestart) {
                 handler.post { triggerIceRestart("signaling-reconnect") }
             }
@@ -162,8 +174,7 @@ class CallManager(context: Context) {
 
         override fun onClosed(reason: String) {
             updateState(_uiState.value.copy(isSignalingConnected = false))
-            val activeRoom = currentRoomId
-            if (activeRoom != null && _uiState.value.phase != CallPhase.Ending) {
+            if (shouldReconnectSignaling()) {
                 scheduleReconnect()
             }
         }
@@ -171,12 +182,18 @@ class CallManager(context: Context) {
 
     init {
         registerConnectivityListener()
+        refreshRecentCalls()
     }
 
     fun updateServerHost(host: String) {
         val trimmed = host.trim().ifBlank { SettingsStore.DEFAULT_HOST }
+        val changed = trimmed != _serverHost.value
         settingsStore.host = trimmed
         _serverHost.value = trimmed
+        if (changed && currentRoomId == null && watchedRoomIds.isNotEmpty()) {
+            signalingClient.close()
+            watchRecentRoomsIfNeeded()
+        }
     }
 
     fun updateLanguage(language: String) {
@@ -270,6 +287,7 @@ class CallManager(context: Context) {
             return
         }
         currentRoomId = roomId
+        callStartTimeMs = System.currentTimeMillis()
         sentOffer = false
         pendingMessages.clear()
         updateState(
@@ -296,7 +314,13 @@ class CallManager(context: Context) {
     fun dismissError() {
         if (_uiState.value.phase == CallPhase.Error) {
             updateState(CallUiState())
+            refreshRecentCalls()
         }
+    }
+
+    fun removeRecentCall(roomId: String) {
+        recentCallStore.removeCall(roomId)
+        refreshRecentCalls()
     }
 
     fun endCall() {
@@ -366,14 +390,16 @@ class CallManager(context: Context) {
     fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
 
     private fun ensureSignalingConnection() {
+        val roomToJoin = currentRoomId
         if (signalingClient.isConnected()) {
-            pendingJoinRoom?.let { join ->
+            if (!roomToJoin.isNullOrBlank()) {
                 pendingJoinRoom = null
-                sendJoin(join)
+                sendJoin(roomToJoin)
             }
+            sendWatchRoomsIfNeeded()
             return
         }
-        pendingJoinRoom = currentRoomId
+        pendingJoinRoom = roomToJoin
         signalingClient.connect(serverHost.value)
     }
 
@@ -408,12 +434,31 @@ class CallManager(context: Context) {
         signalingClient.send(msg)
     }
 
+    private fun sendWatchRoomsIfNeeded() {
+        if (watchedRoomIds.isEmpty()) return
+        if (!signalingClient.isConnected()) return
+        val payload = JSONObject().apply {
+            put("rids", JSONArray(watchedRoomIds))
+        }
+        val msg = SignalingMessage(
+            type = "watch_rooms",
+            rid = null,
+            sid = null,
+            cid = null,
+            to = null,
+            payload = payload
+        )
+        signalingClient.send(msg)
+    }
+
     private fun handleSignalingMessage(msg: SignalingMessage) {
         Log.d("CallManager", "RX ${msg.type}")
         when (msg.type) {
             "joined" -> handleJoined(msg)
             "room_state" -> handleRoomState(msg)
             "room_ended" -> handleRoomEnded(msg)
+            "room_statuses" -> handleRoomStatuses(msg)
+            "room_status_update" -> handleRoomStatusUpdate(msg)
             "offer", "answer", "ice" -> handleSignalingPayload(msg)
             "error" -> handleError(msg)
         }
@@ -443,6 +488,34 @@ class CallManager(context: Context) {
 
     private fun handleRoomEnded(@Suppress("UNUSED_PARAMETER") msg: SignalingMessage) {
         cleanupCall(R.string.call_status_room_ended)
+    }
+
+    private fun handleRoomStatuses(msg: SignalingMessage) {
+        val payload = msg.payload ?: return
+        val watched = watchedRoomIds.toSet()
+        if (watched.isEmpty()) {
+            _roomStatuses.value = emptyMap()
+            return
+        }
+
+        val statuses = mutableMapOf<String, Int>()
+        val keys = payload.keys()
+        while (keys.hasNext()) {
+            val rid = keys.next()
+            if (!watched.contains(rid)) continue
+            statuses[rid] = payload.optInt(rid, 0).coerceAtLeast(0)
+        }
+        _roomStatuses.value = statuses
+    }
+
+    private fun handleRoomStatusUpdate(msg: SignalingMessage) {
+        val payload = msg.payload ?: return
+        val rid = payload.optString("rid").orEmpty()
+        if (!watchedRoomIds.contains(rid)) return
+        val count = payload.optInt("count", 0).coerceAtLeast(0)
+        _roomStatuses.value = _roomStatuses.value.toMutableMap().apply {
+            this[rid] = count
+        }
     }
 
     private fun handleError(msg: SignalingMessage) {
@@ -745,9 +818,11 @@ class CallManager(context: Context) {
                 statusMessageResId = messageResId
             )
         )
+        saveCurrentCallToHistoryIfNeeded()
         settingsStore.reconnectCid = null
         resetResources()
         updateState(CallUiState(phase = CallPhase.Idle))
+        watchRecentRoomsIfNeeded()
     }
 
     private fun resetResources() {
@@ -758,6 +833,7 @@ class CallManager(context: Context) {
         currentRoomId = null
         hostCid = null
         clientId = null
+        callStartTimeMs = null
         pendingJoinRoom = null
         pendingMessages.clear()
         reconnectAttempts = 0
@@ -769,15 +845,71 @@ class CallManager(context: Context) {
     }
 
     private fun scheduleReconnect() {
-        val roomId = currentRoomId ?: return
+        val roomId = currentRoomId
+        if (roomId == null && watchedRoomIds.isEmpty()) return
         reconnectAttempts += 1
         val backoff = (500L * (1 shl (reconnectAttempts - 1))).coerceAtMost(5000L)
         handler.postDelayed({
-            if (currentRoomId == roomId && !signalingClient.isConnected()) {
+            if (signalingClient.isConnected()) {
+                return@postDelayed
+            }
+            if (roomId != null && currentRoomId == roomId) {
                 pendingJoinRoom = roomId
+                signalingClient.connect(serverHost.value)
+                return@postDelayed
+            }
+            if (roomId == null && currentRoomId == null && watchedRoomIds.isNotEmpty()) {
                 signalingClient.connect(serverHost.value)
             }
         }, backoff)
+    }
+
+    private fun refreshRecentCalls() {
+        val calls = recentCallStore.getRecentCalls()
+        _recentCalls.value = calls
+        watchedRoomIds = calls.map { it.roomId }
+        val watched = watchedRoomIds.toSet()
+        _roomStatuses.value = _roomStatuses.value.filterKeys { watched.contains(it) }
+        watchRecentRoomsIfNeeded()
+    }
+
+    private fun watchRecentRoomsIfNeeded() {
+        if (watchedRoomIds.isEmpty()) {
+            if (currentRoomId == null && signalingClient.isConnected()) {
+                signalingClient.close()
+            }
+            return
+        }
+        if (signalingClient.isConnected()) {
+            sendWatchRoomsIfNeeded()
+        } else {
+            signalingClient.connect(serverHost.value)
+        }
+    }
+
+    private fun saveCurrentCallToHistoryIfNeeded() {
+        val roomId = currentRoomId ?: return
+        val startTime = callStartTimeMs ?: return
+        val durationSeconds = ((System.currentTimeMillis() - startTime) / 1000L)
+            .coerceAtLeast(0L)
+            .toInt()
+        recentCallStore.saveCall(
+            RecentCall(
+                roomId = roomId,
+                startTime = startTime,
+                durationSeconds = durationSeconds
+            )
+        )
+        callStartTimeMs = null
+        refreshRecentCalls()
+    }
+
+    private fun shouldReconnectSignaling(): Boolean {
+        val activeRoom = currentRoomId
+        if (activeRoom != null && _uiState.value.phase != CallPhase.Ending) {
+            return true
+        }
+        return activeRoom == null && watchedRoomIds.isNotEmpty()
     }
 
     private fun registerConnectivityListener() {

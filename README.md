@@ -11,6 +11,7 @@ A simple, privacy-focused 1:1 video calling application built with WebRTC. No ac
 - **Privacy-first** – No tracking, no analytics, end-to-end encrypted peer-to-peer video
 - **Resilient signaling** – WebSocket with SSE fallback when WS is blocked
 - **Mobile-friendly** – Works on Android Chrome, iOS Safari, and desktop browsers
+- **Recent calls on home** – Web and Android home screens show your latest calls with live room occupancy (Android supports long-press remove)
 - **Self-hostable** – Run your own instance with full control
 - **Optional join alerts** – Encrypted push notifications with snapshot previews (opt-in)
 

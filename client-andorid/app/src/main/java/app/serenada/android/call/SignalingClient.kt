@@ -21,6 +21,7 @@ class SignalingClient(
 
     private var webSocket: WebSocket? = null
     private var connected = false
+    private var connecting = false
     private var pingRunnable: Runnable? = null
     private var connectTimeoutRunnable: Runnable? = null
     private var connectionAttemptId = 0
@@ -28,11 +29,12 @@ class SignalingClient(
     private var closeNotifiedAttemptId: Int? = null
 
     fun connect(host: String) {
-        if (connected) return
+        if (connected || connecting) return
         val url = buildWssUrl(host) ?: run {
             handler.post { listener.onClosed("invalid_host") }
             return
         }
+        connecting = true
         connectionAttemptId += 1
         val attemptId = connectionAttemptId
         activeAttemptId = attemptId
@@ -42,6 +44,7 @@ class SignalingClient(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (activeAttemptId != attemptId) return
                 clearConnectTimeout()
+                connecting = false
                 connected = true
                 handler.post { listener.onOpen() }
                 startPing()
@@ -62,6 +65,7 @@ class SignalingClient(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (activeAttemptId != attemptId) return
+                connecting = false
                 connected = false
                 stopPing()
                 clearConnectTimeout()
@@ -72,6 +76,7 @@ class SignalingClient(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (activeAttemptId != attemptId) return
+                connecting = false
                 connected = false
                 stopPing()
                 clearConnectTimeout()
@@ -94,6 +99,7 @@ class SignalingClient(
         clearConnectTimeout()
         webSocket?.close(1000, "client_close")
         webSocket = null
+        connecting = false
         connected = false
     }
 
@@ -128,6 +134,7 @@ class SignalingClient(
         val runnable = Runnable {
             if (activeAttemptId != attemptId) return@Runnable
             if (connected) return@Runnable
+            connecting = false
             activeAttemptId = -attemptId
             closeNotifiedAttemptId = attemptId
             webSocket?.cancel()
