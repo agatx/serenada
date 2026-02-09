@@ -2,6 +2,7 @@ package app.serenada.android.call
 
 import android.content.Context
 import java.nio.ByteBuffer
+import kotlin.math.floor
 import kotlin.math.min
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.CapturerObserver
@@ -292,19 +293,21 @@ class CompositeCameraCapturer(
                 ) ?: continue
 
                 val srcDisplayX =
-                    srcLeft + ((displayX - left) * srcSize / drawWidth).coerceIn(0, srcSize - 1)
+                    srcLeft + (((displayX - left) + 0.5f) * srcSize / drawWidth.toFloat()) - 0.5f
                 val srcDisplayY =
-                    srcTop + ((displayY - top) * srcSize / drawHeight).coerceIn(0, srcSize - 1)
-                val srcBufferCoord = displayToBufferCoord(
+                    srcTop + (((displayY - top) + 0.5f) * srcSize / drawHeight.toFloat()) - 0.5f
+                val srcBufferCoord = displayToBufferCoordFloat(
                     displayX = srcDisplayX,
                     displayY = srcDisplayY,
                     bufferWidth = overlayBuffer.width,
                     bufferHeight = overlayBuffer.height,
                     rotation = overlay.rotation
                 ) ?: continue
-                val yValue = getPlaneValue(
+                val yValue = samplePlaneBilinear(
                     plane = overlayBuffer.dataY,
                     stride = overlayBuffer.strideY,
+                    width = overlayBuffer.width,
+                    height = overlayBuffer.height,
                     x = srcBufferCoord.first,
                     y = srcBufferCoord.second
                 )
@@ -344,10 +347,10 @@ class CompositeCameraCapturer(
                 val outputUvY = (outputLumaCoord.second / 2).coerceIn(0, (outputHeight / 2) - 1)
 
                 val srcDisplayLumaX =
-                    srcLeft + ((displayLumaX - left) * srcSize / drawWidth).coerceIn(0, srcSize - 1)
+                    srcLeft + (((displayLumaX - left) + 0.5f) * srcSize / drawWidth.toFloat()) - 0.5f
                 val srcDisplayLumaY =
-                    srcTop + ((displayLumaY - top) * srcSize / drawHeight).coerceIn(0, srcSize - 1)
-                val srcLumaCoord = displayToBufferCoord(
+                    srcTop + (((displayLumaY - top) + 0.5f) * srcSize / drawHeight.toFloat()) - 0.5f
+                val srcLumaCoord = displayToBufferCoordFloat(
                     displayX = srcDisplayLumaX,
                     displayY = srcDisplayLumaY,
                     bufferWidth = overlayBuffer.width,
@@ -355,18 +358,22 @@ class CompositeCameraCapturer(
                     rotation = overlay.rotation
                 ) ?: continue
 
-                val srcUvX = (srcLumaCoord.first / 2).coerceIn(0, (overlayBuffer.width / 2) - 1)
-                val srcUvY = (srcLumaCoord.second / 2).coerceIn(0, (overlayBuffer.height / 2) - 1)
+                val srcUvX = srcLumaCoord.first / 2f
+                val srcUvY = srcLumaCoord.second / 2f
 
-                val uValue = getPlaneValue(
+                val uValue = samplePlaneBilinear(
                     plane = overlayBuffer.dataU,
                     stride = overlayBuffer.strideU,
+                    width = overlayBuffer.width / 2,
+                    height = overlayBuffer.height / 2,
                     x = srcUvX,
                     y = srcUvY
                 )
-                val vValue = getPlaneValue(
+                val vValue = samplePlaneBilinear(
                     plane = overlayBuffer.dataV,
                     stride = overlayBuffer.strideV,
+                    width = overlayBuffer.width / 2,
+                    height = overlayBuffer.height / 2,
                     x = srcUvX,
                     y = srcUvY
                 )
@@ -415,6 +422,48 @@ class CompositeCameraCapturer(
         y: Int
     ): Byte = plane.get(y * stride + x)
 
+    private fun getPlaneValueUnsigned(
+        plane: ByteBuffer,
+        stride: Int,
+        x: Int,
+        y: Int
+    ): Int = plane.get(y * stride + x).toInt() and 0xFF
+
+    private fun samplePlaneBilinear(
+        plane: ByteBuffer,
+        stride: Int,
+        width: Int,
+        height: Int,
+        x: Float,
+        y: Float
+    ): Byte {
+        if (width <= 0 || height <= 0) return 0
+        if (width == 1 || height == 1) {
+            val px = x.toInt().coerceIn(0, width - 1)
+            val py = y.toInt().coerceIn(0, height - 1)
+            return getPlaneValue(plane, stride, px, py)
+        }
+
+        val xClamped = x.coerceIn(0f, (width - 1).toFloat())
+        val yClamped = y.coerceIn(0f, (height - 1).toFloat())
+        val x0 = floor(xClamped).toInt().coerceIn(0, width - 1)
+        val y0 = floor(yClamped).toInt().coerceIn(0, height - 1)
+        val x1 = (x0 + 1).coerceAtMost(width - 1)
+        val y1 = (y0 + 1).coerceAtMost(height - 1)
+        val fx = xClamped - x0
+        val fy = yClamped - y0
+
+        val v00 = getPlaneValueUnsigned(plane, stride, x0, y0)
+        val v10 = getPlaneValueUnsigned(plane, stride, x1, y0)
+        val v01 = getPlaneValueUnsigned(plane, stride, x0, y1)
+        val v11 = getPlaneValueUnsigned(plane, stride, x1, y1)
+
+        val top = v00 + (v10 - v00) * fx
+        val bottom = v01 + (v11 - v01) * fx
+        val value = (top + (bottom - top) * fy).toInt().coerceIn(0, 255)
+        return value.toByte()
+    }
+
     private fun putPlaneValue(
         plane: ByteBuffer,
         stride: Int,
@@ -445,6 +494,29 @@ class CompositeCameraCapturer(
         return coord
     }
 
+    private fun displayToBufferCoordFloat(
+        displayX: Float,
+        displayY: Float,
+        bufferWidth: Int,
+        bufferHeight: Int,
+        rotation: Int
+    ): Pair<Float, Float>? {
+        val coord = when (rotation) {
+            0 -> Pair(displayX, displayY)
+            90 -> Pair(displayY, (bufferHeight - 1).toFloat() - displayX)
+            180 -> Pair((bufferWidth - 1).toFloat() - displayX, (bufferHeight - 1).toFloat() - displayY)
+            270 -> Pair((bufferWidth - 1).toFloat() - displayY, displayX)
+            else -> Pair(displayX, displayY)
+        }
+        if (
+            coord.first < 0f || coord.first > (bufferWidth - 1).toFloat() ||
+                coord.second < 0f || coord.second > (bufferHeight - 1).toFloat()
+        ) {
+            return null
+        }
+        return coord
+    }
+
     private fun normalizeRotation(rotation: Int): Int {
         val normalized = ((rotation % 360) + 360) % 360
         return when (normalized) {
@@ -454,7 +526,7 @@ class CompositeCameraCapturer(
     }
 
     private companion object {
-        const val OVERLAY_DIAMETER_RATIO = 0.30f
+        const val OVERLAY_DIAMETER_RATIO = 0.36f
         const val OVERLAY_BOTTOM_MARGIN_RATIO = 0.04f
         const val MIN_OVERLAY_SIZE = 72
     }
