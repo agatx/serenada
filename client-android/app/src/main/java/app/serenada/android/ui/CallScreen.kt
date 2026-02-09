@@ -91,6 +91,7 @@ fun CallScreen(
     var isLocalLarge by rememberSaveable { mutableStateOf(false) }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(true) }
     var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
+    var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     val context = LocalContext.current
     val localRenderer = remember { SurfaceViewRenderer(context) }
@@ -116,6 +117,28 @@ fun CallScreen(
                     val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
                     if (current == null || abs(current - ratio) > deltaThreshold) {
                         remoteAspectRatio = ratio
+                    }
+                }
+            }
+        }
+    }
+    val localRendererEvents = remember {
+        object : RendererCommon.RendererEvents {
+            override fun onFirstFrameRendered() = Unit
+
+            override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
+                val rotatedWidth = if (rotation % 180 == 0) width else height
+                val rotatedHeight = if (rotation % 180 == 0) height else width
+                if (rotatedWidth == 0 || rotatedHeight == 0) return
+                val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+                val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
+                mainHandler.post {
+                    val current = localAspectRatio
+                    val orientationChanged =
+                            current != null && ((current > 1f) != (ratio > 1f))
+                    val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
+                    if (current == null || abs(current - ratio) > deltaThreshold) {
+                        localAspectRatio = ratio
                     }
                 }
             }
@@ -227,16 +250,37 @@ fun CallScreen(
         }
 
         if (isLocalLarge) {
+            val ratio = localAspectRatio ?: 0f
+            val containerRatio = if (maxHeight == 0.dp) 1f else maxWidth / maxHeight
+            val safeContainerRatio = if (containerRatio > 0f) containerRatio else 1f
+            val fitWidth: androidx.compose.ui.unit.Dp
+            val fitHeight: androidx.compose.ui.unit.Dp
+            if (ratio > 0f) {
+                if (safeContainerRatio > ratio) {
+                    fitHeight = maxHeight
+                    fitWidth = maxHeight * ratio
+                } else {
+                    fitWidth = maxWidth
+                    fitHeight = maxWidth / ratio
+                }
+            } else {
+                fitWidth = maxWidth
+                fitHeight = maxHeight
+            }
             if (uiState.localVideoEnabled) {
-                VideoSurface(
-                        modifier = localModifier,
-                        renderer = localRenderer,
-                        onAttach = { renderer -> attachLocalRenderer(renderer, null) },
-                        onDetach = detachLocalRenderer,
-                        mirror = uiState.isFrontCamera,
-                        contentScale = ContentScale.Crop,
-                        isMediaOverlay = false
-                )
+                Box(modifier = localModifier.clipToBounds()) {
+                    VideoSurface(
+                            modifier =
+                                    Modifier.size(fitWidth, fitHeight)
+                                            .align(Alignment.Center),
+                            renderer = localRenderer,
+                            onAttach = { renderer -> attachLocalRenderer(renderer, localRendererEvents) },
+                            onDetach = detachLocalRenderer,
+                            mirror = uiState.isFrontCamera,
+                            contentScale = ContentScale.Fit,
+                            isMediaOverlay = false
+                    )
+                }
             }
             if (uiState.remoteVideoEnabled) {
                 TextureVideoSurface(

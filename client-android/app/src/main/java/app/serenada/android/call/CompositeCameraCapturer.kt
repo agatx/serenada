@@ -263,7 +263,11 @@ class CompositeCameraCapturer(
         if (drawRadius <= 1) return
         val drawCenterX = left + drawWidth / 2
         val drawCenterY = top + drawHeight / 2
-        val drawRadiusSq = drawRadius * drawRadius
+        val outerRadiusSq = drawRadius.toFloat() * drawRadius.toFloat()
+        val edgeFeatherPx = (drawRadius * EDGE_FEATHER_RATIO).coerceIn(MIN_EDGE_FEATHER_PX, MAX_EDGE_FEATHER_PX)
+        val innerRadius = (drawRadius.toFloat() - edgeFeatherPx).coerceAtLeast(0.5f)
+        val innerRadiusSq = innerRadius * innerRadius
+        val edgeBlendDenominator = (outerRadiusSq - innerRadiusSq).coerceAtLeast(1f)
 
         val overlayBuffer = overlay.buffer
         val overlayDisplayWidth =
@@ -280,7 +284,14 @@ class CompositeCameraCapturer(
             val dy = displayY - drawCenterY
             for (displayX in left until right) {
                 val dx = displayX - drawCenterX
-                if (dx * dx + dy * dy > drawRadiusSq) {
+                val distSq = dx.toFloat() * dx.toFloat() + dy.toFloat() * dy.toFloat()
+                val edgeAlpha = edgeAlpha(
+                    distanceSq = distSq,
+                    innerRadiusSq = innerRadiusSq,
+                    outerRadiusSq = outerRadiusSq,
+                    edgeBlendDenominator = edgeBlendDenominator
+                )
+                if (edgeAlpha <= 0f) {
                     continue
                 }
 
@@ -311,12 +322,13 @@ class CompositeCameraCapturer(
                     x = srcBufferCoord.first,
                     y = srcBufferCoord.second
                 )
-                putPlaneValue(
+                blendPlaneValue(
                     plane = output.dataY,
                     stride = output.strideY,
                     x = outputCoord.first,
                     y = outputCoord.second,
-                    value = yValue
+                    overlayValue = yValue,
+                    alpha = edgeAlpha
                 )
             }
         }
@@ -332,7 +344,14 @@ class CompositeCameraCapturer(
             for (displayUvX in uvLeft until uvRight) {
                 val displayLumaX = displayUvX * 2 + 1
                 val dx = displayLumaX - drawCenterX
-                if (dx * dx + dy * dy > drawRadiusSq) {
+                val distSq = dx.toFloat() * dx.toFloat() + dy.toFloat() * dy.toFloat()
+                val edgeAlpha = edgeAlpha(
+                    distanceSq = distSq,
+                    innerRadiusSq = innerRadiusSq,
+                    outerRadiusSq = outerRadiusSq,
+                    edgeBlendDenominator = edgeBlendDenominator
+                )
+                if (edgeAlpha <= 0f) {
                     continue
                 }
 
@@ -377,19 +396,21 @@ class CompositeCameraCapturer(
                     x = srcUvX,
                     y = srcUvY
                 )
-                putPlaneValue(
+                blendPlaneValue(
                     plane = output.dataU,
                     stride = output.strideU,
                     x = outputUvX,
                     y = outputUvY,
-                    value = uValue
+                    overlayValue = uValue,
+                    alpha = edgeAlpha
                 )
-                putPlaneValue(
+                blendPlaneValue(
                     plane = output.dataV,
                     stride = output.strideV,
                     x = outputUvX,
                     y = outputUvY,
-                    value = vValue
+                    overlayValue = vValue,
+                    alpha = edgeAlpha
                 )
             }
         }
@@ -474,6 +495,36 @@ class CompositeCameraCapturer(
         plane.put(y * stride + x, value)
     }
 
+    private fun blendPlaneValue(
+        plane: ByteBuffer,
+        stride: Int,
+        x: Int,
+        y: Int,
+        overlayValue: Byte,
+        alpha: Float
+    ) {
+        if (alpha <= 0f) return
+        if (alpha >= 0.999f) {
+            putPlaneValue(plane, stride, x, y, overlayValue)
+            return
+        }
+        val base = getPlaneValueUnsigned(plane, stride, x, y)
+        val over = overlayValue.toInt() and 0xFF
+        val blended = (base + (over - base) * alpha).toInt().coerceIn(0, 255)
+        putPlaneValue(plane, stride, x, y, blended.toByte())
+    }
+
+    private fun edgeAlpha(
+        distanceSq: Float,
+        innerRadiusSq: Float,
+        outerRadiusSq: Float,
+        edgeBlendDenominator: Float
+    ): Float {
+        if (distanceSq <= innerRadiusSq) return 1f
+        if (distanceSq >= outerRadiusSq) return 0f
+        return ((outerRadiusSq - distanceSq) / edgeBlendDenominator).coerceIn(0f, 1f)
+    }
+
     private fun displayToBufferCoord(
         displayX: Int,
         displayY: Int,
@@ -529,5 +580,8 @@ class CompositeCameraCapturer(
         const val OVERLAY_DIAMETER_RATIO = 0.36f
         const val OVERLAY_BOTTOM_MARGIN_RATIO = 0.04f
         const val MIN_OVERLAY_SIZE = 72
+        const val EDGE_FEATHER_RATIO = 0.045f
+        const val MIN_EDGE_FEATHER_PX = 1.5f
+        const val MAX_EDGE_FEATHER_PX = 6f
     }
 }
