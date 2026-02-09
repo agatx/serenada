@@ -15,8 +15,14 @@ class CompositeCameraCapturer(
     context: Context,
     private val eglContext: EglBase.Context,
     private val mainCapturer: CameraVideoCapturer,
-    private val overlayCapturer: CameraVideoCapturer
+    private val overlayCapturer: CameraVideoCapturer,
+    private val onStartFailure: (() -> Unit)? = null
 ) : VideoCapturer {
+    private enum class ChildCapturer {
+        MAIN,
+        OVERLAY
+    }
+
     private data class OverlayFrame(
         val buffer: VideoFrame.I420Buffer,
         val rotation: Int
@@ -28,10 +34,15 @@ class CompositeCameraCapturer(
     private var outputObserver: CapturerObserver? = null
     private var overlayTextureHelper: SurfaceTextureHelper? = null
     private var latestOverlayFrame: OverlayFrame? = null
+    private var mainStartResult: Boolean? = null
+    private var overlayStartResult: Boolean? = null
+    private var startReported = false
     private var started = false
 
     private val mainObserver = object : CapturerObserver {
-        override fun onCapturerStarted(success: Boolean) = Unit
+        override fun onCapturerStarted(success: Boolean) {
+            onChildCapturerStarted(ChildCapturer.MAIN, success)
+        }
 
         override fun onCapturerStopped() = Unit
 
@@ -44,7 +55,9 @@ class CompositeCameraCapturer(
     }
 
     private val overlayObserver = object : CapturerObserver {
-        override fun onCapturerStarted(success: Boolean) = Unit
+        override fun onCapturerStarted(success: Boolean) {
+            onChildCapturerStarted(ChildCapturer.OVERLAY, success)
+        }
 
         override fun onCapturerStopped() = Unit
 
@@ -80,6 +93,10 @@ class CompositeCameraCapturer(
 
     override fun startCapture(width: Int, height: Int, framerate: Int) {
         if (started) return
+        started = true
+        mainStartResult = null
+        overlayStartResult = null
+        startReported = false
         var mainStarted = false
         var overlayStarted = false
         try {
@@ -87,8 +104,6 @@ class CompositeCameraCapturer(
             mainStarted = true
             overlayCapturer.startCapture(width, height, framerate)
             overlayStarted = true
-            started = true
-            outputObserver?.onCapturerStarted(true)
         } catch (e: Exception) {
             if (overlayStarted) {
                 runCatching { overlayCapturer.stopCapture() }
@@ -96,7 +111,7 @@ class CompositeCameraCapturer(
             if (mainStarted) {
                 runCatching { mainCapturer.stopCapture() }
             }
-            outputObserver?.onCapturerStarted(false)
+            notifyStartFailed()
             throw e
         }
     }
@@ -106,6 +121,9 @@ class CompositeCameraCapturer(
         runCatching { overlayCapturer.stopCapture() }
         runCatching { mainCapturer.stopCapture() }
         started = false
+        mainStartResult = null
+        overlayStartResult = null
+        startReported = false
         outputObserver?.onCapturerStopped()
     }
 
@@ -128,6 +146,41 @@ class CompositeCameraCapturer(
     }
 
     override fun isScreencast(): Boolean = false
+
+    private fun onChildCapturerStarted(capturer: ChildCapturer, success: Boolean) {
+        if (!started) return
+        if (!success) {
+            notifyStartFailed()
+            return
+        }
+        var notifySuccess = false
+        synchronized(frameLock) {
+            if (!started || startReported) return
+            when (capturer) {
+                ChildCapturer.MAIN -> mainStartResult = true
+                ChildCapturer.OVERLAY -> overlayStartResult = true
+            }
+            if (mainStartResult == true && overlayStartResult == true) {
+                startReported = true
+                notifySuccess = true
+            }
+        }
+        if (notifySuccess) {
+            outputObserver?.onCapturerStarted(true)
+        }
+    }
+
+    private fun notifyStartFailed() {
+        synchronized(frameLock) {
+            if (!started || startReported) return
+            startReported = true
+        }
+        started = false
+        runCatching { overlayCapturer.stopCapture() }
+        runCatching { mainCapturer.stopCapture() }
+        outputObserver?.onCapturerStarted(false)
+        onStartFailure?.invoke()
+    }
 
     private fun composeFrame(mainFrame: VideoFrame): VideoFrame {
         val mainI420 = requireNotNull(mainFrame.buffer.toI420())

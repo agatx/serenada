@@ -1,6 +1,8 @@
 package app.serenada.android.call
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import java.util.Collections
 import java.util.WeakHashMap
@@ -59,6 +61,7 @@ class WebRtcEngine(
     private var audioSource: AudioSource? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var currentCameraSource = LocalCameraSource.SELFIE
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var localSink: VideoSink? = null
     private var remoteSink: VideoSink? = null
@@ -631,12 +634,24 @@ class WebRtcEngine(
                                 context = appContext,
                                 eglContext = eglBase.eglBaseContext,
                                 mainCapturer = mainCapturer,
-                                overlayCapturer = overlayCapturer
+                                overlayCapturer = overlayCapturer,
+                                onStartFailure = { onCompositeStartFailure() }
                             ),
                             isFrontFacing = false
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private fun onCompositeStartFailure() {
+        mainHandler.post {
+            if (currentCameraSource != LocalCameraSource.COMPOSITE) return@post
+            if (videoCapturer !is CompositeCameraCapturer) return@post
+            Log.w("WebRtcEngine", "Composite source failed to start; falling back to selfie")
+            if (restartVideoCapturer(LocalCameraSource.SELFIE)) {
+                Log.w("WebRtcEngine", "Camera source fallback applied: ${LocalCameraSource.SELFIE}")
             }
         }
     }
