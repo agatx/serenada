@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+warn() {
+    echo "⚠️  $1"
+}
+
+ANDROID_RELEASE_APK="client-android/app/build/outputs/apk/release/serenada.apk"
+DEPLOY_TOOLS_DIR="client/dist/tools"
+
 # Load configuration from .env.production
 if [ -f .env.production ]; then
     export $(grep -v '^#' .env.production | xargs)
@@ -23,6 +30,28 @@ echo "🚀 Starting production deployment for $DOMAIN..."
 # 1. Build the frontend
 echo "📦 Building frontend..."
 (cd client && npm run build)
+
+# 1.5 Include Android release APK in /tools (best effort)
+echo "📱 Preparing Android release APK for /tools..."
+if [ ! -f "$ANDROID_RELEASE_APK" ]; then
+    echo "ℹ️  Release APK not found at $ANDROID_RELEASE_APK, attempting build..."
+    if (cd client-android && ./gradlew :app:assembleRelease); then
+        echo "✅ Android release build completed."
+    else
+        warn "Android release build failed. Continuing deployment without updating /tools/serenada.apk."
+    fi
+fi
+
+if [ -f "$ANDROID_RELEASE_APK" ]; then
+    mkdir -p "$DEPLOY_TOOLS_DIR"
+    if cp "$ANDROID_RELEASE_APK" "$DEPLOY_TOOLS_DIR/serenada.apk"; then
+        echo "✅ Included $DEPLOY_TOOLS_DIR/serenada.apk"
+    else
+        warn "Failed to copy Android APK into $DEPLOY_TOOLS_DIR. Continuing deployment."
+    fi
+else
+    warn "Android release APK is unavailable. Skipping /tools/serenada.apk upload."
+fi
 
 # 2. Generate configuration files from templates
 echo "⚙️ Generating configuration files..."
