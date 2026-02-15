@@ -35,7 +35,7 @@ class PushNotificationHandler(context: Context) {
 
     fun showFromPayload(data: Map<String, String>) {
         if (data.isEmpty()) return
-        val host = settingsStore.host
+        val host = resolveHost(data)
 
         val title = data["title"].orEmpty().ifBlank { appContext.getString(R.string.app_name) }
         val body = data["body"].orEmpty().ifBlank {
@@ -52,6 +52,33 @@ class PushNotificationHandler(context: Context) {
             body = body,
             snapshot = snapshot
         )
+    }
+
+    private fun resolveHost(data: Map<String, String>): String {
+        val payloadHost = normalizePayloadHost(data["host"]) ?: extractHostFromAbsoluteUrl(data["url"])
+        return payloadHost ?: settingsStore.host
+    }
+
+    private fun normalizePayloadHost(rawHost: String?): String? {
+        val hostValue = rawHost?.trim().orEmpty()
+        if (hostValue.isBlank()) return null
+        extractHostFromAbsoluteUrl(hostValue)?.let { return it }
+        val normalized = hostValue.substringBefore('/').trim()
+        return normalized.ifBlank { null }
+    }
+
+    private fun extractHostFromAbsoluteUrl(rawUrl: String?): String? {
+        val value = rawUrl?.trim().orEmpty()
+        if (value.isBlank()) return null
+        if (!value.startsWith("http://", ignoreCase = true) &&
+            !value.startsWith("https://", ignoreCase = true)
+        ) {
+            return null
+        }
+        val uri = Uri.parse(value)
+        val host = uri.host?.trim().orEmpty()
+        if (host.isBlank()) return null
+        return if (uri.port > 0 && uri.port != 443) "$host:${uri.port}" else host
     }
 
     private fun loadSnapshotBitmap(host: String, data: Map<String, String>): Bitmap? {
@@ -169,7 +196,9 @@ class PushNotificationHandler(context: Context) {
     private fun normalizeCallPath(rawUrl: String?): String {
         val normalized = rawUrl?.trim().orEmpty()
         if (normalized.isBlank()) return "/"
-        if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+        if (normalized.startsWith("http://", ignoreCase = true) ||
+            normalized.startsWith("https://", ignoreCase = true)
+        ) {
             val uri = Uri.parse(normalized)
             val path = uri.path.orEmpty()
             return if (path.startsWith("/")) path else "/$path"

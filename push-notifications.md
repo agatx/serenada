@@ -39,6 +39,7 @@
 - Cleanup runs on snapshot upload and removes files older than 10 minutes.
 - Enforces a max ciphertext size of 300KB per snapshot.
 - On join, server sends push notifications that include:
+  - `host` (preferred backend host for deep-link/snapshot fetch routing)
   - `snapshotId`
   - `snapshotIv`
   - `snapshotSalt`
@@ -139,6 +140,7 @@ Android (`fcm`) subscription example:
 {
   "title": "Serenada",
   "body": "Someone joined your call!",
+  "host": "serenada.app",
   "url": "/call/ROOM_ID",
   "snapshotId": "SNAP-...",
   "snapshotIv": "<base64>",
@@ -160,6 +162,7 @@ Android (`fcm`) subscription example:
   - `FCM_SERVICE_ACCOUNT_JSON` (full service account JSON string)
   - `FCM_SERVICE_ACCOUNT_FILE` (path to a service account JSON file)
 - If unset, `fcm` subscriptions are accepted but native Android pushes are skipped server-side.
+- `STUN_HOST` (or `DOMAIN`, if set) is used as the push `host` hint so Android opens/fetches against the originating backend.
 
 ## Limitations
 - macOS Chrome does not render `image` in notifications; we use `icon` as a fallback.

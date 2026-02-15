@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -330,6 +331,38 @@ func getLocalizedMessage(locale string) (string, string) {
 	}
 }
 
+func configuredPushHost() string {
+	// Prefer deployment/domain fallbacks.
+	candidates := []string{
+		os.Getenv("DOMAIN"),
+		os.Getenv("STUN_HOST"),
+	}
+	for _, candidate := range candidates {
+		if normalized := normalizePushHost(candidate); normalized != "" {
+			return normalized
+		}
+	}
+	return ""
+}
+
+func normalizePushHost(raw string) string {
+	normalized := strings.TrimSpace(raw)
+	if normalized == "" {
+		return ""
+	}
+	if strings.HasPrefix(normalized, "http://") || strings.HasPrefix(normalized, "https://") {
+		if parsed, err := url.Parse(normalized); err == nil && parsed.Host != "" {
+			normalized = parsed.Host
+		}
+	}
+	normalized = strings.TrimSpace(normalized)
+	normalized = strings.TrimSuffix(normalized, "/")
+	if slash := strings.IndexRune(normalized, '/'); slash >= 0 {
+		normalized = normalized[:slash]
+	}
+	return strings.TrimSpace(normalized)
+}
+
 func (s *PushService) sendOne(roomID string, target struct {
 	ID        int
 	Endpoint  string
@@ -339,12 +372,16 @@ func (s *PushService) sendOne(roomID string, target struct {
 	Transport string
 }, snapshotID string, snapshotMeta *SnapshotMeta) {
 	title, body := getLocalizedMessage(target.Locale)
+	host := configuredPushHost()
 
 	// Payload
 	payload := map[string]string{
 		"title": title,
 		"body":  body,
 		"url":   fmt.Sprintf("/call/%s", roomID),
+	}
+	if host != "" {
+		payload["host"] = host
 	}
 
 	if snapshotID != "" && snapshotMeta != nil {

@@ -229,8 +229,8 @@ func (s *FCMService) buildJWTAssertion(now time.Time) (string, error) {
 }
 
 func isFCMTokenInvalid(statusCode int, body []byte) bool {
-	if statusCode == http.StatusNotFound || statusCode == http.StatusGone {
-		return true
+	if statusCode < http.StatusBadRequest {
+		return false
 	}
 
 	var fcmErr struct {
@@ -263,6 +263,8 @@ func isFCMTokenInvalid(statusCode int, body []byte) bool {
 		}
 	}
 
+	// Fallback for older/non-standard responses that only expose text markers.
+	// Do not treat bare HTTP 404/410 as invalid token without explicit token signals.
 	upper := strings.ToUpper(string(body))
 	return strings.Contains(upper, "UNREGISTERED")
 }
