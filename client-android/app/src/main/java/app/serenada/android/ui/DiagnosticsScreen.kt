@@ -511,7 +511,6 @@ private fun SectionCard(
 private fun StatusRow(label: String, result: CheckResult) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -521,6 +520,7 @@ private fun StatusRow(label: String, result: CheckResult) {
         )
         Spacer(modifier = Modifier.width(8.dp))
         Surface(
+            modifier = Modifier.weight(1f, fill = false),
             shape = RoundedCornerShape(999.dp),
             color = statusColor(result.state).copy(alpha = 0.18f)
         ) {
