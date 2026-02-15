@@ -2,12 +2,6 @@ package app.serenada.android.call
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Matrix
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -20,7 +14,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -30,9 +23,6 @@ import app.serenada.android.data.RecentCallStore
 import app.serenada.android.data.SettingsStore
 import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.ApiClient
-import app.serenada.android.network.PushRecipient
-import app.serenada.android.network.PushSnapshotRecipient
-import app.serenada.android.network.PushSnapshotUploadRequest
 import app.serenada.android.network.TurnCredentials
 import app.serenada.android.service.CallService
 import okhttp3.OkHttpClient
@@ -41,26 +31,6 @@ import org.json.JSONObject
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
 import org.webrtc.SessionDescription
-import org.webrtc.VideoFrame
-import java.io.ByteArrayOutputStream
-import java.math.BigInteger
-import java.nio.ByteBuffer
-import java.security.KeyFactory
-import java.security.KeyPairGenerator
-import java.security.PrivateKey
-import java.security.PublicKey
-import java.security.SecureRandom
-import java.security.interfaces.ECPublicKey
-import java.security.spec.ECGenParameterSpec
-import java.security.spec.ECPublicKeySpec
-import java.util.concurrent.atomic.AtomicBoolean
-import javax.crypto.Cipher
-import javax.crypto.KeyAgreement
-import javax.crypto.Mac
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import kotlin.concurrent.thread
-import kotlin.math.min
 
 class CallManager(context: Context) {
     private val appContext = context.applicationContext
@@ -140,12 +110,17 @@ class CallManager(context: Context) {
     private var previousAudioMode = AudioManager.MODE_NORMAL
     private var previousSpeakerphoneOn = false
     private var previousMicrophoneMute = false
-    private val secureRandom = SecureRandom()
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         Log.d("CallManager", "Audio focus changed: $focusChange")
     }
 
     private var webRtcEngine = buildWebRtcEngine()
+    private val joinSnapshotFeature = JoinSnapshotFeature(
+        apiClient = apiClient,
+        handler = handler,
+        attachLocalSink = { sink -> webRtcEngine.attachLocalSink(sink) },
+        detachLocalSink = { sink -> webRtcEngine.detachLocalSink(sink) }
+    )
 
     private val signalingClient = SignalingClient(okHttpClient, handler, object : SignalingClient.Listener {
         override fun onOpen() {
@@ -649,6 +624,7 @@ class CallManager(context: Context) {
             val joinSnapshotId = snapshotId?.ifBlank { null }
             if (joinSnapshotId != null) {
                 put("snapshotId", joinSnapshotId)
+                Log.d("CallManager", "Including snapshotId in join payload")
             }
         }
         pendingJoinSnapshotId = null
@@ -661,6 +637,27 @@ class CallManager(context: Context) {
             payload = payload
         )
         signalingClient.send(msg)
+    }
+
+    private fun prepareJoinSnapshotAndConnect(roomId: String, joinAttemptId: Long) {
+        joinSnapshotFeature.prepareSnapshotId(
+            host = serverHost.value,
+            roomId = roomId,
+            isVideoEnabled = { _uiState.value.localVideoEnabled },
+            isJoinAttemptActive = { isJoinAttemptActive(roomId, joinAttemptId) }
+        ) { snapshotId ->
+            if (!isJoinAttemptActive(roomId, joinAttemptId)) {
+                return@prepareSnapshotId
+            }
+            pendingJoinSnapshotId = snapshotId
+            ensureSignalingConnection()
+        }
+    }
+
+    private fun isJoinAttemptActive(roomId: String, joinAttemptId: Long): Boolean {
+        return joinAttemptSerial == joinAttemptId &&
+            currentRoomId == roomId &&
+            _uiState.value.phase == CallPhase.Joining
     }
 
     private fun sendMessage(type: String, payload: JSONObject?, to: String? = null) {
@@ -1108,6 +1105,7 @@ class CallManager(context: Context) {
         clientId = null
         callStartTimeMs = null
         pendingJoinRoom = null
+        pendingJoinSnapshotId = null
         pendingMessages.clear()
         reconnectAttempts = 0
         sentOffer = false

@@ -1,6 +1,6 @@
 # Serenada Android Client
 
-Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors the core call flow of the web client and uses WebSocket signaling only (no SSE or push in the current build).
+Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors the core call flow of the web client and uses WebSocket signaling only (no SSE signaling fallback and no native push receive flow in the current build).
 
 ## Features
 - 1:1 WebRTC audio/video calls
@@ -14,10 +14,11 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - Deep links for `https://serenada.app/call/*`
 - Foreground service to keep active calls running in the background
 - Settings screen to change server host, with host validation on save
+- Encrypted join snapshot upload (`snapshotId` on `join`) so server push notifications can include a thumbnail when Android is the joiner
 
 ## Not included (current build)
 - SSE signaling fallback
-- Push notifications
+- Native push subscription/notification receive UI flow
 - Multi-party calls
 
 ## Requirements

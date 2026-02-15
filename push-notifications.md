@@ -6,6 +6,10 @@
 - Preserve multi-subscriber delivery (one snapshot can be shared across multiple recipients).
 - Keep snapshots short-lived (10 minute TTL).
 
+## Client support
+- Snapshot sender on join: web client and native Android client.
+- Push subscription and notification rendering: web client service worker.
+
 ## Architecture (Server-blind)
 ### Key material (per subscriber)
 - Each device that subscribes to notifications generates an ECDH key pair (P-256) in the browser.
