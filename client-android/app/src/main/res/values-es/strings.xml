@@ -33,6 +33,7 @@
     <string name="diagnostics_connectivity_title">Conectividad de red</string>
     <string name="diagnostics_room_id_endpoint">GET /api/room-id</string>
     <string name="diagnostics_websocket_connection">WSS /ws</string>
+    <string name="diagnostics_sse_connection">HTTPS /sse (GET+POST)</string>
     <string name="diagnostics_diagnostic_token">POST /api/diagnostic-token</string>
     <string name="diagnostics_turn_credentials">GET /api/turn-credentials</string>
     <string name="diagnostics_run_connectivity">Ejecutar comprobaciones de conectividad</string>

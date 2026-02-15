@@ -1,110 +1,89 @@
 package app.serenada.android.call
 
 import android.os.Handler
+import android.util.Log
+import app.serenada.android.BuildConfig
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import okio.ByteString
 
 class SignalingClient(
     private val okHttpClient: OkHttpClient,
     private val handler: Handler,
     private val listener: Listener
 ) {
+    enum class TransportKind(val wireName: String) {
+        WS("ws"),
+        SSE("sse")
+    }
+
     interface Listener {
-        fun onOpen()
+        fun onOpen(activeTransport: String)
         fun onMessage(message: SignalingMessage)
         fun onClosed(reason: String)
     }
 
-    private var webSocket: WebSocket? = null
+    private val transportOrder = if (BuildConfig.FORCE_SSE_SIGNALING) {
+        listOf(TransportKind.SSE)
+    } else {
+        listOf(TransportKind.WS, TransportKind.SSE)
+    }
+    private val transportConnectedOnce = mutableMapOf(
+        TransportKind.WS to false,
+        TransportKind.SSE to false
+    )
+
+    private val wsTransport = WebSocketSignalingTransport(okHttpClient)
+    private val sseTransport = SseSignalingTransport(okHttpClient)
+
     private var connected = false
     private var connecting = false
     private var pingRunnable: Runnable? = null
     private var connectTimeoutRunnable: Runnable? = null
     private var connectionAttemptId = 0
     private var activeAttemptId = 0
-    private var closeNotifiedAttemptId: Int? = null
+    private var transportIndex = 0
+    private var activeTransport: TransportKind? = null
+    private var activeTransportImpl: SignalingTransport? = null
+    private var normalizedHost: String? = null
+    private var closedByClient = false
 
     fun connect(host: String) {
         if (connected || connecting) return
-        val url = buildWssUrl(host) ?: run {
+        val normalized = normalizeHost(host) ?: run {
             handler.post { listener.onClosed("invalid_host") }
             return
         }
-        connecting = true
-        connectionAttemptId += 1
-        val attemptId = connectionAttemptId
-        activeAttemptId = attemptId
-        closeNotifiedAttemptId = null
-        val request = Request.Builder().url(url).build()
-        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (activeAttemptId != attemptId) return
-                clearConnectTimeout()
-                connecting = false
-                connected = true
-                handler.post { listener.onOpen() }
-                startPing()
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                if (activeAttemptId != attemptId) return
-                val msg = SignalingMessage.fromJson(text) ?: return
-                handler.post {
-                    if (activeAttemptId != attemptId) return@post
-                    listener.onMessage(msg)
-                }
-            }
-
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                // Ignore binary
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(code, reason)
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (activeAttemptId != attemptId) return
-                connecting = false
-                connected = false
-                stopPing()
-                clearConnectTimeout()
-                this@SignalingClient.webSocket = null
-                if (closeNotifiedAttemptId == attemptId) return
-                handler.post { listener.onClosed(reason) }
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (activeAttemptId != attemptId) return
-                connecting = false
-                connected = false
-                stopPing()
-                clearConnectTimeout()
-                this@SignalingClient.webSocket = null
-                if (closeNotifiedAttemptId == attemptId) return
-                handler.post { listener.onClosed(t.message ?: "failure") }
-            }
-        })
-        scheduleConnectTimeout(attemptId)
+        if (BuildConfig.FORCE_SSE_SIGNALING) {
+            Log.i(TAG, "FORCE_SSE_SIGNALING is enabled; using SSE only")
+        }
+        if (normalized != normalizedHost) {
+            resetTransportState()
+            sseTransport.resetSession()
+        }
+        normalizedHost = normalized
+        closedByClient = false
+        connectWithTransport(transportIndex)
     }
 
     fun isConnected(): Boolean = connected
 
     fun send(message: SignalingMessage) {
-        webSocket?.send(message.toJson())
+        if (!connected) return
+        activeTransportImpl?.send(message)
     }
 
     fun close() {
+        closedByClient = true
         stopPing()
         clearConnectTimeout()
-        webSocket?.close(1000, "client_close")
-        webSocket = null
         connecting = false
         connected = false
+        activeAttemptId = -kotlin.math.abs(activeAttemptId)
+        activeTransport = null
+        activeTransportImpl = null
+        closeTransports()
+        normalizedHost = null
+        resetTransportState()
+        sseTransport.resetSession()
     }
 
     private fun startPing() {
@@ -120,7 +99,7 @@ class SignalingClient(
                     to = null,
                     payload = null
                 )
-                webSocket?.send(payload.toJson())
+                send(payload)
                 handler.postDelayed(this, 12_000)
             }
         }
@@ -136,15 +115,10 @@ class SignalingClient(
     private fun scheduleConnectTimeout(attemptId: Int) {
         clearConnectTimeout()
         val runnable = Runnable {
-            if (activeAttemptId != attemptId) return@Runnable
+            val transportKind = activeTransport ?: return@Runnable
+            if (!isAttemptActive(attemptId, transportKind)) return@Runnable
             if (connected) return@Runnable
-            connecting = false
-            activeAttemptId = -attemptId
-            closeNotifiedAttemptId = attemptId
-            webSocket?.cancel()
-            webSocket?.close(1000, "timeout")
-            webSocket = null
-            handler.post { listener.onClosed("timeout") }
+            handleTransportClosed(attemptId, transportKind, "timeout")
         }
         connectTimeoutRunnable = runnable
         handler.postDelayed(runnable, 2000)
@@ -155,9 +129,124 @@ class SignalingClient(
         connectTimeoutRunnable = null
     }
 
-    private fun buildWssUrl(hostInput: String): String? {
+    private fun connectWithTransport(index: Int) {
+        if (connected || connecting) return
+        val host = normalizedHost ?: return
+        val kind = transportOrder.getOrNull(index) ?: return
+
+        transportIndex = index
+        activeTransport = kind
+        connecting = true
+        connectionAttemptId += 1
+        val attemptId = connectionAttemptId
+        activeAttemptId = attemptId
+
+        closeTransports()
+
+        val transport = transportForKind(kind)
+        activeTransportImpl = transport
+        transport.connect(
+            host = host,
+            onOpen = {
+                handleTransportOpen(attemptId, kind)
+            },
+            onMessage = { msg ->
+                if (isAttemptActive(attemptId, kind)) {
+                    handler.post {
+                        if (!isAttemptActive(attemptId, kind)) return@post
+                        listener.onMessage(msg)
+                    }
+                }
+            },
+            onClosed = { reason ->
+                handleTransportClosed(attemptId, kind, reason)
+            }
+        )
+        scheduleConnectTimeout(attemptId)
+    }
+
+    private fun handleTransportOpen(attemptId: Int, kind: TransportKind) {
+        if (!isAttemptActive(attemptId, kind)) return
+        clearConnectTimeout()
+        connecting = false
+        connected = true
+        transportConnectedOnce[kind] = true
+        Log.i(TAG, "Signaling connected via ${kind.wireName}")
+        handler.post { listener.onOpen(kind.wireName) }
+        startPing()
+    }
+
+    private fun handleTransportClosed(attemptId: Int, kind: TransportKind, reason: String) {
+        if (!isAttemptActive(attemptId, kind)) return
+        clearConnectTimeout()
+        stopPing()
+        connecting = false
+        connected = false
+        activeAttemptId = -kotlin.math.abs(attemptId)
+        activeTransport = null
+        activeTransportImpl = null
+        closeTransports()
+
+        if (closedByClient) {
+            return
+        }
+
+        if (shouldFallback(kind, reason) && tryNextTransport(reason)) {
+            return
+        }
+
+        handler.post { listener.onClosed(reason) }
+    }
+
+    private fun shouldFallback(kind: TransportKind, reason: String): Boolean {
+        if (transportOrder.size <= 1) return false
+        if (transportIndex >= transportOrder.lastIndex) return false
+        if (reason == "unsupported" || reason == "timeout") return true
+        return transportConnectedOnce[kind] != true
+    }
+
+    private fun tryNextTransport(reason: String): Boolean {
+        val current = transportOrder.getOrNull(transportIndex) ?: return false
+        val nextIndex = transportIndex + 1
+        val next = transportOrder.getOrNull(nextIndex) ?: return false
+        Log.w(
+            TAG,
+            "Transport ${current.wireName} failed ($reason), falling back to ${next.wireName}"
+        )
+        transportIndex = nextIndex
+        connectWithTransport(nextIndex)
+        return true
+    }
+
+    private fun isAttemptActive(attemptId: Int, kind: TransportKind): Boolean {
+        return activeAttemptId == attemptId && activeTransport == kind
+    }
+
+    private fun closeTransports() {
+        wsTransport.close()
+        sseTransport.close()
+    }
+
+    private fun resetTransportState() {
+        transportIndex = 0
+        transportConnectedOnce[TransportKind.WS] = false
+        transportConnectedOnce[TransportKind.SSE] = false
+    }
+
+    private fun normalizeHost(hostInput: String): String? {
         val host = hostInput.trim().removePrefix("https://").removePrefix("http://").trimEnd('/')
         if (host.isBlank()) return null
-        return "wss://$host/ws"
+        return host
+    }
+
+    private fun transportForKind(kind: TransportKind): SignalingTransport {
+        return when (kind) {
+            TransportKind.WS -> wsTransport
+            TransportKind.SSE -> sseTransport
+        }
+    }
+
+    private companion object {
+        const val TAG = "SignalingClient"
     }
 }

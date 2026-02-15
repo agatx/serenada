@@ -31,6 +31,10 @@ val firebaseAppId = (findProperty("firebaseAppId") as String?)?.trim()
 val firebaseApiKey = (findProperty("firebaseApiKey") as String?)?.trim()
 val firebaseProjectId = (findProperty("firebaseProjectId") as String?)?.trim()
 val firebaseSenderId = (findProperty("firebaseSenderId") as String?)?.trim()
+val forceSseSignaling = (findProperty("forceSseSignaling") as String?)
+    ?.trim()
+    ?.equals("true", ignoreCase = true)
+    ?: false
 
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("keystore/keystore.properties")
@@ -54,6 +58,7 @@ android {
         buildConfigField("String", "FIREBASE_API_KEY", asBuildConfigString(firebaseApiKey))
         buildConfigField("String", "FIREBASE_PROJECT_ID", asBuildConfigString(firebaseProjectId))
         buildConfigField("String", "FIREBASE_SENDER_ID", asBuildConfigString(firebaseSenderId))
+        buildConfigField("boolean", "FORCE_SSE_SIGNALING", forceSseSignaling.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

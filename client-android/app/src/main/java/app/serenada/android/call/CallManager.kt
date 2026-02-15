@@ -128,9 +128,14 @@ class CallManager(context: Context) {
     )
 
     private val signalingClient = SignalingClient(okHttpClient, handler, object : SignalingClient.Listener {
-        override fun onOpen() {
+        override fun onOpen(activeTransport: String) {
             reconnectAttempts = 0
-            updateState(_uiState.value.copy(isSignalingConnected = true))
+            updateState(
+                _uiState.value.copy(
+                    isSignalingConnected = true,
+                    activeTransport = activeTransport
+                )
+            )
             pendingJoinRoom?.let { join ->
                 pendingJoinRoom = null
                 sendJoin(join, pendingJoinSnapshotId)
@@ -146,7 +151,7 @@ class CallManager(context: Context) {
         }
 
         override fun onClosed(reason: String) {
-            updateState(_uiState.value.copy(isSignalingConnected = false))
+            updateState(_uiState.value.copy(isSignalingConnected = false, activeTransport = null))
             if (shouldReconnectSignaling()) {
                 scheduleReconnect()
             }

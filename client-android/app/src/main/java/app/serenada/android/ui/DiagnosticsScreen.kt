@@ -67,6 +67,7 @@ import app.serenada.android.network.ApiClient
 import app.serenada.android.network.TurnCredentials
 import java.time.Instant
 import java.util.Collections
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -77,8 +78,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -111,6 +114,7 @@ private data class CheckResult(
 private data class ConnectivityReport(
     val roomIdEndpoint: CheckResult,
     val webSocket: CheckResult,
+    val sse: CheckResult,
     val diagnosticToken: CheckResult,
     val turnCredentials: CheckResult
 )
@@ -303,6 +307,14 @@ fun DiagnosticsScreen(
                         connectivityInProgress -> CheckResult(CheckState.Running, stringResource(R.string.diagnostics_running))
                         report == null -> pending
                         else -> report.webSocket
+                    }
+                )
+                StatusRow(
+                    stringResource(R.string.diagnostics_sse_connection),
+                    when {
+                        connectivityInProgress -> CheckResult(CheckState.Running, stringResource(R.string.diagnostics_running))
+                        report == null -> pending
+                        else -> report.sse
                     }
                 )
                 StatusRow(
@@ -683,6 +695,7 @@ private suspend fun runConnectivityChecks(host: String): ConnectivityReport = wi
 
     val roomIdResult = checkRoomIdEndpoint(client, host)
     val wsResult = checkWebSocket(client, host)
+    val sseResult = checkSseEndpoint(client, host)
     val diagnosticTokenResult = apiClient.awaitDiagnosticToken(host)
     val tokenResult = diagnosticTokenResult.toNetworkCheck("Token")
     val turnResult = diagnosticTokenResult.fold(
@@ -697,6 +710,7 @@ private suspend fun runConnectivityChecks(host: String): ConnectivityReport = wi
     ConnectivityReport(
         roomIdEndpoint = roomIdResult,
         webSocket = wsResult,
+        sse = sseResult,
         diagnosticToken = tokenResult,
         turnCredentials = turnResult
     )
@@ -744,6 +758,47 @@ private suspend fun checkWebSocket(client: OkHttpClient, host: String): CheckRes
         continuation.invokeOnCancellation {
             ws.cancel()
         }
+    }
+}
+
+private fun checkSseEndpoint(client: OkHttpClient, host: String): CheckResult {
+    val sid = "S-diag-${UUID.randomUUID().toString().replace("-", "").take(16)}"
+    val url = buildSseUrl(host, sid) ?: return CheckResult(CheckState.Fail, "Invalid host")
+    val start = SystemClock.elapsedRealtime()
+    val getRequest = Request.Builder()
+        .url(url)
+        .header("Accept", "text/event-stream")
+        .get()
+        .build()
+
+    return runCatching {
+        client.newCall(getRequest).execute().use { streamResponse ->
+            if (!streamResponse.isSuccessful) {
+                return@use CheckResult(CheckState.Fail, "GET HTTP ${streamResponse.code}")
+            }
+            val contentType = streamResponse.header("Content-Type").orEmpty().lowercase()
+            if (!contentType.contains("text/event-stream")) {
+                return@use CheckResult(CheckState.Fail, "Unexpected content-type")
+            }
+
+            val postBody = """{"v":1,"type":"ping","payload":{"ts":${System.currentTimeMillis()}}}"""
+                .toRequestBody(JSON_MEDIA_TYPE)
+            val postRequest = Request.Builder()
+                .url(url)
+                .post(postBody)
+                .header("Content-Type", "application/json")
+                .build()
+            client.newCall(postRequest).execute().use { postResponse ->
+                val elapsed = SystemClock.elapsedRealtime() - start
+                if (!postResponse.isSuccessful) {
+                    CheckResult(CheckState.Fail, "POST HTTP ${postResponse.code}")
+                } else {
+                    CheckResult(CheckState.Pass, "${elapsed}ms")
+                }
+            }
+        }
+    }.getOrElse { error ->
+        CheckResult(CheckState.Fail, error.message ?: "SSE failed")
     }
 }
 
@@ -1150,6 +1205,15 @@ private fun buildWssUrl(hostInput: String): String? {
     return "wss://$host/ws"
 }
 
+private fun buildSseUrl(hostInput: String, sid: String): String? {
+    if (sid.isBlank()) return null
+    val base = buildHttpsUrl(hostInput, "/sse")?.toHttpUrlOrNull() ?: return null
+    return base.newBuilder()
+        .addQueryParameter("sid", sid)
+        .build()
+        .toString()
+}
+
 private suspend fun ApiClient.awaitDiagnosticToken(host: String): Result<String> {
     return suspendCancellableCoroutine { continuation ->
         fetchDiagnosticToken(host) { result ->
@@ -1200,6 +1264,7 @@ private fun buildDiagnosticsReport(
         connectivityInProgress -> ConnectivityReport(
             roomIdEndpoint = running,
             webSocket = running,
+            sse = running,
             diagnosticToken = running,
             turnCredentials = running
         )
@@ -1207,6 +1272,7 @@ private fun buildDiagnosticsReport(
         else -> ConnectivityReport(
             roomIdEndpoint = pending,
             webSocket = pending,
+            sse = pending,
             diagnosticToken = pending,
             turnCredentials = pending
         )
@@ -1259,6 +1325,7 @@ private fun buildDiagnosticsReport(
         appendLine("## Network Connectivity")
         appendLine("GET /api/room-id: ${resolvedConnectivity.roomIdEndpoint.toExportLine()}")
         appendLine("WSS /ws: ${resolvedConnectivity.webSocket.toExportLine()}")
+        appendLine("HTTPS /sse (GET+POST): ${resolvedConnectivity.sse.toExportLine()}")
         appendLine("POST /api/diagnostic-token: ${resolvedConnectivity.diagnosticToken.toExportLine()}")
         appendLine("GET /api/turn-credentials: ${resolvedConnectivity.turnCredentials.toExportLine()}")
         appendLine()
@@ -1276,6 +1343,8 @@ private fun buildDiagnosticsReport(
         }
     }
 }
+
+private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
 private fun CheckResult.toExportLine(): String {
     val stateLabel = when (state) {

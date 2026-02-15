@@ -1,10 +1,10 @@
 # Serenada Android Client
 
-Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors the core call flow of the web client and uses WebSocket signaling only (no SSE signaling fallback).
+Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors the core call flow of the web client and prefers WebSocket signaling with automatic SSE fallback.
 
 ## Features
 - 1:1 WebRTC audio/video calls
-- WebSocket signaling (protocol v1)
+- WebSocket signaling with automatic SSE fallback (protocol v1)
 - In-call camera source cycle: `selfie` (default) -> `world` -> `composite` (world view with circular selfie overlay), with automatic composite skip on unsupported devices or composite start failure
 - In-call flashlight toggle shown in the top-right corner only for `world`/`composite` camera modes when the device reports flash support; flashlight turns off automatically when leaving those modes or ending the call, while the user’s flashlight preference is remembered during the same call and reapplied after returning to `world`/`composite`
 - In-call performance locks (partial CPU wake lock + Wi-Fi low-latency lock) to reduce call-time scheduling/network jitter while the call is active
@@ -18,7 +18,6 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - Native push receive via Firebase Cloud Messaging, including encrypted snapshot decryption and `BigPicture` notifications in background/terminated app states
 
 ## Not included (current build)
-- SSE signaling fallback
 - Multi-party calls
 
 ## Requirements
@@ -41,6 +40,12 @@ Debug APK:
 ```bash
 cd client-android
 ./gradlew :app:assembleDebug
+```
+
+Force SSE-only signaling in debug build (test mode):
+```bash
+cd client-android
+./gradlew :app:assembleDebug -PforceSseSignaling=true
 ```
 
 WebRTC provider A/B build (for performance comparison):
@@ -187,7 +192,7 @@ On Save, the app validates `https://<host>/api/room-id` and only persists hosts 
 `Device Check` in Settings opens a native diagnostics screen with:
 - Runtime permission checks (`CAMERA`, `RECORD_AUDIO`, `POST_NOTIFICATIONS` on Android 13+)
 - Audio/video capability inspection (camera inventory, composite prerequisites, audio processing feature availability)
-- Connectivity checks (`/api/room-id`, WebSocket `/ws`, `/api/diagnostic-token`, `/api/turn-credentials`)
+- Connectivity checks (`/api/room-id`, WebSocket `/ws`, SSE `/sse` GET+POST, `/api/diagnostic-token`, `/api/turn-credentials`)
 - ICE tests for full STUN/TURN and TURNS-only modes
 - Title-bar share action that copies the full diagnostic report to clipboard and opens Android share sheet
 
@@ -196,6 +201,4 @@ During active call flows, WebRTC runtime stats are emitted to logcat every ~2s a
 - Debug builds also enable native WebRTC verbose logging (tag `org.webrtc`/`libjingle`) for ICE/TURN investigation.
 
 ## Known limitations
-- WebSocket signaling only
-- No SSE fallback
 - Composite mode depends on device support for concurrent front+back camera capture; unsupported devices fall back to non-composite camera sources
