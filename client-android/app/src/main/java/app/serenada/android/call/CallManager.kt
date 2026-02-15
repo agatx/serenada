@@ -1160,7 +1160,7 @@ class CallManager(context: Context) {
         runCatching {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.isMicrophoneMute = false
-            audioManager.isSpeakerphoneOn = false
+            audioManager.isSpeakerphoneOn = true
         }.onSuccess {
             Log.d(
                 "CallManager",
