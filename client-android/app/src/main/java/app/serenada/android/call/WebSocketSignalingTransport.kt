@@ -1,5 +1,6 @@
 package app.serenada.android.call
 
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -12,6 +13,7 @@ internal class WebSocketSignalingTransport(
 ) : SignalingTransport {
     override val kind: SignalingClient.TransportKind = SignalingClient.TransportKind.WS
 
+    @Volatile
     private var webSocket: WebSocket? = null
 
     override fun connect(
@@ -29,7 +31,12 @@ internal class WebSocketSignalingTransport(
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    val msg = SignalingMessage.fromJson(text) ?: return
+                    val msg = try {
+                        SignalingMessage.fromJson(text)
+                    } catch (e: RuntimeException) {
+                        Log.w(TAG, "Failed to parse signaling message from WebSocket", e)
+                        null
+                    } ?: return
                     onMessage(msg)
                 }
 
@@ -59,6 +66,10 @@ internal class WebSocketSignalingTransport(
     override fun close() {
         webSocket?.cancel()
         webSocket = null
+    }
+
+    private companion object {
+        const val TAG = "WsSignalingTransport"
     }
 
     private fun buildWssUrl(host: String): String = "wss://$host/ws"

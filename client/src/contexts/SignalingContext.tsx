@@ -242,8 +242,12 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         transportOrderRef.current = paramTransports
             ? parseTransportOrder(paramTransports)
             : getConfiguredTransportOrder();
-        transportIndexRef.current = 0;
-        transportConnectedOnceRef.current = { ws: false, sse: false };
+
+        const resetTransportState = () => {
+            transportIndexRef.current = 0;
+            transportConnectedOnceRef.current = { ws: false, sse: false };
+        };
+        resetTransportState();
 
         const clearReconnectTimeout = () => {
             if (reconnectTimeout !== null) {
@@ -261,7 +265,8 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
             reconnectTimeout = window.setTimeout(() => {
                 reconnectTimeout = null;
-                connect();
+                resetTransportState();
+                connect(0);
             }, backoff);
         };
 

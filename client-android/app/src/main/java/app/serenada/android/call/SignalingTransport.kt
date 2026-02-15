@@ -13,4 +13,6 @@ internal interface SignalingTransport {
     fun send(message: SignalingMessage)
 
     fun close()
+
+    fun resetSession() {}
 }

@@ -1,5 +1,7 @@
 package app.serenada.android.call
 
+import android.util.Log
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -23,12 +25,17 @@ internal class SseSignalingTransport(
         .build()
     private val random = SecureRandom()
 
+    @Volatile
     private var sid: String = createSid()
+    @Volatile
     private var streamCall: Call? = null
     private val postCalls = mutableSetOf<Call>()
     private val postCallsLock = Any()
+    @Volatile
     private var currentHost: String? = null
+    @Volatile
     private var onMessageCallback: ((SignalingMessage) -> Unit)? = null
+    @Volatile
     private var onClosedCallback: ((String) -> Unit)? = null
 
     override fun connect(
@@ -116,7 +123,7 @@ internal class SseSignalingTransport(
         onClosedCallback = null
     }
 
-    fun resetSession() {
+    override fun resetSession() {
         sid = createSid()
         currentHost = null
     }
@@ -157,7 +164,12 @@ internal class SseSignalingTransport(
         if (dataBuffer.isEmpty()) return
         val payload = dataBuffer.toString()
         dataBuffer.setLength(0)
-        val msg = SignalingMessage.fromJson(payload) ?: return
+        val msg = try {
+            SignalingMessage.fromJson(payload)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Failed to parse signaling message from SSE stream", e)
+            null
+        } ?: return
         onMessageCallback?.invoke(msg)
     }
 
@@ -170,8 +182,15 @@ internal class SseSignalingTransport(
     }
 
     private companion object {
+        const val TAG = "SseSignalingTransport"
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 
-    private fun buildSseUrl(host: String, sid: String): String = "https://$host/sse?sid=$sid"
+    private fun buildSseUrl(host: String, sid: String): String {
+        return "https://$host/sse".toHttpUrl()
+            .newBuilder()
+            .addQueryParameter("sid", sid)
+            .build()
+            .toString()
+    }
 }

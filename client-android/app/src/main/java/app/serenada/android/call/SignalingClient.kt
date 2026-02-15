@@ -33,6 +33,7 @@ class SignalingClient(
 
     private val wsTransport = WebSocketSignalingTransport(okHttpClient)
     private val sseTransport = SseSignalingTransport(okHttpClient)
+    private val transports = listOf<SignalingTransport>(wsTransport, sseTransport)
 
     private var connected = false
     private var connecting = false
@@ -55,9 +56,9 @@ class SignalingClient(
         if (BuildConfig.FORCE_SSE_SIGNALING) {
             Log.i(TAG, "FORCE_SSE_SIGNALING is enabled; using SSE only")
         }
+        resetTransportState()
         if (normalized != normalizedHost) {
-            resetTransportState()
-            sseTransport.resetSession()
+            resetTransportSessions()
         }
         normalizedHost = normalized
         closedByClient = false
@@ -83,7 +84,7 @@ class SignalingClient(
         closeTransports()
         normalizedHost = null
         resetTransportState()
-        sseTransport.resetSession()
+        resetTransportSessions()
     }
 
     private fun startPing() {
@@ -223,8 +224,11 @@ class SignalingClient(
     }
 
     private fun closeTransports() {
-        wsTransport.close()
-        sseTransport.close()
+        transports.forEach { it.close() }
+    }
+
+    private fun resetTransportSessions() {
+        transports.forEach { it.resetSession() }
     }
 
     private fun resetTransportState() {
