@@ -8,12 +8,16 @@
 
 ## Client support
 - Snapshot sender on join: web client and native Android client.
-- Push subscription and notification rendering: web client service worker.
+- Push subscription + notification rendering:
+  - Web: service worker (`webpush` transport).
+  - Native Android: Firebase Cloud Messaging (`fcm` transport).
 
 ## Architecture (Server-blind)
 ### Key material (per subscriber)
-- Each device that subscribes to notifications generates an ECDH key pair (P-256) in the browser.
-- The private key is stored in IndexedDB as a CryptoKey. The public key is sent to the server with the subscription.
+- Each subscribing device generates an ECDH key pair (P-256).
+  - Web stores the private key in IndexedDB as a CryptoKey.
+  - Android stores the private key in Android Keystore.
+- The public key is sent to the server with the subscription.
 - The server stores the public key alongside the subscription record (`enc_pubkey`).
 
 ### Snapshot encryption (per join)
@@ -52,6 +56,12 @@
   - `image` for Android Chrome.
   - `icon` fallback for macOS (Notification Center ignores `image`).
 
+### Native Android recipient
+- Receives FCM data message in `FirebaseMessagingService`.
+- Uses Android Keystore private key + `snapshotEphemeralPubKey` and HKDF salt to unwrap `snapshotKey`.
+- Fetches encrypted snapshot via `/api/push/snapshot/{id}` and decrypts locally.
+- Renders notification with `BigPictureStyle` and deep-links to `/call/{roomId}`.
+
 ## Protocol details
 ### VAPID key
 `GET /api/push/vapid-public-key`
@@ -65,8 +75,19 @@
 
 ```json
 {
+  "transport": "webpush",
   "endpoint": "...",
   "keys": { "auth": "...", "p256dh": "..." },
+  "locale": "en-US",
+  "encPublicKey": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." }
+}
+```
+
+Android (`fcm`) subscription example:
+```json
+{
+  "transport": "fcm",
+  "endpoint": "<fcm_registration_token>",
   "locale": "en-US",
   "encPublicKey": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." }
 }
@@ -134,7 +155,14 @@
 - Cleanup runs on snapshot upload and removes files older than 10 minutes.
 - No deletion-on-first-fetch to allow multiple subscribers.
 
+## Server configuration (Android FCM)
+- Configure one of:
+  - `FCM_SERVICE_ACCOUNT_JSON` (full service account JSON string)
+  - `FCM_SERVICE_ACCOUNT_FILE` (path to a service account JSON file)
+- If unset, `fcm` subscriptions are accepted but native Android pushes are skipped server-side.
+
 ## Limitations
 - macOS Chrome does not render `image` in notifications; we use `icon` as a fallback.
 - If the device lacks the private key or decryption fails, notifications fall back to text-only.
 - Push payload size must remain under service limits; wrapped key data stays small per recipient.
+- Android requires Firebase runtime config in `client-android` (`firebaseAppId`, `firebaseApiKey`, `firebaseProjectId`, `firebaseSenderId` Gradle properties).

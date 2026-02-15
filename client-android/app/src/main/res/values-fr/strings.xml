@@ -103,8 +103,10 @@
 
     <string name="notification_call_title">Appel Serenada</string>
     <string name="notification_call_status_channel">Statut de l\'appel</string>
+    <string name="notification_join_alerts_channel">Alertes de participation</string>
     <string name="notification_room">Salle %1$s</string>
     <string name="notification_in_call">En appel</string>
+    <string name="push_notification_default_body">Quelqu\'un a rejoint votre appel !</string>
 
     <string name="custom">Personnalisé</string>
     <string name="camera_enabled">Caméra activée</string>

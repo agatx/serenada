@@ -6,6 +6,13 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+fun asBuildConfigString(value: String?): String {
+    val escaped = value.orEmpty()
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+    return "\"$escaped\""
+}
+
 val webrtcProvider = (findProperty("webrtcProvider") as String?)?.trim()?.lowercase()
     ?.takeIf { it == "stream" || it == "dafruits" || it == "webrtcsdk" || it == "local7559" }
     ?: "local7559"
@@ -19,6 +26,11 @@ val localWebRtcAarPath = "libs/libwebrtc-7559_173-arm64.aar"
 if (webrtcProvider == "local7559" && !file(localWebRtcAarPath).exists()) {
     throw GradleException("Missing local WebRTC AAR at app/$localWebRtcAarPath")
 }
+
+val firebaseAppId = (findProperty("firebaseAppId") as String?)?.trim()
+val firebaseApiKey = (findProperty("firebaseApiKey") as String?)?.trim()
+val firebaseProjectId = (findProperty("firebaseProjectId") as String?)?.trim()
+val firebaseSenderId = (findProperty("firebaseSenderId") as String?)?.trim()
 
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("keystore/keystore.properties")
@@ -38,6 +50,10 @@ android {
         versionCode = 6
         versionName = "0.1.6"
         buildConfigField("String", "WEBRTC_PROVIDER", "\"$webrtcProvider\"")
+        buildConfigField("String", "FIREBASE_APP_ID", asBuildConfigString(firebaseAppId))
+        buildConfigField("String", "FIREBASE_API_KEY", asBuildConfigString(firebaseApiKey))
+        buildConfigField("String", "FIREBASE_PROJECT_ID", asBuildConfigString(firebaseProjectId))
+        buildConfigField("String", "FIREBASE_SENDER_ID", asBuildConfigString(firebaseSenderId))
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -124,6 +140,7 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
+    implementation(platform("com.google.firebase:firebase-bom:33.8.0"))
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.compose.ui:ui")
@@ -138,6 +155,7 @@ dependencies {
     } else {
         implementation(webrtcDependency!!)
     }
+    implementation("com.google.firebase:firebase-messaging-ktx")
     implementation("com.google.zxing:core:3.5.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

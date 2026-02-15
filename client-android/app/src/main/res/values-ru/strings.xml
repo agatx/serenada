@@ -106,8 +106,10 @@
 
     <string name="notification_call_title">Звонок Serenada</string>
     <string name="notification_call_status_channel">Статус звонка</string>
+    <string name="notification_join_alerts_channel">Уведомления о входе</string>
     <string name="notification_room">Комната %1$s</string>
     <string name="notification_in_call">В звонке</string>
+    <string name="push_notification_default_body">Кто-то присоединился к вашему звонку!</string>
 
     <string name="custom">Свой</string>
     <string name="camera_enabled">Камера включена</string>

@@ -38,6 +38,10 @@ Edit `.env.production` and set the following required variables:
 - `TURN_SECRET`: Secure secret for TURN (generate with `openssl rand -hex 32`)
 - `TURN_TOKEN_SECRET` *(optional, recommended)*: Separate secret for TURN tokens (falls back to `TURN_SECRET` if unset)
 - `ROOM_ID_SECRET`: Secure secret for Room IDs (generate with `openssl rand -hex 32`)
+- `PUSH_SUBSCRIBER_EMAIL` *(optional)*: Contact email for Web Push VAPID (`mailto:...`)
+- `FCM_SERVICE_ACCOUNT_FILE` or `FCM_SERVICE_ACCOUNT_JSON` *(optional, required for native Android push receive)*:
+  - `FCM_SERVICE_ACCOUNT_FILE`: absolute path on VPS to Firebase service-account JSON
+  - `FCM_SERVICE_ACCOUNT_JSON`: inline JSON string (alternative to file path)
 
 #### Configuration Templates
 Serenada uses templates to generate final configuration files during deployment. This ensures that domain names and IP addresses are consistently applied across all services.
@@ -63,6 +67,23 @@ Ensure the following ports are open on your VPS firewall (e.g., UFW or Hetzner C
 -   **3478/udp & tcp** (STUN/TURN Signaling)
 -   **5349/tcp** (STUN/TURN over TLS)
 -   **49152-65535/udp** (WebRTC Media Range)
+
+### Android Push Build Config (optional)
+Native Android push receive uses Firebase Messaging and expects these Gradle properties when building `client-android`:
+- `firebaseAppId`
+- `firebaseApiKey`
+- `firebaseProjectId`
+- `firebaseSenderId`
+
+Example:
+```bash
+cd client-android
+./gradlew :app:assembleRelease \
+  -PfirebaseAppId=1:1234567890:android:abc123 \
+  -PfirebaseApiKey=AIza... \
+  -PfirebaseProjectId=your-project-id \
+  -PfirebaseSenderId=1234567890
+```
 
 ### 3. HTTPS (SSL) Setup
 
@@ -92,6 +113,8 @@ From the project root on your local machine:
 ```
 
 `deploy.sh` also publishes the Android APK to `https://<your-domain>/tools/serenada.apk` by copying `client-android/app/build/outputs/apk/release/serenada.apk` into the built web assets (`client/dist/tools/serenada.apk`) before sync. If the release APK is missing, the script will attempt `./gradlew :app:assembleRelease` in `client-android/`. If that build fails, deployment continues and prints a warning instead of failing.
+
+If `secrets/service-account.json` exists in the repo root, `deploy.sh` also syncs it to `${REMOTE_DIR}/secrets/service-account.json` and injects `FCM_SERVICE_ACCOUNT_FILE=${REMOTE_DIR}/secrets/service-account.json` into the deployed `.env` (overriding any existing `FCM_SERVICE_ACCOUNT_FILE` / `FCM_SERVICE_ACCOUNT_JSON` entries for that deployment).
 
 ### 5. Android App Links (assetlinks.json)
 

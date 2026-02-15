@@ -23,3 +23,4 @@ server/data/subscriptions.db
 nginx/conf.d/legacy.extra
 nginx/nginx.legacy.conf.template
 client-android/keystore/
+/secrets

@@ -14,9 +14,13 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - TRUST_PROXY=${TRUST_PROXY}
       - BLOCK_WEBSOCKET=${BLOCK_WEBSOCKET}
+      - PUSH_SUBSCRIBER_EMAIL=${PUSH_SUBSCRIBER_EMAIL}
+      - FCM_SERVICE_ACCOUNT_FILE=${FCM_SERVICE_ACCOUNT_FILE}
+      - FCM_SERVICE_ACCOUNT_JSON=${FCM_SERVICE_ACCOUNT_JSON}
       - DATA_DIR=/app/data
     volumes:
       - ./server/data:/app/data
+      - ./secrets:/app/secrets:ro
     restart: unless-stopped
 
   # Coturn Server

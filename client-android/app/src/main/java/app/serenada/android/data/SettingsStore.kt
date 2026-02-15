@@ -27,6 +27,19 @@ class SettingsStore(context: Context) {
             editor.apply()
         }
 
+    var pushEndpoint: String?
+        get() = prefs.getString(KEY_PUSH_ENDPOINT, null)
+        set(value) {
+            val editor = prefs.edit()
+            val normalized = value?.trim()
+            if (normalized.isNullOrBlank()) {
+                editor.remove(KEY_PUSH_ENDPOINT)
+            } else {
+                editor.putString(KEY_PUSH_ENDPOINT, normalized)
+            }
+            editor.apply()
+        }
+
     var language: String
         get() = normalizeLanguage(prefs.getString(KEY_LANGUAGE, LANGUAGE_AUTO))
         set(value) {
@@ -73,6 +86,7 @@ class SettingsStore(context: Context) {
 
         private const val KEY_HOST = "host"
         private const val KEY_RECONNECT_CID = "reconnect_cid"
+        private const val KEY_PUSH_ENDPOINT = "push_endpoint"
         private const val KEY_LANGUAGE = "language"
         private const val KEY_BACKGROUND_MODE = "background_mode"
         private const val KEY_DEFAULT_CAMERA_ENABLED = "default_camera_enabled"

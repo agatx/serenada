@@ -161,6 +161,55 @@ class ApiClient(private val okHttpClient: OkHttpClient) {
         })
     }
 
+    fun subscribePush(
+        host: String,
+        roomId: String,
+        request: PushSubscribeRequest,
+        onResult: (Result<Unit>) -> Unit
+    ) {
+        val url = buildHttpsUrl(host, "/api/push/subscribe", mapOf("roomId" to roomId))
+        if (url == null) {
+            onResult(Result.failure(IllegalArgumentException("Invalid host")))
+            return
+        }
+
+        val payload = JSONObject().apply {
+            put("transport", request.transport)
+            put("endpoint", request.endpoint)
+            put("locale", request.locale)
+            if (!request.auth.isNullOrBlank() && !request.p256dh.isNullOrBlank()) {
+                put(
+                    "keys",
+                    JSONObject().apply {
+                        put("auth", request.auth)
+                        put("p256dh", request.p256dh)
+                    }
+                )
+            }
+            request.encPublicKey?.let { put("encPublicKey", it) }
+        }
+        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+        val httpRequest = Request.Builder()
+            .url(url)
+            .post(requestBody)
+            .build()
+        okHttpClient.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                onResult(Result.failure(e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!response.isSuccessful) {
+                        onResult(Result.failure(IOException("Push subscribe failed: ${response.code}")))
+                        return
+                    }
+                    onResult(Result.success(Unit))
+                }
+            }
+        })
+    }
+
     fun uploadPushSnapshot(
         host: String,
         request: PushSnapshotUploadRequest,
@@ -362,4 +411,13 @@ data class PushSnapshotUploadRequest(
     val snapshotEphemeralPubKey: String,
     val snapshotMime: String,
     val recipients: List<PushSnapshotRecipient>
+)
+
+data class PushSubscribeRequest(
+    val transport: String,
+    val endpoint: String,
+    val locale: String,
+    val encPublicKey: JSONObject? = null,
+    val auth: String? = null,
+    val p256dh: String? = null
 )

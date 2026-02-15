@@ -106,8 +106,10 @@
 
     <string name="notification_call_title">Serenada call</string>
     <string name="notification_call_status_channel">Call status</string>
+    <string name="notification_join_alerts_channel">Join alerts</string>
     <string name="notification_room">Room %1$s</string>
     <string name="notification_in_call">In call</string>
+    <string name="push_notification_default_body">Someone joined your call!</string>
 
     <string name="custom">Custom</string>
     <string name="camera_enabled">Camera enabled</string>

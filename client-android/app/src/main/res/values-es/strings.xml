@@ -106,8 +106,10 @@
 
     <string name="notification_call_title">Llamada de Serenada</string>
     <string name="notification_call_status_channel">Estado de llamada</string>
+    <string name="notification_join_alerts_channel">Alertas de unión</string>
     <string name="notification_room">Sala %1$s</string>
     <string name="notification_in_call">En llamada</string>
+    <string name="push_notification_default_body">¡Alguien se unió a tu llamada!</string>
 
     <string name="custom">Personalizado</string>
     <string name="camera_enabled">Cámara activada</string>

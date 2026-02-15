@@ -7,6 +7,8 @@ warn() {
 
 ANDROID_RELEASE_APK="client-android/app/build/outputs/apk/release/serenada.apk"
 DEPLOY_TOOLS_DIR="client/dist/tools"
+LOCAL_FCM_SERVICE_ACCOUNT_FILE="secrets/service-account.json"
+REMOTE_FCM_SERVICE_ACCOUNT_FILE=""
 
 # Load configuration from .env.production
 if [ -f .env.production ]; then
@@ -82,6 +84,16 @@ else
     rm -f nginx/conf.d/legacy.extra
 fi
 
+# Optional: Firebase service account for Android push
+SYNC_FCM_SERVICE_ACCOUNT=false
+if [ -f "$LOCAL_FCM_SERVICE_ACCOUNT_FILE" ]; then
+    REMOTE_FCM_SERVICE_ACCOUNT_FILE="/app/secrets/service-account.json"
+    SYNC_FCM_SERVICE_ACCOUNT=true
+    echo "🔐 Found Firebase service account at $LOCAL_FCM_SERVICE_ACCOUNT_FILE"
+else
+    echo "ℹ️  No Firebase service account found at $LOCAL_FCM_SERVICE_ACCOUNT_FILE; Android push will rely on .env settings."
+fi
+
 # 3. Sync files to VPS
 echo "📤 Syncing files to VPS..."
 rsync -avzR \
@@ -98,10 +110,20 @@ rsync -avzR \
     coturn/ \
     "$VPS_HOST:$REMOTE_DIR/"
 
+if [ "$SYNC_FCM_SERVICE_ACCOUNT" = true ]; then
+    rsync -avzR "$LOCAL_FCM_SERVICE_ACCOUNT_FILE" "$VPS_HOST:$REMOTE_DIR/"
+fi
+
 # 4. Copy production env file and restart services
 echo "🔄 Restarting production services..."
 ssh "$VPS_HOST" "cd $REMOTE_DIR && \
     cp .env.production .env && \
+    if [ -f $LOCAL_FCM_SERVICE_ACCOUNT_FILE ]; then \
+      chmod 600 $LOCAL_FCM_SERVICE_ACCOUNT_FILE; \
+      awk '!/^FCM_SERVICE_ACCOUNT_FILE=|^FCM_SERVICE_ACCOUNT_JSON=/' .env > .env.tmp && mv .env.tmp .env; \
+      echo FCM_SERVICE_ACCOUNT_FILE=$REMOTE_FCM_SERVICE_ACCOUNT_FILE >> .env; \
+      echo '✅ Configured FCM_SERVICE_ACCOUNT_FILE in .env'; \
+    fi && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
 

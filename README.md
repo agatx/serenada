@@ -16,7 +16,7 @@ A simple, privacy-focused 1:1 video calling application built with WebRTC. No ac
 - **Android camera source cycle** – In-call source switch cycles through `selfie` (default) -> `world` -> `composite` (world feed with circular selfie overlay), automatically skips `composite` when unsupported, and shows a flashlight toggle in `world`/`composite` when flash hardware is available; flashlight preference is remembered during the call and reapplied when returning to supported modes
 - **Android HD video toggle (experimental)** – Settings include an `HD Video (experimental)` switch for higher camera/composite quality; default mode keeps legacy `640x480` camera constraints for stability
 - **Self-hostable** – Run your own instance with full control
-- **Optional join alerts** – Encrypted push notifications with snapshot previews (opt-in)
+- **Optional join alerts** – Encrypted push notifications with snapshot previews (web + native Android)
 
 ## Quick Start
 
@@ -70,6 +70,7 @@ The native Android app lives in `client-android/`.
 
 By default the app targets `https://serenada.app`, and the server host can be changed in Settings.
 The Android app language can also be set in Settings: `Auto (default)`, `English`, `Русский`, `Español`, `Français`. `Auto` follows the device language and falls back to English.
+To enable native Android push receive, provide Firebase Gradle properties when building the app (`firebaseAppId`, `firebaseApiKey`, `firebaseProjectId`, `firebaseSenderId`).
 
 ### Production Deployment
 

@@ -1,6 +1,6 @@
 # Serenada Android Client
 
-Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors the core call flow of the web client and uses WebSocket signaling only (no SSE signaling fallback and no native push receive flow in the current build).
+Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors the core call flow of the web client and uses WebSocket signaling only (no SSE signaling fallback).
 
 ## Features
 - 1:1 WebRTC audio/video calls
@@ -15,10 +15,10 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - Foreground service to keep active calls running in the background
 - Settings screen to change server host, with host validation on save
 - Encrypted join snapshot upload (`snapshotId` on `join`) so server push notifications can include a thumbnail when Android is the joiner
+- Native push receive via Firebase Cloud Messaging, including encrypted snapshot decryption and `BigPicture` notifications in background/terminated app states
 
 ## Not included (current build)
 - SSE signaling fallback
-- Native push subscription/notification receive UI flow
 - Multi-party calls
 
 ## Requirements
@@ -69,6 +69,23 @@ cd client-android
 Release output:
 ```
 app/build/outputs/apk/release/app-release.apk
+```
+
+### Firebase push configuration
+Native push receive requires these Gradle properties at build time:
+- `firebaseAppId`
+- `firebaseApiKey`
+- `firebaseProjectId`
+- `firebaseSenderId`
+
+Example:
+```bash
+cd client-android
+./gradlew :app:assembleDebug \
+  -PfirebaseAppId=1:1234567890:android:abc123 \
+  -PfirebaseApiKey=AIza... \
+  -PfirebaseProjectId=your-project-id \
+  -PfirebaseSenderId=1234567890
 ```
 
 ## Install on a physical device
@@ -180,6 +197,5 @@ During active call flows, WebRTC runtime stats are emitted to logcat every ~2s a
 
 ## Known limitations
 - WebSocket signaling only
-- No push notifications
 - No SSE fallback
 - Composite mode depends on device support for concurrent front+back camera capture; unsupported devices fall back to non-composite camera sources
