@@ -2,6 +2,15 @@ package app.serenada.android.call
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
@@ -11,6 +20,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -20,6 +30,9 @@ import app.serenada.android.data.RecentCallStore
 import app.serenada.android.data.SettingsStore
 import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.ApiClient
+import app.serenada.android.network.PushRecipient
+import app.serenada.android.network.PushSnapshotRecipient
+import app.serenada.android.network.PushSnapshotUploadRequest
 import app.serenada.android.network.TurnCredentials
 import app.serenada.android.service.CallService
 import okhttp3.OkHttpClient
@@ -28,6 +41,26 @@ import org.json.JSONObject
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
 import org.webrtc.SessionDescription
+import org.webrtc.VideoFrame
+import java.io.ByteArrayOutputStream
+import java.math.BigInteger
+import java.nio.ByteBuffer
+import java.security.KeyFactory
+import java.security.KeyPairGenerator
+import java.security.PrivateKey
+import java.security.PublicKey
+import java.security.SecureRandom
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECPublicKeySpec
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.crypto.Cipher
+import javax.crypto.KeyAgreement
+import javax.crypto.Mac
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import kotlin.concurrent.thread
+import kotlin.math.min
 
 class CallManager(context: Context) {
     private val appContext = context.applicationContext
@@ -38,6 +71,7 @@ class CallManager(context: Context) {
     private val recentCallStore = RecentCallStore(appContext)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
 
@@ -85,6 +119,8 @@ class CallManager(context: Context) {
     private var callStartTimeMs: Long? = null
     private var watchedRoomIds: List<String> = emptyList()
     private var pendingJoinRoom: String? = null
+    private var pendingJoinSnapshotId: String? = null
+    private var joinAttemptSerial = 0L
     private var reconnectAttempts = 0
     private var sentOffer = false
     private var isMakingOffer = false
@@ -98,108 +134,18 @@ class CallManager(context: Context) {
     private val pendingMessages = ArrayDeque<SignalingMessage>()
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var wifiPerformanceLock: WifiManager.WifiLock? = null
+    private var audioSessionActive = false
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var audioFocusGranted = false
+    private var previousAudioMode = AudioManager.MODE_NORMAL
+    private var previousSpeakerphoneOn = false
+    private var previousMicrophoneMute = false
+    private val secureRandom = SecureRandom()
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        Log.d("CallManager", "Audio focus changed: $focusChange")
+    }
 
-    private val webRtcEngine = WebRtcEngine(
-        context = appContext,
-        onLocalIceCandidate = { candidate ->
-            val payload = JSONObject().apply {
-                val candidateJson = JSONObject()
-                candidateJson.put("candidate", candidate.sdp)
-                candidateJson.put("sdpMid", candidate.sdpMid)
-                candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
-                put("candidate", candidateJson)
-            }
-            sendMessage("ice", payload)
-        },
-        onConnectionState = { state ->
-            handler.post {
-                val messageResId = when (state) {
-                    PeerConnection.PeerConnectionState.CONNECTED -> R.string.call_status_connected
-                    PeerConnection.PeerConnectionState.CONNECTING -> R.string.call_status_connecting
-                    PeerConnection.PeerConnectionState.DISCONNECTED -> R.string.call_status_disconnected
-                    PeerConnection.PeerConnectionState.FAILED -> R.string.call_status_connection_failed
-                    PeerConnection.PeerConnectionState.CLOSED -> R.string.call_status_call_ended
-                    else -> null
-                }
-                updateState(_uiState.value.copy(
-                    statusMessageResId = messageResId,
-                    connectionState = state.name
-                ))
-                when (state) {
-                    PeerConnection.PeerConnectionState.CONNECTED -> {
-                        clearIceRestartTimer()
-                        pendingIceRestart = false
-                    }
-                    PeerConnection.PeerConnectionState.DISCONNECTED -> scheduleIceRestart("conn-disconnected", 2000)
-                    PeerConnection.PeerConnectionState.FAILED -> scheduleIceRestart("conn-failed", 0)
-                    else -> {}
-                }
-            }
-        },
-        onIceConnectionState = { state ->
-            handler.post {
-                updateState(_uiState.value.copy(iceConnectionState = state.name))
-                when (state) {
-                    PeerConnection.IceConnectionState.DISCONNECTED -> scheduleIceRestart("ice-disconnected", 2000)
-                    PeerConnection.IceConnectionState.FAILED -> scheduleIceRestart("ice-failed", 0)
-                    PeerConnection.IceConnectionState.CONNECTED,
-                    PeerConnection.IceConnectionState.COMPLETED -> {
-                        clearIceRestartTimer()
-                        pendingIceRestart = false
-                    }
-                    else -> {}
-                }
-            }
-        },
-        onSignalingState = { state ->
-            handler.post {
-                if (state == PeerConnection.SignalingState.STABLE) {
-                    clearOfferTimeout()
-                    if (pendingIceRestart) {
-                        pendingIceRestart = false
-                        triggerIceRestart("pending-retry")
-                    }
-                }
-                updateState(_uiState.value.copy(signalingState = state.name))
-            }
-        },
-        onRenegotiationNeededCallback = {
-            handler.post { maybeSendOffer(force = true, iceRestart = false) }
-        },
-        onRemoteVideoTrack = { _ ->
-            handler.post {
-                refreshRemoteVideoEnabled()
-            }
-        },
-        onCameraFacingChanged = { isFront ->
-            handler.post {
-                updateState(_uiState.value.copy(isFrontCamera = isFront))
-            }
-        },
-        onCameraModeChanged = { mode ->
-            handler.post {
-                updateState(_uiState.value.copy(localCameraMode = mode))
-            }
-        },
-        onFlashlightStateChanged = { available, enabled ->
-            handler.post {
-                updateState(
-                    _uiState.value.copy(
-                        isFlashAvailable = available,
-                        isFlashEnabled = enabled
-                    )
-                )
-            }
-        },
-        onScreenShareStopped = {
-            handler.post {
-                if (_uiState.value.isScreenSharing) {
-                    updateState(_uiState.value.copy(isScreenSharing = false))
-                }
-            }
-        },
-        isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled
-    )
+    private var webRtcEngine = buildWebRtcEngine()
 
     private val signalingClient = SignalingClient(okHttpClient, handler, object : SignalingClient.Listener {
         override fun onOpen() {
@@ -207,7 +153,7 @@ class CallManager(context: Context) {
             updateState(_uiState.value.copy(isSignalingConnected = true))
             pendingJoinRoom?.let { join ->
                 pendingJoinRoom = null
-                sendJoin(join)
+                sendJoin(join, pendingJoinSnapshotId)
             }
             sendWatchRoomsIfNeeded()
             if (pendingIceRestart) {
@@ -230,6 +176,127 @@ class CallManager(context: Context) {
     init {
         registerConnectivityListener()
         refreshRecentCalls()
+    }
+
+    private fun buildWebRtcEngine(): WebRtcEngine {
+        return WebRtcEngine(
+            context = appContext,
+            onLocalIceCandidate = { candidate ->
+                val payload = JSONObject().apply {
+                    val candidateJson = JSONObject()
+                    candidateJson.put("candidate", candidate.sdp)
+                    candidateJson.put("sdpMid", candidate.sdpMid)
+                    candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
+                    put("candidate", candidateJson)
+                }
+                sendMessage("ice", payload)
+            },
+            onConnectionState = { state ->
+                handler.post {
+                    val messageResId = when (state) {
+                        PeerConnection.PeerConnectionState.CONNECTED -> R.string.call_status_connected
+                        PeerConnection.PeerConnectionState.CONNECTING -> R.string.call_status_connecting
+                        PeerConnection.PeerConnectionState.DISCONNECTED -> R.string.call_status_disconnected
+                        PeerConnection.PeerConnectionState.FAILED -> R.string.call_status_connection_failed
+                        PeerConnection.PeerConnectionState.CLOSED -> R.string.call_status_call_ended
+                        else -> null
+                    }
+                    updateState(
+                        _uiState.value.copy(
+                            statusMessageResId = messageResId,
+                            connectionState = state.name
+                        )
+                    )
+                    when (state) {
+                        PeerConnection.PeerConnectionState.CONNECTED -> {
+                            clearIceRestartTimer()
+                            pendingIceRestart = false
+                        }
+
+                        PeerConnection.PeerConnectionState.DISCONNECTED -> scheduleIceRestart(
+                            "conn-disconnected",
+                            2000
+                        )
+
+                        PeerConnection.PeerConnectionState.FAILED -> scheduleIceRestart("conn-failed", 0)
+                        else -> {}
+                    }
+                }
+            },
+            onIceConnectionState = { state ->
+                handler.post {
+                    updateState(_uiState.value.copy(iceConnectionState = state.name))
+                    when (state) {
+                        PeerConnection.IceConnectionState.DISCONNECTED -> scheduleIceRestart(
+                            "ice-disconnected",
+                            2000
+                        )
+
+                        PeerConnection.IceConnectionState.FAILED -> scheduleIceRestart("ice-failed", 0)
+                        PeerConnection.IceConnectionState.CONNECTED,
+                        PeerConnection.IceConnectionState.COMPLETED -> {
+                            clearIceRestartTimer()
+                            pendingIceRestart = false
+                        }
+
+                        else -> {}
+                    }
+                }
+            },
+            onSignalingState = { state ->
+                handler.post {
+                    if (state == PeerConnection.SignalingState.STABLE) {
+                        clearOfferTimeout()
+                        if (pendingIceRestart) {
+                            pendingIceRestart = false
+                            triggerIceRestart("pending-retry")
+                        }
+                    }
+                    updateState(_uiState.value.copy(signalingState = state.name))
+                }
+            },
+            onRenegotiationNeededCallback = {
+                handler.post { maybeSendOffer(force = true, iceRestart = false) }
+            },
+            onRemoteVideoTrack = { _ ->
+                handler.post {
+                    refreshRemoteVideoEnabled()
+                }
+            },
+            onCameraFacingChanged = { isFront ->
+                handler.post {
+                    updateState(_uiState.value.copy(isFrontCamera = isFront))
+                }
+            },
+            onCameraModeChanged = { mode ->
+                handler.post {
+                    updateState(_uiState.value.copy(localCameraMode = mode))
+                }
+            },
+            onFlashlightStateChanged = { available, enabled ->
+                handler.post {
+                    updateState(
+                        _uiState.value.copy(
+                            isFlashAvailable = available,
+                            isFlashEnabled = enabled
+                        )
+                    )
+                }
+            },
+            onScreenShareStopped = {
+                handler.post {
+                    if (_uiState.value.isScreenSharing) {
+                        updateState(_uiState.value.copy(isScreenSharing = false))
+                    }
+                }
+            },
+            isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled
+        )
+    }
+
+    private fun recreateWebRtcEngineForNewCall() {
+        runCatching { webRtcEngine.release() }
+        webRtcEngine = buildWebRtcEngine()
     }
 
     private fun registerConnectivityListener() {
@@ -380,10 +447,13 @@ class CallManager(context: Context) {
             return
         }
         currentRoomId = roomId
+        val joinAttemptId = ++joinAttemptSerial
         callStartTimeMs = System.currentTimeMillis()
         sentOffer = false
         pendingMessages.clear()
+        pendingJoinSnapshotId = null
 
+        recreateWebRtcEngineForNewCall()
 
         val defaultAudio = settingsStore.isDefaultMicrophoneEnabled
         val defaultVideo = settingsStore.isDefaultCameraEnabled
@@ -405,6 +475,7 @@ class CallManager(context: Context) {
         )
 
         acquirePerformanceLocks()
+        activateAudioSession()
         webRtcEngine.startLocalMedia()
 
         // Apply defaults immediately after starting media
@@ -412,7 +483,7 @@ class CallManager(context: Context) {
         if (!defaultVideo) webRtcEngine.toggleVideo(false)
 
         startRemoteVideoStatePolling()
-        ensureSignalingConnection()
+        prepareJoinSnapshotAndConnect(roomId, joinAttemptId)
         CallService.start(appContext, roomId)
     }
 
@@ -560,7 +631,7 @@ class CallManager(context: Context) {
         if (signalingClient.isConnected()) {
             if (!roomToJoin.isNullOrBlank()) {
                 pendingJoinRoom = null
-                sendJoin(roomToJoin)
+                sendJoin(roomToJoin, pendingJoinSnapshotId)
             }
             sendWatchRoomsIfNeeded()
             return
@@ -569,13 +640,18 @@ class CallManager(context: Context) {
         signalingClient.connect(serverHost.value)
     }
 
-    private fun sendJoin(roomId: String) {
+    private fun sendJoin(roomId: String, snapshotId: String? = null) {
         val payload = JSONObject().apply {
             put("device", "android")
             put("capabilities", JSONObject().apply { put("trickleIce", true) })
             val reconnectCid = clientId ?: settingsStore.reconnectCid
             reconnectCid?.let { put("reconnectCid", it) }
+            val joinSnapshotId = snapshotId?.ifBlank { null }
+            if (joinSnapshotId != null) {
+                put("snapshotId", joinSnapshotId)
+            }
         }
+        pendingJoinSnapshotId = null
         val msg = SignalingMessage(
             type = "join",
             rid = roomId,
@@ -1021,6 +1097,7 @@ class CallManager(context: Context) {
     }
 
     private fun resetResources() {
+        deactivateAudioSession()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
         signalingClient.close()
@@ -1038,6 +1115,94 @@ class CallManager(context: Context) {
         pendingIceRestart = false
         clearOfferTimeout()
         clearIceRestartTimer()
+    }
+
+    private fun activateAudioSession() {
+        if (audioSessionActive) return
+        audioSessionActive = true
+        previousAudioMode = audioManager.mode
+        previousSpeakerphoneOn = audioManager.isSpeakerphoneOn
+        previousMicrophoneMute = audioManager.isMicrophoneMute
+        requestAudioFocus()
+        runCatching {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isMicrophoneMute = false
+            audioManager.isSpeakerphoneOn = false
+        }.onSuccess {
+            Log.d(
+                "CallManager",
+                "Audio session activated (prevMode=$previousAudioMode, focusGranted=$audioFocusGranted)"
+            )
+        }.onFailure { error ->
+            Log.w("CallManager", "Failed to activate audio session", error)
+        }
+    }
+
+    private fun deactivateAudioSession() {
+        if (!audioSessionActive) {
+            abandonAudioFocus()
+            return
+        }
+        audioSessionActive = false
+        runCatching {
+            audioManager.isMicrophoneMute = previousMicrophoneMute
+            audioManager.isSpeakerphoneOn = previousSpeakerphoneOn
+            audioManager.mode = previousAudioMode
+        }.onSuccess {
+            Log.d("CallManager", "Audio session restored (mode=$previousAudioMode)")
+        }.onFailure { error ->
+            Log.w("CallManager", "Failed to restore audio session", error)
+        }
+        abandonAudioFocus()
+    }
+
+    private fun requestAudioFocus() {
+        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request =
+                audioFocusRequest
+                    ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build()
+                        )
+                        .setAcceptsDelayedFocusGain(false)
+                        .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                        .build()
+                        .also { audioFocusRequest = it }
+            audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_VOICE_CALL,
+                AudioManager.AUDIOFOCUS_GAIN
+            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }
+        audioFocusGranted = granted
+        Log.d("CallManager", "Audio focus request granted=$granted")
+    }
+
+    private fun abandonAudioFocus() {
+        if (!audioFocusGranted) return
+        audioFocusGranted = false
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = audioFocusRequest
+                if (request != null) {
+                    audioManager.abandonAudioFocusRequest(request)
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(audioFocusChangeListener)
+            }
+            Unit
+        }.onSuccess {
+            Log.d("CallManager", "Audio focus abandoned")
+        }.onFailure { error ->
+            Log.w("CallManager", "Failed to abandon audio focus", error)
+        }
     }
 
     private fun acquirePerformanceLocks() {

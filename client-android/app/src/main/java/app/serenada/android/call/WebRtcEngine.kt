@@ -9,6 +9,9 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.display.DisplayManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.Handler
@@ -51,6 +54,8 @@ import org.webrtc.VideoCapturer
 import org.webrtc.VideoSink
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import org.webrtc.audio.AudioDeviceModule
+import org.webrtc.audio.JavaAudioDeviceModule
 
 class WebRtcEngine(
     context: Context,
@@ -102,9 +107,11 @@ class WebRtcEngine(
 
     private val appContext = context.applicationContext
     private val eglBase: EglBase = EglBase.create()
+    private val audioDeviceModule: AudioDeviceModule = createAudioDeviceModule(appContext)
     private val peerConnectionFactory: PeerConnectionFactory
     private val cameraManager = appContext.getSystemService(CameraManager::class.java)
     private val fallbackTorchCameraId: String? = findTorchCameraId()
+    private var released = false
 
     private var peerConnection: PeerConnection? = null
     private var localVideoTrack: VideoTrack? = null
@@ -155,6 +162,7 @@ class WebRtcEngine(
         val encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, false)
         val decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
         peerConnectionFactory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDeviceModule)
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
@@ -173,9 +181,70 @@ class WebRtcEngine(
         }
     }
 
+    private fun createAudioDeviceModule(context: Context): AudioDeviceModule {
+        val builder = JavaAudioDeviceModule.builder(context)
+        configureAudioDeviceModule(builder)
+        return builder.createAudioDeviceModule()
+    }
+
+    private fun configureAudioDeviceModule(builder: JavaAudioDeviceModule.Builder) {
+        builder
+            .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            .setAudioFormat(AudioFormat.ENCODING_PCM_16BIT)
+            .setUseHardwareAcousticEchoCanceler(true)
+            .setUseHardwareNoiseSuppressor(true)
+            .setUseLowLatency(true)
+            .setUseStereoInput(false)
+            .setUseStereoOutput(false)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setEnableVolumeLogger(false)
+            .setAudioTrackErrorCallback(
+                object : JavaAudioDeviceModule.AudioTrackErrorCallback {
+                    override fun onWebRtcAudioTrackInitError(errorMessage: String?) {
+                        Log.w("WebRtcEngine", "AudioTrack init error: $errorMessage")
+                    }
+
+                    override fun onWebRtcAudioTrackStartError(
+                        errorCode: JavaAudioDeviceModule.AudioTrackStartErrorCode?,
+                        errorMessage: String?
+                    ) {
+                        Log.w("WebRtcEngine", "AudioTrack start error: code=$errorCode message=$errorMessage")
+                    }
+
+                    override fun onWebRtcAudioTrackError(errorMessage: String?) {
+                        Log.w("WebRtcEngine", "AudioTrack runtime error: $errorMessage")
+                    }
+                }
+            )
+            .setAudioRecordErrorCallback(
+                object : JavaAudioDeviceModule.AudioRecordErrorCallback {
+                    override fun onWebRtcAudioRecordInitError(errorMessage: String?) {
+                        Log.w("WebRtcEngine", "AudioRecord init error: $errorMessage")
+                    }
+
+                    override fun onWebRtcAudioRecordStartError(
+                        errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode?,
+                        errorMessage: String?
+                    ) {
+                        Log.w("WebRtcEngine", "AudioRecord start error: code=$errorCode message=$errorMessage")
+                    }
+
+                    override fun onWebRtcAudioRecordError(errorMessage: String?) {
+                        Log.w("WebRtcEngine", "AudioRecord runtime error: $errorMessage")
+                    }
+                }
+            )
+    }
+
     fun getEglContext(): EglBase.Context = eglBase.eglBaseContext
 
     fun startLocalMedia() {
+        if (released) return
         if (localAudioTrack != null || localVideoTrack != null) return
         cancelTorchRetry()
         activeTorchCameraId = null
@@ -243,11 +312,17 @@ class WebRtcEngine(
     }
 
     fun release() {
+        if (released) return
+        released = true
         stopLocalMedia()
         closePeerConnection()
+        runCatching { peerConnectionFactory.dispose() }
+        runCatching { audioDeviceModule.release() }
+        runCatching { eglBase.release() }
     }
 
     fun setIceServers(servers: List<PeerConnection.IceServer>) {
+        if (released) return
         Log.d("WebRtcEngine", "ICE servers set: ${servers.size}")
         iceServers = servers
         createPeerConnectionIfReady()
