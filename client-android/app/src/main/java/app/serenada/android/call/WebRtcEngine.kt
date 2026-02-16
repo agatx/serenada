@@ -354,20 +354,20 @@ class WebRtcEngine(
     fun flipCamera() {
         if (isScreenSharing) return
         if (videoSource == null) return
-        var target = when (currentCameraSource) {
-            LocalCameraSource.SELFIE -> LocalCameraSource.WORLD
-            LocalCameraSource.WORLD -> LocalCameraSource.COMPOSITE
-            LocalCameraSource.COMPOSITE -> LocalCameraSource.SELFIE
-        }
-        if (target == LocalCameraSource.COMPOSITE && !canUseCompositeSource()) {
+        val compositeAvailable = canUseCompositeSource()
+        val targetMode = nextFlipCameraMode(
+            current = activeCameraMode(),
+            compositeAvailable = compositeAvailable
+        )
+        val target = cameraSourceFromMode(targetMode)
+        if (!compositeAvailable && targetMode == LocalCameraMode.SELFIE && currentCameraSource == LocalCameraSource.WORLD) {
             Log.w("WebRtcEngine", "Composite source unavailable; skipping to ${LocalCameraSource.SELFIE}")
-            target = LocalCameraSource.SELFIE
         }
         if (restartVideoCapturer(target)) {
             return
         }
         Log.w("WebRtcEngine", "Failed to switch camera source to $target")
-        val fallback = if (target == LocalCameraSource.COMPOSITE) {
+        val fallback = if (targetMode == LocalCameraMode.COMPOSITE) {
             compositeDisabledAfterFailure = true
             LocalCameraSource.SELFIE
         } else {
@@ -1527,10 +1527,23 @@ class WebRtcEngine(
 
     private fun activeCameraMode(): LocalCameraMode {
         if (isScreenSharing) return LocalCameraMode.SCREEN_SHARE
-        return when (currentCameraSource) {
+        return cameraModeFromSource(currentCameraSource)
+    }
+
+    private fun cameraModeFromSource(source: LocalCameraSource): LocalCameraMode {
+        return when (source) {
             LocalCameraSource.SELFIE -> LocalCameraMode.SELFIE
             LocalCameraSource.WORLD -> LocalCameraMode.WORLD
             LocalCameraSource.COMPOSITE -> LocalCameraMode.COMPOSITE
+        }
+    }
+
+    private fun cameraSourceFromMode(mode: LocalCameraMode): LocalCameraSource {
+        return when (mode) {
+            LocalCameraMode.SELFIE -> LocalCameraSource.SELFIE
+            LocalCameraMode.WORLD -> LocalCameraSource.WORLD
+            LocalCameraMode.COMPOSITE -> LocalCameraSource.COMPOSITE
+            LocalCameraMode.SCREEN_SHARE -> LocalCameraSource.SELFIE
         }
     }
 

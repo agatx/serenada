@@ -66,6 +66,13 @@ bash tools/build_libwebrtc_android_7559.sh
 The script outputs:
 `/opt/webrtc-build/artifacts/libwebrtc-7559_173-arm64-curlroots.aar`
 
+After replacing `app/libs/libwebrtc-7559_173-arm64.aar`, update the pinned SHA-256 file used by Gradle verification:
+```bash
+cd client-android
+shasum -a 256 app/libs/libwebrtc-7559_173-arm64.aar | awk '{print $1}' > app/libs/libwebrtc-7559_173-arm64.aar.sha256
+```
+`assembleDebug`/`assembleRelease` will fail if the checksum does not match.
+
 Release APK (signed):
 ```bash
 cd client-android
@@ -75,6 +82,12 @@ cd client-android
 Release output:
 ```
 app/build/outputs/apk/release/app-release.apk
+```
+
+Run unit tests:
+```bash
+cd client-android
+./gradlew :app:testDebugUnitTest
 ```
 
 ### Firebase push configuration

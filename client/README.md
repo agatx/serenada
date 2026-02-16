@@ -14,6 +14,7 @@ React single-page app built with Vite. The client connects to the Go signaling s
 - `npm run build`: typecheck and build production assets.
 - `npm run preview`: preview the production build.
 - `npm run lint`: run ESLint.
+- `npm run test`: run unit tests.
 
 ## Local development
 1. Start the Go server in `server` (see root README).

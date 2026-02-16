@@ -4,6 +4,7 @@ import { createSignalingTransport } from './signaling/transports';
 import type { TransportKind } from './signaling/transports';
 import type { RoomState, SignalingMessage } from './signaling/types';
 import { getConfiguredTransportOrder, parseTransportOrder } from './signaling/transportConfig';
+import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './signaling/roomStatuses';
 import { useTranslation } from 'react-i18next';
 
 interface SignalingContextValue {
@@ -127,15 +128,12 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 break;
             case 'room_statuses':
                 if (msg.payload) {
-                    setRoomStatuses(prev => ({ ...prev, ...msg.payload }));
+                    setRoomStatuses(prev => mergeRoomStatusesPayload(prev, msg.payload));
                 }
                 break;
             case 'room_status_update':
                 if (msg.payload) {
-                    setRoomStatuses(prev => ({
-                        ...prev,
-                        [msg.payload.rid]: msg.payload.count
-                    }));
+                    setRoomStatuses(prev => mergeRoomStatusUpdatePayload(prev, msg.payload));
                 }
                 break;
             case 'error':
