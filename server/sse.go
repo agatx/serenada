@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"serenada/server/internal/stats"
 )
 
 const (
@@ -39,6 +41,8 @@ func handleSSE(hub *Hub) http.HandlerFunc {
 }
 
 func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	stats.IncConnectionAttempt("sse")
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -47,6 +51,7 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		stats.IncConnectionFailure("sse")
 		return
 	}
 
@@ -57,11 +62,14 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	ip := getClientIP(r)
 	client := &Client{hub: hub, send: make(chan []byte, 256), sid: sid, ip: ip, transport: TransportSSE}
-	if existing := hub.getClientBySID(sid); existing != nil {
+	existing := hub.getClientBySID(sid)
+	if existing != nil {
 		hub.replaceClient(existing, client)
 	} else {
 		hub.registerClient(client)
+		stats.AddActiveSSEClients(1)
 	}
+	stats.IncConnectionSuccess("sse")
 	hub.markSSESeen(client)
 
 	log.Printf("[SSE] Client %s connected", client.sid)
@@ -164,6 +172,7 @@ func (h *Hub) handleDisconnectSSE(c *Client) {
 		h.mu.Unlock()
 		return
 	}
+	stats.IncDisconnect("sse")
 	go h.delayDisconnectSSE(c)
 }
 
@@ -196,6 +205,7 @@ func (h *Hub) evictStaleSSE() {
 	h.mu.RUnlock()
 
 	for _, client := range stale {
+		stats.IncDisconnect("sse_stale")
 		h.disconnectClient(client)
 	}
 }

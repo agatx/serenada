@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"serenada/server/internal/stats"
 )
 
 const (
@@ -29,9 +30,12 @@ type wsClient struct {
 }
 
 func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	stats.IncConnectionAttempt("ws")
+
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
+		stats.IncConnectionFailure("ws")
 		return
 	}
 
@@ -40,6 +44,8 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	client := &Client{hub: hub, send: make(chan []byte, 256), sid: sid, ip: ip, transport: TransportWS}
 
 	hub.registerClient(client)
+	stats.IncConnectionSuccess("ws")
+	stats.AddActiveWSClients(1)
 
 	ws := &wsClient{client: client, conn: conn}
 	go ws.writePump()
@@ -68,6 +74,7 @@ func (c *wsClient) readPump() {
 }
 
 func (h *Hub) handleDisconnectWS(c *Client) {
+	stats.IncDisconnect("ws")
 	go h.delayDisconnectWS(c)
 }
 
