@@ -2,10 +2,6 @@ package app.serenada.android.call
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.AudioDeviceInfo
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
@@ -44,7 +40,6 @@ class CallManager(context: Context) {
     private val recentCallStore = RecentCallStore(appContext)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
 
@@ -104,15 +99,19 @@ class CallManager(context: Context) {
     private val pendingMessages = ArrayDeque<SignalingMessage>()
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var wifiPerformanceLock: WifiManager.WifiLock? = null
-    private var audioSessionActive = false
-    private var audioFocusRequest: AudioFocusRequest? = null
-    private var audioFocusGranted = false
-    private var previousAudioMode = AudioManager.MODE_NORMAL
-    private var previousSpeakerphoneOn = false
-    private var previousMicrophoneMute = false
-    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
-        Log.d("CallManager", "Audio focus changed: $focusChange")
-    }
+    private var userPreferredVideoEnabled = true
+    private var isVideoPausedByProximity = false
+    private val callAudioSessionController = CallAudioSessionController(
+        context = appContext,
+        handler = handler,
+        onProximityChanged = { near ->
+            Log.d("CallManager", "Proximity sensor changed: ${if (near) "NEAR" else "FAR"}")
+            applyLocalVideoPreference()
+        },
+        onAudioEnvironmentChanged = {
+            applyLocalVideoPreference()
+        }
+    )
 
     private var webRtcEngine = buildWebRtcEngine()
     private val pushSubscriptionManager = PushSubscriptionManager(
@@ -273,6 +272,7 @@ class CallManager(context: Context) {
                     if (_uiState.value.isScreenSharing) {
                         updateState(_uiState.value.copy(isScreenSharing = false))
                     }
+                    applyLocalVideoPreference()
                 }
             },
             isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled
@@ -437,6 +437,7 @@ class CallManager(context: Context) {
 
         val defaultAudio = settingsStore.isDefaultMicrophoneEnabled
         val defaultVideo = settingsStore.isDefaultCameraEnabled
+        userPreferredVideoEnabled = defaultVideo
 
         updateState(
             _uiState.value.copy(
@@ -460,7 +461,7 @@ class CallManager(context: Context) {
 
         // Apply defaults immediately after starting media
         if (!defaultAudio) webRtcEngine.toggleAudio(false)
-        if (!defaultVideo) webRtcEngine.toggleVideo(false)
+        applyLocalVideoPreference()
 
         startRemoteVideoStatePolling()
         prepareJoinSnapshotAndConnect(roomId, joinAttemptId)
@@ -502,9 +503,8 @@ class CallManager(context: Context) {
     }
 
     fun toggleVideo() {
-        val enabled = !_uiState.value.localVideoEnabled
-        webRtcEngine.toggleVideo(enabled)
-        updateState(_uiState.value.copy(localVideoEnabled = enabled))
+        userPreferredVideoEnabled = !userPreferredVideoEnabled
+        applyLocalVideoPreference()
     }
 
     fun toggleFlashlight() {
@@ -539,6 +539,7 @@ class CallManager(context: Context) {
             CallService.start(appContext, roomId)
         }
         updateState(_uiState.value.copy(isScreenSharing = false))
+        applyLocalVideoPreference()
     }
 
     private fun startScreenShareWhenForegroundReady(
@@ -553,6 +554,7 @@ class CallManager(context: Context) {
                 return
             }
             updateState(_uiState.value.copy(isScreenSharing = true))
+            applyLocalVideoPreference()
             return
         }
         if (attemptsRemaining <= 0) {
@@ -1146,124 +1148,39 @@ class CallManager(context: Context) {
         pendingIceRestart = false
         clearOfferTimeout()
         clearIceRestartTimer()
+        userPreferredVideoEnabled = true
+        isVideoPausedByProximity = false
+    }
+
+    private fun applyLocalVideoPreference() {
+        val shouldPauseForProximity =
+            callAudioSessionController.shouldPauseVideoForProximity(
+                isScreenSharing = _uiState.value.isScreenSharing
+            )
+        if (shouldPauseForProximity != isVideoPausedByProximity) {
+            isVideoPausedByProximity = shouldPauseForProximity
+            if (shouldPauseForProximity) {
+                Log.d("CallManager", "Pausing local video due to proximity NEAR")
+            } else {
+                Log.d(
+                    "CallManager",
+                    "Resuming local video after proximity FAR (userPreferredVideoEnabled=$userPreferredVideoEnabled)"
+                )
+            }
+        }
+        val enabled = userPreferredVideoEnabled && !shouldPauseForProximity
+        webRtcEngine.toggleVideo(enabled)
+        if (_uiState.value.localVideoEnabled != enabled) {
+            updateState(_uiState.value.copy(localVideoEnabled = enabled))
+        }
     }
 
     private fun activateAudioSession() {
-        if (audioSessionActive) return
-        audioSessionActive = true
-        previousAudioMode = audioManager.mode
-        previousSpeakerphoneOn = isSpeakerphoneEnabled()
-        previousMicrophoneMute = audioManager.isMicrophoneMute
-        requestAudioFocus()
-        runCatching {
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            audioManager.isMicrophoneMute = false
-            setSpeakerphoneEnabled(true)
-        }.onSuccess {
-            Log.d(
-                "CallManager",
-                "Audio session activated (prevMode=$previousAudioMode, focusGranted=$audioFocusGranted)"
-            )
-        }.onFailure { error ->
-            Log.w("CallManager", "Failed to activate audio session", error)
-        }
+        callAudioSessionController.activate()
     }
 
     private fun deactivateAudioSession() {
-        if (!audioSessionActive) {
-            abandonAudioFocus()
-            return
-        }
-        audioSessionActive = false
-        runCatching {
-            audioManager.isMicrophoneMute = previousMicrophoneMute
-            setSpeakerphoneEnabled(previousSpeakerphoneOn)
-            audioManager.mode = previousAudioMode
-        }.onSuccess {
-            Log.d("CallManager", "Audio session restored (mode=$previousAudioMode)")
-        }.onFailure { error ->
-            Log.w("CallManager", "Failed to restore audio session", error)
-        }
-        abandonAudioFocus()
-    }
-
-    private fun isSpeakerphoneEnabled(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            audioManager.communicationDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn
-        }
-    }
-
-    private fun setSpeakerphoneEnabled(enabled: Boolean) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (enabled) {
-                val speaker = audioManager.availableCommunicationDevices.firstOrNull {
-                    it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-                }
-                if (speaker == null || !audioManager.setCommunicationDevice(speaker)) {
-                    Log.w("CallManager", "Failed to route audio to built-in speaker")
-                }
-            } else {
-                audioManager.clearCommunicationDevice()
-            }
-            return
-        }
-
-        @Suppress("DEPRECATION")
-        run {
-            audioManager.isSpeakerphoneOn = enabled
-        }
-    }
-
-    private fun requestAudioFocus() {
-        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request =
-                audioFocusRequest
-                    ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                        .setAudioAttributes(
-                            AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                                .build()
-                        )
-                        .setAcceptsDelayedFocusGain(false)
-                        .setOnAudioFocusChangeListener(audioFocusChangeListener)
-                        .build()
-                        .also { audioFocusRequest = it }
-            audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(
-                audioFocusChangeListener,
-                AudioManager.STREAM_VOICE_CALL,
-                AudioManager.AUDIOFOCUS_GAIN
-            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        }
-        audioFocusGranted = granted
-        Log.d("CallManager", "Audio focus request granted=$granted")
-    }
-
-    private fun abandonAudioFocus() {
-        if (!audioFocusGranted) return
-        audioFocusGranted = false
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val request = audioFocusRequest
-                if (request != null) {
-                    audioManager.abandonAudioFocusRequest(request)
-                }
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.abandonAudioFocus(audioFocusChangeListener)
-            }
-            Unit
-        }.onSuccess {
-            Log.d("CallManager", "Audio focus abandoned")
-        }.onFailure { error ->
-            Log.w("CallManager", "Failed to abandon audio focus", error)
-        }
+        callAudioSessionController.deactivate()
     }
 
     private fun acquirePerformanceLocks() {
