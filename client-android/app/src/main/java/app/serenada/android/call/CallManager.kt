@@ -106,6 +106,7 @@ class CallManager(context: Context) {
         handler = handler,
         onProximityChanged = { near ->
             Log.d("CallManager", "Proximity sensor changed: ${if (near) "NEAR" else "FAR"}")
+            applyLocalVideoPreference()
         },
         onAudioEnvironmentChanged = {
             applyLocalVideoPreference()
@@ -502,9 +503,7 @@ class CallManager(context: Context) {
     }
 
     fun toggleVideo() {
-        // Toggle from the effective state so UI semantics remain intuitive even when proximity
-        // temporarily pauses local video.
-        userPreferredVideoEnabled = !_uiState.value.localVideoEnabled
+        userPreferredVideoEnabled = !userPreferredVideoEnabled
         applyLocalVideoPreference()
     }
 

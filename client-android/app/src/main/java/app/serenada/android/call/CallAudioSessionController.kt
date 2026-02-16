@@ -42,11 +42,11 @@ internal class CallAudioSessionController(
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<AudioDeviceInfo>) {
-            onAudioDevicesChanged()
+            handler.post { onAudioDevicesChanged() }
         }
 
         override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>) {
-            onAudioDevicesChanged()
+            handler.post { onAudioDevicesChanged() }
         }
     }
 
