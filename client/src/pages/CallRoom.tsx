@@ -812,6 +812,17 @@ const CallRoom: React.FC = () => {
                     handleControlsInteraction();
                 }}
             >
+                <button onClick={toggleMute} className={`btn-control ${isMuted ? 'active' : ''}`}>
+                    {isMuted ? <MicOff /> : <Mic />}
+                </button>
+                <button onClick={toggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
+                    {isCameraOff ? <VideoOff /> : <Video />}
+                </button>
+                {hasMultipleCameras && (
+                    <button onClick={flipCamera} className="btn-control" disabled={isScreenSharing}>
+                        <RotateCcw />
+                    </button>
+                )}
                 {showScreenShareControl && (
                     <button
                         onClick={() => {
@@ -828,17 +839,6 @@ const CallRoom: React.FC = () => {
                         {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
                     </button>
                 )}
-                {hasMultipleCameras && (
-                    <button onClick={flipCamera} className="btn-control" disabled={isScreenSharing}>
-                        <RotateCcw />
-                    </button>
-                )}
-                <button onClick={toggleMute} className={`btn-control ${isMuted ? 'active' : ''}`}>
-                    {isMuted ? <MicOff /> : <Mic />}
-                </button>
-                <button onClick={toggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
-                    {isCameraOff ? <VideoOff /> : <Video />}
-                </button>
                 <button onClick={handleLeave} className="btn-control btn-leave">
                     <PhoneOff />
                 </button>

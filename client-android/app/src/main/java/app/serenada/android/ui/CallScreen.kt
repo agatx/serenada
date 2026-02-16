@@ -522,32 +522,7 @@ fun CallScreen(
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Order: Screen Share, Flip, Mute, Camera, End call
-
-                    // Screen Share Button (New)
-                    ControlButton(
-                        onClick = {
-                            if (uiState.isScreenSharing) {
-                                onStopScreenShare()
-                            } else {
-                                screenShareLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-                            }
-                        },
-                        icon = if (uiState.isScreenSharing) {
-                            Icons.AutoMirrored.Filled.StopScreenShare
-                        } else {
-                            Icons.AutoMirrored.Filled.ScreenShare
-                        },
-                        backgroundColor = if (uiState.isScreenSharing) Color.Red else Color.White.copy(alpha = 0.2f)
-                    )
-
-                    // Flip Camera (Disable if Screen Sharing)
-                    ControlButton(
-                        onClick = onFlipCamera,
-                        icon = Icons.Default.FlipCameraIos,
-                        backgroundColor = if(uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f) else Color.White.copy(alpha = 0.2f),
-                        // Disabled visual appearance could be added here
-                    )
+                    // Order: Mute, Camera, Flip, Screen Share, End call
 
                     // Mute Button
                     ControlButton(
@@ -568,7 +543,34 @@ fun CallScreen(
                             else Icons.Default.VideocamOff,
                         backgroundColor =
                             if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
-                            else Color.Red
+                                else Color.Red
+                    )
+
+                    // Flip Camera
+                    ControlButton(
+                        onClick = onFlipCamera,
+                        icon = Icons.Default.FlipCameraIos,
+                        backgroundColor =
+                            if (uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f)
+                            else Color.White.copy(alpha = 0.2f),
+                        // Disabled visual appearance could be added here
+                    )
+
+                    // Screen Share Button
+                    ControlButton(
+                        onClick = {
+                            if (uiState.isScreenSharing) {
+                                onStopScreenShare()
+                            } else {
+                                screenShareLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+                            }
+                        },
+                        icon = if (uiState.isScreenSharing) {
+                            Icons.AutoMirrored.Filled.StopScreenShare
+                        } else {
+                            Icons.AutoMirrored.Filled.ScreenShare
+                        },
+                        backgroundColor = if (uiState.isScreenSharing) Color.Red else Color.White.copy(alpha = 0.2f)
                     )
 
                     // End Call Button
