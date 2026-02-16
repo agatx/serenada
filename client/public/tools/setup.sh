@@ -80,6 +80,23 @@ backup_file() {
   fi
 }
 
+apply_kernel_network_tuning() {
+  log "Applying kernel network tuning for high concurrent connections..."
+  $SUDO tee /etc/sysctl.d/99-serenada-scale.conf >/dev/null <<'SYSCTL'
+net.ipv4.ip_local_port_range = 1024 65535
+net.netfilter.nf_conntrack_max = 262144
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 8192
+net.core.netdev_max_backlog = 16384
+net.ipv4.tcp_fin_timeout = 15
+SYSCTL
+
+  $SUDO modprobe nf_conntrack >/dev/null 2>&1 || true
+  if ! $SUDO sysctl --system >/dev/null; then
+    warn "Failed to apply one or more sysctl values. Review /etc/sysctl.d/99-serenada-scale.conf."
+  fi
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO="sudo"
@@ -369,6 +386,8 @@ if $BUILD_FRONTEND; then
   $DOCKER run --rm ${DOCKER_RUN_USER} -v "$INSTALL_DIR/client:/app" -w /app "${NODE_IMAGE}" npm ci
   $DOCKER run --rm ${DOCKER_RUN_USER} -v "$INSTALL_DIR/client:/app" -w /app "${NODE_IMAGE}" npm run build
 fi
+
+apply_kernel_network_tuning
 
 log "Starting services with Docker Compose..."
 $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.prod.yml up -d --build

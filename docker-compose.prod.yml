@@ -2,6 +2,10 @@ services:
   app-server:
     ports:
       - "127.0.0.1:8080:8080"
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
   coturn:
     user: "root"
     network_mode: "host"
@@ -16,8 +20,12 @@ services:
       - --static-auth-secret=${TURN_SECRET}
 
   nginx:
-    network_mode: "host"
-    ports: []
+    ports:
+      - "443:443"
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
     volumes:
       - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf
       - ./nginx/conf.d:/etc/nginx/conf.d

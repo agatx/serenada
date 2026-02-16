@@ -114,7 +114,33 @@ if [ "$SYNC_FCM_SERVICE_ACCOUNT" = true ]; then
     rsync -avzR "$LOCAL_FCM_SERVICE_ACCOUNT_FILE" "$VPS_HOST:$REMOTE_DIR/"
 fi
 
-# 4. Copy production env file and restart services
+# 4. Apply kernel network tuning on VPS
+echo "🛠️ Applying kernel network tuning on VPS..."
+ssh "$VPS_HOST" <<'EOF'
+set -e
+
+if [ "$(id -u)" -ne 0 ]; then
+  SUDO="sudo"
+else
+  SUDO=""
+fi
+
+$SUDO tee /etc/sysctl.d/99-serenada-scale.conf >/dev/null <<'SYSCTL'
+net.ipv4.ip_local_port_range = 1024 65535
+net.netfilter.nf_conntrack_max = 262144
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 8192
+net.core.netdev_max_backlog = 16384
+net.ipv4.tcp_fin_timeout = 15
+SYSCTL
+
+$SUDO modprobe nf_conntrack >/dev/null 2>&1 || true
+if ! $SUDO sysctl --system >/dev/null; then
+  echo "⚠️  Failed to apply one or more sysctl values. Check /etc/sysctl.d/99-serenada-scale.conf" >&2
+fi
+EOF
+
+# 5. Copy production env file and restart services
 echo "🔄 Restarting production services..."
 ssh "$VPS_HOST" "cd $REMOTE_DIR && \
     cp .env.production .env && \
@@ -127,7 +153,7 @@ ssh "$VPS_HOST" "cd $REMOTE_DIR && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
 
-# 5. Verify deployment
+# 6. Verify deployment
 echo "✅ Verifying deployment..."
 sleep 3
 ssh "$VPS_HOST" "docker ps"
