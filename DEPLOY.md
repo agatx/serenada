@@ -42,6 +42,13 @@ Edit `.env.production` and set the following required variables:
 - `FCM_SERVICE_ACCOUNT_FILE` or `FCM_SERVICE_ACCOUNT_JSON` *(optional, required for native Android push receive)*:
   - `FCM_SERVICE_ACCOUNT_FILE`: absolute path on VPS to Firebase service-account JSON
   - `FCM_SERVICE_ACCOUNT_JSON`: inline JSON string (alternative to file path)
+- `RATE_LIMIT_BYPASS_IPS` *(optional, test-only)*: Comma-separated exact IPs/CIDRs that bypass HTTP rate limits (e.g. `127.0.0.1,10.0.0.0/8`)
+- `ENABLE_INTERNAL_STATS` *(optional, default disabled)*: Set to `1` only for controlled load testing to expose `/api/internal/stats`
+- `INTERNAL_STATS_TOKEN` *(optional, recommended when internal stats are enabled)*: Required as `X-Internal-Token` header on `/api/internal/stats`
+
+> [!WARNING]
+> Keep `ENABLE_INTERNAL_STATS` disabled in normal production operation.
+> Enable it only for short-lived controlled diagnostics/load tests.
 
 #### Configuration Templates
 Serenada uses templates to generate final configuration files during deployment. This ensures that domain names and IP addresses are consistently applied across all services.

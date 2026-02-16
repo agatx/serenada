@@ -8,6 +8,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"serenada/server/internal/stats"
 )
 
 const maxMessageSize = 65536 // 64KB
@@ -123,10 +125,13 @@ func (c *Client) sendMessage(msg interface{}) {
 		log.Printf("json error: %v", err)
 		return
 	}
+
+	stats.IncMessageTX(extractMessageType(msg))
 	select {
 	case c.send <- b:
 	default:
-		// Buffer full, drop or close
+		// Buffer full. We keep current behavior (drop), but account for it.
+		stats.IncSendQueueDrop()
 	}
 }
 
@@ -135,9 +140,12 @@ func (c *Client) sendMessage(msg interface{}) {
 func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 	var msg Message
 	if err := json.Unmarshal(msgBytes, &msg); err != nil {
+		stats.IncMessageRX("invalid_json")
 		c.sendError(msg.RID, "BAD_REQUEST", "Invalid JSON")
 		return
 	}
+
+	stats.IncMessageRX(msg.Type)
 
 	if msg.V != 1 {
 		c.sendError(msg.RID, "UNSUPPORTED_VERSION", "Only version 1 is supported")
@@ -170,6 +178,8 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 }
 
 func (h *Hub) handleJoin(c *Client, msg Message) {
+	joinStartedAt := time.Now()
+
 	rid := msg.RID
 	if rid == "" {
 		c.sendError("", "BAD_REQUEST", "Missing roomId")
@@ -338,6 +348,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		CID:     cid,
 		Payload: payloadBytes,
 	})
+	stats.RecordJoinLatency(time.Since(joinStartedAt))
 
 	// Broadcast room_state to others
 	h.broadcastRoomState(room)
@@ -496,6 +507,12 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 func (h *Hub) disconnectClient(c *Client) {
 	log.Printf("[DISCONNECT] Client %s disconnected", c.sid)
 	h.mu.Lock()
+	_, existed := h.clients[c]
+	if !existed {
+		h.mu.Unlock()
+		return
+	}
+
 	delete(h.clients, c)
 	delete(h.clientsBySID, c.sid)
 	// Remove from all watchers
@@ -506,6 +523,13 @@ func (h *Hub) disconnectClient(c *Client) {
 		}
 	}
 	h.mu.Unlock()
+
+	switch c.transport {
+	case TransportWS:
+		stats.AddActiveWSClients(-1)
+	case TransportSSE:
+		stats.AddActiveSSEClients(-1)
+	}
 
 	if c.rid != "" {
 		h.removeClientFromRoom(c)
@@ -617,6 +641,36 @@ func generateID(prefix string) string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return prefix + hex.EncodeToString(b)
+}
+
+func extractMessageType(msg interface{}) string {
+	switch v := msg.(type) {
+	case Message:
+		if v.Type != "" {
+			return v.Type
+		}
+	case *Message:
+		if v != nil && v.Type != "" {
+			return v.Type
+		}
+	}
+
+	return "unknown"
+}
+
+func (h *Hub) refreshStatsGauges() {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	stats.SetActiveClients(int64(len(h.clients)))
+	stats.SetActiveRooms(int64(len(h.rooms)))
+	stats.SetWatcherRooms(int64(len(h.watchers)))
+
+	var subscriptions int64
+	for _, clientSet := range h.watchers {
+		subscriptions += int64(len(clientSet))
+	}
+	stats.SetWatcherSubscriptions(subscriptions)
 }
 
 func (h *Hub) handleWatchRooms(c *Client, msg Message) {

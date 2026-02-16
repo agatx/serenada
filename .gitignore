@@ -26,3 +26,4 @@ client-android/keystore/
 secrets/
 .vscode/
 
+/server/loadtest/reports

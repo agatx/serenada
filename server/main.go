@@ -14,6 +14,7 @@ func main() {
 	// Load .env from current directory or parent directory (for local dev)
 	_ = godotenv.Load()
 	_ = godotenv.Load("../.env")
+	rateLimitBypass = parseRateLimitBypass(os.Getenv("RATE_LIMIT_BYPASS_IPS"))
 
 	// Initialize signaling
 	hub := newHub()
@@ -89,6 +90,7 @@ func main() {
 	http.HandleFunc("/api/turn-credentials", withTimeout(rateLimitMiddleware(turnCredsLimiter, enableCors(handleTurnCredentials())), 15*time.Second))
 	http.HandleFunc("/api/diagnostic-token", withTimeout(rateLimitMiddleware(diagnosticLimiter, enableCors(handleDiagnosticToken())), 15*time.Second))
 	http.HandleFunc("/api/room-id", withTimeout(rateLimitMiddleware(roomIDLimiter, enableCors(handleRoomID())), 15*time.Second))
+	http.HandleFunc("/api/internal/stats", withTimeout(handleInternalStats(hub), 5*time.Second))
 
 	// Push Routes
 	http.HandleFunc("/api/push/vapid-public-key", withTimeout(enableCors(handlePushVapidKey), 5*time.Second))

@@ -82,6 +82,45 @@ curl -fsSL https://serenada.app/tools/setup.sh -o setup-serenada.sh
 bash setup-serenada.sh
 ```
 
+### Load Testing (WS Signaling)
+
+The server includes an in-repo load conduit for signaling capacity validation.
+
+Quick run (local Docker stack):
+```bash
+./server/loadtest/run-local.sh
+```
+
+What it does:
+- Starts local services with `ENABLE_INTERNAL_STATS=1`
+- Validates `/api/room-id` and `/api/internal/stats`
+- Runs `go run ./cmd/loadconduit` from `server/`
+- Writes a JSON report to `server/loadtest/reports/`
+
+Common overrides:
+```bash
+START_CLIENTS=20 STEP_CLIENTS=20 MAX_CLIENTS=200 STEADY_SECONDS=600 ./server/loadtest/run-local.sh
+```
+
+Stabilization and join-tolerance controls:
+```bash
+PRE_RAMP_STABILIZE_SECONDS=10 MAX_JOIN_ERROR_RATE=0.005 ./server/loadtest/run-local.sh
+```
+
+To avoid local/NAT throttling while testing, set a bypass allowlist:
+```bash
+RATE_LIMIT_BYPASS_IPS=127.0.0.1,::1 ./server/loadtest/run-local.sh
+```
+
+Direct conduit usage:
+```bash
+cd server
+go run ./cmd/loadconduit --base-url http://localhost --report-json ./loadtest/reports/manual.json
+```
+
+Detailed request/timing sequence:
+- [`server/loadtest/LOAD_SIMULATION_SEQUENCE.md`](server/loadtest/LOAD_SIMULATION_SEQUENCE.md)
+
 ## Architecture
 
 ```
@@ -113,6 +152,8 @@ bash setup-serenada.sh
 - [Protocol Specification](serenada_protocol_v1.md) – Signaling protocol (WebSocket + SSE)
 - [Push Notifications](push-notifications.md) – Encrypted snapshot notifications
 - [Android Client README](client-android/README.md) – Kotlin native app setup and build notes
+- `server/loadtest/run-local.sh` – Local signaling load sweep runner
+- [`server/loadtest/LOAD_SIMULATION_SEQUENCE.md`](server/loadtest/LOAD_SIMULATION_SEQUENCE.md) – Detailed load-conduit HTTP/WS call sequence and timing
 
 ## Technology
 
