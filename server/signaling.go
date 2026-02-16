@@ -126,9 +126,9 @@ func (c *Client) sendMessage(msg interface{}) {
 		return
 	}
 
-	stats.IncMessageTX(extractMessageType(msg))
 	select {
 	case c.send <- b:
+		stats.IncMessageTX(extractMessageType(msg))
 	default:
 		// Buffer full. We keep current behavior (drop), but account for it.
 		stats.IncSendQueueDrop()

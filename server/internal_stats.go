@@ -19,18 +19,20 @@ func handleInternalStats(hub *Hub) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
+		if requiredToken == "" {
+			http.Error(w, "Internal stats token is required", http.StatusServiceUnavailable)
+			return
+		}
 
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		if requiredToken != "" {
-			provided := strings.TrimSpace(r.Header.Get("X-Internal-Token"))
-			if subtle.ConstantTimeCompare([]byte(provided), []byte(requiredToken)) != 1 {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		provided := strings.TrimSpace(r.Header.Get("X-Internal-Token"))
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(requiredToken)) != 1 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 
 		hub.refreshStatsGauges()

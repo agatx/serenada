@@ -22,7 +22,7 @@ Before the conduit starts its sweep, `server/loadtest/run-local.sh` performs:
 
 1. `docker compose up -d --build` with `ENABLE_INTERNAL_STATS=1`.
 2. `GET /api/room-id` (curl check).
-3. `GET /api/internal/stats` (adds `X-Internal-Token` if `INTERNAL_STATS_TOKEN` is set).
+3. `GET /api/internal/stats` with `X-Internal-Token` (run-local sets a local default token when unset).
 4. Starts `go run ./cmd/loadconduit ...`.
 
 ## 2) Sweep-level sequence (`runSweep`)
@@ -39,13 +39,13 @@ For each target concurrency step (`start-clients`, then `+step-clients`, until `
 
 1. Normalize clients to an even number (`paired` mode).
 2. Compute rooms: `targetRooms = targetClients / 2`.
-3. Fetch initial stats snapshot:
-   - `GET /api/internal/stats` (3s request timeout).
-   - Optional header: `X-Internal-Token: <stats-token>`.
-4. Pre-ramp stabilization wait (default `10s`, configurable by `--pre-ramp-stabilize-seconds`):
+3. Pre-ramp stabilization wait (default `10s`, configurable by `--pre-ramp-stabilize-seconds`):
    - waits before opening client sockets
    - polls `/api/internal/stats` during the wait (best effort)
    - if stats are available, requires idle gauges (`activeClients`, `activeWsClients`, `activeSseClients`) before ramping
+4. Fetch initial stats snapshot (baseline for deltas):
+   - `GET /api/internal/stats` (3s request timeout).
+   - Header: `X-Internal-Token: <stats-token>`.
 
 ### B. Room ID allocation
 

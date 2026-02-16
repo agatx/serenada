@@ -22,6 +22,8 @@ if [[ -n "${OVERRIDE_INTERNAL_STATS_TOKEN}" ]]; then
   INTERNAL_STATS_TOKEN="${OVERRIDE_INTERNAL_STATS_TOKEN}"
 fi
 
+INTERNAL_STATS_TOKEN="${INTERNAL_STATS_TOKEN:-loadtest-local-token}"
+
 START_CLIENTS="${START_CLIENTS:-20}"
 STEP_CLIENTS="${STEP_CLIENTS:-20}"
 MAX_CLIENTS="${MAX_CLIENTS:-100}"
@@ -41,16 +43,12 @@ REPORT_PATH="$REPORT_DIR/load-report-$TIMESTAMP.json"
 mkdir -p "$REPORT_DIR"
 
 echo "[loadtest] starting local stack with internal stats enabled"
-ENABLE_INTERNAL_STATS=1 INTERNAL_STATS_TOKEN="${INTERNAL_STATS_TOKEN:-}" docker compose up -d --build
+ENABLE_INTERNAL_STATS=1 INTERNAL_STATS_TOKEN="$INTERNAL_STATS_TOKEN" docker compose up -d --build
 
 echo "[loadtest] validating endpoints"
 curl -fsS http://localhost/api/room-id >/dev/null
 
-if [[ -n "${INTERNAL_STATS_TOKEN:-}" ]]; then
-  curl -fsS -H "X-Internal-Token: ${INTERNAL_STATS_TOKEN}" http://localhost/api/internal/stats >/dev/null
-else
-  curl -fsS http://localhost/api/internal/stats >/dev/null
-fi
+curl -fsS -H "X-Internal-Token: ${INTERNAL_STATS_TOKEN}" http://localhost/api/internal/stats >/dev/null
 
 echo "[loadtest] running sweep"
 LOAD_CMD=(
@@ -70,9 +68,7 @@ LOAD_CMD=(
   --max-join-error-rate "$MAX_JOIN_ERROR_RATE"
 )
 
-if [[ -n "${INTERNAL_STATS_TOKEN:-}" ]]; then
-  LOAD_CMD+=(--stats-token "$INTERNAL_STATS_TOKEN")
-fi
+LOAD_CMD+=(--stats-token "$INTERNAL_STATS_TOKEN")
 if [[ -n "${ROOM_ID_SECRET:-}" ]]; then
   LOAD_CMD+=(--room-id-secret "$ROOM_ID_SECRET")
 fi

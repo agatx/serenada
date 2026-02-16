@@ -39,9 +39,9 @@ type loadClient struct {
 	connMu  sync.Mutex
 	conn    *websocket.Conn
 
-	expectedClose atomic.Bool
-	joined        atomic.Bool
-	cidValue      atomic.Value
+	expectedCloseSeq atomic.Int64
+	joined           atomic.Bool
+	cidValue         atomic.Value
 
 	generation atomic.Int64
 }
@@ -74,11 +74,11 @@ func (c *loadClient) connectAndJoin(ctx context.Context, reconnectCID string) er
 	c.metrics.connectSuccess.Add(1)
 
 	seq := c.generation.Add(1)
-	c.expectedClose.Store(false)
 	c.joined.Store(false)
 
 	c.connMu.Lock()
 	if c.conn != nil {
+		c.markExpectedClose(seq - 1)
 		_ = c.conn.Close()
 	}
 	c.conn = conn
@@ -102,7 +102,7 @@ func (c *loadClient) connectAndJoin(ctx context.Context, reconnectCID string) er
 	c.metrics.joinAttempts.Add(1)
 	if err := c.writeSignal(signalingEnvelope{V: 1, Type: "join", RID: c.roomID, Payload: mustRawJSON(payload)}); err != nil {
 		c.metrics.joinFailures.Add(1)
-		c.expectedClose.Store(true)
+		c.markExpectedClose(seq)
 		_ = conn.Close()
 		return err
 	}
@@ -113,10 +113,12 @@ func (c *loadClient) connectAndJoin(ctx context.Context, reconnectCID string) er
 	select {
 	case <-ctx.Done():
 		c.metrics.joinFailures.Add(1)
+		c.markExpectedClose(seq)
+		_ = conn.Close()
 		return ctx.Err()
 	case <-joinTimer.C:
 		c.metrics.joinFailures.Add(1)
-		c.expectedClose.Store(true)
+		c.markExpectedClose(seq)
 		_ = conn.Close()
 		return fmt.Errorf("join timeout after %s", c.joinTimeout)
 	case result := <-joinedCh:
@@ -139,7 +141,7 @@ func (c *loadClient) readLoop(seq int64, conn *websocket.Conn, joinedCh chan<- j
 	for {
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
-			if !c.expectedClose.Load() {
+			if !c.isExpectedClose(seq) {
 				c.metrics.unexpectedDisconnect.Add(1)
 			}
 			if !joinReported {
@@ -248,7 +250,9 @@ func (c *loadClient) leaveAndClose() {
 }
 
 func (c *loadClient) close(intentional bool) {
-	c.expectedClose.Store(intentional)
+	if intentional {
+		c.markExpectedClose(c.generation.Load())
+	}
 	c.connMu.Lock()
 	conn := c.conn
 	c.conn = nil
@@ -257,6 +261,22 @@ func (c *loadClient) close(intentional bool) {
 		_ = conn.Close()
 	}
 	c.joined.Store(false)
+}
+
+func (c *loadClient) markExpectedClose(seq int64) {
+	for {
+		current := c.expectedCloseSeq.Load()
+		if seq <= current {
+			return
+		}
+		if c.expectedCloseSeq.CompareAndSwap(current, seq) {
+			return
+		}
+	}
+}
+
+func (c *loadClient) isExpectedClose(seq int64) bool {
+	return seq <= c.expectedCloseSeq.Load()
 }
 
 func mustRawJSON(v any) json.RawMessage {

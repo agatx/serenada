@@ -93,6 +93,7 @@ Quick run (local Docker stack):
 
 What it does:
 - Starts local services with `ENABLE_INTERNAL_STATS=1`
+- Sets a local `INTERNAL_STATS_TOKEN` automatically (override via env if needed)
 - Validates `/api/room-id` and `/api/internal/stats`
 - Runs `go run ./cmd/loadconduit` from `server/`
 - Writes a JSON report to `server/loadtest/reports/`

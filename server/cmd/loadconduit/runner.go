@@ -86,8 +86,8 @@ func runStep(parent context.Context, cfg Config, requestedClients int, statsClie
 	targetRooms := targetClients / 2
 
 	metrics := &StepMetrics{}
-
-	serverStatsStart, startStatsErr := fetchStats(stepCtx, statsClient)
+	var serverStatsStart InternalStatsSnapshot
+	startStatsErr := fmt.Errorf("stats not fetched")
 
 	roomIDs, err := generateRoomIDs(stepCtx, cfg, targetRooms)
 	if err != nil {
@@ -96,6 +96,7 @@ func runStep(parent context.Context, cfg Config, requestedClients int, statsClie
 	if err := waitForServerStabilization(stepCtx, cfg, statsClient); err != nil {
 		return StepResult{TargetClients: targetClients, TargetRooms: targetRooms, StartedAtRFC3339: started.UTC().Format(time.RFC3339), EndedAtRFC3339: time.Now().UTC().Format(time.RFC3339), DurationSeconds: int64(time.Since(started).Seconds()), FailReason: fmt.Sprintf("server stabilization interrupted: %v", err)}, err
 	}
+	serverStatsStart, startStatsErr = fetchStats(stepCtx, statsClient)
 
 	pairs := make([]roomPair, 0, targetRooms)
 	clients := make([]*loadClient, 0, targetClients)
@@ -112,11 +113,14 @@ func runStep(parent context.Context, cfg Config, requestedClients int, statsClie
 		rampInterval = (time.Duration(cfg.RampSeconds) * time.Second) / time.Duration(len(clients)-1)
 	}
 
+	rampStopped := false
+rampLoop:
 	for i, client := range clients {
 		if i > 0 && rampInterval > 0 {
 			select {
 			case <-stepCtx.Done():
-				break
+				rampStopped = true
+				break rampLoop
 			case <-time.After(rampInterval):
 			}
 		}
@@ -129,6 +133,20 @@ func runStep(parent context.Context, cfg Config, requestedClients int, statsClie
 		}(client)
 	}
 	rampWG.Wait()
+	if rampStopped {
+		err := stepCtx.Err()
+		if err == nil {
+			err = context.Canceled
+		}
+		return StepResult{
+			TargetClients:    targetClients,
+			TargetRooms:      targetRooms,
+			StartedAtRFC3339: started.UTC().Format(time.RFC3339),
+			EndedAtRFC3339:   time.Now().UTC().Format(time.RFC3339),
+			DurationSeconds:  int64(time.Since(started).Seconds()),
+			FailReason:       fmt.Sprintf("ramp canceled: %v", err),
+		}, err
+	}
 
 	relayCancel, relayWG := startRelayLoops(stepCtx, cfg, pairs)
 	defer func() {
