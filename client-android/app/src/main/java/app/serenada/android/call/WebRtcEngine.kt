@@ -361,7 +361,7 @@ class WebRtcEngine(
         )
         val target = cameraSourceFromMode(targetMode)
         if (!compositeAvailable && targetMode == LocalCameraMode.SELFIE && currentCameraSource == LocalCameraSource.WORLD) {
-            Log.w("WebRtcEngine", "Composite source unavailable; skipping to ${LocalCameraSource.SELFIE}")
+            Log.w("WebRtcEngine", "Transitioning from WORLD to SELFIE (COMPOSITE unavailable)")
         }
         if (restartVideoCapturer(target)) {
             return
