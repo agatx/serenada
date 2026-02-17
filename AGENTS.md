@@ -11,7 +11,9 @@ This repository is production-critical.
 - Follow existing style and patterns
 - Prioritize clarity over cleverness
 - Native Android client directory is `client-android/`
+- Native iOS client directory is `client-ios/`
 - In `client-android/`, camera source switching is mode-based (`selfie -> world -> composite`) rather than binary front/back flip
+- In `client-ios/`, keep camera switching semantics mode-based (`selfie -> world -> composite`) with automatic composite skip when unsupported
 
 ## Documentation
 - Update all relevant documentation when making changes. Only update documentation that is directly relevant to the change:

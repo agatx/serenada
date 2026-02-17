@@ -1,0 +1,66 @@
+"app_name" = "Serenada";
+"common_back" = "Назад";
+
+"settings_title" = "Настройки";
+"settings_save" = "Сохранить";
+"settings_cancel" = "Отмена";
+"settings_server_host" = "Хост сервера";
+"settings_host_global" = "Глобальный (%@)";
+"settings_host_russia" = "Россия (%@)";
+"settings_custom" = "Свой";
+"settings_language" = "Язык";
+"settings_language_help" = "Авто использует язык устройства. Неподдерживаемые языки переключаются на английский.";
+"settings_language_auto" = "Авто (по умолчанию)";
+"settings_language_english" = "Английский";
+"settings_language_russian" = "Русский";
+"settings_language_spanish" = "Испанский";
+"settings_language_french" = "Французский";
+"settings_call_defaults" = "Параметры звонка";
+"settings_hd_video_experimental" = "HD видео (экспериментально)";
+"settings_hd_video_experimental_info" = "Включает более качественные режимы камеры. Может повысить нагрузку на CPU.";
+"settings_error_invalid_server_host" = "Этот хост недоступен или не является сервером Serenada.";
+
+"join_enter_code_or_link" = "Введите код или ссылку";
+"join_settings" = "Настройки";
+"join_subtitle" = "Приватные 1:1 видеозвонки, без аккаунтов.";
+"join_start_call" = "Начать звонок";
+"recent_calls_title" = "Недавние звонки";
+"recent_calls_at" = "в";
+"recent_calls_remove" = "Удалить";
+"recent_calls_empty" = "Недавних звонков пока нет.";
+"join_with_code_title" = "Войти по коду";
+"join_with_code_action" = "Войти";
+"join_with_code_hint" = "Введите код или ссылку от организатора";
+"join_with_code_placeholder" = "Код встречи или ссылка";
+
+"error_something_went_wrong" = "Что-то пошло не так";
+"error_enter_room_or_id" = "Введите ссылку или ID комнаты";
+"error_failed_create_room" = "Не удалось создать комнату";
+"error_invalid_room_id" = "Некорректный ID комнаты";
+"error_unknown" = "Неизвестная ошибка";
+
+"call_status_connected" = "Подключено";
+"call_status_connecting" = "Подключение";
+"call_status_disconnected" = "Отключено";
+"call_status_connection_failed" = "Ошибка соединения";
+"call_status_call_ended" = "Звонок завершен";
+"call_status_creating_room" = "Создаем комнату...";
+"call_status_joining_room" = "Подключаемся к комнате...";
+"call_status_waiting_for_join" = "Ожидание собеседника";
+"call_status_in_call" = "В звонке";
+"call_status_left_room" = "Вы вышли из комнаты";
+"call_status_room_ended" = "Комната завершена";
+
+"call_local_camera_off" = "Ваша камера выключена";
+"call_camera_off" = "Камера выключена";
+"call_waiting_short" = "Ожидание...";
+"call_video_off" = "Видео выключено";
+"call_reconnecting" = "Переподключение...";
+"call_waiting_overlay" = "Ждем, пока кто-то присоединится...";
+"call_qr_code" = "QR-код";
+"call_share_invitation" = "Поделиться приглашением";
+
+"camera_enabled" = "Камера включена";
+"camera_enabled_info" = "Включать камеру при входе в звонок";
+"microphone_enabled" = "Микрофон включен";
+"microphone_enabled_info" = "Включать микрофон при входе в звонок";

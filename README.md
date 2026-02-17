@@ -15,6 +15,7 @@ A simple, privacy-focused 1:1 video calling application built with WebRTC. No ac
 - **Recent calls on home** – Web and Android home screens show your latest calls with live room occupancy (Android supports long-press remove)
 - **Android camera source cycle** – In-call source switch cycles through `selfie` (default) -> `world` -> `composite` (world feed with circular selfie overlay), automatically skips `composite` when unsupported, and shows a flashlight toggle in `world`/`composite` when flash hardware is available; flashlight preference is remembered during the call and reapplied when returning to supported modes
 - **Android HD video toggle (experimental)** – Settings include an `HD Video (experimental)` switch for higher camera/composite quality; default mode keeps legacy `640x480` camera constraints for stability
+- **iOS native client (SwiftUI)** – Native iOS app in `client-ios/` mirrors core Android/web flow (1:1 calls, WS->SSE fallback, recent calls with live room occupancy, deep-link parsing, settings + localization, and in-call controls)
 - **Self-hostable** – Run your own instance with full control
 - **Optional join alerts** – Encrypted push notifications with snapshot previews (web + native Android)
 
@@ -72,6 +73,30 @@ The native Android app lives in `client-android/`.
 By default the app targets `https://serenada.app`, and the server host can be changed in Settings.
 The Android app language can also be set in Settings: `Auto (default)`, `English`, `Русский`, `Español`, `Français`. `Auto` follows the device language and falls back to English.
 To enable native Android push receive, provide Firebase Gradle properties when building the app (`firebaseAppId`, `firebaseApiKey`, `firebaseProjectId`, `firebaseSenderId`).
+
+### iOS Client (Swift + SwiftUI)
+The native iOS app lives in `client-ios/`.
+
+1. Install `xcodegen` (if not already installed).
+2. Generate project files:
+   ```bash
+   cd client-ios
+   xcodegen generate
+   ```
+3. Open `SerenadaiOS.xcodeproj` in Xcode.
+4. Run `SerenadaiOS` on iOS 16+ simulator/device.
+5. Build and vendor pinned WebRTC XCFramework:
+   ```bash
+   bash tools/build_libwebrtc_ios_7559.sh
+   ```
+   This script strips dSYMs by default to keep repository artifact size manageable.
+6. If you replace `client-ios/Vendor/WebRTC/WebRTC.xcframework` manually, regenerate checksum:
+   ```bash
+   cd client-ios
+   ./scripts/update_webrtc_checksum.sh
+   ```
+
+iOS v1 currently defers push notifications, ReplayKit screen sharing, diagnostics screen, and full universal-link entitlement provisioning.
 
 ### Production Deployment
 
@@ -154,6 +179,7 @@ Detailed request/timing sequence:
 - [Protocol Specification](serenada_protocol_v1.md) – Signaling protocol (WebSocket + SSE)
 - [Push Notifications](push-notifications.md) – Encrypted snapshot notifications
 - [Android Client README](client-android/README.md) – Kotlin native app setup and build notes
+- [iOS Client README](client-ios/README.md) – SwiftUI native app setup and build notes
 - `server/loadtest/run-local.sh` – Local signaling load sweep runner
 - [`server/loadtest/LOAD_SIMULATION_SEQUENCE.md`](server/loadtest/LOAD_SIMULATION_SEQUENCE.md) – Detailed load-conduit HTTP/WS call sequence and timing
 

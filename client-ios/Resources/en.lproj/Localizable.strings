@@ -1,0 +1,66 @@
+"app_name" = "Serenada";
+"common_back" = "Back";
+
+"settings_title" = "Settings";
+"settings_save" = "Save";
+"settings_cancel" = "Cancel";
+"settings_server_host" = "Server host";
+"settings_host_global" = "Global (%@)";
+"settings_host_russia" = "Russia (%@)";
+"settings_custom" = "Custom";
+"settings_language" = "Language";
+"settings_language_help" = "Auto uses your device language. Unsupported languages fall back to English.";
+"settings_language_auto" = "Auto (default)";
+"settings_language_english" = "English";
+"settings_language_russian" = "Russian";
+"settings_language_spanish" = "Spanish";
+"settings_language_french" = "French";
+"settings_call_defaults" = "Call defaults";
+"settings_hd_video_experimental" = "HD Video (experimental)";
+"settings_hd_video_experimental_info" = "Enable higher-quality camera modes. May increase CPU usage.";
+"settings_error_invalid_server_host" = "This host is unreachable or is not a Serenada server.";
+
+"join_enter_code_or_link" = "Enter a code or link";
+"join_settings" = "Settings";
+"join_subtitle" = "Private 1:1 video calls, no accounts.";
+"join_start_call" = "Start call";
+"recent_calls_title" = "Your recent calls";
+"recent_calls_at" = "at";
+"recent_calls_remove" = "Remove";
+"recent_calls_empty" = "No recent calls yet.";
+"join_with_code_title" = "Join with a code";
+"join_with_code_action" = "Join";
+"join_with_code_hint" = "Enter the code or link provided by the meeting organizer";
+"join_with_code_placeholder" = "Meeting code or link";
+
+"error_something_went_wrong" = "Something went wrong";
+"error_enter_room_or_id" = "Enter a room link or ID";
+"error_failed_create_room" = "Failed to create room";
+"error_invalid_room_id" = "Invalid room ID";
+"error_unknown" = "Unknown error";
+
+"call_status_connected" = "Connected";
+"call_status_connecting" = "Connecting";
+"call_status_disconnected" = "Disconnected";
+"call_status_connection_failed" = "Connection failed";
+"call_status_call_ended" = "Call ended";
+"call_status_creating_room" = "Creating room...";
+"call_status_joining_room" = "Joining room...";
+"call_status_waiting_for_join" = "Waiting for someone to join";
+"call_status_in_call" = "In call";
+"call_status_left_room" = "Left room";
+"call_status_room_ended" = "Room ended";
+
+"call_local_camera_off" = "Your camera is off";
+"call_camera_off" = "Camera off";
+"call_waiting_short" = "Waiting...";
+"call_video_off" = "Video off";
+"call_reconnecting" = "Reconnecting...";
+"call_waiting_overlay" = "Waiting for someone to join...";
+"call_qr_code" = "QR code";
+"call_share_invitation" = "Share invitation";
+
+"camera_enabled" = "Camera enabled";
+"camera_enabled_info" = "Turn on camera when joining a call";
+"microphone_enabled" = "Microphone enabled";
+"microphone_enabled_info" = "Turn on microphone when joining a call";

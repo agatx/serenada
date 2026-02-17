@@ -1,0 +1,66 @@
+"app_name" = "Serenada";
+"common_back" = "Atrás";
+
+"settings_title" = "Configuración";
+"settings_save" = "Guardar";
+"settings_cancel" = "Cancelar";
+"settings_server_host" = "Host del servidor";
+"settings_host_global" = "Global (%@)";
+"settings_host_russia" = "Rusia (%@)";
+"settings_custom" = "Personalizado";
+"settings_language" = "Idioma";
+"settings_language_help" = "Auto usa el idioma del dispositivo. Los idiomas no compatibles cambian a inglés.";
+"settings_language_auto" = "Auto (predeterminado)";
+"settings_language_english" = "Inglés";
+"settings_language_russian" = "Ruso";
+"settings_language_spanish" = "Español";
+"settings_language_french" = "Francés";
+"settings_call_defaults" = "Valores por defecto de llamada";
+"settings_hd_video_experimental" = "Video HD (experimental)";
+"settings_hd_video_experimental_info" = "Activa modos de cámara de mayor calidad. Puede aumentar el uso de CPU.";
+"settings_error_invalid_server_host" = "Este host no es accesible o no es un servidor Serenada.";
+
+"join_enter_code_or_link" = "Introduce un código o enlace";
+"join_settings" = "Configuración";
+"join_subtitle" = "Videollamadas privadas 1:1, sin cuentas.";
+"join_start_call" = "Iniciar llamada";
+"recent_calls_title" = "Tus llamadas recientes";
+"recent_calls_at" = "a las";
+"recent_calls_remove" = "Eliminar";
+"recent_calls_empty" = "Aún no hay llamadas recientes.";
+"join_with_code_title" = "Unirse con código";
+"join_with_code_action" = "Unirse";
+"join_with_code_hint" = "Introduce el código o enlace del organizador";
+"join_with_code_placeholder" = "Código o enlace";
+
+"error_something_went_wrong" = "Algo salió mal";
+"error_enter_room_or_id" = "Introduce un enlace o ID de sala";
+"error_failed_create_room" = "No se pudo crear la sala";
+"error_invalid_room_id" = "ID de sala inválido";
+"error_unknown" = "Error desconocido";
+
+"call_status_connected" = "Conectado";
+"call_status_connecting" = "Conectando";
+"call_status_disconnected" = "Desconectado";
+"call_status_connection_failed" = "Conexión fallida";
+"call_status_call_ended" = "Llamada finalizada";
+"call_status_creating_room" = "Creando sala...";
+"call_status_joining_room" = "Uniéndose a la sala...";
+"call_status_waiting_for_join" = "Esperando a que alguien se una";
+"call_status_in_call" = "En llamada";
+"call_status_left_room" = "Has salido de la sala";
+"call_status_room_ended" = "Sala finalizada";
+
+"call_local_camera_off" = "Tu cámara está apagada";
+"call_camera_off" = "Cámara apagada";
+"call_waiting_short" = "Esperando...";
+"call_video_off" = "Video apagado";
+"call_reconnecting" = "Reconectando...";
+"call_waiting_overlay" = "Esperando a que alguien se una...";
+"call_qr_code" = "Código QR";
+"call_share_invitation" = "Compartir invitación";
+
+"camera_enabled" = "Cámara activada";
+"camera_enabled_info" = "Activar cámara al unirse a una llamada";
+"microphone_enabled" = "Micrófono activado";
+"microphone_enabled_info" = "Activar micrófono al unirse a una llamada";
