@@ -19,7 +19,6 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: Sources
-    resources:
       - path: Resources
         excludes:
           - Info.plist
@@ -41,7 +40,7 @@ targets:
         basedOnDependencyAnalysis: false
     dependencies:
       - framework: Vendor/WebRTC/WebRTC.xcframework
-        embed: false
+        embed: true
         codeSign: false
     settings:
       base:

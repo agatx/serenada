@@ -51,6 +51,7 @@ If the WebRTC artifact is missing, the app builds in a local stub mode (UI/state
 - ReplayKit screen sharing is not implemented yet
 - Diagnostics screen parity with Android is not implemented yet
 - Universal link entitlements/provisioning are deferred (URL parsing/routing is implemented)
+- iOS Simulator may not expose a usable camera feed; verify local camera preview on a physical iPhone
 
 ## Test
 ```bash

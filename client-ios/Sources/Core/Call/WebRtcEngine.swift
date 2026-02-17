@@ -105,7 +105,7 @@ final class WebRtcEngine {
         notifyCameraModeAndFlash()
     }
 
-    func startLocalMedia() {
+    func startLocalMedia(preferVideo: Bool = true) {
 #if canImport(WebRTC)
         guard let factory = peerConnectionFactory else { return }
         guard localAudioTrack == nil && localVideoTrack == nil else { return }
@@ -116,12 +116,10 @@ final class WebRtcEngine {
         localVideoSource = factory.videoSource()
         localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
 
-        if !restartVideoCapturer(source: .selfie) {
-            localAudioTrack = nil
-            localAudioSource = nil
-            localVideoTrack = nil
-            localVideoSource = nil
-            return
+        if preferVideo {
+            _ = restartVideoCapturer(source: .selfie)
+        } else {
+            notifyCameraModeAndFlash()
         }
 
         attachTrackToRegisteredRenderers()
@@ -343,6 +341,9 @@ final class WebRtcEngine {
 
     func toggleVideo(_ enabled: Bool) {
 #if canImport(WebRTC)
+        if enabled && localVideoCapturer == nil {
+            _ = restartVideoCapturer(source: localCameraSource)
+        }
         localVideoTrack?.isEnabled = enabled
 #endif
     }
@@ -471,7 +472,6 @@ final class WebRtcEngine {
         guard peerConnection == nil else { return }
         guard let factory = peerConnectionFactory else { return }
         guard let iceServers else { return }
-        guard localAudioTrack != nil || localVideoTrack != nil else { return }
 
         let rtcServers = iceServers.map {
             RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
@@ -526,14 +526,25 @@ final class WebRtcEngine {
 
         if let localAudioTrack {
             _ = peerConnection.add(localAudioTrack, streamIds: ["serenada"])
+        } else {
+            addReceiveOnlyTransceiver(mediaType: .audio, to: peerConnection)
         }
         if let localVideoTrack {
             _ = peerConnection.add(localVideoTrack, streamIds: ["serenada"])
+        } else {
+            addReceiveOnlyTransceiver(mediaType: .video, to: peerConnection)
         }
+    }
+
+    private func addReceiveOnlyTransceiver(mediaType: RTCRtpMediaType, to peerConnection: RTCPeerConnection) {
+        let transceiverInit = RTCRtpTransceiverInit()
+        transceiverInit.direction = .recvOnly
+        _ = peerConnection.addTransceiver(of: mediaType, init: transceiverInit)
     }
 
     private func restartVideoCapturer(source: LocalCameraSource) -> Bool {
         guard let localVideoSource else { return false }
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return false }
 
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil

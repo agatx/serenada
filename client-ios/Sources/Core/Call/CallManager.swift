@@ -1,8 +1,14 @@
+import AVFoundation
 import Foundation
 import Network
 
 @MainActor
 final class CallManager: ObservableObject {
+    private struct MediaPermissions {
+        let cameraGranted: Bool
+        let microphoneGranted: Bool
+    }
+
     @Published private(set) var uiState = CallUiState()
     @Published private(set) var serverHost: String
     @Published private(set) var selectedLanguage: String
@@ -246,18 +252,18 @@ final class CallManager: ObservableObject {
             $0.isFlashEnabled = false
         }
 
-        activateAudioSession()
-        webRtcEngine.startLocalMedia()
-
-        if !defaultAudio {
-            webRtcEngine.toggleAudio(false)
+        let currentJoinAttempt = joinAttemptSerial
+        Task { [weak self] in
+            guard let self else { return }
+            let permissions = await self.resolveMediaPermissions()
+            await self.prepareMediaAndConnect(
+                roomId: trimmed,
+                joinAttempt: currentJoinAttempt,
+                defaultAudioEnabled: defaultAudio,
+                defaultVideoEnabled: defaultVideo,
+                permissions: permissions
+            )
         }
-        applyLocalVideoPreference()
-
-        startRemoteVideoStatePolling()
-
-        pendingJoinRoom = trimmed
-        ensureSignalingConnection()
     }
 
     func leaveCall() {
@@ -825,6 +831,88 @@ final class CallManager: ObservableObject {
         webRtcEngine.toggleVideo(enabled)
         if uiState.localVideoEnabled != enabled {
             updateState { $0.localVideoEnabled = enabled }
+        }
+    }
+
+    private func prepareMediaAndConnect(
+        roomId: String,
+        joinAttempt: Int64,
+        defaultAudioEnabled: Bool,
+        defaultVideoEnabled: Bool,
+        permissions: MediaPermissions
+    ) async {
+        guard joinAttempt == joinAttemptSerial else { return }
+        guard currentRoomId == roomId else { return }
+        guard uiState.phase == .joining || uiState.phase == .creatingRoom else { return }
+
+        let hasMicPermission = permissions.microphoneGranted
+        let hasCameraPermission = permissions.cameraGranted
+        let shouldEnableAudio = defaultAudioEnabled && hasMicPermission
+        let shouldEnableVideo = defaultVideoEnabled && hasCameraPermission
+
+        updateState {
+            $0.localAudioEnabled = shouldEnableAudio
+            $0.localVideoEnabled = shouldEnableVideo
+        }
+
+        activateAudioSession()
+        webRtcEngine.startLocalMedia(preferVideo: shouldEnableVideo)
+
+        if !shouldEnableAudio {
+            webRtcEngine.toggleAudio(false)
+        }
+
+        userPreferredVideoEnabled = shouldEnableVideo
+        applyLocalVideoPreference()
+
+        startRemoteVideoStatePolling()
+
+        pendingJoinRoom = roomId
+        ensureSignalingConnection()
+    }
+
+    private func resolveMediaPermissions() async -> MediaPermissions {
+        async let cameraGranted = requestCameraPermission()
+        async let microphoneGranted = requestMicrophonePermission()
+        return await MediaPermissions(
+            cameraGranted: cameraGranted,
+            microphoneGranted: microphoneGranted
+        )
+    }
+
+    private func requestCameraPermission() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .video) { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private func requestMicrophonePermission() async -> Bool {
+        let audioSession = AVAudioSession.sharedInstance()
+
+        switch audioSession.recordPermission {
+        case .granted:
+            return true
+        case .undetermined:
+            return await withCheckedContinuation { continuation in
+                audioSession.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+        case .denied:
+            return false
+        @unknown default:
+            return false
         }
     }
 

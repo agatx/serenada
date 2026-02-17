@@ -97,6 +97,7 @@ The native iOS app lives in `client-ios/`.
    ```
 
 iOS v1 currently defers push notifications, ReplayKit screen sharing, diagnostics screen, and full universal-link entitlement provisioning.
+Note: iOS Simulator can run signaling and call flow, but local camera preview reliability varies by host setup; use a physical iPhone to validate local camera capture.
 
 ### Production Deployment
 
