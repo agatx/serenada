@@ -27,6 +27,17 @@ func shouldShowRemoteVideoPlaceholder(phase: CallPhase, remoteVideoEnabled: Bool
     !remoteVideoEnabled && phase == .inCall
 }
 
+func shouldShowRemoteFitButton(remoteVideoEnabled: Bool, isLocalLarge: Bool) -> Bool {
+    remoteVideoEnabled && !isLocalLarge
+}
+
+func pipBottomPadding(isLandscape: Bool, areControlsVisible: Bool) -> CGFloat {
+    if isLandscape {
+        return areControlsVisible ? 92 : 24
+    }
+    return areControlsVisible ? 170 : 52
+}
+
 struct CallScreen: View {
     let roomId: String
     let uiState: CallUiState
@@ -38,8 +49,10 @@ struct CallScreen: View {
     let onEndCall: () -> Void
     let callManager: CallManager
 
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var areControlsVisible = true
     @State private var isLocalLarge = false
+    @State private var remoteVideoFitCover = true
     @State private var showShareSheet = false
 
     var body: some View {
@@ -56,6 +69,7 @@ struct CallScreen: View {
             } else {
                 mainVideoSurface(
                     kind: .remote,
+                    videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit,
                     showPlaceholder: shouldShowRemoteVideoPlaceholder(
                         phase: uiState.phase,
                         remoteVideoEnabled: uiState.remoteVideoEnabled
@@ -89,10 +103,15 @@ struct CallScreen: View {
         }
     }
 
-    private func mainVideoSurface(kind: WebRTCVideoView.Kind, showPlaceholder: Bool, placeholderText: String?) -> some View {
+    private func mainVideoSurface(
+        kind: WebRTCVideoView.Kind,
+        videoContentMode: UIView.ContentMode = .scaleAspectFill,
+        showPlaceholder: Bool,
+        placeholderText: String?
+    ) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            WebRTCVideoView(kind: kind, callManager: callManager)
+            WebRTCVideoView(kind: kind, callManager: callManager, videoContentMode: videoContentMode)
                 .ignoresSafeArea()
 
             if showPlaceholder {
@@ -105,7 +124,7 @@ struct CallScreen: View {
     private var smallLocalView: some View {
         ZStack {
             Color.black
-            WebRTCVideoView(kind: .local, callManager: callManager)
+            WebRTCVideoView(kind: .local, callManager: callManager, videoContentMode: .scaleAspectFill)
 
             if shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled) {
                 VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
@@ -115,7 +134,7 @@ struct CallScreen: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.35), lineWidth: 1))
             .padding(.trailing, 16)
-            .padding(.bottom, areControlsVisible ? 170 : 52)
+            .padding(.bottom, pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -127,7 +146,7 @@ struct CallScreen: View {
     private var smallRemoteView: some View {
         ZStack {
             Color.black
-            WebRTCVideoView(kind: .remote, callManager: callManager)
+            WebRTCVideoView(kind: .remote, callManager: callManager, videoContentMode: .scaleAspectFill)
 
             if shouldShowRemoteVideoPlaceholder(phase: uiState.phase, remoteVideoEnabled: uiState.remoteVideoEnabled) {
                 VideoPlaceholderTile(text: uiState.phase == .inCall ? L10n.callVideoOff : nil, compact: true)
@@ -137,7 +156,7 @@ struct CallScreen: View {
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.35), lineWidth: 1))
             .padding(.trailing, 16)
-            .padding(.bottom, areControlsVisible ? 170 : 52)
+            .padding(.bottom, pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -193,6 +212,14 @@ struct CallScreen: View {
                 if uiState.phase == .waiting {
                     iconButton(system: "square.and.arrow.up") {
                         showShareSheet = true
+                    }
+                }
+
+                if shouldShowRemoteFitButton(remoteVideoEnabled: uiState.remoteVideoEnabled, isLocalLarge: isLocalLarge) {
+                    iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            remoteVideoFitCover.toggle()
+                        }
                     }
                 }
             }
@@ -263,6 +290,10 @@ struct CallScreen: View {
 
     private var statusLabel: String {
         L10n.callReconnecting
+    }
+
+    private var isLandscape: Bool {
+        verticalSizeClass == .compact
     }
 }
 

@@ -12,6 +12,17 @@ struct WebRTCVideoView: UIViewRepresentable {
 
     let kind: Kind
     let callManager: CallManager
+    let videoContentMode: UIView.ContentMode
+
+    init(
+        kind: Kind,
+        callManager: CallManager,
+        videoContentMode: UIView.ContentMode = .scaleAspectFill
+    ) {
+        self.kind = kind
+        self.callManager = callManager
+        self.videoContentMode = videoContentMode
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(kind: kind, callManager: callManager)
@@ -20,7 +31,7 @@ struct WebRTCVideoView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
 #if canImport(WebRTC)
         let renderer = RTCMTLVideoView(frame: .zero)
-        renderer.videoContentMode = .scaleAspectFill
+        renderer.videoContentMode = videoContentMode
         renderer.clipsToBounds = true
 
         switch kind {
@@ -54,7 +65,42 @@ struct WebRTCVideoView: UIViewRepresentable {
 #endif
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {
+#if canImport(WebRTC)
+        if let renderer = uiView as? RTCMTLVideoView, renderer.videoContentMode != videoContentMode {
+            animateContentModeTransition(renderer: renderer, targetMode: videoContentMode)
+        }
+#endif
+    }
+
+#if canImport(WebRTC)
+    private func animateContentModeTransition(renderer: RTCMTLVideoView, targetMode: UIView.ContentMode) {
+        guard renderer.window != nil, !UIAccessibility.isReduceMotionEnabled else {
+            renderer.videoContentMode = targetMode
+            renderer.transform = .identity
+            return
+        }
+
+        renderer.layer.removeAllAnimations()
+
+        // Match Android's tween(durationMillis = 260, FastOutSlowInEasing).
+        renderer.videoContentMode = targetMode
+        let startScale: CGFloat = targetMode == .scaleAspectFit ? 1.08 : 0.92
+        renderer.transform = CGAffineTransform(scaleX: startScale, y: startScale)
+
+        let animator = UIViewPropertyAnimator(
+            duration: 0.26,
+            controlPoint1: CGPoint(x: 0.4, y: 0.0),
+            controlPoint2: CGPoint(x: 0.2, y: 1.0)
+        ) {
+            renderer.transform = .identity
+        }
+        animator.addCompletion { _ in
+            renderer.transform = .identity
+        }
+        animator.startAnimation()
+    }
+#endif
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
 #if canImport(WebRTC)

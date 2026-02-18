@@ -47,4 +47,17 @@ final class CallScreenStateTests: XCTestCase {
         XCTAssertFalse(shouldShowRemoteVideoPlaceholder(phase: .joining, remoteVideoEnabled: false))
         XCTAssertFalse(shouldShowRemoteVideoPlaceholder(phase: .inCall, remoteVideoEnabled: true))
     }
+
+    func testRemoteFitButtonShownOnlyWhenRemoteIsMainSurface() {
+        XCTAssertTrue(shouldShowRemoteFitButton(remoteVideoEnabled: true, isLocalLarge: false))
+        XCTAssertFalse(shouldShowRemoteFitButton(remoteVideoEnabled: false, isLocalLarge: false))
+        XCTAssertFalse(shouldShowRemoteFitButton(remoteVideoEnabled: true, isLocalLarge: true))
+    }
+
+    func testPipBottomPaddingUsesLowerOffsetsInLandscape() {
+        XCTAssertEqual(pipBottomPadding(isLandscape: true, areControlsVisible: true), 92)
+        XCTAssertEqual(pipBottomPadding(isLandscape: true, areControlsVisible: false), 24)
+        XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: true), 170)
+        XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: false), 52)
+    }
 }
