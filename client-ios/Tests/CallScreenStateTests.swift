@@ -49,9 +49,17 @@ final class CallScreenStateTests: XCTestCase {
     }
 
     func testRemoteFitButtonShownOnlyWhenRemoteIsMainSurface() {
-        XCTAssertTrue(shouldShowRemoteFitButton(remoteVideoEnabled: true, isLocalLarge: false))
-        XCTAssertFalse(shouldShowRemoteFitButton(remoteVideoEnabled: false, isLocalLarge: false))
-        XCTAssertFalse(shouldShowRemoteFitButton(remoteVideoEnabled: true, isLocalLarge: true))
+        XCTAssertTrue(shouldShowRemoteFitButton(phase: .inCall, remoteVideoEnabled: true, isLocalLarge: false))
+        XCTAssertFalse(shouldShowRemoteFitButton(phase: .inCall, remoteVideoEnabled: false, isLocalLarge: false))
+        XCTAssertFalse(shouldShowRemoteFitButton(phase: .inCall, remoteVideoEnabled: true, isLocalLarge: true))
+        XCTAssertFalse(shouldShowRemoteFitButton(phase: .waiting, remoteVideoEnabled: true, isLocalLarge: false))
+    }
+
+    func testOnlyInCallRendersLocalAsPrimarySurfaceWhenExpanded() {
+        XCTAssertFalse(shouldRenderLocalAsPrimarySurface(phase: .waiting, isLocalLarge: false))
+        XCTAssertFalse(shouldRenderLocalAsPrimarySurface(phase: .waiting, isLocalLarge: true))
+        XCTAssertFalse(shouldRenderLocalAsPrimarySurface(phase: .inCall, isLocalLarge: false))
+        XCTAssertTrue(shouldRenderLocalAsPrimarySurface(phase: .inCall, isLocalLarge: true))
     }
 
     func testPipBottomPaddingUsesLowerOffsetsInLandscape() {

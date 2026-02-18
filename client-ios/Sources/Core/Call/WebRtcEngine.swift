@@ -156,7 +156,7 @@ final class WebRtcEngine {
 
     func closePeerConnection() {
 #if canImport(WebRTC)
-        detachTracksFromRegisteredRenderers()
+        detachRemoteTrackFromRegisteredRenderers()
         peerConnection?.close()
         peerConnection = nil
         remoteVideoTrack = nil
@@ -674,6 +674,16 @@ final class WebRtcEngine {
                 guard let renderer = box.value as? RTCVideoRenderer else { continue }
                 remoteVideoTrack.remove(renderer)
             }
+        }
+    }
+
+    private func detachRemoteTrackFromRegisteredRenderers() {
+        compactRenderers()
+
+        guard let remoteVideoTrack else { return }
+        for box in remoteRenderers {
+            guard let renderer = box.value as? RTCVideoRenderer else { continue }
+            remoteVideoTrack.remove(renderer)
         }
     }
 

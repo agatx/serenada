@@ -27,8 +27,12 @@ func shouldShowRemoteVideoPlaceholder(phase: CallPhase, remoteVideoEnabled: Bool
     !remoteVideoEnabled && phase == .inCall
 }
 
-func shouldShowRemoteFitButton(remoteVideoEnabled: Bool, isLocalLarge: Bool) -> Bool {
-    remoteVideoEnabled && !isLocalLarge
+func shouldShowRemoteFitButton(phase: CallPhase, remoteVideoEnabled: Bool, isLocalLarge: Bool) -> Bool {
+    phase == .inCall && remoteVideoEnabled && !isLocalLarge
+}
+
+func shouldRenderLocalAsPrimarySurface(phase: CallPhase, isLocalLarge: Bool) -> Bool {
+    phase == .inCall && isLocalLarge
 }
 
 func pipBottomPadding(isLandscape: Bool, areControlsVisible: Bool) -> CGFloat {
@@ -56,10 +60,18 @@ struct CallScreen: View {
     @State private var showShareSheet = false
 
     var body: some View {
+        let showLocalAsPrimarySurface = shouldRenderLocalAsPrimarySurface(
+            phase: uiState.phase,
+            isLocalLarge: isLocalLarge
+        )
+
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if isLocalLarge {
+            if uiState.phase == .waiting {
+                waitingMainSurface
+                smallLocalView
+            } else if showLocalAsPrimarySurface {
                 mainVideoSurface(
                     kind: .local,
                     showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
@@ -111,7 +123,12 @@ struct CallScreen: View {
     ) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            WebRTCVideoView(kind: kind, callManager: callManager, videoContentMode: videoContentMode)
+            WebRTCVideoView(
+                kind: kind,
+                callManager: callManager,
+                videoContentMode: videoContentMode,
+                isMirrored: kind == .local && uiState.isFrontCamera
+            )
                 .ignoresSafeArea()
 
             if showPlaceholder {
@@ -121,10 +138,19 @@ struct CallScreen: View {
         }
     }
 
+    private var waitingMainSurface: some View {
+        Color.black.ignoresSafeArea()
+    }
+
     private var smallLocalView: some View {
         ZStack {
             Color.black
-            WebRTCVideoView(kind: .local, callManager: callManager, videoContentMode: .scaleAspectFill)
+            WebRTCVideoView(
+                kind: .local,
+                callManager: callManager,
+                videoContentMode: .scaleAspectFill,
+                isMirrored: uiState.isFrontCamera
+            )
 
             if shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled) {
                 VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
@@ -215,7 +241,11 @@ struct CallScreen: View {
                     }
                 }
 
-                if shouldShowRemoteFitButton(remoteVideoEnabled: uiState.remoteVideoEnabled, isLocalLarge: isLocalLarge) {
+                if shouldShowRemoteFitButton(
+                    phase: uiState.phase,
+                    remoteVideoEnabled: uiState.remoteVideoEnabled,
+                    isLocalLarge: isLocalLarge
+                ) {
                     iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             remoteVideoFitCover.toggle()
@@ -230,7 +260,7 @@ struct CallScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
-        .opacity(areControlsVisible ? 1 : 0)
+        .opacity(uiState.phase == .waiting ? 1 : (areControlsVisible ? 1 : 0))
     }
 
     private var waitingOverlay: some View {

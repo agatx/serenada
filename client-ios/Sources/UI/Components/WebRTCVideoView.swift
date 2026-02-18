@@ -4,6 +4,82 @@ import UIKit
 import WebRTC
 #endif
 
+#if canImport(WebRTC)
+final class MirroredRTCMTLVideoView: UIView, RTCVideoRenderer {
+    private let metalView = RTCMTLVideoView(frame: .zero)
+    private var pendingMirrorState: Bool?
+    private(set) var isMirrored = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        configureMetalView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureMetalView()
+    }
+
+    var videoContentMode: UIView.ContentMode {
+        get { metalView.videoContentMode }
+        set { metalView.videoContentMode = newValue }
+    }
+
+    var enabled: Bool {
+        get { metalView.isEnabled }
+        set { metalView.isEnabled = newValue }
+    }
+
+    var rotationOverride: NSValue? {
+        get { metalView.rotationOverride }
+        set { metalView.rotationOverride = newValue }
+    }
+
+    func setMirrored(_ mirrored: Bool, applyImmediately: Bool) {
+        if applyImmediately {
+            pendingMirrorState = nil
+            applyMirrorState(mirrored)
+            return
+        }
+
+        guard mirrored != isMirrored else { return }
+        pendingMirrorState = mirrored
+    }
+
+    func setSize(_ size: CGSize) {
+        metalView.setSize(size)
+    }
+
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        if let pendingMirrorState {
+            self.pendingMirrorState = nil
+            applyMirrorState(pendingMirrorState)
+        }
+        metalView.renderFrame(frame)
+    }
+
+    private func configureMetalView() {
+        metalView.frame = bounds
+        metalView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        metalView.clipsToBounds = true
+        addSubview(metalView)
+    }
+
+    private func applyMirrorState(_ mirrored: Bool) {
+        isMirrored = mirrored
+        let transform = mirrored ? CGAffineTransform(scaleX: -1, y: 1) : .identity
+
+        if Thread.isMainThread {
+            metalView.transform = transform
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.metalView.transform = transform
+            }
+        }
+    }
+}
+#endif
+
 struct WebRTCVideoView: UIViewRepresentable {
     enum Kind {
         case local
@@ -13,15 +89,18 @@ struct WebRTCVideoView: UIViewRepresentable {
     let kind: Kind
     let callManager: CallManager
     let videoContentMode: UIView.ContentMode
+    let isMirrored: Bool
 
     init(
         kind: Kind,
         callManager: CallManager,
-        videoContentMode: UIView.ContentMode = .scaleAspectFill
+        videoContentMode: UIView.ContentMode = .scaleAspectFill,
+        isMirrored: Bool = false
     ) {
         self.kind = kind
         self.callManager = callManager
         self.videoContentMode = videoContentMode
+        self.isMirrored = isMirrored
     }
 
     func makeCoordinator() -> Coordinator {
@@ -30,19 +109,23 @@ struct WebRTCVideoView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIView {
 #if canImport(WebRTC)
-        let renderer = RTCMTLVideoView(frame: .zero)
-        renderer.videoContentMode = videoContentMode
-        renderer.clipsToBounds = true
-
         switch kind {
         case .local:
+            let renderer = MirroredRTCMTLVideoView(frame: .zero)
+            renderer.videoContentMode = videoContentMode
+            renderer.setMirrored(isMirrored, applyImmediately: true)
             callManager.attachLocalRenderer(renderer)
+            context.coordinator.renderer = renderer
+            context.coordinator.isMirrored = isMirrored
+            return renderer
         case .remote:
+            let renderer = RTCMTLVideoView(frame: .zero)
+            renderer.videoContentMode = videoContentMode
+            renderer.clipsToBounds = true
             callManager.attachRemoteRenderer(renderer)
+            context.coordinator.renderer = renderer
+            return renderer
         }
-
-        context.coordinator.renderer = renderer
-        return renderer
 #else
         let placeholder = UIView(frame: .zero)
         placeholder.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1)
@@ -67,8 +150,26 @@ struct WebRTCVideoView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
 #if canImport(WebRTC)
-        if let renderer = uiView as? RTCMTLVideoView, renderer.videoContentMode != videoContentMode {
-            animateContentModeTransition(renderer: renderer, targetMode: videoContentMode)
+        if let renderer = uiView as? MirroredRTCMTLVideoView {
+            let mirrorChanged = context.coordinator.isMirrored != isMirrored
+            context.coordinator.isMirrored = isMirrored
+
+            if renderer.videoContentMode != videoContentMode {
+                renderer.videoContentMode = videoContentMode
+            }
+
+            if mirrorChanged {
+                // Defer mirroring until the next rendered local frame so
+                // mirror state and camera feed switch together.
+                renderer.setMirrored(isMirrored, applyImmediately: false)
+            }
+            return
+        }
+
+        if let renderer = uiView as? RTCMTLVideoView {
+            if renderer.videoContentMode != videoContentMode {
+                animateContentModeTransition(renderer: renderer, targetMode: videoContentMode)
+            }
         }
 #endif
     }
@@ -117,9 +218,8 @@ struct WebRTCVideoView: UIViewRepresentable {
     final class Coordinator {
         let kind: Kind
         weak var callManager: CallManager?
-#if canImport(WebRTC)
-        weak var renderer: RTCMTLVideoView?
-#endif
+        var isMirrored: Bool = false
+        weak var renderer: AnyObject?
 
         init(kind: Kind, callManager: CallManager) {
             self.kind = kind
