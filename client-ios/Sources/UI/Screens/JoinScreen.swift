@@ -128,24 +128,28 @@ private struct RecentCallsSection: View {
                     onJoinRecentCall(call.roomId)
                 } label: {
                     HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(call.roomId)
-                                .font(.subheadline.monospaced())
-                                .lineLimit(1)
+                        StatusDot(count: roomStatuses[call.roomId] ?? 0)
 
-                            Text(formatDate(call.startTime))
+                        HStack(spacing: 6) {
+                            Image(systemName: "calendar")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            Text(formatDateTime(call.startTime))
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
                         }
 
                         Spacer()
 
-                        let count = roomStatuses[call.roomId] ?? 0
-                        Text("\(count)")
-                            .font(.caption.bold())
-                            .frame(width: 22, height: 22)
-                            .background(count > 0 ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
-                            .clipShape(Circle())
+                        HStack(spacing: 6) {
+                            Image(systemName: "clock")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(formatDuration(call.durationSeconds))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -169,11 +173,45 @@ private struct RecentCallsSection: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
-    private func formatDate(_ timestampMs: Int64) -> String {
+    private func formatDateTime(_ timestampMs: Int64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(timestampMs) / 1000)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = .autoupdatingCurrent
+        dateFormatter.setLocalizedDateFormatFromTemplate("MMM d")
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = .autoupdatingCurrent
+        timeFormatter.timeStyle = .short
+
+        return "\(dateFormatter.string(from: date)) \(L10n.recentCallsAt) \(timeFormatter.string(from: date))"
+    }
+
+    private func formatDuration(_ durationSeconds: Int) -> String {
+        let seconds = max(0, durationSeconds)
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        let remainderSeconds = seconds % 60
+        return "\(minutes)m \(remainderSeconds)s"
+    }
+}
+
+private struct StatusDot: View {
+    let count: Int
+
+    private var dotColor: Color {
+        if count == 1 {
+            return Color(red: 0.247, green: 0.725, blue: 0.314)
+        }
+        if count >= 2 {
+            return Color(red: 0.824, green: 0.600, blue: 0.133)
+        }
+        return .clear
+    }
+
+    var body: some View {
+        Circle()
+            .fill(dotColor)
+            .frame(width: 8, height: 8)
     }
 }
