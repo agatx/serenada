@@ -18,7 +18,7 @@
 		3E06894D6424CFB4D21BF430 /* SignalingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B1FBDAE9C6D5498DFA0A42 /* SignalingTransport.swift */; };
 		4A6F5FCA6B5464133906FD88 /* Backoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3F9BB7205561A9FC615B5C0 /* Backoff.swift */; };
 		510630AC79A23A3493C00772 /* CameraModeFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEFD1574E642447D3E65BC68 /* CameraModeFlowTests.swift */; };
-		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		54C3E5B5BA9A787706DC771F /* CallScreenStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92E4A6AD9C0BE3B195A0F4E1 /* CallScreenStateTests.swift */; };
 		5999F7198524B83CC99F9EF7 /* LocalCameraMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 303C1730C037405575173314 /* LocalCameraMode.swift */; };
 		5AE74F66C6B194F70EC28357 /* DeepLinkParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA1B2270ACAB900CC69BC699 /* DeepLinkParserTests.swift */; };
