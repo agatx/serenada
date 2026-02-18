@@ -7,6 +7,7 @@ This v1 port mirrors Android/web call flow and signaling semantics:
 - WebSocket signaling with automatic SSE fallback
 - Room watch statuses for recent calls
 - In-call camera mode cycle semantics (`selfie -> world -> composite`), with automatic composite skip
+- Local camera default capture profile targets 480p; enabling `HD Video (experimental)` switches to highest available mode
 - Settings for server host, language, and call defaults
 
 ## Requirements

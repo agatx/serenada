@@ -17,6 +17,64 @@ struct IceCandidatePayload: Equatable {
     let candidate: String
 }
 
+struct CaptureResolution: Equatable {
+    let width: Int32
+    let height: Int32
+}
+
+func choosePreferredCaptureResolution(
+    from resolutions: [CaptureResolution],
+    isHdVideoExperimentalEnabled: Bool
+) -> CaptureResolution? {
+    guard !resolutions.isEmpty else { return nil }
+
+    func normalized(_ resolution: CaptureResolution) -> (longSide: Int32, shortSide: Int32) {
+        (
+            longSide: max(resolution.width, resolution.height),
+            shortSide: min(resolution.width, resolution.height)
+        )
+    }
+
+    if isHdVideoExperimentalEnabled {
+        return resolutions.max {
+            let lhs = normalized($0)
+            let rhs = normalized($1)
+            if lhs.longSide != rhs.longSide {
+                return lhs.longSide < rhs.longSide
+            }
+            if lhs.shortSide != rhs.shortSide {
+                return lhs.shortSide < rhs.shortSide
+            }
+            return $0.width < $1.width
+        }
+    }
+
+    // Non-HD mode targets 480p (640x480) for a clearer default preview.
+    let targetLongSide: Int64 = 640
+    let targetShortSide: Int64 = 480
+
+    func nonHdScore(_ resolution: CaptureResolution) -> (distance: Int64, pixels: Int64, longSide: Int64) {
+        let dims = normalized(resolution)
+        let longSide = Int64(dims.longSide)
+        let shortSide = Int64(dims.shortSide)
+        let distance = abs(longSide - targetLongSide) + abs(shortSide - targetShortSide)
+        let pixels = longSide * shortSide
+        return (distance: distance, pixels: pixels, longSide: longSide)
+    }
+
+    return resolutions.min {
+        let lhs = nonHdScore($0)
+        let rhs = nonHdScore($1)
+        if lhs.distance != rhs.distance {
+            return lhs.distance < rhs.distance
+        }
+        if lhs.pixels != rhs.pixels {
+            return lhs.pixels < rhs.pixels
+        }
+        return lhs.longSide < rhs.longSide
+    }
+}
+
 enum SessionDescriptionType {
     case offer
     case answer
@@ -599,14 +657,23 @@ final class WebRtcEngine {
 
     private func selectCaptureFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
         let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
-        if isHdVideoExperimentalEnabled {
-            return formats.max {
-                CMVideoFormatDescriptionGetDimensions($0.formatDescription).width < CMVideoFormatDescriptionGetDimensions($1.formatDescription).width
-            }
+        let paired = formats.map { format -> (format: AVCaptureDevice.Format, resolution: CaptureResolution) in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return (
+                format: format,
+                resolution: CaptureResolution(width: dimensions.width, height: dimensions.height)
+            )
         }
-        return formats.min {
-            CMVideoFormatDescriptionGetDimensions($0.formatDescription).width < CMVideoFormatDescriptionGetDimensions($1.formatDescription).width
+
+        let resolutions = paired.map(\.resolution)
+        guard let preferred = choosePreferredCaptureResolution(
+            from: resolutions,
+            isHdVideoExperimentalEnabled: isHdVideoExperimentalEnabled
+        ) else {
+            return nil
         }
+
+        return paired.first { $0.resolution == preferred }?.format
     }
 
     private func selectCaptureFPS(for format: AVCaptureDevice.Format) -> Int {
