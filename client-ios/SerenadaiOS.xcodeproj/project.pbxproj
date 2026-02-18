@@ -10,7 +10,6 @@
 		059EAC15414FB96D99F16AA7 /* Participant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175B5E9B7BA77160AF7DB9A6 /* Participant.swift */; };
 		0A2C0A7E3C1A621804CC59C9 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = EA93F28D0C87ABED6B756036 /* Localizable.strings */; };
 		0CE0F1992A4BE3DA02955EBB /* WebRTCVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A244DB0F6B199EF5BF486FF /* WebRTCVideoView.swift */; };
-		1F3A5D3196A7499BB6E8C332 /* JoinRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B1C0273E8AA4E0AA84D3B69 /* JoinRecoveryTests.swift */; };
 		252529C96E5D4B8966096E25 /* JoinWithCodeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */; };
 		3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BD7296B4488661AE49A34BA /* RootViewRoutingTests.swift */; };
 		35B2C3834A362F96B5B9FFDC /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; };
@@ -23,10 +22,10 @@
 		5999F7198524B83CC99F9EF7 /* LocalCameraMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 303C1730C037405575173314 /* LocalCameraMode.swift */; };
 		5AE74F66C6B194F70EC28357 /* DeepLinkParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA1B2270ACAB900CC69BC699 /* DeepLinkParserTests.swift */; };
 		5EA0D8F3AC25ECC78C79E491 /* TurnCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF8E62B4D813B9D13ED9461F /* TurnCredentials.swift */; };
-		7C71C6B4B00D4F2F95ED0A64 /* L10nTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AF8924D4ED44B50A93C84E9 /* L10nTests.swift */; };
 		691A7EA5E1AB4B402D91A90C /* CallScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17000DBF4640C9A33AA00C70 /* CallScreen.swift */; };
 		69CEC70224A4A74EF1814A2C /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D576F4E596F3BD8F5BAA7C /* ActivityView.swift */; };
 		6E92E404B6B3E0A636F21C56 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3529A15EA2C43DB2F91F46FC /* RootView.swift */; };
+		6EE2ED9D63185C2AA8581CFE /* L10nTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8656DA5A095E572174461E96 /* L10nTests.swift */; };
 		71320D322F59D2244B5A2027 /* RoomStatusesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */; };
 		7260FA8E0FC5EC6D345B2FD2 /* CaptureResolutionSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2486CC31E85D120A0B2C140D /* CaptureResolutionSelectionTests.swift */; };
 		7480FCA8B0FAB831740061CA /* BackoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5F241AA65BDF199921519B /* BackoffTests.swift */; };
@@ -52,6 +51,7 @@
 		DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A48285CB0CBEE51504B0674B /* CallManager.swift */; };
 		E2FAC448F3CB052B795A2B93 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF26E07FE9367694AE3E5E57 /* JSONValue.swift */; };
 		EE8328B7F79EEA681164E7ED /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 018403014C9AEDF89B039618 /* SettingsScreen.swift */; };
+		F2F58ECBF303ACB0312CBCD2 /* JoinRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9CA838043C3D3C9D89F8C00 /* JoinRecoveryTests.swift */; };
 		F5003EBD4E5505F020DD6036 /* SignalingMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF70AD939332E3245DCCD861 /* SignalingMessage.swift */; };
 		F6138648F1A35A494AF6330E /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9036C71CC2E91FAD8FB5170 /* APIClient.swift */; };
 		F9CC8286BAD9F8D26CDEEF33 /* RecentCallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43E2F0452DE65337073894BF /* RecentCallStore.swift */; };
@@ -99,14 +99,13 @@
 		3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomStatusesTests.swift; sourceTree = "<group>"; };
 		43E2F0452DE65337073894BF /* RecentCallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCallStore.swift; sourceTree = "<group>"; };
 		48FB4B4943231481B509B421 /* DeepLinkParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkParser.swift; sourceTree = "<group>"; };
-		4B1C0273E8AA4E0AA84D3B69 /* JoinRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinRecoveryTests.swift; sourceTree = "<group>"; };
 		4ED070FA228FECAF62312895 /* SseSignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SseSignalingTransport.swift; sourceTree = "<group>"; };
 		6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinWithCodeScreen.swift; sourceTree = "<group>"; };
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		70B1FBDAE9C6D5498DFA0A42 /* SignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingTransport.swift; sourceTree = "<group>"; };
 		734875A19A797AA3C724DDC1 /* CallAudioSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudioSessionController.swift; sourceTree = "<group>"; };
-		7AF8924D4ED44B50A93C84E9 /* L10nTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10nTests.swift; sourceTree = "<group>"; };
 		7EE887624CBDA34B0B333C6A /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
+		8656DA5A095E572174461E96 /* L10nTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10nTests.swift; sourceTree = "<group>"; };
 		8662332FB191C23A57DDBA4D /* AppConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConstants.swift; sourceTree = "<group>"; };
 		8B55A3575079D0B073AB0D7C /* SignalingClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingClient.swift; sourceTree = "<group>"; };
 		8FAAF254BE1C5AEACE3C14F0 /* WebSocketSignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketSignalingTransport.swift; sourceTree = "<group>"; };
@@ -117,6 +116,7 @@
 		A48285CB0CBEE51504B0674B /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
 		B8DC46B13DBF27F02DA8B2D2 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
 		C3F9BB7205561A9FC615B5C0 /* Backoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backoff.swift; sourceTree = "<group>"; };
+		C9CA838043C3D3C9D89F8C00 /* JoinRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinRecoveryTests.swift; sourceTree = "<group>"; };
 		CAFF8170B38C84FF4B68CAAD /* WebRtcEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRtcEngine.swift; sourceTree = "<group>"; };
 		CE5F241AA65BDF199921519B /* BackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackoffTests.swift; sourceTree = "<group>"; };
 		CF26E07FE9367694AE3E5E57 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
@@ -305,8 +305,8 @@
 				FEFD1574E642447D3E65BC68 /* CameraModeFlowTests.swift */,
 				2486CC31E85D120A0B2C140D /* CaptureResolutionSelectionTests.swift */,
 				EA1B2270ACAB900CC69BC699 /* DeepLinkParserTests.swift */,
-				4B1C0273E8AA4E0AA84D3B69 /* JoinRecoveryTests.swift */,
-				7AF8924D4ED44B50A93C84E9 /* L10nTests.swift */,
+				C9CA838043C3D3C9D89F8C00 /* JoinRecoveryTests.swift */,
+				8656DA5A095E572174461E96 /* L10nTests.swift */,
 				F9816C392666DC51C1838319 /* RecentCallStoreTests.swift */,
 				3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */,
 				9BD7296B4488661AE49A34BA /* RootViewRoutingTests.swift */,
@@ -503,8 +503,8 @@
 				510630AC79A23A3493C00772 /* CameraModeFlowTests.swift in Sources */,
 				7260FA8E0FC5EC6D345B2FD2 /* CaptureResolutionSelectionTests.swift in Sources */,
 				5AE74F66C6B194F70EC28357 /* DeepLinkParserTests.swift in Sources */,
-				1F3A5D3196A7499BB6E8C332 /* JoinRecoveryTests.swift in Sources */,
-				7C71C6B4B00D4F2F95ED0A64 /* L10nTests.swift in Sources */,
+				F2F58ECBF303ACB0312CBCD2 /* JoinRecoveryTests.swift in Sources */,
+				6EE2ED9D63185C2AA8581CFE /* L10nTests.swift in Sources */,
 				C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */,
 				71320D322F59D2244B5A2027 /* RoomStatusesTests.swift in Sources */,
 				3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */,

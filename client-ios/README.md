@@ -64,3 +64,24 @@ xcodebuild \
   -destination 'platform=iOS Simulator,name=iPhone 16' \
   test
 ```
+
+## Real device deploy
+Build, install, and launch on a connected physical iPhone:
+
+```bash
+cd client-ios
+./scripts/deploy_to_device.sh
+```
+
+Useful options:
+
+```bash
+# specific device
+./scripts/deploy_to_device.sh --udid [UDID]
+
+# install only (skip launch)
+./scripts/deploy_to_device.sh --no-launch
+
+# override signing team
+./scripts/deploy_to_device.sh --team [TEAM_ID]
+```

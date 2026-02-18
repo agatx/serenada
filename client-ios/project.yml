@@ -32,6 +32,9 @@ targets:
         NSMicrophoneUsageDescription: Serenada needs microphone access for audio calls.
         NSLocalNetworkUsageDescription: Serenada may access local network interfaces for call connectivity checks.
         UIApplicationSupportsIndirectInputEvents: YES
+        UIBackgroundModes:
+          - audio
+          - voip
         LSApplicationQueriesSchemes:
           - https
     preBuildScripts:
@@ -41,7 +44,7 @@ targets:
     dependencies:
       - framework: Vendor/WebRTC/WebRTC.xcframework
         embed: true
-        codeSign: false
+        codeSign: true
     settings:
       base:
         INFOPLIST_FILE: Resources/Info.plist
