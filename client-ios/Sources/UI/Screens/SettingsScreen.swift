@@ -113,7 +113,7 @@ struct SettingsScreen: View {
             .overlay {
                 if isSaving {
                     ZStack {
-                        Color.black.opacity(0.08).ignoresSafeArea()
+                        Color.primary.opacity(0.1).ignoresSafeArea()
                         ProgressView()
                     }
                 }

@@ -27,7 +27,7 @@ targets:
       properties:
         CFBundleDisplayName: Serenada
         UILaunchScreen: {}
-        UIUserInterfaceStyle: Light
+
         NSCameraUsageDescription: Serenada needs camera access for video calls.
         NSMicrophoneUsageDescription: Serenada needs microphone access for audio calls.
         NSLocalNetworkUsageDescription: Serenada may access local network interfaces for call connectivity checks.

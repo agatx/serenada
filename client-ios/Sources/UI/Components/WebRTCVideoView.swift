@@ -128,13 +128,13 @@ struct WebRTCVideoView: UIViewRepresentable {
         }
 #else
         let placeholder = UIView(frame: .zero)
-        placeholder.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1)
+        placeholder.backgroundColor = .secondarySystemBackground
 
         let label = UILabel(frame: .zero)
         label.translatesAutoresizingMaskIntoConstraints = false
         label.textAlignment = .center
         label.numberOfLines = 2
-        label.textColor = .white
+        label.textColor = .label
         label.font = UIFont.systemFont(ofSize: 13, weight: .medium)
         label.text = kind == .local ? "Local video\n(WebRTC stub)" : "Remote video\n(WebRTC stub)"
         placeholder.addSubview(label)
