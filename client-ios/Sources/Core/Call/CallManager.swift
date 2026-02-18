@@ -2,6 +2,31 @@ import AVFoundation
 import Foundation
 import Network
 
+struct JoinRecoveryState: Equatable {
+    let phase: CallPhase
+    let participantCount: Int
+}
+
+func resolveJoinRecoveryState(
+    currentPhase: CallPhase,
+    participantHint: Int?,
+    preferInCall: Bool
+) -> JoinRecoveryState? {
+    guard currentPhase == .joining || currentPhase == .creatingRoom else { return nil }
+
+    let normalizedHint = max(1, participantHint ?? 1)
+
+    if preferInCall {
+        return JoinRecoveryState(phase: .inCall, participantCount: max(2, normalizedHint))
+    }
+
+    if normalizedHint > 1 {
+        return JoinRecoveryState(phase: .inCall, participantCount: normalizedHint)
+    }
+
+    return JoinRecoveryState(phase: .waiting, participantCount: 1)
+}
+
 @MainActor
 final class CallManager: ObservableObject {
     private struct MediaPermissions {
@@ -51,6 +76,7 @@ final class CallManager: ObservableObject {
     private var lastIceRestartAt: TimeInterval = 0
 
     private var reconnectTask: Task<Void, Never>?
+    private var joinRecoveryTask: Task<Void, Never>?
     private var iceRestartTask: Task<Void, Never>?
     private var offerTimeoutTask: Task<Void, Never>?
     private var remoteVideoPollTimer: Timer?
@@ -102,6 +128,7 @@ final class CallManager: ObservableObject {
     deinit {
         pathMonitor.cancel()
         reconnectTask?.cancel()
+        joinRecoveryTask?.cancel()
         iceRestartTask?.cancel()
         offerTimeoutTask?.cancel()
         remoteVideoPollTimer?.invalidate()
@@ -286,14 +313,8 @@ final class CallManager: ObservableObject {
 
     func endCall() {
         guard uiState.phase != .idle else { return }
-
-        if isHost() {
-            sendMessage(type: "end_room")
-        } else {
-            sendMessage(type: "leave")
-        }
-
-        cleanupCall(message: L10n.callStatusCallEnded)
+        sendMessage(type: "leave")
+        cleanupCall(message: L10n.callStatusLeftRoom)
     }
 
     func toggleAudio() {
@@ -367,6 +388,7 @@ final class CallManager: ObservableObject {
         )
 
         signalingClient.send(message)
+        scheduleJoinRecovery(for: roomId)
     }
 
     private func sendMessage(type: String, payload: JSONValue? = nil, to: String? = nil) {
@@ -415,12 +437,20 @@ final class CallManager: ObservableObject {
     }
 
     private func handleJoined(_ message: SignalingMessage) {
+        if let messageRoomId = message.rid, let activeRoomId = currentRoomId, messageRoomId != activeRoomId {
+            return
+        }
+
+        clearJoinRecovery()
+
         clientId = message.cid
         settingsStore.reconnectCid = message.cid
 
         if let roomState = parseRoomState(payload: message.payload) {
             hostCid = roomState.hostCid
             updateParticipants(roomState)
+        } else {
+            recoverFromJoiningIfNeeded(participantHint: participantCountHint(payload: message.payload))
         }
 
         if let turnToken = message.payload?.objectValue?["turnToken"]?.stringValue, !turnToken.isEmpty {
@@ -431,7 +461,12 @@ final class CallManager: ObservableObject {
     }
 
     private func handleRoomState(_ message: SignalingMessage) {
-        guard let roomState = parseRoomState(payload: message.payload) else { return }
+        clearJoinRecovery()
+
+        guard let roomState = parseRoomState(payload: message.payload) else {
+            recoverFromJoiningIfNeeded(participantHint: participantCountHint(payload: message.payload))
+            return
+        }
         hostCid = roomState.hostCid
         updateParticipants(roomState)
     }
@@ -442,6 +477,7 @@ final class CallManager: ObservableObject {
 
     private func handleError(_ message: SignalingMessage) {
         let rawMessage = message.payload?.objectValue?["message"]?.stringValue
+        clearJoinRecovery()
         resetResources()
         uiState = CallUiState(
             phase: .error,
@@ -450,6 +486,10 @@ final class CallManager: ObservableObject {
     }
 
     private func handleSignalingPayload(_ message: SignalingMessage) {
+        if message.type == "offer" || message.type == "answer" || message.type == "ice" {
+            recoverFromJoiningIfNeeded(participantHint: participantCountHint(payload: message.payload), preferInCall: true)
+        }
+
         if !webRtcEngine.isReady() {
             webRtcEngine.ensurePeerConnection()
             if !webRtcEngine.isReady() {
@@ -500,7 +540,7 @@ final class CallManager: ObservableObject {
     }
 
     private func updateParticipants(_ roomState: RoomState) {
-        let count = roomState.participants.count
+        let count = max(1, roomState.participants.count)
         let isHostNow = clientId != nil && clientId == roomState.hostCid
 
         let phase: CallPhase = (count <= 1) ? .waiting : .inCall
@@ -706,7 +746,8 @@ final class CallManager: ObservableObject {
 
     private func parseRoomState(payload: JSONValue?) -> RoomState? {
         guard let payload = payload?.objectValue else { return nil }
-        guard let hostCid = payload["hostCid"]?.stringValue, !hostCid.isEmpty else { return nil }
+        let parsedHostCid = payload["hostCid"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedHostCid = (parsedHostCid?.isEmpty == false ? parsedHostCid : nil) ?? hostCid ?? clientId
 
         var participants: [Participant] = []
         if let values = payload["participants"]?.arrayValue {
@@ -718,7 +759,8 @@ final class CallManager: ObservableObject {
             }
         }
 
-        return RoomState(hostCid: hostCid, participants: participants)
+        guard let resolvedHostCid, !resolvedHostCid.isEmpty else { return nil }
+        return RoomState(hostCid: resolvedHostCid, participants: participants)
     }
 
     private func refreshRemoteVideoEnabled() {
@@ -771,9 +813,12 @@ final class CallManager: ObservableObject {
     }
 
     private func cleanupCall(message: String) {
+        clearJoinRecovery()
         updateState {
             $0.phase = .ending
             $0.statusMessage = message
+            $0.localVideoEnabled = false
+            $0.remoteVideoEnabled = false
         }
 
         saveCurrentCallToHistoryIfNeeded()
@@ -790,11 +835,11 @@ final class CallManager: ObservableObject {
     }
 
     private func resetResources() {
-        deactivateAudioSession()
         stopRemoteVideoStatePolling()
 
         signalingClient.close()
         webRtcEngine.release()
+        deactivateAudioSession()
 
         currentRoomId = nil
         hostCid = nil
@@ -811,6 +856,7 @@ final class CallManager: ObservableObject {
 
         reconnectTask?.cancel()
         reconnectTask = nil
+        clearJoinRecovery()
         clearOfferTimeout()
         clearIceRestartTimer()
 
@@ -827,10 +873,10 @@ final class CallManager: ObservableObject {
             isVideoPausedByProximity = shouldPauseForProximity
         }
 
-        let enabled = userPreferredVideoEnabled && !shouldPauseForProximity
-        webRtcEngine.toggleVideo(enabled)
-        if uiState.localVideoEnabled != enabled {
-            updateState { $0.localVideoEnabled = enabled }
+        let preferredEnabled = userPreferredVideoEnabled && !shouldPauseForProximity
+        let effectiveEnabled = webRtcEngine.toggleVideo(preferredEnabled)
+        if uiState.localVideoEnabled != effectiveEnabled {
+            updateState { $0.localVideoEnabled = effectiveEnabled }
         }
     }
 
@@ -924,6 +970,47 @@ final class CallManager: ObservableObject {
         callAudioSessionController.deactivate()
     }
 
+    private func scheduleJoinRecovery(for roomId: String) {
+        clearJoinRecovery()
+
+        joinRecoveryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            guard self.currentRoomId == roomId else { return }
+            guard self.uiState.isSignalingConnected else { return }
+
+            let occupancyHint = self.roomStatuses[roomId]
+            self.recoverFromJoiningIfNeeded(participantHint: occupancyHint)
+        }
+    }
+
+    private func clearJoinRecovery() {
+        joinRecoveryTask?.cancel()
+        joinRecoveryTask = nil
+    }
+
+    private func participantCountHint(payload: JSONValue?) -> Int? {
+        guard let participants = payload?.objectValue?["participants"]?.arrayValue else { return nil }
+        return max(1, participants.count)
+    }
+
+    private func recoverFromJoiningIfNeeded(participantHint: Int?, preferInCall: Bool = false) {
+        guard let recovered = resolveJoinRecoveryState(
+            currentPhase: uiState.phase,
+            participantHint: participantHint ?? uiState.participantCount,
+            preferInCall: preferInCall
+        ) else { return }
+
+        updateState {
+            $0.phase = recovered.phase
+            $0.participantCount = recovered.participantCount
+            $0.statusMessage = recovered.phase == .inCall
+                ? L10n.callStatusInCall
+                : L10n.callStatusWaitingForJoin
+        }
+    }
+
     private func scheduleReconnect() {
         let roomId = currentRoomId
         if roomId == nil && watchedRoomIds.isEmpty { return }
@@ -1010,96 +1097,117 @@ final class CallManager: ObservableObject {
     private static func buildWebRtcEngine(isHdVideoExperimentalEnabled: Bool, eventSink: CallManager) -> WebRtcEngine {
         WebRtcEngine(
             onLocalIceCandidate: { [weak eventSink] candidate in
-                guard let eventSink else { return }
-                let payload: JSONValue = .object([
-                    "candidate": .object([
-                        "candidate": .string(candidate.candidate),
-                        "sdpMid": candidate.sdpMid.map(JSONValue.string) ?? .null,
-                        "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
+                Task { @MainActor in
+                    guard let eventSink else { return }
+                    let payload: JSONValue = .object([
+                        "candidate": .object([
+                            "candidate": .string(candidate.candidate),
+                            "sdpMid": candidate.sdpMid.map(JSONValue.string) ?? .null,
+                            "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
+                        ])
                     ])
-                ])
-                eventSink.sendMessage(type: "ice", payload: payload)
+                    eventSink.sendMessage(type: "ice", payload: payload)
+                }
             },
             onConnectionState: { [weak eventSink] state in
-                guard let eventSink else { return }
-                eventSink.updateState {
-                    $0.connectionState = state
+                Task { @MainActor in
+                    guard let eventSink else { return }
+                    eventSink.updateState {
+                        $0.connectionState = state
+                        switch state {
+                        case "CONNECTED":
+                            $0.statusMessage = L10n.callStatusConnected
+                        case "CONNECTING":
+                            $0.statusMessage = L10n.callStatusConnecting
+                        case "DISCONNECTED":
+                            $0.statusMessage = L10n.callStatusDisconnected
+                        case "FAILED":
+                            $0.statusMessage = L10n.callStatusConnectionFailed
+                        case "CLOSED":
+                            $0.statusMessage = L10n.callStatusCallEnded
+                        default:
+                            break
+                        }
+                    }
+
                     switch state {
                     case "CONNECTED":
-                        $0.statusMessage = L10n.callStatusConnected
-                    case "CONNECTING":
-                        $0.statusMessage = L10n.callStatusConnecting
+                        eventSink.recoverFromJoiningIfNeeded(participantHint: nil, preferInCall: true)
+                        eventSink.clearIceRestartTimer()
+                        eventSink.pendingIceRestart = false
                     case "DISCONNECTED":
-                        $0.statusMessage = L10n.callStatusDisconnected
+                        eventSink.scheduleIceRestart(reason: "conn-disconnected", delayMs: 2000)
                     case "FAILED":
-                        $0.statusMessage = L10n.callStatusConnectionFailed
-                    case "CLOSED":
-                        $0.statusMessage = L10n.callStatusCallEnded
+                        eventSink.scheduleIceRestart(reason: "conn-failed", delayMs: 0)
                     default:
                         break
                     }
                 }
-
-                switch state {
-                case "CONNECTED":
-                    eventSink.clearIceRestartTimer()
-                    eventSink.pendingIceRestart = false
-                case "DISCONNECTED":
-                    eventSink.scheduleIceRestart(reason: "conn-disconnected", delayMs: 2000)
-                case "FAILED":
-                    eventSink.scheduleIceRestart(reason: "conn-failed", delayMs: 0)
-                default:
-                    break
-                }
             },
             onIceConnectionState: { [weak eventSink] state in
-                guard let eventSink else { return }
-                eventSink.updateState { $0.iceConnectionState = state }
+                Task { @MainActor in
+                    guard let eventSink else { return }
+                    eventSink.updateState { $0.iceConnectionState = state }
 
-                switch state {
-                case "DISCONNECTED":
-                    eventSink.scheduleIceRestart(reason: "ice-disconnected", delayMs: 2000)
-                case "FAILED":
-                    eventSink.scheduleIceRestart(reason: "ice-failed", delayMs: 0)
-                case "CONNECTED", "COMPLETED":
-                    eventSink.clearIceRestartTimer()
-                    eventSink.pendingIceRestart = false
-                default:
-                    break
+                    switch state {
+                    case "DISCONNECTED":
+                        eventSink.scheduleIceRestart(reason: "ice-disconnected", delayMs: 2000)
+                    case "FAILED":
+                        eventSink.scheduleIceRestart(reason: "ice-failed", delayMs: 0)
+                    case "CONNECTED", "COMPLETED":
+                        eventSink.clearIceRestartTimer()
+                        eventSink.pendingIceRestart = false
+                    default:
+                        break
+                    }
                 }
             },
             onSignalingState: { [weak eventSink] state in
-                guard let eventSink else { return }
-                if state == "STABLE" {
-                    eventSink.clearOfferTimeout()
-                    if eventSink.pendingIceRestart {
-                        eventSink.pendingIceRestart = false
-                        eventSink.triggerIceRestart(reason: "pending-retry")
+                Task { @MainActor in
+                    guard let eventSink else { return }
+                    if state == "STABLE" {
+                        eventSink.clearOfferTimeout()
+                        if eventSink.pendingIceRestart {
+                            eventSink.pendingIceRestart = false
+                            eventSink.triggerIceRestart(reason: "pending-retry")
+                        }
                     }
+                    eventSink.updateState { $0.signalingState = state }
                 }
-                eventSink.updateState { $0.signalingState = state }
             },
             onRenegotiationNeededCallback: { [weak eventSink] in
-                eventSink?.maybeSendOffer(force: true, iceRestart: false)
+                Task { @MainActor in
+                    eventSink?.maybeSendOffer(force: true, iceRestart: false)
+                }
             },
             onRemoteVideoTrack: { [weak eventSink] _ in
-                eventSink?.refreshRemoteVideoEnabled()
+                Task { @MainActor in
+                    eventSink?.refreshRemoteVideoEnabled()
+                }
             },
             onCameraFacingChanged: { [weak eventSink] isFront in
-                eventSink?.updateState { $0.isFrontCamera = isFront }
+                Task { @MainActor in
+                    eventSink?.updateState { $0.isFrontCamera = isFront }
+                }
             },
             onCameraModeChanged: { [weak eventSink] mode in
-                eventSink?.updateState { $0.localCameraMode = mode }
+                Task { @MainActor in
+                    eventSink?.updateState { $0.localCameraMode = mode }
+                }
             },
             onFlashlightStateChanged: { [weak eventSink] available, enabled in
-                eventSink?.updateState {
-                    $0.isFlashAvailable = available
-                    $0.isFlashEnabled = enabled
+                Task { @MainActor in
+                    eventSink?.updateState {
+                        $0.isFlashAvailable = available
+                        $0.isFlashEnabled = enabled
+                    }
                 }
             },
             onScreenShareStopped: { [weak eventSink] in
-                eventSink?.updateState { $0.isScreenSharing = false }
-                eventSink?.applyLocalVideoPreference()
+                Task { @MainActor in
+                    eventSink?.updateState { $0.isScreenSharing = false }
+                    eventSink?.applyLocalVideoPreference()
+                }
             },
             isHdVideoExperimentalEnabled: isHdVideoExperimentalEnabled
         )

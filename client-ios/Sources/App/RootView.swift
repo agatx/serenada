@@ -8,6 +8,10 @@ private enum RootScreen {
     case error
 }
 
+func shouldShowActiveCallScreen(for uiState: CallUiState) -> Bool {
+    uiState.phase == .waiting || uiState.phase == .inCall
+}
+
 struct RootView: View {
     @ObservedObject var callManager: CallManager
 
@@ -21,7 +25,7 @@ struct RootView: View {
 
     var body: some View {
         let uiState = callManager.uiState
-        let showActiveCallScreen = uiState.phase == .waiting || uiState.phase == .inCall || uiState.connectionState == "CONNECTED"
+        let showActiveCallScreen = shouldShowActiveCallScreen(for: uiState)
 
         let currentScreen: RootScreen = {
             if showSettings { return .settings }

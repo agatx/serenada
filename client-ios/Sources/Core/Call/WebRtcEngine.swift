@@ -53,6 +53,10 @@ final class WebRtcEngine {
     private var pendingRemoteIceCandidates: [IceCandidatePayload] = []
 
 #if canImport(WebRTC)
+    private static var sslInitialized = false
+#endif
+
+#if canImport(WebRTC)
     private var peerConnectionFactory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
 
@@ -96,7 +100,7 @@ final class WebRtcEngine {
         self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
 
 #if canImport(WebRTC)
-        RTCInitializeSSL()
+        Self.initializeSslIfNeeded()
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
         self.peerConnectionFactory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
@@ -117,8 +121,10 @@ final class WebRtcEngine {
         localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
 
         if preferVideo {
-            _ = restartVideoCapturer(source: .selfie)
+            let started = restartVideoCapturer(source: .selfie)
+            localVideoTrack?.isEnabled = started
         } else {
+            localVideoTrack?.isEnabled = false
             notifyCameraModeAndFlash()
         }
 
@@ -133,6 +139,7 @@ final class WebRtcEngine {
     func stopLocalMedia() {
 #if canImport(WebRTC)
         setTorchEnabled(false)
+        detachTracksFromRegisteredRenderers()
 
         localVideoTrack?.isEnabled = false
         localAudioTrack?.isEnabled = false
@@ -149,6 +156,7 @@ final class WebRtcEngine {
 
     func closePeerConnection() {
 #if canImport(WebRTC)
+        detachTracksFromRegisteredRenderers()
         peerConnection?.close()
         peerConnection = nil
         remoteVideoTrack = nil
@@ -160,9 +168,6 @@ final class WebRtcEngine {
     func release() {
         stopLocalMedia()
         closePeerConnection()
-#if canImport(WebRTC)
-        RTCCleanupSSL()
-#endif
     }
 
     func setIceServers(_ servers: [IceServerConfig]) {
@@ -339,12 +344,21 @@ final class WebRtcEngine {
 #endif
     }
 
-    func toggleVideo(_ enabled: Bool) {
+    @discardableResult
+    func toggleVideo(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)
         if enabled && localVideoCapturer == nil {
-            _ = restartVideoCapturer(source: localCameraSource)
+            let started = restartVideoCapturer(source: localCameraSource)
+            if !started {
+                localVideoTrack?.isEnabled = false
+                return false
+            }
         }
-        localVideoTrack?.isEnabled = enabled
+        let effectiveEnabled = enabled && localVideoCapturer != nil
+        localVideoTrack?.isEnabled = effectiveEnabled
+        return effectiveEnabled
+#else
+        return false
 #endif
     }
 
@@ -468,6 +482,12 @@ final class WebRtcEngine {
     }
 
 #if canImport(WebRTC)
+    private static func initializeSslIfNeeded() {
+        guard !sslInitialized else { return }
+        RTCInitializeSSL()
+        sslInitialized = true
+    }
+
     private func createPeerConnectionIfReady() {
         guard peerConnection == nil else { return }
         guard let factory = peerConnectionFactory else { return }
@@ -637,6 +657,24 @@ final class WebRtcEngine {
     private func compactRenderers() {
         localRenderers.removeAll { $0.value == nil }
         remoteRenderers.removeAll { $0.value == nil }
+    }
+
+    private func detachTracksFromRegisteredRenderers() {
+        compactRenderers()
+
+        if let localVideoTrack {
+            for box in localRenderers {
+                guard let renderer = box.value as? RTCVideoRenderer else { continue }
+                localVideoTrack.remove(renderer)
+            }
+        }
+
+        if let remoteVideoTrack {
+            for box in remoteRenderers {
+                guard let renderer = box.value as? RTCVideoRenderer else { continue }
+                remoteVideoTrack.remove(renderer)
+            }
+        }
     }
 
     private func connectionStateString(_ state: RTCPeerConnectionState) -> String {

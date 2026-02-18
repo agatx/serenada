@@ -1,5 +1,32 @@
 import SwiftUI
 
+func shouldShowCallStatusLabel(
+    phase: CallPhase,
+    isSignalingConnected: Bool,
+    iceConnectionState: String?,
+    connectionState: String?
+) -> Bool {
+    guard phase == .inCall else { return false }
+
+    return !isSignalingConnected ||
+        iceConnectionState == "DISCONNECTED" ||
+        iceConnectionState == "FAILED" ||
+        connectionState == "DISCONNECTED" ||
+        connectionState == "FAILED"
+}
+
+func shouldShowWaitingOverlay(phase: CallPhase) -> Bool {
+    phase == .waiting
+}
+
+func shouldShowLocalVideoPlaceholder(localVideoEnabled: Bool) -> Bool {
+    !localVideoEnabled
+}
+
+func shouldShowRemoteVideoPlaceholder(phase: CallPhase, remoteVideoEnabled: Bool) -> Bool {
+    !remoteVideoEnabled && phase == .inCall
+}
+
 struct CallScreen: View {
     let roomId: String
     let uiState: CallUiState
@@ -20,12 +47,21 @@ struct CallScreen: View {
             Color.black.ignoresSafeArea()
 
             if isLocalLarge {
-                WebRTCVideoView(kind: .local, callManager: callManager)
-                    .ignoresSafeArea()
+                mainVideoSurface(
+                    kind: .local,
+                    showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
+                    placeholderText: L10n.callLocalCameraOff
+                )
                 smallRemoteView
             } else {
-                WebRTCVideoView(kind: .remote, callManager: callManager)
-                    .ignoresSafeArea()
+                mainVideoSurface(
+                    kind: .remote,
+                    showPlaceholder: shouldShowRemoteVideoPlaceholder(
+                        phase: uiState.phase,
+                        remoteVideoEnabled: uiState.remoteVideoEnabled
+                    ),
+                    placeholderText: uiState.phase == .inCall ? L10n.callVideoOff : nil
+                )
                 smallLocalView
             }
 
@@ -53,8 +89,28 @@ struct CallScreen: View {
         }
     }
 
+    private func mainVideoSurface(kind: WebRTCVideoView.Kind, showPlaceholder: Bool, placeholderText: String?) -> some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            WebRTCVideoView(kind: kind, callManager: callManager)
+                .ignoresSafeArea()
+
+            if showPlaceholder {
+                VideoPlaceholderTile(text: placeholderText, compact: false)
+                    .ignoresSafeArea()
+            }
+        }
+    }
+
     private var smallLocalView: some View {
-        WebRTCVideoView(kind: .local, callManager: callManager)
+        ZStack {
+            Color.black
+            WebRTCVideoView(kind: .local, callManager: callManager)
+
+            if shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled) {
+                VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
+            }
+        }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.35), lineWidth: 1))
@@ -69,7 +125,14 @@ struct CallScreen: View {
     }
 
     private var smallRemoteView: some View {
-        WebRTCVideoView(kind: .remote, callManager: callManager)
+        ZStack {
+            Color.black
+            WebRTCVideoView(kind: .remote, callManager: callManager)
+
+            if shouldShowRemoteVideoPlaceholder(phase: uiState.phase, remoteVideoEnabled: uiState.remoteVideoEnabled) {
+                VideoPlaceholderTile(text: uiState.phase == .inCall ? L10n.callVideoOff : nil, compact: true)
+            }
+        }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.35), lineWidth: 1))
@@ -89,7 +152,7 @@ struct CallScreen: View {
 
             Spacer()
 
-            if uiState.phase == .waiting {
+            if shouldShowWaitingOverlay(phase: uiState.phase) {
                 waitingOverlay
             }
 
@@ -104,13 +167,20 @@ struct CallScreen: View {
     private var topStatus: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                Text(statusLabel)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.45))
-                    .clipShape(Capsule())
+                if shouldShowCallStatusLabel(
+                    phase: uiState.phase,
+                    isSignalingConnected: uiState.isSignalingConnected,
+                    iceConnectionState: uiState.iceConnectionState,
+                    connectionState: uiState.connectionState
+                ) {
+                    Text(statusLabel)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.black.opacity(0.45))
+                        .clipShape(Capsule())
+                }
 
                 Spacer()
 
@@ -120,12 +190,14 @@ struct CallScreen: View {
                     }
                 }
 
-                iconButton(system: "square.and.arrow.up") {
-                    showShareSheet = true
+                if uiState.phase == .waiting {
+                    iconButton(system: "square.and.arrow.up") {
+                        showShareSheet = true
+                    }
                 }
             }
 
-            if uiState.phase == .waiting {
+            if shouldShowWaitingOverlay(phase: uiState.phase) {
                 QRCodeImageView(text: "https://\(serverHost)/call/\(roomId)")
             }
         }
@@ -190,24 +262,30 @@ struct CallScreen: View {
     }
 
     private var statusLabel: String {
-        let isReconnecting = !uiState.isSignalingConnected ||
-            uiState.iceConnectionState == "DISCONNECTED" ||
-            uiState.iceConnectionState == "FAILED" ||
-            uiState.connectionState == "DISCONNECTED" ||
-            uiState.connectionState == "FAILED"
+        L10n.callReconnecting
+    }
+}
 
-        if isReconnecting {
-            return L10n.callReconnecting
+private struct VideoPlaceholderTile: View {
+    let text: String?
+    let compact: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: compact ? 6 : 10) {
+                Image(systemName: "video.slash.fill")
+                    .font(.system(size: compact ? 20 : 34, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                if let text, !text.isEmpty {
+                    Text(text)
+                        .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, compact ? 6 : 16)
+                }
+            }
         }
-
-        if let statusMessage = uiState.statusMessage, !statusMessage.isEmpty {
-            return statusMessage
-        }
-
-        if uiState.phase == .waiting {
-            return L10n.callWaitingShort
-        }
-
-        return L10n.callStatusInCall
     }
 }
