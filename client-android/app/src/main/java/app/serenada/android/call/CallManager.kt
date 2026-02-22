@@ -707,6 +707,10 @@ class CallManager(context: Context) {
         }
     }
 
+    fun adjustLocalCameraZoom(scaleFactor: Float) {
+        webRtcEngine.adjustWorldCameraZoom(scaleFactor)
+    }
+
     fun startScreenShare(intent: Intent) {
         if (_uiState.value.isScreenSharing) return
         val roomId = currentRoomId

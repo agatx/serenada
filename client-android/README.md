@@ -6,6 +6,7 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - 1:1 WebRTC audio/video calls
 - WebSocket signaling with automatic SSE fallback (protocol v1)
 - In-call camera source cycle: `selfie` (default) -> `world` -> `composite` (world view with circular selfie overlay), with automatic composite skip on unsupported devices or composite start failure
+- In-call pinch zoom for `world`/`composite` when local feed is the large view (not PIP), applied at camera capture level so remote participants receive the zoomed stream too
 - In-call flashlight toggle shown in the top-right corner only for `world`/`composite` camera modes when the device reports flash support; flashlight turns off automatically when leaving those modes or ending the call, while the user’s flashlight preference is remembered during the same call and reapplied after returning to `world`/`composite`
 - In-call performance locks (partial CPU wake lock + Wi-Fi low-latency lock) to reduce call-time scheduling/network jitter while the call is active
 - Call-scoped audio session management (`MODE_IN_COMMUNICATION` + audio focus request / restore on hangup), with route priority `Bluetooth headset -> proximity earpiece -> speaker` during active calls

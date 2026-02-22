@@ -30,6 +30,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -85,6 +87,7 @@ fun CallScreen(
     onToggleVideo: () -> Unit,
     onFlipCamera: () -> Unit,
     onToggleFlashlight: () -> Unit,
+    onLocalPinchZoom: (Float) -> Unit,
     onEndCall: () -> Unit,
     // Added callbacks for Screen Share
     onStartScreenShare: (Intent) -> Unit = {},
@@ -110,6 +113,20 @@ fun CallScreen(
     val localPipRenderer = remember { PipTextureRendererView(context, "local-pip") }
     val remotePipRenderer = remember { PipTextureRendererView(context, "remote-pip") }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val localZoomTransformState = rememberTransformableState { zoomChange, _, _ ->
+        if (zoomChange > 0f && abs(zoomChange - 1f) > 0.01f) {
+            onLocalPinchZoom(zoomChange)
+        }
+    }
+    val isWorldOrCompositeMode =
+        uiState.localCameraMode == LocalCameraMode.WORLD ||
+                uiState.localCameraMode == LocalCameraMode.COMPOSITE
+    val isLocalPinchZoomEnabled =
+        uiState.phase == CallPhase.InCall &&
+                isLocalLarge &&
+                uiState.localVideoEnabled &&
+                !uiState.isScreenSharing &&
+                isWorldOrCompositeMode
 
     // Screen Share Launcher
     val mediaProjectionManager = remember {
@@ -292,7 +309,17 @@ fun CallScreen(
                 fitHeight = maxHeight
             }
             if (uiState.localVideoEnabled) {
-                Box(modifier = localModifier.clipToBounds()) {
+                val localLargeModifier =
+                    localModifier
+                        .clipToBounds()
+                        .then(
+                            if (isLocalPinchZoomEnabled) {
+                                Modifier.transformable(state = localZoomTransformState)
+                            } else {
+                                Modifier
+                            }
+                        )
+                Box(modifier = localLargeModifier) {
                     VideoSurface(
                         modifier =
                             Modifier.size(fitWidth, fitHeight)
@@ -422,9 +449,6 @@ fun CallScreen(
             }
         }
 
-        val isWorldOrCompositeMode =
-            uiState.localCameraMode == LocalCameraMode.WORLD ||
-                    uiState.localCameraMode == LocalCameraMode.COMPOSITE
         val showFlashButton =
             uiState.phase == CallPhase.InCall &&
                     isWorldOrCompositeMode &&
