@@ -9,6 +9,7 @@ import { saveCall } from '../utils/callHistory';
 import { useTranslation } from 'react-i18next';
 import { playJoinChime } from '../utils/audio';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
+import { saveRoom, markRoomJoined } from '../utils/savedRooms';
 
 function urlBase64ToUint8Array(base64String: string) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -191,6 +192,12 @@ const CallRoom: React.FC = () => {
     const { t } = useTranslation();
     const { roomId } = useParams<{ roomId: string }>();
     const navigate = useNavigate();
+
+    // Parse URL parameters for room name sharing
+    const location = window.location;
+    const urlParams = new URLSearchParams(location.search);
+    const sharedName = urlParams.get('name');
+
     const {
         joinRoom,
         leaveRoom,
@@ -228,6 +235,7 @@ const CallRoom: React.FC = () => {
     const [remoteVideoFit, setRemoteVideoFit] = useState<'cover' | 'contain'>('cover');
     const [showReconnecting, setShowReconnecting] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
+    const [wantsToSave, setWantsToSave] = useState<boolean>(!!sharedName);
 
     const lastFacingModeRef = useRef(facingMode);
 
@@ -485,6 +493,18 @@ const CallRoom: React.FC = () => {
 
     const handleJoin = async () => {
         if (!roomId) return;
+
+        if (sharedName && wantsToSave) {
+            saveRoom({
+                roomId,
+                name: sharedName,
+                createdAt: Date.now()
+            });
+            showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
+        }
+
+        if (!isConnected) return; // Allow save to happen even if not connected, but stop here for joining
+
         try {
             clearError();
             if (isMobileDevice()) {
@@ -540,6 +560,10 @@ const CallRoom: React.FC = () => {
                 startTime: callStartTimeRef.current,
                 duration: duration > 0 ? duration : 0
             });
+
+            // Also update lastJoinedAt if it's a saved room
+            markRoomJoined(roomId, Date.now());
+
             callStartTimeRef.current = null;
         }
         leaveRoom();
@@ -655,8 +679,24 @@ const CallRoom: React.FC = () => {
         return (
             <div className="page-container center-content">
                 <div className="card prejoin-card">
-                    <h2>{t('ready_to_join')}</h2>
-                    <p>{t('room_id')} {roomId}</p>
+                    <h2>{sharedName ? (t('saved_rooms_invited_title', { name: sharedName }) || `Invited to ${sharedName}`) : t('ready_to_join')}</h2>
+                    <p style={{ display: 'none' }}>{t('room_id')} {roomId}</p>
+
+                    {sharedName && (
+                        <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+                            <input
+                                type="checkbox"
+                                id="saveRoomCheck"
+                                checked={wantsToSave}
+                                onChange={(e) => setWantsToSave(e.target.checked)}
+                                style={{ transform: 'scale(1.2)', cursor: 'pointer' }}
+                            />
+                            <label htmlFor="saveRoomCheck" style={{ cursor: 'pointer', fontSize: '0.95rem' }}>
+                                {t('saved_rooms_save_prompt') || 'Save this room to my list'}
+                            </label>
+                        </div>
+                    )}
+
                     {signalingError && (
                         <div className="error-message">
                             <AlertCircle size={20} />
@@ -674,12 +714,14 @@ const CallRoom: React.FC = () => {
                         {!localStream && <div className="video-placeholder">{t('camera_off')}</div>}
                     </div>
                     <div className="button-group">
-                        <button className="btn-primary" onClick={handleJoin} disabled={!isConnected}>
-                            {isConnected ? t('join_call') : t('connecting')}
+                        <button className="btn-primary" onClick={handleJoin}>
+                            {isConnected ? ((sharedName && wantsToSave) ? (t('saved_rooms_save_and_join') || 'Save & Join') : t('join_call')) : ((sharedName && wantsToSave) ? (t('save') || 'Save') : t('connecting'))}
                         </button>
-                        <button className="btn-secondary" onClick={copyLink}>
-                            <Copy size={16} /> {t('copy_link')}
-                        </button>
+                        {!sharedName && (
+                            <button className="btn-secondary" onClick={copyLink}>
+                                <Copy size={16} /> {t('copy_link')}
+                            </button>
+                        )}
                         <button className="btn-secondary" onClick={handleLeave}>
                             {t('home')}
                         </button>

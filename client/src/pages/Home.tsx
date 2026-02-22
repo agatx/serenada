@@ -5,6 +5,9 @@ import RecentCalls from '../components/RecentCalls';
 import Footer from '../components/Footer';
 import { getRecentCalls } from '../utils/callHistory';
 import type { RecentCall } from '../utils/callHistory';
+import SavedRooms from '../components/SavedRooms';
+import { getSavedRooms } from '../utils/savedRooms';
+import type { SavedRoom } from '../utils/savedRooms';
 import { useSignaling } from '../contexts/SignalingContext';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../contexts/ToastContext';
@@ -14,17 +17,26 @@ const Home: React.FC = () => {
     const { showToast } = useToast();
     const navigate = useNavigate();
     const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
+    const [savedRooms, setSavedRooms] = useState<SavedRoom[]>([]);
     const [isCreating, setIsCreating] = useState(false);
     const { watchRooms, roomStatuses, isConnected } = useSignaling();
 
-    useEffect(() => {
+    const loadData = () => {
         const calls = getRecentCalls();
+        const rooms = getSavedRooms();
         setRecentCalls(calls);
+        setSavedRooms(rooms);
 
-        if (calls.length > 0 && isConnected) {
-            const rids = calls.map(c => c.roomId);
-            watchRooms(rids);
+        if (isConnected) {
+            const rids = [...new Set([...calls.map(c => c.roomId), ...rooms.map(r => r.roomId)])];
+            if (rids.length > 0) {
+                watchRooms(rids);
+            }
         }
+    };
+
+    useEffect(() => {
+        loadData();
     }, [isConnected]);
 
     const startCall = async () => {
@@ -81,7 +93,8 @@ const Home: React.FC = () => {
                     {t('start_call')}
                 </button>
 
-                <RecentCalls calls={recentCalls} roomStatuses={roomStatuses} />
+                <RecentCalls calls={recentCalls} roomStatuses={roomStatuses} savedRooms={savedRooms} onCallUpdate={loadData} />
+                <SavedRooms rooms={savedRooms} roomStatuses={roomStatuses} onRoomUpdate={loadData} />
             </div>
 
             <div className="benefits-container">

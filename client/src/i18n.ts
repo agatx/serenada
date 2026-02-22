@@ -52,7 +52,22 @@ const resources = {
             "notify_me_on": "Notify Me (On)",
             "screen_share_start": "Share Screen",
             "screen_share_stop": "Stop Sharing",
-            "toast_screen_share_error": "Could not start screen sharing."
+            "toast_screen_share_error": "Could not start screen sharing.",
+            "saved_rooms_title": "Saved Rooms",
+            "saved_rooms_name_label": "Room Name",
+            "saved_rooms_name_placeholder": "E.g., Weekly Sync",
+            "saved_rooms_last_joined": "Last Joined",
+            "saved_rooms_never_joined": "Never",
+            "saved_rooms_dialog_title_create": "Save Room",
+            "saved_rooms_dialog_title_rename": "Rename Room",
+            "saved_rooms_invited_title": "Invited to {{name}}",
+            "saved_rooms_save_prompt": "Save this room to my list",
+            "saved_rooms_save_and_join": "Save & Join",
+            "saved_rooms_save_success": "Room saved successfully",
+            "save_room": "Save Room",
+            "create": "Create",
+            "save": "Save",
+            "cancel": "Cancel"
         }
     },
     ru: {
@@ -104,7 +119,22 @@ const resources = {
             "notify_me_on": "Уведомления включены",
             "screen_share_start": "Поделиться экраном",
             "screen_share_stop": "Остановить показ",
-            "toast_screen_share_error": "Не удалось начать демонстрацию экрана."
+            "toast_screen_share_error": "Не удалось начать демонстрацию экрана.",
+            "saved_rooms_title": "Сохраненные комнаты",
+            "saved_rooms_name_label": "Название комнаты",
+            "saved_rooms_name_placeholder": "Например, Еженедельный созвон",
+            "saved_rooms_last_joined": "Последний вход",
+            "saved_rooms_never_joined": "Никогда",
+            "saved_rooms_dialog_title_create": "Сохранить комнату",
+            "saved_rooms_dialog_title_rename": "Переименовать",
+            "saved_rooms_invited_title": "Приглашение в {{name}}",
+            "saved_rooms_save_prompt": "Сохранить комнату в мой список",
+            "saved_rooms_save_and_join": "Сохранить и войти",
+            "saved_rooms_save_success": "Комната сохранена",
+            "save_room": "Сохранить комнату",
+            "create": "Создать",
+            "save": "Сохранить",
+            "cancel": "Отмена"
         }
     },
     es: {
@@ -156,7 +186,22 @@ const resources = {
             "notify_me_on": "Notificaciones activadas",
             "screen_share_start": "Compartir pantalla",
             "screen_share_stop": "Detener uso compartido",
-            "toast_screen_share_error": "No se pudo iniciar el uso compartido de pantalla."
+            "toast_screen_share_error": "No se pudo iniciar el uso compartido de pantalla.",
+            "saved_rooms_title": "Salas Guardadas",
+            "saved_rooms_name_label": "Nombre de la sala",
+            "saved_rooms_name_placeholder": "Ej. Reunión Semanal",
+            "saved_rooms_last_joined": "Último acceso",
+            "saved_rooms_never_joined": "Nunca",
+            "saved_rooms_dialog_title_create": "Guardar Sala",
+            "saved_rooms_dialog_title_rename": "Renombrar Sala",
+            "saved_rooms_invited_title": "Invitado a {{name}}",
+            "saved_rooms_save_prompt": "Guardar esta sala en mi lista",
+            "saved_rooms_save_and_join": "Guardar y Unirse",
+            "saved_rooms_save_success": "Sala guardada con éxito",
+            "save_room": "Guardar Sala",
+            "create": "Crear",
+            "save": "Guardar",
+            "cancel": "Cancelar"
         }
     },
     fr: {
@@ -208,7 +253,22 @@ const resources = {
             "notify_me_on": "Notifications activées",
             "screen_share_start": "Partager l'écran",
             "screen_share_stop": "Arrêter le partage",
-            "toast_screen_share_error": "Impossible de démarrer le partage d'écran."
+            "toast_screen_share_error": "Impossible de démarrer le partage d'écran.",
+            "saved_rooms_title": "Salles Enregistrées",
+            "saved_rooms_name_label": "Nom de la salle",
+            "saved_rooms_name_placeholder": "Ex. Point Hebdo",
+            "saved_rooms_last_joined": "Dernier accès",
+            "saved_rooms_never_joined": "Jamais",
+            "saved_rooms_dialog_title_create": "Enregistrer la Salle",
+            "saved_rooms_dialog_title_rename": "Renommer la Salle",
+            "saved_rooms_invited_title": "Invité à {{name}}",
+            "saved_rooms_save_prompt": "Enregistrer cette salle dans ma liste",
+            "saved_rooms_save_and_join": "Enregistrer & Rejoindre",
+            "saved_rooms_save_success": "Salle enregistrée avec succès",
+            "save_room": "Enregistrer la Salle",
+            "create": "Créer",
+            "save": "Enregistrer",
+            "cancel": "Annuler"
         }
     }
 };

@@ -1,17 +1,73 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Clock, Calendar } from 'lucide-react';
+import { BookmarkPlus, Clock, Calendar, MoreVertical, Trash2 } from 'lucide-react';
 import type { RecentCall } from '../utils/callHistory';
+import { removeRecentCall } from '../utils/callHistory';
+import type { SavedRoom } from '../utils/savedRooms';
 import { useTranslation } from 'react-i18next';
+import { SavedRoomDialog } from './SavedRoomDialog';
+import { useToast } from '../contexts/ToastContext';
+import { saveRoom } from '../utils/savedRooms';
 
 interface RecentCallsProps {
     calls: RecentCall[];
     roomStatuses: Record<string, number>;
+    savedRooms: SavedRoom[];
+    onCallUpdate?: () => void;
 }
 
-const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses }) => {
+const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRooms, onCallUpdate }) => {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
+    const [activeMenu, setActiveMenu] = useState<string | null>(null);
+    const [dialogOpen, setDialogOpen] = useState(false);
+    const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+    const { showToast } = useToast();
+
+    React.useEffect(() => {
+        const handleClickOutside = () => {
+            setActiveMenu(null);
+        };
+        if (activeMenu) {
+            document.addEventListener('click', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('click', handleClickOutside);
+        };
+    }, [activeMenu]);
+
+    const handleMenuToggle = (e: React.MouseEvent, roomId: string) => {
+        e.stopPropagation();
+        setActiveMenu(activeMenu === roomId ? null : roomId);
+    };
+
+    const handleSaveClick = (e: React.MouseEvent, roomId: string) => {
+        e.stopPropagation();
+        setSelectedRoomId(roomId);
+        setDialogOpen(true);
+        setActiveMenu(null);
+    };
+
+    const handleDialogSave = (newName: string) => {
+        if (selectedRoomId) {
+            saveRoom({
+                roomId: selectedRoomId,
+                name: newName,
+                createdAt: Date.now()
+            });
+            showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
+            if (onCallUpdate) onCallUpdate();
+        }
+        setDialogOpen(false);
+        setSelectedRoomId(null);
+    };
+
+    const handleRemoveClick = (e: React.MouseEvent, roomId: string) => {
+        e.stopPropagation();
+        removeRecentCall(roomId);
+        if (onCallUpdate) onCallUpdate();
+        setActiveMenu(null);
+    };
 
     const formatDuration = (seconds: number) => {
         if (seconds < 60) return `${seconds}s`;
@@ -51,8 +107,9 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses }) => {
                 <table className="recent-calls-table">
                     <thead>
                         <tr>
-                            <th>{t('date_time')}</th>
+                            <th style={{ width: '55%' }}>{t('date_time')}</th>
                             <th className="text-right">{t('duration')}</th>
+                            <th style={{ width: '48px' }}></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -75,11 +132,45 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses }) => {
                                         <span>{formatDuration(call.duration)}</span>
                                     </div>
                                 </td>
+                                <td>
+                                    <div className="menu-container" style={{ position: 'relative' }}>
+                                        <button
+                                            className="btn-icon small"
+                                            onClick={(e) => handleMenuToggle(e, call.roomId)}
+                                            style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '4px' }}
+                                        >
+                                            <MoreVertical size={16} />
+                                        </button>
+
+                                        {activeMenu === call.roomId && (
+                                            <div className="dropdown-menu">
+                                                {!savedRooms.some(r => r.roomId === call.roomId) && (
+                                                    <button onClick={(e) => handleSaveClick(e, call.roomId)}>
+                                                        <BookmarkPlus size={14} /> {t('save_room') || 'Save'}
+                                                    </button>
+                                                )}
+                                                <button className="danger" onClick={(e) => handleRemoveClick(e, call.roomId)}>
+                                                    <Trash2 size={14} /> Remove
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </td>
                             </tr>
                         ))}
                     </tbody>
                 </table>
             </div>
+
+            {selectedRoomId && (
+                <SavedRoomDialog
+                    isOpen={dialogOpen}
+                    mode="create"
+                    roomId={selectedRoomId}
+                    onClose={() => setDialogOpen(false)}
+                    onSave={handleDialogSave}
+                />
+            )}
         </div>
     );
 };
