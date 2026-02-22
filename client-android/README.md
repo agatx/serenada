@@ -17,6 +17,7 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - Deep links for `https://serenada.app/call/*`
 - Foreground service to keep active calls running in the background
 - Settings screen to change server host, with host validation on save
+- Join attempts include a timeout guard so the app does not stay in `Joining room...` indefinitely on signaling/connectivity failures
 - Android system back support for internal navigation (toolbar back button, hardware back, and edge-swipe gesture behave the same across Settings/Diagnostics/Join-by-code/Error screens)
 - Encrypted join snapshot upload (`snapshotId` on `join`) so server push notifications can include a thumbnail when Android is the joiner
 - Native push receive via Firebase Cloud Messaging, including encrypted snapshot decryption and `BigPicture` notifications in background/terminated app states

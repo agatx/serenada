@@ -108,6 +108,7 @@ class CallManager(context: Context) {
     private var lastIceRestartAt = 0L
     private var iceRestartRunnable: Runnable? = null
     private var offerTimeoutRunnable: Runnable? = null
+    private var joinTimeoutRunnable: Runnable? = null
     private var remoteVideoStatePollRunnable: Runnable? = null
     private var webrtcStatsRequestInFlight = false
     private var lastWebRtcStatsPollAtMs = 0L
@@ -624,6 +625,7 @@ class CallManager(context: Context) {
                 isFlashEnabled = false
             )
         )
+        scheduleJoinTimeout(roomId, joinAttemptId)
 
         acquirePerformanceLocks()
         activateAudioSession()
@@ -967,6 +969,7 @@ class CallManager(context: Context) {
 
     private fun handleError(msg: SignalingMessage) {
         val rawMessage = msg.payload?.optString("message").orEmpty().ifBlank { null }
+        clearJoinTimeout()
         resetResources()
         updateState(
             CallUiState(
@@ -1024,6 +1027,9 @@ class CallManager(context: Context) {
         val phase = when {
             count <= 1 -> CallPhase.Waiting
             else -> CallPhase.InCall
+        }
+        if (phase != CallPhase.Joining) {
+            clearJoinTimeout()
         }
         if (count <= 1) {
             sentOffer = false
@@ -1124,6 +1130,39 @@ class CallManager(context: Context) {
         }
         offerTimeoutRunnable = runnable
         handler.postDelayed(runnable, 8000)
+    }
+
+    private fun scheduleJoinTimeout(roomId: String, joinAttemptId: Long) {
+        clearJoinTimeout()
+        val runnable = Runnable {
+            joinTimeoutRunnable = null
+            val state = _uiState.value
+            val isStillJoining = state.phase == CallPhase.Joining &&
+                currentRoomId == roomId &&
+                joinAttemptSerial == joinAttemptId
+            if (!isStillJoining) return@Runnable
+            Log.w("CallManager", "Join timeout for room $roomId; failing attempt")
+            failJoinWithError(R.string.call_status_connection_failed)
+        }
+        joinTimeoutRunnable = runnable
+        handler.postDelayed(runnable, JOIN_ROOM_TIMEOUT_MS)
+    }
+
+    private fun clearJoinTimeout() {
+        joinTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        joinTimeoutRunnable = null
+    }
+
+    private fun failJoinWithError(messageResId: Int) {
+        clearJoinTimeout()
+        resetResources()
+        updateState(
+            CallUiState(
+                phase = CallPhase.Error,
+                errorMessageResId = messageResId,
+                errorMessageText = null
+            )
+        )
     }
 
     private fun clearOfferTimeout() {
@@ -1304,6 +1343,7 @@ class CallManager(context: Context) {
     }
 
     private fun resetResources() {
+        clearJoinTimeout()
         deactivateAudioSession()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
@@ -1525,6 +1565,7 @@ class CallManager(context: Context) {
     private companion object {
         const val WEBRTC_STATS_POLL_INTERVAL_MS = 2000L
         const val JOIN_PUSH_ENDPOINT_WAIT_MS = 250L
+        const val JOIN_ROOM_TIMEOUT_MS = 25_000L
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         const val WIFI_PERF_LOCK_TAG = "serenada:call-wifi"
         const val MAX_SAVED_ROOM_NAME_LENGTH = 120
