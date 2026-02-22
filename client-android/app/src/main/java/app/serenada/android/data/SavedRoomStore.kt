@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 data class SavedRoom(
     val roomId: String,
@@ -131,7 +132,7 @@ class SavedRoomStore(context: Context) {
                 "https://$raw"
             }
             val parsed = runCatching { Uri.parse(withScheme) }.getOrNull() ?: return null
-            val host = parsed.host?.trim()?.lowercase() ?: return null
+            val host = parsed.host?.trim()?.lowercase(Locale.ROOT) ?: return null
             if (host.isBlank()) return null
             if (!parsed.userInfo.isNullOrBlank()) return null
             if (!parsed.query.isNullOrBlank()) return null

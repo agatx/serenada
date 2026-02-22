@@ -402,9 +402,19 @@ class CallManager(context: Context) {
         }
 
         val targetHost = hostInput.trim().ifBlank { serverHost.value }
-        val normalizedHost = normalizeHostValue(targetHost) ?: targetHost
+        val normalizedHost = normalizeHostValue(targetHost)
+        if (normalizedHost == null) {
+            handler.post {
+                onResult(
+                    Result.failure(
+                        IllegalArgumentException(appContext.getString(R.string.settings_error_invalid_server_host))
+                    )
+                )
+            }
+            return
+        }
         val roomHostOverride = normalizedHost.takeUnless { isTrustedDeepLinkHost(it) }
-        apiClient.createRoomId(targetHost) { result ->
+        apiClient.createRoomId(normalizedHost) { result ->
             handler.post {
                 result
                     .onSuccess { roomId ->
@@ -420,9 +430,8 @@ class CallManager(context: Context) {
     fun handleDeepLink(uri: Uri) {
         val deepLinkTarget = parseDeepLinkTarget(uri) ?: return
         val hostPolicy = resolveDeepLinkHostPolicy(deepLinkTarget.host)
-        hostPolicy.persistedHost?.let { updateServerHost(it) }
-
         if (deepLinkTarget.action == DeepLinkAction.SaveRoom) {
+            hostPolicy.persistedHost?.let { updateServerHost(it) }
             val roomName = deepLinkTarget.savedRoomName ?: deepLinkTarget.roomId
             saveRoom(deepLinkTarget.roomId, roomName, hostPolicy.oneOffHost)
             return
@@ -438,6 +447,7 @@ class CallManager(context: Context) {
             Log.d("CallManager", "Ignoring duplicate deep link for active room $roomId")
             return
         }
+        hostPolicy.persistedHost?.let { updateServerHost(it) }
         joinRoom(roomId, hostPolicy.oneOffHost)
     }
 
