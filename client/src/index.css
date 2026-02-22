@@ -86,6 +86,22 @@ body {
   /* 500px - 3rem padding */
 }
 
+.prejoin-invite-title {
+  margin-bottom: 0.75rem;
+}
+
+.prejoin-invite-label {
+  display: block;
+  color: #6e7781;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.prejoin-invite-room {
+  margin: 0.35rem 0 0;
+}
+
 .btn-primary,
 .btn-secondary {
   border: none;
@@ -144,6 +160,24 @@ body {
   gap: 1rem;
   align-items: center;
   margin-top: 1.5rem;
+}
+
+.prejoin-invite-actions {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.prejoin-invite-actions .btn-primary,
+.prejoin-invite-actions .btn-secondary {
+  flex: 1;
+}
+
+.prejoin-invite-home {
+  margin-top: 1rem;
 }
 
 /* Call Room */

@@ -235,7 +235,6 @@ const CallRoom: React.FC = () => {
     const [remoteVideoFit, setRemoteVideoFit] = useState<'cover' | 'contain'>('cover');
     const [showReconnecting, setShowReconnecting] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
-    const [wantsToSave, setWantsToSave] = useState<boolean>(!!sharedName);
 
     const lastFacingModeRef = useRef(facingMode);
 
@@ -491,16 +490,21 @@ const CallRoom: React.FC = () => {
 
     const callStartTimeRef = useRef<number | null>(null);
 
-    const handleJoin = async () => {
+    const saveInvitedRoom = () => {
+        if (!sharedName || !roomId) return;
+        saveRoom({
+            roomId,
+            name: sharedName,
+            createdAt: Date.now()
+        });
+        showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
+    };
+
+    const handleJoin = async (shouldSave = false) => {
         if (!roomId) return;
 
-        if (sharedName && wantsToSave) {
-            saveRoom({
-                roomId,
-                name: sharedName,
-                createdAt: Date.now()
-            });
-            showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
+        if (shouldSave) {
+            saveInvitedRoom();
         }
 
         if (!isConnected) return; // Allow save to happen even if not connected, but stop here for joining
@@ -542,6 +546,10 @@ const CallRoom: React.FC = () => {
             console.error("Failed to join room", err);
             showToast('error', t('toast_camera_error'));
         }
+    };
+
+    const handleSaveOnly = () => {
+        saveInvitedRoom();
     };
 
     // If we receive a signaling error while trying to join, or if we are joined but room state becomes null
@@ -679,23 +687,17 @@ const CallRoom: React.FC = () => {
         return (
             <div className="page-container center-content">
                 <div className="card prejoin-card">
-                    <h2>{sharedName ? (t('saved_rooms_invited_title', { name: sharedName }) || `Invited to ${sharedName}`) : t('ready_to_join')}</h2>
-                    <p style={{ display: 'none' }}>{t('room_id')} {roomId}</p>
-
-                    {sharedName && (
-                        <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-                            <input
-                                type="checkbox"
-                                id="saveRoomCheck"
-                                checked={wantsToSave}
-                                onChange={(e) => setWantsToSave(e.target.checked)}
-                                style={{ transform: 'scale(1.2)', cursor: 'pointer' }}
-                            />
-                            <label htmlFor="saveRoomCheck" style={{ cursor: 'pointer', fontSize: '0.95rem' }}>
-                                {t('saved_rooms_save_prompt') || 'Save this room to my list'}
-                            </label>
+                    {sharedName ? (
+                        <div className="prejoin-invite-title">
+                            <span className="prejoin-invite-label">
+                                {t('saved_rooms_invited_prefix') || 'Invited to'}
+                            </span>
+                            <h2 className="prejoin-invite-room">{sharedName}</h2>
                         </div>
+                    ) : (
+                        <h2>{t('ready_to_join')}</h2>
                     )}
+                    <p style={{ display: 'none' }}>{t('room_id')} {roomId}</p>
 
                     {signalingError && (
                         <div className="error-message">
@@ -713,19 +715,36 @@ const CallRoom: React.FC = () => {
                         />
                         {!localStream && <div className="video-placeholder">{t('camera_off')}</div>}
                     </div>
-                    <div className="button-group">
-                        <button className="btn-primary" onClick={handleJoin}>
-                            {isConnected ? ((sharedName && wantsToSave) ? (t('saved_rooms_save_and_join') || 'Save & Join') : t('join_call')) : ((sharedName && wantsToSave) ? (t('save') || 'Save') : t('connecting'))}
-                        </button>
-                        {!sharedName && (
+
+                    {sharedName ? (
+                        <>
+                            <div className="prejoin-invite-actions">
+                                <button className="btn-primary" onClick={() => handleJoin(true)}>
+                                    {t('saved_rooms_save_and_join') || 'Save & Join'}
+                                </button>
+                                <button className="btn-secondary" onClick={handleSaveOnly}>
+                                    {t('saved_rooms_save_only') || 'Save Only'}
+                                </button>
+                            </div>
+                            <div className="button-group prejoin-invite-home">
+                                <button className="btn-secondary" onClick={handleLeave}>
+                                    {t('home')}
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="button-group">
+                            <button className="btn-primary" onClick={() => handleJoin()}>
+                                {isConnected ? t('join_call') : t('connecting')}
+                            </button>
                             <button className="btn-secondary" onClick={copyLink}>
                                 <Copy size={16} /> {t('copy_link')}
                             </button>
-                        )}
-                        <button className="btn-secondary" onClick={handleLeave}>
-                            {t('home')}
-                        </button>
-                    </div>
+                            <button className="btn-secondary" onClick={handleLeave}>
+                                {t('home')}
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         );
