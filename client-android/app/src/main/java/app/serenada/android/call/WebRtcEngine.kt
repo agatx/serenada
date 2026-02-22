@@ -84,7 +84,7 @@ class WebRtcEngine(
         val isFrontFacing: Boolean,
         val captureProfile: CaptureProfile,
         val torchCameraId: String?,
-        val primaryCameraId: String?
+        val zoomCameraId: String?
     )
 
     private data class CaptureProfile(
@@ -132,7 +132,7 @@ class WebRtcEngine(
     private var cameraSourceBeforeScreenShare: LocalCameraSource? = null
     private var isScreenSharing = false
     private var activeTorchCameraId: String? = null
-    private var activePrimaryCameraId: String? = null
+    private var activeZoomCameraId: String? = null
     private var activeZoomCapabilities: ZoomCapabilities? = null
     private var isTorchPreferenceEnabled = false
     private var isTorchEnabled = false
@@ -260,7 +260,7 @@ class WebRtcEngine(
         if (localAudioTrack != null || localVideoTrack != null) return
         cancelTorchRetry()
         activeTorchCameraId = null
-        activePrimaryCameraId = null
+        activeZoomCameraId = null
         activeZoomCapabilities = null
         isTorchPreferenceEnabled = false
         torchSyncRequired = false
@@ -295,7 +295,7 @@ class WebRtcEngine(
     fun stopLocalMedia() {
         cancelTorchRetry()
         activeTorchCameraId = null
-        activePrimaryCameraId = null
+        activeZoomCameraId = null
         activeZoomCapabilities = null
         isTorchPreferenceEnabled = false
         torchSyncRequired = false
@@ -558,7 +558,7 @@ class WebRtcEngine(
         val previousSource = currentCameraSource
         cancelTorchRetry()
         activeTorchCameraId = null
-        activePrimaryCameraId = null
+        activeZoomCameraId = null
         activeZoomCapabilities = null
         torchSyncRequired = false
         setTorchEnabled(false, notify = false)
@@ -884,8 +884,8 @@ class WebRtcEngine(
         surfaceTextureHelper = textureHelper
         currentCameraSource = source
         activeTorchCameraId = selection.torchCameraId
-        activePrimaryCameraId = selection.primaryCameraId
-        activeZoomCapabilities = queryZoomCapabilities(activePrimaryCameraId)
+        activeZoomCameraId = selection.zoomCameraId
+        activeZoomCapabilities = queryZoomCapabilities(activeZoomCameraId)
         desiredCameraZoomRatio = clampZoomRatioForCapabilities(desiredCameraZoomRatio, activeZoomCapabilities)
         appliedCameraZoomRatio = 1f
         isTorchEnabled = false
@@ -932,7 +932,7 @@ class WebRtcEngine(
                                 policy = cameraCapturePolicyFor(LocalCameraSource.SELFIE)
                             ),
                             torchCameraId = null,
-                            primaryCameraId = front
+                            zoomCameraId = front
                         )
                     }
                 } else if (back != null) {
@@ -946,7 +946,7 @@ class WebRtcEngine(
                                 policy = cameraCapturePolicyFor(LocalCameraSource.SELFIE)
                             ),
                             torchCameraId = back.takeIf { hasFlashUnit(it) },
-                            primaryCameraId = back
+                            zoomCameraId = back
                         )
                     }
                 } else {
@@ -968,7 +968,7 @@ class WebRtcEngine(
                                 policy = cameraCapturePolicyFor(LocalCameraSource.WORLD)
                             ),
                             torchCameraId = back.takeIf { hasFlashUnit(it) },
-                            primaryCameraId = back
+                            zoomCameraId = back
                         )
                     }
                 }
@@ -1003,7 +1003,7 @@ class WebRtcEngine(
                             isFrontFacing = false,
                             captureProfile = profile,
                             torchCameraId = back.takeIf { hasFlashUnit(it) },
-                            primaryCameraId = back
+                            zoomCameraId = back
                         )
                     }
                 }
@@ -1371,6 +1371,7 @@ class WebRtcEngine(
                 val zoomRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
                 if (zoomRange != null) {
                     minRatio = max(1f, zoomRange.lower)
+                    // Keep the larger max as a guard against inconsistent vendor-reported limits.
                     maxRatio = max(maxRatio, zoomRange.upper)
                 }
             }
@@ -1646,6 +1647,12 @@ class WebRtcEngine(
             val appliedViaRatio = runCatching {
                 builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, clampedZoom)
                 true
+            }.onFailure { error ->
+                Log.w(
+                    "WebRtcEngine",
+                    "Failed to apply CONTROL_ZOOM_RATIO; falling back to SCALER_CROP_REGION",
+                    error
+                )
             }.getOrDefault(false)
             if (appliedViaRatio) {
                 return

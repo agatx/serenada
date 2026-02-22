@@ -77,6 +77,8 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 
+private const val PINCH_ZOOM_CHANGE_THRESHOLD = 0.01f
+
 @Composable
 fun CallScreen(
     roomId: String,
@@ -114,7 +116,7 @@ fun CallScreen(
     val remotePipRenderer = remember { PipTextureRendererView(context, "remote-pip") }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val localZoomTransformState = rememberTransformableState { zoomChange, _, _ ->
-        if (zoomChange > 0f && abs(zoomChange - 1f) > 0.01f) {
+        if (zoomChange > 0f && abs(zoomChange - 1f) > PINCH_ZOOM_CHANGE_THRESHOLD) {
             onLocalPinchZoom(zoomChange)
         }
     }
