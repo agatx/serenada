@@ -474,8 +474,10 @@ class CallManager(context: Context) {
     private fun parseDeepLinkTarget(uri: Uri): DeepLinkTarget? {
         val roomId = extractRoomId(uri) ?: return null
         if (!isValidRoomId(roomId)) return null
-        val action = when (uri.pathSegments.firstOrNull()?.lowercase()) {
-            "saved" -> DeepLinkAction.SaveRoom
+        val savedRoomName = normalizeSavedRoomName(uri.getQueryParameter("name"))
+        val action = when {
+            savedRoomName != null -> DeepLinkAction.SaveRoom
+            uri.pathSegments.firstOrNull()?.lowercase() == "saved" -> DeepLinkAction.SaveRoom
             else -> DeepLinkAction.Join
         }
 
@@ -483,7 +485,7 @@ class CallManager(context: Context) {
             action = action,
             roomId = roomId,
             host = normalizeHostValue(uri.getQueryParameter("host")) ?: normalizeHostValue(uri.authority),
-            savedRoomName = normalizeSavedRoomName(uri.getQueryParameter("name"))
+            savedRoomName = savedRoomName
         )
     }
 
@@ -501,7 +503,7 @@ class CallManager(context: Context) {
         return Uri.Builder()
             .scheme("https")
             .authority(appLinkHost)
-            .appendPath("saved")
+            .appendPath("call")
             .appendPath(roomId)
             .appendQueryParameter("host", normalizedHost)
             .appendQueryParameter("name", roomName)
@@ -595,6 +597,9 @@ class CallManager(context: Context) {
                 )
             )
             return
+        }
+        if (savedRoomStore.markRoomJoined(roomId)) {
+            refreshSavedRooms()
         }
         activeCallHostOverride = normalizeHostValue(oneOffHost)
         currentRoomId = roomId

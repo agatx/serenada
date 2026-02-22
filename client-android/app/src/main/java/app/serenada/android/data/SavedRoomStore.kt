@@ -10,7 +10,8 @@ data class SavedRoom(
     val roomId: String,
     val name: String,
     val createdAt: Long,
-    val host: String? = null
+    val host: String? = null,
+    val lastJoinedAt: Long? = null
 )
 
 class SavedRoomStore(context: Context) {
@@ -23,13 +24,15 @@ class SavedRoomStore(context: Context) {
         val cleanHost = normalizeHost(room.host)
 
         val rooms = getSavedRooms().toMutableList()
+        val existing = rooms.firstOrNull { it.roomId == room.roomId }
         rooms.removeAll { it.roomId == room.roomId }
         rooms.add(
             index = 0,
             element = room.copy(
                 name = cleanName,
                 createdAt = room.createdAt.coerceAtLeast(1L),
-                host = cleanHost
+                host = cleanHost,
+                lastJoinedAt = (room.lastJoinedAt ?: existing?.lastJoinedAt)?.takeIf { it > 0L }
             )
         )
         persist(rooms.take(MAX_SAVED_ROOMS))
@@ -48,12 +51,14 @@ class SavedRoomStore(context: Context) {
             val name = normalizeName(item.optString("name").orEmpty()) ?: continue
             val createdAt = item.optLong("createdAt", 0L).coerceAtLeast(1L)
             val host = normalizeHost(item.opt("host")?.toString())
+            val lastJoinedAt = item.optLong("lastJoinedAt", 0L).takeIf { it > 0L }
             rooms.add(
                 SavedRoom(
                     roomId = roomId,
                     name = name,
                     createdAt = createdAt,
-                    host = host
+                    host = host,
+                    lastJoinedAt = lastJoinedAt
                 )
             )
         }
@@ -73,6 +78,19 @@ class SavedRoomStore(context: Context) {
         persist(filtered)
     }
 
+    fun markRoomJoined(roomId: String, joinedAt: Long = System.currentTimeMillis()): Boolean {
+        if (roomId.isBlank()) return false
+        val rooms = getSavedRooms().toMutableList()
+        val index = rooms.indexOfFirst { it.roomId == roomId }
+        if (index == -1) return false
+        val cleanJoinedAt = joinedAt.coerceAtLeast(1L)
+        val room = rooms[index]
+        if (room.lastJoinedAt == cleanJoinedAt) return false
+        rooms[index] = room.copy(lastJoinedAt = cleanJoinedAt)
+        persist(rooms)
+        return true
+    }
+
     private fun persist(rooms: List<SavedRoom>) {
         val json = JSONArray()
         rooms.forEach { room ->
@@ -82,6 +100,7 @@ class SavedRoomStore(context: Context) {
                     put("name", room.name)
                     put("createdAt", room.createdAt)
                     room.host?.let { put("host", it) }
+                    room.lastJoinedAt?.let { put("lastJoinedAt", it) }
                 }
             )
         }

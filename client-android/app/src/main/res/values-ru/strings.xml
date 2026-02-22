@@ -119,17 +119,23 @@
     <string name="microphone_enabled_info">Включать микрофон при входе в звонок</string>
 
     <string name="saved_rooms_title">Сохраненные комнаты</string>
+    <string name="saved_rooms_title_empty">Нет сохраненных комнат</string>
     <string name="saved_rooms_save">Сохранить комнату</string>
     <string name="saved_rooms_rename">Переименовать комнату</string>
     <string name="saved_rooms_remove">Удалить комнату</string>
     <string name="saved_rooms_name_label">Название комнаты</string>
     <string name="saved_rooms_name_placeholder">Например, Семья</string>
+    <string name="saved_rooms_create">+ Создать</string>
+    <string name="saved_rooms_create_action">Создать</string>
     <string name="saved_rooms_dialog_title_new">Сохранить комнату</string>
     <string name="saved_rooms_dialog_title_rename">Переименовать сохраненную комнату</string>
+    <string name="saved_rooms_dialog_title_create">Создать комнату</string>
+    <string name="saved_rooms_last_joined">Последний вход: %1$s</string>
+    <string name="saved_rooms_never_joined">Никогда не открывалась</string>
     <string name="error_failed_create_saved_room_link">Не удалось создать ссылку на комнату</string>
     <string name="error_invalid_saved_room_name">Введите название комнаты</string>
     <string name="settings_saved_rooms_title">Сохраненные комнаты</string>
-    <string name="settings_saved_rooms_help">Храните именованные комнаты на главном экране и делитесь ссылками, которые автоматически добавляют комнату.</string>
+    <string name="settings_saved_rooms_help">Храните именованные комнаты на главном экране. Используйте + Создать в разделе сохраненных комнат, чтобы сделать ссылку для шаринга.</string>
     <string name="settings_saved_rooms_show_first">Показывать сохраненные комнаты над недавними звонками</string>
     <string name="settings_saved_rooms_show_first_info">Отключите, чтобы показывать сохраненные комнаты после недавних звонков.</string>
     <string name="settings_saved_rooms_create_link">Создать ссылку на комнату</string>

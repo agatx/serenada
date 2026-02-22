@@ -170,7 +170,7 @@ keytool -list -v -keystore keystore/serenada-release.keystore -storepass YOUR_PA
 ## Deep links (App Links)
 The app handles:
 - `https://serenada.app/call/*`
-- `https://serenada.app/saved/*` (adds a named saved room instead of joining immediately)
+- `https://serenada.app/call/*?name=<room-name>` (adds a named saved room instead of joining immediately)
 
 Deep-link `host` query behavior:
 - Trusted hosts (`serenada.app`, `serenada-app.ru`) are allowed to update the global server host setting.
@@ -209,7 +209,7 @@ Quick checks:
 ```bash
 adb shell pm get-app-links app.serenada.android
 adb shell am start -a android.intent.action.VIEW -d "https://serenada.app/call/ROOM_ID"
-adb shell am start -a android.intent.action.VIEW -d "https://serenada.app/saved/ROOM_ID?host=serenada.app&name=Family"
+adb shell am start -a android.intent.action.VIEW -d "https://serenada.app/call/ROOM_ID?host=serenada.app&name=Family"
 ```
 
 ## Settings
@@ -218,7 +218,7 @@ On Save, the app validates `https://<host>/api/room-id` and only persists hosts 
 `Call defaults` also include `HD Video (experimental)`; when disabled (default), camera capture uses legacy `640x480`, and when enabled the app applies higher per-mode camera/composite targets.
 `Saved rooms` settings include:
 - A switch to show saved rooms above or below recent calls on the home screen
-- Room-link generation for named rooms (creates a room ID and shareable link that adds this room on recipient devices and preserves per-room host overrides for non-default hosts)
+Named-room creation and sharing is available from the home screen (`Saved rooms` section → `+ Create`). It creates a room ID and shareable link that adds this room on recipient devices and preserves per-room host overrides for non-default hosts.
 `Device Check` in Settings opens a native diagnostics screen with:
 - Runtime permission checks (`CAMERA`, `RECORD_AUDIO`, `POST_NOTIFICATIONS` on Android 13+)
 - Audio/video capability inspection (camera inventory, composite prerequisites, audio processing feature availability)

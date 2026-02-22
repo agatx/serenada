@@ -116,17 +116,23 @@
     <string name="microphone_enabled_info">Activer le micro en rejoignant un appel</string>
 
     <string name="saved_rooms_title">Salles enregistrées</string>
+    <string name="saved_rooms_title_empty">Aucune salle enregistrée</string>
     <string name="saved_rooms_save">Enregistrer la salle</string>
     <string name="saved_rooms_rename">Renommer la salle</string>
     <string name="saved_rooms_remove">Supprimer la salle</string>
     <string name="saved_rooms_name_label">Nom de la salle</string>
     <string name="saved_rooms_name_placeholder">Par exemple, Famille</string>
+    <string name="saved_rooms_create">+ Créer</string>
+    <string name="saved_rooms_create_action">Créer</string>
     <string name="saved_rooms_dialog_title_new">Enregistrer la salle</string>
     <string name="saved_rooms_dialog_title_rename">Renommer la salle enregistrée</string>
+    <string name="saved_rooms_dialog_title_create">Créer une salle</string>
+    <string name="saved_rooms_last_joined">Dernière connexion %1$s</string>
+    <string name="saved_rooms_never_joined">Jamais rejointe</string>
     <string name="error_failed_create_saved_room_link">Impossible de créer le lien de la salle</string>
     <string name="error_invalid_saved_room_name">Saisissez un nom de salle</string>
     <string name="settings_saved_rooms_title">Salles enregistrées</string>
-    <string name="settings_saved_rooms_help">Conservez des salles nommées sur l\'écran d\'accueil et partagez des liens qui les ajoutent automatiquement.</string>
+    <string name="settings_saved_rooms_help">Conservez des salles nommées sur l\'écran d\'accueil. Utilisez + Créer dans les salles enregistrées pour générer un lien partageable.</string>
     <string name="settings_saved_rooms_show_first">Afficher les salles enregistrées au-dessus des appels récents</string>
     <string name="settings_saved_rooms_show_first_info">Désactivez pour afficher les salles enregistrées sous les appels récents.</string>
     <string name="settings_saved_rooms_create_link">Créer un lien de salle</string>

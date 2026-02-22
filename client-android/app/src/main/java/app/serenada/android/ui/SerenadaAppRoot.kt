@@ -268,13 +268,6 @@ fun SerenadaAppRoot(
                         onDefaultMicrophoneChange = { callManager.updateDefaultMicrophone(it) },
                         onHdVideoExperimentalChange = { callManager.updateHdVideoExperimental(it) },
                         onSavedRoomsShownFirstChange = { callManager.updateSavedRoomsShownFirst(it) },
-                        onCreateSavedRoomInviteLink = { roomName, onResult ->
-                            callManager.createSavedRoomInviteLink(
-                                roomName = roomName,
-                                hostInput = hostInput,
-                                onResult = onResult
-                            )
-                        },
                         onOpenDiagnostics = {
                             showDiagnostics = true
                         },
@@ -399,6 +392,13 @@ fun SerenadaAppRoot(
                         },
                         onSaveRoom = { roomId, name ->
                             callManager.saveRoom(roomId, name)
+                        },
+                        onCreateSavedRoomInviteLink = { roomName, onResult ->
+                            callManager.createSavedRoomInviteLink(
+                                roomName = roomName,
+                                hostInput = hostInput,
+                                onResult = onResult
+                            )
                         },
                         onRemoveSavedRoom = { roomId ->
                             callManager.removeSavedRoom(roomId)
