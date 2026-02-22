@@ -44,16 +44,8 @@
                     android:pathPrefix="/call/" />
                 <data
                     android:scheme="https"
-                    android:host="serenada.app"
-                    android:pathPrefix="/saved/" />
-                <data
-                    android:scheme="https"
                     android:host="serenada-app.ru"
                     android:pathPrefix="/call/" />
-                <data
-                    android:scheme="https"
-                    android:host="serenada-app.ru"
-                    android:pathPrefix="/saved/" />
             </intent-filter>
         </activity>
 

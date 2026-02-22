@@ -477,7 +477,6 @@ class CallManager(context: Context) {
         val savedRoomName = normalizeSavedRoomName(uri.getQueryParameter("name"))
         val action = when {
             savedRoomName != null -> DeepLinkAction.SaveRoom
-            uri.pathSegments.firstOrNull()?.lowercase() == "saved" -> DeepLinkAction.SaveRoom
             else -> DeepLinkAction.Join
         }
 
