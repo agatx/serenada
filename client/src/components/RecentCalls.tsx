@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BookmarkPlus, Clock, Calendar, MoreVertical, Trash2 } from 'lucide-react';
+import { BookmarkPlus, Clock, MoreVertical, Trash2 } from 'lucide-react';
 import type { RecentCall } from '../utils/callHistory';
 import { removeRecentCall } from '../utils/callHistory';
 import type { SavedRoom } from '../utils/savedRooms';
@@ -48,7 +48,7 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
         setActiveMenu(null);
     };
 
-    const handleDialogSave = (newName: string) => {
+    const handleDialogSave = async (newName: string) => {
         if (selectedRoomId) {
             saveRoom({
                 roomId: selectedRoomId,
@@ -56,6 +56,14 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
                 createdAt: Date.now()
             });
             showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
+            try {
+                if (navigator.clipboard?.writeText) {
+                    const shareUrl = `${window.location.origin}/call/${selectedRoomId}?name=${encodeURIComponent(newName)}`;
+                    await navigator.clipboard.writeText(shareUrl);
+                }
+            } catch (err) {
+                console.warn('Failed to copy saved room link', err);
+            }
             if (onCallUpdate) onCallUpdate();
         }
         setDialogOpen(false);
@@ -102,7 +110,10 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
 
     return (
         <div className="recent-calls">
-            <h3 className="recent-calls-label">{t('recent_calls')}</h3>
+            <h3 className="recent-calls-label">
+                <Clock className="section-label-icon" />
+                {t('recent_calls')}
+            </h3>
             <div className="recent-calls-table-container">
                 <table className="recent-calls-table">
                     <thead>
@@ -113,51 +124,57 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
                         </tr>
                     </thead>
                     <tbody>
-                        {calls.map((call, index) => (
-                            <tr
-                                key={`${call.roomId}-${index}`}
-                                className="recent-call-row"
-                                onClick={() => navigate(`/call/${call.roomId}`)}
-                            >
-                                <td>
-                                    <div className="recent-call-date-cell">
-                                        {renderStatusDot(call.roomId)}
-                                        <Calendar size={14} className="recent-call-icon" />
-                                        <span>{formatDate(call.startTime)} at {formatTime(call.startTime)}</span>
-                                    </div>
-                                </td>
-                                <td className="text-right">
-                                    <div className="recent-call-duration-cell">
-                                        <Clock size={14} className="recent-call-icon" />
-                                        <span>{formatDuration(call.duration)}</span>
-                                    </div>
-                                </td>
-                                <td>
-                                    <div className="menu-container" style={{ position: 'relative' }}>
-                                        <button
-                                            className="btn-icon small"
-                                            onClick={(e) => handleMenuToggle(e, call.roomId)}
-                                            style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '4px' }}
-                                        >
-                                            <MoreVertical size={16} />
-                                        </button>
-
-                                        {activeMenu === call.roomId && (
-                                            <div className="dropdown-menu">
-                                                {!savedRooms.some(r => r.roomId === call.roomId) && (
-                                                    <button onClick={(e) => handleSaveClick(e, call.roomId)}>
-                                                        <BookmarkPlus size={14} /> {t('save_room') || 'Save'}
-                                                    </button>
+                        {calls.map((call, index) => {
+                            const matchingSavedRoom = savedRooms.find((room) => room.roomId === call.roomId);
+                            return (
+                                <tr
+                                    key={`${call.roomId}-${index}`}
+                                    className="recent-call-row"
+                                    onClick={() => navigate(`/call/${call.roomId}`)}
+                                >
+                                    <td>
+                                        <div className="recent-call-date-cell">
+                                            {renderStatusDot(call.roomId)}
+                                            <div className="recent-call-meta">
+                                                <span>{formatDate(call.startTime)} at {formatTime(call.startTime)}</span>
+                                                {matchingSavedRoom && (
+                                                    <span className="recent-call-secondary">{matchingSavedRoom.name}</span>
                                                 )}
-                                                <button className="danger" onClick={(e) => handleRemoveClick(e, call.roomId)}>
-                                                    <Trash2 size={14} /> Remove
-                                                </button>
                                             </div>
-                                        )}
-                                    </div>
-                                </td>
-                            </tr>
-                        ))}
+                                        </div>
+                                    </td>
+                                    <td className="text-right">
+                                        <div className="recent-call-duration-cell">
+                                            <span>{formatDuration(call.duration)}</span>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div className="menu-container" style={{ position: 'relative' }}>
+                                            <button
+                                                className="btn-icon small"
+                                                onClick={(e) => handleMenuToggle(e, call.roomId)}
+                                                style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: '4px' }}
+                                            >
+                                                <MoreVertical size={16} />
+                                            </button>
+
+                                            {activeMenu === call.roomId && (
+                                                <div className="dropdown-menu">
+                                                    {!savedRooms.some(r => r.roomId === call.roomId) && (
+                                                        <button onClick={(e) => handleSaveClick(e, call.roomId)}>
+                                                            <BookmarkPlus size={14} /> {t('save_room') || 'Save'}
+                                                        </button>
+                                                    )}
+                                                    <button className="danger" onClick={(e) => handleRemoveClick(e, call.roomId)}>
+                                                        <Trash2 size={14} /> Remove
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>

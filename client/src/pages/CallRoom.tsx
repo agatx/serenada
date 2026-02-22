@@ -490,7 +490,7 @@ const CallRoom: React.FC = () => {
 
     const callStartTimeRef = useRef<number | null>(null);
 
-    const saveInvitedRoom = () => {
+    const saveInvitedRoom = async () => {
         if (!sharedName || !roomId) return;
         saveRoom({
             roomId,
@@ -504,7 +504,7 @@ const CallRoom: React.FC = () => {
         if (!roomId) return;
 
         if (shouldSave) {
-            saveInvitedRoom();
+            await saveInvitedRoom();
         }
 
         if (!isConnected) return; // Allow save to happen even if not connected, but stop here for joining
@@ -548,8 +548,8 @@ const CallRoom: React.FC = () => {
         }
     };
 
-    const handleSaveOnly = () => {
-        saveInvitedRoom();
+    const handleSaveOnly = async () => {
+        await saveInvitedRoom();
     };
 
     // If we receive a signaling error while trying to join, or if we are joined but room state becomes null
@@ -719,10 +719,10 @@ const CallRoom: React.FC = () => {
                     {sharedName ? (
                         <>
                             <div className="prejoin-invite-actions">
-                                <button className="btn-primary" onClick={() => handleJoin(true)}>
+                                <button className="btn-primary" onClick={() => { void handleJoin(true); }}>
                                     {t('saved_rooms_save_and_join') || 'Save & Join'}
                                 </button>
-                                <button className="btn-secondary" onClick={handleSaveOnly}>
+                                <button className="btn-secondary" onClick={() => { void handleSaveOnly(); }}>
                                     {t('saved_rooms_save_only') || 'Save Only'}
                                 </button>
                             </div>
