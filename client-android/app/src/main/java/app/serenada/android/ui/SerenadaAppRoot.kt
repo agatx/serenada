@@ -43,6 +43,7 @@ private enum class RootScreen {
 fun SerenadaAppRoot(
     callManager: CallManager,
     deepLinkUri: Uri?,
+    deepLinkRequestId: Int,
     onDeepLinkConsumed: () -> Unit
 ) {
     val uiState by callManager.uiState
@@ -147,7 +148,7 @@ fun SerenadaAppRoot(
         }
     }
 
-    LaunchedEffect(deepLinkUri) {
+    LaunchedEffect(deepLinkRequestId, deepLinkUri) {
         val uri = deepLinkUri ?: return@LaunchedEffect
         runWithCallPermissions {
             callManager.handleDeepLink(uri)

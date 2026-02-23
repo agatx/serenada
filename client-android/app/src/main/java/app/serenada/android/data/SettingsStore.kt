@@ -76,6 +76,29 @@ class SettingsStore(context: Context) {
             prefs.edit().putBoolean(KEY_ROOM_INVITE_NOTIFICATIONS_ENABLED, value).apply()
         }
 
+    var inviteSuppressedRoomId: String?
+        get() = prefs.getString(KEY_INVITE_SUPPRESSED_ROOM_ID, null)
+        set(value) {
+            val editor = prefs.edit()
+            val normalized = value?.trim()
+            if (normalized.isNullOrBlank()) {
+                editor.remove(KEY_INVITE_SUPPRESSED_ROOM_ID)
+            } else {
+                editor.putString(KEY_INVITE_SUPPRESSED_ROOM_ID, normalized)
+            }
+            editor.apply()
+        }
+
+    var inviteSuppressedUntilMs: Long
+        get() = prefs.getLong(KEY_INVITE_SUPPRESSED_UNTIL_MS, 0L)
+        set(value) {
+            if (value <= 0L) {
+                prefs.edit().remove(KEY_INVITE_SUPPRESSED_UNTIL_MS).apply()
+            } else {
+                prefs.edit().putLong(KEY_INVITE_SUPPRESSED_UNTIL_MS, value).apply()
+            }
+        }
+
 
     companion object {
         const val DEFAULT_HOST = "serenada.app"
@@ -98,6 +121,8 @@ class SettingsStore(context: Context) {
         private const val KEY_HD_VIDEO_EXPERIMENTAL_ENABLED = "hd_video_experimental_enabled"
         private const val KEY_SAVED_ROOMS_SHOWN_FIRST = "saved_rooms_shown_first"
         private const val KEY_ROOM_INVITE_NOTIFICATIONS_ENABLED = "room_invite_notifications_enabled"
+        private const val KEY_INVITE_SUPPRESSED_ROOM_ID = "invite_suppressed_room_id"
+        private const val KEY_INVITE_SUPPRESSED_UNTIL_MS = "invite_suppressed_until_ms"
 
         fun normalizeLanguage(value: String?): String =
             when (value) {

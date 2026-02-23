@@ -63,8 +63,16 @@
 - Receives FCM data message in `FirebaseMessagingService`.
 - Uses Android Keystore private key + `snapshotEphemeralPubKey` and HKDF salt to unwrap `snapshotKey`.
 - Fetches encrypted snapshot via `/api/push/snapshot/{id}` and decrypts locally.
-- Renders notification with `BigPictureStyle` and deep-links to `/call/{roomId}`.
+- Join notifications render `BigPictureStyle` and deep-link to `/call/{roomId}`.
 - Invite notifications are shown only when the invited room is saved on device and the Settings toggle is enabled.
+- Invite notifications use a dedicated "Incoming invites" channel and incoming-call behavior:
+  - `CATEGORY_CALL` + `CallStyle.forIncomingCall(...)`
+  - Answer/Decline actions are handled by a receiver to stop ringing immediately before navigation
+  - full-screen incoming invite activity (shows while locked, does not auto-join)
+  - Accept promotes the active call activity above keyguard for lock-screen answer flows
+  - ringtone/vibration on the invite channel
+  - auto-timeout after 45 seconds to stop ringing if unanswered
+  - short post-action suppression window to avoid immediate duplicate re-alerts
 
 ## Protocol details
 ### VAPID key
@@ -191,3 +199,4 @@ Invite payload example:
 - If the device lacks the private key or decryption fails, notifications fall back to text-only.
 - Push payload size must remain under service limits; wrapped key data stays small per recipient.
 - Android requires Firebase runtime config in `client-android` (`firebaseAppId`, `firebaseApiKey`, `firebaseProjectId`, `firebaseSenderId` Gradle properties).
+- Android uses a dedicated full-screen incoming invite activity; joining the call requires explicit user Accept action from that screen.

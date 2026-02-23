@@ -1,6 +1,7 @@
 package app.serenada.android.push
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -9,9 +10,16 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
+import androidx.core.app.Person
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -49,6 +57,9 @@ class PushNotificationHandler(context: Context) {
             if (roomId == null || !savedRoomStore.hasRoom(roomId)) {
                 return
             }
+            if (isInviteSuppressed(roomId)) {
+                return
+            }
         }
 
         val title = data["title"].orEmpty().ifBlank { appContext.getString(R.string.app_name) }
@@ -65,6 +76,7 @@ class PushNotificationHandler(context: Context) {
             host = host,
             callPath = callPath,
             roomId = roomId,
+            kind = kind,
             title = title,
             body = body,
             snapshot = snapshot
@@ -146,6 +158,7 @@ class PushNotificationHandler(context: Context) {
         host: String,
         callPath: String,
         roomId: String?,
+        kind: String,
         title: String,
         body: String,
         snapshot: Bitmap?
@@ -160,7 +173,7 @@ class PushNotificationHandler(context: Context) {
             }
         }
 
-        createChannelIfNeeded()
+        createChannelsIfNeeded()
 
         val callUrl = buildCallUrl(host, callPath)
         val tapIntent = Intent(Intent.ACTION_VIEW, Uri.parse(callUrl), appContext, MainActivity::class.java)
@@ -170,6 +183,13 @@ class PushNotificationHandler(context: Context) {
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
 
+        val isInvite = kind == PUSH_KIND_INVITE
+        val notificationId = if (isInvite) {
+            (roomId ?: callPath).hashCode()
+        } else {
+            (roomId ?: callPath).hashCode() xor System.currentTimeMillis().toInt()
+        }
+
         val pendingIntent = PendingIntent.getActivity(
             appContext,
             callUrl.hashCode(),
@@ -177,37 +197,101 @@ class PushNotificationHandler(context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val builder = NotificationCompat.Builder(appContext, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setSmallIcon(android.R.drawable.sym_call_incoming)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-
-        if (snapshot != null) {
-            builder
-                .setLargeIcon(snapshot)
+        val managerCompat = NotificationManagerCompat.from(appContext)
+        val builder = if (isInvite) {
+            val inviteRoomId = roomId.orEmpty()
+            val incomingScreenPendingIntent = IncomingInviteActivity.createPendingIntent(
+                context = appContext,
+                notificationId = notificationId,
+                roomId = inviteRoomId,
+                callUrl = callUrl,
+                title = title,
+                body = body
+            )
+            val answerPendingIntent = InviteNotificationActionReceiver.answerPendingIntent(
+                context = appContext,
+                notificationId = notificationId,
+                roomId = inviteRoomId,
+                callUrl = callUrl
+            )
+            val declinePendingIntent = InviteNotificationActionReceiver.declinePendingIntent(
+                context = appContext,
+                notificationId = notificationId,
+                roomId = inviteRoomId
+            )
+            val caller = Person.Builder()
+                .setName(title)
+                .setImportant(true)
+                .build()
+            NotificationCompat.Builder(appContext, INVITE_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setSmallIcon(android.R.drawable.sym_call_incoming)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setTimeoutAfter(INVITE_RING_TIMEOUT_MS)
+                .setDeleteIntent(declinePendingIntent)
+                .setContentIntent(incomingScreenPendingIntent)
                 .setStyle(
-                    NotificationCompat.BigPictureStyle()
-                        .bigPicture(snapshot)
-                        .setSummaryText(body)
+                    NotificationCompat.CallStyle.forIncomingCall(
+                        caller,
+                        declinePendingIntent,
+                        answerPendingIntent
+                    )
                 )
+                .setFullScreenIntent(incomingScreenPendingIntent, true)
+        } else {
+            NotificationCompat.Builder(appContext, JOIN_CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setSmallIcon(android.R.drawable.sym_call_incoming)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
         }
 
-        val notificationId = (roomId ?: callPath).hashCode() xor (System.currentTimeMillis().toInt())
-        NotificationManagerCompat.from(appContext).notify(notificationId, builder.build())
+        if (!isInvite && snapshot != null) {
+            builder.setLargeIcon(snapshot)
+            builder.setStyle(
+                NotificationCompat.BigPictureStyle()
+                    .bigPicture(snapshot)
+                    .setSummaryText(body)
+            )
+        }
+
+        managerCompat.notify(notificationId, builder.build())
     }
 
-    private fun createChannelIfNeeded() {
+    private fun createChannelsIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channel = NotificationChannel(
-            CHANNEL_ID,
+        val joinChannel = NotificationChannel(
+            JOIN_CHANNEL_ID,
             appContext.getString(R.string.notification_join_alerts_channel),
             NotificationManager.IMPORTANCE_HIGH
         )
-        manager.createNotificationChannel(channel)
+        val inviteChannel = NotificationChannel(
+            INVITE_CHANNEL_ID,
+            appContext.getString(R.string.notification_invite_calls_channel),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            enableLights(true)
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0L, 800L, 600L, 800L)
+            setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+        }
+        manager.createNotificationChannel(joinChannel)
+        manager.createNotificationChannel(inviteChannel)
     }
 
     private fun normalizeCallPath(rawUrl: String?): String {
@@ -252,9 +336,63 @@ class PushNotificationHandler(context: Context) {
         return value.all { it.isLetterOrDigit() || it == '-' || it == '_' }
     }
 
-    private companion object {
-        const val CHANNEL_ID = "serenada_join_alerts"
+    private fun isInviteSuppressed(roomId: String): Boolean {
+        val untilMs = settingsStore.inviteSuppressedUntilMs
+        val suppressedRoomId = settingsStore.inviteSuppressedRoomId
+        if (suppressedRoomId == roomId && untilMs > System.currentTimeMillis()) {
+            return true
+        }
+        if (suppressedRoomId == roomId && untilMs > 0L) {
+            settingsStore.inviteSuppressedRoomId = null
+            settingsStore.inviteSuppressedUntilMs = 0L
+        }
+        if (suppressedRoomId.isNullOrBlank()) {
+            return false
+        }
+        // Cleanup stale suppression if it belongs to a different room and expired.
+        if (untilMs <= System.currentTimeMillis()) {
+            settingsStore.inviteSuppressedRoomId = null
+            settingsStore.inviteSuppressedUntilMs = 0L
+        }
+        if (System.currentTimeMillis() < untilMs) {
+            return suppressedRoomId == roomId
+        }
+        return false
+    }
+
+    companion object {
+        const val JOIN_CHANNEL_ID = "serenada_join_alerts"
+        const val INVITE_CHANNEL_ID = "serenada_invite_calls"
+        const val INVITE_RING_TIMEOUT_MS = 45_000L
+        const val INVITE_SUPPRESSION_AFTER_ACTION_MS = 8_000L
         const val PUSH_KIND_JOIN = "join"
         const val PUSH_KIND_INVITE = "invite"
+
+        fun suppressInviteForRoom(context: Context, roomId: String) {
+            if (roomId.isBlank()) return
+            val settingsStore = SettingsStore(context.applicationContext)
+            settingsStore.inviteSuppressedRoomId = roomId
+            settingsStore.inviteSuppressedUntilMs =
+                System.currentTimeMillis() + INVITE_SUPPRESSION_AFTER_ACTION_MS
+        }
+
+        fun stopInviteAlertFeedback(context: Context) {
+            val appContext = context.applicationContext
+            val cancelVibration = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val manager = appContext.getSystemService(VibratorManager::class.java)
+                    manager?.defaultVibrator?.cancel()
+                    manager?.vibratorIds?.forEach { id ->
+                        manager.getVibrator(id).cancel()
+                    }
+                }
+                @Suppress("DEPRECATION")
+                (appContext.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator)?.cancel()
+            }
+            runCatching { cancelVibration() }
+            val mainHandler = Handler(Looper.getMainLooper())
+            mainHandler.postDelayed({ runCatching { cancelVibration() } }, 200L)
+            mainHandler.postDelayed({ runCatching { cancelVibration() } }, 700L)
+        }
     }
 }
