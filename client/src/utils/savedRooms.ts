@@ -6,6 +6,8 @@ export interface SavedRoom {
     lastJoinedAt?: number;
 }
 
+export type SaveRoomResult = 'ok' | 'quota_exceeded' | 'error' | 'invalid_input';
+
 const STORAGE_KEY = 'serenada_saved_rooms';
 const MAX_SAVED_ROOMS = 50;
 const MAX_ROOM_NAME_LENGTH = 120;
@@ -48,6 +50,16 @@ const normalizeHost = (hostInput: string | null | undefined): string | null => {
     }
 };
 
+const isQuotaExceededError = (error: unknown): boolean => {
+    if (!(error instanceof DOMException)) return false;
+    return (
+        error.name === 'QuotaExceededError' ||
+        error.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+        error.code === 22 ||
+        error.code === 1014
+    );
+};
+
 export const getSavedRooms = (): SavedRoom[] => {
     try {
         const json = localStorage.getItem(STORAGE_KEY);
@@ -88,10 +100,10 @@ export const getSavedRooms = (): SavedRoom[] => {
     }
 };
 
-export const saveRoom = (room: SavedRoom) => {
-    if (!isValidRoomId(room.roomId)) return;
+export const saveRoom = (room: SavedRoom): SaveRoomResult => {
+    if (!isValidRoomId(room.roomId)) return 'invalid_input';
     const cleanName = normalizeName(room.name);
-    if (!cleanName) return;
+    if (!cleanName) return 'invalid_input';
     const cleanHost = normalizeHost(room.host);
 
     try {
@@ -112,8 +124,14 @@ export const saveRoom = (room: SavedRoom) => {
         rooms = rooms.slice(0, MAX_SAVED_ROOMS);
         
         localStorage.setItem(STORAGE_KEY, JSON.stringify(rooms));
+        return 'ok';
     } catch (error) {
+        if (isQuotaExceededError(error)) {
+            console.warn('Saved rooms storage quota exceeded', error);
+            return 'quota_exceeded';
+        }
         console.error('Failed to save room', error);
+        return 'error';
     }
 };
 

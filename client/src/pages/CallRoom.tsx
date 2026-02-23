@@ -9,7 +9,7 @@ import { saveCall } from '../utils/callHistory';
 import { useTranslation } from 'react-i18next';
 import { playJoinChime } from '../utils/audio';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
-import { saveRoom, markRoomJoined } from '../utils/savedRooms';
+import { saveRoom, markRoomJoined, type SaveRoomResult } from '../utils/savedRooms';
 
 function urlBase64ToUint8Array(base64String: string) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -469,6 +469,14 @@ const CallRoom: React.FC = () => {
         cleanupRefs.current = { leaveRoom, stopLocalMedia, roomId };
     }, [leaveRoom, stopLocalMedia, roomId]);
 
+    const showSaveRoomError = (result: SaveRoomResult) => {
+        if (result === 'quota_exceeded') {
+            showToast('error', t('toast_saved_rooms_storage_full') || 'Storage is full. Remove old rooms and try again.');
+            return;
+        }
+        showToast('error', t('toast_saved_rooms_save_error') || 'Failed to save room.');
+    };
+
     useEffect(() => {
         return () => {
             const { leaveRoom: lr, stopLocalMedia: slm, roomId: rid } = cleanupRefs.current;
@@ -479,6 +487,7 @@ const CallRoom: React.FC = () => {
                     startTime: callStartTimeRef.current,
                     duration: duration > 0 ? duration : 0
                 });
+                markRoomJoined(rid, Date.now());
                 callStartTimeRef.current = null;
             }
             lr();
@@ -490,14 +499,19 @@ const CallRoom: React.FC = () => {
 
     const callStartTimeRef = useRef<number | null>(null);
 
-    const saveInvitedRoom = async () => {
-        if (!sharedName || !roomId) return;
-        saveRoom({
+    const saveInvitedRoom = async (): Promise<boolean> => {
+        if (!sharedName || !roomId) return false;
+        const result = saveRoom({
             roomId,
             name: sharedName,
             createdAt: Date.now()
         });
+        if (result !== 'ok') {
+            showSaveRoomError(result);
+            return false;
+        }
         showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
+        return true;
     };
 
     const handleJoin = async (shouldSave = false) => {
@@ -719,8 +733,8 @@ const CallRoom: React.FC = () => {
                     {sharedName ? (
                         <>
                             <div className="prejoin-invite-actions">
-                                <button className="btn-primary" onClick={() => { void handleJoin(true); }}>
-                                    {t('saved_rooms_save_and_join') || 'Save & Join'}
+                                <button className="btn-primary" disabled={!isConnected} onClick={() => { void handleJoin(true); }}>
+                                    {isConnected ? (t('saved_rooms_save_and_join') || 'Save & Join') : (t('connecting') || 'Connecting...')}
                                 </button>
                                 <button className="btn-secondary" onClick={() => { void handleSaveOnly(); }}>
                                     {t('saved_rooms_save_only') || 'Save Only'}

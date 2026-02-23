@@ -23,19 +23,68 @@ export const SavedRoomDialog: React.FC<SavedRoomDialogProps> = ({
     const { t } = useTranslation();
     const [name, setName] = useState(initialName);
     const inputRef = React.useRef<HTMLInputElement>(null);
+    const dialogRef = React.useRef<HTMLDivElement>(null);
+    const previousFocusedElementRef = React.useRef<HTMLElement | null>(null);
+    const titleId = React.useId();
 
     useEffect(() => {
-        if (isOpen) {
-            setName(initialName);
-            setTimeout(() => {
-                if (mode === 'rename' && inputRef.current) {
-                    inputRef.current.select();
-                } else if (inputRef.current) {
-                    inputRef.current.focus();
+        if (!isOpen) return;
+
+        previousFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const focusTimer = window.setTimeout(() => {
+            if (mode === 'rename' && inputRef.current) {
+                inputRef.current.select();
+            } else if (inputRef.current) {
+                inputRef.current.focus();
+            } else if (dialogRef.current) {
+                dialogRef.current.focus();
+            }
+        }, 10);
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                onClose();
+                return;
+            }
+            if (event.key !== 'Tab' || !dialogRef.current) return;
+
+            const focusableElements = Array.from(
+                dialogRef.current.querySelectorAll<HTMLElement>(
+                    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+                )
+            ).filter((element) => !element.hasAttribute('disabled'));
+            if (focusableElements.length === 0) {
+                event.preventDefault();
+                dialogRef.current.focus();
+                return;
+            }
+
+            const firstElement = focusableElements[0];
+            const lastElement = focusableElements[focusableElements.length - 1];
+
+            if (event.shiftKey) {
+                if (document.activeElement === firstElement || !dialogRef.current.contains(document.activeElement)) {
+                    event.preventDefault();
+                    lastElement.focus();
                 }
-            }, 10);
-        }
-    }, [isOpen, initialName, mode]);
+                return;
+            }
+
+            if (document.activeElement === lastElement) {
+                event.preventDefault();
+                firstElement.focus();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.clearTimeout(focusTimer);
+            document.removeEventListener('keydown', handleKeyDown);
+            previousFocusedElementRef.current?.focus();
+            previousFocusedElementRef.current = null;
+        };
+    }, [isOpen, mode, onClose]);
 
     if (!isOpen) return null;
 
@@ -58,10 +107,18 @@ export const SavedRoomDialog: React.FC<SavedRoomDialogProps> = ({
 
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div
+                ref={dialogRef}
+                className="modal-content"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                tabIndex={-1}
+                onClick={e => e.stopPropagation()}
+            >
                 <div className="modal-header">
-                    <h3>{safeTitle}</h3>
-                    <button className="modal-close" onClick={onClose}>
+                    <h3 id={titleId}>{safeTitle}</h3>
+                    <button className="modal-close" onClick={onClose} aria-label={t('cancel') !== 'cancel' ? t('cancel') : 'Cancel'}>
                         <X size={20} />
                     </button>
                 </div>
@@ -81,7 +138,11 @@ export const SavedRoomDialog: React.FC<SavedRoomDialogProps> = ({
 
                     {isCreate && roomId && name.trim() && (
                         <div className="form-group helper-text">
-                            <p>This will generate a shareable link that adds this room with this name for everyone who opens it.</p>
+                            <p>
+                                {t('saved_rooms_helper_text') !== 'saved_rooms_helper_text'
+                                    ? t('saved_rooms_helper_text')
+                                    : 'This will generate a shareable link that adds this room with this name for everyone who opens it.'}
+                            </p>
                         </div>
                     )}
 

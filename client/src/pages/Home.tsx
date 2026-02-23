@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Video, Zap, Shield, Lock, Smartphone, Code } from 'lucide-react';
 import RecentCalls from '../components/RecentCalls';
@@ -11,6 +11,7 @@ import type { SavedRoom } from '../utils/savedRooms';
 import { useSignaling } from '../contexts/SignalingContext';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../contexts/ToastContext';
+import { createRoomId } from '../utils/roomApi';
 
 const Home: React.FC = () => {
     const { t } = useTranslation();
@@ -21,7 +22,7 @@ const Home: React.FC = () => {
     const [isCreating, setIsCreating] = useState(false);
     const { watchRooms, roomStatuses, isConnected } = useSignaling();
 
-    const loadData = () => {
+    const loadData = useCallback(() => {
         const calls = getRecentCalls();
         const rooms = getSavedRooms();
         setRecentCalls(calls);
@@ -33,36 +34,18 @@ const Home: React.FC = () => {
                 watchRooms(rids);
             }
         }
-    };
+    }, [isConnected, watchRooms]);
 
     useEffect(() => {
         loadData();
-    }, [isConnected]);
+    }, [loadData]);
 
     const startCall = async () => {
         if (isCreating) return;
         setIsCreating(true);
         try {
-            let apiUrl = '/api/room-id';
-            const wsUrl = import.meta.env.VITE_WS_URL;
-            if (wsUrl) {
-                const url = new URL(wsUrl);
-                url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-                url.pathname = '/api/room-id';
-                url.search = '';
-                url.hash = '';
-                apiUrl = url.toString();
-            }
-
-            const res = await fetch(apiUrl, { method: 'POST' });
-            if (!res.ok) {
-                throw new Error(`Room ID request failed: ${res.status}`);
-            }
-            const data = await res.json();
-            if (!data?.roomId) {
-                throw new Error('Room ID missing from response');
-            }
-            navigate(`/call/${data.roomId}`);
+            const roomId = await createRoomId(import.meta.env.VITE_WS_URL);
+            navigate(`/call/${roomId}`);
         } catch (err) {
             console.error('Failed to create room', err);
             showToast('error', t('toast_room_create_error'));

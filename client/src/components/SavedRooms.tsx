@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bookmark, MoreVertical, Edit2, Trash2, Share2 } from 'lucide-react';
-import type { SavedRoom } from '../utils/savedRooms';
+import type { SaveRoomResult, SavedRoom } from '../utils/savedRooms';
 import { removeRoom, saveRoom } from '../utils/savedRooms';
 import { useTranslation } from 'react-i18next';
 import { SavedRoomDialog } from './SavedRoomDialog';
 import { useToast } from '../contexts/ToastContext';
+import { createRoomId } from '../utils/roomApi';
 
 interface SavedRoomsProps {
     rooms: SavedRoom[];
@@ -70,35 +71,19 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
         setActiveMenu(null);
     };
 
-    const createRoomId = async (): Promise<string> => {
-        let apiUrl = '/api/room-id';
-        const wsUrl = import.meta.env.VITE_WS_URL;
-        if (wsUrl) {
-            const url = new URL(wsUrl);
-            url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-            url.pathname = '/api/room-id';
-            url.search = '';
-            url.hash = '';
-            apiUrl = url.toString();
+    const showSaveRoomError = (result: SaveRoomResult) => {
+        if (result === 'quota_exceeded') {
+            showToast('error', t('toast_saved_rooms_storage_full') || 'Storage is full. Remove old rooms and try again.');
+            return;
         }
-
-        const res = await fetch(apiUrl, { method: 'POST' });
-        if (!res.ok) {
-            throw new Error(`Room ID request failed: ${res.status}`);
-        }
-
-        const data = await res.json();
-        if (!data?.roomId) {
-            throw new Error('Room ID missing from response');
-        }
-        return data.roomId;
+        showToast('error', t('toast_saved_rooms_save_error') || 'Failed to save room.');
     };
 
     const handleCreateClick = async () => {
         if (isCreatingRoom) return;
         setIsCreatingRoom(true);
         try {
-            const roomId = await createRoomId();
+            const roomId = await createRoomId(import.meta.env.VITE_WS_URL);
             setSelectedRoom({
                 roomId,
                 name: '',
@@ -119,14 +104,24 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
         removeRoom(roomId);
         onRoomUpdate();
         setActiveMenu(null);
-        showToast('success', 'Room removed');
+        showToast('success', t('saved_rooms_removed') || 'Room removed');
     };
 
-    const handleShareClick = (e: React.MouseEvent, room: SavedRoom) => {
+    const handleShareClick = async (e: React.MouseEvent, room: SavedRoom) => {
         e.stopPropagation();
         const shareUrl = `${window.location.origin}/call/${room.roomId}?name=${encodeURIComponent(room.name)}`;
-        navigator.clipboard.writeText(shareUrl);
-        showToast('success', t('toast_link_copied') || 'Link copied to clipboard');
+        if (!navigator.clipboard?.writeText) {
+            showToast('error', t('toast_link_copy_error') || 'Failed to copy link to clipboard');
+            setActiveMenu(null);
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(shareUrl);
+            showToast('success', t('toast_link_copied') || 'Link copied to clipboard');
+        } catch (err) {
+            console.warn('Failed to copy room share link', err);
+            showToast('error', t('toast_link_copy_error') || 'Failed to copy link to clipboard');
+        }
         setActiveMenu(null);
     };
 
@@ -137,15 +132,23 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
         }
 
         if (dialogMode === 'rename') {
-            saveRoom({ ...selectedRoom, name: newName });
+            const result = saveRoom({ ...selectedRoom, name: newName });
+            if (result !== 'ok') {
+                showSaveRoomError(result);
+                return;
+            }
             onRoomUpdate();
-            showToast('success', 'Room renamed');
+            showToast('success', t('saved_rooms_renamed') || 'Room renamed');
         } else {
-            saveRoom({
+            const result = saveRoom({
                 roomId: selectedRoom.roomId,
                 name: newName,
                 createdAt: Date.now()
             });
+            if (result !== 'ok') {
+                showSaveRoomError(result);
+                return;
+            }
             onRoomUpdate();
             showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
             try {
@@ -223,14 +226,14 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
 
                                             {activeMenu === room.roomId && (
                                                 <div className="dropdown-menu">
-                                                    <button onClick={(e) => handleShareClick(e, room)}>
-                                                        <Share2 size={14} /> Share
+                                                    <button onClick={(e) => { void handleShareClick(e, room); }}>
+                                                        <Share2 size={14} /> {t('share') !== 'share' ? t('share') : 'Share'}
                                                     </button>
                                                     <button onClick={(e) => handleRenameClick(e, room)}>
-                                                        <Edit2 size={14} /> Rename
+                                                        <Edit2 size={14} /> {t('rename') !== 'rename' ? t('rename') : 'Rename'}
                                                     </button>
                                                     <button className="danger" onClick={(e) => handleRemoveClick(e, room.roomId)}>
-                                                        <Trash2 size={14} /> Remove
+                                                        <Trash2 size={14} /> {t('remove') !== 'remove' ? t('remove') : 'Remove'}
                                                     </button>
                                                 </div>
                                             )}

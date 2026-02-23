@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { BookmarkPlus, Clock, MoreVertical, Trash2 } from 'lucide-react';
 import type { RecentCall } from '../utils/callHistory';
 import { removeRecentCall } from '../utils/callHistory';
-import type { SavedRoom } from '../utils/savedRooms';
+import type { SaveRoomResult, SavedRoom } from '../utils/savedRooms';
 import { useTranslation } from 'react-i18next';
 import { SavedRoomDialog } from './SavedRoomDialog';
 import { useToast } from '../contexts/ToastContext';
@@ -36,6 +36,14 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
         };
     }, [activeMenu]);
 
+    const showSaveRoomError = (result: SaveRoomResult) => {
+        if (result === 'quota_exceeded') {
+            showToast('error', t('toast_saved_rooms_storage_full') || 'Storage is full. Remove old rooms and try again.');
+            return;
+        }
+        showToast('error', t('toast_saved_rooms_save_error') || 'Failed to save room.');
+    };
+
     const handleMenuToggle = (e: React.MouseEvent, roomId: string) => {
         e.stopPropagation();
         setActiveMenu(activeMenu === roomId ? null : roomId);
@@ -50,11 +58,15 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
 
     const handleDialogSave = async (newName: string) => {
         if (selectedRoomId) {
-            saveRoom({
+            const result = saveRoom({
                 roomId: selectedRoomId,
                 name: newName,
                 createdAt: Date.now()
             });
+            if (result !== 'ok') {
+                showSaveRoomError(result);
+                return;
+            }
             showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
             try {
                 if (navigator.clipboard?.writeText) {
@@ -170,7 +182,7 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
                                                         </button>
                                                     )}
                                                     <button className="danger" onClick={(e) => handleRemoveClick(e, call.roomId)}>
-                                                        <Trash2 size={14} /> Remove
+                                                        <Trash2 size={14} /> {t('remove') !== 'remove' ? t('remove') : 'Remove'}
                                                     </button>
                                                 </div>
                                             )}
@@ -188,7 +200,10 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
                     isOpen={dialogOpen}
                     mode="create"
                     roomId={selectedRoomId}
-                    onClose={() => setDialogOpen(false)}
+                    onClose={() => {
+                        setDialogOpen(false);
+                        setSelectedRoomId(null);
+                    }}
                     onSave={handleDialogSave}
                 />
             )}
