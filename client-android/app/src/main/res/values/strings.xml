@@ -62,6 +62,7 @@
     <string name="settings_hd_video_experimental">HD Video (experimental)</string>
     <string name="settings_hd_video_experimental_info">Enable higher-quality camera and composite modes. May increase CPU usage.</string>
     <string name="settings_error_invalid_server_host">This host is unreachable or is not a Serenada server.</string>
+    <string name="settings_app_version">App version: %1$s</string>
 
     <string name="join_enter_code_or_link">Enter a code or link</string>
     <string name="join_settings">Settings</string>
@@ -70,6 +71,20 @@
     <string name="recent_calls_title">Your recent calls</string>
     <string name="recent_calls_at">at</string>
     <string name="recent_calls_remove">Remove</string>
+    <string name="saved_rooms_title">Saved rooms</string>
+    <string name="saved_rooms_title_empty">No saved rooms</string>
+    <string name="saved_rooms_save">Save room</string>
+    <string name="saved_rooms_rename">Rename room</string>
+    <string name="saved_rooms_remove">Remove room</string>
+    <string name="saved_rooms_name_label">Room name</string>
+    <string name="saved_rooms_name_placeholder">For example, Family</string>
+    <string name="saved_rooms_create">+ Create</string>
+    <string name="saved_rooms_create_action">Create</string>
+    <string name="saved_rooms_dialog_title_new">Save room</string>
+    <string name="saved_rooms_dialog_title_rename">Rename saved room</string>
+    <string name="saved_rooms_dialog_title_create">Create room</string>
+    <string name="saved_rooms_last_joined">Last joined %1$s</string>
+    <string name="saved_rooms_never_joined">Never joined</string>
     <string name="join_with_code_title">Join with a code</string>
     <string name="join_with_code_action">Join</string>
     <string name="join_with_code_hint">Enter the code or link provided by the meeting organizer</string>
@@ -78,6 +93,8 @@
     <string name="error_something_went_wrong">Something went wrong</string>
     <string name="error_enter_room_or_id">Enter a room link or ID</string>
     <string name="error_failed_create_room">Failed to create room</string>
+    <string name="error_failed_create_saved_room_link">Failed to create room link</string>
+    <string name="error_invalid_saved_room_name">Enter a room name</string>
     <string name="error_invalid_room_id">Invalid room ID</string>
     <string name="error_unknown">Unknown error</string>
 
@@ -103,6 +120,9 @@
     <string name="call_waiting_overlay">Waiting for someone to join...</string>
     <string name="call_qr_code">QR code</string>
     <string name="call_share_invitation">Share invitation</string>
+    <string name="call_invite_to_room">Invite to call</string>
+    <string name="call_invite_sent">Invite sent</string>
+    <string name="call_invite_failed">Failed to send invite</string>
     <string name="call_share_link_chooser">Share call link</string>
 
     <string name="notification_call_title">Serenada call</string>
@@ -111,10 +131,22 @@
     <string name="notification_room">Room %1$s</string>
     <string name="notification_in_call">In call</string>
     <string name="push_notification_default_body">Someone joined your call!</string>
+    <string name="push_notification_invite_body">You were invited to a room.</string>
 
     <string name="custom">Custom</string>
     <string name="camera_enabled">Camera enabled</string>
     <string name="camera_enabled_info">Turn on camera when joining a call</string>
     <string name="microphone_enabled">Microphone enabled</string>
     <string name="microphone_enabled_info">Turn on microphone when joining a call</string>
+    <string name="settings_saved_rooms_title">Saved rooms</string>
+    <string name="settings_saved_rooms_help">Keep named rooms on the home screen. Use + Create in Saved rooms to make a shareable room link.</string>
+    <string name="settings_saved_rooms_show_first">Show saved rooms above recent calls</string>
+    <string name="settings_saved_rooms_show_first_info">Turn off to place saved rooms below recent calls.</string>
+    <string name="settings_invites_title">Invites</string>
+    <string name="settings_invite_notifications">Invite notifications</string>
+    <string name="settings_invite_notifications_info">Show notifications when someone invites you to a saved room.</string>
+    <string name="settings_saved_rooms_create_link">Create room link</string>
+    <string name="settings_saved_rooms_share_link_chooser">Share room link</string>
+    <string name="common_copy">Copy</string>
+    <string name="common_share">Share</string>
 </resources>

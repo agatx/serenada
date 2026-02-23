@@ -1,56 +1,51 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Video, Zap, Shield, Lock, Smartphone, Code } from 'lucide-react';
 import RecentCalls from '../components/RecentCalls';
 import Footer from '../components/Footer';
 import { getRecentCalls } from '../utils/callHistory';
 import type { RecentCall } from '../utils/callHistory';
+import SavedRooms from '../components/SavedRooms';
+import { getSavedRooms } from '../utils/savedRooms';
+import type { SavedRoom } from '../utils/savedRooms';
 import { useSignaling } from '../contexts/SignalingContext';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../contexts/ToastContext';
+import { createRoomId } from '../utils/roomApi';
 
 const Home: React.FC = () => {
     const { t } = useTranslation();
     const { showToast } = useToast();
     const navigate = useNavigate();
     const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
+    const [savedRooms, setSavedRooms] = useState<SavedRoom[]>([]);
     const [isCreating, setIsCreating] = useState(false);
     const { watchRooms, roomStatuses, isConnected } = useSignaling();
 
-    useEffect(() => {
+    const loadData = useCallback(() => {
         const calls = getRecentCalls();
+        const rooms = getSavedRooms();
         setRecentCalls(calls);
+        setSavedRooms(rooms);
 
-        if (calls.length > 0 && isConnected) {
-            const rids = calls.map(c => c.roomId);
-            watchRooms(rids);
+        if (isConnected) {
+            const rids = [...new Set([...calls.map(c => c.roomId), ...rooms.map(r => r.roomId)])];
+            if (rids.length > 0) {
+                watchRooms(rids);
+            }
         }
-    }, [isConnected]);
+    }, [isConnected, watchRooms]);
+
+    useEffect(() => {
+        loadData();
+    }, [loadData]);
 
     const startCall = async () => {
         if (isCreating) return;
         setIsCreating(true);
         try {
-            let apiUrl = '/api/room-id';
-            const wsUrl = import.meta.env.VITE_WS_URL;
-            if (wsUrl) {
-                const url = new URL(wsUrl);
-                url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-                url.pathname = '/api/room-id';
-                url.search = '';
-                url.hash = '';
-                apiUrl = url.toString();
-            }
-
-            const res = await fetch(apiUrl, { method: 'POST' });
-            if (!res.ok) {
-                throw new Error(`Room ID request failed: ${res.status}`);
-            }
-            const data = await res.json();
-            if (!data?.roomId) {
-                throw new Error('Room ID missing from response');
-            }
-            navigate(`/call/${data.roomId}`);
+            const roomId = await createRoomId(import.meta.env.VITE_WS_URL);
+            navigate(`/call/${roomId}`);
         } catch (err) {
             console.error('Failed to create room', err);
             showToast('error', t('toast_room_create_error'));
@@ -81,7 +76,8 @@ const Home: React.FC = () => {
                     {t('start_call')}
                 </button>
 
-                <RecentCalls calls={recentCalls} roomStatuses={roomStatuses} />
+                <RecentCalls calls={recentCalls} roomStatuses={roomStatuses} savedRooms={savedRooms} onCallUpdate={loadData} />
+                <SavedRooms rooms={savedRooms} roomStatuses={roomStatuses} onRoomUpdate={loadData} />
             </div>
 
             <div className="benefits-container">

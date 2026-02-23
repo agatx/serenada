@@ -50,3 +50,15 @@ export const getRecentCalls = (): RecentCall[] => {
         return [];
     }
 };
+
+export const removeRecentCall = (roomId: string) => {
+    try {
+        const historyJson = localStorage.getItem(STORAGE_KEY);
+        if (!historyJson) return;
+        const history: RecentCall[] = JSON.parse(historyJson);
+        const filtered = history.filter(item => item.roomId !== roomId);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+    } catch (error) {
+        console.error('Failed to remove recent call:', error);
+    }
+};

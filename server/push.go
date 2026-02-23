@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -78,6 +79,8 @@ var pushService *PushService
 const (
 	pushTransportWebPush = "webpush"
 	pushTransportFCM     = "fcm"
+	pushKindJoin         = "join"
+	pushKindInvite       = "invite"
 )
 
 func normalizePushTransport(input string) string {
@@ -290,6 +293,14 @@ func (s *PushService) Unsubscribe(roomID string, endpoint string) error {
 }
 
 func (s *PushService) SendNotificationToRoom(roomID string, excludeEndpoint string, snapshotID string) {
+	s.sendNotificationToRoom(roomID, excludeEndpoint, snapshotID, pushKindJoin)
+}
+
+func (s *PushService) SendInviteNotificationToRoom(roomID string, excludeEndpoint string) {
+	s.sendNotificationToRoom(roomID, excludeEndpoint, "", pushKindInvite)
+}
+
+func (s *PushService) sendNotificationToRoom(roomID string, excludeEndpoint string, snapshotID string, kind string) {
 	if err := validateRoomID(roomID); err != nil {
 		log.Printf("[PUSH] Skipping notifications for invalid room %q: %v", roomID, err)
 		return
@@ -327,7 +338,7 @@ func (s *PushService) SendNotificationToRoom(roomID string, excludeEndpoint stri
 	log.Printf("[PUSH] Found %d subscribers for room %s", len(targets), roomID)
 
 	var snapshotMeta *SnapshotMeta
-	if snapshotID != "" && isSafeSnapshotID(snapshotID) {
+	if kind == pushKindJoin && snapshotID != "" && isSafeSnapshotID(snapshotID) {
 		if meta, err := loadSnapshotMeta(snapshotID); err == nil {
 			snapshotMeta = meta
 		} else {
@@ -335,18 +346,32 @@ func (s *PushService) SendNotificationToRoom(roomID string, excludeEndpoint stri
 		}
 	}
 
-	// Send in parallel or just loop
 	for _, target := range targets {
-		go s.sendOne(roomID, target, snapshotID, snapshotMeta)
+		go s.sendOne(roomID, target, snapshotID, snapshotMeta, kind)
 	}
 }
 
-func getLocalizedMessage(locale string) (string, string) {
+func getLocalizedMessage(locale string, kind string) (string, string) {
 	// Simple mapping, can be expanded
 	// Check prefix
 	lang := locale
 	if len(locale) > 2 {
 		lang = locale[:2]
+	}
+
+	if kind == pushKindInvite {
+		switch lang {
+		case "ru":
+			return "Serenada", "Вас позвали в комнату."
+		case "es":
+			return "Serenada", "Te invitaron a una sala."
+		case "de":
+			return "Serenada", "Du wurdest in einen Raum eingeladen."
+		case "fr":
+			return "Serenada", "Vous avez été invité dans une salle."
+		default:
+			return "Serenada", "You were invited to a room."
+		}
 	}
 
 	switch lang {
@@ -402,8 +427,8 @@ func (s *PushService) sendOne(roomID string, target struct {
 	P256dh    string
 	Locale    string
 	Transport string
-}, snapshotID string, snapshotMeta *SnapshotMeta) {
-	title, body := getLocalizedMessage(target.Locale)
+}, snapshotID string, snapshotMeta *SnapshotMeta, kind string) {
+	title, body := getLocalizedMessage(target.Locale, kind)
 	host := configuredPushHost()
 
 	// Payload
@@ -411,6 +436,7 @@ func (s *PushService) sendOne(roomID string, target struct {
 		"title": title,
 		"body":  body,
 		"url":   fmt.Sprintf("/call/%s", roomID),
+		"kind":  kind,
 	}
 	if host != "" {
 		payload["host"] = host
@@ -669,6 +695,38 @@ func handlePushRecipients(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(recipients)
+}
+
+func handlePushInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	roomID := strings.TrimSpace(r.URL.Query().Get("roomId"))
+	if writeRoomIDValidationError(w, roomID) {
+		return
+	}
+
+	var body struct {
+		Endpoint string `json:"endpoint"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "Invalid body", http.StatusBadRequest)
+		return
+	}
+
+	if pushService == nil {
+		http.Error(w, "Push service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	go pushService.SendInviteNotificationToRoom(roomID, strings.TrimSpace(body.Endpoint))
+	w.WriteHeader(http.StatusOK)
 }
 
 func handlePushSnapshot(w http.ResponseWriter, r *http.Request) {

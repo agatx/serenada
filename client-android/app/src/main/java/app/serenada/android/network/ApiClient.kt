@@ -265,6 +265,43 @@ class ApiClient(private val okHttpClient: OkHttpClient) {
         })
     }
 
+    fun sendPushInvite(
+        host: String,
+        roomId: String,
+        endpoint: String?,
+        onResult: (Result<Unit>) -> Unit
+    ) {
+        val url = buildHttpsUrl(host, "/api/push/invite", mapOf("roomId" to roomId))
+        if (url == null) {
+            onResult(Result.failure(IllegalArgumentException("Invalid host")))
+            return
+        }
+
+        val payload = JSONObject().apply {
+            endpoint?.trim()?.takeIf { it.isNotBlank() }?.let { put("endpoint", it) }
+        }
+        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+        val httpRequest = Request.Builder()
+            .url(url)
+            .post(requestBody)
+            .build()
+        okHttpClient.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                onResult(Result.failure(e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!response.isSuccessful) {
+                        onResult(Result.failure(IOException("Push invite failed: ${response.code}")))
+                        return
+                    }
+                    onResult(Result.success(Unit))
+                }
+            }
+        })
+    }
+
     private fun parseRoomId(body: String): Result<String> {
         return try {
             val json = JSONObject(body)

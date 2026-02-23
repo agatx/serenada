@@ -62,6 +62,7 @@
     <string name="settings_hd_video_experimental">Vidéo HD (expérimental)</string>
     <string name="settings_hd_video_experimental_info">Active une meilleure qualité pour la caméra et le mode composite. Peut augmenter l\'utilisation CPU.</string>
     <string name="settings_error_invalid_server_host">Cet hôte est inaccessible ou ne semble pas être un serveur Serenada.</string>
+    <string name="settings_app_version">Version de l\'application : %1$s</string>
 
     <string name="join_enter_code_or_link">Saisir un code ou un lien</string>
     <string name="join_settings">Paramètres</string>
@@ -114,4 +115,36 @@
     <string name="camera_enabled_info">Activer la caméra en rejoignant un appel</string>
     <string name="microphone_enabled">Micro activé</string>
     <string name="microphone_enabled_info">Activer le micro en rejoignant un appel</string>
+
+    <string name="saved_rooms_title">Salles enregistrées</string>
+    <string name="saved_rooms_title_empty">Aucune salle enregistrée</string>
+    <string name="saved_rooms_save">Enregistrer la salle</string>
+    <string name="saved_rooms_rename">Renommer la salle</string>
+    <string name="saved_rooms_remove">Supprimer la salle</string>
+    <string name="saved_rooms_name_label">Nom de la salle</string>
+    <string name="saved_rooms_name_placeholder">Par exemple, Famille</string>
+    <string name="saved_rooms_create">+ Créer</string>
+    <string name="saved_rooms_create_action">Créer</string>
+    <string name="saved_rooms_dialog_title_new">Enregistrer la salle</string>
+    <string name="saved_rooms_dialog_title_rename">Renommer la salle enregistrée</string>
+    <string name="saved_rooms_dialog_title_create">Créer une salle</string>
+    <string name="saved_rooms_last_joined">Dernière connexion %1$s</string>
+    <string name="saved_rooms_never_joined">Jamais rejointe</string>
+    <string name="error_failed_create_saved_room_link">Impossible de créer le lien de la salle</string>
+    <string name="error_invalid_saved_room_name">Saisissez un nom de salle</string>
+    <string name="settings_saved_rooms_title">Salles enregistrées</string>
+    <string name="settings_saved_rooms_help">Conservez des salles nommées sur l\'écran d\'accueil. Utilisez + Créer dans les salles enregistrées pour générer un lien partageable.</string>
+    <string name="settings_saved_rooms_show_first">Afficher les salles enregistrées au-dessus des appels récents</string>
+    <string name="settings_saved_rooms_show_first_info">Désactivez pour afficher les salles enregistrées sous les appels récents.</string>
+    <string name="settings_saved_rooms_create_link">Créer un lien de salle</string>
+    <string name="settings_saved_rooms_share_link_chooser">Partager le lien de salle</string>
+    <string name="common_copy">Copier</string>
+    <string name="common_share">Partager</string>
+    <string name="call_invite_to_room">Inviter à l\'appel</string>
+    <string name="call_invite_sent">Invitation envoyée</string>
+    <string name="call_invite_failed">Échec de l\'envoi de l\'invitation</string>
+    <string name="push_notification_invite_body">Vous avez été invité dans une salle.</string>
+    <string name="settings_invites_title">Invitations</string>
+    <string name="settings_invite_notifications">Notifications d\'invitation</string>
+    <string name="settings_invite_notifications_info">Afficher les notifications quand vous êtes invité dans une salle enregistrée.</string>
 </resources>

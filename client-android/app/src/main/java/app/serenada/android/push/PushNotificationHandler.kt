@@ -17,6 +17,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import app.serenada.android.MainActivity
 import app.serenada.android.R
+import app.serenada.android.data.SavedRoomStore
 import app.serenada.android.data.SettingsStore
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -26,6 +27,7 @@ import java.util.concurrent.TimeUnit
 class PushNotificationHandler(context: Context) {
     private val appContext = context.applicationContext
     private val settingsStore = SettingsStore(appContext)
+    private val savedRoomStore = SavedRoomStore(appContext)
     private val pushKeyStore = PushKeyStore()
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
@@ -36,18 +38,33 @@ class PushNotificationHandler(context: Context) {
     fun showFromPayload(data: Map<String, String>) {
         if (data.isEmpty()) return
         val host = resolveHost(data)
+        val kind = data["kind"]?.trim()?.lowercase().orEmpty().ifBlank { PUSH_KIND_JOIN }
+        val callPath = normalizeCallPath(data["url"])
+        val roomId = extractRoomId(callPath)
+
+        if (kind == PUSH_KIND_INVITE) {
+            if (!settingsStore.areRoomInviteNotificationsEnabled) {
+                return
+            }
+            if (roomId == null || !savedRoomStore.hasRoom(roomId)) {
+                return
+            }
+        }
 
         val title = data["title"].orEmpty().ifBlank { appContext.getString(R.string.app_name) }
         val body = data["body"].orEmpty().ifBlank {
-            appContext.getString(R.string.push_notification_default_body)
+            if (kind == PUSH_KIND_INVITE) {
+                appContext.getString(R.string.push_notification_invite_body)
+            } else {
+                appContext.getString(R.string.push_notification_default_body)
+            }
         }
-        val callPath = normalizeCallPath(data["url"])
-        val snapshot = loadSnapshotBitmap(host, data)
+        val snapshot = if (kind == PUSH_KIND_INVITE) null else loadSnapshotBitmap(host, data)
 
         showNotification(
             host = host,
             callPath = callPath,
-            roomId = extractRoomId(callPath),
+            roomId = roomId,
             title = title,
             body = body,
             snapshot = snapshot
@@ -237,5 +254,7 @@ class PushNotificationHandler(context: Context) {
 
     private companion object {
         const val CHANNEL_ID = "serenada_join_alerts"
+        const val PUSH_KIND_JOIN = "join"
+        const val PUSH_KIND_INVITE = "invite"
     }
 }

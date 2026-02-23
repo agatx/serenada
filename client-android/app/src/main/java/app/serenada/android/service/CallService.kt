@@ -21,6 +21,7 @@ class CallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_START) {
             val roomId = intent.getStringExtra(EXTRA_ROOM_ID).orEmpty()
+            val roomName = intent.getStringExtra(EXTRA_ROOM_NAME).orEmpty()
             val includeMediaProjection = intent.getBooleanExtra(EXTRA_INCLUDE_MEDIA_PROJECTION, false)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 var serviceTypes =
@@ -29,10 +30,10 @@ class CallService : Service() {
                 if (includeMediaProjection) {
                     serviceTypes = serviceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                 }
-                startForeground(NOTIFICATION_ID, buildNotification(roomId), serviceTypes)
+                startForeground(NOTIFICATION_ID, buildNotification(roomId, roomName), serviceTypes)
                 mediaProjectionForegroundActive = includeMediaProjection
             } else {
-                startForeground(NOTIFICATION_ID, buildNotification(roomId))
+                startForeground(NOTIFICATION_ID, buildNotification(roomId, roomName))
                 mediaProjectionForegroundActive = false
             }
         }
@@ -49,7 +50,7 @@ class CallService : Service() {
         stopSelf()
     }
 
-    private fun buildNotification(roomId: String): Notification {
+    private fun buildNotification(roomId: String, roomName: String): Notification {
         createChannelIfNeeded()
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -61,7 +62,9 @@ class CallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val contentText =
-            if (roomId.isNotBlank()) {
+            if (roomName.isNotBlank()) {
+                roomName
+            } else if (roomId.isNotBlank()) {
                 getString(R.string.notification_room, roomId)
             } else {
                 getString(R.string.notification_in_call)
@@ -91,16 +94,23 @@ class CallService : Service() {
         private const val NOTIFICATION_ID = 42
         private const val ACTION_START = "app.serenada.android.action.START_CALL"
         private const val EXTRA_ROOM_ID = "room_id"
+        private const val EXTRA_ROOM_NAME = "room_name"
         private const val EXTRA_INCLUDE_MEDIA_PROJECTION = "include_media_projection"
         @Volatile
         private var mediaProjectionForegroundActive = false
 
         fun isMediaProjectionForegroundActive(): Boolean = mediaProjectionForegroundActive
 
-        fun start(context: Context, roomId: String, includeMediaProjection: Boolean = false) {
+        fun start(
+            context: Context,
+            roomId: String,
+            roomName: String? = null,
+            includeMediaProjection: Boolean = false
+        ) {
             val intent = Intent(context, CallService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_ROOM_ID, roomId)
+                putExtra(EXTRA_ROOM_NAME, roomName)
                 putExtra(EXTRA_INCLUDE_MEDIA_PROJECTION, includeMediaProjection)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

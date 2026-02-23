@@ -2,6 +2,7 @@
 
 ## Goals
 - Deliver a join notification that includes a camera snapshot.
+- Deliver a room invite notification on explicit invite action.
 - Keep the server blind to snapshot contents (no plaintext stored or processed).
 - Preserve multi-subscriber delivery (one snapshot can be shared across multiple recipients).
 - Keep snapshots short-lived (10 minute TTL).
@@ -38,7 +39,7 @@
 - Never sees plaintext.
 - Cleanup runs on snapshot upload and removes files older than 10 minutes.
 - Enforces a max ciphertext size of 300KB per snapshot.
-- On join, server sends push notifications that include:
+- On join, server sends push notifications (`kind: "join"`) that include:
   - `host` (preferred backend host for deep-link/snapshot fetch routing)
   - `snapshotId`
   - `snapshotIv`
@@ -47,6 +48,7 @@
   - `snapshotKey` (wrapped content key)
   - `snapshotKeyIv`
   - `snapshotMime`
+- On invite (`POST /api/push/invite`), server sends push notifications with `kind: "invite"` and no snapshot fields.
 
 ### Service worker (recipient)
 - Retrieves its private key from IndexedDB.
@@ -62,6 +64,7 @@
 - Uses Android Keystore private key + `snapshotEphemeralPubKey` and HKDF salt to unwrap `snapshotKey`.
 - Fetches encrypted snapshot via `/api/push/snapshot/{id}` and decrypts locally.
 - Renders notification with `BigPictureStyle` and deep-links to `/call/{roomId}`.
+- Invite notifications are shown only when the invited room is saved on device and the Settings toggle is enabled.
 
 ## Protocol details
 ### VAPID key
@@ -110,6 +113,13 @@ Android (`fcm`) subscription example:
 ]
 ```
 
+### Invite trigger
+`POST /api/push/invite?roomId=...`
+
+```json
+{ "endpoint": "optional-sender-endpoint-or-fcm-token" }
+```
+
 ### Snapshot upload
 `POST /api/push/snapshot`
 
@@ -138,6 +148,7 @@ Android (`fcm`) subscription example:
 ### Push payload fields
 ```json
 {
+  "kind": "join",
   "title": "Serenada",
   "body": "Someone joined your call!",
   "host": "serenada.app",
@@ -149,6 +160,17 @@ Android (`fcm`) subscription example:
   "snapshotKey": "<base64>",
   "snapshotKeyIv": "<base64>",
   "snapshotMime": "image/jpeg"
+}
+```
+
+Invite payload example:
+```json
+{
+  "kind": "invite",
+  "title": "Serenada",
+  "body": "You were invited to a room.",
+  "host": "serenada.app",
+  "url": "/call/ROOM_ID"
 }
 ```
 

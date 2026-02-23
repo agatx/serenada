@@ -564,6 +564,19 @@ Issues a short-lived diagnostic TURN token (5 seconds).
 { "token": "payload.signature", "expires": 1735174800 }
 ```
 
+### 8.4 `POST /api/push/invite?roomId=...`
+Triggers a room invite push notification to subscribers of the room.
+
+**Request body**
+```json
+{ "endpoint": "optionalSenderEndpointOrFcmToken" }
+```
+
+**Behavior**
+- Validates `roomId`.
+- Sends push payload with `kind: "invite"`, `url: "/call/{roomId}"`, and localized `title/body`.
+- If `endpoint` is provided, the server excludes that endpoint from delivery to avoid self-notifications.
+
 ---
 
 ## 9. Security requirements

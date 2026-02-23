@@ -17,6 +17,8 @@ import androidx.compose.runtime.mutableStateOf
 import app.serenada.android.R
 import app.serenada.android.data.RecentCall
 import app.serenada.android.data.RecentCallStore
+import app.serenada.android.data.SavedRoom
+import app.serenada.android.data.SavedRoomStore
 import app.serenada.android.data.SettingsStore
 import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.ApiClient
@@ -29,15 +31,21 @@ import org.json.JSONObject
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
 import org.webrtc.SessionDescription
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.Executors
 
 class CallManager(context: Context) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
+    private val webRtcStatsExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "webrtc-stats")
+    }
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = ApiClient(okHttpClient)
     private val settingsStore = SettingsStore(appContext)
     private val recentCallStore = RecentCallStore(appContext)
+    private val savedRoomStore = SavedRoomStore(appContext)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -75,10 +83,21 @@ class CallManager(context: Context) {
     private val _recentCalls = mutableStateOf<List<RecentCall>>(emptyList())
     val recentCalls: State<List<RecentCall>> = _recentCalls
 
+    private val _savedRooms = mutableStateOf<List<SavedRoom>>(emptyList())
+    val savedRooms: State<List<SavedRoom>> = _savedRooms
+
+    private val _areSavedRoomsShownFirst = mutableStateOf(settingsStore.areSavedRoomsShownFirst)
+    val areSavedRoomsShownFirst: State<Boolean> = _areSavedRoomsShownFirst
+
+    private val _areRoomInviteNotificationsEnabled =
+        mutableStateOf(settingsStore.areRoomInviteNotificationsEnabled)
+    val areRoomInviteNotificationsEnabled: State<Boolean> = _areRoomInviteNotificationsEnabled
+
     private val _roomStatuses = mutableStateOf<Map<String, Int>>(emptyMap())
     val roomStatuses: State<Map<String, Int>> = _roomStatuses
 
     private var currentRoomId: String? = null
+    private var activeCallHostOverride: String? = null
     private var clientId: String? = null
     private var hostCid: String? = null
     private var callStartTimeMs: Long? = null
@@ -93,6 +112,7 @@ class CallManager(context: Context) {
     private var lastIceRestartAt = 0L
     private var iceRestartRunnable: Runnable? = null
     private var offerTimeoutRunnable: Runnable? = null
+    private var joinTimeoutRunnable: Runnable? = null
     private var remoteVideoStatePollRunnable: Runnable? = null
     private var webrtcStatsRequestInFlight = false
     private var lastWebRtcStatsPollAtMs = 0L
@@ -159,6 +179,7 @@ class CallManager(context: Context) {
     init {
         registerConnectivityListener()
         refreshRecentCalls()
+        refreshSavedRooms()
     }
 
     private fun buildWebRtcEngine(): WebRtcEngine {
@@ -300,9 +321,10 @@ class CallManager(context: Context) {
         val changed = trimmed != _serverHost.value
         settingsStore.host = trimmed
         _serverHost.value = trimmed
-        if (changed && currentRoomId == null && watchedRoomIds.isNotEmpty()) {
+        if (changed && currentRoomId == null) {
             signalingClient.close()
-            watchRecentRoomsIfNeeded()
+            syncSavedRoomPushSubscriptions(_savedRooms.value)
+            refreshWatchedRooms()
         }
     }
 
@@ -339,26 +361,121 @@ class CallManager(context: Context) {
         webRtcEngine.setHdVideoExperimentalEnabled(enabled)
     }
 
+    fun updateSavedRoomsShownFirst(enabled: Boolean) {
+        settingsStore.areSavedRoomsShownFirst = enabled
+        _areSavedRoomsShownFirst.value = enabled
+    }
+
+    fun updateRoomInviteNotifications(enabled: Boolean) {
+        settingsStore.areRoomInviteNotificationsEnabled = enabled
+        _areRoomInviteNotificationsEnabled.value = enabled
+    }
+
+    fun inviteToCurrentRoom(onResult: (Result<Unit>) -> Unit) {
+        val roomId = currentRoomId?.trim().orEmpty()
+        if (roomId.isBlank()) {
+            handler.post {
+                onResult(Result.failure(IllegalStateException("No active room")))
+            }
+            return
+        }
+        val host = currentSignalingHost()
+        val endpoint = pushSubscriptionManager.cachedEndpoint()
+        apiClient.sendPushInvite(host, roomId, endpoint) { result ->
+            handler.post {
+                onResult(result)
+            }
+        }
+    }
+
+    fun saveRoom(roomId: String, name: String, host: String? = null) {
+        val cleanRoomId = roomId.trim()
+        val cleanName = normalizeSavedRoomName(name) ?: return
+        val normalizedHost = normalizeHostValue(host)
+        val hostOverride = normalizedHost?.takeUnless { isTrustedDeepLinkHost(it) }
+        if (!isValidRoomId(cleanRoomId)) return
+        savedRoomStore.saveRoom(
+            SavedRoom(
+                roomId = cleanRoomId,
+                name = cleanName,
+                createdAt = System.currentTimeMillis(),
+                host = hostOverride
+            )
+        )
+        refreshSavedRooms()
+    }
+
+    fun joinSavedRoom(room: SavedRoom) {
+        val roomHostOverride = normalizeHostValue(room.host)?.takeUnless { isTrustedDeepLinkHost(it) }
+        joinRoom(room.roomId, roomHostOverride)
+    }
+
+    fun removeSavedRoom(roomId: String) {
+        savedRoomStore.removeRoom(roomId)
+        refreshSavedRooms()
+    }
+
+    fun createSavedRoomInviteLink(roomName: String, hostInput: String, onResult: (Result<String>) -> Unit) {
+        val normalizedName = normalizeSavedRoomName(roomName)
+        if (normalizedName == null) {
+            handler.post {
+                onResult(
+                    Result.failure(
+                        IllegalArgumentException(appContext.getString(R.string.error_invalid_saved_room_name))
+                    )
+                )
+            }
+            return
+        }
+
+        val targetHost = hostInput.trim().ifBlank { serverHost.value }
+        val normalizedHost = normalizeHostValue(targetHost)
+        if (normalizedHost == null) {
+            handler.post {
+                onResult(
+                    Result.failure(
+                        IllegalArgumentException(appContext.getString(R.string.settings_error_invalid_server_host))
+                    )
+                )
+            }
+            return
+        }
+        val roomHostOverride = normalizedHost.takeUnless { isTrustedDeepLinkHost(it) }
+        apiClient.createRoomId(normalizedHost) { result ->
+            handler.post {
+                result
+                    .onSuccess { roomId ->
+                        saveRoom(roomId, normalizedName, roomHostOverride)
+                        val link = buildSavedRoomInviteLink(normalizedHost, roomId, normalizedName)
+                        onResult(Result.success(link))
+                    }
+                    .onFailure { onResult(Result.failure(it)) }
+            }
+        }
+    }
+
     fun handleDeepLink(uri: Uri) {
-        val roomId = extractRoomId(uri) ?: return
+        val deepLinkTarget = parseDeepLinkTarget(uri) ?: return
+        val hostPolicy = resolveDeepLinkHostPolicy(deepLinkTarget.host)
+        if (deepLinkTarget.action == DeepLinkAction.SaveRoom) {
+            hostPolicy.persistedHost?.let { updateServerHost(it) }
+            val roomName = deepLinkTarget.savedRoomName ?: deepLinkTarget.roomId
+            saveRoom(deepLinkTarget.roomId, roomName, hostPolicy.oneOffHost)
+            return
+        }
+
         val state = _uiState.value
+        val roomId = deepLinkTarget.roomId
         val isSameActiveRoom = (state.roomId == roomId || currentRoomId == roomId) &&
-                state.phase != CallPhase.Idle &&
-                state.phase != CallPhase.Error &&
-                state.phase != CallPhase.Ending
+            state.phase != CallPhase.Idle &&
+            state.phase != CallPhase.Error &&
+            state.phase != CallPhase.Ending
         if (isSameActiveRoom) {
             Log.d("CallManager", "Ignoring duplicate deep link for active room $roomId")
             return
         }
-        val linkHost = uri.host
-        if (!linkHost.isNullOrBlank()) {
-            updateServerHost(linkHost)
-        }
-        joinRoom(roomId)
-    }
-
-    private fun extractRoomId(uri: Uri): String? {
-        return uri.pathSegments.lastOrNull()
+        hostPolicy.persistedHost?.let { updateServerHost(it) }
+        joinRoom(roomId, hostPolicy.oneOffHost)
     }
 
     fun joinFromInput(input: String) {
@@ -375,15 +492,107 @@ class CallManager(context: Context) {
         }
         val uri = runCatching { Uri.parse(trimmed) }.getOrNull()
         if (uri != null && uri.scheme != null && uri.host != null) {
-            val roomId = extractRoomId(uri)
-            if (roomId != null) {
-                updateServerHost(uri.host ?: serverHost.value)
-                joinRoom(roomId)
+            val deepLinkTarget = parseDeepLinkTarget(uri)
+            if (deepLinkTarget != null) {
+                val hostPolicy = resolveDeepLinkHostPolicy(deepLinkTarget.host)
+                hostPolicy.persistedHost?.let { updateServerHost(it) }
+                if (deepLinkTarget.action == DeepLinkAction.SaveRoom) {
+                    val roomName = deepLinkTarget.savedRoomName ?: deepLinkTarget.roomId
+                    saveRoom(deepLinkTarget.roomId, roomName, hostPolicy.oneOffHost)
+                } else {
+                    joinRoom(deepLinkTarget.roomId, hostPolicy.oneOffHost)
+                }
                 return
             }
         }
         joinRoom(trimmed)
     }
+
+    private fun parseDeepLinkTarget(uri: Uri): DeepLinkTarget? {
+        val roomId = extractRoomId(uri) ?: return null
+        if (!isValidRoomId(roomId)) return null
+        val savedRoomName = normalizeSavedRoomName(uri.getQueryParameter("name"))
+        val action = when {
+            savedRoomName != null -> DeepLinkAction.SaveRoom
+            else -> DeepLinkAction.Join
+        }
+
+        return DeepLinkTarget(
+            action = action,
+            roomId = roomId,
+            host = normalizeHostValue(uri.getQueryParameter("host")) ?: normalizeHostValue(uri.authority),
+            savedRoomName = savedRoomName
+        )
+    }
+
+    private fun extractRoomId(uri: Uri): String? {
+        return uri.pathSegments.lastOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun buildSavedRoomInviteLink(host: String, roomId: String, roomName: String): String {
+        val normalizedHost = normalizeHostValue(host) ?: host
+        val appLinkHost = if (normalizedHost == SettingsStore.HOST_RU) {
+            SettingsStore.HOST_RU
+        } else {
+            SettingsStore.DEFAULT_HOST
+        }
+        return Uri.Builder()
+            .scheme("https")
+            .authority(appLinkHost)
+            .appendPath("call")
+            .appendPath(roomId)
+            .appendQueryParameter("host", normalizedHost)
+            .appendQueryParameter("name", roomName)
+            .build()
+            .toString()
+    }
+
+    private fun normalizeHostValue(hostInput: String?): String? {
+        val raw = hostInput?.trim().orEmpty()
+        if (raw.isBlank()) return null
+        val withScheme = if (raw.startsWith("http://", ignoreCase = true) ||
+            raw.startsWith("https://", ignoreCase = true)
+        ) {
+            raw
+        } else {
+            "https://$raw"
+        }
+        val parsed = runCatching { Uri.parse(withScheme) }.getOrNull() ?: return null
+        if (!parsed.userInfo.isNullOrBlank()) return null
+        if (!parsed.query.isNullOrBlank()) return null
+        if (!parsed.fragment.isNullOrBlank()) return null
+        val path = parsed.path.orEmpty()
+        if (path.isNotBlank() && path != "/") return null
+
+        val host = parsed.host?.trim()?.lowercase(Locale.ROOT) ?: return null
+        if (host.isBlank()) return null
+        val port = parsed.port
+        if (port == -1) return host
+        if (port <= 0 || port > 65535) return null
+        return "$host:$port"
+    }
+
+    private fun resolveDeepLinkHostPolicy(host: String?): DeepLinkHostPolicy {
+        val normalized = normalizeHostValue(host) ?: return DeepLinkHostPolicy()
+        return if (isTrustedDeepLinkHost(normalized)) {
+            DeepLinkHostPolicy(persistedHost = normalized)
+        } else {
+            DeepLinkHostPolicy(oneOffHost = normalized)
+        }
+    }
+
+    private fun isTrustedDeepLinkHost(host: String): Boolean {
+        val canonical = host.lowercase(Locale.ROOT)
+        return canonical == SettingsStore.DEFAULT_HOST || canonical == SettingsStore.HOST_RU
+    }
+
+    private fun normalizeSavedRoomName(name: String?): String? {
+        val trimmed = name?.trim().orEmpty()
+        if (trimmed.isBlank()) return null
+        return trimmed.take(MAX_SAVED_ROOM_NAME_LENGTH)
+    }
+
+    private fun isValidRoomId(roomId: String): Boolean = ROOM_ID_REGEX.matches(roomId)
 
     fun startNewCall() {
         if (_uiState.value.phase != CallPhase.Idle) return
@@ -414,7 +623,7 @@ class CallManager(context: Context) {
         }
     }
 
-    fun joinRoom(roomId: String) {
+    fun joinRoom(roomId: String, oneOffHost: String? = null) {
         if (roomId.isBlank()) {
             updateState(
                 _uiState.value.copy(
@@ -425,6 +634,10 @@ class CallManager(context: Context) {
             )
             return
         }
+        if (savedRoomStore.markRoomJoined(roomId)) {
+            refreshSavedRooms()
+        }
+        activeCallHostOverride = normalizeHostValue(oneOffHost)
         currentRoomId = roomId
         val joinAttemptId = ++joinAttemptSerial
         callStartTimeMs = System.currentTimeMillis()
@@ -453,6 +666,7 @@ class CallManager(context: Context) {
                 isFlashEnabled = false
             )
         )
+        scheduleJoinTimeout(roomId, joinAttemptId)
 
         acquirePerformanceLocks()
         activateAudioSession()
@@ -464,7 +678,7 @@ class CallManager(context: Context) {
 
         startRemoteVideoStatePolling()
         prepareJoinSnapshotAndConnect(roomId, joinAttemptId)
-        CallService.start(appContext, roomId)
+        CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
     }
 
     fun leaveCall() {
@@ -477,6 +691,7 @@ class CallManager(context: Context) {
         if (_uiState.value.phase == CallPhase.Error) {
             updateState(CallUiState())
             refreshRecentCalls()
+            refreshSavedRooms()
         }
     }
 
@@ -519,6 +734,10 @@ class CallManager(context: Context) {
         }
     }
 
+    fun adjustLocalCameraZoom(scaleFactor: Float) {
+        webRtcEngine.adjustWorldCameraZoom(scaleFactor)
+    }
+
     fun startScreenShare(intent: Intent) {
         if (_uiState.value.isScreenSharing) return
         val roomId = currentRoomId
@@ -526,7 +745,12 @@ class CallManager(context: Context) {
             Log.w("CallManager", "Failed to start screen sharing: roomId is missing")
             return
         }
-        CallService.start(appContext, roomId, includeMediaProjection = true)
+        CallService.start(
+            appContext,
+            roomId,
+            roomName = savedRoomNameForNotification(roomId),
+            includeMediaProjection = true
+        )
         startScreenShareWhenForegroundReady(intent, roomId, attemptsRemaining = 15)
     }
 
@@ -537,7 +761,7 @@ class CallManager(context: Context) {
             return
         }
         currentRoomId?.let { roomId ->
-            CallService.start(appContext, roomId)
+            CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
         }
         updateState(_uiState.value.copy(isScreenSharing = false))
         applyLocalVideoPreference()
@@ -550,7 +774,7 @@ class CallManager(context: Context) {
     ) {
         if (CallService.isMediaProjectionForegroundActive()) {
             if (!webRtcEngine.startScreenShare(intent)) {
-                CallService.start(appContext, roomId)
+                CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
                 Log.w("CallManager", "Failed to start screen sharing")
                 return
             }
@@ -559,7 +783,7 @@ class CallManager(context: Context) {
             return
         }
         if (attemptsRemaining <= 0) {
-            CallService.start(appContext, roomId)
+            CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
             Log.w("CallManager", "Failed to start screen sharing: media projection foreground type not ready")
             return
         }
@@ -620,7 +844,7 @@ class CallManager(context: Context) {
             return
         }
         pendingJoinRoom = roomToJoin
-        signalingClient.connect(serverHost.value)
+        signalingClient.connect(currentSignalingHost())
     }
 
     private fun sendJoin(roomId: String, snapshotId: String? = null) {
@@ -673,7 +897,7 @@ class CallManager(context: Context) {
 
     private fun prepareJoinSnapshotAndConnect(roomId: String, joinAttemptId: Long) {
         joinSnapshotFeature.prepareSnapshotId(
-            host = serverHost.value,
+            host = currentSignalingHost(),
             roomId = roomId,
             isVideoEnabled = { _uiState.value.localVideoEnabled },
             isJoinAttemptActive = { isJoinAttemptActive(roomId, joinAttemptId) }
@@ -740,7 +964,7 @@ class CallManager(context: Context) {
         clientId?.let { settingsStore.reconnectCid = it }
         val joinedRoomId = msg.rid ?: currentRoomId
         if (!joinedRoomId.isNullOrBlank()) {
-            pushSubscriptionManager.subscribeRoom(joinedRoomId, serverHost.value)
+            pushSubscriptionManager.subscribeRoom(joinedRoomId, currentSignalingHost())
         }
         val roomState = parseRoomState(msg.payload)
         if (roomState != null) {
@@ -795,6 +1019,7 @@ class CallManager(context: Context) {
 
     private fun handleError(msg: SignalingMessage) {
         val rawMessage = msg.payload?.optString("message").orEmpty().ifBlank { null }
+        clearJoinTimeout()
         resetResources()
         updateState(
             CallUiState(
@@ -852,6 +1077,9 @@ class CallManager(context: Context) {
         val phase = when {
             count <= 1 -> CallPhase.Waiting
             else -> CallPhase.InCall
+        }
+        if (phase != CallPhase.Joining) {
+            clearJoinTimeout()
         }
         if (count <= 1) {
             sentOffer = false
@@ -954,6 +1182,39 @@ class CallManager(context: Context) {
         handler.postDelayed(runnable, 8000)
     }
 
+    private fun scheduleJoinTimeout(roomId: String, joinAttemptId: Long) {
+        clearJoinTimeout()
+        val runnable = Runnable {
+            joinTimeoutRunnable = null
+            val state = _uiState.value
+            val isStillJoining = state.phase == CallPhase.Joining &&
+                currentRoomId == roomId &&
+                joinAttemptSerial == joinAttemptId
+            if (!isStillJoining) return@Runnable
+            Log.w("CallManager", "Join timeout for room $roomId; failing attempt")
+            failJoinWithError(R.string.call_status_connection_failed)
+        }
+        joinTimeoutRunnable = runnable
+        handler.postDelayed(runnable, JOIN_ROOM_TIMEOUT_MS)
+    }
+
+    private fun clearJoinTimeout() {
+        joinTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        joinTimeoutRunnable = null
+    }
+
+    private fun failJoinWithError(messageResId: Int) {
+        clearJoinTimeout()
+        resetResources()
+        updateState(
+            CallUiState(
+                phase = CallPhase.Error,
+                errorMessageResId = messageResId,
+                errorMessageText = null
+            )
+        )
+    }
+
     private fun clearOfferTimeout() {
         offerTimeoutRunnable?.let { handler.removeCallbacks(it) }
         offerTimeoutRunnable = null
@@ -996,7 +1257,7 @@ class CallManager(context: Context) {
     }
 
     private fun fetchTurnCredentials(token: String) {
-        apiClient.fetchTurnCredentials(serverHost.value, token) { result ->
+        apiClient.fetchTurnCredentials(currentSignalingHost(), token) { result ->
             handler.post {
                 result
                     .onSuccess { creds ->
@@ -1097,14 +1358,16 @@ class CallManager(context: Context) {
         if (now - lastWebRtcStatsPollAtMs < WEBRTC_STATS_POLL_INTERVAL_MS) return
 
         webrtcStatsRequestInFlight = true
-        webRtcEngine.collectWebRtcStatsSummary { summary ->
-            handler.post {
-                webrtcStatsRequestInFlight = false
-                lastWebRtcStatsPollAtMs = System.currentTimeMillis()
-                if (_uiState.value.webrtcStatsSummary != summary) {
-                    updateState(_uiState.value.copy(webrtcStatsSummary = summary))
+        webRtcStatsExecutor.execute {
+            webRtcEngine.collectWebRtcStatsSummary { summary ->
+                handler.post {
+                    webrtcStatsRequestInFlight = false
+                    lastWebRtcStatsPollAtMs = System.currentTimeMillis()
+                    if (_uiState.value.webrtcStatsSummary != summary) {
+                        updateState(_uiState.value.copy(webrtcStatsSummary = summary))
+                    }
+                    Log.d("CallManager", "[WebRTCStats] $summary")
                 }
-                Log.d("CallManager", "[WebRTCStats] $summary")
             }
         }
     }
@@ -1130,6 +1393,7 @@ class CallManager(context: Context) {
     }
 
     private fun resetResources() {
+        clearJoinTimeout()
         deactivateAudioSession()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
@@ -1140,6 +1404,7 @@ class CallManager(context: Context) {
         hostCid = null
         clientId = null
         callStartTimeMs = null
+        activeCallHostOverride = null
         pendingJoinRoom = null
         pendingJoinSnapshotId = null
         pendingMessages.clear()
@@ -1253,7 +1518,7 @@ class CallManager(context: Context) {
             }
             if (roomId != null && currentRoomId == roomId) {
                 pendingJoinRoom = roomId
-                signalingClient.connect(serverHost.value)
+                signalingClient.connect(currentSignalingHost())
                 return@postDelayed
             }
             if (roomId == null && currentRoomId == null && watchedRoomIds.isNotEmpty()) {
@@ -1265,7 +1530,49 @@ class CallManager(context: Context) {
     private fun refreshRecentCalls() {
         val calls = recentCallStore.getRecentCalls()
         _recentCalls.value = calls
-        watchedRoomIds = calls.map { it.roomId }
+        refreshWatchedRooms()
+    }
+
+    private fun refreshSavedRooms() {
+        val rooms = savedRoomStore.getSavedRooms()
+        _savedRooms.value = rooms
+        syncSavedRoomPushSubscriptions(rooms)
+        refreshWatchedRooms()
+    }
+
+    private fun syncSavedRoomPushSubscriptions(rooms: List<SavedRoom>) {
+        val host = serverHost.value
+        rooms
+            .filter { shouldWatchSavedRoom(it) }
+            .forEach { room ->
+                pushSubscriptionManager.subscribeRoom(room.roomId, host)
+            }
+    }
+
+    private fun savedRoomNameForNotification(roomId: String): String? {
+        return _savedRooms.value.firstOrNull { it.roomId == roomId }?.name
+    }
+
+    private fun shouldWatchSavedRoom(room: SavedRoom): Boolean {
+        val roomHost = room.host ?: return true
+        return roomHost.equals(serverHost.value, ignoreCase = true)
+    }
+
+    private fun currentSignalingHost(): String {
+        return if (currentRoomId != null) {
+            activeCallHostOverride ?: serverHost.value
+        } else {
+            serverHost.value
+        }
+    }
+
+    private fun refreshWatchedRooms() {
+        val mergedRoomIds = LinkedHashSet<String>()
+        _savedRooms.value
+            .filter { shouldWatchSavedRoom(it) }
+            .forEach { mergedRoomIds.add(it.roomId) }
+        _recentCalls.value.forEach { mergedRoomIds.add(it.roomId) }
+        watchedRoomIds = mergedRoomIds.toList()
         val watched = watchedRoomIds.toSet()
         _roomStatuses.value = _roomStatuses.value.filterKeys { watched.contains(it) }
         watchRecentRoomsIfNeeded()
@@ -1281,7 +1588,7 @@ class CallManager(context: Context) {
         if (signalingClient.isConnected()) {
             sendWatchRoomsIfNeeded()
         } else {
-            signalingClient.connect(serverHost.value)
+            signalingClient.connect(currentSignalingHost())
         }
     }
 
@@ -1302,10 +1609,30 @@ class CallManager(context: Context) {
         refreshRecentCalls()
     }
 
+    private enum class DeepLinkAction {
+        Join,
+        SaveRoom
+    }
+
+    private data class DeepLinkTarget(
+        val action: DeepLinkAction,
+        val roomId: String,
+        val host: String?,
+        val savedRoomName: String?
+    )
+
+    private data class DeepLinkHostPolicy(
+        val persistedHost: String? = null,
+        val oneOffHost: String? = null
+    )
+
     private companion object {
         const val WEBRTC_STATS_POLL_INTERVAL_MS = 2000L
         const val JOIN_PUSH_ENDPOINT_WAIT_MS = 250L
+        const val JOIN_ROOM_TIMEOUT_MS = 25_000L
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         const val WIFI_PERF_LOCK_TAG = "serenada:call-wifi"
+        const val MAX_SAVED_ROOM_NAME_LENGTH = 120
+        val ROOM_ID_REGEX = Regex("^[A-Za-z0-9_-]{27}$")
     }
 }

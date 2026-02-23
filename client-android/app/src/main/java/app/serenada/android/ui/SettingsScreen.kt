@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.serenada.android.BuildConfig
 import app.serenada.android.R
 import app.serenada.android.data.SettingsStore
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +69,8 @@ fun SettingsScreen(
     isDefaultCameraEnabled: Boolean,
     isDefaultMicrophoneEnabled: Boolean,
     isHdVideoExperimentalEnabled: Boolean,
+    areSavedRoomsShownFirst: Boolean,
+    areRoomInviteNotificationsEnabled: Boolean,
     hostError: String?,
     isSaving: Boolean,
     onHostChange: (String) -> Unit,
@@ -75,6 +78,8 @@ fun SettingsScreen(
     onDefaultCameraChange: (Boolean) -> Unit,
     onDefaultMicrophoneChange: (Boolean) -> Unit,
     onHdVideoExperimentalChange: (Boolean) -> Unit,
+    onSavedRoomsShownFirstChange: (Boolean) -> Unit,
+    onRoomInviteNotificationsChange: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
     onSave: () -> Unit,
     onCancel: () -> Unit
@@ -100,6 +105,7 @@ fun SettingsScreen(
     var pingResult by remember { mutableStateOf<String?>(null) }
     var isPinging by remember { mutableStateOf(false) }
     var pingFailed by remember { mutableStateOf(false) }
+    val appVersion = BuildConfig.VERSION_NAME.ifBlank { "-" }
 
     Scaffold(
         topBar = {
@@ -326,6 +332,36 @@ fun SettingsScreen(
                         onCheckedChange = onHdVideoExperimentalChange
                     )
                 }
+
+                SettingsSection(
+                    title = stringResource(R.string.settings_saved_rooms_title),
+                    subTitle = stringResource(R.string.settings_saved_rooms_help)
+                ) {
+                    SettingsSwitchRow(
+                        label = stringResource(R.string.settings_saved_rooms_show_first),
+                        subLabel = stringResource(R.string.settings_saved_rooms_show_first_info),
+                        checked = areSavedRoomsShownFirst,
+                        onCheckedChange = onSavedRoomsShownFirstChange
+                    )
+                }
+
+                SettingsSection(
+                    title = stringResource(R.string.settings_invites_title)
+                ) {
+                    SettingsSwitchRow(
+                        label = stringResource(R.string.settings_invite_notifications),
+                        subLabel = stringResource(R.string.settings_invite_notifications_info),
+                        checked = areRoomInviteNotificationsEnabled,
+                        onCheckedChange = onRoomInviteNotificationsChange
+                    )
+                }
+
+                Text(
+                    text = stringResource(R.string.settings_app_version, appVersion),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
             }
         }
     }

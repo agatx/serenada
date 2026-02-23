@@ -62,6 +62,7 @@
     <string name="settings_hd_video_experimental">Video HD (experimental)</string>
     <string name="settings_hd_video_experimental_info">Activa mayor calidad para cámara y modo compuesto. Puede aumentar el uso de CPU.</string>
     <string name="settings_error_invalid_server_host">Este host no responde o no parece un servidor Serenada.</string>
+    <string name="settings_app_version">Versión de la app: %1$s</string>
 
     <string name="join_enter_code_or_link">Introduce un código o enlace</string>
     <string name="join_settings">Ajustes</string>
@@ -117,4 +118,35 @@
     <string name="camera_enabled_info">Activar la cámara al unirse a una llamada</string>
     <string name="microphone_enabled">Micrófono activado</string>
     <string name="microphone_enabled_info">Activar el micrófono al unirse a una llamada</string>
+    <string name="saved_rooms_title">Salas guardadas</string>
+    <string name="saved_rooms_title_empty">No hay salas guardadas</string>
+    <string name="saved_rooms_save">Guardar sala</string>
+    <string name="saved_rooms_rename">Renombrar sala</string>
+    <string name="saved_rooms_remove">Eliminar sala</string>
+    <string name="saved_rooms_name_label">Nombre de la sala</string>
+    <string name="saved_rooms_name_placeholder">Por ejemplo, Familia</string>
+    <string name="saved_rooms_create">+ Crear</string>
+    <string name="saved_rooms_create_action">Crear</string>
+    <string name="saved_rooms_dialog_title_new">Guardar sala</string>
+    <string name="saved_rooms_dialog_title_rename">Renombrar sala guardada</string>
+    <string name="saved_rooms_dialog_title_create">Crear sala</string>
+    <string name="saved_rooms_last_joined">Última vez %1$s</string>
+    <string name="saved_rooms_never_joined">Nunca se unió</string>
+    <string name="error_failed_create_saved_room_link">No se pudo crear el enlace de la sala</string>
+    <string name="error_invalid_saved_room_name">Introduce un nombre para la sala</string>
+    <string name="settings_saved_rooms_title">Salas guardadas</string>
+    <string name="settings_saved_rooms_help">Guarda salas con nombre en la pantalla principal. Usa + Crear en Salas guardadas para generar un enlace compartible.</string>
+    <string name="settings_saved_rooms_show_first">Mostrar salas guardadas encima de llamadas recientes</string>
+    <string name="settings_saved_rooms_show_first_info">Desactívalo para mostrar las salas guardadas debajo de llamadas recientes.</string>
+    <string name="settings_saved_rooms_create_link">Crear enlace de sala</string>
+    <string name="settings_saved_rooms_share_link_chooser">Compartir enlace de sala</string>
+    <string name="common_copy">Copiar</string>
+    <string name="common_share">Compartir</string>
+    <string name="call_invite_to_room">Invitar a la llamada</string>
+    <string name="call_invite_sent">Invitación enviada</string>
+    <string name="call_invite_failed">No se pudo enviar la invitación</string>
+    <string name="push_notification_invite_body">Te invitaron a una sala.</string>
+    <string name="settings_invites_title">Invitaciones</string>
+    <string name="settings_invite_notifications">Notificaciones de invitación</string>
+    <string name="settings_invite_notifications_info">Mostrar notificaciones cuando te inviten a una sala guardada.</string>
 </resources>

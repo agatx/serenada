@@ -6,15 +6,19 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - 1:1 WebRTC audio/video calls
 - WebSocket signaling with automatic SSE fallback (protocol v1)
 - In-call camera source cycle: `selfie` (default) -> `world` -> `composite` (world view with circular selfie overlay), with automatic composite skip on unsupported devices or composite start failure
+- In-call pinch zoom for `world`/`composite` when local feed is the large view (not PIP), applied at camera capture level so remote participants receive the zoomed stream too
 - In-call flashlight toggle shown in the top-right corner only for `world`/`composite` camera modes when the device reports flash support; flashlight turns off automatically when leaving those modes or ending the call, while the user’s flashlight preference is remembered during the same call and reapplied after returning to `world`/`composite`
 - In-call performance locks (partial CPU wake lock + Wi-Fi low-latency lock) to reduce call-time scheduling/network jitter while the call is active
 - Call-scoped audio session management (`MODE_IN_COMMUNICATION` + audio focus request / restore on hangup), with route priority `Bluetooth headset -> proximity earpiece -> speaker` during active calls
 - Proximity sensor integration for call ergonomics: when the phone is against the ear, audio switches to earpiece and local camera video is paused until the phone is moved away (Bluetooth headset route takes precedence)
 - WebRTC audio path configured with `JavaAudioDeviceModule` (`VOICE_COMMUNICATION`, hardware AEC/NS, low-latency path)
 - Recent calls on home (max 3, deduped) with live room occupancy status and long-press remove
+- Saved rooms with custom names, quick join, rename/remove actions, and configurable position above/below recent calls
+- Settings flow to create shareable saved-room links; opening such a link in the app adds the room with the creator-defined name and uses per-room host overrides for non-default hosts
 - Deep links for `https://serenada.app/call/*`
 - Foreground service to keep active calls running in the background
 - Settings screen to change server host, with host validation on save
+- Join attempts include a timeout guard so the app does not stay in `Joining room...` indefinitely on signaling/connectivity failures
 - Android system back support for internal navigation (toolbar back button, hardware back, and edge-swipe gesture behave the same across Settings/Diagnostics/Join-by-code/Error screens)
 - Encrypted join snapshot upload (`snapshotId` on `join`) so server push notifications can include a thumbnail when Android is the joiner
 - Native push receive via Firebase Cloud Messaging, including encrypted snapshot decryption and `BigPicture` notifications in background/terminated app states
@@ -165,7 +169,15 @@ keytool -list -v -keystore keystore/serenada-release.keystore -storepass YOUR_PA
 ```
 
 ## Deep links (App Links)
-The app handles `https://serenada.app/call/*`. For App Links verification, the web server must serve:
+The app handles:
+- `https://serenada.app/call/*`
+- `https://serenada.app/call/*?name=<room-name>` (adds a named saved room instead of joining immediately)
+
+Deep-link `host` query behavior:
+- Trusted hosts (`serenada.app`, `serenada-app.ru`) are allowed to update the global server host setting.
+- Other hosts are treated as one-off: calls use them only for that action, and saved-room links store them as per-room host overrides without mutating global settings.
+
+For App Links verification, the web server must serve:
 ```
 client/public/.well-known/assetlinks.json
 ```
@@ -198,12 +210,17 @@ Quick checks:
 ```bash
 adb shell pm get-app-links app.serenada.android
 adb shell am start -a android.intent.action.VIEW -d "https://serenada.app/call/ROOM_ID"
+adb shell am start -a android.intent.action.VIEW -d "https://serenada.app/call/ROOM_ID?host=serenada.app&name=Family"
 ```
 
 ## Settings
 Server host is configurable in the in-app Settings screen (Join screen → Settings).
 On Save, the app validates `https://<host>/api/room-id` and only persists hosts that respond with the expected Serenada room ID payload.
 `Call defaults` also include `HD Video (experimental)`; when disabled (default), camera capture uses legacy `640x480`, and when enabled the app applies higher per-mode camera/composite targets.
+`Saved rooms` settings include:
+- A switch to show saved rooms above or below recent calls on the home screen
+The app version is shown at the bottom of the Settings screen for quick support/debug reference.
+Named-room creation and sharing is available from the home screen (`Saved rooms` section → `+ Create`). It creates a room ID and shareable link that adds this room on recipient devices and preserves per-room host overrides for non-default hosts.
 `Device Check` in Settings opens a native diagnostics screen with:
 - Runtime permission checks (`CAMERA`, `RECORD_AUDIO`, `POST_NOTIFICATIONS` on Android 13+)
 - Audio/video capability inspection (camera inventory, composite prerequisites, audio processing feature availability)

@@ -30,6 +30,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -75,6 +77,8 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 
+private const val PINCH_ZOOM_CHANGE_THRESHOLD = 0.01f
+
 @Composable
 fun CallScreen(
     roomId: String,
@@ -85,7 +89,9 @@ fun CallScreen(
     onToggleVideo: () -> Unit,
     onFlipCamera: () -> Unit,
     onToggleFlashlight: () -> Unit,
+    onLocalPinchZoom: (Float) -> Unit,
     onEndCall: () -> Unit,
+    onInviteToRoom: () -> Unit,
     // Added callbacks for Screen Share
     onStartScreenShare: (Intent) -> Unit = {},
     onStopScreenShare: () -> Unit = {},
@@ -110,6 +116,20 @@ fun CallScreen(
     val localPipRenderer = remember { PipTextureRendererView(context, "local-pip") }
     val remotePipRenderer = remember { PipTextureRendererView(context, "remote-pip") }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val localZoomTransformState = rememberTransformableState { zoomChange, _, _ ->
+        if (zoomChange > 0f && abs(zoomChange - 1f) > PINCH_ZOOM_CHANGE_THRESHOLD) {
+            onLocalPinchZoom(zoomChange)
+        }
+    }
+    val isWorldOrCompositeMode =
+        uiState.localCameraMode == LocalCameraMode.WORLD ||
+                uiState.localCameraMode == LocalCameraMode.COMPOSITE
+    val isLocalPinchZoomEnabled =
+        uiState.phase == CallPhase.InCall &&
+                isLocalLarge &&
+                uiState.localVideoEnabled &&
+                !uiState.isScreenSharing &&
+                isWorldOrCompositeMode
 
     // Screen Share Launcher
     val mediaProjectionManager = remember {
@@ -292,7 +312,17 @@ fun CallScreen(
                 fitHeight = maxHeight
             }
             if (uiState.localVideoEnabled) {
-                Box(modifier = localModifier.clipToBounds()) {
+                val localLargeModifier =
+                    localModifier
+                        .clipToBounds()
+                        .then(
+                            if (isLocalPinchZoomEnabled) {
+                                Modifier.transformable(state = localZoomTransformState)
+                            } else {
+                                Modifier
+                            }
+                        )
+                Box(modifier = localLargeModifier) {
                     VideoSurface(
                         modifier =
                             Modifier.size(fitWidth, fitHeight)
@@ -402,7 +432,11 @@ fun CallScreen(
 
         // Waiting State Overlay
         if (uiState.phase == CallPhase.Waiting && !isLocalLarge) {
-            WaitingOverlay(roomId = roomId, serverHost = serverHost)
+            WaitingOverlay(
+                roomId = roomId,
+                serverHost = serverHost,
+                onInviteToRoom = onInviteToRoom
+            )
         }
 
         // Reconnecting Indicator
@@ -422,9 +456,6 @@ fun CallScreen(
             }
         }
 
-        val isWorldOrCompositeMode =
-            uiState.localCameraMode == LocalCameraMode.WORLD ||
-                    uiState.localCameraMode == LocalCameraMode.COMPOSITE
         val showFlashButton =
             uiState.phase == CallPhase.InCall &&
                     isWorldOrCompositeMode &&
@@ -609,7 +640,7 @@ private fun ControlButton(
 }
 
 @Composable
-private fun WaitingOverlay(roomId: String, serverHost: String) {
+private fun WaitingOverlay(roomId: String, serverHost: String, onInviteToRoom: () -> Unit) {
     val link = "https://$serverHost/call/$roomId"
     val qrBitmap = remember(link) { generateQrCode(link) }
     val context = LocalContext.current
@@ -656,6 +687,21 @@ private fun WaitingOverlay(roomId: String, serverHost: String) {
             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text(stringResource(R.string.call_share_invitation))
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onInviteToRoom,
+            colors =
+                ButtonDefaults.buttonColors(
+                    containerColor = Color.White.copy(alpha = 0.2f)
+                ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.call_invite_to_room))
         }
     }
 }

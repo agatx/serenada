@@ -2,6 +2,7 @@ package app.serenada.android.call
 
 import android.content.Intent
 import android.content.Context
+import android.graphics.Rect
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -82,7 +83,8 @@ class WebRtcEngine(
         val capturer: VideoCapturer,
         val isFrontFacing: Boolean,
         val captureProfile: CaptureProfile,
-        val torchCameraId: String?
+        val torchCameraId: String?,
+        val zoomCameraId: String?
     )
 
     private data class CaptureProfile(
@@ -105,6 +107,12 @@ class WebRtcEngine(
         val degradationPreference: RtpParameters.DegradationPreference?
     )
 
+    private data class ZoomCapabilities(
+        val minRatio: Float,
+        val maxRatio: Float,
+        val sensorRect: Rect?
+    )
+
     private val appContext = context.applicationContext
     private val eglBase: EglBase = EglBase.create()
     private val audioDeviceModule: AudioDeviceModule = createAudioDeviceModule(appContext)
@@ -124,11 +132,15 @@ class WebRtcEngine(
     private var cameraSourceBeforeScreenShare: LocalCameraSource? = null
     private var isScreenSharing = false
     private var activeTorchCameraId: String? = null
+    private var activeZoomCameraId: String? = null
+    private var activeZoomCapabilities: ZoomCapabilities? = null
     private var isTorchPreferenceEnabled = false
     private var isTorchEnabled = false
     private var torchSyncRequired = false
     private var torchRetryRunnable: Runnable? = null
     private var torchRetryAttempts = 0
+    private var desiredCameraZoomRatio = 1f
+    private var appliedCameraZoomRatio = 1f
     private var compositeSupportCache: Pair<Pair<String, String>, Boolean>? = null
     private var compositeDisabledAfterFailure = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -248,9 +260,13 @@ class WebRtcEngine(
         if (localAudioTrack != null || localVideoTrack != null) return
         cancelTorchRetry()
         activeTorchCameraId = null
+        activeZoomCameraId = null
+        activeZoomCapabilities = null
         isTorchPreferenceEnabled = false
         torchSyncRequired = false
         setTorchEnabled(false, notify = false)
+        desiredCameraZoomRatio = 1f
+        appliedCameraZoomRatio = 1f
         val audioConstraints = MediaConstraints()
         audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
         localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
@@ -279,9 +295,13 @@ class WebRtcEngine(
     fun stopLocalMedia() {
         cancelTorchRetry()
         activeTorchCameraId = null
+        activeZoomCameraId = null
+        activeZoomCapabilities = null
         isTorchPreferenceEnabled = false
         torchSyncRequired = false
         setTorchEnabled(false)
+        desiredCameraZoomRatio = 1f
+        appliedCameraZoomRatio = 1f
         isScreenSharing = false
         cameraSourceBeforeScreenShare = null
         localVideoTrack?.setEnabled(false)
@@ -376,6 +396,22 @@ class WebRtcEngine(
         if (fallback != target && restartVideoCapturer(fallback)) {
             Log.w("WebRtcEngine", "Camera source fallback applied: $fallback")
         }
+    }
+
+    fun adjustWorldCameraZoom(scaleFactor: Float): Boolean {
+        if (!scaleFactor.isFinite() || scaleFactor <= 0f) return false
+        if (!isZoomAvailableForCurrentMode()) return false
+        val capabilities = activeZoomCapabilities ?: return false
+        val targetRatio =
+            (desiredCameraZoomRatio * scaleFactor).coerceIn(
+                capabilities.minRatio,
+                capabilities.maxRatio
+            )
+        if (abs(targetRatio - desiredCameraZoomRatio) < ZOOM_RATIO_DELTA_EPSILON) {
+            return false
+        }
+        desiredCameraZoomRatio = targetRatio
+        return applyZoomForCurrentMode()
     }
 
     fun createOffer(
@@ -522,8 +558,11 @@ class WebRtcEngine(
         val previousSource = currentCameraSource
         cancelTorchRetry()
         activeTorchCameraId = null
+        activeZoomCameraId = null
+        activeZoomCapabilities = null
         torchSyncRequired = false
         setTorchEnabled(false, notify = false)
+        appliedCameraZoomRatio = 1f
         disposeVideoCapturer()
         val capturer = ScreenCapturerAndroid(intent, object : MediaProjection.Callback() {
             override fun onStop() {
@@ -845,10 +884,17 @@ class WebRtcEngine(
         surfaceTextureHelper = textureHelper
         currentCameraSource = source
         activeTorchCameraId = selection.torchCameraId
+        activeZoomCameraId = selection.zoomCameraId
+        activeZoomCapabilities = queryZoomCapabilities(activeZoomCameraId)
+        desiredCameraZoomRatio = clampZoomRatioForCapabilities(desiredCameraZoomRatio, activeZoomCapabilities)
+        appliedCameraZoomRatio = 1f
         isTorchEnabled = false
         torchSyncRequired = true
         onCameraFacingChanged(selection.isFrontFacing)
         applyTorchForCurrentMode()
+        if (isZoomAvailableForCurrentMode()) {
+            applyZoomForCurrentMode()
+        }
         applyVideoSenderParameters()
         Log.d(
             "WebRtcEngine",
@@ -885,7 +931,8 @@ class WebRtcEngine(
                                 deviceNames = listOf(front),
                                 policy = cameraCapturePolicyFor(LocalCameraSource.SELFIE)
                             ),
-                            torchCameraId = null
+                            torchCameraId = null,
+                            zoomCameraId = front
                         )
                     }
                 } else if (back != null) {
@@ -898,7 +945,8 @@ class WebRtcEngine(
                                 deviceNames = listOf(back),
                                 policy = cameraCapturePolicyFor(LocalCameraSource.SELFIE)
                             ),
-                            torchCameraId = back.takeIf { hasFlashUnit(it) }
+                            torchCameraId = back.takeIf { hasFlashUnit(it) },
+                            zoomCameraId = back
                         )
                     }
                 } else {
@@ -919,7 +967,8 @@ class WebRtcEngine(
                                 deviceNames = listOf(back),
                                 policy = cameraCapturePolicyFor(LocalCameraSource.WORLD)
                             ),
-                            torchCameraId = back.takeIf { hasFlashUnit(it) }
+                            torchCameraId = back.takeIf { hasFlashUnit(it) },
+                            zoomCameraId = back
                         )
                     }
                 }
@@ -953,7 +1002,8 @@ class WebRtcEngine(
                             ),
                             isFrontFacing = false,
                             captureProfile = profile,
-                            torchCameraId = back.takeIf { hasFlashUnit(it) }
+                            torchCameraId = back.takeIf { hasFlashUnit(it) },
+                            zoomCameraId = back
                         )
                     }
                 }
@@ -1282,6 +1332,63 @@ class WebRtcEngine(
         }.getOrDefault(false)
     }
 
+    private fun supportsZoomForSource(source: LocalCameraSource): Boolean {
+        return source == LocalCameraSource.WORLD || source == LocalCameraSource.COMPOSITE
+    }
+
+    private fun isZoomAvailableForCurrentMode(): Boolean {
+        if (isScreenSharing) return false
+        if (!supportsZoomForSource(currentCameraSource)) return false
+        val capabilities = activeZoomCapabilities ?: return false
+        return capabilities.maxRatio > capabilities.minRatio + ZOOM_RATIO_DELTA_EPSILON
+    }
+
+    private fun clampZoomRatioForCapabilities(
+        ratio: Float,
+        capabilities: ZoomCapabilities?
+    ): Float {
+        val caps = capabilities ?: return 1f
+        return ratio.coerceIn(caps.minRatio, caps.maxRatio)
+    }
+
+    private fun requestedZoomRatioForCurrentMode(): Float {
+        if (!isZoomAvailableForCurrentMode()) return 1f
+        return clampZoomRatioForCapabilities(desiredCameraZoomRatio, activeZoomCapabilities)
+    }
+
+    private fun queryZoomCapabilities(cameraId: String?): ZoomCapabilities? {
+        val manager = cameraManager ?: return null
+        val activeCameraId = cameraId ?: return null
+        return runCatching {
+            val characteristics = manager.getCameraCharacteristics(activeCameraId)
+            val sensorRect = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            var minRatio = 1f
+            var maxRatio =
+                characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)
+                    ?.coerceAtLeast(1f)
+                    ?: 1f
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val zoomRange = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+                if (zoomRange != null) {
+                    minRatio = max(1f, zoomRange.lower)
+                    // Keep the larger max as a guard against inconsistent vendor-reported limits.
+                    maxRatio = max(maxRatio, zoomRange.upper)
+                }
+            }
+            if (maxRatio <= minRatio + ZOOM_RATIO_DELTA_EPSILON) {
+                null
+            } else {
+                ZoomCapabilities(
+                    minRatio = minRatio,
+                    maxRatio = maxRatio,
+                    sensorRect = sensorRect
+                )
+            }
+        }.onFailure { error ->
+            Log.w("WebRtcEngine", "Failed to query zoom capabilities for camera=$activeCameraId", error)
+        }.getOrNull()
+    }
+
     private fun supportsTorchForSource(source: LocalCameraSource): Boolean {
         val supportsMode = source == LocalCameraSource.WORLD || source == LocalCameraSource.COMPOSITE
         if (!supportsMode) return false
@@ -1309,6 +1416,36 @@ class WebRtcEngine(
         return applied
     }
 
+    private fun applyZoomForCurrentMode(): Boolean {
+        if (!isZoomAvailableForCurrentMode()) {
+            appliedCameraZoomRatio = 1f
+            return false
+        }
+        val session = resolveActiveCamera2Session() ?: return false
+        val cameraHandler = readFieldValue(session, "cameraThreadHandler") as? Handler ?: return false
+        val targetZoomRatio = requestedZoomRatioForCurrentMode()
+        if (abs(targetZoomRatio - appliedCameraZoomRatio) < ZOOM_RATIO_DELTA_EPSILON) {
+            return true
+        }
+        cameraHandler.post {
+            runCatching {
+                applyCameraControlsViaCaptureRequestInternal(
+                    session = session,
+                    cameraHandler = cameraHandler,
+                    torchEnabled = isTorchEnabled,
+                    zoomRatio = targetZoomRatio
+                )
+            }.onSuccess { applied ->
+                if (applied) {
+                    appliedCameraZoomRatio = targetZoomRatio
+                }
+            }.onFailure { error ->
+                Log.w("WebRtcEngine", "Failed to apply zoom via capture request", error)
+            }
+        }
+        return true
+    }
+
     private fun setTorchEnabled(
         enabled: Boolean,
         notify: Boolean = true,
@@ -1320,7 +1457,7 @@ class WebRtcEngine(
             }
             return true
         }
-        if (applyTorchViaCaptureRequest(enabled)) {
+        if (applyTorchViaCaptureRequest(enabled, requestedZoomRatioForCurrentMode())) {
             isTorchEnabled = enabled
             torchSyncRequired = false
             Log.d(
@@ -1438,13 +1575,20 @@ class WebRtcEngine(
         torchRetryAttempts = 0
     }
 
-    private fun applyTorchViaCaptureRequest(enabled: Boolean): Boolean {
+    private fun applyTorchViaCaptureRequest(enabled: Boolean, zoomRatio: Float): Boolean {
         val session = resolveActiveCamera2Session() ?: return false
         val cameraHandler = readFieldValue(session, "cameraThreadHandler") as? Handler ?: return false
         val latch = CountDownLatch(1)
         var applied = false
         cameraHandler.post {
-            applied = runCatching { applyTorchViaCaptureRequestInternal(session, cameraHandler, enabled) }
+            applied = runCatching {
+                applyCameraControlsViaCaptureRequestInternal(
+                    session = session,
+                    cameraHandler = cameraHandler,
+                    torchEnabled = enabled,
+                    zoomRatio = zoomRatio
+                )
+            }
                 .onFailure { error ->
                     Log.w("WebRtcEngine", "Failed to apply torch via capture request", error)
                 }
@@ -1455,13 +1599,17 @@ class WebRtcEngine(
             Log.w("WebRtcEngine", "Timed out waiting for torch capture request")
             return false
         }
+        if (applied && isZoomAvailableForCurrentMode()) {
+            appliedCameraZoomRatio = zoomRatio
+        }
         return applied
     }
 
-    private fun applyTorchViaCaptureRequestInternal(
+    private fun applyCameraControlsViaCaptureRequestInternal(
         session: Any,
         cameraHandler: Handler,
-        enabled: Boolean
+        torchEnabled: Boolean,
+        zoomRatio: Float
     ): Boolean {
         val captureSession = readFieldValue(session, "captureSession") as? CameraCaptureSession ?: return false
         val cameraDevice = readFieldValue(session, "cameraDevice") as? CameraDevice ?: return false
@@ -1483,11 +1631,50 @@ class WebRtcEngine(
         }
         builder.set(
             CaptureRequest.FLASH_MODE,
-            if (enabled) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
+            if (torchEnabled) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF
         )
+        applyZoomRequest(builder, zoomRatio)
         builder.addTarget(surface)
         captureSession.setRepeatingRequest(builder.build(), null, cameraHandler)
         return true
+    }
+
+    private fun applyZoomRequest(builder: CaptureRequest.Builder, zoomRatio: Float) {
+        if (!isZoomAvailableForCurrentMode()) return
+        val capabilities = activeZoomCapabilities ?: return
+        val clampedZoom = clampZoomRatioForCapabilities(zoomRatio, capabilities)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val appliedViaRatio = runCatching {
+                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, clampedZoom)
+                true
+            }.onFailure { error ->
+                Log.w(
+                    "WebRtcEngine",
+                    "Failed to apply CONTROL_ZOOM_RATIO; falling back to SCALER_CROP_REGION",
+                    error
+                )
+            }.getOrDefault(false)
+            if (appliedViaRatio) {
+                return
+            }
+        }
+        val sensorRect = capabilities.sensorRect ?: return
+        val cropRegion = cropRegionForZoom(sensorRect, clampedZoom)
+        builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion)
+    }
+
+    private fun cropRegionForZoom(sensorRect: Rect, zoomRatio: Float): Rect {
+        val clampedZoom = zoomRatio.coerceAtLeast(1f)
+        val centerX = sensorRect.centerX()
+        val centerY = sensorRect.centerY()
+        val halfWidth = (sensorRect.width() / (2f * clampedZoom)).roundToInt().coerceAtLeast(1)
+        val halfHeight = (sensorRect.height() / (2f * clampedZoom)).roundToInt().coerceAtLeast(1)
+        return Rect(
+            (centerX - halfWidth).coerceAtLeast(sensorRect.left),
+            (centerY - halfHeight).coerceAtLeast(sensorRect.top),
+            (centerX + halfWidth).coerceAtMost(sensorRect.right),
+            (centerY + halfHeight).coerceAtMost(sensorRect.bottom)
+        )
     }
 
     private fun resolveActiveCamera2Session(): Any? {
@@ -1749,6 +1936,7 @@ class WebRtcEngine(
         const val SCREEN_SHARE_MIN_BITRATE_BPS = 1_000_000
 
         const val MAX_CAPTURE_FPS = 60
+        const val ZOOM_RATIO_DELTA_EPSILON = 0.01f
         const val TORCH_RETRY_DELAY_MS = 120L
         const val MAX_TORCH_RETRY_ATTEMPTS = 8
     }
