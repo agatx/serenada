@@ -78,10 +78,14 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
     };
 
     const formatDuration = (seconds: number) => {
-        if (seconds < 60) return `${seconds}s`;
-        const mins = Math.floor(seconds / 60);
-        const secs = seconds % 60;
-        return `${mins}m ${secs}s`;
+        if (seconds < 120) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            if (mins === 0) return `${secs}s`;
+            return `${mins}m ${secs}s`;
+        }
+        const mins = Math.round(seconds / 60);
+        return `${mins}m`;
     };
 
     const formatDate = (timestamp: number) => {

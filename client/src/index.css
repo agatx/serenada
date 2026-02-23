@@ -937,6 +937,11 @@ body {
   gap: 0.75rem;
 }
 
+.recent-call-duration-cell {
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
 .recent-call-meta {
   display: flex;
   flex-direction: column;
@@ -954,6 +959,10 @@ body {
 }
 
 .text-right {
+  text-align: right;
+}
+
+.recent-calls-table th.text-right {
   text-align: right;
 }
 

@@ -185,7 +185,7 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
                         <thead>
                             <tr>
                                 <th style={{ width: '55%' }}>{t('saved_rooms_name_label') || 'Name'}</th>
-                                <th>{t('saved_rooms_last_joined') || 'Last Joined'}</th>
+                                <th className="text-right">{t('saved_rooms_last_joined') || 'Last Joined'}</th>
                                 <th style={{ width: '48px' }}></th>
                             </tr>
                         </thead>
@@ -202,7 +202,7 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
                                             <span className="room-name">{room.name}</span>
                                         </div>
                                     </td>
-                                    <td>
+                                    <td className="text-right">
                                         <div className="recent-call-duration-cell" style={{ opacity: 0.8 }}>
                                             {room.lastJoinedAt ? (
                                                 <span>{formatDate(room.lastJoinedAt)}</span>
