@@ -107,6 +107,11 @@ struct JoinScreen: View {
                 ActivityView(items: [shareLink])
             }
         }
+        .overlay(alignment: .topLeading) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("join.screen")
+        }
     }
 
     private var contentSections: some View {
@@ -169,12 +174,14 @@ struct JoinScreen: View {
                 if !statusMessage.isEmpty {
                     Text(statusMessage)
                         .font(.callout)
+                        .accessibilityIdentifier("join.busyStatus")
                 }
             }
             .padding(24)
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 16))
         }
+        .accessibilityIdentifier("join.busyOverlay")
     }
 
     private var topBar: some View {
@@ -252,6 +259,7 @@ private struct RecentCallsSection: View {
                     .padding(.vertical, 10)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("join.recentCall.\(call.roomId)")
                 .contextMenu {
                     let existingName = savedRoomNameById[call.roomId]
                     Button {

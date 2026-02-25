@@ -88,6 +88,18 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: app.serenada.ios.tests
+  SerenadaiOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: SerenadaiOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: app.serenada.ios.uitests
 schemes:
   SerenadaiOS:
     build:
@@ -96,3 +108,4 @@ schemes:
     test:
       targets:
         - SerenadaiOSTests
+        - SerenadaiOSUITests

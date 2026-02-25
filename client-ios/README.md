@@ -39,8 +39,9 @@ Recommended build flow (from repository root):
 bash tools/build_libwebrtc_ios_7559.sh
 ```
 
-The script fetches Chromium WebRTC (`branch-heads/7559_173`), builds iOS slices,
-strips dSYMs for repository-friendly size, copies the artifact into
+The script fetches Chromium WebRTC (`branch-heads/7559_173`), patches
+`rtc_base/ssl_roots.h` from the current root bundle, builds iOS slices, strips
+dSYMs for repository-friendly size, copies the artifact into
 `client-ios/Vendor/WebRTC/`, and updates checksum.
 
 Manual checksum workflow (if you replace the artifact yourself):
@@ -78,6 +79,30 @@ xcodebuild \
   -project SerenadaiOS.xcodeproj \
   -scheme SerenadaiOS \
   -destination 'platform=iOS Simulator,name=iPhone 16' \
+  test
+```
+
+Run the deep-link rejoin UI flow test only:
+```bash
+cd client-ios
+xcodegen generate
+xcodebuild \
+  -project SerenadaiOS.xcodeproj \
+  -scheme SerenadaiOS \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  -only-testing:SerenadaiOSUITests/DeepLinkRejoinFlowUITests \
+  test
+```
+
+Override the test deep link (for example, to target a known active room):
+```bash
+cd client-ios
+SERENADA_UI_TEST_REJOIN_DEEPLINK='https://serenada.app/call/<room-token>' \
+xcodebuild \
+  -project SerenadaiOS.xcodeproj \
+  -scheme SerenadaiOS \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  -only-testing:SerenadaiOSUITests/DeepLinkRejoinFlowUITests \
   test
 ```
 

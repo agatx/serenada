@@ -50,6 +50,17 @@
                ReferencedContainer = "container:SerenadaiOS.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "672FC74C984B324924370F4E"
+               BuildableName = "SerenadaiOSUITests.xctest"
+               BlueprintName = "SerenadaiOSUITests"
+               ReferencedContainer = "container:SerenadaiOS.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

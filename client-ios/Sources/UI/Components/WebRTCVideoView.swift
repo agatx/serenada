@@ -113,8 +113,11 @@ struct WebRTCVideoView: UIViewRepresentable {
         case .local:
             let renderer = MirroredRTCMTLVideoView(frame: .zero)
             renderer.videoContentMode = videoContentMode
+            renderer.isUserInteractionEnabled = false
             renderer.setMirrored(isMirrored, applyImmediately: true)
-            callManager.attachLocalRenderer(renderer)
+            Task { @MainActor in
+                callManager.attachLocalRenderer(renderer)
+            }
             context.coordinator.renderer = renderer
             context.coordinator.isMirrored = isMirrored
             return renderer
@@ -122,7 +125,10 @@ struct WebRTCVideoView: UIViewRepresentable {
             let renderer = RTCMTLVideoView(frame: .zero)
             renderer.videoContentMode = videoContentMode
             renderer.clipsToBounds = true
-            callManager.attachRemoteRenderer(renderer)
+            renderer.isUserInteractionEnabled = false
+            Task { @MainActor in
+                callManager.attachRemoteRenderer(renderer)
+            }
             context.coordinator.renderer = renderer
             return renderer
         }
@@ -206,11 +212,13 @@ struct WebRTCVideoView: UIViewRepresentable {
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
 #if canImport(WebRTC)
         guard let renderer = coordinator.renderer else { return }
-        switch coordinator.kind {
-        case .local:
-            coordinator.callManager?.detachLocalRenderer(renderer)
-        case .remote:
-            coordinator.callManager?.detachRemoteRenderer(renderer)
+        Task { @MainActor in
+            switch coordinator.kind {
+            case .local:
+                coordinator.callManager?.detachLocalRenderer(renderer)
+            case .remote:
+                coordinator.callManager?.detachRemoteRenderer(renderer)
+            }
         }
 #endif
     }

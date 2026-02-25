@@ -92,7 +92,7 @@ The native iOS app lives in `client-ios/`.
    ```bash
    bash tools/build_libwebrtc_ios_7559.sh
    ```
-   This script strips dSYMs by default to keep repository artifact size manageable.
+   This script also patches `rtc_base/ssl_roots.h` from the current root bundle (same approach as Android) and strips dSYMs by default to keep repository artifact size manageable.
 6. If you replace `client-ios/Vendor/WebRTC/WebRTC.xcframework` manually, regenerate checksum:
    ```bash
    cd client-ios

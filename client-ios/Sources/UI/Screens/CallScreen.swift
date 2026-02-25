@@ -276,26 +276,9 @@ struct CallScreen: View {
                 smallLocalView
             }
 
+            backgroundInteractionLayer(isPinchZoomEnabled: isPinchZoomEnabled)
             overlays
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                areControlsVisible.toggle()
-            }
-        }
-        .gesture(
-            MagnificationGesture()
-                .onChanged { value in
-                    guard isPinchZoomEnabled else { return }
-                    let delta = value / max(lastMagnificationValue, 0.001)
-                    lastMagnificationValue = value
-                    onAdjustCameraZoom(delta)
-                }
-                .onEnded { _ in
-                    lastMagnificationValue = 1
-                }
-        )
         .onChange(of: uiState.isFrontCamera) { isFront in
             isLocalLarge = !isFront
         }
@@ -316,6 +299,33 @@ struct CallScreen: View {
         .sheet(isPresented: $showShareSheet) {
             ActivityView(items: ["https://\(serverHost)/call/\(roomId)"])
         }
+        .overlay(alignment: .topLeading) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("call.screen")
+        }
+    }
+
+    private func backgroundInteractionLayer(isPinchZoomEnabled: Bool) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    areControlsVisible.toggle()
+                }
+            }
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        guard isPinchZoomEnabled else { return }
+                        let delta = value / max(lastMagnificationValue, 0.001)
+                        lastMagnificationValue = value
+                        onAdjustCameraZoom(delta)
+                    }
+                    .onEnded { _ in
+                        lastMagnificationValue = 1
+                    }
+            )
     }
 
     private func mainVideoSurface(
@@ -550,6 +560,7 @@ struct CallScreen: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("call.endCall")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)

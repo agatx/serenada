@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import Foundation
 import UIKit
 #if canImport(ReplayKit)
@@ -177,6 +178,7 @@ final class WebRtcEngine {
     private var pendingRemoteIceCandidates: [IceCandidatePayload] = []
     private var lastRealtimeStatsSample: RealtimeStatsSample?
     private var freezeSamples: [FreezeSample] = []
+    private let rendererAttachmentQueue = DispatchQueue(label: "serenada.ios.webrtc.renderer-attachment", qos: .userInitiated)
 
 #if canImport(WebRTC)
     private static var sslInitialized = false
@@ -191,6 +193,7 @@ final class WebRtcEngine {
     private var localVideoSource: RTCVideoSource?
     private var localVideoTrack: RTCVideoTrack?
     private var localVideoCapturer: RTCCameraVideoCapturer?
+    private var compositeVideoCapturer: CompositeCameraVideoCapturer?
     #if canImport(ReplayKit)
     private var replayKitCapturer: ReplayKitVideoCapturer?
     #endif
@@ -282,6 +285,8 @@ final class WebRtcEngine {
         isScreenSharing = false
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil
+        compositeVideoCapturer?.stopCapture()
+        compositeVideoCapturer = nil
         activeCaptureDevice = nil
         currentZoomFactor = 1
         onZoomFactorChanged(1)
@@ -433,7 +438,7 @@ final class WebRtcEngine {
 #endif
     }
 
-    func setRemoteDescription(type: SessionDescriptionType, sdp: String, onComplete: (() -> Void)? = nil) {
+    func setRemoteDescription(type: SessionDescriptionType, sdp: String, onComplete: ((Bool) -> Void)? = nil) {
 #if canImport(WebRTC)
         guard let peerConnection else { return }
         let rtcType: RTCSdpType
@@ -451,11 +456,13 @@ final class WebRtcEngine {
             guard let self else { return }
             if error == nil {
                 self.flushPendingIceCandidates()
-                onComplete?()
+                onComplete?(true)
+            } else {
+                onComplete?(false)
             }
         }
 #else
-        onComplete?()
+        onComplete?(true)
 #endif
     }
 
@@ -486,14 +493,14 @@ final class WebRtcEngine {
     @discardableResult
     func toggleVideo(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)
-        if enabled && localVideoCapturer == nil && !isScreenSharing {
+        if enabled && !hasActiveCameraCapturer() && !isScreenSharing {
             let started = restartVideoCapturer(source: localCameraSource)
             if !started {
                 localVideoTrack?.isEnabled = false
                 return false
             }
         }
-        let effectiveEnabled = enabled && (localVideoCapturer != nil || isScreenSharing)
+        let effectiveEnabled = enabled && (hasActiveCameraCapturer() || isScreenSharing)
         localVideoTrack?.isEnabled = effectiveEnabled
         return effectiveEnabled
 #else
@@ -536,6 +543,8 @@ final class WebRtcEngine {
         setTorchEnabled(false)
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil
+        compositeVideoCapturer?.stopCapture()
+        compositeVideoCapturer = nil
         activeCaptureDevice = nil
 
         let capturer = ReplayKitVideoCapturer(delegate: localVideoSource)
@@ -967,7 +976,10 @@ final class WebRtcEngine {
         localRenderers.append(WeakAnyBox(value: renderer))
         compactRenderers()
         if let renderer = renderer as? RTCVideoRenderer {
-            localVideoTrack?.add(renderer)
+            let track = localVideoTrack
+            rendererAttachmentQueue.async {
+                track?.add(renderer)
+            }
         }
 #endif
     }
@@ -975,7 +987,10 @@ final class WebRtcEngine {
     func detachLocalRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
         if let renderer = renderer as? RTCVideoRenderer {
-            localVideoTrack?.remove(renderer)
+            let track = localVideoTrack
+            rendererAttachmentQueue.async {
+                track?.remove(renderer)
+            }
         }
         localRenderers.removeAll { $0.value === renderer || $0.value == nil }
 #endif
@@ -986,7 +1001,10 @@ final class WebRtcEngine {
         remoteRenderers.append(WeakAnyBox(value: renderer))
         compactRenderers()
         if let renderer = renderer as? RTCVideoRenderer {
-            remoteVideoTrack?.add(renderer)
+            let track = remoteVideoTrack
+            rendererAttachmentQueue.async {
+                track?.add(renderer)
+            }
         }
 #endif
     }
@@ -994,7 +1012,10 @@ final class WebRtcEngine {
     func detachRemoteRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
         if let renderer = renderer as? RTCVideoRenderer {
-            remoteVideoTrack?.remove(renderer)
+            let track = remoteVideoTrack
+            rendererAttachmentQueue.async {
+                track?.remove(renderer)
+            }
         }
         remoteRenderers.removeAll { $0.value === renderer || $0.value == nil }
 #endif
@@ -1110,11 +1131,29 @@ final class WebRtcEngine {
 
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil
+        compositeVideoCapturer?.stopCapture()
+        compositeVideoCapturer = nil
         #if canImport(ReplayKit)
         replayKitCapturer?.stopCapture()
         replayKitCapturer = nil
         #endif
         isScreenSharing = false
+
+        if source == .composite {
+            let compositeCapturer = CompositeCameraVideoCapturer(delegate: localVideoSource)
+            guard compositeCapturer.startCapture() else {
+                compositeDisabledAfterFailure = true
+                return false
+            }
+
+            compositeVideoCapturer = compositeCapturer
+            localCameraSource = source
+            activeCaptureDevice = compositeCapturer.primaryCaptureDevice
+            _ = adjustCaptureZoom(by: 1)
+            notifyCameraModeAndFlash()
+            _ = applyTorchForCurrentMode()
+            return true
+        }
 
         let capturer = RTCCameraVideoCapturer(delegate: localVideoSource)
         guard let camera = selectCameraDevice(for: source) else {
@@ -1143,7 +1182,7 @@ final class WebRtcEngine {
         }
 
         notifyCameraModeAndFlash()
-        applyTorchForCurrentMode()
+        _ = applyTorchForCurrentMode()
         return true
     }
 
@@ -1209,20 +1248,22 @@ final class WebRtcEngine {
     private func attachTrackToRegisteredRenderers() {
         compactRenderers()
         guard let localVideoTrack else { return }
-
-        for box in localRenderers {
-            guard let renderer = box.value as? RTCVideoRenderer else { continue }
-            localVideoTrack.add(renderer)
+        let renderers = localRenderers.compactMap { $0.value as? RTCVideoRenderer }
+        rendererAttachmentQueue.async {
+            for renderer in renderers {
+                localVideoTrack.add(renderer)
+            }
         }
     }
 
     private func attachRemoteTrackToRegisteredRenderers() {
         compactRenderers()
         guard let remoteVideoTrack else { return }
-
-        for box in remoteRenderers {
-            guard let renderer = box.value as? RTCVideoRenderer else { continue }
-            remoteVideoTrack.add(renderer)
+        let renderers = remoteRenderers.compactMap { $0.value as? RTCVideoRenderer }
+        rendererAttachmentQueue.async {
+            for renderer in renderers {
+                remoteVideoTrack.add(renderer)
+            }
         }
     }
 
@@ -1233,18 +1274,20 @@ final class WebRtcEngine {
 
     private func detachTracksFromRegisteredRenderers() {
         compactRenderers()
-
-        if let localVideoTrack {
-            for box in localRenderers {
-                guard let renderer = box.value as? RTCVideoRenderer else { continue }
-                localVideoTrack.remove(renderer)
+        let localTrack = localVideoTrack
+        let remoteTrack = remoteVideoTrack
+        let localRendererList = localRenderers.compactMap { $0.value as? RTCVideoRenderer }
+        let remoteRendererList = remoteRenderers.compactMap { $0.value as? RTCVideoRenderer }
+        rendererAttachmentQueue.async {
+            if let localTrack {
+                for renderer in localRendererList {
+                    localTrack.remove(renderer)
+                }
             }
-        }
-
-        if let remoteVideoTrack {
-            for box in remoteRenderers {
-                guard let renderer = box.value as? RTCVideoRenderer else { continue }
-                remoteVideoTrack.remove(renderer)
+            if let remoteTrack {
+                for renderer in remoteRendererList {
+                    remoteTrack.remove(renderer)
+                }
             }
         }
     }
@@ -1253,9 +1296,11 @@ final class WebRtcEngine {
         compactRenderers()
 
         guard let remoteVideoTrack else { return }
-        for box in remoteRenderers {
-            guard let renderer = box.value as? RTCVideoRenderer else { continue }
-            remoteVideoTrack.remove(renderer)
+        let renderers = remoteRenderers.compactMap { $0.value as? RTCVideoRenderer }
+        rendererAttachmentQueue.async {
+            for renderer in renderers {
+                remoteVideoTrack.remove(renderer)
+            }
         }
     }
 
@@ -1329,11 +1374,22 @@ final class WebRtcEngine {
         if let cachedCompositeSupport {
             return cachedCompositeSupport
         }
-        let supported = AVCaptureMultiCamSession.isMultiCamSupported
+        let hasMultiCam = AVCaptureMultiCamSession.isMultiCamSupported
+        let hasFrontCamera = selectCameraDevice(for: .selfie) != nil
+        let hasBackCamera = selectCameraDevice(for: .world) != nil
+        let supported = hasMultiCam && hasFrontCamera && hasBackCamera
         cachedCompositeSupport = supported
         return supported
 #else
         return false
+#endif
+    }
+
+    private func hasActiveCameraCapturer() -> Bool {
+#if canImport(WebRTC)
+        localVideoCapturer != nil || compositeVideoCapturer != nil
+#else
+        false
 #endif
     }
 
@@ -1491,6 +1547,257 @@ private final class WeakAnyBox {
 
     init(value: AnyObject) {
         self.value = value
+    }
+}
+
+private final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private enum Constants {
+        static let overlaySizeRatio: CGFloat = 0.28
+        static let overlayMarginRatio: CGFloat = 0.04
+        static let maxOverlayAgeNs: Int64 = 350_000_000
+    }
+
+    private let captureQueue = DispatchQueue(label: "serenada.ios.composite-capture", qos: .userInitiated)
+    private let queueKey = DispatchSpecificKey<Void>()
+    private let ciContext = CIContext()
+    private let rgbColorSpace = CGColorSpaceCreateDeviceRGB()
+    private let session = AVCaptureMultiCamSession()
+    private let backOutput = AVCaptureVideoDataOutput()
+    private let frontOutput = AVCaptureVideoDataOutput()
+
+    private var configured = false
+    private var isRunning = false
+    private var latestFrontPixelBuffer: CVPixelBuffer?
+    private var latestFrontTimestampNs: Int64 = 0
+
+    private(set) var primaryCaptureDevice: AVCaptureDevice?
+
+    override init(delegate: RTCVideoCapturerDelegate) {
+        super.init(delegate: delegate)
+        captureQueue.setSpecific(key: queueKey, value: ())
+    }
+
+    @discardableResult
+    func startCapture() -> Bool {
+        var started = false
+        runOnCaptureQueueSync {
+            guard configureSessionIfNeeded() else {
+                started = false
+                return
+            }
+            if !session.isRunning {
+                session.startRunning()
+            }
+            isRunning = session.isRunning
+            started = isRunning
+        }
+        return started
+    }
+
+    func stopCapture() {
+        runOnCaptureQueueSync {
+            if session.isRunning {
+                session.stopRunning()
+            }
+            isRunning = false
+            latestFrontPixelBuffer = nil
+            latestFrontTimestampNs = 0
+        }
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard isRunning else { return }
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        let timestampNs = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * 1_000_000_000)
+        if output === frontOutput {
+            latestFrontPixelBuffer = pixelBuffer
+            latestFrontTimestampNs = timestampNs
+            return
+        }
+        guard output === backOutput else { return }
+
+        let frameBuffer = composeFrame(mainPixelBuffer: pixelBuffer, timestampNs: timestampNs) ?? pixelBuffer
+        let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: frameBuffer)
+        let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: ._0, timeStampNs: timestampNs)
+        delegate?.capturer(self, didCapture: frame)
+    }
+
+    private func configureSessionIfNeeded() -> Bool {
+        if configured {
+            return true
+        }
+        guard AVCaptureMultiCamSession.isMultiCamSupported else { return false }
+
+        guard let backCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+              let frontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
+            return false
+        }
+
+        let backInput: AVCaptureDeviceInput
+        let frontInput: AVCaptureDeviceInput
+        do {
+            backInput = try AVCaptureDeviceInput(device: backCamera)
+            frontInput = try AVCaptureDeviceInput(device: frontCamera)
+        } catch {
+            return false
+        }
+
+        backOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        frontOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        backOutput.alwaysDiscardsLateVideoFrames = true
+        frontOutput.alwaysDiscardsLateVideoFrames = true
+        backOutput.setSampleBufferDelegate(self, queue: captureQueue)
+        frontOutput.setSampleBufferDelegate(self, queue: captureQueue)
+
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+
+        session.sessionPreset = .inputPriority
+
+        guard session.canAddInput(backInput), session.canAddInput(frontInput) else { return false }
+        session.addInputWithNoConnections(backInput)
+        session.addInputWithNoConnections(frontInput)
+
+        guard session.canAddOutput(backOutput), session.canAddOutput(frontOutput) else { return false }
+        session.addOutputWithNoConnections(backOutput)
+        session.addOutputWithNoConnections(frontOutput)
+
+        guard let backPort = videoPort(for: backInput, position: .back),
+              let frontPort = videoPort(for: frontInput, position: .front) else {
+            return false
+        }
+
+        let backConnection = AVCaptureConnection(inputPorts: [backPort], output: backOutput)
+        let frontConnection = AVCaptureConnection(inputPorts: [frontPort], output: frontOutput)
+
+        if backConnection.isVideoOrientationSupported {
+            backConnection.videoOrientation = .portrait
+        }
+        if frontConnection.isVideoOrientationSupported {
+            frontConnection.videoOrientation = .portrait
+        }
+        if frontConnection.isVideoMirroringSupported {
+            frontConnection.isVideoMirrored = true
+        }
+
+        guard session.canAddConnection(backConnection), session.canAddConnection(frontConnection) else {
+            return false
+        }
+
+        session.addConnection(backConnection)
+        session.addConnection(frontConnection)
+
+        primaryCaptureDevice = backCamera
+        configured = true
+        return true
+    }
+
+    private func videoPort(for input: AVCaptureDeviceInput, position: AVCaptureDevice.Position) -> AVCaptureInput.Port? {
+        input.ports(for: .video, sourceDeviceType: input.device.deviceType, sourceDevicePosition: position).first
+            ?? input.ports.first(where: { $0.mediaType == .video })
+    }
+
+    private func composeFrame(mainPixelBuffer: CVPixelBuffer, timestampNs: Int64) -> CVPixelBuffer? {
+        guard let frontPixelBuffer = latestFrontPixelBuffer else { return nil }
+        if timestampNs - latestFrontTimestampNs > Constants.maxOverlayAgeNs {
+            return nil
+        }
+
+        let mainWidth = CVPixelBufferGetWidth(mainPixelBuffer)
+        let mainHeight = CVPixelBufferGetHeight(mainPixelBuffer)
+        guard mainWidth > 0, mainHeight > 0 else { return nil }
+
+        guard let outputPixelBuffer = makeOutputPixelBuffer(width: mainWidth, height: mainHeight) else {
+            return nil
+        }
+
+        let mainImage = CIImage(cvPixelBuffer: mainPixelBuffer)
+        let overlayImage = makeOverlayImage(
+            frontPixelBuffer: frontPixelBuffer,
+            targetWidth: CGFloat(mainWidth),
+            targetHeight: CGFloat(mainHeight)
+        )
+        let composed = overlayImage.composited(over: mainImage)
+
+        ciContext.render(
+            composed,
+            to: outputPixelBuffer,
+            bounds: CGRect(x: 0, y: 0, width: mainWidth, height: mainHeight),
+            colorSpace: rgbColorSpace
+        )
+        return outputPixelBuffer
+    }
+
+    private func makeOverlayImage(frontPixelBuffer: CVPixelBuffer, targetWidth: CGFloat, targetHeight: CGFloat) -> CIImage {
+        let frontImage = CIImage(cvPixelBuffer: frontPixelBuffer)
+        let sourceExtent = frontImage.extent
+
+        let cropSize = min(sourceExtent.width, sourceExtent.height)
+        let cropRect = CGRect(
+            x: sourceExtent.midX - (cropSize / 2),
+            y: sourceExtent.midY - (cropSize / 2),
+            width: cropSize,
+            height: cropSize
+        )
+
+        let cropped = frontImage.cropped(to: cropRect)
+        let mirrored = cropped.transformed(
+            by: CGAffineTransform(scaleX: -1, y: 1).translatedBy(x: -cropRect.width, y: 0)
+        )
+
+        let baseSize = min(targetWidth, targetHeight)
+        let overlaySize = max(1, baseSize * Constants.overlaySizeRatio)
+        let margin = baseSize * Constants.overlayMarginRatio
+        let targetRect = CGRect(
+            x: targetWidth - overlaySize - margin,
+            y: margin,
+            width: overlaySize,
+            height: overlaySize
+        )
+
+        let scaleX = targetRect.width / mirrored.extent.width
+        let scaleY = targetRect.height / mirrored.extent.height
+        let scaled = mirrored.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        let translation = CGAffineTransform(
+            translationX: targetRect.minX - scaled.extent.minX,
+            y: targetRect.minY - scaled.extent.minY
+        )
+        return scaled.transformed(by: translation)
+    }
+
+    private func makeOutputPixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        var pixelBuffer: CVPixelBuffer?
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferIOSurfacePropertiesKey: [:],
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
+        ]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess else { return nil }
+        return pixelBuffer
+    }
+
+    private func runOnCaptureQueueSync(_ block: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            block()
+            return
+        }
+        captureQueue.sync(execute: block)
     }
 }
 
