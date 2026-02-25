@@ -85,3 +85,28 @@ Useful options:
 # override signing team
 ./scripts/deploy_to_device.sh --team [TEAM_ID]
 ```
+
+## Local-only signing override (do not commit)
+To keep your team ID in this local clone only, create a private xcconfig:
+
+```bash
+cd client-ios
+cat > LocalSigning.xcconfig <<'EOF'
+DEVELOPMENT_TEAM = U5TBRZ56DZ
+CODE_SIGN_STYLE = Automatic
+EOF
+```
+
+Ignore it in this clone only:
+
+```bash
+echo "client-ios/LocalSigning.xcconfig" >> ../.git/info/exclude
+```
+
+`./scripts/deploy_to_device.sh` auto-loads `client-ios/LocalSigning.xcconfig` when present.
+
+If needed, you can override explicitly:
+
+```bash
+./scripts/deploy_to_device.sh --xcconfig /absolute/path/to/LocalSigning.xcconfig
+```

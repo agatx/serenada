@@ -98,6 +98,7 @@ The native iOS app lives in `client-ios/`.
    cd client-ios
    ./scripts/update_webrtc_checksum.sh
    ```
+7. For local-only device signing overrides (without committing team IDs), use `client-ios/LocalSigning.xcconfig`. See `client-ios/README.md`.
 
 iOS v1 currently defers push notifications, ReplayKit screen sharing, diagnostics screen, and full universal-link entitlement provisioning.
 Note: iOS Simulator can run signaling and call flow, but local camera preview reliability varies by host setup; use a physical iPhone to validate local camera capture.
