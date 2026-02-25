@@ -113,6 +113,50 @@ class WebRtcEngine(
         val sensorRect: Rect?
     )
 
+    private data class MediaTotals(
+        var inboundPacketsReceived: Long = 0L,
+        var inboundPacketsLost: Long = 0L,
+        var inboundBytes: Long = 0L,
+        var inboundJitterSumSeconds: Double = 0.0,
+        var inboundJitterCount: Int = 0,
+        var inboundJitterBufferDelaySeconds: Double = 0.0,
+        var inboundJitterBufferEmittedCount: Long = 0L,
+        var inboundConcealedSamples: Long = 0L,
+        var inboundTotalSamples: Long = 0L,
+        var inboundFpsSum: Double = 0.0,
+        var inboundFpsCount: Int = 0,
+        var inboundFrameWidth: Int = 0,
+        var inboundFrameHeight: Int = 0,
+        var inboundFramesDecoded: Long = 0L,
+        var inboundFreezeCount: Long = 0L,
+        var inboundFreezeDurationSeconds: Double = 0.0,
+        var inboundNackCount: Long = 0L,
+        var inboundPliCount: Long = 0L,
+        var inboundFirCount: Long = 0L,
+        var outboundPacketsSent: Long = 0L,
+        var outboundBytes: Long = 0L,
+        var outboundPacketsRetransmitted: Long = 0L,
+        var remoteInboundPacketsLost: Long = 0L
+    )
+
+    private data class RealtimeStatsSample(
+        val timestampMs: Long,
+        val audioRxBytes: Long,
+        val audioTxBytes: Long,
+        val videoRxBytes: Long,
+        val videoTxBytes: Long,
+        val videoFramesDecoded: Long,
+        val videoNackCount: Long,
+        val videoPliCount: Long,
+        val videoFirCount: Long
+    )
+
+    private data class FreezeSample(
+        val timestampMs: Long,
+        val freezeCount: Long,
+        val freezeDurationSeconds: Double
+    )
+
     private val appContext = context.applicationContext
     private val eglBase: EglBase = EglBase.create()
     private val audioDeviceModule: AudioDeviceModule = createAudioDeviceModule(appContext)
@@ -158,6 +202,8 @@ class WebRtcEngine(
     private var lastStatsTimestampMs: Double? = null
     private var lastOutboundVideoBytes: Long? = null
     private var lastInboundVideoBytes: Long? = null
+    private var lastRealtimeStatsSample: RealtimeStatsSample? = null
+    private val freezeSamples = mutableListOf<FreezeSample>()
     private val initializedRenderers =
         Collections.newSetFromMap(WeakHashMap<SurfaceViewRenderer, Boolean>())
 
@@ -328,6 +374,8 @@ class WebRtcEngine(
         lastStatsTimestampMs = null
         lastOutboundVideoBytes = null
         lastInboundVideoBytes = null
+        lastRealtimeStatsSample = null
+        freezeSamples.clear()
         onRemoteVideoTrack(null)
     }
 
@@ -635,14 +683,23 @@ class WebRtcEngine(
         )
     }
 
-    fun collectWebRtcStatsSummary(onComplete: (String) -> Unit) {
+    fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit) {
         val pc = peerConnection
         if (pc == null) {
-            onComplete("pc=none")
+            onComplete("pc=none", null)
             return
         }
         pc.getStats { report ->
-            onComplete(buildWebRtcStatsSummary(report))
+            onComplete(
+                buildWebRtcStatsSummary(report),
+                buildRealtimeCallStats(report)
+            )
+        }
+    }
+
+    fun collectWebRtcStatsSummary(onComplete: (String) -> Unit) {
+        collectWebRtcStats { summary, _ ->
+            onComplete(summary)
         }
     }
 
@@ -1854,6 +1911,303 @@ class WebRtcEngine(
             append(",qualityLimit=")
             append(qualityLimitationReason ?: "n/a")
         }
+    }
+
+    @Synchronized
+    private fun buildRealtimeCallStats(report: RTCStatsReport): RealtimeCallStats {
+        val stats = report.statsMap.values
+        val statsById = report.statsMap
+        val audio = MediaTotals()
+        val video = MediaTotals()
+
+        var selectedCandidatePair: RTCStats? = null
+        var fallbackCandidatePair: RTCStats? = null
+        var remoteInboundRttSumSeconds = 0.0
+        var remoteInboundRttCount = 0
+
+        stats.forEach { stat ->
+            if (stat.type == "candidate-pair") {
+                val isSelected = memberBoolean(stat, "selected") == true
+                val isNominated = memberBoolean(stat, "nominated") == true
+                val pairState = memberString(stat, "state")
+                if (isSelected) {
+                    selectedCandidatePair = stat
+                } else if (fallbackCandidatePair == null && isNominated && pairState == "succeeded") {
+                    fallbackCandidatePair = stat
+                }
+                return@forEach
+            }
+
+            val kind = getMediaKind(stat) ?: return@forEach
+            val bucket = if (kind == "audio") audio else video
+
+            when (stat.type) {
+                "inbound-rtp" -> {
+                    bucket.inboundPacketsReceived += memberLong(stat, "packetsReceived") ?: 0L
+                    bucket.inboundPacketsLost += max(0L, memberLong(stat, "packetsLost") ?: 0L)
+                    bucket.inboundBytes += memberLong(stat, "bytesReceived") ?: 0L
+
+                    val jitter = memberDouble(stat, "jitter")
+                    if (jitter != null) {
+                        bucket.inboundJitterSumSeconds += jitter
+                        bucket.inboundJitterCount += 1
+                    }
+
+                    bucket.inboundJitterBufferDelaySeconds += memberDouble(stat, "jitterBufferDelay") ?: 0.0
+                    bucket.inboundJitterBufferEmittedCount += memberLong(stat, "jitterBufferEmittedCount") ?: 0L
+                    bucket.inboundConcealedSamples += memberLong(stat, "concealedSamples") ?: 0L
+                    bucket.inboundTotalSamples += memberLong(stat, "totalSamplesReceived") ?: 0L
+
+                    val fps = memberDouble(stat, "framesPerSecond")
+                    if (fps != null) {
+                        bucket.inboundFpsSum += fps
+                        bucket.inboundFpsCount += 1
+                    }
+
+                    val frameWidth = (memberLong(stat, "frameWidth") ?: 0L).toInt()
+                    val frameHeight = (memberLong(stat, "frameHeight") ?: 0L).toInt()
+                    bucket.inboundFrameWidth = max(bucket.inboundFrameWidth, frameWidth)
+                    bucket.inboundFrameHeight = max(bucket.inboundFrameHeight, frameHeight)
+
+                    bucket.inboundFramesDecoded += memberLong(stat, "framesDecoded") ?: 0L
+                    bucket.inboundFreezeCount += memberLong(stat, "freezeCount") ?: 0L
+                    bucket.inboundFreezeDurationSeconds += memberDouble(stat, "totalFreezesDuration") ?: 0.0
+                    bucket.inboundNackCount += memberLong(stat, "nackCount") ?: 0L
+                    bucket.inboundPliCount += memberLong(stat, "pliCount") ?: 0L
+                    bucket.inboundFirCount += memberLong(stat, "firCount") ?: 0L
+                }
+
+                "outbound-rtp" -> {
+                    bucket.outboundPacketsSent += memberLong(stat, "packetsSent") ?: 0L
+                    bucket.outboundBytes += memberLong(stat, "bytesSent") ?: 0L
+                    bucket.outboundPacketsRetransmitted += memberLong(stat, "retransmittedPacketsSent") ?: 0L
+                }
+
+                "remote-inbound-rtp" -> {
+                    bucket.remoteInboundPacketsLost += max(0L, memberLong(stat, "packetsLost") ?: 0L)
+                    val remoteRtt = memberDouble(stat, "roundTripTime")
+                    if (remoteRtt != null) {
+                        remoteInboundRttSumSeconds += remoteRtt
+                        remoteInboundRttCount += 1
+                    }
+                }
+            }
+        }
+
+        val selectedPair = selectedCandidatePair ?: fallbackCandidatePair
+        val localCandidate = selectedPair?.let { pair ->
+            val id = memberString(pair, "localCandidateId")
+            if (id.isNullOrBlank()) null else statsById[id]
+        }
+        val remoteCandidate = selectedPair?.let { pair ->
+            val id = memberString(pair, "remoteCandidateId")
+            if (id.isNullOrBlank()) null else statsById[id]
+        }
+
+        val localCandidateType = memberString(localCandidate, "candidateType")
+        val remoteCandidateType = memberString(remoteCandidate, "candidateType")
+        val localProtocol = memberString(localCandidate, "protocol")
+        val remoteProtocol = memberString(remoteCandidate, "protocol")
+        val isRelay = localCandidateType == "relay" || remoteCandidateType == "relay"
+        val transportPath =
+            if (localCandidateType != null || remoteCandidateType != null) {
+                "${if (isRelay) "TURN relay" else "Direct"} (${localCandidateType ?: "n/a"} -> ${remoteCandidateType ?: "n/a"}, ${localProtocol ?: remoteProtocol ?: "n/a"})"
+            } else {
+                null
+            }
+
+        val candidateRttSeconds = memberDouble(selectedPair, "currentRoundTripTime")
+        val remoteInboundRttSeconds =
+            if (remoteInboundRttCount > 0) {
+                remoteInboundRttSumSeconds / remoteInboundRttCount
+            } else {
+                null
+            }
+        val chosenRttSeconds = candidateRttSeconds ?: remoteInboundRttSeconds
+        val rttMs = chosenRttSeconds?.times(1000.0)
+        val availableOutgoingKbps = memberDouble(selectedPair, "availableOutgoingBitrate")?.div(1000.0)
+
+        val now = System.currentTimeMillis()
+        val previousSample = lastRealtimeStatsSample
+        val elapsedSeconds =
+            if (previousSample != null) {
+                (now - previousSample.timestampMs) / 1000.0
+            } else {
+                0.0
+            }
+
+        val audioRxKbps = previousSample?.let {
+            calculateBitrateKbps(it.audioRxBytes, audio.inboundBytes, elapsedSeconds)
+        }
+        val audioTxKbps = previousSample?.let {
+            calculateBitrateKbps(it.audioTxBytes, audio.outboundBytes, elapsedSeconds)
+        }
+        val videoRxKbps = previousSample?.let {
+            calculateBitrateKbps(it.videoRxBytes, video.inboundBytes, elapsedSeconds)
+        }
+        val videoTxKbps = previousSample?.let {
+            calculateBitrateKbps(it.videoTxBytes, video.outboundBytes, elapsedSeconds)
+        }
+
+        val videoFps =
+            if (video.inboundFpsCount > 0) {
+                video.inboundFpsSum / video.inboundFpsCount
+            } else if (
+                previousSample != null &&
+                elapsedSeconds > 0.0 &&
+                video.inboundFramesDecoded >= previousSample.videoFramesDecoded
+            ) {
+                (video.inboundFramesDecoded - previousSample.videoFramesDecoded) / elapsedSeconds
+            } else {
+                null
+            }
+
+        freezeSamples.add(
+            FreezeSample(
+                timestampMs = now,
+                freezeCount = video.inboundFreezeCount,
+                freezeDurationSeconds = video.inboundFreezeDurationSeconds
+            )
+        )
+        freezeSamples.removeAll { sample -> now - sample.timestampMs > 60_000L }
+        val freezeWindowBase = freezeSamples.firstOrNull()
+        val videoFreezeCount60s =
+            freezeWindowBase?.let { base ->
+                max(0L, video.inboundFreezeCount - base.freezeCount)
+            }
+        val videoFreezeDuration60s =
+            freezeWindowBase?.let { base ->
+                max(0.0, video.inboundFreezeDurationSeconds - base.freezeDurationSeconds)
+            }
+
+        val audioRxPacketLossPct =
+            ratioPercent(
+                numerator = audio.inboundPacketsLost,
+                denominator = audio.inboundPacketsReceived + audio.inboundPacketsLost
+            )
+        val audioTxPacketLossPct =
+            ratioPercent(
+                numerator = audio.remoteInboundPacketsLost,
+                denominator = audio.outboundPacketsSent + audio.remoteInboundPacketsLost
+            )
+        val videoRxPacketLossPct =
+            ratioPercent(
+                numerator = video.inboundPacketsLost,
+                denominator = video.inboundPacketsReceived + video.inboundPacketsLost
+            )
+        val videoTxPacketLossPct =
+            ratioPercent(
+                numerator = video.remoteInboundPacketsLost,
+                denominator = video.outboundPacketsSent + video.remoteInboundPacketsLost
+            )
+
+        val audioJitterMs =
+            if (audio.inboundJitterCount > 0) {
+                (audio.inboundJitterSumSeconds / audio.inboundJitterCount) * 1000.0
+            } else {
+                null
+            }
+        val audioPlayoutDelayMs =
+            if (audio.inboundJitterBufferEmittedCount > 0) {
+                (audio.inboundJitterBufferDelaySeconds / audio.inboundJitterBufferEmittedCount) * 1000.0
+            } else {
+                null
+            }
+        val audioConcealedPct =
+            ratioPercent(
+                numerator = audio.inboundConcealedSamples,
+                denominator = audio.inboundConcealedSamples + audio.inboundTotalSamples
+            )
+        val videoRetransmitPct =
+            ratioPercent(
+                numerator = video.outboundPacketsRetransmitted,
+                denominator = video.outboundPacketsSent
+            )
+
+        val videoNackPerMin = previousSample?.let {
+            positiveRatePerMinute(video.inboundNackCount, it.videoNackCount, elapsedSeconds)
+        }
+        val videoPliPerMin = previousSample?.let {
+            positiveRatePerMinute(video.inboundPliCount, it.videoPliCount, elapsedSeconds)
+        }
+        val videoFirPerMin = previousSample?.let {
+            positiveRatePerMinute(video.inboundFirCount, it.videoFirCount, elapsedSeconds)
+        }
+
+        val videoResolution =
+            if (video.inboundFrameWidth > 0 && video.inboundFrameHeight > 0) {
+                "${video.inboundFrameWidth}x${video.inboundFrameHeight}"
+            } else {
+                null
+            }
+
+        lastRealtimeStatsSample =
+            RealtimeStatsSample(
+                timestampMs = now,
+                audioRxBytes = audio.inboundBytes,
+                audioTxBytes = audio.outboundBytes,
+                videoRxBytes = video.inboundBytes,
+                videoTxBytes = video.outboundBytes,
+                videoFramesDecoded = video.inboundFramesDecoded,
+                videoNackCount = video.inboundNackCount,
+                videoPliCount = video.inboundPliCount,
+                videoFirCount = video.inboundFirCount
+            )
+
+        return RealtimeCallStats(
+            transportPath = transportPath,
+            rttMs = rttMs,
+            availableOutgoingKbps = availableOutgoingKbps,
+            audioRxPacketLossPct = audioRxPacketLossPct,
+            audioTxPacketLossPct = audioTxPacketLossPct,
+            audioJitterMs = audioJitterMs,
+            audioPlayoutDelayMs = audioPlayoutDelayMs,
+            audioConcealedPct = audioConcealedPct,
+            audioRxKbps = audioRxKbps,
+            audioTxKbps = audioTxKbps,
+            videoRxPacketLossPct = videoRxPacketLossPct,
+            videoTxPacketLossPct = videoTxPacketLossPct,
+            videoRxKbps = videoRxKbps,
+            videoTxKbps = videoTxKbps,
+            videoFps = videoFps,
+            videoResolution = videoResolution,
+            videoFreezeCount60s = videoFreezeCount60s,
+            videoFreezeDuration60s = videoFreezeDuration60s,
+            videoRetransmitPct = videoRetransmitPct,
+            videoNackPerMin = videoNackPerMin,
+            videoPliPerMin = videoPliPerMin,
+            videoFirPerMin = videoFirPerMin,
+            updatedAtMs = now
+        )
+    }
+
+    private fun getMediaKind(stat: RTCStats): String? {
+        val kind = memberString(stat, "kind") ?: memberString(stat, "mediaType")
+        return if (kind == "audio" || kind == "video") kind else null
+    }
+
+    private fun calculateBitrateKbps(
+        previousBytes: Long,
+        currentBytes: Long,
+        elapsedSeconds: Double
+    ): Double? {
+        if (elapsedSeconds <= 0.0 || currentBytes < previousBytes) return null
+        val bits = (currentBytes - previousBytes) * 8.0
+        return bits / elapsedSeconds / 1000.0
+    }
+
+    private fun positiveRatePerMinute(
+        currentValue: Long,
+        previousValue: Long,
+        elapsedSeconds: Double
+    ): Double? {
+        if (elapsedSeconds <= 0.0 || currentValue < previousValue) return null
+        return ((currentValue - previousValue) / elapsedSeconds) * 60.0
+    }
+
+    private fun ratioPercent(numerator: Long, denominator: Long): Double? {
+        if (denominator <= 0L) return null
+        return (numerator.toDouble() / denominator.toDouble()) * 100.0
     }
 
     private fun isVideoRtpStat(stat: RTCStats): Boolean {

@@ -662,6 +662,7 @@ class CallManager(context: Context) {
                 localVideoEnabled = defaultVideo,
                 localCameraMode = LocalCameraMode.SELFIE,
                 webrtcStatsSummary = "",
+                realtimeCallStats = null,
                 isFlashAvailable = false,
                 isFlashEnabled = false
             )
@@ -1359,12 +1360,18 @@ class CallManager(context: Context) {
 
         webrtcStatsRequestInFlight = true
         webRtcStatsExecutor.execute {
-            webRtcEngine.collectWebRtcStatsSummary { summary ->
+            webRtcEngine.collectWebRtcStats { summary, realtimeStats ->
                 handler.post {
                     webrtcStatsRequestInFlight = false
                     lastWebRtcStatsPollAtMs = System.currentTimeMillis()
-                    if (_uiState.value.webrtcStatsSummary != summary) {
-                        updateState(_uiState.value.copy(webrtcStatsSummary = summary))
+                    val state = _uiState.value
+                    if (state.webrtcStatsSummary != summary || state.realtimeCallStats != realtimeStats) {
+                        updateState(
+                            state.copy(
+                                webrtcStatsSummary = summary,
+                                realtimeCallStats = realtimeStats
+                            )
+                        )
                     }
                     Log.d("CallManager", "[WebRTCStats] $summary")
                 }
@@ -1451,7 +1458,9 @@ class CallManager(context: Context) {
 
     private fun acquirePerformanceLocks() {
         acquireCpuWakeLock()
-        acquireWifiLock()
+        // Wi-Fi low-latency lock disabled: on some devices (notably Samsung with Qualcomm WiFi),
+        // WIFI_MODE_FULL_LOW_LATENCY triggers prolonged off-channel scans (~1.5s) instead of
+        // suppressing them, causing massive UDP packet jitter and ~1s+ audio playout delay.
     }
 
     private fun acquireCpuWakeLock() {

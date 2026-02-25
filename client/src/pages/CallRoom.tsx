@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { playJoinChime } from '../utils/audio';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 import { saveRoom, markRoomJoined, type SaveRoomResult } from '../utils/savedRooms';
+import { buildDebugPanelSections, useRealtimeCallStats } from './callDiagnostics';
 
 function urlBase64ToUint8Array(base64String: string) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -221,6 +222,7 @@ const CallRoom: React.FC = () => {
         hasMultipleCameras,
         localStream,
         remoteStream,
+        peerConnection,
         iceConnectionState,
         connectionState,
         signalingState
@@ -402,6 +404,7 @@ const CallRoom: React.FC = () => {
     const [showDebug, setShowDebug] = useState(false);
     const debugTapRef = useRef<number>(0);
     const debugTapTimeoutRef = useRef<number | null>(null);
+    const realtimeStats = useRealtimeCallStats(peerConnection, showDebug && hasJoined);
 
     const isMobileDevice = () => {
         if (typeof window === 'undefined') return false;
@@ -798,6 +801,16 @@ const CallRoom: React.FC = () => {
     // Render In-Call
     const otherParticipant = roomState?.participants?.find(p => p.cid !== clientId);
     const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const debugSections = buildDebugPanelSections({
+        isConnected,
+        activeTransport,
+        iceConnectionState,
+        connectionState,
+        signalingState,
+        roomParticipantCount: roomState ? roomState.participants.length : null,
+        showReconnecting,
+        realtimeStats
+    });
 
 
     return (
@@ -813,13 +826,22 @@ const CallRoom: React.FC = () => {
             />
             {showDebug && (
                 <div className="debug-panel">
-                    <div>Signaling: {isConnected ? 'connected' : 'disconnected'}</div>
-                    <div>Transport: {activeTransport ?? 'n/a'}</div>
-                    <div>ICE: {iceConnectionState}</div>
-                    <div>PC: {connectionState}</div>
-                    <div>SDP: {signalingState}</div>
-                    <div>Room: {roomState ? `${roomState.participants.length} participants` : 'none'}</div>
-                    <div>Reconnecting: {showReconnecting ? 'yes' : 'no'}</div>
+                    <div className="debug-panel-grid">
+                        {debugSections.map(section => (
+                            <section className="debug-section" key={section.title}>
+                                <div className="debug-section-title">{section.title}</div>
+                                {section.metrics.map(metric => (
+                                    <div className="debug-metric-row" key={`${section.title}:${metric.label}`}>
+                                        <div className="debug-metric-label">
+                                            <span className={`debug-dot debug-dot-${metric.status}`} />
+                                            {metric.label && <span>{metric.label}</span>}
+                                        </div>
+                                        <span className="debug-metric-value">{metric.value}</span>
+                                    </div>
+                                ))}
+                            </section>
+                        ))}
+                    </div>
                 </div>
             )}
             {showReconnecting && (

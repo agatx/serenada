@@ -29,10 +29,14 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,6 +54,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -64,6 +69,10 @@ import app.serenada.android.R
 import app.serenada.android.call.CallPhase
 import app.serenada.android.call.CallUiState
 import app.serenada.android.call.LocalCameraMode
+import app.serenada.android.call.RealtimeCallStats
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlin.math.abs
@@ -110,6 +119,9 @@ fun CallScreen(
     var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
+    var showDebug by rememberSaveable { mutableStateOf(false) }
+    var debugTapTimestampMs by remember { mutableStateOf(0L) }
+    var showReconnecting by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val localRenderer = remember { SurfaceViewRenderer(context) }
     val remoteRenderer = remember { SurfaceViewRenderer(context) }
@@ -215,6 +227,41 @@ fun CallScreen(
                     connState == "FAILED"
         }
 
+    LaunchedEffect(uiState.phase, isReconnecting) {
+        if (uiState.phase != CallPhase.InCall || !isReconnecting) {
+            showReconnecting = false
+            return@LaunchedEffect
+        }
+        delay(800)
+        if (uiState.phase == CallPhase.InCall && isReconnecting) {
+            showReconnecting = true
+        }
+    }
+
+    val debugSections =
+        remember(
+            uiState.isSignalingConnected,
+            uiState.activeTransport,
+            uiState.iceConnectionState,
+            uiState.connectionState,
+            uiState.signalingState,
+            uiState.roomId,
+            uiState.participantCount,
+            showReconnecting,
+            uiState.realtimeCallStats
+        ) {
+            buildDebugPanelSections(
+                isConnected = uiState.isSignalingConnected,
+                activeTransport = uiState.activeTransport,
+                iceConnectionState = uiState.iceConnectionState,
+                connectionState = uiState.connectionState,
+                signalingState = uiState.signalingState,
+                roomParticipantCount = if (uiState.roomId != null) uiState.participantCount else null,
+                showReconnecting = showReconnecting,
+                realtimeStats = uiState.realtimeCallStats
+            )
+        }
+
     // Auto-hide controls
     LaunchedEffect(areControlsVisible, uiState.phase) {
         if (areControlsVisible && uiState.phase == CallPhase.InCall) {
@@ -264,6 +311,8 @@ fun CallScreen(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { areControlsVisible = !areControlsVisible }
+        val debugPanelWidth = minOf(maxWidth * 0.92f, 430.dp)
+        val debugPanelMaxHeight = (maxHeight - 140.dp).coerceAtLeast(120.dp)
 
         val pipBaseModifier =
             if (showPip) {
@@ -430,6 +479,40 @@ fun CallScreen(
             }
         }
 
+        Box(
+            modifier =
+                Modifier.align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .size(72.dp)
+                    .zIndex(6f)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                val now = System.currentTimeMillis()
+                                if (now - debugTapTimestampMs < 450L) {
+                                    debugTapTimestampMs = 0L
+                                    showDebug = !showDebug
+                                } else {
+                                    debugTapTimestampMs = now
+                                }
+                            }
+                        )
+                    }
+        )
+
+        if (showDebug) {
+            DebugPanel(
+                sections = debugSections,
+                modifier =
+                    Modifier.align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .padding(start = 16.dp, top = 16.dp)
+                        .width(debugPanelWidth)
+                        .heightIn(max = debugPanelMaxHeight)
+                        .zIndex(5f)
+            )
+        }
+
         // Waiting State Overlay
         if (uiState.phase == CallPhase.Waiting && !isLocalLarge) {
             WaitingOverlay(
@@ -441,7 +524,7 @@ fun CallScreen(
 
         // Reconnecting Indicator
         AnimatedVisibility(
-            visible = isReconnecting && uiState.phase == CallPhase.InCall,
+            visible = showReconnecting && uiState.phase == CallPhase.InCall,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp)
@@ -614,6 +697,401 @@ fun CallScreen(
             }
         }
     }
+}
+
+@Composable
+private fun DebugPanel(
+    sections: List<DebugPanelSection>,
+    modifier: Modifier = Modifier
+) {
+    val panelShape = RoundedCornerShape(10.dp)
+    Surface(
+        modifier =
+            modifier.border(
+                width = 1.dp,
+                color = Color.White.copy(alpha = 0.12f),
+                shape = panelShape
+            ),
+        color = Color.Black.copy(alpha = 0.7f),
+        shape = panelShape
+    ) {
+        BoxWithConstraints(
+            modifier =
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(10.dp)
+        ) {
+            val useTwoColumns = maxWidth >= 390.dp
+            if (useTwoColumns) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (index in sections.indices step 2) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            DebugPanelSectionCard(
+                                section = sections[index],
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (index + 1 < sections.size) {
+                                DebugPanelSectionCard(
+                                    section = sections[index + 1],
+                                    modifier = Modifier.weight(1f)
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    sections.forEach { section ->
+                        DebugPanelSectionCard(
+                            section = section,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private enum class DebugStatus {
+    GOOD,
+    WARN,
+    BAD,
+    NA
+}
+
+private data class DebugPanelMetric(
+    val label: String,
+    val value: String,
+    val status: DebugStatus
+)
+
+private data class DebugPanelSection(
+    val title: String,
+    val metrics: List<DebugPanelMetric>
+)
+
+@Composable
+private fun DebugPanelSectionCard(
+    section: DebugPanelSection,
+    modifier: Modifier = Modifier
+) {
+    val sectionShape = RoundedCornerShape(8.dp)
+    Surface(
+        modifier =
+            modifier.border(
+                width = 1.dp,
+                color = Color.White.copy(alpha = 0.11f),
+                shape = sectionShape
+            ),
+        color = Color.White.copy(alpha = 0.04f),
+        shape = sectionShape
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp)) {
+            Text(
+                text = section.title,
+                color = Color(0xD9E6EDF3),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            section.metrics.forEach { metric ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(debugDotColor(metric.status))
+                        )
+                        if (metric.label.isNotBlank()) {
+                            Text(
+                                text = metric.label,
+                                color = Color(0xF2E6EDF3),
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Text(
+                        text = metric.value,
+                        color = Color(0xE6E6EDF3),
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun debugDotColor(status: DebugStatus): Color {
+    return when (status) {
+        DebugStatus.GOOD -> Color(0xFF2ECC71)
+        DebugStatus.WARN -> Color(0xFFF1C40F)
+        DebugStatus.BAD -> Color(0xFFE74C3C)
+        DebugStatus.NA -> Color(0xFF95A5A6)
+    }
+}
+
+private fun buildDebugPanelSections(
+    isConnected: Boolean,
+    activeTransport: String?,
+    iceConnectionState: String,
+    connectionState: String,
+    signalingState: String,
+    roomParticipantCount: Int?,
+    showReconnecting: Boolean,
+    realtimeStats: RealtimeCallStats?
+): List<DebugPanelSection> {
+    val normalizedIceConnectionState = normalizeState(iceConnectionState)
+    val normalizedConnectionState = normalizeState(connectionState)
+    val normalizedSignalingState = normalizeState(signalingState)
+
+    val signalingStatus = if (isConnected) DebugStatus.GOOD else DebugStatus.BAD
+    val iceStatus =
+        when (normalizedIceConnectionState) {
+            "connected", "completed" -> DebugStatus.GOOD
+            "checking", "disconnected" -> DebugStatus.WARN
+            else -> DebugStatus.BAD
+        }
+    val pcStatus =
+        when (normalizedConnectionState) {
+            "connected" -> DebugStatus.GOOD
+            "connecting", "disconnected" -> DebugStatus.WARN
+            else -> DebugStatus.BAD
+        }
+    val reconnectingStatus = if (showReconnecting) DebugStatus.BAD else DebugStatus.GOOD
+
+    val transportPathStatus =
+        when {
+            realtimeStats?.transportPath == null -> DebugStatus.NA
+            realtimeStats.transportPath.startsWith("TURN relay") -> DebugStatus.WARN
+            else -> DebugStatus.GOOD
+        }
+    val rttStatus = lowerIsBetter(realtimeStats?.rttMs, 120.0, 250.0)
+    val availableOutgoingStatus = higherIsBetter(realtimeStats?.availableOutgoingKbps, 1500.0, 600.0)
+
+    val audioLossStatus =
+        worstStatus(
+            lowerIsBetter(realtimeStats?.audioRxPacketLossPct, 1.0, 3.0),
+            lowerIsBetter(realtimeStats?.audioTxPacketLossPct, 1.0, 3.0)
+        )
+    val audioBitrateStatus =
+        worstStatus(
+            higherIsBetter(realtimeStats?.audioRxKbps, 20.0, 12.0),
+            higherIsBetter(realtimeStats?.audioTxKbps, 20.0, 12.0)
+        )
+
+    val videoLossStatus =
+        worstStatus(
+            lowerIsBetter(realtimeStats?.videoRxPacketLossPct, 1.0, 3.0),
+            lowerIsBetter(realtimeStats?.videoTxPacketLossPct, 1.0, 3.0)
+        )
+    val videoBitrateStatus =
+        worstStatus(
+            higherIsBetter(realtimeStats?.videoRxKbps, 900.0, 350.0),
+            higherIsBetter(realtimeStats?.videoTxKbps, 900.0, 350.0)
+        )
+
+    return listOf(
+        DebugPanelSection(
+            title = "Connection",
+            metrics =
+                listOf(
+                    DebugPanelMetric(
+                        label = "Signaling",
+                        value = if (isConnected) "connected" else "disconnected",
+                        status = signalingStatus
+                    ),
+                    DebugPanelMetric(
+                        label = "Transport",
+                        value = activeTransport ?: "n/a",
+                        status = signalingStatus
+                    ),
+                    DebugPanelMetric(
+                        label = "ICE / PC",
+                        value = "$normalizedIceConnectionState / $normalizedConnectionState",
+                        status = worstStatus(iceStatus, pcStatus)
+                    ),
+                    DebugPanelMetric(
+                        label = "SDP",
+                        value = normalizedSignalingState,
+                        status = if (normalizedSignalingState == "stable") DebugStatus.GOOD else DebugStatus.WARN
+                    ),
+                    DebugPanelMetric(
+                        label = "Room",
+                        value = if (roomParticipantCount != null) "$roomParticipantCount participants" else "none",
+                        status = if (roomParticipantCount != null) DebugStatus.GOOD else DebugStatus.WARN
+                    ),
+                    DebugPanelMetric(
+                        label = "Reconnecting",
+                        value = if (showReconnecting) "yes" else "no",
+                        status = reconnectingStatus
+                    )
+                )
+        ),
+        DebugPanelSection(
+            title = "Latency",
+            metrics =
+                listOf(
+                    DebugPanelMetric("RTT", formatMs(realtimeStats?.rttMs), rttStatus),
+                    DebugPanelMetric("", realtimeStats?.transportPath ?: "n/a", transportPathStatus),
+                    DebugPanelMetric(
+                        "Outgoing headroom",
+                        formatKbps(realtimeStats?.availableOutgoingKbps),
+                        availableOutgoingStatus
+                    ),
+                    DebugPanelMetric(
+                        "Updated",
+                        formatTimeLabel(realtimeStats?.updatedAtMs),
+                        DebugStatus.NA
+                    )
+                )
+        ),
+        DebugPanelSection(
+            title = "Audio Quality",
+            metrics =
+                listOf(
+                    DebugPanelMetric(
+                        "Packet loss ⇵",
+                        "${formatPercent(realtimeStats?.audioRxPacketLossPct)} / ${formatPercent(realtimeStats?.audioTxPacketLossPct)}",
+                        audioLossStatus
+                    ),
+                    DebugPanelMetric(
+                        "Jitter",
+                        formatMs(realtimeStats?.audioJitterMs),
+                        lowerIsBetter(realtimeStats?.audioJitterMs, 20.0, 40.0)
+                    ),
+                    DebugPanelMetric(
+                        "Playout delay",
+                        formatMs(realtimeStats?.audioPlayoutDelayMs),
+                        lowerIsBetter(realtimeStats?.audioPlayoutDelayMs, 80.0, 180.0)
+                    ),
+                    DebugPanelMetric(
+                        "Concealed audio",
+                        formatPercent(realtimeStats?.audioConcealedPct),
+                        lowerIsBetter(realtimeStats?.audioConcealedPct, 2.0, 8.0)
+                    ),
+                    DebugPanelMetric(
+                        "Bitrate ⇵",
+                        "${formatKbps(realtimeStats?.audioRxKbps)} / ${formatKbps(realtimeStats?.audioTxKbps)}",
+                        audioBitrateStatus
+                    )
+                )
+        ),
+        DebugPanelSection(
+            title = "Video Quality",
+            metrics =
+                listOf(
+                    DebugPanelMetric(
+                        "Packet loss ⇵",
+                        "${formatPercent(realtimeStats?.videoRxPacketLossPct)} / ${formatPercent(realtimeStats?.videoTxPacketLossPct)}",
+                        videoLossStatus
+                    ),
+                    DebugPanelMetric(
+                        "Bitrate ⇵",
+                        "${formatKbps(realtimeStats?.videoRxKbps)} / ${formatKbps(realtimeStats?.videoTxKbps)}",
+                        videoBitrateStatus
+                    ),
+                    DebugPanelMetric(
+                        "Render FPS",
+                        formatFps(realtimeStats?.videoFps),
+                        higherIsBetter(realtimeStats?.videoFps, 24.0, 15.0)
+                    ),
+                    DebugPanelMetric(
+                        "Resolution",
+                        realtimeStats?.videoResolution ?: "n/a",
+                        if (realtimeStats?.videoResolution != null) DebugStatus.GOOD else DebugStatus.NA
+                    ),
+                    DebugPanelMetric(
+                        "Freezes (last 60s)",
+                        formatFreezeWindow(realtimeStats?.videoFreezeCount60s, realtimeStats?.videoFreezeDuration60s),
+                        worstStatus(
+                            lowerIsBetter(realtimeStats?.videoFreezeCount60s?.toDouble(), 0.0, 2.0),
+                            lowerIsBetter(realtimeStats?.videoFreezeDuration60s, 0.2, 1.0)
+                        )
+                    ),
+                    DebugPanelMetric(
+                        "Retransmit",
+                        formatPercent(realtimeStats?.videoRetransmitPct),
+                        lowerIsBetter(realtimeStats?.videoRetransmitPct, 1.0, 3.0)
+                    )
+                )
+        )
+    )
+}
+
+private fun normalizeState(value: String): String {
+    val normalized = value.trim().lowercase(Locale.US)
+    return if (normalized.isBlank()) "n/a" else normalized
+}
+
+private fun formatMs(value: Double?): String {
+    return if (value == null) "n/a" else "${value.roundToInt()} ms"
+}
+
+private fun formatPercent(value: Double?): String {
+    return if (value == null) "n/a" else "%.1f%%".format(Locale.US, value)
+}
+
+private fun formatKbps(value: Double?): String {
+    return if (value == null) "n/a" else "${value.roundToInt()} kbps"
+}
+
+private fun formatFps(value: Double?): String {
+    return if (value == null) "n/a" else "%.1f fps".format(Locale.US, value)
+}
+
+private fun formatFreezeWindow(count: Long?, durationSeconds: Double?): String {
+    if (count == null || durationSeconds == null) return "n/a"
+    return "$count / %.1fs".format(Locale.US, durationSeconds)
+}
+
+private fun formatTimeLabel(timestampMs: Long?): String {
+    if (timestampMs == null) return "n/a"
+    val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    return formatter.format(Date(timestampMs))
+}
+
+private fun lowerIsBetter(value: Double?, goodMax: Double, warnMax: Double): DebugStatus {
+    if (value == null) return DebugStatus.NA
+    return when {
+        value <= goodMax -> DebugStatus.GOOD
+        value <= warnMax -> DebugStatus.WARN
+        else -> DebugStatus.BAD
+    }
+}
+
+private fun higherIsBetter(value: Double?, goodMin: Double, warnMin: Double): DebugStatus {
+    if (value == null) return DebugStatus.NA
+    return when {
+        value >= goodMin -> DebugStatus.GOOD
+        value >= warnMin -> DebugStatus.WARN
+        else -> DebugStatus.BAD
+    }
+}
+
+private fun worstStatus(vararg statuses: DebugStatus): DebugStatus {
+    val concreteStatuses = statuses.filter { it != DebugStatus.NA }
+    if (concreteStatuses.isEmpty()) return DebugStatus.NA
+    if (concreteStatuses.contains(DebugStatus.BAD)) return DebugStatus.BAD
+    if (concreteStatuses.contains(DebugStatus.WARN)) return DebugStatus.WARN
+    return DebugStatus.GOOD
 }
 
 @Composable
