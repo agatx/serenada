@@ -6,13 +6,19 @@ struct SettingsScreen: View {
     let isDefaultCameraEnabled: Bool
     let isDefaultMicrophoneEnabled: Bool
     let isHdVideoExperimentalEnabled: Bool
+    let areSavedRoomsShownFirst: Bool
+    let areRoomInviteNotificationsEnabled: Bool
+    let appVersion: String
     let hostError: String?
     let isSaving: Bool
     let onLanguageSelect: (String) -> Void
     let onDefaultCameraChange: (Bool) -> Void
     let onDefaultMicrophoneChange: (Bool) -> Void
     let onHdVideoExperimentalChange: (Bool) -> Void
+    let onSavedRoomsShownFirstChange: (Bool) -> Void
+    let onRoomInviteNotificationsChange: (Bool) -> Void
     let onSave: () -> Void
+    let onOpenDiagnostics: () -> Void
     let onCancel: () -> Void
 
     private let languageOptions: [(String, String)] = [
@@ -107,6 +113,49 @@ struct SettingsScreen: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                }
+
+                Section(L10n.settingsSavedRoomsTitle) {
+                    Toggle(isOn: Binding(
+                        get: { areSavedRoomsShownFirst },
+                        set: onSavedRoomsShownFirstChange
+                    )) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.settingsSavedRoomsShowFirst)
+                            Text(L10n.settingsSavedRoomsShowFirstInfo)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(L10n.settingsSavedRoomsHelp)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section(L10n.settingsInvitesTitle) {
+                    Toggle(isOn: Binding(
+                        get: { areRoomInviteNotificationsEnabled },
+                        set: onRoomInviteNotificationsChange
+                    )) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.settingsInviteNotifications)
+                            Text(L10n.settingsInviteNotificationsInfo)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Section {
+                    Text(String(format: L10n.settingsAppVersion, appVersion))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section(L10n.settingsDiagnosticsTitle) {
+                    Button(action: onOpenDiagnostics) {
+                        Label(L10n.settingsDiagnosticsAction, systemImage: "stethoscope")
                     }
                 }
             }

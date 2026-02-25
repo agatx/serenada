@@ -1,6 +1,9 @@
 import AVFoundation
 import Foundation
 import UIKit
+#if canImport(ReplayKit)
+import ReplayKit
+#endif
 #if canImport(WebRTC)
 import WebRTC
 #endif
@@ -83,6 +86,63 @@ enum SessionDescriptionType {
 
 @MainActor
 final class WebRtcEngine {
+    private struct RealtimeStatsSample {
+        let timestampMs: Int64
+        let audioRxBytes: Int64
+        let audioTxBytes: Int64
+        let videoRxBytes: Int64
+        let videoTxBytes: Int64
+        let videoFramesDecoded: Int64
+        let videoNackCount: Int64
+        let videoPliCount: Int64
+        let videoFirCount: Int64
+    }
+
+    private struct FreezeSample {
+        let timestampMs: Int64
+        let freezeCount: Int64
+        let freezeDurationSeconds: Double
+    }
+
+    private struct MediaTotals {
+        var inboundPacketsReceived: Int64 = 0
+        var inboundPacketsLost: Int64 = 0
+        var inboundBytes: Int64 = 0
+
+        var outboundPacketsSent: Int64 = 0
+        var outboundBytes: Int64 = 0
+        var outboundPacketsRetransmitted: Int64 = 0
+
+        var remoteInboundPacketsLost: Int64 = 0
+
+        var inboundJitterSumSeconds: Double = 0
+        var inboundJitterCount: Int64 = 0
+
+        var inboundJitterBufferDelaySeconds: Double = 0
+        var inboundJitterBufferEmittedCount: Int64 = 0
+        var inboundConcealedSamples: Int64 = 0
+        var inboundTotalSamples: Int64 = 0
+
+        var inboundFpsSum: Double = 0
+        var inboundFpsCount: Int64 = 0
+        var inboundFrameWidth: Int = 0
+        var inboundFrameHeight: Int = 0
+        var inboundFramesDecoded: Int64 = 0
+
+        var inboundFreezeCount: Int64 = 0
+        var inboundFreezeDurationSeconds: Double = 0
+
+        var inboundNackCount: Int64 = 0
+        var inboundPliCount: Int64 = 0
+        var inboundFirCount: Int64 = 0
+    }
+
+    private enum Constants {
+        static let maxCaptureZoom: CGFloat = 4
+        static let minZoomDeltaEpsilon: CGFloat = 0.01
+        static let freezeWindowMs: Int64 = 60_000
+    }
+
     private enum LocalCameraSource {
         case selfie
         case world
@@ -99,16 +159,24 @@ final class WebRtcEngine {
     private let onCameraModeChanged: (LocalCameraMode) -> Void
     private let onFlashlightStateChanged: (Bool, Bool) -> Void
     private let onScreenShareStopped: () -> Void
+    private let onZoomFactorChanged: (Double) -> Void
 
     private var isHdVideoExperimentalEnabled: Bool
 
     private var localCameraSource: LocalCameraSource = .selfie
+    private var preScreenShareCameraSource: LocalCameraSource = .selfie
     private var isScreenSharing = false
     private var isTorchPreferenceEnabled = false
     private var isTorchEnabled = false
+    private var compositeDisabledAfterFailure = false
+    private var cachedCompositeSupport: Bool?
+    private var activeCaptureDevice: AVCaptureDevice?
+    private var currentZoomFactor: CGFloat = 1
 
     private var iceServers: [IceServerConfig]?
     private var pendingRemoteIceCandidates: [IceCandidatePayload] = []
+    private var lastRealtimeStatsSample: RealtimeStatsSample?
+    private var freezeSamples: [FreezeSample] = []
 
 #if canImport(WebRTC)
     private static var sslInitialized = false
@@ -123,6 +191,9 @@ final class WebRtcEngine {
     private var localVideoSource: RTCVideoSource?
     private var localVideoTrack: RTCVideoTrack?
     private var localVideoCapturer: RTCCameraVideoCapturer?
+    #if canImport(ReplayKit)
+    private var replayKitCapturer: ReplayKitVideoCapturer?
+    #endif
 
     private var remoteVideoTrack: RTCVideoTrack?
 
@@ -143,6 +214,7 @@ final class WebRtcEngine {
         onCameraModeChanged: @escaping (LocalCameraMode) -> Void,
         onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
         onScreenShareStopped: @escaping () -> Void,
+        onZoomFactorChanged: @escaping (Double) -> Void,
         isHdVideoExperimentalEnabled: Bool
     ) {
         self.onLocalIceCandidate = onLocalIceCandidate
@@ -155,6 +227,7 @@ final class WebRtcEngine {
         self.onCameraModeChanged = onCameraModeChanged
         self.onFlashlightStateChanged = onFlashlightStateChanged
         self.onScreenShareStopped = onScreenShareStopped
+        self.onZoomFactorChanged = onZoomFactorChanged
         self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
 
 #if canImport(WebRTC)
@@ -202,8 +275,16 @@ final class WebRtcEngine {
         localVideoTrack?.isEnabled = false
         localAudioTrack?.isEnabled = false
 
+        #if canImport(ReplayKit)
+        replayKitCapturer?.stopCapture()
+        replayKitCapturer = nil
+        #endif
+        isScreenSharing = false
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil
+        activeCaptureDevice = nil
+        currentZoomFactor = 1
+        onZoomFactorChanged(1)
 
         localVideoTrack = nil
         localVideoSource = nil
@@ -405,14 +486,14 @@ final class WebRtcEngine {
     @discardableResult
     func toggleVideo(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)
-        if enabled && localVideoCapturer == nil {
+        if enabled && localVideoCapturer == nil && !isScreenSharing {
             let started = restartVideoCapturer(source: localCameraSource)
             if !started {
                 localVideoTrack?.isEnabled = false
                 return false
             }
         }
-        let effectiveEnabled = enabled && localVideoCapturer != nil
+        let effectiveEnabled = enabled && (localVideoCapturer != nil || isScreenSharing)
         localVideoTrack?.isEnabled = effectiveEnabled
         return effectiveEnabled
 #else
@@ -439,16 +520,112 @@ final class WebRtcEngine {
         return result
     }
 
-    func startScreenShare() -> Bool {
-        false
+    func startScreenShare(onComplete: ((Bool) -> Void)? = nil) -> Bool {
+#if canImport(WebRTC) && canImport(ReplayKit)
+        guard let localVideoSource else {
+            onComplete?(false)
+            return false
+        }
+        if isScreenSharing {
+            onComplete?(true)
+            return true
+        }
+
+        let previousSource = localCameraSource
+        preScreenShareCameraSource = previousSource
+        setTorchEnabled(false)
+        localVideoCapturer?.stopCapture()
+        localVideoCapturer = nil
+        activeCaptureDevice = nil
+
+        let capturer = ReplayKitVideoCapturer(delegate: localVideoSource)
+        replayKitCapturer = capturer
+
+        return capturer.startCapture { [weak self] started in
+            Task { @MainActor in
+                guard let self else { return }
+                if started {
+                    self.isScreenSharing = true
+                    self.currentZoomFactor = 1
+                    self.onZoomFactorChanged(1)
+                    self.notifyCameraModeAndFlash()
+                    self.localVideoTrack?.isEnabled = true
+                    onComplete?(true)
+                    return
+                }
+
+                self.replayKitCapturer = nil
+                self.isScreenSharing = false
+                _ = self.restartVideoCapturer(source: previousSource)
+                self.notifyCameraModeAndFlash()
+                onComplete?(false)
+            }
+        }
+#else
+        onComplete?(false)
+        return false
+#endif
     }
 
     func stopScreenShare() -> Bool {
+#if canImport(WebRTC) && canImport(ReplayKit)
+        replayKitCapturer?.stopCapture()
+        replayKitCapturer = nil
+#endif
         if isScreenSharing {
             isScreenSharing = false
+            let restoreSource = preScreenShareCameraSource
+            preScreenShareCameraSource = .selfie
+#if canImport(WebRTC)
+            if localVideoTrack?.isEnabled == true {
+                _ = restartVideoCapturer(source: restoreSource)
+            } else {
+                localCameraSource = restoreSource
+                notifyCameraModeAndFlash()
+            }
+#endif
             onScreenShareStopped()
         }
         return true
+    }
+
+    @discardableResult
+    func adjustCaptureZoom(by scaleDelta: CGFloat) -> Double? {
+        guard !isScreenSharing else { return nil }
+        guard localCameraSource == .world || localCameraSource == .composite else { return nil }
+        guard let device = activeCaptureDevice else { return nil }
+        guard device.activeFormat.videoMaxZoomFactor > 1 else { return nil }
+
+        let maxZoom = min(device.activeFormat.videoMaxZoomFactor, Constants.maxCaptureZoom)
+        let next = max(1, min(maxZoom, currentZoomFactor * scaleDelta))
+        guard abs(next - currentZoomFactor) >= Constants.minZoomDeltaEpsilon else {
+            return Double(currentZoomFactor)
+        }
+
+        do {
+            try device.lockForConfiguration()
+            device.videoZoomFactor = next
+            device.unlockForConfiguration()
+            currentZoomFactor = next
+            onZoomFactorChanged(Double(next))
+            return Double(next)
+        } catch {
+            return nil
+        }
+    }
+
+    @discardableResult
+    func resetCaptureZoom() -> Double {
+        currentZoomFactor = 1
+        if let device = activeCaptureDevice, device.activeFormat.videoMaxZoomFactor > 1 {
+            do {
+                try device.lockForConfiguration()
+                device.videoZoomFactor = 1
+                device.unlockForConfiguration()
+            } catch {}
+        }
+        onZoomFactorChanged(1)
+        return 1
     }
 
     func isRemoteVideoTrackEnabled() -> Bool {
@@ -480,6 +657,310 @@ final class WebRtcEngine {
         onComplete("pc=stub")
 #endif
     }
+
+    func collectRealtimeCallStats(onComplete: @escaping (RealtimeCallStats) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(.empty)
+            return
+        }
+        peerConnection.statistics { [weak self] report in
+            guard let self else {
+                onComplete(.empty)
+                return
+            }
+            onComplete(self.buildRealtimeCallStats(report))
+        }
+#else
+        onComplete(.empty)
+#endif
+    }
+
+#if canImport(WebRTC)
+    private func buildRealtimeCallStats(_ report: RTCStatisticsReport) -> RealtimeCallStats {
+        let stats = Array(report.statistics.values)
+        var audio = MediaTotals()
+        var video = MediaTotals()
+
+        var selectedCandidatePair: RTCStatistics?
+        var fallbackCandidatePair: RTCStatistics?
+        var remoteInboundRttSumSeconds = 0.0
+        var remoteInboundRttCount: Int64 = 0
+
+        for stat in stats {
+            if stat.type == "candidate-pair" {
+                let isSelected = memberBool(stat, key: "selected") == true
+                let isNominated = memberBool(stat, key: "nominated") == true
+                let pairState = memberString(stat, key: "state")
+                if isSelected {
+                    selectedCandidatePair = stat
+                } else if fallbackCandidatePair == nil && isNominated && pairState == "succeeded" {
+                    fallbackCandidatePair = stat
+                }
+                continue
+            }
+
+            guard let kind = mediaKind(for: stat) else { continue }
+            if kind == "audio" {
+                collectMediaStat(stat, into: &audio, remoteInboundRttSumSeconds: &remoteInboundRttSumSeconds, remoteInboundRttCount: &remoteInboundRttCount)
+            } else {
+                collectMediaStat(stat, into: &video, remoteInboundRttSumSeconds: &remoteInboundRttSumSeconds, remoteInboundRttCount: &remoteInboundRttCount)
+            }
+        }
+
+        let selectedPair = selectedCandidatePair ?? fallbackCandidatePair
+        let localCandidate = selectedPair.flatMap { pair -> RTCStatistics? in
+            guard let id = memberString(pair, key: "localCandidateId"), !id.isEmpty else { return nil }
+            return report.statistics[id]
+        }
+        let remoteCandidate = selectedPair.flatMap { pair -> RTCStatistics? in
+            guard let id = memberString(pair, key: "remoteCandidateId"), !id.isEmpty else { return nil }
+            return report.statistics[id]
+        }
+
+        let localCandidateType = memberString(localCandidate, key: "candidateType")
+        let remoteCandidateType = memberString(remoteCandidate, key: "candidateType")
+        let localProtocol = memberString(localCandidate, key: "protocol")
+        let remoteProtocol = memberString(remoteCandidate, key: "protocol")
+        let isRelay = localCandidateType == "relay" || remoteCandidateType == "relay"
+        let transportPath: String? = {
+            guard localCandidateType != nil || remoteCandidateType != nil else { return nil }
+            return "\(isRelay ? "TURN relay" : "Direct") (\(localCandidateType ?? "n/a") -> \(remoteCandidateType ?? "n/a"), \(localProtocol ?? remoteProtocol ?? "n/a"))"
+        }()
+
+        let candidateRttSeconds = memberDouble(selectedPair, key: "currentRoundTripTime")
+        let remoteInboundRttSeconds: Double? = remoteInboundRttCount > 0
+            ? (remoteInboundRttSumSeconds / Double(remoteInboundRttCount))
+            : nil
+        let chosenRttSeconds = candidateRttSeconds ?? remoteInboundRttSeconds
+        let rttMs = chosenRttSeconds.map { $0 * 1000.0 }
+        let availableOutgoingKbps = memberDouble(selectedPair, key: "availableOutgoingBitrate").map { $0 / 1000.0 }
+
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let previousSample = lastRealtimeStatsSample
+        let elapsedSeconds: Double = {
+            guard let previousSample else { return 0 }
+            return max(0, Double(now - previousSample.timestampMs) / 1000.0)
+        }()
+
+        let audioRxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.audioRxBytes, currentBytes: audio.inboundBytes, elapsedSeconds: elapsedSeconds) }
+        let audioTxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.audioTxBytes, currentBytes: audio.outboundBytes, elapsedSeconds: elapsedSeconds) }
+        let videoRxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.videoRxBytes, currentBytes: video.inboundBytes, elapsedSeconds: elapsedSeconds) }
+        let videoTxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.videoTxBytes, currentBytes: video.outboundBytes, elapsedSeconds: elapsedSeconds) }
+
+        let videoFps: Double? = {
+            if video.inboundFpsCount > 0 {
+                return video.inboundFpsSum / Double(video.inboundFpsCount)
+            }
+            if let previousSample, elapsedSeconds > 0, video.inboundFramesDecoded >= previousSample.videoFramesDecoded {
+                return Double(video.inboundFramesDecoded - previousSample.videoFramesDecoded) / elapsedSeconds
+            }
+            return nil
+        }()
+
+        freezeSamples.append(
+            FreezeSample(
+                timestampMs: now,
+                freezeCount: video.inboundFreezeCount,
+                freezeDurationSeconds: video.inboundFreezeDurationSeconds
+            )
+        )
+        freezeSamples.removeAll { now - $0.timestampMs > Constants.freezeWindowMs }
+        let freezeWindowBase = freezeSamples.first
+        let videoFreezeCount60s = freezeWindowBase.map { max(0, video.inboundFreezeCount - $0.freezeCount) }
+        let videoFreezeDuration60s = freezeWindowBase.map { max(0, video.inboundFreezeDurationSeconds - $0.freezeDurationSeconds) }
+
+        let audioRxPacketLossPct = ratioPercent(numerator: audio.inboundPacketsLost, denominator: audio.inboundPacketsLost + audio.inboundPacketsReceived)
+        let audioTxPacketLossPct = ratioPercent(numerator: audio.remoteInboundPacketsLost, denominator: audio.remoteInboundPacketsLost + audio.outboundPacketsSent)
+        let videoRxPacketLossPct = ratioPercent(numerator: video.inboundPacketsLost, denominator: video.inboundPacketsLost + video.inboundPacketsReceived)
+        let videoTxPacketLossPct = ratioPercent(numerator: video.remoteInboundPacketsLost, denominator: video.remoteInboundPacketsLost + video.outboundPacketsSent)
+
+        let audioJitterMs = audio.inboundJitterCount > 0
+            ? ((audio.inboundJitterSumSeconds / Double(audio.inboundJitterCount)) * 1000.0)
+            : nil
+        let audioPlayoutDelayMs = audio.inboundJitterBufferEmittedCount > 0
+            ? ((audio.inboundJitterBufferDelaySeconds / Double(audio.inboundJitterBufferEmittedCount)) * 1000.0)
+            : nil
+        let audioConcealedPct = ratioPercent(numerator: audio.inboundConcealedSamples, denominator: audio.inboundConcealedSamples + audio.inboundTotalSamples)
+        let videoRetransmitPct = ratioPercent(numerator: video.outboundPacketsRetransmitted, denominator: video.outboundPacketsSent)
+
+        let videoNackPerMin = previousSample.flatMap { positiveRatePerMinute(currentValue: video.inboundNackCount, previousValue: $0.videoNackCount, elapsedSeconds: elapsedSeconds) }
+        let videoPliPerMin = previousSample.flatMap { positiveRatePerMinute(currentValue: video.inboundPliCount, previousValue: $0.videoPliCount, elapsedSeconds: elapsedSeconds) }
+        let videoFirPerMin = previousSample.flatMap { positiveRatePerMinute(currentValue: video.inboundFirCount, previousValue: $0.videoFirCount, elapsedSeconds: elapsedSeconds) }
+
+        let videoResolution: String? = (video.inboundFrameWidth > 0 && video.inboundFrameHeight > 0)
+            ? "\(video.inboundFrameWidth)x\(video.inboundFrameHeight)"
+            : nil
+
+        lastRealtimeStatsSample = RealtimeStatsSample(
+            timestampMs: now,
+            audioRxBytes: audio.inboundBytes,
+            audioTxBytes: audio.outboundBytes,
+            videoRxBytes: video.inboundBytes,
+            videoTxBytes: video.outboundBytes,
+            videoFramesDecoded: video.inboundFramesDecoded,
+            videoNackCount: video.inboundNackCount,
+            videoPliCount: video.inboundPliCount,
+            videoFirCount: video.inboundFirCount
+        )
+
+        return RealtimeCallStats(
+            transportPath: transportPath,
+            rttMs: rttMs,
+            availableOutgoingKbps: availableOutgoingKbps,
+            audioRxPacketLossPct: audioRxPacketLossPct,
+            audioTxPacketLossPct: audioTxPacketLossPct,
+            audioJitterMs: audioJitterMs,
+            audioPlayoutDelayMs: audioPlayoutDelayMs,
+            audioConcealedPct: audioConcealedPct,
+            audioRxKbps: audioRxKbps,
+            audioTxKbps: audioTxKbps,
+            videoRxPacketLossPct: videoRxPacketLossPct,
+            videoTxPacketLossPct: videoTxPacketLossPct,
+            videoRxKbps: videoRxKbps,
+            videoTxKbps: videoTxKbps,
+            videoFps: videoFps,
+            videoResolution: videoResolution,
+            videoFreezeCount60s: videoFreezeCount60s,
+            videoFreezeDuration60s: videoFreezeDuration60s,
+            videoRetransmitPct: videoRetransmitPct,
+            videoNackPerMin: videoNackPerMin,
+            videoPliPerMin: videoPliPerMin,
+            videoFirPerMin: videoFirPerMin,
+            updatedAtMs: now
+        )
+    }
+
+    private func collectMediaStat(
+        _ stat: RTCStatistics,
+        into totals: inout MediaTotals,
+        remoteInboundRttSumSeconds: inout Double,
+        remoteInboundRttCount: inout Int64
+    ) {
+        switch stat.type {
+        case "inbound-rtp":
+            totals.inboundPacketsReceived += memberInt64(stat, key: "packetsReceived") ?? 0
+            totals.inboundPacketsLost += max(0, memberInt64(stat, key: "packetsLost") ?? 0)
+            totals.inboundBytes += memberInt64(stat, key: "bytesReceived") ?? 0
+
+            if let jitter = memberDouble(stat, key: "jitter") {
+                totals.inboundJitterSumSeconds += jitter
+                totals.inboundJitterCount += 1
+            }
+
+            totals.inboundJitterBufferDelaySeconds += memberDouble(stat, key: "jitterBufferDelay") ?? 0
+            totals.inboundJitterBufferEmittedCount += memberInt64(stat, key: "jitterBufferEmittedCount") ?? 0
+            totals.inboundConcealedSamples += memberInt64(stat, key: "concealedSamples") ?? 0
+            totals.inboundTotalSamples += memberInt64(stat, key: "totalSamplesReceived") ?? 0
+
+            if let fps = memberDouble(stat, key: "framesPerSecond") {
+                totals.inboundFpsSum += fps
+                totals.inboundFpsCount += 1
+            }
+
+            let frameWidth = Int(memberInt64(stat, key: "frameWidth") ?? 0)
+            let frameHeight = Int(memberInt64(stat, key: "frameHeight") ?? 0)
+            totals.inboundFrameWidth = max(totals.inboundFrameWidth, frameWidth)
+            totals.inboundFrameHeight = max(totals.inboundFrameHeight, frameHeight)
+            totals.inboundFramesDecoded += memberInt64(stat, key: "framesDecoded") ?? 0
+
+            totals.inboundFreezeCount += memberInt64(stat, key: "freezeCount") ?? 0
+            totals.inboundFreezeDurationSeconds += memberDouble(stat, key: "totalFreezesDuration") ?? 0
+            totals.inboundNackCount += memberInt64(stat, key: "nackCount") ?? 0
+            totals.inboundPliCount += memberInt64(stat, key: "pliCount") ?? 0
+            totals.inboundFirCount += memberInt64(stat, key: "firCount") ?? 0
+
+        case "outbound-rtp":
+            totals.outboundPacketsSent += memberInt64(stat, key: "packetsSent") ?? 0
+            totals.outboundBytes += memberInt64(stat, key: "bytesSent") ?? 0
+            totals.outboundPacketsRetransmitted += memberInt64(stat, key: "retransmittedPacketsSent") ?? 0
+
+        case "remote-inbound-rtp":
+            totals.remoteInboundPacketsLost += max(0, memberInt64(stat, key: "packetsLost") ?? 0)
+            if let remoteRtt = memberDouble(stat, key: "roundTripTime") {
+                remoteInboundRttSumSeconds += remoteRtt
+                remoteInboundRttCount += 1
+            }
+
+        default:
+            break
+        }
+    }
+
+    private func mediaKind(for stat: RTCStatistics) -> String? {
+        let kind = memberString(stat, key: "kind") ?? memberString(stat, key: "mediaType")
+        if kind == "audio" || kind == "video" {
+            return kind
+        }
+        return nil
+    }
+
+    private func memberString(_ stat: RTCStatistics?, key: String) -> String? {
+        guard let value = stat?.values[key] else { return nil }
+        if let str = value as? String {
+            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        let text = value.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private func memberDouble(_ stat: RTCStatistics?, key: String) -> Double? {
+        guard let value = stat?.values[key] else { return nil }
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let text = value as? String {
+            return Double(text)
+        }
+        return nil
+    }
+
+    private func memberInt64(_ stat: RTCStatistics?, key: String) -> Int64? {
+        guard let value = stat?.values[key] else { return nil }
+        if let number = value as? NSNumber {
+            return number.int64Value
+        }
+        if let text = value as? String {
+            return Int64(text)
+        }
+        return nil
+    }
+
+    private func memberBool(_ stat: RTCStatistics?, key: String) -> Bool? {
+        guard let value = stat?.values[key] else { return nil }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let text = value as? String {
+            switch text.lowercased() {
+            case "true":
+                return true
+            case "false":
+                return false
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+
+    private func calculateBitrateKbps(previousBytes: Int64, currentBytes: Int64, elapsedSeconds: Double) -> Double? {
+        guard elapsedSeconds > 0, currentBytes >= previousBytes else { return nil }
+        let bits = Double(currentBytes - previousBytes) * 8
+        return bits / elapsedSeconds / 1000.0
+    }
+
+    private func ratioPercent(numerator: Int64, denominator: Int64) -> Double? {
+        guard denominator > 0 else { return nil }
+        return (Double(numerator) / Double(denominator)) * 100.0
+    }
+
+    private func positiveRatePerMinute(currentValue: Int64, previousValue: Int64, elapsedSeconds: Double) -> Double? {
+        guard elapsedSeconds > 0, currentValue >= previousValue else { return nil }
+        return (Double(currentValue - previousValue) / elapsedSeconds) * 60.0
+    }
+#endif
 
     func attachLocalRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
@@ -623,19 +1104,43 @@ final class WebRtcEngine {
     private func restartVideoCapturer(source: LocalCameraSource) -> Bool {
         guard let localVideoSource else { return false }
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return false }
+        if source == .composite && !canUseCompositeSource() {
+            return false
+        }
 
         localVideoCapturer?.stopCapture()
         localVideoCapturer = nil
+        #if canImport(ReplayKit)
+        replayKitCapturer?.stopCapture()
+        replayKitCapturer = nil
+        #endif
+        isScreenSharing = false
 
         let capturer = RTCCameraVideoCapturer(delegate: localVideoSource)
-        guard let camera = selectCameraDevice(for: source) else { return false }
-        guard let format = selectCaptureFormat(for: camera) else { return false }
+        guard let camera = selectCameraDevice(for: source) else {
+            if source == .composite {
+                compositeDisabledAfterFailure = true
+            }
+            return false
+        }
+        guard let format = selectCaptureFormat(for: camera) else {
+            if source == .composite {
+                compositeDisabledAfterFailure = true
+            }
+            return false
+        }
 
         let fps = selectCaptureFPS(for: format)
 
         capturer.startCapture(with: camera, format: format, fps: fps)
         localVideoCapturer = capturer
         localCameraSource = source
+        activeCaptureDevice = camera
+        if source == .world || source == .composite {
+            _ = adjustCaptureZoom(by: 1)
+        } else {
+            _ = resetCaptureZoom()
+        }
 
         notifyCameraModeAndFlash()
         applyTorchForCurrentMode()
@@ -817,8 +1322,19 @@ final class WebRtcEngine {
 #endif
 
     private func canUseCompositeSource() -> Bool {
-        // iOS v1 ships with mode semantics but no custom multi-camera compositor implementation.
-        false
+#if canImport(WebRTC)
+        if compositeDisabledAfterFailure {
+            return false
+        }
+        if let cachedCompositeSupport {
+            return cachedCompositeSupport
+        }
+        let supported = AVCaptureMultiCamSession.isMultiCamSupported
+        cachedCompositeSupport = supported
+        return supported
+#else
+        return false
+#endif
     }
 
     private func activeCameraMode() -> LocalCameraMode {
@@ -977,6 +1493,49 @@ private final class WeakAnyBox {
         self.value = value
     }
 }
+
+#if canImport(ReplayKit)
+private final class ReplayKitVideoCapturer: RTCVideoCapturer {
+    private let recorder = RPScreenRecorder.shared()
+    private var isRunning = false
+
+    @discardableResult
+    func startCapture(onReady: @escaping (Bool) -> Void) -> Bool {
+        guard !isRunning else {
+            onReady(true)
+            return true
+        }
+
+        recorder.isMicrophoneEnabled = false
+        recorder.startCapture(
+            handler: { [weak self] sampleBuffer, sampleType, _ in
+                guard let self else { return }
+                guard sampleType == .video else { return }
+                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+                let timestampNs = Int64(CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds * 1_000_000_000)
+                let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
+                let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: ._0, timeStampNs: timestampNs)
+                self.delegate?.capturer(self, didCapture: frame)
+            },
+            completionHandler: { [weak self] error in
+                let success = (error == nil)
+                self?.isRunning = success
+                onReady(success)
+            }
+        )
+
+        return true
+    }
+
+    func stopCapture() {
+        guard isRunning else { return }
+        recorder.stopCapture { [weak self] _ in
+            self?.isRunning = false
+        }
+    }
+}
+#endif
 #endif
 
 #if !canImport(WebRTC)

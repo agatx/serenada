@@ -8,10 +8,11 @@
 - Keep snapshots short-lived (10 minute TTL).
 
 ## Client support
-- Snapshot sender on join: web client and native Android client.
+- Snapshot sender on join: web client, native Android client, and native iOS client.
 - Push subscription + notification rendering:
   - Web: service worker (`webpush` transport).
   - Native Android: Firebase Cloud Messaging (`fcm` transport).
+  - Native iOS: Firebase Cloud Messaging (`fcm` transport) with a Notification Service Extension for snapshot decrypt/render.
 
 ## Architecture (Server-blind)
 ### Key material (per subscriber)
@@ -64,6 +65,13 @@
 - Uses Android Keystore private key + `snapshotEphemeralPubKey` and HKDF salt to unwrap `snapshotKey`.
 - Fetches encrypted snapshot via `/api/push/snapshot/{id}` and decrypts locally.
 - Renders notification with `BigPictureStyle` and deep-links to `/call/{roomId}`.
+- Invite notifications are shown only when the invited room is saved on device and the Settings toggle is enabled.
+
+### Native iOS recipient
+- Receives FCM/APNs data in a Notification Service Extension (`SerenadaNotificationService`).
+- Uses local P-256 private key + `snapshotEphemeralPubKey` and HKDF salt to unwrap `snapshotKey`.
+- Fetches encrypted snapshot via `/api/push/snapshot/{id}` and decrypts locally.
+- Attaches the decrypted image to the notification and deep-links to `/call/{roomId}`.
 - Invite notifications are shown only when the invited room is saved on device and the Settings toggle is enabled.
 
 ## Protocol details
@@ -179,15 +187,17 @@ Invite payload example:
 - Cleanup runs on snapshot upload and removes files older than 10 minutes.
 - No deletion-on-first-fetch to allow multiple subscribers.
 
-## Server configuration (Android FCM)
+## Server configuration (Android + iOS FCM)
 - Configure one of:
   - `FCM_SERVICE_ACCOUNT_JSON` (full service account JSON string)
   - `FCM_SERVICE_ACCOUNT_FILE` (path to a service account JSON file)
-- If unset, `fcm` subscriptions are accepted but native Android pushes are skipped server-side.
+- If unset, `fcm` subscriptions are accepted but native Android/iOS pushes are skipped server-side.
 - `STUN_HOST` (or `DOMAIN`, if set) is used as the push `host` hint so Android opens/fetches against the originating backend.
+- FCM requests include an APNs block (`apns-priority`, `apns-push-type`, and `aps.mutable-content`) so iOS Notification Service processing can run.
 
 ## Limitations
 - macOS Chrome does not render `image` in notifications; we use `icon` as a fallback.
 - If the device lacks the private key or decryption fails, notifications fall back to text-only.
 - Push payload size must remain under service limits; wrapped key data stays small per recipient.
 - Android requires Firebase runtime config in `client-android` (`firebaseAppId`, `firebaseApiKey`, `firebaseProjectId`, `firebaseSenderId` Gradle properties).
+- iOS requires Firebase runtime config (`GoogleService-Info.plist`) in the app target for FCM token registration.

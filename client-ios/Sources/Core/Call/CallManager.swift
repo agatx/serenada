@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Network
+import UIKit
 
 struct JoinRecoveryState: Equatable {
     let phase: CallPhase
@@ -40,7 +41,11 @@ final class CallManager: ObservableObject {
     @Published private(set) var isDefaultCameraEnabled: Bool
     @Published private(set) var isDefaultMicrophoneEnabled: Bool
     @Published private(set) var isHdVideoExperimentalEnabled: Bool
+    @Published private(set) var areSavedRoomsShownFirst: Bool
+    @Published private(set) var areRoomInviteNotificationsEnabled: Bool
+    @Published private(set) var appVersion: String
     @Published private(set) var recentCalls: [RecentCall] = []
+    @Published private(set) var savedRooms: [SavedRoom] = []
     @Published private(set) var roomStatuses: [String: Int] = [:]
 
     var locale: Locale {
@@ -53,20 +58,25 @@ final class CallManager: ObservableObject {
     private let apiClient: APIClient
     private let settingsStore: SettingsStore
     private let recentCallStore: RecentCallStore
+    private let savedRoomStore: SavedRoomStore
+    private let pushSubscriptionManager: PushSubscriptionManager
     private let signalingClient: SignalingClient
     private let pathMonitor = NWPathMonitor()
     private let pathMonitorQueue = DispatchQueue(label: "CallManager.PathMonitor")
 
     private var callAudioSessionController: CallAudioSessionController!
     private var webRtcEngine: WebRtcEngine!
+    private var joinSnapshotFeature: JoinSnapshotFeature!
 
     private var currentRoomId: String?
+    private var activeCallHostOverride: String?
     private var clientId: String?
     private var hostCid: String?
     private var callStartTimeMs: Int64?
 
     private var watchedRoomIds: [String] = []
     private var pendingJoinRoom: String?
+    private var pendingJoinSnapshotId: String?
 
     private var joinAttemptSerial: Int64 = 0
     private var reconnectAttempts = 0
@@ -92,11 +102,17 @@ final class CallManager: ObservableObject {
         apiClient: APIClient = APIClient(),
         settingsStore: SettingsStore = SettingsStore(),
         recentCallStore: RecentCallStore = RecentCallStore(),
+        savedRoomStore: SavedRoomStore = SavedRoomStore(),
         signalingClient: SignalingClient? = nil
     ) {
         self.apiClient = apiClient
         self.settingsStore = settingsStore
         self.recentCallStore = recentCallStore
+        self.savedRoomStore = savedRoomStore
+        self.pushSubscriptionManager = PushSubscriptionManager(
+            apiClient: apiClient,
+            settingsStore: settingsStore
+        )
         self.signalingClient = signalingClient ?? SignalingClient()
 
         self.serverHost = settingsStore.host
@@ -104,6 +120,9 @@ final class CallManager: ObservableObject {
         self.isDefaultCameraEnabled = settingsStore.isDefaultCameraEnabled
         self.isDefaultMicrophoneEnabled = settingsStore.isDefaultMicrophoneEnabled
         self.isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled
+        self.areSavedRoomsShownFirst = settingsStore.areSavedRoomsShownFirst
+        self.areRoomInviteNotificationsEnabled = settingsStore.areRoomInviteNotificationsEnabled
+        self.appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-"
 
         self.callAudioSessionController = CallAudioSessionController(
             onProximityChanged: { _ in },
@@ -118,11 +137,21 @@ final class CallManager: ObservableObject {
             isHdVideoExperimentalEnabled: settingsStore.isHdVideoExperimentalEnabled,
             eventSink: self
         )
+        self.joinSnapshotFeature = JoinSnapshotFeature(
+            apiClient: apiClient,
+            attachLocalRenderer: { [weak self] renderer in
+                self?.webRtcEngine.attachLocalRenderer(renderer)
+            },
+            detachLocalRenderer: { [weak self] renderer in
+                self?.webRtcEngine.detachLocalRenderer(renderer)
+            }
+        )
 
         self.signalingClient.listener = self
 
         startNetworkMonitoring()
         refreshRecentCalls()
+        refreshSavedRooms()
     }
 
     deinit {
@@ -132,6 +161,7 @@ final class CallManager: ObservableObject {
         iceRestartTask?.cancel()
         offerTimeoutTask?.cancel()
         remoteVideoPollTimer?.invalidate()
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     func updateServerHost(_ host: String) {
@@ -144,7 +174,8 @@ final class CallManager: ObservableObject {
 
         if changed && currentRoomId == nil && !watchedRoomIds.isEmpty {
             signalingClient.close()
-            watchRecentRoomsIfNeeded()
+            syncSavedRoomPushSubscriptions(savedRooms)
+            refreshWatchedRooms()
         }
     }
 
@@ -184,8 +215,37 @@ final class CallManager: ObservableObject {
         webRtcEngine.setHdVideoExperimentalEnabled(enabled)
     }
 
+    func updateSavedRoomsShownFirst(_ enabled: Bool) {
+        settingsStore.areSavedRoomsShownFirst = enabled
+        areSavedRoomsShownFirst = enabled
+    }
+
+    func updateRoomInviteNotifications(_ enabled: Bool) {
+        settingsStore.areRoomInviteNotificationsEnabled = enabled
+        areRoomInviteNotificationsEnabled = enabled
+    }
+
+    func inviteToCurrentRoom() async -> Result<Void, Error> {
+        let roomId = currentRoomId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !roomId.isEmpty else {
+            return .failure(NSError(domain: "CallManager", code: 11, userInfo: [NSLocalizedDescriptionKey: "No active room"]))
+        }
+
+        do {
+            try await apiClient.sendPushInvite(
+                host: currentSignalingHost(),
+                roomId: roomId,
+                endpoint: pushSubscriptionManager.cachedEndpoint()
+            )
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
+    }
+
     func handleDeepLink(_ url: URL) {
-        guard let roomId = DeepLinkParser.extractRoomId(from: url) else { return }
+        guard let target = DeepLinkParser.parseTarget(from: url) else { return }
+        let roomId = target.roomId
 
         let isSameActiveRoom =
             (uiState.roomId == roomId || currentRoomId == roomId) &&
@@ -197,11 +257,21 @@ final class CallManager: ObservableObject {
             return
         }
 
-        if let host = url.host, !host.isEmpty {
-            updateServerHost(host)
+        let hostPolicy = DeepLinkParser.resolveHostPolicy(host: target.host)
+        if let persisted = hostPolicy.persistedHost {
+            updateServerHost(persisted)
         }
 
-        joinRoom(roomId)
+        if target.action == .saveRoom {
+            saveRoom(
+                roomId: target.roomId,
+                name: target.savedRoomName ?? target.roomId,
+                host: hostPolicy.oneOffHost
+            )
+            return
+        }
+
+        joinRoom(roomId, oneOffHost: hostPolicy.oneOffHost)
     }
 
     func joinFromInput(_ input: String) {
@@ -212,9 +282,21 @@ final class CallManager: ObservableObject {
             return
         }
 
-        if let url = URL(string: trimmed), let host = url.host, let roomId = DeepLinkParser.extractRoomId(from: url) {
-            updateServerHost(host)
-            joinRoom(roomId)
+        if let url = URL(string: trimmed), let target = DeepLinkParser.parseTarget(from: url) {
+            let hostPolicy = DeepLinkParser.resolveHostPolicy(host: target.host)
+            if let persisted = hostPolicy.persistedHost {
+                updateServerHost(persisted)
+            }
+
+            if target.action == .saveRoom {
+                saveRoom(
+                    roomId: target.roomId,
+                    name: target.savedRoomName ?? target.roomId,
+                    host: hostPolicy.oneOffHost
+                )
+            } else {
+                joinRoom(target.roomId, oneOffHost: hostPolicy.oneOffHost)
+            }
             return
         }
 
@@ -243,7 +325,7 @@ final class CallManager: ObservableObject {
         }
     }
 
-    func joinRoom(_ roomId: String) {
+    func joinRoom(_ roomId: String, oneOffHost: String? = nil) {
         let trimmed = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             updateState {
@@ -253,12 +335,17 @@ final class CallManager: ObservableObject {
             return
         }
 
+        if savedRoomStore.markRoomJoined(roomId: trimmed) {
+            refreshSavedRooms()
+        }
+        activeCallHostOverride = DeepLinkParser.normalizeHostValue(oneOffHost)
         currentRoomId = trimmed
         joinAttemptSerial += 1
         callStartTimeMs = Int64(Date().timeIntervalSince1970 * 1000)
 
         sentOffer = false
         pendingMessages.removeAll()
+        pendingJoinSnapshotId = nil
 
         recreateWebRtcEngineForNewCall()
 
@@ -274,7 +361,9 @@ final class CallManager: ObservableObject {
             $0.localAudioEnabled = defaultAudio
             $0.localVideoEnabled = defaultVideo
             $0.localCameraMode = .selfie
+            $0.cameraZoomFactor = 1
             $0.webrtcStatsSummary = ""
+            $0.realtimeStats = .empty
             $0.isFlashAvailable = false
             $0.isFlashEnabled = false
         }
@@ -301,14 +390,65 @@ final class CallManager: ObservableObject {
 
     func dismissError() {
         if uiState.phase == .error {
-            uiState = CallUiState()
+            setUiState(CallUiState())
             refreshRecentCalls()
+            refreshSavedRooms()
         }
     }
 
     func removeRecentCall(roomId: String) {
         recentCallStore.removeCall(roomId: roomId)
         refreshRecentCalls()
+    }
+
+    func saveRoom(roomId: String, name: String, host: String? = nil) {
+        let normalizedRoomId = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedRoomId.isEmpty else { return }
+        guard let normalizedName = DeepLinkParser.normalizeSavedRoomName(name) else { return }
+
+        let normalizedHost = DeepLinkParser.normalizeHostValue(host)
+        let hostOverride = normalizedHost.flatMap { DeepLinkParser.isTrustedHost($0) ? nil : $0 }
+
+        let room = SavedRoom(
+            roomId: normalizedRoomId,
+            name: normalizedName,
+            createdAt: Int64(Date().timeIntervalSince1970 * 1000),
+            host: hostOverride,
+            lastJoinedAt: nil
+        )
+        savedRoomStore.saveRoom(room)
+        refreshSavedRooms()
+    }
+
+    func joinSavedRoom(_ room: SavedRoom) {
+        joinRoom(room.roomId, oneOffHost: room.host)
+    }
+
+    func removeSavedRoom(roomId: String) {
+        savedRoomStore.removeRoom(roomId: roomId)
+        refreshSavedRooms()
+    }
+
+    func createSavedRoomInviteLink(roomName: String, hostInput: String) async -> Result<String, Error> {
+        guard let normalizedName = DeepLinkParser.normalizeSavedRoomName(roomName) else {
+            return .failure(NSError(domain: "CallManager", code: 1, userInfo: [NSLocalizedDescriptionKey: L10n.errorInvalidSavedRoomName]))
+        }
+
+        let targetHostInput = hostInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? serverHost
+            : hostInput
+        guard let normalizedHost = DeepLinkParser.normalizeHostValue(targetHostInput) else {
+            return .failure(NSError(domain: "CallManager", code: 2, userInfo: [NSLocalizedDescriptionKey: L10n.settingsErrorInvalidServerHost]))
+        }
+
+        do {
+            let roomId = try await apiClient.createRoomId(host: normalizedHost)
+            let roomHostOverride = DeepLinkParser.isTrustedHost(normalizedHost) ? nil : normalizedHost
+            saveRoom(roomId: roomId, name: normalizedName, host: roomHostOverride)
+            return .success(buildSavedRoomInviteLink(host: normalizedHost, roomId: roomId, roomName: normalizedName))
+        } catch {
+            return .failure(error)
+        }
     }
 
     func endCall() {
@@ -339,6 +479,39 @@ final class CallManager: ObservableObject {
         }
     }
 
+    func toggleScreenShare() {
+        if uiState.isScreenSharing {
+            _ = webRtcEngine.stopScreenShare()
+            return
+        }
+
+        _ = webRtcEngine.startScreenShare { [weak self] started in
+            Task { @MainActor in
+                guard let self else { return }
+                guard started else { return }
+                self.updateState {
+                    $0.isScreenSharing = true
+                    $0.localCameraMode = .screenShare
+                    $0.cameraZoomFactor = 1
+                }
+                self.applyLocalVideoPreference()
+            }
+        }
+    }
+
+    func adjustCameraZoom(scaleDelta: CGFloat) {
+        guard uiState.phase == .inCall else { return }
+        guard uiState.localCameraMode == .world || uiState.localCameraMode == .composite else { return }
+        if let zoom = webRtcEngine.adjustCaptureZoom(by: scaleDelta) {
+            updateState { $0.cameraZoomFactor = zoom }
+        }
+    }
+
+    func resetCameraZoom() {
+        let zoom = webRtcEngine.resetCaptureZoom()
+        updateState { $0.cameraZoomFactor = zoom }
+    }
+
     func attachLocalRenderer(_ renderer: AnyObject) {
         webRtcEngine.attachLocalRenderer(renderer)
     }
@@ -360,35 +533,70 @@ final class CallManager: ObservableObject {
         if signalingClient.isConnected() {
             if let roomToJoin {
                 pendingJoinRoom = nil
-                sendJoin(roomId: roomToJoin)
+                sendJoin(roomId: roomToJoin, snapshotId: pendingJoinSnapshotId)
             }
             sendWatchRoomsIfNeeded()
             return
         }
 
         pendingJoinRoom = roomToJoin
-        signalingClient.connect(host: serverHost)
+        signalingClient.connect(host: currentSignalingHost())
     }
 
-    private func sendJoin(roomId: String) {
-        var payload: [String: JSONValue] = [
-            "device": .string("ios"),
-            "capabilities": .object(["trickleIce": .bool(true)])
-        ]
+    private func sendJoin(roomId: String, snapshotId: String? = nil) {
+        pendingJoinSnapshotId = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let endpoint = await self.fetchJoinPushEndpointWithTimeout()
+            guard self.currentRoomId == roomId else { return }
+            guard self.signalingClient.isConnected() else { return }
 
-        let reconnectCid = clientId ?? settingsStore.reconnectCid
-        if let reconnectCid {
-            payload["reconnectCid"] = .string(reconnectCid)
+            var payload: [String: JSONValue] = [
+                "device": .string("ios"),
+                "capabilities": .object(["trickleIce": .bool(true)])
+            ]
+
+            let reconnectCid = self.clientId ?? self.settingsStore.reconnectCid
+            if let reconnectCid {
+                payload["reconnectCid"] = .string(reconnectCid)
+            }
+            if let endpoint, !endpoint.isEmpty {
+                payload["pushEndpoint"] = .string(endpoint)
+            }
+            if let snapshotId, !snapshotId.isEmpty {
+                payload["snapshotId"] = .string(snapshotId)
+            }
+
+            let message = SignalingMessage(
+                type: "join",
+                rid: roomId,
+                payload: .object(payload)
+            )
+
+            self.signalingClient.send(message)
+            self.scheduleJoinRecovery(for: roomId)
+        }
+    }
+
+    private func fetchJoinPushEndpointWithTimeout() async -> String? {
+        if let cached = pushSubscriptionManager.cachedEndpoint() {
+            return cached
         }
 
-        let message = SignalingMessage(
-            type: "join",
-            rid: roomId,
-            payload: .object(payload)
-        )
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask { @MainActor [weak self] in
+                guard let self else { return nil }
+                return await self.pushSubscriptionManager.refreshPushEndpoint()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                return nil
+            }
 
-        signalingClient.send(message)
-        scheduleJoinRecovery(for: roomId)
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
     }
 
     private func sendMessage(type: String, payload: JSONValue? = nil, to: String? = nil) {
@@ -446,6 +654,10 @@ final class CallManager: ObservableObject {
         clientId = message.cid
         settingsStore.reconnectCid = message.cid
 
+        if let joinedRoomId = message.rid ?? currentRoomId {
+            pushSubscriptionManager.subscribeRoom(roomId: joinedRoomId, host: currentSignalingHost())
+        }
+
         if let roomState = parseRoomState(payload: message.payload) {
             hostCid = roomState.hostCid
             updateParticipants(roomState)
@@ -479,10 +691,10 @@ final class CallManager: ObservableObject {
         let rawMessage = message.payload?.objectValue?["message"]?.stringValue
         clearJoinRecovery()
         resetResources()
-        uiState = CallUiState(
+        setUiState(CallUiState(
             phase: .error,
             errorMessage: rawMessage?.isEmpty == false ? rawMessage : L10n.errorUnknown
-        )
+        ))
     }
 
     private func handleSignalingPayload(_ message: SignalingMessage) {
@@ -800,13 +1012,22 @@ final class CallManager: ObservableObject {
 
         webrtcStatsRequestInFlight = true
 
-        webRtcEngine.collectWebRtcStatsSummary { [weak self] summary in
+        webRtcEngine.collectRealtimeCallStats { [weak self] realtimeStats in
             Task { @MainActor in
                 guard let self else { return }
-                self.webrtcStatsRequestInFlight = false
-                self.lastWebRtcStatsPollAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-                if self.uiState.webrtcStatsSummary != summary {
-                    self.updateState { $0.webrtcStatsSummary = summary }
+                if self.uiState.realtimeStats != realtimeStats {
+                    self.updateState { $0.realtimeStats = realtimeStats }
+                }
+
+                self.webRtcEngine.collectWebRtcStatsSummary { [weak self] summary in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.webrtcStatsRequestInFlight = false
+                        self.lastWebRtcStatsPollAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+                        if self.uiState.webrtcStatsSummary != summary {
+                            self.updateState { $0.webrtcStatsSummary = summary }
+                        }
+                    }
                 }
             }
         }
@@ -830,8 +1051,8 @@ final class CallManager: ObservableObject {
         settingsStore.reconnectCid = nil
         resetResources()
 
-        uiState = CallUiState(phase: .idle)
-        watchRecentRoomsIfNeeded()
+        setUiState(CallUiState(phase: .idle))
+        watchRoomsIfNeeded()
     }
 
     private func resetResources() {
@@ -842,11 +1063,13 @@ final class CallManager: ObservableObject {
         deactivateAudioSession()
 
         currentRoomId = nil
+        activeCallHostOverride = nil
         hostCid = nil
         clientId = nil
         callStartTimeMs = nil
 
         pendingJoinRoom = nil
+        pendingJoinSnapshotId = nil
         pendingMessages.removeAll()
 
         reconnectAttempts = 0
@@ -914,7 +1137,32 @@ final class CallManager: ObservableObject {
         startRemoteVideoStatePolling()
 
         pendingJoinRoom = roomId
-        ensureSignalingConnection()
+        prepareJoinSnapshotAndConnect(roomId: roomId, joinAttempt: joinAttempt)
+    }
+
+    private func prepareJoinSnapshotAndConnect(roomId: String, joinAttempt: Int64) {
+        joinSnapshotFeature.prepareSnapshotId(
+            host: currentSignalingHost(),
+            roomId: roomId,
+            isVideoEnabled: { [weak self] in
+                self?.uiState.localVideoEnabled ?? false
+            },
+            isJoinAttemptActive: { [weak self] in
+                self?.isJoinAttemptActive(roomId: roomId, joinAttempt: joinAttempt) ?? false
+            },
+            onReady: { [weak self] snapshotId in
+                guard let self else { return }
+                guard self.isJoinAttemptActive(roomId: roomId, joinAttempt: joinAttempt) else { return }
+                self.pendingJoinSnapshotId = snapshotId
+                self.ensureSignalingConnection()
+            }
+        )
+    }
+
+    private func isJoinAttemptActive(roomId: String, joinAttempt: Int64) -> Bool {
+        joinAttemptSerial == joinAttempt &&
+            currentRoomId == roomId &&
+            uiState.phase == .joining
     }
 
     private func resolveMediaPermissions() async -> MediaPermissions {
@@ -1030,12 +1278,12 @@ final class CallManager: ObservableObject {
 
             if let roomId, self.currentRoomId == roomId {
                 self.pendingJoinRoom = roomId
-                self.signalingClient.connect(host: self.serverHost)
+                self.signalingClient.connect(host: self.currentSignalingHost())
                 return
             }
 
             if roomId == nil && self.currentRoomId == nil && !self.watchedRoomIds.isEmpty {
-                self.signalingClient.connect(host: self.serverHost)
+                self.signalingClient.connect(host: self.currentSignalingHost())
             }
         }
     }
@@ -1043,15 +1291,52 @@ final class CallManager: ObservableObject {
     private func refreshRecentCalls() {
         let calls = recentCallStore.getRecentCalls()
         recentCalls = calls
+        refreshWatchedRooms()
+    }
 
-        watchedRoomIds = calls.map { $0.roomId }
+    private func refreshSavedRooms() {
+        let rooms = savedRoomStore.getSavedRooms()
+        savedRooms = rooms
+        syncSavedRoomPushSubscriptions(rooms)
+        refreshWatchedRooms()
+    }
+
+    private func syncSavedRoomPushSubscriptions(_ rooms: [SavedRoom]) {
+        let host = serverHost
+        for room in rooms where shouldWatchSavedRoom(room) {
+            pushSubscriptionManager.subscribeRoom(roomId: room.roomId, host: host)
+        }
+    }
+
+    private func refreshWatchedRooms() {
+        var merged = [String]()
+        var seen = Set<String>()
+
+        for room in savedRooms where shouldWatchSavedRoom(room) {
+            if seen.insert(room.roomId).inserted {
+                merged.append(room.roomId)
+            }
+        }
+
+        for call in recentCalls {
+            if seen.insert(call.roomId).inserted {
+                merged.append(call.roomId)
+            }
+        }
+
+        watchedRoomIds = merged
         let watchedSet = Set(watchedRoomIds)
         roomStatuses = roomStatuses.filter { watchedSet.contains($0.key) }
 
-        watchRecentRoomsIfNeeded()
+        watchRoomsIfNeeded()
     }
 
-    private func watchRecentRoomsIfNeeded() {
+    private func shouldWatchSavedRoom(_ room: SavedRoom) -> Bool {
+        guard let host = room.host else { return true }
+        return host.compare(serverHost, options: .caseInsensitive) == .orderedSame
+    }
+
+    private func watchRoomsIfNeeded() {
         if watchedRoomIds.isEmpty {
             if currentRoomId == nil && signalingClient.isConnected() {
                 signalingClient.close()
@@ -1062,7 +1347,7 @@ final class CallManager: ObservableObject {
         if signalingClient.isConnected() {
             sendWatchRoomsIfNeeded()
         } else {
-            signalingClient.connect(host: serverHost)
+            signalingClient.connect(host: currentSignalingHost())
         }
     }
 
@@ -1080,6 +1365,28 @@ final class CallManager: ObservableObject {
         refreshRecentCalls()
     }
 
+    private func currentSignalingHost() -> String {
+        if currentRoomId != nil {
+            return activeCallHostOverride ?? serverHost
+        }
+        return serverHost
+    }
+
+    private func buildSavedRoomInviteLink(host: String, roomId: String, roomName: String) -> String {
+        let normalizedHost = DeepLinkParser.normalizeHostValue(host) ?? host
+        let appLinkHost = normalizedHost == AppConstants.ruHost ? AppConstants.ruHost : AppConstants.defaultHost
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = appLinkHost
+        components.path = "/call/\(roomId)"
+        components.queryItems = [
+            URLQueryItem(name: "host", value: normalizedHost),
+            URLQueryItem(name: "name", value: roomName)
+        ]
+        return components.url?.absoluteString ?? "https://\(appLinkHost)/call/\(roomId)"
+    }
+
     private func isHost() -> Bool {
         clientId != nil && clientId == hostCid
     }
@@ -1091,7 +1398,21 @@ final class CallManager: ObservableObject {
     private func updateState(_ mutate: (inout CallUiState) -> Void) {
         var next = uiState
         mutate(&next)
-        uiState = next
+        setUiState(next)
+    }
+
+    private func setUiState(_ state: CallUiState) {
+        uiState = state
+        syncIdleTimerPolicy(for: state.phase)
+    }
+
+    private func syncIdleTimerPolicy(for phase: CallPhase) {
+        switch phase {
+        case .creatingRoom, .joining, .waiting, .inCall:
+            UIApplication.shared.isIdleTimerDisabled = true
+        default:
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 
     private static func buildWebRtcEngine(isHdVideoExperimentalEnabled: Bool, eventSink: CallManager) -> WebRtcEngine {
@@ -1205,8 +1526,16 @@ final class CallManager: ObservableObject {
             },
             onScreenShareStopped: { [weak eventSink] in
                 Task { @MainActor in
-                    eventSink?.updateState { $0.isScreenSharing = false }
+                    eventSink?.updateState {
+                        $0.isScreenSharing = false
+                        $0.cameraZoomFactor = 1
+                    }
                     eventSink?.applyLocalVideoPreference()
+                }
+            },
+            onZoomFactorChanged: { [weak eventSink] zoomFactor in
+                Task { @MainActor in
+                    eventSink?.updateState { $0.cameraZoomFactor = zoomFactor }
                 }
             },
             isHdVideoExperimentalEnabled: isHdVideoExperimentalEnabled
@@ -1246,7 +1575,7 @@ extension CallManager: SignalingClientListener {
 
         if let join = pendingJoinRoom {
             pendingJoinRoom = nil
-            sendJoin(roomId: join)
+            sendJoin(roomId: join, snapshotId: pendingJoinSnapshotId)
         }
 
         sendWatchRoomsIfNeeded()

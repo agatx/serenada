@@ -134,7 +134,7 @@ From the project root on your local machine:
 
 If `secrets/service-account.json` exists in the repo root, `deploy.sh` also syncs it to `${REMOTE_DIR}/secrets/service-account.json` and injects `FCM_SERVICE_ACCOUNT_FILE=${REMOTE_DIR}/secrets/service-account.json` into the deployed `.env` (overriding any existing `FCM_SERVICE_ACCOUNT_FILE` / `FCM_SERVICE_ACCOUNT_JSON` entries for that deployment).
 
-### 5. Android App Links (assetlinks.json)
+### 5. Android and iOS Deep Link Association Files
 
 Android deep links require `/.well-known/assetlinks.json` to be served from your domain. The file lives at:
 
@@ -143,6 +143,14 @@ client/public/.well-known/assetlinks.json
 ```
 
 Update it with your **release** signing certificate SHA-256 fingerprint before deployment.
+
+iOS universal links require `/.well-known/apple-app-site-association` to be served from your domain (no `.json` suffix). The file lives at:
+
+```
+client/public/.well-known/apple-app-site-association
+```
+
+Update the `appID` value (`<TEAM_ID>.app.serenada.ios`) to match your Apple Developer Team ID and iOS bundle identifier before deployment.
 
 ### 6. Advanced: Legacy Redirects
 If you need to support redirects from old domains (e.g. `connected.dowhile.fun`), you can create a template at `nginx/nginx.legacy.conf.template`. The deployment script will automatically generate an `extra` configuration for Nginx if this file exists.

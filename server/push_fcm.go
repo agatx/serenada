@@ -116,6 +116,26 @@ func (s *FCMService) SendDataMessage(token string, payload map[string]string) (i
 		return 0, nil, err
 	}
 
+	title := strings.TrimSpace(payload["title"])
+	bodyText := strings.TrimSpace(payload["body"])
+	aps := map[string]any{
+		"mutable-content": 1,
+		"content-available": 1,
+	}
+	if title != "" || bodyText != "" {
+		alert := map[string]string{}
+		if title != "" {
+			alert["title"] = title
+		}
+		if bodyText != "" {
+			alert["body"] = bodyText
+		}
+		if len(alert) > 0 {
+			aps["alert"] = alert
+			aps["sound"] = "default"
+		}
+	}
+
 	requestBody := map[string]any{
 		"message": map[string]any{
 			"token": token,
@@ -123,6 +143,15 @@ func (s *FCMService) SendDataMessage(token string, payload map[string]string) (i
 			"android": map[string]any{
 				"priority": "HIGH",
 				"ttl":      "60s",
+			},
+			"apns": map[string]any{
+				"headers": map[string]string{
+					"apns-priority":  "10",
+					"apns-push-type": "alert",
+				},
+				"payload": map[string]any{
+					"aps": aps,
+				},
 			},
 		},
 	}

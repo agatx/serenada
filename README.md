@@ -17,10 +17,10 @@ A simple, privacy-focused 1:1 video calling application built with WebRTC. No ac
 - **Android camera source cycle** – In-call source switch cycles through `selfie` (default) -> `world` -> `composite` (world feed with circular selfie overlay), automatically skips `composite` when unsupported, and shows a flashlight toggle in `world`/`composite` when flash hardware is available; flashlight preference is remembered during the call and reapplied when returning to supported modes
 - **Android world/composite pinch zoom** – When local video is the large in-call view in `world` or `composite`, pinch gesture zooms the camera capture itself so both local preview and the remote participant see the zoomed detail
 - **Android HD video toggle (experimental)** – Settings include an `HD Video (experimental)` switch for higher camera/composite quality; default mode keeps legacy `640x480` camera constraints for stability
-- **iOS native client (SwiftUI)** – Native iOS app in `client-ios/` mirrors core Android/web flow (1:1 calls, WS->SSE fallback, recent calls with live room occupancy, deep-link parsing, settings + localization, and in-call controls)
+- **iOS native client (SwiftUI)** – Native iOS app in `client-ios/` mirrors Android parity flow: saved rooms + recents ordering, structured deep-link parsing, invite push toggle, encrypted push snapshots, waiting-room invite action, diagnostics screen, mode-based camera cycle with composite fallback, world/composite pinch zoom, ReplayKit screen share toggle, and in-call realtime stats/debug panel
 - **Self-hostable** – Run your own instance with full control
-- **Optional join alerts** – Encrypted push notifications with snapshot previews (web + native Android)
-- **Room invite push** – In waiting state you can explicitly invite subscribers of the room; Android shows these only for saved rooms and has a Settings toggle to disable invite notifications
+- **Optional join alerts** – Encrypted push notifications with snapshot previews (web + native Android + native iOS)
+- **Room invite push** – In waiting state you can explicitly invite subscribers of the room; Android and iOS show these only for saved rooms and have a Settings toggle to disable invite notifications
 
 ## Quick Start
 
@@ -100,7 +100,7 @@ The native iOS app lives in `client-ios/`.
    ```
 7. For local-only device signing overrides (without committing team IDs), use `client-ios/LocalSigning.xcconfig`. See `client-ios/README.md`.
 
-iOS v1 currently defers push notifications, ReplayKit screen sharing, diagnostics screen, and full universal-link entitlement provisioning.
+iOS universal links are enabled for `serenada.app` and `serenada-app.ru` via associated domains plus `/.well-known/apple-app-site-association`.
 Note: iOS Simulator can run signaling and call flow, but local camera preview reliability varies by host setup; use a physical iPhone to validate local camera capture.
 
 ### Production Deployment

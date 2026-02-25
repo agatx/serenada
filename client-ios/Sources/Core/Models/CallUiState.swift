@@ -17,9 +17,11 @@ struct CallUiState: Equatable {
     var signalingState: String = "STABLE"
     var activeTransport: String?
     var webrtcStatsSummary: String = ""
+    var realtimeStats: RealtimeCallStats = .empty
     var isFrontCamera: Bool = true
     var isScreenSharing: Bool = false
     var localCameraMode: LocalCameraMode = .selfie
+    var cameraZoomFactor: Double = 1
     var isFlashAvailable: Bool = false
     var isFlashEnabled: Bool = false
 }

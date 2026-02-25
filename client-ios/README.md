@@ -5,10 +5,16 @@ Native iOS (SwiftUI) client for Serenada 1:1 WebRTC calls.
 This v1 port mirrors Android/web call flow and signaling semantics:
 - 1:1 calls with host-based offer flow
 - WebSocket signaling with automatic SSE fallback
-- Room watch statuses for recent calls
+- Room watch statuses for merged recent calls + saved rooms
+- Saved rooms (create, rename, remove, quick-join, share link) with Android-parity host override semantics
 - In-call camera mode cycle semantics (`selfie -> world -> composite`), with automatic composite skip
+- World/composite pinch zoom (capture-level zoom)
 - Local camera default capture profile targets 480p; enabling `HD Video (experimental)` switches to highest available mode
-- Settings for server host, language, and call defaults
+- ReplayKit screen-share toggle for in-call sharing
+- Push subscription + encrypted join snapshots + waiting-room invite action
+- In-call realtime stats model + top-left double-tap debug panel
+- Diagnostics screen (permissions, media, connectivity, ICE gather probe, report export)
+- Settings for server host, language, call defaults, saved-room order, invite-notification filter, and app version
 
 ## Requirements
 - Xcode 16+
@@ -47,12 +53,22 @@ Builds run `scripts/verify_webrtc_checksum.sh` pre-build.
 
 If the WebRTC artifact is missing, the app builds in a local stub mode (UI/state/signaling scaffolding still compiles, but media transport is non-functional).
 
-## Current v1 limitations
-- Push notifications and encrypted snapshot flow are not implemented yet
-- ReplayKit screen sharing is not implemented yet
-- Diagnostics screen parity with Android is not implemented yet
-- Universal link entitlements/provisioning are deferred (URL parsing/routing is implemented)
-- iOS Simulator may not expose a usable camera feed; verify local camera preview on a physical iPhone
+## Universal links
+- Associated domains are configured for:
+  - `applinks:serenada.app`
+  - `applinks:serenada-app.ru`
+- Server must host `/.well-known/apple-app-site-association` with `appID = U5TBRZ56DZ.app.serenada.ios`.
+- Deep-link smoke test command (physical device):
+```bash
+xcrun devicectl device process launch \
+  --device [UDID] \
+  --terminate-existing \
+  --activate \
+  --payload-url "https://serenada.app/call/YovflsGamCygX912gb26Jeaq8Es" \
+  app.serenada.ios
+```
+
+iOS Simulator may not expose a usable camera feed; verify local camera preview and media behavior on a physical iPhone.
 
 ## Test
 ```bash

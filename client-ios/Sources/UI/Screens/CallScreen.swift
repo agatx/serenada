@@ -42,6 +42,182 @@ func pipBottomPadding(isLandscape: Bool, areControlsVisible: Bool) -> CGFloat {
     return areControlsVisible ? 170 : 52
 }
 
+enum DebugStatus {
+    case good
+    case warn
+    case bad
+    case na
+}
+
+struct DebugPanelMetric: Identifiable {
+    let id = UUID()
+    let label: String
+    let value: String
+    let status: DebugStatus
+}
+
+struct DebugPanelSection: Identifiable {
+    let id = UUID()
+    let title: String
+    let metrics: [DebugPanelMetric]
+}
+
+func buildDebugPanelSections(uiState: CallUiState) -> [DebugPanelSection] {
+    let stats = uiState.realtimeStats
+    let signalingStatus: DebugStatus = uiState.isSignalingConnected ? .good : .bad
+    let iceStatus: DebugStatus = {
+        switch normalizeState(uiState.iceConnectionState) {
+        case "connected", "completed":
+            return .good
+        case "checking", "disconnected":
+            return .warn
+        default:
+            return .bad
+        }
+    }()
+    let pcStatus: DebugStatus = {
+        switch normalizeState(uiState.connectionState) {
+        case "connected":
+            return .good
+        case "connecting", "disconnected":
+            return .warn
+        default:
+            return .bad
+        }
+    }()
+    let reconnectStatus: DebugStatus = uiState.isReconnecting ? .bad : .good
+
+    let transportPathStatus: DebugStatus = {
+        guard let path = stats.transportPath else { return .na }
+        return path.hasPrefix("TURN relay") ? .warn : .good
+    }()
+
+    let rttStatus = lowerIsBetter(stats.rttMs, goodMax: 120, warnMax: 250)
+    let outgoingHeadroomStatus = higherIsBetter(stats.availableOutgoingKbps, goodMin: 1500, warnMin: 600)
+    let audioLossStatus = worstStatus(
+        lowerIsBetter(stats.audioRxPacketLossPct, goodMax: 1, warnMax: 3),
+        lowerIsBetter(stats.audioTxPacketLossPct, goodMax: 1, warnMax: 3)
+    )
+    let audioBitrateStatus = worstStatus(
+        higherIsBetter(stats.audioRxKbps, goodMin: 20, warnMin: 12),
+        higherIsBetter(stats.audioTxKbps, goodMin: 20, warnMin: 12)
+    )
+    let videoLossStatus = worstStatus(
+        lowerIsBetter(stats.videoRxPacketLossPct, goodMax: 1, warnMax: 3),
+        lowerIsBetter(stats.videoTxPacketLossPct, goodMax: 1, warnMax: 3)
+    )
+    let videoBitrateStatus = worstStatus(
+        higherIsBetter(stats.videoRxKbps, goodMin: 900, warnMin: 350),
+        higherIsBetter(stats.videoTxKbps, goodMin: 900, warnMin: 350)
+    )
+
+    return [
+        DebugPanelSection(
+            title: "Connection",
+            metrics: [
+                DebugPanelMetric(label: "Signaling", value: uiState.isSignalingConnected ? "connected" : "disconnected", status: signalingStatus),
+                DebugPanelMetric(label: "Transport", value: uiState.activeTransport ?? "n/a", status: signalingStatus),
+                DebugPanelMetric(label: "ICE / PC", value: "\(normalizeState(uiState.iceConnectionState)) / \(normalizeState(uiState.connectionState))", status: worstStatus(iceStatus, pcStatus)),
+                DebugPanelMetric(label: "SDP", value: normalizeState(uiState.signalingState), status: normalizeState(uiState.signalingState) == "stable" ? .good : .warn),
+                DebugPanelMetric(label: "Room", value: uiState.participantCount > 0 ? "\(uiState.participantCount) participants" : "none", status: uiState.participantCount > 0 ? .good : .warn),
+                DebugPanelMetric(label: "Reconnecting", value: uiState.isReconnecting ? "yes" : "no", status: reconnectStatus)
+            ]
+        ),
+        DebugPanelSection(
+            title: "Latency",
+            metrics: [
+                DebugPanelMetric(label: "RTT", value: formatMs(stats.rttMs), status: rttStatus),
+                DebugPanelMetric(label: "", value: stats.transportPath ?? "n/a", status: transportPathStatus),
+                DebugPanelMetric(label: "Outgoing headroom", value: formatKbps(stats.availableOutgoingKbps), status: outgoingHeadroomStatus),
+                DebugPanelMetric(label: "Updated", value: formatTimeLabel(stats.updatedAtMs == 0 ? nil : stats.updatedAtMs), status: .na)
+            ]
+        ),
+        DebugPanelSection(
+            title: "Audio Quality",
+            metrics: [
+                DebugPanelMetric(label: "Packet loss ⇵", value: "\(formatPercent(stats.audioRxPacketLossPct)) / \(formatPercent(stats.audioTxPacketLossPct))", status: audioLossStatus),
+                DebugPanelMetric(label: "Jitter", value: formatMs(stats.audioJitterMs), status: lowerIsBetter(stats.audioJitterMs, goodMax: 20, warnMax: 40)),
+                DebugPanelMetric(label: "Playout delay", value: formatMs(stats.audioPlayoutDelayMs), status: lowerIsBetter(stats.audioPlayoutDelayMs, goodMax: 80, warnMax: 180)),
+                DebugPanelMetric(label: "Concealed audio", value: formatPercent(stats.audioConcealedPct), status: lowerIsBetter(stats.audioConcealedPct, goodMax: 2, warnMax: 8)),
+                DebugPanelMetric(label: "Bitrate ⇵", value: "\(formatKbps(stats.audioRxKbps)) / \(formatKbps(stats.audioTxKbps))", status: audioBitrateStatus)
+            ]
+        ),
+        DebugPanelSection(
+            title: "Video Quality",
+            metrics: [
+                DebugPanelMetric(label: "Packet loss ⇵", value: "\(formatPercent(stats.videoRxPacketLossPct)) / \(formatPercent(stats.videoTxPacketLossPct))", status: videoLossStatus),
+                DebugPanelMetric(label: "Bitrate ⇵", value: "\(formatKbps(stats.videoRxKbps)) / \(formatKbps(stats.videoTxKbps))", status: videoBitrateStatus),
+                DebugPanelMetric(label: "Render FPS", value: formatFps(stats.videoFps), status: higherIsBetter(stats.videoFps, goodMin: 24, warnMin: 15)),
+                DebugPanelMetric(label: "Resolution", value: stats.videoResolution ?? "n/a", status: stats.videoResolution == nil ? .na : .good),
+                DebugPanelMetric(label: "Freezes (last 60s)", value: formatFreezeWindow(stats.videoFreezeCount60s, stats.videoFreezeDuration60s), status: worstStatus(
+                    lowerIsBetter(stats.videoFreezeCount60s.map(Double.init), goodMax: 0, warnMax: 2),
+                    lowerIsBetter(stats.videoFreezeDuration60s, goodMax: 0.2, warnMax: 1)
+                )),
+                DebugPanelMetric(label: "Retransmit", value: formatPercent(stats.videoRetransmitPct), status: lowerIsBetter(stats.videoRetransmitPct, goodMax: 1, warnMax: 3))
+            ]
+        )
+    ]
+}
+
+func normalizeState(_ value: String?) -> String {
+    let normalized = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return normalized.isEmpty ? "n/a" : normalized
+}
+
+func formatMs(_ value: Double?) -> String {
+    guard let value else { return "n/a" }
+    return "\(Int(value.rounded())) ms"
+}
+
+func formatPercent(_ value: Double?) -> String {
+    guard let value else { return "n/a" }
+    return String(format: "%.1f%%", value)
+}
+
+func formatKbps(_ value: Double?) -> String {
+    guard let value else { return "n/a" }
+    return "\(Int(value.rounded())) kbps"
+}
+
+func formatFps(_ value: Double?) -> String {
+    guard let value else { return "n/a" }
+    return String(format: "%.1f fps", value)
+}
+
+func formatFreezeWindow(_ count: Int64?, _ durationSeconds: Double?) -> String {
+    guard let count, let durationSeconds else { return "n/a" }
+    return "\(count) / \(String(format: "%.1f", durationSeconds))s"
+}
+
+func formatTimeLabel(_ timestampMs: Int64?) -> String {
+    guard let timestampMs else { return "n/a" }
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm:ss"
+    return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(timestampMs) / 1000.0))
+}
+
+func lowerIsBetter(_ value: Double?, goodMax: Double, warnMax: Double) -> DebugStatus {
+    guard let value else { return .na }
+    if value <= goodMax { return .good }
+    if value <= warnMax { return .warn }
+    return .bad
+}
+
+func higherIsBetter(_ value: Double?, goodMin: Double, warnMin: Double) -> DebugStatus {
+    guard let value else { return .na }
+    if value >= goodMin { return .good }
+    if value >= warnMin { return .warn }
+    return .bad
+}
+
+func worstStatus(_ statuses: DebugStatus...) -> DebugStatus {
+    let concrete = statuses.filter { $0 != .na }
+    guard !concrete.isEmpty else { return .na }
+    if concrete.contains(.bad) { return .bad }
+    if concrete.contains(.warn) { return .warn }
+    return .good
+}
+
 struct CallScreen: View {
     let roomId: String
     let uiState: CallUiState
@@ -49,8 +225,12 @@ struct CallScreen: View {
     let onToggleAudio: () -> Void
     let onToggleVideo: () -> Void
     let onFlipCamera: () -> Void
+    let onToggleScreenShare: () -> Void
+    let onAdjustCameraZoom: (CGFloat) -> Void
+    let onResetCameraZoom: () -> Void
     let onToggleFlashlight: () -> Void
     let onEndCall: () -> Void
+    let onInviteToRoom: () async -> Result<Void, Error>
     let callManager: CallManager
 
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -58,12 +238,17 @@ struct CallScreen: View {
     @State private var isLocalLarge = false
     @State private var remoteVideoFitCover = true
     @State private var showShareSheet = false
+    @State private var inviteStatusMessage: String?
+    @State private var showDebugPanel = false
+    @State private var lastDebugTapAt: Date?
+    @State private var lastMagnificationValue: CGFloat = 1
 
     var body: some View {
         let showLocalAsPrimarySurface = shouldRenderLocalAsPrimarySurface(
             phase: uiState.phase,
             isLocalLarge: isLocalLarge
         )
+        let isPinchZoomEnabled = shouldEnablePinchZoom(showLocalAsPrimarySurface: showLocalAsPrimarySurface)
 
         ZStack {
             Color.black.ignoresSafeArea()
@@ -99,8 +284,26 @@ struct CallScreen: View {
                 areControlsVisible.toggle()
             }
         }
+        .gesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    guard isPinchZoomEnabled else { return }
+                    let delta = value / max(lastMagnificationValue, 0.001)
+                    lastMagnificationValue = value
+                    onAdjustCameraZoom(delta)
+                }
+                .onEnded { _ in
+                    lastMagnificationValue = 1
+                }
+        )
         .onChange(of: uiState.isFrontCamera) { isFront in
             isLocalLarge = !isFront
+        }
+        .onChange(of: isPinchZoomEnabled) { enabled in
+            if !enabled {
+                lastMagnificationValue = 1
+                onResetCameraZoom()
+            }
         }
         .task(id: areControlsVisible) {
             guard areControlsVisible, uiState.phase == .inCall else { return }
@@ -192,18 +395,33 @@ struct CallScreen: View {
     }
 
     private var overlays: some View {
-        VStack(spacing: 0) {
-            topStatus
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                topStatus
 
-            Spacer()
+                Spacer()
 
-            if shouldShowWaitingOverlay(phase: uiState.phase) {
-                waitingOverlay
+                if shouldShowWaitingOverlay(phase: uiState.phase) {
+                    waitingOverlay
+                }
+
+                if areControlsVisible {
+                    controlBar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
 
-            if areControlsVisible {
-                controlBar
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            Color.clear
+                .frame(width: 72, height: 72)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    handleDebugTap()
+                }
+
+            if showDebugPanel && uiState.phase == .inCall {
+                debugPanelView
+                    .padding(.top, 80)
+                    .padding(.leading, 12)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: areControlsVisible)
@@ -264,14 +482,45 @@ struct CallScreen: View {
     }
 
     private var waitingOverlay: some View {
-        Text(L10n.callWaitingOverlay)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.45))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .padding(.bottom, 20)
+        VStack(spacing: 12) {
+            Text(L10n.callWaitingOverlay)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Button {
+                Task {
+                    let result = await onInviteToRoom()
+                    await MainActor.run {
+                        switch result {
+                        case .success:
+                            inviteStatusMessage = L10n.callInviteSent
+                        case .failure:
+                            inviteStatusMessage = L10n.callInviteFailed
+                        }
+                    }
+                }
+            } label: {
+                Label(L10n.callInviteToRoom, systemImage: "bell.badge.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+
+            if let inviteStatusMessage, !inviteStatusMessage.isEmpty {
+                Text(inviteStatusMessage)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.45))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .padding(.bottom, 20)
     }
 
     private var controlBar: some View {
@@ -286,6 +535,10 @@ struct CallScreen: View {
 
             iconButton(system: "camera.rotate.fill") {
                 onFlipCamera()
+            }
+
+            iconButton(system: uiState.isScreenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle") {
+                onToggleScreenShare()
             }
 
             Button(action: onEndCall) {
@@ -304,6 +557,70 @@ struct CallScreen: View {
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .padding(.horizontal, 18)
         .padding(.bottom, 26)
+    }
+
+    private var debugPanelView: some View {
+        let sections = buildDebugPanelSections(uiState: uiState)
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(sections) { section in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(section.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.white.opacity(0.95))
+                    ForEach(section.metrics) { metric in
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(debugDotColor(metric.status))
+                                .frame(width: 8, height: 8)
+                            if !metric.label.isEmpty {
+                                Text(metric.label)
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.white.opacity(0.9))
+                            }
+                            Spacer(minLength: 8)
+                            Text(metric.value)
+                                .font(.caption2)
+                                .foregroundStyle(Color.white.opacity(0.95))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: 280)
+        .background(Color.black.opacity(0.62))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func shouldEnablePinchZoom(showLocalAsPrimarySurface: Bool) -> Bool {
+        if uiState.phase != .inCall { return false }
+        if uiState.isScreenSharing { return false }
+        if !showLocalAsPrimarySurface { return false }
+        return uiState.localCameraMode == .world || uiState.localCameraMode == .composite
+    }
+
+    private func handleDebugTap() {
+        guard uiState.phase == .inCall else { return }
+        let now = Date()
+        let didDoubleTap = lastDebugTapAt.map { now.timeIntervalSince($0) <= 0.45 } ?? false
+        lastDebugTapAt = now
+        guard didDoubleTap else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showDebugPanel.toggle()
+        }
+    }
+
+    private func debugDotColor(_ status: DebugStatus) -> Color {
+        switch status {
+        case .good:
+            return Color(red: 0.18, green: 0.80, blue: 0.44)
+        case .warn:
+            return Color(red: 0.94, green: 0.77, blue: 0.06)
+        case .bad:
+            return Color(red: 0.91, green: 0.30, blue: 0.24)
+        case .na:
+            return Color(red: 0.58, green: 0.65, blue: 0.65)
+        }
     }
 
     private func iconButton(system: String, action: @escaping () -> Void) -> some View {

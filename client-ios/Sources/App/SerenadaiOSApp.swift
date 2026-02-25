@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct SerenadaiOSApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var callManager = CallManager()
 
     var body: some Scene {

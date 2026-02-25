@@ -4,6 +4,7 @@ private enum RootScreen {
     case join
     case joinWithCode
     case settings
+    case diagnostics
     case call
     case error
 }
@@ -22,12 +23,14 @@ struct RootView: View {
 
     @State private var showSettings = false
     @State private var showJoinWithCode = false
+    @State private var showDiagnostics = false
 
     var body: some View {
         let uiState = callManager.uiState
         let showActiveCallScreen = shouldShowActiveCallScreen(for: uiState)
 
         let currentScreen: RootScreen = {
+            if showDiagnostics { return .diagnostics }
             if showSettings { return .settings }
             if showJoinWithCode { return .joinWithCode }
             if showActiveCallScreen { return .call }
@@ -42,6 +45,8 @@ struct RootView: View {
                     isBusy: uiState.phase == .creatingRoom || uiState.phase == .joining,
                     statusMessage: uiState.statusMessage ?? "",
                     recentCalls: callManager.recentCalls,
+                    savedRooms: callManager.savedRooms,
+                    areSavedRoomsShownFirst: callManager.areSavedRoomsShownFirst,
                     roomStatuses: callManager.roomStatuses,
                     onOpenJoinWithCode: {
                         showJoinWithCode = true
@@ -57,8 +62,20 @@ struct RootView: View {
                     onJoinRecentCall: { roomId in
                         callManager.joinRoom(roomId)
                     },
+                    onJoinSavedRoom: { room in
+                        callManager.joinSavedRoom(room)
+                    },
                     onRemoveRecentCall: { roomId in
                         callManager.removeRecentCall(roomId: roomId)
+                    },
+                    onSaveRoom: { roomId, name in
+                        callManager.saveRoom(roomId: roomId, name: name)
+                    },
+                    onCreateSavedRoomInviteLink: { roomName in
+                        await callManager.createSavedRoomInviteLink(roomName: roomName, hostInput: hostInput)
+                    },
+                    onRemoveSavedRoom: { roomId in
+                        callManager.removeSavedRoom(roomId: roomId)
                     }
                 )
 
@@ -87,17 +104,33 @@ struct RootView: View {
                     isDefaultCameraEnabled: callManager.isDefaultCameraEnabled,
                     isDefaultMicrophoneEnabled: callManager.isDefaultMicrophoneEnabled,
                     isHdVideoExperimentalEnabled: callManager.isHdVideoExperimentalEnabled,
+                    areSavedRoomsShownFirst: callManager.areSavedRoomsShownFirst,
+                    areRoomInviteNotificationsEnabled: callManager.areRoomInviteNotificationsEnabled,
+                    appVersion: callManager.appVersion,
                     hostError: settingsHostError,
                     isSaving: settingsSaveInProgress,
                     onLanguageSelect: { callManager.updateLanguage($0) },
                     onDefaultCameraChange: { callManager.updateDefaultCamera($0) },
                     onDefaultMicrophoneChange: { callManager.updateDefaultMicrophone($0) },
                     onHdVideoExperimentalChange: { callManager.updateHdVideoExperimental($0) },
+                    onSavedRoomsShownFirstChange: { callManager.updateSavedRoomsShownFirst($0) },
+                    onRoomInviteNotificationsChange: { callManager.updateRoomInviteNotifications($0) },
                     onSave: {
                         saveSettings()
                     },
+                    onOpenDiagnostics: {
+                        showDiagnostics = true
+                    },
                     onCancel: {
                         closeSettings()
+                    }
+                )
+
+            case .diagnostics:
+                DiagnosticsScreen(
+                    host: hostInput,
+                    onBack: {
+                        showDiagnostics = false
                     }
                 )
 
@@ -110,8 +143,14 @@ struct RootView: View {
                         onToggleAudio: { callManager.toggleAudio() },
                         onToggleVideo: { callManager.toggleVideo() },
                         onFlipCamera: { callManager.flipCamera() },
+                        onToggleScreenShare: { callManager.toggleScreenShare() },
+                        onAdjustCameraZoom: { delta in
+                            callManager.adjustCameraZoom(scaleDelta: delta)
+                        },
+                        onResetCameraZoom: { callManager.resetCameraZoom() },
                         onToggleFlashlight: { _ = callManager.toggleFlashlight() },
                         onEndCall: { callManager.endCall() },
+                        onInviteToRoom: { await callManager.inviteToCurrentRoom() },
                         callManager: callManager
                     )
                 }
@@ -142,6 +181,7 @@ struct RootView: View {
             if isActive {
                 showJoinWithCode = false
                 showSettings = false
+                showDiagnostics = false
                 settingsSaveInProgress = false
                 settingsHostError = nil
                 roomInput = ""

@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "U5TBRZ56DZ.app.serenada.ios",
+        "paths": [
+          "/call/*"
+        ]
+      }
+    ]
+  }
+}
