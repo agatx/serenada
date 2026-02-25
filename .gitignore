@@ -28,3 +28,4 @@ secrets/
 
 /server/loadtest/reports
 /.webrtc-ios-build
+client-ios/Resources/GoogleService-Info.plist

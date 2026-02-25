@@ -47,8 +47,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     private func configureNotifications(application: UIApplication) {
         UNUserNotificationCenter.current().delegate = self
 
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
-            guard granted else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in
             DispatchQueue.main.async {
                 application.registerForRemoteNotifications()
             }
