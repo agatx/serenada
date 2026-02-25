@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end WebRTC iOS XCFramework build for branch-heads/7559_173.
+# End-to-end WebRTC iOS XCFramework build for branch-heads/7559_173 with updated
+# TLS root bundle (includes ISRG roots used by Let's Encrypt).
 #
 # Usage:
 #   bash tools/build_libwebrtc_ios_7559.sh
@@ -13,6 +14,7 @@ set -euo pipefail
 #   BUILD_CONFIG=release
 #   DEPLOYMENT_TARGET=16.0
 #   IOS_ARCHS="device:arm64 simulator:arm64 simulator:x64"
+#   ROOT_BUNDLE_URL=https://curl.se/ca/cacert.pem
 #   OUTPUT_DIR=/opt/webrtc-build-ios/src/out_ios_libs
 #   VENDOR_XCFRAMEWORK=/path/to/repo/client-ios/Vendor/WebRTC/WebRTC.xcframework
 #   UPDATE_CHECKSUM=1
@@ -26,6 +28,7 @@ FETCH_TARGET="${FETCH_TARGET:-webrtc_ios}"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
 DEPLOYMENT_TARGET="${DEPLOYMENT_TARGET:-16.0}"
 IOS_ARCHS="${IOS_ARCHS:-device:arm64 simulator:arm64 simulator:x64}"
+ROOT_BUNDLE_URL="${ROOT_BUNDLE_URL:-https://curl.se/ca/cacert.pem}"
 OUTPUT_DIR="${OUTPUT_DIR:-$WORKDIR/src/out_ios_libs}"
 VENDOR_XCFRAMEWORK="${VENDOR_XCFRAMEWORK:-$REPO_ROOT/client-ios/Vendor/WebRTC/WebRTC.xcframework}"
 UPDATE_CHECKSUM="${UPDATE_CHECKSUM:-1}"
@@ -75,6 +78,20 @@ sync_sources() {
   if [ "$RUN_GCLIENT_HOOKS" = "1" ]; then
     log "running gclient runhooks"
     gclient runhooks
+  fi
+}
+
+patch_ssl_roots() {
+  export PATH="$WORKDIR/depot_tools:$PATH"
+  cd "$WORKDIR/src"
+
+  log "generating ssl_roots.h from $ROOT_BUNDLE_URL"
+  vpython3 tools_webrtc/sslroots/generate_sslroots.py "$ROOT_BUNDLE_URL"
+
+  mv ssl_roots.h rtc_base/ssl_roots.h
+
+  if ! grep -q "ISRG Root X1" rtc_base/ssl_roots.h; then
+    log "warning: generated roots do not contain ISRG Root X1"
   fi
 }
 
@@ -148,6 +165,7 @@ main() {
 
   setup_workspace
   sync_sources
+  patch_ssl_roots
   build_xcframework
   vendor_artifact
 

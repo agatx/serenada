@@ -10,8 +10,9 @@ Recommended from repository root:
 bash tools/build_libwebrtc_ios_7559.sh
 ```
 
-This script builds `branch-heads/7559_173`, strips dSYMs for repository-friendly
-size, copies the artifact here, and updates checksum.
+This script builds `branch-heads/7559_173`, patches `rtc_base/ssl_roots.h` from
+the current root bundle, strips dSYMs for repository-friendly size, copies the
+artifact here, and updates checksum.
 
 Then run:
 
