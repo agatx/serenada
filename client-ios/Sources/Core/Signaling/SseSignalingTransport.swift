@@ -133,9 +133,12 @@ final class SseSignalingTransport: SignalingTransport {
     }
 
     private func buildSseURL(host: String, sid: String) -> URL? {
+        guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
+
         var components = URLComponents()
         components.scheme = "https"
-        components.host = host
+        components.host = parsedHost.host
+        components.port = parsedHost.port
         components.path = "/sse"
         components.queryItems = [URLQueryItem(name: "sid", value: sid)]
         return components.url

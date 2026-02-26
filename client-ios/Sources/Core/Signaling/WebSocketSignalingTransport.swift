@@ -94,9 +94,12 @@ final class WebSocketSignalingTransport: NSObject, SignalingTransport {
     }
 
     private func buildWssURL(host: String) -> URL? {
+        guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
+
         var components = URLComponents()
         components.scheme = "wss"
-        components.host = host
+        components.host = parsedHost.host
+        components.port = parsedHost.port
         components.path = "/ws"
         return components.url
     }

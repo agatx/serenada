@@ -256,17 +256,12 @@ final class APIClient {
     }
 
     private func buildHTTPSURL(host: String, path: String, query: [String: String] = [:]) -> URL? {
-        let trimmed = host
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "https://", with: "")
-            .replacingOccurrences(of: "http://", with: "")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-
-        guard !trimmed.isEmpty else { return nil }
+        guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
 
         var components = URLComponents()
         components.scheme = "https"
-        components.host = trimmed
+        components.host = parsedHost.host
+        components.port = parsedHost.port
         components.path = path
         if !query.isEmpty {
             components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
