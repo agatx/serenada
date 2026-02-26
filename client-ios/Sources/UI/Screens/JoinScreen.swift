@@ -235,7 +235,8 @@ private struct RecentCallsSection: View {
             Text(L10n.recentCallsTitle)
                 .font(.headline)
                 .padding(.horizontal, 4)
-                .padding(.top, 4)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
 
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(calls) { call in
@@ -338,6 +339,8 @@ private struct SavedRoomsSection: View {
                     .disabled(isBusy)
             }
             .padding(.horizontal, 4)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
 
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(rooms) { room in
@@ -438,6 +441,7 @@ private struct CreateSavedRoomSheet: View {
                             create()
                         }
                         .disabled(roomName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .tint(.accentColor)
                     }
                 }
             }

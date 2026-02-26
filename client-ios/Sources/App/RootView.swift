@@ -160,6 +160,7 @@ struct RootView: View {
                         } else {
                             Button(L10n.settingsSave) { saveSettings() }
                                 .disabled(settingsSaveInProgress)
+                                .tint(.accentColor)
                         }
                     }
                 }
@@ -179,7 +180,10 @@ struct RootView: View {
                     roomInput: $roomInput,
                     isBusy: uiState.phase == .creatingRoom || uiState.phase == .joining,
                     statusMessage: uiState.statusMessage ?? "",
-                    errorMessage: uiState.errorMessage
+                    errorMessage: uiState.errorMessage,
+                    onJoin: {
+                        callManager.joinFromInput(roomInput)
+                    }
                 )
                 .navigationTitle(L10n.joinWithCodeTitle)
                 .navigationBarTitleDisplayMode(.inline)
@@ -195,6 +199,7 @@ struct RootView: View {
                             callManager.joinFromInput(roomInput)
                         }
                         .disabled(uiState.phase == .creatingRoom || uiState.phase == .joining || roomInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .tint(.accentColor)
                     }
                 }
             }

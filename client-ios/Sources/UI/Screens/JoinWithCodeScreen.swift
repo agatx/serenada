@@ -5,21 +5,33 @@ struct JoinWithCodeScreen: View {
     let isBusy: Bool
     let statusMessage: String
     let errorMessage: String?
+    let onJoin: () -> Void
+
+    @FocusState private var isRoomInputFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             Text(L10n.joinWithCodeHint)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            TextField(L10n.joinWithCodePlaceholder, text: $roomInput)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField(L10n.joinWithCodePlaceholder, text: $roomInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($isRoomInputFocused)
+                    .submitLabel(.go)
+                    .onSubmit(onJoin)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(Capsule())
 
             if isBusy {
                 ProgressView(statusMessage)
-                    .padding(.top, 12)
             }
 
             if let errorMessage, !errorMessage.isEmpty {
@@ -32,5 +44,10 @@ struct JoinWithCodeScreen: View {
             Spacer()
         }
         .padding(20)
+        .onAppear {
+            DispatchQueue.main.async {
+                isRoomInputFocused = true
+            }
+        }
     }
 }
