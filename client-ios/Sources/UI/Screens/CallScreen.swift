@@ -458,13 +458,13 @@ struct CallScreen: View {
                 Spacer()
 
                 if uiState.isFlashAvailable {
-                    iconButton(system: uiState.isFlashEnabled ? "flashlight.on.fill" : "flashlight.off.fill") {
+                    iconButton(system: uiState.isFlashEnabled ? "flashlight.on.fill" : "flashlight.off.fill", accessibilityLabel: uiState.isFlashEnabled ? L10n.callA11yFlashlightOn : L10n.callA11yFlashlightOff) {
                         onToggleFlashlight()
                     }
                 }
 
                 if uiState.phase == .waiting {
-                    iconButton(system: "square.and.arrow.up") {
+                    iconButton(system: "square.and.arrow.up", accessibilityLabel: L10n.callA11yShareInvite) {
                         showShareSheet = true
                     }
                 }
@@ -474,7 +474,7 @@ struct CallScreen: View {
                     remoteVideoEnabled: uiState.remoteVideoEnabled,
                     isLocalLarge: isLocalLarge
                 ) {
-                    iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
+                    iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", accessibilityLabel: remoteVideoFitCover ? L10n.callA11yVideoFit : L10n.callA11yVideoFill) {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             remoteVideoFitCover.toggle()
                         }
@@ -535,23 +535,28 @@ struct CallScreen: View {
 
     private var controlBar: some View {
         HStack(spacing: 14) {
-            iconButton(system: uiState.localAudioEnabled ? "mic.fill" : "mic.slash.fill") {
+            iconButton(system: uiState.localAudioEnabled ? "mic.fill" : "mic.slash.fill", accessibilityLabel: uiState.localAudioEnabled ? L10n.callA11yMuteOn : L10n.callA11yMuteOff) {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 onToggleAudio()
             }
 
-            iconButton(system: uiState.localVideoEnabled ? "video.fill" : "video.slash.fill") {
+            iconButton(system: uiState.localVideoEnabled ? "video.fill" : "video.slash.fill", accessibilityLabel: uiState.localVideoEnabled ? L10n.callA11yVideoOn : L10n.callA11yVideoOff) {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 onToggleVideo()
             }
 
-            iconButton(system: "camera.rotate.fill") {
+            iconButton(system: "camera.rotate.fill", accessibilityLabel: L10n.callA11yFlipCamera) {
                 onFlipCamera()
             }
 
-            iconButton(system: uiState.isScreenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle") {
+            iconButton(system: uiState.isScreenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle", accessibilityLabel: uiState.isScreenSharing ? L10n.callA11yScreenShareOn : L10n.callA11yScreenShareOff) {
                 onToggleScreenShare()
             }
 
-            Button(action: onEndCall) {
+            Button {
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                onEndCall()
+            } label: {
                 Image(systemName: "phone.down.fill")
                     .font(.system(size: 19, weight: .bold))
                     .frame(width: 58, height: 58)
@@ -561,6 +566,7 @@ struct CallScreen: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("call.endCall")
+            .accessibilityLabel(L10n.callA11yEndCall)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
@@ -634,7 +640,7 @@ struct CallScreen: View {
         }
     }
 
-    private func iconButton(system: String, action: @escaping () -> Void) -> some View {
+    private func iconButton(system: String, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: system)
                 .font(.system(size: 18, weight: .semibold))
@@ -644,6 +650,7 @@ struct CallScreen: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private var statusLabel: String {

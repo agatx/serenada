@@ -40,12 +40,10 @@ private struct DiagnosticsMediaReport {
 private struct DiagnosticsIceReport {
     var stunPassed = false
     var turnPassed = false
-    var logs: [String] = []
 }
 
 struct DiagnosticsScreen: View {
     let host: String
-    let onBack: () -> Void
 
     @State private var permissions = DiagnosticsPermissionReport()
     @State private var media = DiagnosticsMediaReport()
@@ -61,18 +59,25 @@ struct DiagnosticsScreen: View {
     private let apiClient = APIClient()
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-
-            ScrollView {
-                VStack(spacing: 14) {
-                    permissionsCard
-                    mediaCard
-                    connectivityCard
-                    iceCard
-                    logsCard
+        ScrollView {
+            VStack(spacing: 14) {
+                permissionsCard
+                mediaCard
+                connectivityCard
+                iceCard
+                logsCard
+            }
+            .padding(16)
+        }
+        .navigationTitle(L10n.diagnosticsTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    shareText = buildReportText()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
                 }
-                .padding(16)
             }
         }
         .sheet(isPresented: Binding(
@@ -89,170 +94,159 @@ struct DiagnosticsScreen: View {
         }
     }
 
-    private var topBar: some View {
-        HStack {
-            Button(L10n.commonBack, action: onBack)
-            Spacer()
-            Text(L10n.diagnosticsTitle)
-                .font(.headline)
-            Spacer()
-            Button {
-                shareText = buildReportText()
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-    }
-
     private var permissionsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(L10n.diagnosticsPermissionsTitle)
                 .font(.headline)
+                .padding(.horizontal, 4)
 
-            checkRow(title: L10n.diagnosticsPermissionCamera, passed: permissions.cameraGranted)
-            checkRow(title: L10n.diagnosticsPermissionMicrophone, passed: permissions.microphoneGranted)
-            checkRow(title: L10n.diagnosticsPermissionNotifications, passed: permissions.notificationsGranted)
+            VStack(alignment: .leading, spacing: 10) {
+                checkRow(title: L10n.diagnosticsPermissionCamera, passed: permissions.cameraGranted)
+                checkRow(title: L10n.diagnosticsPermissionMicrophone, passed: permissions.microphoneGranted)
+                checkRow(title: L10n.diagnosticsPermissionNotifications, passed: permissions.notificationsGranted)
 
-            HStack(spacing: 10) {
-                Button(L10n.diagnosticsPermissionsRequest) {
-                    Task {
-                        await requestMissingPermissions()
-                        await refreshPermissions()
+                HStack(spacing: 10) {
+                    Button(L10n.diagnosticsPermissionsRequest) {
+                        Task {
+                            await requestMissingPermissions()
+                            await refreshPermissions()
+                        }
                     }
-                }
-                .buttonStyle(.borderedProminent)
+                    .buttonStyle(.borderedProminent)
 
-                Button(L10n.diagnosticsRefresh) {
-                    Task {
-                        await refreshPermissions()
+                    Button(L10n.diagnosticsRefresh) {
+                        Task {
+                            await refreshPermissions()
+                        }
                     }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
             }
+            .cardStyle()
         }
-        .cardStyle()
     }
 
     private var mediaCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(L10n.diagnosticsMediaTitle)
                 .font(.headline)
+                .padding(.horizontal, 4)
 
-            checkRow(title: L10n.diagnosticsMediaAnyCamera, passed: media.hasCameraHardware)
-            checkRow(title: L10n.diagnosticsMediaFrontCamera, passed: media.hasFrontCamera)
-            checkRow(title: L10n.diagnosticsMediaBackCamera, passed: media.hasBackCamera)
-            checkRow(title: L10n.diagnosticsMediaComposite, passed: media.isCompositeSupported)
-            checkRow(title: L10n.diagnosticsMediaMicHardware, passed: media.hasMicrophoneHardware)
+            VStack(alignment: .leading, spacing: 10) {
+                checkRow(title: L10n.diagnosticsMediaAnyCamera, passed: media.hasCameraHardware)
+                checkRow(title: L10n.diagnosticsMediaFrontCamera, passed: media.hasFrontCamera)
+                checkRow(title: L10n.diagnosticsMediaBackCamera, passed: media.hasBackCamera)
+                checkRow(title: L10n.diagnosticsMediaComposite, passed: media.isCompositeSupported)
+                checkRow(title: L10n.diagnosticsMediaMicHardware, passed: media.hasMicrophoneHardware)
 
-            if let sampleRateHz = media.sampleRateHz {
-                infoLine(title: L10n.diagnosticsMediaSampleRate, value: "\(Int(sampleRateHz)) Hz")
-            }
-            if let ioBufferMs = media.ioBufferMs {
-                infoLine(title: L10n.diagnosticsMediaBuffer, value: String(format: "%.1f ms", ioBufferMs))
-            }
+                if let sampleRateHz = media.sampleRateHz {
+                    infoLine(title: L10n.diagnosticsMediaSampleRate, value: "\(Int(sampleRateHz)) Hz")
+                }
+                if let ioBufferMs = media.ioBufferMs {
+                    infoLine(title: L10n.diagnosticsMediaBuffer, value: String(format: "%.1f ms", ioBufferMs))
+                }
 
-            Button(L10n.diagnosticsRefreshMedia) {
-                refreshMedia()
+                Button(L10n.diagnosticsRefreshMedia) {
+                    refreshMedia()
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
+            .cardStyle()
         }
-        .cardStyle()
     }
 
     private var connectivityCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(L10n.diagnosticsConnectivityTitle)
                 .font(.headline)
+                .padding(.horizontal, 4)
 
-            ForEach(connectivityChecks) { check in
-                HStack(spacing: 10) {
-                    statusDot(check.status)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(check.title)
-                                .font(.subheadline.weight(.semibold))
-                            if let latencyMs = check.latencyMs {
-                                Text("(\(latencyMs) ms)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(connectivityChecks) { check in
+                    HStack(spacing: 10) {
+                        statusDot(check.status)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(check.title)
+                                    .font(.subheadline.weight(.semibold))
+                                if let latencyMs = check.latencyMs {
+                                    Text("(\(latencyMs) ms)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            Text(check.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        Text(check.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                 }
-            }
 
-            Button(isRunningConnectivity ? L10n.diagnosticsRunning : L10n.diagnosticsRunConnectivity) {
-                Task { await runConnectivityChecks() }
+                Button(isRunningConnectivity ? L10n.diagnosticsRunning : L10n.diagnosticsRunConnectivity) {
+                    Task { await runConnectivityChecks() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isRunningConnectivity || isRunningIce)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isRunningConnectivity || isRunningIce)
+            .cardStyle()
         }
-        .cardStyle()
     }
 
     private var iceCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(L10n.diagnosticsIceTitle)
                 .font(.headline)
+                .padding(.horizontal, 4)
 
-            checkRow(title: L10n.diagnosticsIceStun, passed: iceReport.stunPassed)
-            checkRow(title: L10n.diagnosticsIceTurn, passed: iceReport.turnPassed)
+            VStack(alignment: .leading, spacing: 10) {
+                checkRow(title: L10n.diagnosticsIceStun, passed: iceReport.stunPassed)
+                checkRow(title: L10n.diagnosticsIceTurn, passed: iceReport.turnPassed)
 
-            ForEach(iceReport.logs.indices, id: \.self) { index in
-                Text(iceReport.logs[index])
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+                HStack(spacing: 10) {
+                    Button(isRunningIce ? L10n.diagnosticsRunning : L10n.diagnosticsRunIceFull) {
+                        Task { await runIceCheck(turnsOnly: false) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isRunningIce || isRunningConnectivity)
 
-            HStack(spacing: 10) {
-                Button(isRunningIce ? L10n.diagnosticsRunning : L10n.diagnosticsRunIceFull) {
-                    Task { await runIceCheck(turnsOnly: false) }
+                    Button(L10n.diagnosticsRunIceTurnsOnly) {
+                        Task { await runIceCheck(turnsOnly: true) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRunningIce || isRunningConnectivity)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(isRunningIce || isRunningConnectivity)
-
-                Button(L10n.diagnosticsRunIceTurnsOnly) {
-                    Task { await runIceCheck(turnsOnly: true) }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isRunningIce || isRunningConnectivity)
             }
+            .cardStyle()
         }
-        .cardStyle()
     }
 
     private var logsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(L10n.diagnosticsLogsTitle)
                 .font(.headline)
+                .padding(.horizontal, 4)
 
-            if logLines.isEmpty {
-                Text(L10n.diagnosticsLogsEmpty)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(logLines.indices, id: \.self) { index in
-                    Text(logLines[index])
-                        .font(.caption2.monospaced())
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 10) {
+                if logLines.isEmpty {
+                    Text(L10n.diagnosticsLogsEmpty)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(logLines.indices, id: \.self) { index in
+                        Text(logLines[index])
+                            .font(.caption2.monospaced())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
+            .cardStyle()
         }
-        .cardStyle()
     }
 
     private func checkRow(title: String, passed: Bool) -> some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(passed ? Color.green : Color.red)
+                .fill(passed ? Color(UIColor.systemGreen) : Color(UIColor.systemRed))
                 .frame(width: 9, height: 9)
             Text(title)
                 .font(.subheadline)
@@ -283,15 +277,15 @@ struct DiagnosticsScreen: View {
     private func color(for status: DiagnosticsCheckStatus) -> Color {
         switch status {
         case .idle:
-            return .gray
+            return Color(UIColor.systemGray)
         case .running:
-            return .blue
+            return Color(UIColor.systemBlue)
         case .pass:
-            return .green
+            return Color(UIColor.systemGreen)
         case .warn:
-            return .yellow
+            return Color(UIColor.systemYellow)
         case .fail:
-            return .red
+            return Color(UIColor.systemRed)
         }
     }
 
@@ -480,7 +474,7 @@ struct DiagnosticsScreen: View {
 
         let normalizedHost = DeepLinkParser.normalizeHostValue(host) ?? host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedHost.isEmpty else {
-            iceReport = DiagnosticsIceReport(stunPassed: false, turnPassed: false, logs: [L10n.settingsErrorInvalidServerHost])
+            iceReport = DiagnosticsIceReport(stunPassed: false, turnPassed: false)
             appendLog(L10n.settingsErrorInvalidServerHost)
             return
         }
@@ -493,12 +487,15 @@ struct DiagnosticsScreen: View {
             let probe = await runIceProbe(
                 urls: urls,
                 username: credentials.username,
-                credential: credentials.password
+                credential: credentials.password,
+                onCandidateLog: { candidate in
+                    appendLog("ICE: \(candidate)")
+                }
             )
-            iceReport = DiagnosticsIceReport(stunPassed: probe.stunPassed, turnPassed: probe.turnPassed, logs: probe.logs)
-            appendLog("ICE: \(probe.logs.joined(separator: " | "))")
+            iceReport = DiagnosticsIceReport(stunPassed: probe.stunPassed, turnPassed: probe.turnPassed)
+            appendLog("ICE done: STUN=\(probe.stunPassed) TURN=\(probe.turnPassed)")
         } catch {
-            iceReport = DiagnosticsIceReport(stunPassed: false, turnPassed: false, logs: [error.localizedDescription])
+            iceReport = DiagnosticsIceReport(stunPassed: false, turnPassed: false)
             appendLog("ICE: \(error.localizedDescription)")
         }
     }
@@ -518,7 +515,7 @@ struct DiagnosticsScreen: View {
             let latency = check.latencyMs.map { " (\($0)ms)" } ?? ""
             return "- \(check.title): \(check.detail)\(latency)"
         }.joined(separator: "\n")
-        let iceLogs = iceReport.logs.joined(separator: "\n")
+        let allLogs = logLines.joined(separator: "\n")
 
         return """
         \(L10n.diagnosticsTitle)
@@ -544,7 +541,9 @@ struct DiagnosticsScreen: View {
         [ICE]
         stunPassed: \(iceReport.stunPassed)
         turnPassed: \(iceReport.turnPassed)
-        \(iceLogs)
+
+        [Logs]
+        \(allLogs)
         """
     }
 }
@@ -557,13 +556,13 @@ private struct IceProbeResult {
 
 private extension DiagnosticsScreen {
     @MainActor
-    func runIceProbe(urls: [String], username: String, credential: String) async -> IceProbeResult {
+    func runIceProbe(urls: [String], username: String, credential: String, onCandidateLog: @escaping (String) -> Void) async -> IceProbeResult {
 #if canImport(WebRTC)
         guard !urls.isEmpty else {
             return IceProbeResult(stunPassed: false, turnPassed: false, logs: [L10n.diagnosticsIceNoServers])
         }
         let probe = IceGatheringProbe()
-        return await probe.run(urls: urls, username: username, credential: credential)
+        return await probe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
 #else
         return IceProbeResult(stunPassed: false, turnPassed: false, logs: [L10n.errorSomethingWentWrong])
 #endif
@@ -579,9 +578,11 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
     private var hasRelay = false
     private var logs: [String] = []
     private var finished = false
+    private var onCandidateLog: ((String) -> Void)?
 
-    func run(urls: [String], username: String, credential: String) async -> IceProbeResult {
-        await withCheckedContinuation { continuation in
+    func run(urls: [String], username: String, credential: String, onCandidateLog: @escaping (String) -> Void) async -> IceProbeResult {
+        self.onCandidateLog = onCandidateLog
+        return await withCheckedContinuation { continuation in
             self.continuation = continuation
             self.start(urls: urls, username: username, credential: credential)
             Task { [weak self] in
@@ -644,6 +645,7 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
         if sdp.contains(" typ srflx") { hasSrflx = true }
         if sdp.contains(" typ relay") { hasRelay = true }
         logs.append(candidate.sdp)
+        onCandidateLog?(candidate.sdp)
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {

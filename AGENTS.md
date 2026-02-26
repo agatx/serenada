@@ -25,10 +25,21 @@ This repository is production-critical.
     - push-notifications.md - push notifications documentation
 
 ## Testing
+### Testing the web client
 - If you need to test locally, you can:
 1. Run `npm run build` in the client directory
 2. Run `docker-compose up -d --build` in the server directory
 3. Access the app at `http://localhost`
+
+### Testing the Android client
+- If you need to test locally, you can:
+1. Run `./gradlew assembleDebug` in the client directory
+2. Run `./gradlew installDebug` in the client directory
+3. Use UI automation tools to test the app
+4. To join a live call use the following deep-link: `https://serenada.app/call/YovflsGamCygX912gb26Jeaq8Es`
+
+### Testing the iOS client
+Follow the instructions in the `client-ios/README.md` file. Use the following deep-link: `https://serenada.app/call/YovflsGamCygX912gb26Jeaq8Es` to join a live call.
 
 ## When unsure
 - Ask for clarification instead of guessing

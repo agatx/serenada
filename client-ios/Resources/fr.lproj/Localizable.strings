@@ -126,10 +126,24 @@
 "diagnostics_ice_title" = "ICE";
 "diagnostics_ice_stun" = "Vérification STUN";
 "diagnostics_ice_turn" = "Vérification TURN";
-"diagnostics_run_ice_full" = "Lancer la vérification ICE complète";
-"diagnostics_run_ice_turns_only" = "Lancer la vérification ICE TURNS uniquement";
+"diagnostics_run_ice_full" = "Test complet";
+"diagnostics_run_ice_turns_only" = "TURNS uniquement";
 "diagnostics_ice_no_servers" = "Aucun serveur ICE disponible";
 "diagnostics_logs_title" = "Journaux";
 "diagnostics_logs_empty" = "Aucun journal";
 "diagnostics_status_available" = "Disponible";
 "diagnostics_status_missing" = "Manquant";
+
+"call_a11y_mute_on" = "Couper le microphone";
+"call_a11y_mute_off" = "Activer le microphone";
+"call_a11y_video_on" = "Désactiver la caméra";
+"call_a11y_video_off" = "Activer la caméra";
+"call_a11y_flip_camera" = "Basculer la caméra";
+"call_a11y_screen_share_on" = "Arrêter le partage d'écran";
+"call_a11y_screen_share_off" = "Démarrer le partage d'écran";
+"call_a11y_end_call" = "Terminer l'appel";
+"call_a11y_flashlight_on" = "Éteindre la lampe";
+"call_a11y_flashlight_off" = "Allumer la lampe";
+"call_a11y_share_invite" = "Partager le lien d'invitation";
+"call_a11y_video_fit" = "Ajuster la vidéo";
+"call_a11y_video_fill" = "Remplir la vidéo";

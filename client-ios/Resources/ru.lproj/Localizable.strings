@@ -126,10 +126,24 @@
 "diagnostics_ice_title" = "ICE";
 "diagnostics_ice_stun" = "Проверка STUN";
 "diagnostics_ice_turn" = "Проверка TURN";
-"diagnostics_run_ice_full" = "Запустить полную проверку ICE";
-"diagnostics_run_ice_turns_only" = "Запустить проверку ICE только TURNS";
+"diagnostics_run_ice_full" = "Полный тест";
+"diagnostics_run_ice_turns_only" = "Только TURNS";
 "diagnostics_ice_no_servers" = "Нет доступных ICE-серверов";
 "diagnostics_logs_title" = "Логи";
 "diagnostics_logs_empty" = "Логи отсутствуют";
 "diagnostics_status_available" = "Доступно";
 "diagnostics_status_missing" = "Отсутствует";
+
+"call_a11y_mute_on" = "Выключить микрофон";
+"call_a11y_mute_off" = "Включить микрофон";
+"call_a11y_video_on" = "Выключить камеру";
+"call_a11y_video_off" = "Включить камеру";
+"call_a11y_flip_camera" = "Переключить камеру";
+"call_a11y_screen_share_on" = "Остановить демонстрацию экрана";
+"call_a11y_screen_share_off" = "Начать демонстрацию экрана";
+"call_a11y_end_call" = "Завершить звонок";
+"call_a11y_flashlight_on" = "Выключить фонарик";
+"call_a11y_flashlight_off" = "Включить фонарик";
+"call_a11y_share_invite" = "Поделиться ссылкой";
+"call_a11y_video_fit" = "Вписать видео";
+"call_a11y_video_fill" = "Заполнить видео";

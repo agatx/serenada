@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsScreen: View {
     @Binding var host: String
+    @Binding var showDiagnostics: Bool
     let selectedLanguage: String
     let isDefaultCameraEnabled: Bool
     let isDefaultMicrophoneEnabled: Bool
@@ -17,9 +18,6 @@ struct SettingsScreen: View {
     let onHdVideoExperimentalChange: (Bool) -> Void
     let onSavedRoomsShownFirstChange: (Bool) -> Void
     let onRoomInviteNotificationsChange: (Bool) -> Void
-    let onSave: () -> Void
-    let onOpenDiagnostics: () -> Void
-    let onCancel: () -> Void
 
     private let languageOptions: [(String, String)] = [
         (AppConstants.languageAuto, L10n.settingsLanguageAuto),
@@ -30,160 +28,159 @@ struct SettingsScreen: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button(L10n.settingsCancel, action: onCancel)
-                Spacer()
-                Text(L10n.settingsTitle)
-                    .font(.headline)
-                Spacer()
-                Button(L10n.settingsSave, action: onSave)
-                    .disabled(isSaving)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-
-            Form {
-                Section(L10n.settingsServerHost) {
-                    HostChoiceRow(selected: host == AppConstants.defaultHost, title: String(format: L10n.settingsHostGlobal, AppConstants.defaultHost)) {
-                        host = AppConstants.defaultHost
+        Form {
+            Section(L10n.settingsServerHost) {
+                Picker(L10n.settingsServerHost, selection: Binding(
+                    get: { hostPreset },
+                    set: { newPreset in
+                        switch newPreset {
+                        case "global":
+                            host = AppConstants.defaultHost
+                        case "russia":
+                            host = AppConstants.ruHost
+                        case "custom":
+                            if host == AppConstants.defaultHost || host == AppConstants.ruHost {
+                                host = ""
+                            }
+                        default:
+                            break
+                        }
                     }
-                    HostChoiceRow(selected: host == AppConstants.ruHost, title: String(format: L10n.settingsHostRussia, AppConstants.ruHost)) {
-                        host = AppConstants.ruHost
-                    }
-                    HostChoiceRow(selected: host != AppConstants.defaultHost && host != AppConstants.ruHost, title: L10n.settingsCustom) {}
+                )) {
+                    Text(String(format: L10n.settingsHostGlobal, AppConstants.defaultHost)).tag("global")
+                    Text(String(format: L10n.settingsHostRussia, AppConstants.ruHost)).tag("russia")
+                    Text(L10n.settingsCustom).tag("custom")
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
 
+                if hostPreset == "custom" {
                     TextField(L10n.settingsServerHost, text: $host)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                }
 
-                    if let hostError, !hostError.isEmpty {
-                        Text(hostError)
-                            .foregroundStyle(.red)
+                if let hostError, !hostError.isEmpty {
+                    Text(hostError)
+                        .foregroundStyle(.red)
+                        .font(.footnote)
+                }
+            }
+
+            Section(L10n.settingsLanguage) {
+                Picker(L10n.settingsLanguage, selection: Binding(
+                    get: { selectedLanguage },
+                    set: { onLanguageSelect($0) }
+                )) {
+                    ForEach(languageOptions, id: \.0) { (code, title) in
+                        Text(title).tag(code)
+                    }
+                }
+                Text(L10n.settingsLanguageHelp)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section(L10n.settingsCallDefaults) {
+                Toggle(isOn: Binding(
+                    get: { isDefaultCameraEnabled },
+                    set: onDefaultCameraChange
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L10n.settingsCameraEnabled)
+                        Text(L10n.settingsCameraEnabledInfo)
                             .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
-                Section(L10n.settingsLanguage) {
-                    Picker(L10n.settingsLanguage, selection: Binding(
-                        get: { selectedLanguage },
-                        set: { onLanguageSelect($0) }
-                    )) {
-                        ForEach(languageOptions, id: \.0) { (code, title) in
-                            Text(title).tag(code)
-                        }
-                    }
-                    Text(L10n.settingsLanguageHelp)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section(L10n.settingsCallDefaults) {
-                    Toggle(isOn: Binding(
-                        get: { isDefaultCameraEnabled },
-                        set: onDefaultCameraChange
-                    )) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.settingsCameraEnabled)
-                            Text(L10n.settingsCameraEnabledInfo)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Toggle(isOn: Binding(
-                        get: { isDefaultMicrophoneEnabled },
-                        set: onDefaultMicrophoneChange
-                    )) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.settingsMicrophoneEnabled)
-                            Text(L10n.settingsMicrophoneEnabledInfo)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Toggle(isOn: Binding(
-                        get: { isHdVideoExperimentalEnabled },
-                        set: onHdVideoExperimentalChange
-                    )) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.settingsHdVideoExperimental)
-                            Text(L10n.settingsHdVideoExperimentalInfo)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                Toggle(isOn: Binding(
+                    get: { isDefaultMicrophoneEnabled },
+                    set: onDefaultMicrophoneChange
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L10n.settingsMicrophoneEnabled)
+                        Text(L10n.settingsMicrophoneEnabledInfo)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
-                Section(L10n.settingsSavedRoomsTitle) {
-                    Toggle(isOn: Binding(
-                        get: { areSavedRoomsShownFirst },
-                        set: onSavedRoomsShownFirstChange
-                    )) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.settingsSavedRoomsShowFirst)
-                            Text(L10n.settingsSavedRoomsShowFirstInfo)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text(L10n.settingsSavedRoomsHelp)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section(L10n.settingsInvitesTitle) {
-                    Toggle(isOn: Binding(
-                        get: { areRoomInviteNotificationsEnabled },
-                        set: onRoomInviteNotificationsChange
-                    )) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.settingsInviteNotifications)
-                            Text(L10n.settingsInviteNotificationsInfo)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Section {
-                    Text(String(format: L10n.settingsAppVersion, appVersion))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section(L10n.settingsDiagnosticsTitle) {
-                    Button(action: onOpenDiagnostics) {
-                        Label(L10n.settingsDiagnosticsAction, systemImage: "stethoscope")
+                Toggle(isOn: Binding(
+                    get: { isHdVideoExperimentalEnabled },
+                    set: onHdVideoExperimentalChange
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L10n.settingsHdVideoExperimental)
+                        Text(L10n.settingsHdVideoExperimentalInfo)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
-            .overlay {
-                if isSaving {
-                    ZStack {
-                        Color.primary.opacity(0.1).ignoresSafeArea()
-                        ProgressView()
+
+            Section(L10n.settingsSavedRoomsTitle) {
+                Toggle(isOn: Binding(
+                    get: { areSavedRoomsShownFirst },
+                    set: onSavedRoomsShownFirstChange
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L10n.settingsSavedRoomsShowFirst)
+                        Text(L10n.settingsSavedRoomsShowFirstInfo)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
+                }
+                Text(L10n.settingsSavedRoomsHelp)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section(L10n.settingsInvitesTitle) {
+                Toggle(isOn: Binding(
+                    get: { areRoomInviteNotificationsEnabled },
+                    set: onRoomInviteNotificationsChange
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L10n.settingsInviteNotifications)
+                        Text(L10n.settingsInviteNotificationsInfo)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section(L10n.settingsDiagnosticsTitle) {
+                Button {
+                    showDiagnostics = true
+                } label: {
+                    HStack {
+                        Label(L10n.settingsDiagnosticsAction, systemImage: "stethoscope")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+
+                Text(String(format: L10n.settingsAppVersion, appVersion))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .overlay {
+            if isSaving {
+                ZStack {
+                    Color.primary.opacity(0.1).ignoresSafeArea()
+                    ProgressView()
                 }
             }
         }
     }
-}
 
-private struct HostChoiceRow: View {
-    let selected: Bool
-    let title: String
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack {
-                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                Text(title)
-            }
-        }
-        .buttonStyle(.plain)
+    private var hostPreset: String {
+        if host == AppConstants.defaultHost { return "global" }
+        if host == AppConstants.ruHost { return "russia" }
+        return "custom"
     }
 }

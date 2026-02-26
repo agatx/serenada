@@ -126,10 +126,24 @@
 "diagnostics_ice_title" = "ICE";
 "diagnostics_ice_stun" = "Comprobación STUN";
 "diagnostics_ice_turn" = "Comprobación TURN";
-"diagnostics_run_ice_full" = "Ejecutar comprobación ICE completa";
-"diagnostics_run_ice_turns_only" = "Ejecutar comprobación ICE solo TURNS";
+"diagnostics_run_ice_full" = "Test completo";
+"diagnostics_run_ice_turns_only" = "Solo TURNS";
 "diagnostics_ice_no_servers" = "No hay servidores ICE disponibles";
 "diagnostics_logs_title" = "Registros";
 "diagnostics_logs_empty" = "Sin registros";
 "diagnostics_status_available" = "Disponible";
 "diagnostics_status_missing" = "Falta";
+
+"call_a11y_mute_on" = "Silenciar micrófono";
+"call_a11y_mute_off" = "Activar micrófono";
+"call_a11y_video_on" = "Apagar cámara";
+"call_a11y_video_off" = "Encender cámara";
+"call_a11y_flip_camera" = "Cambiar cámara";
+"call_a11y_screen_share_on" = "Dejar de compartir pantalla";
+"call_a11y_screen_share_off" = "Compartir pantalla";
+"call_a11y_end_call" = "Finalizar llamada";
+"call_a11y_flashlight_on" = "Apagar linterna";
+"call_a11y_flashlight_off" = "Encender linterna";
+"call_a11y_share_invite" = "Compartir enlace de invitación";
+"call_a11y_video_fit" = "Ajustar video";
+"call_a11y_video_fill" = "Llenar video";

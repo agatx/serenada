@@ -5,7 +5,11 @@ struct ErrorScreen: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 52))
+                .foregroundStyle(Color(UIColor.systemOrange))
+                .accessibilityHidden(true)
             Text(L10n.errorSomethingWentWrong)
                 .font(.title2.bold())
             Text(message)

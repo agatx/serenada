@@ -32,7 +32,8 @@ struct JoinScreen: View {
                     VStack(spacing: 20) {
                         Spacer().frame(height: 12)
                         Text(L10n.appName)
-                            .font(.system(size: 42, weight: .bold))
+                            .font(.largeTitle.bold())
+                            .dynamicTypeSize(.xSmall ... .accessibility3)
 
                         Text(L10n.joinSubtitle)
                             .multilineTextAlignment(.center)
@@ -120,9 +121,16 @@ struct JoinScreen: View {
 
         return VStack(spacing: 16) {
             if !hasSavedRooms && !hasRecentCalls {
-                Text(L10n.noRecentCalls)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 24)
+                VStack(spacing: 12) {
+                    Image(systemName: "phone.arrow.up.right")
+                        .font(.system(size: 36, weight: .light))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                    Text(L10n.noRecentCalls)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 24)
             } else if areSavedRoomsShownFirst {
                 savedRoomsSection
                 recentCallsSection
@@ -203,6 +211,8 @@ struct JoinScreen: View {
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape.fill")
                     .font(.title3)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .disabled(isBusy)
         }
@@ -221,68 +231,69 @@ private struct RecentCallsSection: View {
     let onRemoveRecentCall: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(L10n.recentCallsTitle)
                 .font(.headline)
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
 
-            ForEach(calls) { call in
-                Button {
-                    onJoinRecentCall(call.roomId)
-                } label: {
-                    HStack(spacing: 12) {
-                        StatusDot(count: roomStatuses[call.roomId] ?? 0)
-                        HStack(spacing: 6) {
-                            Image(systemName: "calendar")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(formatDateTime(call.startTime))
-                                .font(.subheadline)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                        }
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(calls) { call in
+                    let roomName = savedRoomNameById[call.roomId]
+                    Button {
+                        onJoinRecentCall(call.roomId)
+                    } label: {
+                        HStack(spacing: 12) {
+                            StatusDot(count: roomStatuses[call.roomId] ?? 0)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(formatDateTime(call.startTime))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                if let roomName {
+                                    Text(roomName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
 
-                        Spacer()
+                            Spacer()
 
-                        HStack(spacing: 6) {
-                            Image(systemName: "clock")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                             Text(formatDuration(call.durationSeconds))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 16)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("join.recentCall.\(call.roomId)")
-                .contextMenu {
-                    let existingName = savedRoomNameById[call.roomId]
-                    Button {
-                        onSaveRecentCall(call.roomId, existingName)
-                    } label: {
-                        Label(existingName == nil ? L10n.savedRoomsSave : L10n.savedRoomsRename, systemImage: "square.and.pencil")
-                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("join.recentCall.\(call.roomId)")
+                    .contextMenu {
+                        let existingName = savedRoomNameById[call.roomId]
+                        Button {
+                            onSaveRecentCall(call.roomId, existingName)
+                        } label: {
+                            Label(existingName == nil ? L10n.savedRoomsSave : L10n.savedRoomsRename, systemImage: "square.and.pencil")
+                        }
 
-                    Button(role: .destructive) {
-                        onRemoveRecentCall(call.roomId)
-                    } label: {
-                        Label(L10n.recentCallsRemove, systemImage: "trash")
+                        Button(role: .destructive) {
+                            onRemoveRecentCall(call.roomId)
+                        } label: {
+                            Label(L10n.recentCallsRemove, systemImage: "trash")
+                        }
                     }
-                }
-                .disabled(isBusy)
+                    .disabled(isBusy)
 
-                if call.id != calls.last?.id {
-                    Divider().padding(.leading, 14)
+                    if call.id != calls.last?.id {
+                        Divider().padding(.leading, 14)
+                    }
                 }
             }
+            .background(Color(.secondarySystemBackground).opacity(0.65))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
         }
-        .background(Color(.secondarySystemBackground).opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     private func formatDateTime(_ timestampMs: Int64) -> String {
@@ -318,7 +329,7 @@ private struct SavedRoomsSection: View {
     let onRemoveSavedRoom: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(rooms.isEmpty ? L10n.savedRoomsTitleEmpty : L10n.savedRoomsTitle)
                     .font(.headline)
@@ -326,51 +337,52 @@ private struct SavedRoomsSection: View {
                 Button(L10n.savedRoomsCreate, action: onCreate)
                     .disabled(isBusy)
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 4)
 
-            ForEach(rooms) { room in
-                Button {
-                    onJoinSavedRoom(room)
-                } label: {
-                    HStack(spacing: 12) {
-                        StatusDot(count: roomStatuses[room.roomId] ?? 0)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(room.name)
-                                .font(.subheadline)
-                                .foregroundStyle(.primary)
-                            Text(formatLastJoined(room.lastJoinedAt))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(rooms) { room in
                     Button {
-                        onRenameSavedRoom(room)
+                        onJoinSavedRoom(room)
                     } label: {
-                        Label(L10n.savedRoomsRename, systemImage: "square.and.pencil")
+                        HStack(spacing: 12) {
+                            StatusDot(count: roomStatuses[room.roomId] ?? 0)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(room.name)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                Text(formatLastJoined(room.lastJoinedAt))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 16)
+                        .contentShape(Rectangle())
                     }
-                    Button(role: .destructive) {
-                        onRemoveSavedRoom(room.roomId)
-                    } label: {
-                        Label(L10n.savedRoomsRemove, systemImage: "trash")
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            onRenameSavedRoom(room)
+                        } label: {
+                            Label(L10n.savedRoomsRename, systemImage: "square.and.pencil")
+                        }
+                        Button(role: .destructive) {
+                            onRemoveSavedRoom(room.roomId)
+                        } label: {
+                            Label(L10n.savedRoomsRemove, systemImage: "trash")
+                        }
                     }
-                }
-                .disabled(isBusy)
+                    .disabled(isBusy)
 
-                if room.id != rooms.last?.id {
-                    Divider().padding(.leading, 14)
+                    if room.id != rooms.last?.id {
+                        Divider().padding(.leading, 14)
+                    }
                 }
             }
+            .background(Color(.secondarySystemBackground).opacity(0.65))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
         }
-        .background(Color(.secondarySystemBackground).opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     private func formatLastJoined(_ timestampMs: Int64?) -> String {
@@ -464,10 +476,10 @@ private struct StatusDot: View {
 
     private var dotColor: Color {
         if count == 1 {
-            return Color(red: 0.247, green: 0.725, blue: 0.314)
+            return Color(UIColor.systemGreen)
         }
         if count >= 2 {
-            return Color(red: 0.824, green: 0.600, blue: 0.133)
+            return Color(UIColor.systemOrange)
         }
         return .clear
     }

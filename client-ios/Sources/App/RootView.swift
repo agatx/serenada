@@ -2,9 +2,6 @@ import SwiftUI
 
 private enum RootScreen {
     case join
-    case joinWithCode
-    case settings
-    case diagnostics
     case call
     case error
 }
@@ -30,9 +27,6 @@ struct RootView: View {
         let showActiveCallScreen = shouldShowActiveCallScreen(for: uiState)
 
         let currentScreen: RootScreen = {
-            if showDiagnostics { return .diagnostics }
-            if showSettings { return .settings }
-            if showJoinWithCode { return .joinWithCode }
             if showActiveCallScreen { return .call }
             if uiState.phase == .error { return .error }
             return .join
@@ -57,6 +51,7 @@ struct RootView: View {
                         showSettings = true
                     },
                     onStartCall: {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         callManager.startNewCall()
                     },
                     onJoinRecentCall: { roomId in
@@ -76,61 +71,6 @@ struct RootView: View {
                     },
                     onRemoveSavedRoom: { roomId in
                         callManager.removeSavedRoom(roomId: roomId)
-                    }
-                )
-
-            case .joinWithCode:
-                JoinWithCodeScreen(
-                    roomInput: $roomInput,
-                    isBusy: uiState.phase == .creatingRoom || uiState.phase == .joining,
-                    statusMessage: uiState.statusMessage ?? "",
-                    errorMessage: uiState.errorMessage,
-                    onJoinCall: {
-                        callManager.joinFromInput(roomInput)
-                    },
-                    onBack: {
-                        if callManager.uiState.phase == .error {
-                            callManager.dismissError()
-                        }
-                        showJoinWithCode = false
-                        roomInput = ""
-                    }
-                )
-
-            case .settings:
-                SettingsScreen(
-                    host: $hostInput,
-                    selectedLanguage: callManager.selectedLanguage,
-                    isDefaultCameraEnabled: callManager.isDefaultCameraEnabled,
-                    isDefaultMicrophoneEnabled: callManager.isDefaultMicrophoneEnabled,
-                    isHdVideoExperimentalEnabled: callManager.isHdVideoExperimentalEnabled,
-                    areSavedRoomsShownFirst: callManager.areSavedRoomsShownFirst,
-                    areRoomInviteNotificationsEnabled: callManager.areRoomInviteNotificationsEnabled,
-                    appVersion: callManager.appVersion,
-                    hostError: settingsHostError,
-                    isSaving: settingsSaveInProgress,
-                    onLanguageSelect: { callManager.updateLanguage($0) },
-                    onDefaultCameraChange: { callManager.updateDefaultCamera($0) },
-                    onDefaultMicrophoneChange: { callManager.updateDefaultMicrophone($0) },
-                    onHdVideoExperimentalChange: { callManager.updateHdVideoExperimental($0) },
-                    onSavedRoomsShownFirstChange: { callManager.updateSavedRoomsShownFirst($0) },
-                    onRoomInviteNotificationsChange: { callManager.updateRoomInviteNotifications($0) },
-                    onSave: {
-                        saveSettings()
-                    },
-                    onOpenDiagnostics: {
-                        showDiagnostics = true
-                    },
-                    onCancel: {
-                        closeSettings()
-                    }
-                )
-
-            case .diagnostics:
-                DiagnosticsScreen(
-                    host: hostInput,
-                    onBack: {
-                        showDiagnostics = false
                     }
                 )
 
@@ -187,12 +127,85 @@ struct RootView: View {
                 roomInput = ""
             }
         }
+        .sheet(isPresented: $showSettings, onDismiss: { closeSettings() }) {
+            NavigationStack {
+                SettingsScreen(
+                    host: $hostInput,
+                    showDiagnostics: $showDiagnostics,
+                    selectedLanguage: callManager.selectedLanguage,
+                    isDefaultCameraEnabled: callManager.isDefaultCameraEnabled,
+                    isDefaultMicrophoneEnabled: callManager.isDefaultMicrophoneEnabled,
+                    isHdVideoExperimentalEnabled: callManager.isHdVideoExperimentalEnabled,
+                    areSavedRoomsShownFirst: callManager.areSavedRoomsShownFirst,
+                    areRoomInviteNotificationsEnabled: callManager.areRoomInviteNotificationsEnabled,
+                    appVersion: callManager.appVersion,
+                    hostError: settingsHostError,
+                    isSaving: settingsSaveInProgress,
+                    onLanguageSelect: { callManager.updateLanguage($0) },
+                    onDefaultCameraChange: { callManager.updateDefaultCamera($0) },
+                    onDefaultMicrophoneChange: { callManager.updateDefaultMicrophone($0) },
+                    onHdVideoExperimentalChange: { callManager.updateHdVideoExperimental($0) },
+                    onSavedRoomsShownFirstChange: { callManager.updateSavedRoomsShownFirst($0) },
+                    onRoomInviteNotificationsChange: { callManager.updateRoomInviteNotifications($0) }
+                )
+                .navigationTitle(L10n.settingsTitle)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(L10n.settingsCancel) { closeSettings() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if settingsSaveInProgress {
+                            ProgressView()
+                        } else {
+                            Button(L10n.settingsSave) { saveSettings() }
+                                .disabled(settingsSaveInProgress)
+                        }
+                    }
+                }
+                .navigationDestination(isPresented: $showDiagnostics) {
+                    DiagnosticsScreen(host: hostInput)
+                }
+            }
+        }
+        .sheet(isPresented: $showJoinWithCode, onDismiss: {
+            roomInput = ""
+            if callManager.uiState.phase == .error {
+                callManager.dismissError()
+            }
+        }) {
+            NavigationStack {
+                JoinWithCodeScreen(
+                    roomInput: $roomInput,
+                    isBusy: uiState.phase == .creatingRoom || uiState.phase == .joining,
+                    statusMessage: uiState.statusMessage ?? "",
+                    errorMessage: uiState.errorMessage
+                )
+                .navigationTitle(L10n.joinWithCodeTitle)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(L10n.settingsCancel) {
+                            showJoinWithCode = false
+                            roomInput = ""
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(L10n.joinWithCodeAction) {
+                            callManager.joinFromInput(roomInput)
+                        }
+                        .disabled(uiState.phase == .creatingRoom || uiState.phase == .joining || roomInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }
     }
 
     private func closeSettings() {
         hostInput = callManager.serverHost
         settingsHostError = nil
         settingsSaveInProgress = false
+        showDiagnostics = false
         showSettings = false
     }
 

@@ -160,5 +160,19 @@ enum L10n {
     static var diagnosticsStatusAvailable: String { text("diagnostics_status_available") }
     static var diagnosticsStatusMissing: String { text("diagnostics_status_missing") }
 
+    static var callA11yMuteOn: String { text("call_a11y_mute_on") }
+    static var callA11yMuteOff: String { text("call_a11y_mute_off") }
+    static var callA11yVideoOn: String { text("call_a11y_video_on") }
+    static var callA11yVideoOff: String { text("call_a11y_video_off") }
+    static var callA11yFlipCamera: String { text("call_a11y_flip_camera") }
+    static var callA11yScreenShareOn: String { text("call_a11y_screen_share_on") }
+    static var callA11yScreenShareOff: String { text("call_a11y_screen_share_off") }
+    static var callA11yEndCall: String { text("call_a11y_end_call") }
+    static var callA11yFlashlightOn: String { text("call_a11y_flashlight_on") }
+    static var callA11yFlashlightOff: String { text("call_a11y_flashlight_off") }
+    static var callA11yShareInvite: String { text("call_a11y_share_invite") }
+    static var callA11yVideoFit: String { text("call_a11y_video_fit") }
+    static var callA11yVideoFill: String { text("call_a11y_video_fill") }
+
     static var commonBack: String { text("common_back") }
 }
