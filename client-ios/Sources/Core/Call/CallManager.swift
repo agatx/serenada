@@ -30,16 +30,7 @@ func resolveJoinRecoveryState(
 
 @MainActor
 final class CallManager: ObservableObject {
-    private enum Constants {
-        static let joinTimeoutNs: UInt64 = 15_000_000_000
-        static let joinConnectKickstartNs: UInt64 = 1_200_000_000
-        static let joinRecoveryNs: UInt64 = 4_000_000_000
-        static let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
-        static let turnFetchTimeoutNs: UInt64 = 2_000_000_000
-        static let nonHostOfferFallbackNs: UInt64 = 4_000_000_000
-        static let snapshotPrepareTimeoutNs: UInt64 = 2_000_000_000
-        static let turnRefreshTriggerRatio: Double = 0.8
-    }
+    private let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
 
     #if DEBUG
     private enum DebugTrace {
@@ -670,7 +661,7 @@ final class CallManager: ObservableObject {
                 return await self.pushSubscriptionManager.refreshPushEndpoint()
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                try? await Task.sleep(nanoseconds: WebRtcResilience.joinPushEndpointWaitNs)
                 return nil
             }
 
@@ -1040,7 +1031,7 @@ final class CallManager: ObservableObject {
         clearOfferTimeout()
 
         offerTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            try? await Task.sleep(nanoseconds: WebRtcResilience.offerTimeoutNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
 
@@ -1082,7 +1073,7 @@ final class CallManager: ObservableObject {
 
         debugTrace("nonHostOfferFallback scheduled rid=\(roomId) reason=\(reason)")
         nonHostOfferFallbackTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Constants.nonHostOfferFallbackNs)
+            try? await Task.sleep(nanoseconds: WebRtcResilience.nonHostFallbackDelayNs)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -1148,7 +1139,7 @@ final class CallManager: ObservableObject {
         debugTrace("scheduleJoinTimeout rid=\(roomId) attempt=\(joinAttempt)")
 
         joinTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Constants.joinTimeoutNs)
+            try? await Task.sleep(nanoseconds: WebRtcResilience.joinHardTimeoutNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
 
@@ -1173,7 +1164,7 @@ final class CallManager: ObservableObject {
         debugTrace("scheduleJoinConnectKickstart rid=\(roomId) attempt=\(joinAttempt)")
 
         joinConnectKickstartTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Constants.joinConnectKickstartNs)
+            try? await Task.sleep(nanoseconds: WebRtcResilience.joinConnectKickstartNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
 
@@ -1214,7 +1205,7 @@ final class CallManager: ObservableObject {
         }
 
         let now = Date().timeIntervalSince1970 * 1000
-        if now - lastIceRestartAt < 10_000 {
+        if now - lastIceRestartAt < Double(WebRtcResilience.iceRestartCooldownMs) {
             return
         }
 
@@ -1275,7 +1266,7 @@ final class CallManager: ObservableObject {
                 }
 
                 group.addTask {
-                    try? await Task.sleep(nanoseconds: Constants.turnFetchTimeoutNs)
+                    try? await Task.sleep(nanoseconds: WebRtcResilience.turnFetchTimeoutNs)
                     return .timedOut
                 }
 
@@ -1333,7 +1324,7 @@ final class CallManager: ObservableObject {
     private func scheduleTurnRefresh(ttlMs: Int64) {
         clearTurnRefresh()
         guard ttlMs > 0 else { return }
-        let delayNs = UInt64(Double(ttlMs) * Constants.turnRefreshTriggerRatio * 1_000_000)
+        let delayNs = UInt64(Double(ttlMs) * WebRtcResilience.turnRefreshTriggerRatio * 1_000_000)
         let roomId = currentRoomId
 
         turnRefreshTask = Task { [weak self] in
@@ -1697,7 +1688,7 @@ final class CallManager: ObservableObject {
             }
 
             Task {
-                try? await Task.sleep(nanoseconds: Constants.permissionRequestTimeoutNs)
+                try? await Task.sleep(nanoseconds: permissionRequestTimeoutNs)
                 resolve(fallback, timedOut: true)
             }
         }
@@ -1715,7 +1706,7 @@ final class CallManager: ObservableObject {
         clearJoinRecovery()
 
         joinRecoveryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(nanoseconds: WebRtcResilience.joinRecoveryNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
             guard self.currentRoomId == roomId else { return }

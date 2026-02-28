@@ -557,7 +557,7 @@ class WebRtcEngine(
     fun addIceCandidate(candidate: IceCandidate) {
         val pc = peerConnection ?: return
         if (!remoteDescriptionSet) {
-            if (pendingIceCandidates.size < MAX_PENDING_ICE_CANDIDATES) {
+            if (pendingIceCandidates.size < WebRtcResilienceConstants.ICE_CANDIDATE_BUFFER_MAX) {
                 pendingIceCandidates.add(candidate)
             }
             return
@@ -2295,6 +2295,5 @@ class WebRtcEngine(
         const val ZOOM_RATIO_DELTA_EPSILON = 0.01f
         const val TORCH_RETRY_DELAY_MS = 120L
         const val MAX_TORCH_RETRY_ATTEMPTS = 8
-        const val MAX_PENDING_ICE_CANDIDATES = 50
     }
 }

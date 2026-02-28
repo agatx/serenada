@@ -1,5 +1,6 @@
 import type { SignalingMessage } from '../types';
 import type { SignalingTransport, TransportHandlers, TransportKind } from './types';
+import { CONNECT_TIMEOUT_MS } from '../../../constants/webrtcResilience';
 
 const getHttpBaseUrl = () => {
     const wsUrl = import.meta.env.VITE_WS_URL;
@@ -66,7 +67,7 @@ export class SseTransport implements SignalingTransport {
                 this.open = false;
                 this.handlers.onClose('timeout');
             }
-        }, 2000);
+        }, CONNECT_TIMEOUT_MS);
 
         this.es.onopen = () => {
             this.clearConnectTimeout();

@@ -1,5 +1,6 @@
 import type { SignalingMessage } from '../types';
 import type { SignalingTransport, TransportHandlers, TransportKind } from './types';
+import { CONNECT_TIMEOUT_MS } from '../../../constants/webrtcResilience';
 
 const getWsUrl = () => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -21,7 +22,7 @@ export class WebSocketTransport implements SignalingTransport {
         const wsUrl = getWsUrl();
         this.ws = new WebSocket(wsUrl);
 
-        // 2-second timeout for connection to open (handles hanging connections)
+        // Timeout for connection to open (handles hanging connections)
         this.connectTimeout = window.setTimeout(() => {
             if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
                 console.warn('[WS] Connection timeout after 2s');
@@ -29,7 +30,7 @@ export class WebSocketTransport implements SignalingTransport {
                 this.open = false;
                 this.handlers.onClose('timeout');
             }
-        }, 2000);
+        }, CONNECT_TIMEOUT_MS);
 
         this.ws.onopen = () => {
             if (this.connectTimeout) {

@@ -23,9 +23,6 @@ final class SignalingClient {
     private var pingTask: Task<Void, Never>?
     private var connectTimeoutTask: Task<Void, Never>?
 
-    private static let wsFallbackConsecutiveFailures = 3
-    private static let pongMissThreshold = 2
-
     private var connectionAttemptId = 0
     private var activeAttemptId = 0
     private var transportIndex = 0
@@ -99,7 +96,7 @@ final class SignalingClient {
         pingTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 12_000_000_000)
+                try? await Task.sleep(nanoseconds: WebRtcResilience.pingIntervalNs)
                 if Task.isCancelled { return }
                 if !self.connected { continue }
 
@@ -107,7 +104,7 @@ final class SignalingClient {
                 let elapsed = CFAbsoluteTimeGetCurrent() - self.lastPongAt
                 if elapsed > 12.0 {
                     self.missedPongs += 1
-                    if self.missedPongs >= Self.pongMissThreshold {
+                    if self.missedPongs >= WebRtcResilience.pongMissThreshold {
                         self.missedPongs = 0
                         guard let kind = self.activeTransport else { continue }
                         let attemptId = self.activeAttemptId
@@ -131,7 +128,7 @@ final class SignalingClient {
 
         connectTimeoutTask = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: WebRtcResilience.connectTimeoutNs)
             guard !Task.isCancelled else { return }
             guard let kind = self.activeTransport else { return }
             guard self.isAttemptActive(attemptId: attemptId, kind: kind) else { return }
@@ -234,7 +231,7 @@ final class SignalingClient {
         if reason == "unsupported" || reason == "timeout" { return true }
         if transportConnectedOnce[kind] != true { return true }
         // Allow SSE fallback after consecutive WS failures even if WS connected before
-        if kind == .ws && wsConsecutiveFailures >= Self.wsFallbackConsecutiveFailures { return true }
+        if kind == .ws && wsConsecutiveFailures >= WebRtcResilience.wsFallbackConsecutiveFailures { return true }
         return false
     }
 

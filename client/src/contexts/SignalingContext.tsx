@@ -6,17 +6,18 @@ import type { RoomState, SignalingMessage } from './signaling/types';
 import { getConfiguredTransportOrder, parseTransportOrder } from './signaling/transportConfig';
 import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './signaling/roomStatuses';
 import { useTranslation } from 'react-i18next';
-
-// Resilience constants (shared across all clients)
-const RECONNECT_BACKOFF_BASE_MS = 500;
-const RECONNECT_BACKOFF_CAP_MS = 5000;
-const JOIN_PUSH_ENDPOINT_WAIT_MS = 250;
-const JOIN_CONNECT_KICKSTART_MS = 1200;
-const JOIN_RECOVERY_MS = 4000;
-const JOIN_HARD_TIMEOUT_MS = 15000;
-const PONG_MISS_THRESHOLD = 2;
-const WS_FALLBACK_CONSECUTIVE_FAILURES = 3;
-const TURN_REFRESH_TRIGGER_RATIO = 0.8;
+import {
+    RECONNECT_BACKOFF_BASE_MS,
+    RECONNECT_BACKOFF_CAP_MS,
+    PING_INTERVAL_MS,
+    PONG_MISS_THRESHOLD,
+    WS_FALLBACK_CONSECUTIVE_FAILURES,
+    JOIN_PUSH_ENDPOINT_WAIT_MS,
+    JOIN_CONNECT_KICKSTART_MS,
+    JOIN_RECOVERY_MS,
+    JOIN_HARD_TIMEOUT_MS,
+    TURN_REFRESH_TRIGGER_RATIO,
+} from '../constants/webrtcResilience';
 
 interface SignalingContextValue {
     isConnected: boolean;
@@ -250,7 +251,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const interval = window.setInterval(() => {
             // Check for missed pongs before sending next ping
             const elapsed = Date.now() - lastPongAtRef.current;
-            if (elapsed > 12000) {
+            if (elapsed > PING_INTERVAL_MS) {
                 missedPongsRef.current++;
                 if (missedPongsRef.current >= PONG_MISS_THRESHOLD) {
                     console.warn(`[Signaling] ${missedPongsRef.current} missed pongs, treating connection as dead`);
@@ -262,7 +263,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 }
             }
             sendMessage('ping', { ts: Date.now() });
-        }, 12000);
+        }, PING_INTERVAL_MS);
 
         return () => {
             window.clearInterval(interval);

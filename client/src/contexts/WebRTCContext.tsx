@@ -2,14 +2,14 @@ import React, { createContext, useContext, useEffect, useRef, useState, useCallb
 import { useSignaling } from './SignalingContext';
 import { useToast } from './ToastContext';
 import { useTranslation } from 'react-i18next';
-
-// Resilience constants (shared across all clients)
-const OFFER_TIMEOUT_MS = 8000;
-const ICE_RESTART_COOLDOWN_MS = 10000;
-const NON_HOST_FALLBACK_DELAY_MS = 4000;
-const NON_HOST_FALLBACK_MAX_ATTEMPTS = 2;
-const ICE_CANDIDATE_BUFFER_MAX = 50;
-const TURN_FETCH_TIMEOUT_MS = 2000;
+import {
+    OFFER_TIMEOUT_MS,
+    ICE_RESTART_COOLDOWN_MS,
+    NON_HOST_FALLBACK_DELAY_MS,
+    NON_HOST_FALLBACK_MAX_ATTEMPTS,
+    ICE_CANDIDATE_BUFFER_MAX,
+    TURN_FETCH_TIMEOUT_MS,
+} from '../constants/webrtcResilience';
 
 // Default STUN config for non-blocking ICE bootstrap
 const DEFAULT_RTC_CONFIG: RTCConfiguration = {

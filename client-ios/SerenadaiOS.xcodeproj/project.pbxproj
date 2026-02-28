@@ -10,6 +10,7 @@
 		059EAC15414FB96D99F16AA7 /* Participant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175B5E9B7BA77160AF7DB9A6 /* Participant.swift */; };
 		0A2C0A7E3C1A621804CC59C9 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = EA93F28D0C87ABED6B756036 /* Localizable.strings */; };
 		0CE0F1992A4BE3DA02955EBB /* WebRTCVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A244DB0F6B199EF5BF486FF /* WebRTCVideoView.swift */; };
+		135B0010385ED26334B7012A /* WebRtcResilienceConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9721BFFAF6861BC8E54400A7 /* WebRtcResilienceConstants.swift */; };
 		22E7581EA45084E89DE3B268 /* SavedRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53E3B13DA44022026D9F605D /* SavedRoomStore.swift */; };
 		252529C96E5D4B8966096E25 /* JoinWithCodeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */; };
 		2B3986D47A857C11365A6D68 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5B216BB8A302914AB1CA5B /* NotificationService.swift */; };
@@ -166,6 +167,7 @@
 		94E1C7D4ECF5F1F059A4EF75 /* RoomState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomState.swift; sourceTree = "<group>"; };
 		96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsScreen.swift; sourceTree = "<group>"; };
 		9719A0065F1C4857A1F9917D /* RealtimeCallStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealtimeCallStats.swift; sourceTree = "<group>"; };
+		9721BFFAF6861BC8E54400A7 /* WebRtcResilienceConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRtcResilienceConstants.swift; sourceTree = "<group>"; };
 		9BD7296B4488661AE49A34BA /* RootViewRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootViewRoutingTests.swift; sourceTree = "<group>"; };
 		9DA4F257ABA1CF5875CA4B83 /* RecentCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCall.swift; sourceTree = "<group>"; };
 		9FB1F707A2EB44614A04629B /* PushSubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionManager.swift; sourceTree = "<group>"; };
@@ -431,6 +433,7 @@
 				734875A19A797AA3C724DDC1 /* CallAudioSessionController.swift */,
 				A48285CB0CBEE51504B0674B /* CallManager.swift */,
 				CAFF8170B38C84FF4B68CAAD /* WebRtcEngine.swift */,
+				9721BFFAF6861BC8E54400A7 /* WebRtcResilienceConstants.swift */,
 			);
 			path = Call;
 			sourceTree = "<group>";
@@ -663,6 +666,7 @@
 				5EA0D8F3AC25ECC78C79E491 /* TurnCredentials.swift in Sources */,
 				0CE0F1992A4BE3DA02955EBB /* WebRTCVideoView.swift in Sources */,
 				BA3523C0637CDB0DCB44BB33 /* WebRtcEngine.swift in Sources */,
+				135B0010385ED26334B7012A /* WebRtcResilienceConstants.swift in Sources */,
 				ADC370E3926B02936B3FE5BE /* WebSocketSignalingTransport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

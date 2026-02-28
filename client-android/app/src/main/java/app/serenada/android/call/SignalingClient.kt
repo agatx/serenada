@@ -98,9 +98,9 @@ class SignalingClient(
             override fun run() {
                 if (!connected) return
                 val elapsed = System.currentTimeMillis() - lastPongAt
-                if (elapsed > PING_INTERVAL_MS) {
+                if (elapsed > WebRtcResilienceConstants.PING_INTERVAL_MS) {
                     missedPongs++
-                    if (missedPongs >= PONG_MISS_THRESHOLD) {
+                    if (missedPongs >= WebRtcResilienceConstants.PONG_MISS_THRESHOLD) {
                         missedPongs = 0
                         val kind = activeTransport ?: return
                         val attemptId = activeAttemptId
@@ -117,11 +117,11 @@ class SignalingClient(
                     payload = null
                 )
                 send(payload)
-                handler.postDelayed(this, PING_INTERVAL_MS)
+                handler.postDelayed(this, WebRtcResilienceConstants.PING_INTERVAL_MS)
             }
         }
         pingRunnable = runnable
-        handler.postDelayed(runnable, PING_INTERVAL_MS)
+        handler.postDelayed(runnable, WebRtcResilienceConstants.PING_INTERVAL_MS)
     }
 
     private fun stopPing() {
@@ -138,7 +138,7 @@ class SignalingClient(
             handleTransportClosed(attemptId, transportKind, "timeout")
         }
         connectTimeoutRunnable = runnable
-        handler.postDelayed(runnable, 2000)
+        handler.postDelayed(runnable, WebRtcResilienceConstants.CONNECT_TIMEOUT_MS)
     }
 
     private fun clearConnectTimeout() {
@@ -224,7 +224,7 @@ class SignalingClient(
         if (transportIndex >= transportOrder.lastIndex) return false
         if (reason == "unsupported" || reason == "timeout") return true
         if (transportConnectedOnce[kind] != true) return true
-        if (kind == TransportKind.WS && wsConsecutiveFailures >= WS_FALLBACK_CONSECUTIVE_FAILURES) return true
+        if (kind == TransportKind.WS && wsConsecutiveFailures >= WebRtcResilienceConstants.WS_FALLBACK_CONSECUTIVE_FAILURES) return true
         return false
     }
 
@@ -279,8 +279,5 @@ class SignalingClient(
 
     private companion object {
         const val TAG = "SignalingClient"
-        const val WS_FALLBACK_CONSECUTIVE_FAILURES = 3
-        const val PONG_MISS_THRESHOLD = 2
-        const val PING_INTERVAL_MS = 12_000L
     }
 }

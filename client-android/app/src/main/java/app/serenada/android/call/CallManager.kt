@@ -908,7 +908,7 @@ class CallManager(context: Context) {
             return
         }
 
-        handler.postDelayed(fallbackSend, JOIN_PUSH_ENDPOINT_WAIT_MS)
+        handler.postDelayed(fallbackSend, WebRtcResilienceConstants.JOIN_PUSH_ENDPOINT_WAIT_MS)
         pushSubscriptionManager.refreshPushEndpoint { endpoint ->
             handler.post {
                 handler.removeCallbacks(fallbackSend)
@@ -1230,7 +1230,7 @@ class CallManager(context: Context) {
             }
         }
         offerTimeoutRunnable = runnable
-        handler.postDelayed(runnable, 8000)
+        handler.postDelayed(runnable, WebRtcResilienceConstants.OFFER_TIMEOUT_MS)
     }
 
     private fun scheduleJoinTimeout(roomId: String, joinAttemptId: Long) {
@@ -1246,7 +1246,7 @@ class CallManager(context: Context) {
             failJoinWithError(R.string.call_status_connection_failed)
         }
         joinTimeoutRunnable = runnable
-        handler.postDelayed(runnable, JOIN_ROOM_TIMEOUT_MS)
+        handler.postDelayed(runnable, WebRtcResilienceConstants.JOIN_HARD_TIMEOUT_MS)
     }
 
     private fun clearJoinTimeout() {
@@ -1278,7 +1278,7 @@ class CallManager(context: Context) {
         }
         if (iceRestartRunnable != null) return
         val now = System.currentTimeMillis()
-        if (now - lastIceRestartAt < 10_000) return
+        if (now - lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
         val runnable = Runnable {
             iceRestartRunnable = null
             triggerIceRestart(reason)
@@ -1446,7 +1446,7 @@ class CallManager(context: Context) {
     private fun scheduleTurnRefresh(ttlMs: Long) {
         clearTurnRefresh()
         if (ttlMs <= 0) return
-        val delayMs = (ttlMs * TURN_REFRESH_TRIGGER_RATIO).toLong()
+        val delayMs = (ttlMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
         val roomId = currentRoomId
         val runnable = Runnable {
             turnRefreshRunnable = null
@@ -1476,7 +1476,7 @@ class CallManager(context: Context) {
             ensureSignalingConnection()
         }
         joinKickstartRunnable = runnable
-        handler.postDelayed(runnable, JOIN_CONNECT_KICKSTART_MS)
+        handler.postDelayed(runnable, WebRtcResilienceConstants.JOIN_CONNECT_KICKSTART_MS)
     }
 
     private fun clearJoinKickstart() {
@@ -1508,7 +1508,7 @@ class CallManager(context: Context) {
             }
         }
         joinRecoveryRunnable = runnable
-        handler.postDelayed(runnable, JOIN_RECOVERY_MS)
+        handler.postDelayed(runnable, WebRtcResilienceConstants.JOIN_RECOVERY_MS)
     }
 
     private fun clearJoinRecovery() {
@@ -1532,7 +1532,7 @@ class CallManager(context: Context) {
             maybeSendNonHostFallbackOffer()
         }
         nonHostOfferFallbackRunnable = runnable
-        handler.postDelayed(runnable, NON_HOST_FALLBACK_DELAY_MS)
+        handler.postDelayed(runnable, WebRtcResilienceConstants.NON_HOST_FALLBACK_DELAY_MS)
     }
 
     private fun clearNonHostOfferFallback() {
@@ -1727,7 +1727,7 @@ class CallManager(context: Context) {
         val roomId = currentRoomId
         if (roomId == null && watchedRoomIds.isEmpty()) return
         reconnectAttempts += 1
-        val backoff = (500L * (1 shl (reconnectAttempts - 1))).coerceAtMost(5000L)
+        val backoff = (WebRtcResilienceConstants.RECONNECT_BACKOFF_BASE_MS * (1 shl (reconnectAttempts - 1))).coerceAtMost(WebRtcResilienceConstants.RECONNECT_BACKOFF_CAP_MS)
         handler.postDelayed({
             if (signalingClient.isConnected()) {
                 return@postDelayed
@@ -1844,14 +1844,6 @@ class CallManager(context: Context) {
 
     private companion object {
         const val WEBRTC_STATS_POLL_INTERVAL_MS = 2000L
-        const val JOIN_PUSH_ENDPOINT_WAIT_MS = 250L
-        const val JOIN_ROOM_TIMEOUT_MS = 15_000L
-        const val JOIN_CONNECT_KICKSTART_MS = 1_200L
-        const val JOIN_RECOVERY_MS = 4_000L
-        const val TURN_FETCH_TIMEOUT_MS = 2_000L
-        const val NON_HOST_FALLBACK_DELAY_MS = 4_000L
-        const val SNAPSHOT_PREPARE_TIMEOUT_MS = 2_000L
-        const val TURN_REFRESH_TRIGGER_RATIO = 0.8
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         const val WIFI_PERF_LOCK_TAG = "serenada:call-wifi"
         const val MAX_SAVED_ROOM_NAME_LENGTH = 120
