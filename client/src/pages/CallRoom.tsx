@@ -11,6 +11,7 @@ import { playJoinChime } from '../utils/audio';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 import { saveRoom, markRoomJoined, type SaveRoomResult } from '../utils/savedRooms';
 import { buildDebugPanelSections, useRealtimeCallStats } from './callDiagnostics';
+import { SNAPSHOT_PREPARE_TIMEOUT_MS } from '../constants/webrtcResilience';
 
 function urlBase64ToUint8Array(base64String: string) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -581,7 +582,7 @@ const CallRoom: React.FC = () => {
                 });
                 snapshotId = await Promise.race([
                     snapshotPromise,
-                    new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200))
+                    new Promise<null>((resolve) => setTimeout(() => resolve(null), SNAPSHOT_PREPARE_TIMEOUT_MS))
                 ]);
             }
             // Tiny delay to ensure state propagates

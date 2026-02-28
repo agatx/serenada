@@ -101,6 +101,7 @@ final class CallManager: ObservableObject {
     private var iceRestartTask: Task<Void, Never>?
     private var offerTimeoutTask: Task<Void, Never>?
     private var nonHostOfferFallbackTask: Task<Void, Never>?
+    private var nonHostOfferFallbackAttempts = 0
     private var turnRefreshTask: Task<Void, Never>?
     private var remoteVideoPollTimer: Timer?
 
@@ -1070,6 +1071,7 @@ final class CallManager: ObservableObject {
         }
         guard signalingClient.isConnected() else { return }
         guard nonHostOfferFallbackTask == nil else { return }
+        guard nonHostOfferFallbackAttempts < WebRtcResilience.nonHostFallbackMaxAttempts else { return }
 
         debugTrace("nonHostOfferFallback scheduled rid=\(roomId) reason=\(reason)")
         nonHostOfferFallbackTask = Task { [weak self] in
@@ -1079,6 +1081,8 @@ final class CallManager: ObservableObject {
                 guard let self else { return }
                 self.nonHostOfferFallbackTask = nil
                 guard self.currentRoomId == roomId else { return }
+                self.nonHostOfferFallbackAttempts += 1
+                self.debugTrace("nonHostOfferFallback trigger (attempt \(self.nonHostOfferFallbackAttempts))")
                 self.maybeSendNonHostFallbackOffer()
             }
         }
@@ -1502,6 +1506,7 @@ final class CallManager: ObservableObject {
         clearJoinRecovery()
         clearOfferTimeout()
         clearNonHostOfferFallback()
+        nonHostOfferFallbackAttempts = 0
         clearIceRestartTimer()
         clearTurnRefresh()
 

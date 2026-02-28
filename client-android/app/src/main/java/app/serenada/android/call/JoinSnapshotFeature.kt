@@ -510,7 +510,7 @@ class JoinSnapshotFeature(
     }
 
     private companion object {
-        const val JOIN_SNAPSHOT_PREP_TIMEOUT_MS = 1500L
+        val JOIN_SNAPSHOT_PREP_TIMEOUT_MS = WebRtcResilienceConstants.SNAPSHOT_PREPARE_TIMEOUT_MS
         const val JOIN_SNAPSHOT_FRAME_TIMEOUT_MS = 900L
         const val JOIN_SNAPSHOT_MAX_WIDTH_PX = 320
         const val JOIN_SNAPSHOT_MAX_BYTES = 200 * 1024

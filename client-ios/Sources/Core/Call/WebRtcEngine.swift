@@ -473,7 +473,9 @@ final class WebRtcEngine {
         guard let peerConnection else { return }
 
         if peerConnection.remoteDescription == nil {
-            pendingRemoteIceCandidates.append(candidate)
+            if pendingRemoteIceCandidates.count < WebRtcResilience.iceCandidateBufferMax {
+                pendingRemoteIceCandidates.append(candidate)
+            }
             return
         }
 

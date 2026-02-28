@@ -117,6 +117,7 @@ class CallManager(context: Context) {
     private var joinKickstartRunnable: Runnable? = null
     private var joinRecoveryRunnable: Runnable? = null
     private var nonHostOfferFallbackRunnable: Runnable? = null
+    private var nonHostOfferFallbackAttempts = 0
     private var turnRefreshRunnable: Runnable? = null
     private var remoteVideoStatePollRunnable: Runnable? = null
     private var webrtcStatsRequestInFlight = false
@@ -1523,12 +1524,15 @@ class CallManager(context: Context) {
         if (state.isHost) { clearNonHostOfferFallback(); return }
         if (!signalingClient.isConnected()) return
         if (nonHostOfferFallbackRunnable != null) return
+        if (nonHostOfferFallbackAttempts >= WebRtcResilienceConstants.NON_HOST_FALLBACK_MAX_ATTEMPTS) return
 
         val roomId = currentRoomId
         Log.d("CallManager", "Non-host fallback scheduled ($reason)")
         val runnable = Runnable {
             nonHostOfferFallbackRunnable = null
             if (currentRoomId != roomId) return@Runnable
+            nonHostOfferFallbackAttempts++
+            Log.w("CallManager", "Non-host fallback offer (attempt $nonHostOfferFallbackAttempts)")
             maybeSendNonHostFallbackOffer()
         }
         nonHostOfferFallbackRunnable = runnable
@@ -1603,6 +1607,7 @@ class CallManager(context: Context) {
         clearJoinKickstart()
         clearJoinRecovery()
         clearNonHostOfferFallback()
+        nonHostOfferFallbackAttempts = 0
         clearTurnRefresh()
         deactivateAudioSession()
         releasePerformanceLocks()
