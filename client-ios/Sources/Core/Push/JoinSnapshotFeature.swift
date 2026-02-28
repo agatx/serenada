@@ -263,7 +263,7 @@ final class JoinSnapshotFeature {
         }
 
         let ephemeralPrivate = P256.KeyAgreement.PrivateKey()
-        let ephemeralPublicRaw = ephemeralPrivate.publicKey.rawRepresentation
+        let ephemeralPublicRaw = ephemeralPrivate.publicKey.x963Representation
         let salt = randomBytes(Constants.saltBytes)
         let info = Data(Constants.hkdfInfo.utf8)
 
@@ -323,7 +323,7 @@ final class JoinSnapshotFeature {
         var raw = Data([0x04])
         raw.append(x)
         raw.append(y)
-        return try? P256.KeyAgreement.PublicKey(rawRepresentation: raw)
+        return try? P256.KeyAgreement.PublicKey(x963Representation: raw)
     }
 
     private func encryptAESGCM(plaintext: Data, keyData: Data, iv: Data) -> Data? {

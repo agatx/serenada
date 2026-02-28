@@ -1575,10 +1575,6 @@ final class CallManager: ObservableObject {
 
         startRemoteVideoStatePolling()
 
-        pendingJoinRoom = roomId
-        if !hasJoinSignalStartedForAttempt {
-            ensureSignalingConnection()
-        }
         prepareJoinSnapshotAndConnect(roomId: roomId, joinAttempt: joinAttempt)
     }
 
@@ -1597,15 +1593,7 @@ final class CallManager: ObservableObject {
                 guard self.isJoinAttemptActive(roomId: roomId, joinAttempt: joinAttempt) else { return }
                 self.debugTrace("joinSnapshot ready rid=\(roomId) hasSnapshot=\(snapshotId == nil ? "no" : "yes")")
                 self.pendingJoinSnapshotId = snapshotId
-                let shouldEnsure =
-                    !self.hasJoinSignalStartedForAttempt ||
-                    self.pendingJoinRoom != nil ||
-                    !self.signalingClient.isConnected()
-                if shouldEnsure {
-                    self.ensureSignalingConnection()
-                } else {
-                    self.debugTrace("joinSnapshot skipEnsure rid=\(roomId) reason=join-already-started")
-                }
+                self.ensureSignalingConnection()
             }
         )
     }
