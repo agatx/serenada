@@ -165,18 +165,16 @@ class SignalingClient(
         transport.connect(
             host = host,
             onOpen = {
-                handleTransportOpen(attemptId, kind)
+                handler.post { handleTransportOpen(attemptId, kind) }
             },
             onMessage = { msg ->
-                if (isAttemptActive(attemptId, kind)) {
-                    handler.post {
-                        if (!isAttemptActive(attemptId, kind)) return@post
-                        listener.onMessage(msg)
-                    }
+                handler.post {
+                    if (!isAttemptActive(attemptId, kind)) return@post
+                    listener.onMessage(msg)
                 }
             },
             onClosed = { reason ->
-                handleTransportClosed(attemptId, kind, reason)
+                handler.post { handleTransportClosed(attemptId, kind, reason) }
             }
         )
         scheduleConnectTimeout(attemptId)

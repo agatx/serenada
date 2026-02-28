@@ -1309,13 +1309,23 @@ class CallManager(context: Context) {
     }
 
     private fun fetchTurnCredentials(token: String) {
+        var resolved = false
+        val timeoutRunnable = Runnable {
+            if (resolved) return@Runnable
+            resolved = true
+            Log.w("CallManager", "TURN fetch timed out, applying default STUN")
+            applyDefaultIceServers()
+        }
+        handler.postDelayed(timeoutRunnable, WebRtcResilienceConstants.TURN_FETCH_TIMEOUT_MS)
         apiClient.fetchTurnCredentials(currentSignalingHost(), token) { result ->
             handler.post {
+                handler.removeCallbacks(timeoutRunnable)
+                if (resolved) return@post
+                resolved = true
                 result
-                    .onSuccess { creds ->
-                        applyTurnCredentials(creds)
-                    }
+                    .onSuccess { creds -> applyTurnCredentials(creds) }
                     .onFailure {
+                        Log.w("CallManager", "TURN fetch failed, applying default STUN")
                         applyDefaultIceServers()
                     }
             }
@@ -1349,8 +1359,7 @@ class CallManager(context: Context) {
 
     private fun parseRoomState(payload: JSONObject?): RoomState? {
         if (payload == null) return null
-        val hostCid = payload.optString("hostCid", "")
-        if (hostCid.isBlank()) return null
+        val parsedHostCid = payload.optString("hostCid", "").ifBlank { null }
         val participantsJson = payload.optJSONArray("participants")
         val participants = mutableListOf<Participant>()
         if (participantsJson != null) {
@@ -1364,7 +1373,16 @@ class CallManager(context: Context) {
                 }
             }
         }
-        return RoomState(hostCid, participants)
+        // Multi-level hostCid fallback (matches iOS behavior)
+        var resolvedHostCid = parsedHostCid ?: hostCid ?: clientId
+        if (resolvedHostCid != null && participants.isNotEmpty()) {
+            val participantCids = participants.map { it.cid }.toSet()
+            if (resolvedHostCid !in participantCids) {
+                resolvedHostCid = participants.firstOrNull()?.cid
+            }
+        }
+        if (resolvedHostCid.isNullOrBlank()) return null
+        return RoomState(resolvedHostCid, participants)
     }
 
     private fun updateState(state: CallUiState) {
