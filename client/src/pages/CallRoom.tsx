@@ -606,6 +606,8 @@ const CallRoom: React.FC = () => {
             return;
         }
         if (!roomId || !clientId || !localStream) return;
+        const isCurrentParticipant = roomState?.participants?.some((participant) => participant.cid === clientId) ?? false;
+        if (!isCurrentParticipant) return;
         if (pushNotifySentRef.current) return;
         pushNotifySentRef.current = true;
 
@@ -644,7 +646,7 @@ const CallRoom: React.FC = () => {
                 console.warn('[Push] Post-join push notify failed', err);
             }
         })();
-    }, [hasJoined, roomId, clientId, localStream]);
+    }, [hasJoined, roomId, clientId, localStream, roomState]);
 
     const handleLeave = () => {
         if (callStartTimeRef.current && roomId) {

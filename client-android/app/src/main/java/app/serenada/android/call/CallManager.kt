@@ -32,7 +32,6 @@ import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
 import org.webrtc.SessionDescription
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.Executors
 
 class CallManager(context: Context) {
@@ -878,23 +877,17 @@ class CallManager(context: Context) {
                 reconnectToken?.let { put("reconnectToken", it) }
             }
         }
-        val sent = AtomicBoolean(false)
-        fun sendOnce() {
-            if (!sent.compareAndSet(false, true)) return
-            if (currentRoomId != roomId) return
-            if (!signalingClient.isConnected()) return
-            val msg = SignalingMessage(
-                type = "join",
-                rid = roomId,
-                sid = null,
-                cid = null,
-                to = null,
-                payload = buildPayload()
-            )
-            signalingClient.send(msg)
-        }
-
-        sendOnce()
+        if (currentRoomId != roomId) return
+        if (!signalingClient.isConnected()) return
+        val msg = SignalingMessage(
+            type = "join",
+            rid = roomId,
+            sid = null,
+            cid = null,
+            to = null,
+            payload = buildPayload()
+        )
+        signalingClient.send(msg)
         scheduleJoinRecovery(roomId)
     }
 
@@ -1638,6 +1631,7 @@ class CallManager(context: Context) {
         turnTokenTTLMs = null
         hasJoinSignalStarted = false
         hasJoinAcknowledged = false
+        hasNotifiedPushForJoin = false
     }
 
     private fun applyLocalVideoPreference() {

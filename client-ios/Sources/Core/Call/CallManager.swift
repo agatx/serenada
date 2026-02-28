@@ -1503,6 +1503,7 @@ final class CallManager: ObservableObject {
 
         userPreferredVideoEnabled = true
         isVideoPausedByProximity = false
+        hasNotifiedPushForJoin = false
         hasJoinSignalStartedForAttempt = false
         hasJoinAcknowledgedCurrentAttempt = false
         hasInitializedIceSetupForAttempt = false
