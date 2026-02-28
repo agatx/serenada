@@ -20,6 +20,15 @@ ROOM_ID="${SMOKE_ROOM_ID:?}"
 ARTIFACTS_DIR="${SMOKE_ARTIFACTS_DIR:-$SCRIPT_DIR/../artifacts}"
 REPO_ROOT="$(repo_root)"
 
+# Resolve signing configuration (mirrors deploy_to_device.sh)
+XCCONFIG_PATH="${XCODE_XCCONFIG:-}"
+DEFAULT_LOCAL_XCCONFIG="$REPO_ROOT/client-ios/LocalSigning.xcconfig"
+if [ -z "$XCCONFIG_PATH" ] && [ -f "$DEFAULT_LOCAL_XCCONFIG" ]; then
+    XCCONFIG_PATH="$DEFAULT_LOCAL_XCCONFIG"
+fi
+TEAM_ID="${DEVELOPMENT_TEAM:-}"
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/connected-ios-smoke-build}"
+
 log_info "=== iOS Smoke Test ==="
 
 # Detect device UDID
@@ -47,19 +56,35 @@ log_info "Test deep link: $DEEP_LINK"
 mkdir -p "$ARTIFACTS_DIR"
 rm -rf "$ARTIFACTS_DIR/ios-smoke.xcresult"
 
+# Build xcodebuild arguments (signing mirrors deploy_to_device.sh)
+XCODEBUILD_ARGS=(
+    -project "$REPO_ROOT/client-ios/SerenadaiOS.xcodeproj"
+    -scheme SerenadaiOS
+    -destination "id=$UDID"
+    -only-testing:SerenadaiOSUITests/DeepLinkRejoinFlowUITests
+    -resultBundlePath "$ARTIFACTS_DIR/ios-smoke.xcresult"
+    -derivedDataPath "$DERIVED_DATA_PATH"
+    -allowProvisioningUpdates
+)
+
+if [ -n "$XCCONFIG_PATH" ]; then
+    log_info "Using xcconfig: $XCCONFIG_PATH"
+    XCODEBUILD_ARGS+=(-xcconfig "$XCCONFIG_PATH")
+fi
+
+XCODEBUILD_ARGS+=(test CODE_SIGN_STYLE=Automatic)
+
+if [ -n "$TEAM_ID" ]; then
+    log_info "Using development team: $TEAM_ID"
+    XCODEBUILD_ARGS+=(DEVELOPMENT_TEAM="$TEAM_ID")
+fi
+
 # Run XCUITest on the physical device
 # Disable set -e around the pipeline so we can capture PIPESTATUS
 log_info "Running DeepLinkRejoinFlowUITests on device $UDID ..."
 set +e
 SERENADA_UI_TEST_REJOIN_DEEPLINK="$DEEP_LINK" \
-xcodebuild \
-    -project "$REPO_ROOT/client-ios/SerenadaiOS.xcodeproj" \
-    -scheme SerenadaiOS \
-    -destination "id=$UDID" \
-    -only-testing:SerenadaiOSUITests/DeepLinkRejoinFlowUITests \
-    -resultBundlePath "$ARTIFACTS_DIR/ios-smoke.xcresult" \
-    -allowProvisioningUpdates \
-    test 2>&1 | tail -20
+xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tail -20
 EXIT_CODE=${PIPESTATUS[0]}
 set -e
 

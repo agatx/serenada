@@ -12,8 +12,10 @@ import app.serenada.android.ui.SerenadaAppRoot
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.testTagsAsResourceId
 
+@OptIn(ExperimentalComposeUiApi::class)
 class MainActivity : AppCompatActivity() {
     companion object {
         private const val STATE_PENDING_DEEP_LINK = "pending_deep_link"

@@ -99,6 +99,19 @@ else
     fi
 fi
 
+# --- Step 3b: Mobile platform builds ---
+if [ "$SMOKE_SKIP_BUILD" != "1" ]; then
+    if [ "$ANDROID_AVAILABLE" = true ]; then
+        log_info "Building and installing Android APK ..."
+        (cd "$REPO_ROOT/client-android" && \
+            ANDROID_SERIAL="$ANDROID_SERIAL" \
+            ./gradlew :app:installDebug) || {
+            log_error "Android build/install failed"
+            exit 1
+        }
+    fi
+fi
+
 # --- Step 4: Resolve platform URLs ---
 WEB_URL="$SERVER_URL"
 MOBILE_URL="$SERVER_URL"
