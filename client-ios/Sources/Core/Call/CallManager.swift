@@ -31,11 +31,14 @@ func resolveJoinRecoveryState(
 @MainActor
 final class CallManager: ObservableObject {
     private enum Constants {
-        static let joinTimeoutNs: UInt64 = 12_000_000_000
+        static let joinTimeoutNs: UInt64 = 15_000_000_000
         static let joinConnectKickstartNs: UInt64 = 1_200_000_000
+        static let joinRecoveryNs: UInt64 = 4_000_000_000
         static let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
         static let turnFetchTimeoutNs: UInt64 = 2_000_000_000
         static let nonHostOfferFallbackNs: UInt64 = 4_000_000_000
+        static let snapshotPrepareTimeoutNs: UInt64 = 2_000_000_000
+        static let turnRefreshTriggerRatio: Double = 0.8
     }
 
     #if DEBUG
@@ -107,6 +110,7 @@ final class CallManager: ObservableObject {
     private var iceRestartTask: Task<Void, Never>?
     private var offerTimeoutTask: Task<Void, Never>?
     private var nonHostOfferFallbackTask: Task<Void, Never>?
+    private var turnRefreshTask: Task<Void, Never>?
     private var remoteVideoPollTimer: Timer?
 
     private var lastWebRtcStatsPollAtMs: Int64 = 0
@@ -116,6 +120,8 @@ final class CallManager: ObservableObject {
     private var hasJoinAcknowledgedCurrentAttempt = false
     private var hasInitializedIceSetupForAttempt = false
     private var lastTurnTokenForAttempt: String?
+    private var reconnectToken: String?
+    private var turnTokenTTLMs: Int64?
 
     private var userPreferredVideoEnabled = true
     private var isVideoPausedByProximity = false
@@ -189,6 +195,7 @@ final class CallManager: ObservableObject {
         iceRestartTask?.cancel()
         offerTimeoutTask?.cancel()
         nonHostOfferFallbackTask?.cancel()
+        turnRefreshTask?.cancel()
         remoteVideoPollTimer?.invalidate()
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -626,6 +633,9 @@ final class CallManager: ObservableObject {
             if let reconnectCid {
                 payload["reconnectCid"] = .string(reconnectCid)
             }
+            if let reconnectToken = self.reconnectToken {
+                payload["reconnectToken"] = .string(reconnectToken)
+            }
             if let endpoint, !endpoint.isEmpty {
                 payload["pushEndpoint"] = .string(endpoint)
             }
@@ -706,6 +716,10 @@ final class CallManager: ObservableObject {
             roomStatuses = RoomStatuses.mergeStatusesPayload(previous: roomStatuses, payload: message.payload)
         case "room_status_update":
             roomStatuses = RoomStatuses.mergeStatusUpdatePayload(previous: roomStatuses, payload: message.payload)
+        case "pong":
+            signalingClient.recordPong()
+        case "turn-refreshed":
+            handleTurnRefreshed(message)
         case "offer", "answer", "ice":
             handleSignalingPayload(message)
         case "error":
@@ -728,6 +742,14 @@ final class CallManager: ObservableObject {
         hasJoinAcknowledgedCurrentAttempt = true
         clientId = message.cid
         settingsStore.reconnectCid = message.cid
+
+        if let token = message.payload?.objectValue?["reconnectToken"]?.stringValue {
+            reconnectToken = token
+        }
+        if let ttl = message.payload?.objectValue?["turnTokenTTLMs"]?.intValue {
+            turnTokenTTLMs = Int64(ttl)
+            scheduleTurnRefresh(ttlMs: Int64(ttl))
+        }
 
         if let joinedRoomId = message.rid ?? currentRoomId {
             pushSubscriptionManager.subscribeRoom(roomId: joinedRoomId, host: currentSignalingHost())
@@ -1242,9 +1264,10 @@ final class CallManager: ObservableObject {
         let joinAttemptAtFetchStart = joinAttemptSerial
         Task {
             let outcome = await withTaskGroup(of: TurnFetchOutcome.self) { group in
-                group.addTask { [apiClient, serverHost] in
+                let host = self.currentSignalingHost()
+                group.addTask { [apiClient] in
                     do {
-                        let credentials = try await apiClient.fetchTurnCredentials(host: serverHost, token: token)
+                        let credentials = try await apiClient.fetchTurnCredentials(host: host, token: token)
                         return .success(credentials)
                     } catch {
                         return .failed
@@ -1292,6 +1315,41 @@ final class CallManager: ObservableObject {
         flushPendingMessages()
         maybeSendOffer()
         maybeScheduleNonHostOfferFallback(reason: "turn-ready")
+    }
+
+    private func handleTurnRefreshed(_ message: SignalingMessage) {
+        guard currentRoomId != nil else { return }
+        debugTrace("rx turn-refreshed")
+        if let ttl = message.payload?.objectValue?["turnTokenTTLMs"]?.intValue {
+            turnTokenTTLMs = Int64(ttl)
+            scheduleTurnRefresh(ttlMs: Int64(ttl))
+        }
+        ensureIceSetupIfNeeded(
+            turnToken: turnToken(from: message.payload),
+            source: "turn-refreshed"
+        )
+    }
+
+    private func scheduleTurnRefresh(ttlMs: Int64) {
+        clearTurnRefresh()
+        guard ttlMs > 0 else { return }
+        let delayNs = UInt64(Double(ttlMs) * Constants.turnRefreshTriggerRatio * 1_000_000)
+        let roomId = currentRoomId
+
+        turnRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delayNs)
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            guard self.currentRoomId == roomId, self.currentRoomId != nil else { return }
+            guard self.signalingClient.isConnected() else { return }
+            self.debugTrace("turn-refresh send")
+            self.sendMessage(type: "turn-refresh")
+        }
+    }
+
+    private func clearTurnRefresh() {
+        turnRefreshTask?.cancel()
+        turnRefreshTask = nil
     }
 
     private func applyDefaultIceServers() {
@@ -1454,6 +1512,7 @@ final class CallManager: ObservableObject {
         clearOfferTimeout()
         clearNonHostOfferFallback()
         clearIceRestartTimer()
+        clearTurnRefresh()
 
         userPreferredVideoEnabled = true
         isVideoPausedByProximity = false
@@ -1461,6 +1520,8 @@ final class CallManager: ObservableObject {
         hasJoinAcknowledgedCurrentAttempt = false
         hasInitializedIceSetupForAttempt = false
         lastTurnTokenForAttempt = nil
+        reconnectToken = nil
+        turnTokenTTLMs = nil
     }
 
     private func applyLocalVideoPreference() {

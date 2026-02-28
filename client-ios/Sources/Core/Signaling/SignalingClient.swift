@@ -23,6 +23,9 @@ final class SignalingClient {
     private var pingTask: Task<Void, Never>?
     private var connectTimeoutTask: Task<Void, Never>?
 
+    private static let wsFallbackConsecutiveFailures = 3
+    private static let pongMissThreshold = 2
+
     private var connectionAttemptId = 0
     private var activeAttemptId = 0
     private var transportIndex = 0
@@ -30,6 +33,9 @@ final class SignalingClient {
     private var activeTransportImpl: SignalingTransport?
     private var normalizedHost: String?
     private var closedByClient = false
+    private var wsConsecutiveFailures = 0
+    private var lastPongAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    private var missedPongs = 0
 
     init(forceSseSignaling: Bool = false) {
         self.transportOrder = forceSseSignaling ? [.sse] : [.ws, .sse]
@@ -81,14 +87,35 @@ final class SignalingClient {
         resetTransportSessions()
     }
 
+    func recordPong() {
+        lastPongAt = CFAbsoluteTimeGetCurrent()
+        missedPongs = 0
+    }
+
     private func startPing() {
         stopPing()
+        lastPongAt = CFAbsoluteTimeGetCurrent()
+        missedPongs = 0
         pingTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 12_000_000_000)
                 if Task.isCancelled { return }
                 if !self.connected { continue }
+
+                // Check for missed pongs
+                let elapsed = CFAbsoluteTimeGetCurrent() - self.lastPongAt
+                if elapsed > 12.0 {
+                    self.missedPongs += 1
+                    if self.missedPongs >= Self.pongMissThreshold {
+                        self.missedPongs = 0
+                        guard let kind = self.activeTransport else { continue }
+                        let attemptId = self.activeAttemptId
+                        self.handleTransportClosed(attemptId: attemptId, kind: kind, reason: "pong_timeout")
+                        return
+                    }
+                }
+
                 self.send(SignalingMessage(type: "ping"))
             }
         }
@@ -168,6 +195,9 @@ final class SignalingClient {
         connecting = false
         connected = true
         transportConnectedOnce[kind] = true
+        if kind == .ws { wsConsecutiveFailures = 0 }
+        lastPongAt = CFAbsoluteTimeGetCurrent()
+        missedPongs = 0
 
         listener?.onOpen(activeTransport: kind.wireName)
         startPing()
@@ -184,6 +214,7 @@ final class SignalingClient {
         activeAttemptId = -abs(attemptId)
         activeTransport = nil
         activeTransportImpl = nil
+        if kind == .ws { wsConsecutiveFailures += 1 }
         closeTransports()
 
         if closedByClient {
@@ -201,7 +232,10 @@ final class SignalingClient {
         if transportOrder.count <= 1 { return false }
         if transportIndex >= transportOrder.count - 1 { return false }
         if reason == "unsupported" || reason == "timeout" { return true }
-        return transportConnectedOnce[kind] != true
+        if transportConnectedOnce[kind] != true { return true }
+        // Allow SSE fallback after consecutive WS failures even if WS connected before
+        if kind == .ws && wsConsecutiveFailures >= Self.wsFallbackConsecutiveFailures { return true }
+        return false
     }
 
     @discardableResult

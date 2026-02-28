@@ -199,6 +199,7 @@ final class WebRtcEngine {
     #endif
 
     private var remoteVideoTrack: RTCVideoTrack?
+    private var remoteVideoTrackDelivered = false
 
     private var localRenderers: [WeakAnyBox] = []
     private var remoteRenderers: [WeakAnyBox] = []
@@ -304,6 +305,7 @@ final class WebRtcEngine {
         peerConnection?.close()
         peerConnection = nil
         remoteVideoTrack = nil
+        remoteVideoTrackDelivered = false
         onRemoteVideoTrack(false)
         pendingRemoteIceCandidates.removeAll()
 #endif
@@ -1091,9 +1093,17 @@ final class WebRtcEngine {
             },
             onRemoteVideoTrack: { [weak self] track in
                 guard let self else { return }
-                self.remoteVideoTrack = track
-                self.attachRemoteTrackToRegisteredRenderers()
-                self.onRemoteVideoTrack(track != nil)
+                if let track {
+                    guard !self.remoteVideoTrackDelivered else { return }
+                    self.remoteVideoTrackDelivered = true
+                    self.remoteVideoTrack = track
+                    self.attachRemoteTrackToRegisteredRenderers()
+                    self.onRemoteVideoTrack(true)
+                } else {
+                    self.remoteVideoTrackDelivered = false
+                    self.remoteVideoTrack = nil
+                    self.onRemoteVideoTrack(false)
+                }
             }
         )
         observerProxy = observer

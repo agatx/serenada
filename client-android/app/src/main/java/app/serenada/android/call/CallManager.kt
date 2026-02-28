@@ -113,10 +113,18 @@ class CallManager(context: Context) {
     private var iceRestartRunnable: Runnable? = null
     private var offerTimeoutRunnable: Runnable? = null
     private var joinTimeoutRunnable: Runnable? = null
+    private var joinKickstartRunnable: Runnable? = null
+    private var joinRecoveryRunnable: Runnable? = null
+    private var nonHostOfferFallbackRunnable: Runnable? = null
+    private var turnRefreshRunnable: Runnable? = null
     private var remoteVideoStatePollRunnable: Runnable? = null
     private var webrtcStatsRequestInFlight = false
     private var lastWebRtcStatsPollAtMs = 0L
-    private val pendingMessages = ArrayDeque<SignalingMessage>()
+    private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
+    private var reconnectToken: String? = null
+    private var turnTokenTTLMs: Long? = null
+    private var hasJoinSignalStarted = false
+    private var hasJoinAcknowledged = false
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var wifiPerformanceLock: WifiManager.WifiLock? = null
     private var userPreferredVideoEnabled = true
@@ -151,6 +159,7 @@ class CallManager(context: Context) {
             updateState(
                 _uiState.value.copy(
                     isSignalingConnected = true,
+                    isReconnecting = false,
                     activeTransport = activeTransport
                 )
             )
@@ -169,8 +178,13 @@ class CallManager(context: Context) {
         }
 
         override fun onClosed(reason: String) {
-            updateState(_uiState.value.copy(isSignalingConnected = false, activeTransport = null))
-            if (shouldReconnectSignaling()) {
+            val shouldReconnect = shouldReconnectSignaling()
+            updateState(_uiState.value.copy(
+                isSignalingConnected = false,
+                isReconnecting = shouldReconnect,
+                activeTransport = null
+            ))
+            if (shouldReconnect) {
                 scheduleReconnect()
             }
         }
@@ -644,6 +658,8 @@ class CallManager(context: Context) {
         sentOffer = false
         pendingMessages.clear()
         pendingJoinSnapshotId = null
+        hasJoinSignalStarted = false
+        hasJoinAcknowledged = false
 
         recreateWebRtcEngineForNewCall()
 
@@ -668,6 +684,7 @@ class CallManager(context: Context) {
             )
         )
         scheduleJoinTimeout(roomId, joinAttemptId)
+        scheduleJoinKickstart(roomId, joinAttemptId)
 
         acquirePerformanceLocks()
         activateAudioSession()
@@ -835,6 +852,7 @@ class CallManager(context: Context) {
     fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
 
     private fun ensureSignalingConnection() {
+        hasJoinSignalStarted = true
         val roomToJoin = currentRoomId
         if (signalingClient.isConnected()) {
             if (!roomToJoin.isNullOrBlank()) {
@@ -855,6 +873,7 @@ class CallManager(context: Context) {
                 put("capabilities", JSONObject().apply { put("trickleIce", true) })
                 val reconnectCid = clientId ?: settingsStore.reconnectCid
                 reconnectCid?.let { put("reconnectCid", it) }
+                reconnectToken?.let { put("reconnectToken", it) }
                 endpoint?.trim()?.takeIf { it.isNotBlank() }?.let { put("pushEndpoint", it) }
                 val joinSnapshotId = snapshotId?.ifBlank { null }
                 if (joinSnapshotId != null) {
@@ -884,6 +903,7 @@ class CallManager(context: Context) {
         val cachedEndpoint = pushSubscriptionManager.cachedEndpoint()
         if (!cachedEndpoint.isNullOrBlank()) {
             sendWithEndpoint(cachedEndpoint)
+            scheduleJoinRecovery(roomId)
             return
         }
 
@@ -892,6 +912,7 @@ class CallManager(context: Context) {
             handler.post {
                 handler.removeCallbacks(fallbackSend)
                 sendWithEndpoint(endpoint)
+                scheduleJoinRecovery(roomId)
             }
         }
     }
@@ -955,14 +976,30 @@ class CallManager(context: Context) {
             "room_ended" -> handleRoomEnded(msg)
             "room_statuses" -> handleRoomStatuses(msg)
             "room_status_update" -> handleRoomStatusUpdate(msg)
+            "pong" -> signalingClient.recordPong()
+            "turn-refreshed" -> handleTurnRefreshed(msg)
             "offer", "answer", "ice" -> handleSignalingPayload(msg)
             "error" -> handleError(msg)
         }
     }
 
     private fun handleJoined(msg: SignalingMessage) {
+        clearJoinTimeout()
+        clearJoinKickstart()
+        clearJoinRecovery()
+        hasJoinAcknowledged = true
+
         clientId = msg.cid
         clientId?.let { settingsStore.reconnectCid = it }
+
+        msg.payload?.optString("reconnectToken").orEmpty().ifBlank { null }?.let {
+            reconnectToken = it
+        }
+        msg.payload?.optLong("turnTokenTTLMs", 0)?.takeIf { it > 0 }?.let { ttl ->
+            turnTokenTTLMs = ttl
+            scheduleTurnRefresh(ttl)
+        }
+
         val joinedRoomId = msg.rid ?: currentRoomId
         if (!joinedRoomId.isNullOrBlank()) {
             pushSubscriptionManager.subscribeRoom(joinedRoomId, currentSignalingHost())
@@ -981,6 +1018,10 @@ class CallManager(context: Context) {
     }
 
     private fun handleRoomState(msg: SignalingMessage) {
+        clearJoinTimeout()
+        clearJoinKickstart()
+        clearJoinRecovery()
+        hasJoinAcknowledged = true
         val roomState = parseRoomState(msg.payload) ?: return
         hostCid = roomState.hostCid
         updateParticipants(roomState)
@@ -1045,6 +1086,7 @@ class CallManager(context: Context) {
     private fun processSignalingPayload(msg: SignalingMessage) {
         when (msg.type) {
             "offer" -> {
+                clearNonHostOfferFallback()
                 val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
                 webRtcEngine.setRemoteDescription(SessionDescription.Type.OFFER, sdp) {
                     webRtcEngine.createAnswer(onSdp = { answerSdp ->
@@ -1054,6 +1096,7 @@ class CallManager(context: Context) {
                 }
             }
             "answer" -> {
+                clearNonHostOfferFallback()
                 val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
                 webRtcEngine.setRemoteDescription(SessionDescription.Type.ANSWER, sdp) {
                     clearOfferTimeout()
@@ -1109,7 +1152,10 @@ class CallManager(context: Context) {
             webRtcEngine.ensurePeerConnection()
         }
         if (count > 1 && isHostNow) {
+            clearNonHostOfferFallback()
             maybeSendOffer()
+        } else if (count > 1) {
+            maybeScheduleNonHostOfferFallback("participants")
         }
     }
 
@@ -1177,6 +1223,9 @@ class CallManager(context: Context) {
                 webRtcEngine.rollbackLocalDescription {
                     handler.post { scheduleIceRestart("offer-timeout", 0) }
                 }
+            } else {
+                // Always schedule ICE restart on offer timeout regardless of signaling state
+                scheduleIceRestart("offer-timeout-stale", 0)
             }
         }
         offerTimeoutRunnable = runnable
@@ -1381,6 +1430,155 @@ class CallManager(context: Context) {
 
     private fun isHost(): Boolean = clientId != null && clientId == hostCid
 
+    private fun handleTurnRefreshed(msg: SignalingMessage) {
+        if (currentRoomId == null) return
+        msg.payload?.optLong("turnTokenTTLMs", 0)?.takeIf { it > 0 }?.let { ttl ->
+            turnTokenTTLMs = ttl
+            scheduleTurnRefresh(ttl)
+        }
+        val token = msg.payload?.optString("turnToken").orEmpty().ifBlank { null }
+        if (!token.isNullOrBlank()) {
+            fetchTurnCredentials(token)
+        }
+    }
+
+    private fun scheduleTurnRefresh(ttlMs: Long) {
+        clearTurnRefresh()
+        if (ttlMs <= 0) return
+        val delayMs = (ttlMs * TURN_REFRESH_TRIGGER_RATIO).toLong()
+        val roomId = currentRoomId
+        val runnable = Runnable {
+            turnRefreshRunnable = null
+            if (currentRoomId != roomId || currentRoomId == null) return@Runnable
+            if (!signalingClient.isConnected()) return@Runnable
+            Log.d("CallManager", "Sending turn-refresh")
+            sendMessage("turn-refresh", null)
+        }
+        turnRefreshRunnable = runnable
+        handler.postDelayed(runnable, delayMs)
+    }
+
+    private fun clearTurnRefresh() {
+        turnRefreshRunnable?.let { handler.removeCallbacks(it) }
+        turnRefreshRunnable = null
+    }
+
+    private fun scheduleJoinKickstart(roomId: String, joinAttemptId: Long) {
+        clearJoinKickstart()
+        val runnable = Runnable {
+            joinKickstartRunnable = null
+            if (_uiState.value.phase != CallPhase.Joining) return@Runnable
+            if (currentRoomId != roomId) return@Runnable
+            if (joinAttemptSerial != joinAttemptId) return@Runnable
+            if (hasJoinSignalStarted) return@Runnable
+            Log.d("CallManager", "Join kickstart fired for $roomId")
+            ensureSignalingConnection()
+        }
+        joinKickstartRunnable = runnable
+        handler.postDelayed(runnable, JOIN_CONNECT_KICKSTART_MS)
+    }
+
+    private fun clearJoinKickstart() {
+        joinKickstartRunnable?.let { handler.removeCallbacks(it) }
+        joinKickstartRunnable = null
+    }
+
+    private fun scheduleJoinRecovery(roomId: String) {
+        clearJoinRecovery()
+        val runnable = Runnable {
+            joinRecoveryRunnable = null
+            if (currentRoomId != roomId) return@Runnable
+            if (!signalingClient.isConnected()) return@Runnable
+            if (!hasJoinAcknowledged) {
+                Log.d("CallManager", "Join recovery: no ack, resending")
+                if (_uiState.value.phase == CallPhase.Joining) {
+                    pendingJoinRoom = roomId
+                    ensureSignalingConnection()
+                }
+                return@Runnable
+            }
+            // If still in joining after recovery delay, promote state
+            if (_uiState.value.phase == CallPhase.Joining) {
+                updateState(_uiState.value.copy(
+                    phase = CallPhase.Waiting,
+                    participantCount = 1,
+                    statusMessageResId = R.string.call_status_waiting_for_join
+                ))
+            }
+        }
+        joinRecoveryRunnable = runnable
+        handler.postDelayed(runnable, JOIN_RECOVERY_MS)
+    }
+
+    private fun clearJoinRecovery() {
+        joinRecoveryRunnable?.let { handler.removeCallbacks(it) }
+        joinRecoveryRunnable = null
+    }
+
+    private fun maybeScheduleNonHostOfferFallback(reason: String) {
+        if (currentRoomId == null) return
+        val state = _uiState.value
+        if (state.participantCount <= 1) { clearNonHostOfferFallback(); return }
+        if (state.isHost) { clearNonHostOfferFallback(); return }
+        if (!signalingClient.isConnected()) return
+        if (nonHostOfferFallbackRunnable != null) return
+
+        val roomId = currentRoomId
+        Log.d("CallManager", "Non-host fallback scheduled ($reason)")
+        val runnable = Runnable {
+            nonHostOfferFallbackRunnable = null
+            if (currentRoomId != roomId) return@Runnable
+            maybeSendNonHostFallbackOffer()
+        }
+        nonHostOfferFallbackRunnable = runnable
+        handler.postDelayed(runnable, NON_HOST_FALLBACK_DELAY_MS)
+    }
+
+    private fun clearNonHostOfferFallback() {
+        nonHostOfferFallbackRunnable?.let { handler.removeCallbacks(it) }
+        nonHostOfferFallbackRunnable = null
+    }
+
+    private fun maybeSendNonHostFallbackOffer() {
+        val state = _uiState.value
+        if (state.participantCount <= 1) return
+        if (state.isHost) return
+        if (!signalingClient.isConnected()) return
+        if (!webRtcEngine.isReady()) return
+        val signalingState = webRtcEngine.getSignalingState()
+        if (signalingState != null && signalingState != PeerConnection.SignalingState.STABLE) {
+            maybeScheduleNonHostOfferFallback("signaling-not-stable")
+            return
+        }
+        if (webRtcEngine.hasRemoteDescription()) return
+        if (isMakingOffer) {
+            maybeScheduleNonHostOfferFallback("already-making-offer")
+            return
+        }
+
+        Log.d("CallManager", "Non-host fallback offer triggered")
+        isMakingOffer = true
+        val started = webRtcEngine.createOffer(
+            onSdp = { sdp ->
+                val payload = JSONObject().apply { put("sdp", sdp) }
+                sendMessage("offer", payload)
+                scheduleOfferTimeout()
+            },
+            onComplete = { success ->
+                handler.post {
+                    isMakingOffer = false
+                    if (!success) {
+                        maybeScheduleNonHostOfferFallback("offer-failed")
+                    }
+                }
+            }
+        )
+        if (!started) {
+            isMakingOffer = false
+            maybeScheduleNonHostOfferFallback("offer-not-started")
+        }
+    }
+
     private fun cleanupCall(messageResId: Int) {
         updateState(
             _uiState.value.copy(
@@ -1401,6 +1599,10 @@ class CallManager(context: Context) {
 
     private fun resetResources() {
         clearJoinTimeout()
+        clearJoinKickstart()
+        clearJoinRecovery()
+        clearNonHostOfferFallback()
+        clearTurnRefresh()
         deactivateAudioSession()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
@@ -1423,6 +1625,10 @@ class CallManager(context: Context) {
         clearIceRestartTimer()
         userPreferredVideoEnabled = true
         isVideoPausedByProximity = false
+        reconnectToken = null
+        turnTokenTTLMs = null
+        hasJoinSignalStarted = false
+        hasJoinAcknowledged = false
     }
 
     private fun applyLocalVideoPreference() {
@@ -1638,7 +1844,13 @@ class CallManager(context: Context) {
     private companion object {
         const val WEBRTC_STATS_POLL_INTERVAL_MS = 2000L
         const val JOIN_PUSH_ENDPOINT_WAIT_MS = 250L
-        const val JOIN_ROOM_TIMEOUT_MS = 25_000L
+        const val JOIN_ROOM_TIMEOUT_MS = 15_000L
+        const val JOIN_CONNECT_KICKSTART_MS = 1_200L
+        const val JOIN_RECOVERY_MS = 4_000L
+        const val TURN_FETCH_TIMEOUT_MS = 2_000L
+        const val NON_HOST_FALLBACK_DELAY_MS = 4_000L
+        const val SNAPSHOT_PREPARE_TIMEOUT_MS = 2_000L
+        const val TURN_REFRESH_TRIGGER_RATIO = 0.8
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         const val WIFI_PERF_LOCK_TAG = "serenada:call-wifi"
         const val MAX_SAVED_ROOM_NAME_LENGTH = 120

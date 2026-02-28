@@ -1,11 +1,14 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -13,6 +16,39 @@ import (
 )
 
 const maxMessageSize = 65536 // 64KB
+
+// TURN token TTL: 30 minutes. Clients proactively refresh at 80% of TTL.
+const turnTokenTTL = 30 * time.Minute
+
+// issueReconnectToken generates an HMAC proof that allows a client to reclaim
+// its CID on reconnect. Format: hex(HMAC-SHA256(secret, cid|rid)).
+// The token is bound to (cid, rid) — NOT session id — because the session id
+// changes on every reconnect.
+func issueReconnectToken(cid, rid string) string {
+	secret := os.Getenv("TURN_TOKEN_SECRET")
+	if secret == "" {
+		secret = os.Getenv("TURN_SECRET")
+	}
+	if secret == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(cid + "|" + rid))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// validateReconnectToken checks that the provided token matches the expected HMAC.
+func validateReconnectToken(token, cid, rid string) bool {
+	if token == "" {
+		return false
+	}
+	expected := issueReconnectToken(cid, rid)
+	if expected == "" {
+		// No secret configured — allow legacy clients (backwards compatible)
+		return true
+	}
+	return hmac.Equal([]byte(expected), []byte(token))
+}
 
 type TransportKind string
 
@@ -154,6 +190,7 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 
 	switch msg.Type {
 	case "ping":
+		c.sendMessage(Message{V: 1, Type: "pong"})
 		return
 	case "join":
 		log.Printf("[JOIN] Client %s joining room %s", c.sid, msg.RID)
@@ -169,6 +206,8 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 		h.handleEndRoom(c, msg)
 	case "watch_rooms":
 		h.handleWatchRooms(c, msg)
+	case "turn-refresh":
+		h.handleTurnRefresh(c, msg)
 	case "offer", "answer", "ice":
 		// log.Printf("[%s] Relay from %s to room %s", msg.Type, c.cid, c.rid) // verbose
 		h.handleRelay(c, msg)
@@ -209,9 +248,10 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	room.mu.Lock()
 	var joinPayload struct {
-		ReconnectCID string `json:"reconnectCid"`
-		PushEndpoint string `json:"pushEndpoint"`
-		SnapshotID   string `json:"snapshotId"`
+		ReconnectCID   string `json:"reconnectCid"`
+		ReconnectToken string `json:"reconnectToken"`
+		PushEndpoint   string `json:"pushEndpoint"`
+		SnapshotID     string `json:"snapshotId"`
 	}
 	if len(msg.Payload) > 0 {
 		if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
@@ -220,81 +260,54 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	reconnectCID := joinPayload.ReconnectCID
+	reconnectToken := joinPayload.ReconnectToken
 	excludeEndpoint := joinPayload.PushEndpoint
 	snapshotID := joinPayload.SnapshotID
 	reusedCID := false
 
+	// Single-pass ghost eviction: find ghost client with reconnectCID, mark for removal under room lock
+	var ghostToEvict *Client
 	if reconnectCID != "" {
-		var ghostClient *Client
+		// Validate reconnectToken if provided (backwards compatible: legacy clients without token still allowed)
+		if reconnectToken != "" && !validateReconnectToken(reconnectToken, reconnectCID, rid) {
+			room.mu.Unlock()
+			log.Printf("[JOIN] Invalid reconnectToken for CID %s from client %s", reconnectCID, c.sid)
+			c.sendError(rid, "INVALID_RECONNECT_TOKEN", "Reconnect token validation failed")
+			return
+		}
+
 		for client, cid := range room.Participants {
 			if cid == reconnectCID {
-				ghostClient = client
+				ghostToEvict = client
 				break
 			}
 		}
-
-		if ghostClient != nil {
-			delete(room.Participants, ghostClient)
-			ghostClient.cid = ""
-			ghostClient.rid = ""
+		if ghostToEvict != nil {
+			log.Printf("[JOIN] Reconnection detected for CID %s. Evicting ghost client %s", reconnectCID, ghostToEvict.sid)
+			// Remove ghost from room under room lock (atomic)
+			delete(room.Participants, ghostToEvict)
+			ghostToEvict.cid = ""
+			ghostToEvict.rid = ""
 			reusedCID = true
-			// Note: room.HostCID is intentionally left unchanged here so that
+			// Note: room.HostCID is intentionally left unchanged so that
 			// the host assignment is preserved across reconnects via the
 			// reused client ID (reconnectCID).
 		}
 	}
 
-	// Checks...
+	// Room full check (after ghost eviction)
 	if len(room.Participants) >= 2 {
-		evicted := false
+		room.mu.Unlock()
+		log.Printf("[JOIN] Room %s is full", rid)
+		c.sendError(rid, "ROOM_FULL", "Room is full")
+		return
+	}
 
-		if reconnectCID != "" {
-			var ghostClient *Client
-			for client, cid := range room.Participants {
-				if cid == reconnectCID {
-					ghostClient = client
-					break
-				}
-			}
-
-			if ghostClient != nil {
-				log.Printf("[JOIN] Reconnection detected for CID %s. Evicting ghost client %s", reconnectCID, ghostClient.sid)
-				// Evict ghost. MUST unlock room before calling removeClientFromRoom because it locks hub then room.
-				// Wait, removeClientFromRoom locks hub then room. We currently hold room lock.
-				// We CANNOT call removeClientFromRoom here directly without deadlock or complex unlocking.
-				// Alternative: Mark for removal, unlock, remove, retry join?
-				// Or: Just remove from room.Participants manually here?
-				// Removing manually requires updating Hub.watchers and Hub.rooms if empty, which needs Hub lock.
-				// We do NOT hold Hub lock here (unlocked at line 238).
-
-				// Best strategy: Unlock, remove ghost, retry logic?
-				// But we are in middle of function.
-
-				// Let's do this: Release room lock, call removeClientFromRoom, re-acquire room lock.
-				room.mu.Unlock()
-
-				// We need to ensure we don't race.
-				// Actually, handleDisconnect might be running for ghost.
-				h.removeClientFromRoom(ghostClient)
-
-				room.mu.Lock()
-				// Re-check state after re-lock
-				if len(room.Participants) >= 2 {
-					// Still full? Maybe someone else joined or ghost removal failed (already gone).
-					// If ghost is gone, len should be < 2.
-					// Let's just fall through to check again.
-				} else {
-					evicted = true
-				}
-			}
-		}
-
-		if !evicted && len(room.Participants) >= 2 {
-			room.mu.Unlock()
-			log.Printf("[JOIN] Room %s is full", rid)
-			c.sendError(rid, "ROOM_FULL", "Room is full")
-			return
-		}
+	// Deferred hub-level cleanup of ghost outside room lock to avoid deadlock
+	if ghostToEvict != nil {
+		room.mu.Unlock()
+		h.cleanupEvictedClient(ghostToEvict)
+		room.mu.Lock()
 	}
 
 	cid := generateID("C-")
@@ -319,8 +332,8 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	room.mu.Unlock() // <--- CRITICAL FIX: Unlock before broadcast/send to avoid deadlock/blocking
 
-	// Trigger Push Notification when anyone joins (subscribed users waiting offline should get notified)
-	if pushService != nil {
+	// Trigger Push Notification only for fresh joins (not reconnects)
+	if pushService != nil && !reusedCID {
 		go pushService.SendNotificationToRoom(rid, excludeEndpoint, snapshotID)
 	}
 
@@ -330,12 +343,18 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	// Include TURN token in joined response (gated by valid room ID)
-	token, expiresAt, err := issueTurnToken(5*time.Minute, turnTokenKindCall)
+	token, expiresAt, err := issueTurnToken(turnTokenTTL, turnTokenKindCall)
 	if err != nil {
 		log.Printf("[TURN] Failed to issue token: %v", err)
 	} else {
 		payload["turnToken"] = token
 		payload["turnTokenExpiresAt"] = expiresAt.Unix()
+		payload["turnTokenTTLMs"] = int64(turnTokenTTL / time.Millisecond)
+	}
+
+	// Include reconnectToken for authenticated reconnection
+	if rt := issueReconnectToken(cid, rid); rt != "" {
+		payload["reconnectToken"] = rt
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
@@ -355,6 +374,35 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Notify watchers
 	h.broadcastRoomStatusUpdate(rid)
+}
+
+func (h *Hub) handleTurnRefresh(c *Client, msg Message) {
+	if c.rid == "" {
+		c.sendError(msg.RID, "NOT_IN_ROOM", "Must be in a room to refresh TURN credentials")
+		return
+	}
+
+	token, expiresAt, err := issueTurnToken(turnTokenTTL, turnTokenKindCall)
+	if err != nil {
+		log.Printf("[TURN-REFRESH] Failed to issue token for %s: %v", c.cid, err)
+		c.sendError(msg.RID, "TURN_REFRESH_FAILED", "Failed to refresh TURN credentials")
+		return
+	}
+
+	payload := map[string]interface{}{
+		"turnToken":          token,
+		"turnTokenExpiresAt": expiresAt.Unix(),
+		"turnTokenTTLMs":     int64(turnTokenTTL / time.Millisecond),
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	c.sendMessage(Message{
+		V:       1,
+		Type:    "turn-refreshed",
+		RID:     c.rid,
+		Payload: payloadBytes,
+	})
+	log.Printf("[TURN-REFRESH] Refreshed TURN credentials for client %s (CID: %s) in room %s", c.sid, c.cid, c.rid)
 }
 
 func (h *Hub) handleLeave(c *Client, msg Message) {
@@ -641,6 +689,28 @@ func generateID(prefix string) string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return prefix + hex.EncodeToString(b)
+}
+
+// cleanupEvictedClient performs hub-level cleanup for a ghost client that was already
+// removed from its room's Participants map. This must be called outside the room lock.
+func (h *Hub) cleanupEvictedClient(ghost *Client) {
+	h.mu.Lock()
+	delete(h.clients, ghost)
+	delete(h.clientsBySID, ghost.sid)
+	for rid, clientSet := range h.watchers {
+		delete(clientSet, ghost)
+		if len(clientSet) == 0 {
+			delete(h.watchers, rid)
+		}
+	}
+	h.mu.Unlock()
+
+	switch ghost.transport {
+	case TransportWS:
+		stats.AddActiveWSClients(-1)
+	case TransportSSE:
+		stats.AddActiveSSEClients(-1)
+	}
 }
 
 func extractMessageType(msg interface{}) string {

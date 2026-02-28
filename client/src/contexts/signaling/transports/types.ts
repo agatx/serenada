@@ -14,4 +14,5 @@ export interface SignalingTransport {
     close: () => void;
     send: (msg: SignalingMessage) => void;
     isOpen: () => boolean;
+    getSessionId?: () => string;
 }

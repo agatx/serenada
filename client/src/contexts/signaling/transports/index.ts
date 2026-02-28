@@ -6,9 +6,9 @@ export type { SignalingTransport, TransportHandlers, TransportKind } from './typ
 export { WebSocketTransport } from './ws';
 export { SseTransport } from './sse';
 
-export const createSignalingTransport = (kind: TransportKind, handlers: TransportHandlers): SignalingTransport => {
+export const createSignalingTransport = (kind: TransportKind, handlers: TransportHandlers, options?: { sseSid?: string }): SignalingTransport => {
     if (kind === 'sse') {
-        return new SseTransport(handlers);
+        return new SseTransport(handlers, { sid: options?.sseSid });
     }
     return new WebSocketTransport(handlers);
 };

@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	ssePingPeriod     = 12 * time.Second
-	sseGracePeriod    = 5 * time.Second
-	sseStaleTimeout   = 60 * time.Second
-	sseReaperInterval = 15 * time.Second
+	ssePingPeriod            = 12 * time.Second
+	sseGracePeriod           = 5 * time.Second
+	sseStaleTimeoutIdle      = 60 * time.Second  // clients not in a room
+	sseStaleTimeoutInRoom    = 5 * time.Minute    // clients currently in a room
+	sseReaperInterval        = 15 * time.Second
 )
 
 func (h *Hub) run() {
@@ -189,7 +190,8 @@ func (h *Hub) delayDisconnectSSE(c *Client) {
 
 func (h *Hub) evictStaleSSE() {
 	now := time.Now().UnixNano()
-	cutoff := now - sseStaleTimeout.Nanoseconds()
+	cutoffIdle := now - sseStaleTimeoutIdle.Nanoseconds()
+	cutoffInRoom := now - sseStaleTimeoutInRoom.Nanoseconds()
 	stale := make([]*Client, 0)
 
 	h.mu.RLock()
@@ -198,7 +200,15 @@ func (h *Hub) evictStaleSSE() {
 			continue
 		}
 		lastSeen := atomic.LoadInt64(&client.lastSeen)
-		if lastSeen > 0 && lastSeen < cutoff {
+		if lastSeen == 0 {
+			continue
+		}
+		// Use longer timeout for clients in a room (active call participants)
+		cutoff := cutoffIdle
+		if client.rid != "" {
+			cutoff = cutoffInRoom
+		}
+		if lastSeen < cutoff {
 			stale = append(stale, client)
 		}
 	}

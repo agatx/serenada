@@ -12,7 +12,7 @@ final class JoinSnapshotFeature {
     }
 
     private enum Constants {
-        static let prepTimeoutNs: UInt64 = 1_500_000_000
+        static let prepTimeoutNs: UInt64 = 2_000_000_000
         static let frameTimeoutNs: UInt64 = 900_000_000
         static let maxWidthPx: CGFloat = 320
         static let maxBytes = 200 * 1024

@@ -3,9 +3,18 @@ import { useSignaling } from './SignalingContext';
 import { useToast } from './ToastContext';
 import { useTranslation } from 'react-i18next';
 
-// RTC Config
-// RTC Config moved to state
+// Resilience constants (shared across all clients)
+const OFFER_TIMEOUT_MS = 8000;
+const ICE_RESTART_COOLDOWN_MS = 10000;
+const NON_HOST_FALLBACK_DELAY_MS = 4000;
+const NON_HOST_FALLBACK_MAX_ATTEMPTS = 2;
+const ICE_CANDIDATE_BUFFER_MAX = 50;
+const TURN_FETCH_TIMEOUT_MS = 2000;
 
+// Default STUN config for non-blocking ICE bootstrap
+const DEFAULT_RTC_CONFIG: RTCConfiguration = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+};
 
 interface WebRTCContextValue {
     localStream: MediaStream | null;
@@ -55,10 +64,12 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const iceRestartTimerRef = useRef<number | null>(null);
     const offerTimeoutRef = useRef<number | null>(null);
     const isConnectedRef = useRef(isConnected);
+    const nonHostFallbackTimerRef = useRef<number | null>(null);
+    const nonHostFallbackAttemptsRef = useRef(0);
 
-    // RTC Config State
-    const [rtcConfig, setRtcConfig] = useState<RTCConfiguration | null>(null);
-    const rtcConfigRef = useRef<RTCConfiguration | null>(null);
+    // RTC Config State — init with default STUN immediately (non-blocking ICE bootstrap)
+    const [rtcConfig, setRtcConfig] = useState<RTCConfiguration>(DEFAULT_RTC_CONFIG);
+    const rtcConfigRef = useRef<RTCConfiguration>(DEFAULT_RTC_CONFIG);
     const signalingBufferRef = useRef<any[]>([]);
     const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
     const facingModeRef = useRef<'user' | 'environment'>('user');
@@ -133,14 +144,14 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         };
     }, []);
 
-    // Fetch ICE Servers on mount
+    // Fetch ICE Servers when TURN token is available (non-blocking: default STUN already set)
     useEffect(() => {
         if (!turnToken) {
             return;
         }
+        const controller = new AbortController();
         const fetchIceServers = async () => {
             try {
-                // In production, this call goes to the same Go server via Nginx proxy or direct
                 let apiUrl = '/api/turn-credentials';
                 const wsUrl = import.meta.env.VITE_WS_URL;
                 if (wsUrl) {
@@ -153,7 +164,10 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     apiUrl = `/api/turn-credentials?token=${encodeURIComponent(turnToken)}`;
                 }
 
-                const res = await fetch(apiUrl);
+                const timeoutId = setTimeout(() => controller.abort(), TURN_FETCH_TIMEOUT_MS);
+                const res = await fetch(apiUrl, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
                 if (res.ok) {
                     const data = await res.json();
                     console.log('[WebRTC] Loaded ICE Servers:', data);
@@ -179,7 +193,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     }
 
                     const config: RTCConfiguration = {
-                        iceServers: servers.length > 0 ? servers : [{ urls: 'stun:stun.l.google.com:19302' }]
+                        iceServers: servers.length > 0 ? servers : DEFAULT_RTC_CONFIG.iceServers
                     };
 
                     if (turnsOnly) {
@@ -188,31 +202,29 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
                     setRtcConfig(config);
                 } else {
-                    console.warn('[WebRTC] Failed to fetch ICE servers, using default Google STUN');
-                    setRtcConfig({
-                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                    });
+                    console.warn('[WebRTC] Failed to fetch ICE servers, keeping default STUN');
                 }
             } catch (err) {
-                console.error('[WebRTC] Error fetching ICE servers:', err);
-                setRtcConfig({
-                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                });
+                if (controller.signal.aborted) {
+                    console.warn('[WebRTC] TURN fetch timed out, keeping default STUN');
+                } else {
+                    console.error('[WebRTC] Error fetching ICE servers:', err);
+                }
             }
         };
 
         fetchIceServers();
+        return () => controller.abort();
     }, [turnToken]);
 
     // Sync rtcConfig to ref and flush buffered messages
     useEffect(() => {
         rtcConfigRef.current = rtcConfig;
-        if (rtcConfig && signalingBufferRef.current.length > 0) {
+        if (signalingBufferRef.current.length > 0) {
             console.log(`[WebRTC] Flushing ${signalingBufferRef.current.length} buffered signaling messages`);
             const msgs = [...signalingBufferRef.current];
             signalingBufferRef.current = [];
             msgs.forEach(msg => {
-                // We use setTimeout to ensure we don't block the effect and allow state updates to settle if needed
                 setTimeout(() => processSignalingMessage(msg), 0);
             });
         }
@@ -251,15 +263,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Handle incoming signaling messages
     useEffect(() => {
         const handleMessage = (msg: any) => {
-            const { type } = msg;
-            // Only buffer WebRTC negotiation messages
-            if (['offer', 'answer', 'ice'].includes(type)) {
-                if (!rtcConfigRef.current) {
-                    console.log(`[WebRTC] Buffering signaling message: ${type}`);
-                    signalingBufferRef.current.push(msg);
-                    return;
-                }
-            }
             processSignalingMessage(msg);
         };
 
@@ -327,7 +330,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (iceRestartTimerRef.current) return;
 
         const now = Date.now();
-        if (now - lastIceRestartAtRef.current < 10000) {
+        if (now - lastIceRestartAtRef.current < ICE_RESTART_COOLDOWN_MS) {
             return;
         }
 
@@ -358,26 +361,22 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Logic to initiate offer if we are HOST and have 2 participants
     useEffect(() => {
-        // Wait for ICE config to be loaded before attempting to create peer connection
-        if (!rtcConfig) {
-            return;
-        }
         if (roomState && roomState.participants && roomState.participants.length === 2 && roomState.hostCid === clientId) {
-            // ... (existing logic)
             const pc = getOrCreatePC();
             // Only initiate offer if we haven't established a connection yet (no remote description)
-            // This prevents infinite negotiation loops when room_state updates occur
             if (pc.signalingState === 'stable' && !pc.remoteDescription) {
                 createOffer();
             }
+        } else if (roomState && roomState.participants && roomState.participants.length === 2 && roomState.hostCid !== clientId) {
+            // Non-host: create PC and schedule fallback offer if host doesn't send one
+            getOrCreatePC();
+            scheduleNonHostFallback();
         } else if (roomState && roomState.participants && roomState.participants.length < 2) {
-            // Check if we need to cleanup. If we have a PC or remote stream, clean it.
             if (pcRef.current || remoteStream) {
                 console.log('[WebRTC] Participant left, cleaning up connection');
                 cleanupPC();
             }
         } else if (!roomState) {
-            // We left the room completely
             if (pcRef.current || remoteStream) {
                 console.log('[WebRTC] Room state cleared, cleaning up connection');
                 cleanupPC();
@@ -386,11 +385,42 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, [roomState, clientId, remoteStream, rtcConfig]);
 
 
-    const getOrCreatePC = () => {
-        if (!rtcConfig) {
-            console.warn("getOrCreatePC called before ICE config loaded");
-            throw new Error("Cannot create PC before ICE config is loaded");
+    const clearNonHostFallback = () => {
+        if (nonHostFallbackTimerRef.current) {
+            window.clearTimeout(nonHostFallbackTimerRef.current);
+            nonHostFallbackTimerRef.current = null;
         }
+    };
+
+    const scheduleNonHostFallback = () => {
+        if (isHost()) return;
+        if (nonHostFallbackTimerRef.current) return;
+        if (nonHostFallbackAttemptsRef.current >= NON_HOST_FALLBACK_MAX_ATTEMPTS) return;
+        const pc = pcRef.current;
+        if (!pc) return;
+
+        nonHostFallbackTimerRef.current = window.setTimeout(async () => {
+            nonHostFallbackTimerRef.current = null;
+            const currentPc = pcRef.current;
+            if (!currentPc) return;
+            if (isHost()) return;
+            if (currentPc.remoteDescription) return; // host sent offer, no need
+            if (currentPc.signalingState !== 'stable') return;
+            if (!isConnectedRef.current) return;
+
+            nonHostFallbackAttemptsRef.current++;
+            console.warn(`[WebRTC] Non-host fallback offer (attempt ${nonHostFallbackAttemptsRef.current})`);
+            try {
+                const offer = await currentPc.createOffer();
+                await currentPc.setLocalDescription(offer as RTCSessionDescriptionInit);
+                sendMessage('offer', { sdp: offer.sdp });
+            } catch (err) {
+                console.error('[WebRTC] Non-host fallback offer failed', err);
+            }
+        }, NON_HOST_FALLBACK_DELAY_MS);
+    };
+
+    const getOrCreatePC = () => {
         if (pcRef.current) return pcRef.current;
 
         const pc = new RTCPeerConnection(rtcConfig);
@@ -508,6 +538,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         clearIceRestartTimer();
         clearOfferTimeout();
+        clearNonHostFallback();
+        nonHostFallbackAttemptsRef.current = 0;
         pendingIceRestartRef.current = false;
         setIceConnectionState('closed');
         setConnectionState('closed');
@@ -568,10 +600,20 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 channelCount: { ideal: 1 },
                 sampleRate: { ideal: 48000 }
             };
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: facingMode },
-                audio: audioConstraints
-            });
+            let stream: MediaStream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: facingMode },
+                    audio: audioConstraints
+                });
+            } catch (constraintErr) {
+                // Retry with relaxed constraints on failure
+                console.warn('[WebRTC] getUserMedia failed with constraints, retrying with relaxed', constraintErr);
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: true
+                });
+            }
 
             // Check validity:
             // 1. Component unmounted
@@ -828,19 +870,21 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             offerTimeoutRef.current = window.setTimeout(() => {
                 const currentPc = pcRef.current;
                 if (!currentPc) return;
-                if (currentPc.signalingState !== 'have-local-offer') {
-                    return;
-                }
-                console.warn('[WebRTC] Offer timeout; rolling back and retrying');
+                console.warn(`[WebRTC] Offer timeout; signalingState=${currentPc.signalingState}`);
                 pendingIceRestartRef.current = true;
-                currentPc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
-                    .catch(err => {
-                        console.warn('[WebRTC] Rollback failed', err);
-                    })
-                    .finally(() => {
-                        scheduleIceRestart('offer-timeout', 0);
-                    });
-            }, 8000);
+                if (currentPc.signalingState === 'have-local-offer') {
+                    currentPc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
+                        .catch(err => {
+                            console.warn('[WebRTC] Rollback failed', err);
+                        })
+                        .finally(() => {
+                            scheduleIceRestart('offer-timeout', 0);
+                        });
+                } else {
+                    // Negotiation stalled in unexpected state — still schedule ICE restart
+                    scheduleIceRestart('offer-timeout-unexpected-state', 0);
+                }
+            }, OFFER_TIMEOUT_MS);
         } catch (err) {
             console.error('[WebRTC] Error creating offer:', err);
         } finally {
@@ -856,6 +900,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const handleOffer = async (sdp: string) => {
         try {
             console.log('[WebRTC] Handling offer...');
+            clearNonHostFallback(); // Cancel non-host fallback on inbound offer
             const pc = getOrCreatePC();
             await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
             console.log('[WebRTC] Remote description set (offer)');
@@ -882,6 +927,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const handleAnswer = async (sdp: string) => {
         try {
             console.log('[WebRTC] Handling answer...');
+            clearNonHostFallback(); // Cancel non-host fallback on inbound answer
             const pc = getOrCreatePC();
             await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
             console.log('[WebRTC] Remote description set (answer)');
@@ -897,7 +943,10 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (pc.remoteDescription) {
                 await pc.addIceCandidate(candidate);
             } else {
-                console.log('[WebRTC] Buffering ICE candidate');
+                if (iceBufferRef.current.length >= ICE_CANDIDATE_BUFFER_MAX) {
+                    console.warn(`[WebRTC] ICE buffer full (${ICE_CANDIDATE_BUFFER_MAX}), dropping oldest`);
+                    iceBufferRef.current.shift();
+                }
                 iceBufferRef.current.push(candidate);
             }
         } catch (err) {

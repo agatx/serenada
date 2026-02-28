@@ -28,12 +28,17 @@ export class SseTransport implements SignalingTransport {
     private es: EventSource | null = null;
     private handlers: TransportHandlers;
     private open = false;
-    private sid = createSid();
+    private sid: string;
     private sseUrl = `${getHttpBaseUrl()}/sse`;
     private connectTimeout: number | null = null;
 
-    constructor(handlers: TransportHandlers) {
+    constructor(handlers: TransportHandlers, options?: { sid?: string }) {
         this.handlers = handlers;
+        this.sid = options?.sid || createSid();
+    }
+
+    getSessionId(): string {
+        return this.sid;
     }
 
     private clearConnectTimeout() {

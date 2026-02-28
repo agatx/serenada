@@ -7,12 +7,21 @@ import { getConfiguredTransportOrder, parseTransportOrder } from './signaling/tr
 import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './signaling/roomStatuses';
 import { useTranslation } from 'react-i18next';
 
+// Resilience constants (shared across all clients)
+const RECONNECT_BACKOFF_BASE_MS = 500;
+const RECONNECT_BACKOFF_CAP_MS = 5000;
+const JOIN_PUSH_ENDPOINT_WAIT_MS = 250;
+const PONG_MISS_THRESHOLD = 2;
+const WS_FALLBACK_CONSECUTIVE_FAILURES = 3;
+const TURN_REFRESH_TRIGGER_RATIO = 0.8;
+
 interface SignalingContextValue {
     isConnected: boolean;
     activeTransport: TransportKind | null;
     clientId: string | null;
     roomState: RoomState | null;
     turnToken: string | null;
+    turnTokenTTLMs: number | null;
     joinRoom: (roomId: string, opts?: { snapshotId?: string }) => void;
     leaveRoom: () => void;
     endRoom: () => void;
@@ -44,6 +53,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const [error, setError] = useState<string | null>(null);
     const [roomStatuses, setRoomStatuses] = useState<Record<string, number>>({});
     const [turnToken, setTurnToken] = useState<string | null>(null);
+    const [turnTokenTTLMs, setTurnTokenTTLMs] = useState<number | null>(null);
     const { showToast } = useToast();
     const { t } = useTranslation();
 
@@ -61,14 +71,23 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const clientIdRef = useRef<string | null>(null);
     const lastClientIdRef = useRef<string | null>(null);
     const needsRejoinRef = useRef(false);
+    const reconnectTokenRef = useRef<string | null>(null);
+    const turnRefreshTimerRef = useRef<number | null>(null);
+    const lastPongAtRef = useRef<number>(Date.now());
+    const missedPongsRef = useRef<number>(0);
+    const wsConsecutiveFailuresRef = useRef<number>(0);
+    const sseSidRef = useRef<string | null>(null);
     const reconnectStorageKey = 'serenada.reconnectCid';
+    const reconnectTokenStorageKey = 'serenada.reconnectToken';
 
     const clearReconnectStorage = useCallback(() => {
         try {
             window.sessionStorage.removeItem(reconnectStorageKey);
+            window.sessionStorage.removeItem(reconnectTokenStorageKey);
         } catch (err) {
             console.warn('[Signaling] Failed to clear reconnectCid', err);
         }
+        reconnectTokenRef.current = null;
     }, []);
 
     // Sync ref
@@ -89,6 +108,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             if (stored && !lastClientIdRef.current) {
                 lastClientIdRef.current = stored;
             }
+            const storedToken = window.sessionStorage.getItem(reconnectTokenStorageKey);
+            if (storedToken && !reconnectTokenRef.current) {
+                reconnectTokenRef.current = storedToken;
+            }
         } catch (err) {
             console.warn('[Signaling] Failed to load reconnectCid', err);
         }
@@ -106,13 +129,38 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             case 'joined':
                 if (msg.cid) setClientId(msg.cid);
                 if (msg.payload) {
-                    // In Go server we send "participants" and "hostCid" in payload for joined AND room_state
                     setRoomState(msg.payload as RoomState);
-                    // TURN token is now included in joined response (gated by valid room ID)
                     if (msg.payload.turnToken) {
                         setTurnToken(msg.payload.turnToken as string);
                     }
+                    if (msg.payload.turnTokenTTLMs) {
+                        setTurnTokenTTLMs(msg.payload.turnTokenTTLMs as number);
+                    }
+                    // Store reconnect token for authenticated reconnection
+                    if (msg.payload.reconnectToken) {
+                        reconnectTokenRef.current = msg.payload.reconnectToken as string;
+                        try {
+                            window.sessionStorage.setItem(reconnectTokenStorageKey, msg.payload.reconnectToken as string);
+                        } catch (err) {
+                            console.warn('[Signaling] Failed to persist reconnectToken', err);
+                        }
+                    }
                 }
+                break;
+            case 'turn-refreshed':
+                if (msg.payload) {
+                    if (msg.payload.turnToken) {
+                        setTurnToken(msg.payload.turnToken as string);
+                    }
+                    if (msg.payload.turnTokenTTLMs) {
+                        setTurnTokenTTLMs(msg.payload.turnTokenTTLMs as number);
+                    }
+                    console.log('[Signaling] TURN credentials refreshed');
+                }
+                break;
+            case 'pong':
+                lastPongAtRef.current = Date.now();
+                missedPongsRef.current = 0;
                 break;
             case 'room_state':
                 if (msg.payload) {
@@ -145,7 +193,8 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
 
         setLastMessage(msg);
-        listenersRef.current.forEach(listener => listener(msg));
+        // Copy array before iteration to prevent mutation during callback dispatch
+        [...listenersRef.current].forEach(listener => listener(msg));
     }, [clearReconnectStorage, showToast]);
 
     const sendMessage = useCallback((type: string, payload?: any, to?: string) => {
@@ -169,7 +218,23 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     useEffect(() => {
         if (!isConnected) return;
 
+        lastPongAtRef.current = Date.now();
+        missedPongsRef.current = 0;
+
         const interval = window.setInterval(() => {
+            // Check for missed pongs before sending next ping
+            const elapsed = Date.now() - lastPongAtRef.current;
+            if (elapsed > 12000) {
+                missedPongsRef.current++;
+                if (missedPongsRef.current >= PONG_MISS_THRESHOLD) {
+                    console.warn(`[Signaling] ${missedPongsRef.current} missed pongs, treating connection as dead`);
+                    missedPongsRef.current = 0;
+                    if (transportRef.current) {
+                        transportRef.current.close();
+                    }
+                    return;
+                }
+            }
             sendMessage('ping', { ts: Date.now() });
         }, 12000);
 
@@ -192,6 +257,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             const reconnectCid = clientIdRef.current || lastClientIdRef.current;
             if (reconnectCid) {
                 payload.reconnectCid = reconnectCid;
+                if (reconnectTokenRef.current) {
+                    payload.reconnectToken = reconnectTokenRef.current;
+                }
             }
             let sent = false;
             const sendJoin = (endpoint?: string) => {
@@ -209,7 +277,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 'PushManager' in window;
 
             if (hasPushSupport) {
-                const fallbackTimer = window.setTimeout(() => sendJoin(), 250);
+                const fallbackTimer = window.setTimeout(() => sendJoin(), JOIN_PUSH_ENDPOINT_WAIT_MS);
                 navigator.serviceWorker.ready
                     .then((reg) => reg.pushManager.getSubscription())
                     .then((sub) => {
@@ -259,7 +327,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             if (reconnectTimeout !== null) return;
             const attempt = reconnectAttemptsRef.current + 1;
             reconnectAttemptsRef.current = attempt;
-            const backoff = Math.min(500 * Math.pow(2, attempt - 1), 5000);
+            const backoff = Math.min(RECONNECT_BACKOFF_BASE_MS * Math.pow(2, attempt - 1), RECONNECT_BACKOFF_CAP_MS);
 
             reconnectTimeout = window.setTimeout(() => {
                 reconnectTimeout = null;
@@ -273,7 +341,13 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             if (order.length <= 1) return false;
             if (transportIndexRef.current >= order.length - 1) return false;
             if (reason === 'unsupported' || reason === 'timeout') return true;
+            // Allow SSE fallback if WS hasn't connected even once
             if (!transportConnectedOnceRef.current[kind]) return true;
+            // Allow SSE fallback after consecutive WS failures even if WS connected before
+            if (kind === 'ws' && wsConsecutiveFailuresRef.current >= WS_FALLBACK_CONSECUTIVE_FAILURES) {
+                console.warn(`[Signaling] ${wsConsecutiveFailuresRef.current} consecutive WS failures, allowing SSE fallback`);
+                return true;
+            }
             return false;
         };
 
@@ -300,6 +374,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             connectingRef.current = true;
 
             if (transportRef.current) {
+                // Save SSE sid before closing for reuse on reconnect
+                if (transportRef.current.getSessionId) {
+                    sseSidRef.current = transportRef.current.getSessionId();
+                }
                 transportRef.current.close();
             }
 
@@ -311,6 +389,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     if (connectionId !== transportIdRef.current) return;
                     connectingRef.current = false;
                     reconnectAttemptsRef.current = 0;
+                    if (targetKind === 'ws') {
+                        wsConsecutiveFailuresRef.current = 0;
+                    }
                     const wasConnected = isConnectedRef.current;
                     setIsConnected(true);
                     setActiveTransport(targetKind);
@@ -335,6 +416,9 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     console.error(`[Signaling] Disconnected via ${reason}`, err);
                     setIsConnected(false);
                     setActiveTransport(null);
+                    if (targetKind === 'ws') {
+                        wsConsecutiveFailuresRef.current++;
+                    }
                     // Keep lastClientIdRef for reconnection attempt
                     if (clientIdRef.current) {
                         lastClientIdRef.current = clientIdRef.current;
@@ -352,7 +436,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     if (connectionId !== transportIdRef.current) return;
                     handleIncomingMessage(msg);
                 }
-            });
+            }, { sseSid: sseSidRef.current || undefined });
 
             transportRef.current = transport;
             transport.connect();
@@ -369,15 +453,43 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         };
     }, [handleIncomingMessage, joinRoom, showToast, t]);
 
+    // Proactive TURN credential refresh at 80% of TTL
+    useEffect(() => {
+        if (turnRefreshTimerRef.current) {
+            window.clearTimeout(turnRefreshTimerRef.current);
+            turnRefreshTimerRef.current = null;
+        }
+        if (!isConnected || !turnTokenTTLMs || !currentRoomIdRef.current) return;
+
+        const refreshDelay = turnTokenTTLMs * TURN_REFRESH_TRIGGER_RATIO;
+        console.log(`[Signaling] Scheduling TURN refresh in ${Math.round(refreshDelay / 1000)}s`);
+        turnRefreshTimerRef.current = window.setTimeout(() => {
+            turnRefreshTimerRef.current = null;
+            if (isConnectedRef.current && currentRoomIdRef.current) {
+                console.log('[Signaling] Sending turn-refresh request');
+                sendMessage('turn-refresh');
+            }
+        }, refreshDelay);
+
+        return () => {
+            if (turnRefreshTimerRef.current) {
+                window.clearTimeout(turnRefreshTimerRef.current);
+                turnRefreshTimerRef.current = null;
+            }
+        };
+    }, [isConnected, turnTokenTTLMs, sendMessage]);
+
     const clearError = useCallback(() => setError(null), []);
 
     const leaveRoom = useCallback(() => {
         sendMessage('leave');
         currentRoomIdRef.current = null;
-        lastClientIdRef.current = null; // Clear last ID on explicit leave
+        lastClientIdRef.current = null;
         needsRejoinRef.current = false;
         clearReconnectStorage();
         setRoomState(null);
+        setTurnToken(null);
+        setTurnTokenTTLMs(null);
     }, [clearReconnectStorage, sendMessage]);
 
     const endRoom = useCallback(() => {
@@ -403,6 +515,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             clientId,
             roomState,
             turnToken,
+            turnTokenTTLMs,
             joinRoom,
             leaveRoom,
             endRoom,

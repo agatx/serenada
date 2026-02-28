@@ -35,10 +35,13 @@ class SignalingClient(
     private val sseTransport = SseSignalingTransport(okHttpClient)
     private val transports = listOf<SignalingTransport>(wsTransport, sseTransport)
 
-    private var connected = false
-    private var connecting = false
+    @Volatile private var connected = false
+    @Volatile private var connecting = false
     private var pingRunnable: Runnable? = null
     private var connectTimeoutRunnable: Runnable? = null
+    private var wsConsecutiveFailures = 0
+    private var lastPongAt = System.currentTimeMillis()
+    private var missedPongs = 0
     private var connectionAttemptId = 0
     private var activeAttemptId = 0
     private var transportIndex = 0
@@ -89,9 +92,22 @@ class SignalingClient(
 
     private fun startPing() {
         stopPing()
+        lastPongAt = System.currentTimeMillis()
+        missedPongs = 0
         val runnable = object : Runnable {
             override fun run() {
                 if (!connected) return
+                val elapsed = System.currentTimeMillis() - lastPongAt
+                if (elapsed > PING_INTERVAL_MS) {
+                    missedPongs++
+                    if (missedPongs >= PONG_MISS_THRESHOLD) {
+                        missedPongs = 0
+                        val kind = activeTransport ?: return
+                        val attemptId = activeAttemptId
+                        handleTransportClosed(attemptId, kind, "pong_timeout")
+                        return
+                    }
+                }
                 val payload = SignalingMessage(
                     type = "ping",
                     rid = null,
@@ -101,11 +117,11 @@ class SignalingClient(
                     payload = null
                 )
                 send(payload)
-                handler.postDelayed(this, 12_000)
+                handler.postDelayed(this, PING_INTERVAL_MS)
             }
         }
         pingRunnable = runnable
-        handler.postDelayed(runnable, 12_000)
+        handler.postDelayed(runnable, PING_INTERVAL_MS)
     }
 
     private fun stopPing() {
@@ -172,6 +188,9 @@ class SignalingClient(
         connecting = false
         connected = true
         transportConnectedOnce[kind] = true
+        if (kind == TransportKind.WS) wsConsecutiveFailures = 0
+        lastPongAt = System.currentTimeMillis()
+        missedPongs = 0
         Log.i(TAG, "Signaling connected via ${kind.wireName}")
         handler.post { listener.onOpen(kind.wireName) }
         startPing()
@@ -186,6 +205,7 @@ class SignalingClient(
         activeAttemptId = -kotlin.math.abs(attemptId)
         activeTransport = null
         activeTransportImpl = null
+        if (kind == TransportKind.WS) wsConsecutiveFailures++
         closeTransports()
 
         if (closedByClient) {
@@ -203,7 +223,9 @@ class SignalingClient(
         if (transportOrder.size <= 1) return false
         if (transportIndex >= transportOrder.lastIndex) return false
         if (reason == "unsupported" || reason == "timeout") return true
-        return transportConnectedOnce[kind] != true
+        if (transportConnectedOnce[kind] != true) return true
+        if (kind == TransportKind.WS && wsConsecutiveFailures >= WS_FALLBACK_CONSECUTIVE_FAILURES) return true
+        return false
     }
 
     private fun tryNextTransport(reason: String): Boolean {
@@ -250,7 +272,15 @@ class SignalingClient(
         }
     }
 
+    fun recordPong() {
+        lastPongAt = System.currentTimeMillis()
+        missedPongs = 0
+    }
+
     private companion object {
         const val TAG = "SignalingClient"
+        const val WS_FALLBACK_CONSECUTIVE_FAILURES = 3
+        const val PONG_MISS_THRESHOLD = 2
+        const val PING_INTERVAL_MS = 12_000L
     }
 }
