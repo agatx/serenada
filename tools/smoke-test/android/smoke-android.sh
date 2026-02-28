@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Android smoke test leg — ADB deep link + uiautomator state polling
+#
+# Required env vars:
+#   SMOKE_SERVER_URL  — Server URL (e.g. http://192.168.1.5)
+#   SMOKE_ROOM_ID     — Room ID for initial join
+#   SMOKE_BARRIER_DIR — Barrier directory for synchronization
+#   SMOKE_ARTIFACTS_DIR — Directory for screenshots
+#
+# Optional:
+#   ANDROID_SERIAL    — ADB serial (defaults to first device)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
+
+PACKAGE="app.serenada.android"
+SERVER_URL="${SMOKE_SERVER_URL:?}"
+ROOM_ID="${SMOKE_ROOM_ID:?}"
+BARRIER_DIR="${SMOKE_BARRIER_DIR:?}"
+ARTIFACTS_DIR="${SMOKE_ARTIFACTS_DIR:-$SCRIPT_DIR/../artifacts}"
+
+adb_cmd() {
+    if [ -n "${ANDROID_SERIAL:-}" ]; then
+        adb -s "$ANDROID_SERIAL" "$@"
+    else
+        adb "$@"
+    fi
+}
+
+# Dump UI hierarchy and return XML
+ui_dump() {
+    adb_cmd shell uiautomator dump /sdcard/smoke_dump.xml 2>/dev/null || true
+    adb_cmd shell cat /sdcard/smoke_dump.xml 2>/dev/null || echo ""
+}
+
+# Wait for a testTag to appear in the UI hierarchy
+wait_for_element() {
+    local tag="$1" timeout="${2:-30}"
+    local elapsed=0
+    log_info "Android: waiting for element '$tag' (${timeout}s timeout) ..."
+    while true; do
+        local xml
+        xml=$(ui_dump)
+        if echo "$xml" | grep -q "$tag"; then
+            log_ok "Android: found '$tag'"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            log_error "Android: element '$tag' not found after ${timeout}s"
+            take_screenshot "timeout_${tag}"
+            return 1
+        fi
+    done
+}
+
+# Tap an element by its testTag — finds bounds and computes center
+tap_element() {
+    local tag="$1"
+    local xml
+    xml=$(ui_dump)
+
+    # Find node with matching resource-id or content-desc containing the tag
+    local bounds
+    bounds=$(echo "$xml" | grep -o "resource-id=\"[^\"]*${tag}[^\"]*\"[^>]*bounds=\"\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]\"" | head -1 | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' || true)
+
+    # Fallback: search for the tag string anywhere in the node attributes
+    if [ -z "$bounds" ]; then
+        bounds=$(echo "$xml" | grep "$tag" | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 || true)
+    fi
+
+    if [ -z "$bounds" ]; then
+        log_error "Android: could not find bounds for '$tag'"
+        return 1
+    fi
+
+    # Parse bounds="[x1,y1][x2,y2]"
+    # Replace ][ with space first, then strip remaining brackets
+    local coords
+    coords=$(echo "$bounds" | grep -o '\[.*\]' | sed 's/\]\[/ /g' | tr -d '[]"' | tr ',' ' ')
+    local x1 y1 x2 y2
+    read -r x1 y1 x2 y2 <<< "$(echo "$coords" | awk '{print $1, $2, $3, $4}')"
+
+    local cx=$(( (x1 + x2) / 2 ))
+    local cy=$(( (y1 + y2) / 2 ))
+
+    log_info "Android: tapping '$tag' at ($cx, $cy)"
+    adb_cmd shell input tap "$cx" "$cy"
+}
+
+take_screenshot() {
+    local name="$1"
+    mkdir -p "$ARTIFACTS_DIR"
+    adb_cmd shell screencap -p /sdcard/smoke_screenshot.png 2>/dev/null || true
+    adb_cmd pull /sdcard/smoke_screenshot.png "$ARTIFACTS_DIR/android_${name}.png" 2>/dev/null || true
+}
+
+# Pre-grant permissions
+pre_grant_permissions() {
+    log_info "Android: granting camera and microphone permissions ..."
+    adb_cmd shell pm grant "$PACKAGE" android.permission.CAMERA 2>/dev/null || true
+    adb_cmd shell pm grant "$PACKAGE" android.permission.RECORD_AUDIO 2>/dev/null || true
+}
+
+launch_deep_link() {
+    local room_id="$1"
+    local url="${SERVER_URL}/call/${room_id}"
+    log_info "Android: launching deep link $url"
+    adb_cmd shell am start -a android.intent.action.VIEW -d "$url" 2>/dev/null
+}
+
+# --- Main flow ---
+
+log_info "=== Android Smoke Test ==="
+
+pre_grant_permissions
+
+# Phase 1: Join
+launch_deep_link "$ROOM_ID"
+wait_for_element "call.screen" 30
+barrier_write "$BARRIER_DIR" "android.joined"
+
+# Wait for peer
+barrier_wait "$BARRIER_DIR" "peer.ready" 45
+
+# Stabilize — brief pause for media connection
+sleep 3
+take_screenshot "in_call_1"
+barrier_write "$BARRIER_DIR" "android.in-call"
+
+# Phase 2: Leave
+barrier_wait "$BARRIER_DIR" "leave" 30
+tap_element "call.endCall"
+wait_for_element "join.screen" 20
+barrier_write "$BARRIER_DIR" "android.left"
+
+# Phase 3: Rejoin
+REJOIN_ROOM_ID=$(barrier_wait "$BARRIER_DIR" "rejoin" 30)
+if [ -z "$REJOIN_ROOM_ID" ]; then
+    REJOIN_ROOM_ID="$ROOM_ID"
+fi
+
+launch_deep_link "$REJOIN_ROOM_ID"
+wait_for_element "call.screen" 30
+barrier_write "$BARRIER_DIR" "android.rejoined"
+
+# Wait for peer again
+barrier_wait "$BARRIER_DIR" "peer.ready.2" 45
+sleep 3
+take_screenshot "in_call_2"
+barrier_write "$BARRIER_DIR" "android.rejoin-in-call"
+
+# Phase 4: End
+barrier_wait "$BARRIER_DIR" "end" 30
+tap_element "call.endCall"
+wait_for_element "join.screen" 20
+barrier_write "$BARRIER_DIR" "android.done"
+
+log_ok "=== Android Smoke Test Complete ==="

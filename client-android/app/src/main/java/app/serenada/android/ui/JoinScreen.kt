@@ -61,6 +61,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
@@ -132,6 +133,7 @@ fun JoinScreen(
     }
 
     Scaffold(
+        modifier = Modifier.testTag("join.screen"),
         topBar = {
             TopAppBar(
                 title = {
@@ -315,6 +317,7 @@ fun JoinScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .testTag("join.busyOverlay")
                         .background(Color.Black.copy(alpha = 0.24f))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
@@ -417,7 +420,8 @@ private fun RecentCallsSection(
                     enter = fadeIn(),
                     exit = shrinkVertically() + fadeOut()
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth()
+                        .testTag("join.recentCall.${call.roomId}")) {
                         RecentCallRow(
                             call = call,
                             count = roomStatuses[call.roomId] ?: 0,

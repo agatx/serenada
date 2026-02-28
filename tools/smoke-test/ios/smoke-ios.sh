@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# iOS smoke test leg — xcodebuild wrapper for DeepLinkRejoinFlowUITests
+#
+# Required env vars:
+#   SMOKE_SERVER_URL    — Server URL (e.g. http://192.168.1.5)
+#   SMOKE_ROOM_ID       — Room ID for the test
+#   SMOKE_ARTIFACTS_DIR — Directory for xcresult bundle
+#
+# Optional:
+#   IOS_UDID            — Device UDID (auto-detected if not set)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/device-detect.sh"
+
+SERVER_URL="${SMOKE_SERVER_URL:?}"
+ROOM_ID="${SMOKE_ROOM_ID:?}"
+ARTIFACTS_DIR="${SMOKE_ARTIFACTS_DIR:-$SCRIPT_DIR/../artifacts}"
+REPO_ROOT="$(repo_root)"
+
+log_info "=== iOS Smoke Test ==="
+
+# Detect device UDID
+UDID="${IOS_UDID:-}"
+if [ -z "$UDID" ]; then
+    UDID=$(detect_ios) || {
+        log_error "No iOS device available"
+        exit 1
+    }
+fi
+log_info "Using iOS device: $UDID"
+
+# Generate Xcode project
+log_info "Generating Xcode project ..."
+(cd "$REPO_ROOT/client-ios" && xcodegen generate) || {
+    log_error "xcodegen generate failed"
+    exit 1
+}
+
+# Build deep link URL
+DEEP_LINK="${SERVER_URL}/call/${ROOM_ID}"
+log_info "Test deep link: $DEEP_LINK"
+
+# Create artifacts dir and clean previous xcresult
+mkdir -p "$ARTIFACTS_DIR"
+rm -rf "$ARTIFACTS_DIR/ios-smoke.xcresult"
+
+# Run XCUITest on the physical device
+# Disable set -e around the pipeline so we can capture PIPESTATUS
+log_info "Running DeepLinkRejoinFlowUITests on device $UDID ..."
+set +e
+SERENADA_UI_TEST_REJOIN_DEEPLINK="$DEEP_LINK" \
+xcodebuild \
+    -project "$REPO_ROOT/client-ios/SerenadaiOS.xcodeproj" \
+    -scheme SerenadaiOS \
+    -destination "id=$UDID" \
+    -only-testing:SerenadaiOSUITests/DeepLinkRejoinFlowUITests \
+    -resultBundlePath "$ARTIFACTS_DIR/ios-smoke.xcresult" \
+    -allowProvisioningUpdates \
+    test 2>&1 | tail -20
+EXIT_CODE=${PIPESTATUS[0]}
+set -e
+
+if [ "$EXIT_CODE" -eq 0 ]; then
+    log_ok "=== iOS Smoke Test PASSED ==="
+else
+    log_error "=== iOS Smoke Test FAILED (exit code: $EXIT_CODE) ==="
+    exit "$EXIT_CODE"
+fi

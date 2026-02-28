@@ -98,6 +98,14 @@ xcodebuild \
 ./server/loadtest/run-local.sh    # Run signaling load sweep against local Docker stack
 ```
 
+### Cross-Platform Smoke Test
+```bash
+bash tools/smoke-test/smoke-test.sh                          # Full run (both devices plugged in)
+SMOKE_SERVER=https://serenada.app bash tools/smoke-test/smoke-test.sh  # Against production
+SMOKE_PAIRS=web+android bash tools/smoke-test/smoke-test.sh  # Android only
+SMOKE_PAIRS=web+ios bash tools/smoke-test/smoke-test.sh      # iOS only
+```
+
 ## Architecture
 
 ```

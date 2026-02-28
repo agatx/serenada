@@ -9,6 +9,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.serenada.android.ui.SerenadaAppRoot
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -22,11 +26,13 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         pendingDeepLinkUri = restorePendingDeepLink(savedInstanceState)
         setContent {
-            SerenadaAppRoot(
-                callManager = callManager,
-                deepLinkUri = pendingDeepLinkUri,
-                onDeepLinkConsumed = { pendingDeepLinkUri = null }
-            )
+            Box(modifier = Modifier.semantics { testTagsAsResourceId = true }) {
+                SerenadaAppRoot(
+                    callManager = callManager,
+                    deepLinkUri = pendingDeepLinkUri,
+                    onDeepLinkConsumed = { pendingDeepLinkUri = null }
+                )
+            }
         }
     }
 

@@ -1,0 +1,12 @@
+{
+  "name": "serenada-smoke-test-web",
+  "private": true,
+  "scripts": {
+    "test": "npx playwright test",
+    "test:smoke": "npx playwright test smoke.spec.ts",
+    "test:hold": "npx playwright test hold-room.spec.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

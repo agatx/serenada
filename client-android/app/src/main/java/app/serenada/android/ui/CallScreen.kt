@@ -31,6 +31,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -282,7 +283,9 @@ fun CallScreen(
 
     BoxWithConstraints(
         modifier =
-            Modifier.fillMaxSize().background(Color.Black).clickable(
+            Modifier.fillMaxSize().background(Color.Black)
+                .testTag("call.screen")
+                .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { areControlsVisible = !areControlsVisible }
@@ -691,7 +694,8 @@ fun CallScreen(
                     ControlButton(
                         onClick = onEndCall,
                         icon = Icons.Default.CallEnd,
-                        backgroundColor = Color.Red
+                        backgroundColor = Color.Red,
+                        modifier = Modifier.testTag("call.endCall")
                     )
                 }
             }
@@ -1099,11 +1103,12 @@ private fun ControlButton(
     onClick: () -> Unit,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     backgroundColor: Color,
+    modifier: Modifier = Modifier,
     buttonSize: androidx.compose.ui.unit.Dp = 56.dp,
     iconSize: androidx.compose.ui.unit.Dp = 28.dp
 ) {
     Surface(
-        modifier = Modifier.size(buttonSize).clip(CircleShape).clickable { onClick() },
+        modifier = modifier.size(buttonSize).clip(CircleShape).clickable { onClick() },
         color = backgroundColor
     ) {
         Box(contentAlignment = Alignment.Center) {
