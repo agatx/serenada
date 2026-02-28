@@ -57,6 +57,13 @@ wait_for_element() {
     done
 }
 
+element_exists() {
+    local tag="$1"
+    local xml
+    xml=$(ui_dump)
+    echo "$xml" | grep -q "$tag"
+}
+
 # Tap an element by its testTag — finds bounds and computes center
 tap_element() {
     local tag="$1"
@@ -98,6 +105,27 @@ take_screenshot() {
     adb_cmd pull /sdcard/smoke_screenshot.png "$ARTIFACTS_DIR/android_${name}.png" 2>/dev/null || true
 }
 
+tap_end_call_with_controls() {
+    local timeout="${1:-12}"
+    local elapsed=0
+
+    log_info "Android: revealing call controls before tapping end call ..."
+    while [ "$elapsed" -lt "$timeout" ]; do
+        # Call controls auto-hide; tap center of call screen to reveal.
+        tap_element "call.screen" || true
+        sleep 1
+        if element_exists "call.endCall"; then
+            tap_element "call.endCall"
+            return 0
+        fi
+        elapsed=$((elapsed + 1))
+    done
+
+    log_error "Android: end-call control did not appear after ${timeout}s"
+    take_screenshot "missing_end_call_controls"
+    return 1
+}
+
 # Pre-grant permissions
 pre_grant_permissions() {
     log_info "Android: granting camera and microphone permissions ..."
@@ -133,7 +161,7 @@ barrier_write "$BARRIER_DIR" "android.in-call"
 
 # Phase 2: Leave
 barrier_wait "$BARRIER_DIR" "leave" 30
-tap_element "call.endCall"
+tap_end_call_with_controls 12
 wait_for_element "join.screen" 20
 barrier_write "$BARRIER_DIR" "android.left"
 
@@ -155,7 +183,7 @@ barrier_write "$BARRIER_DIR" "android.rejoin-in-call"
 
 # Phase 4: End
 barrier_wait "$BARRIER_DIR" "end" 30
-tap_element "call.endCall"
+tap_end_call_with_controls 12
 wait_for_element "join.screen" 20
 barrier_write "$BARRIER_DIR" "android.done"
 

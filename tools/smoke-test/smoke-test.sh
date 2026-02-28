@@ -161,28 +161,52 @@ for pair in "${PAIRS[@]}"; do
 
     if [ "$PLATFORM_B" = "ios" ]; then
         # --- iOS-specific flow (section 5 of plan) ---
+        BARRIER_DIR=$(mktemp -d)
+        BARRIER_DIRS+=("$BARRIER_DIR")
+
         run_ios_pair() {
             local room_id="$1"
+            local barrier_dir="$2"
+            local holder_pid=""
+            local ios_exit=0
 
             # Start web holder in background (runs from web/ dir for proper module resolution)
             log_info "Starting web room holder ..."
             (cd "$WEB_DIR" && \
                 SMOKE_SERVER_URL="$WEB_URL" \
                 SMOKE_ROOM_ID="$room_id" \
+                SMOKE_BARRIER_DIR="$barrier_dir" \
                 exec npx playwright test hold-room.spec.ts) &
-            local holder_pid=$!
+            holder_pid=$!
             PIDS+=("$holder_pid")
 
-            # Give the web holder time to join
-            sleep 5
+            # Require holder to actually join before starting iOS.
+            barrier_wait "$barrier_dir" "web.holder.joined" 45 || {
+                log_error "Web holder did not join room in time"
+                kill "$holder_pid" 2>/dev/null || true
+                wait "$holder_pid" 2>/dev/null || true
+                return 1
+            }
+            if ! kill -0 "$holder_pid" 2>/dev/null; then
+                log_error "Web holder exited unexpectedly before iOS started"
+                wait "$holder_pid" 2>/dev/null || true
+                return 1
+            fi
 
             # Run iOS test
             SMOKE_SERVER_URL="$MOBILE_URL" \
             SMOKE_ROOM_ID="$room_id" \
             SMOKE_ARTIFACTS_DIR="$SMOKE_ARTIFACTS_DIR" \
             IOS_UDID="$IOS_UDID" \
-            bash "$SCRIPT_DIR/ios/smoke-ios.sh"
-            local ios_exit=$?
+            bash "$SCRIPT_DIR/ios/smoke-ios.sh" || ios_exit=$?
+
+            # Ensure the web leg stayed alive through the iOS run.
+            if [ "$ios_exit" -eq 0 ]; then
+                if ! kill -0 "$holder_pid" 2>/dev/null; then
+                    log_error "Web holder exited unexpectedly during iOS run"
+                    ios_exit=1
+                fi
+            fi
 
             # Kill web holder
             kill "$holder_pid" 2>/dev/null || true
@@ -191,7 +215,7 @@ for pair in "${PAIRS[@]}"; do
             return "$ios_exit"
         }
 
-        if run_ios_pair "$ROOM_ID"; then
+        if run_ios_pair "$ROOM_ID" "$BARRIER_DIR"; then
             PAIR_STATUS="PASS"
         fi
     else

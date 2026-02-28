@@ -36,6 +36,30 @@ async function clickJoinAndWaitForCall(page: import('@playwright/test').Page) {
   await page.waitForSelector('.prejoin-card', { state: 'detached', timeout: 30_000 });
 }
 
+async function revealControlsAndClickLeave(page: import('@playwright/test').Page, timeoutMs = 12_000) {
+  const leaveButton = page.locator('button.btn-leave');
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      await leaveButton.click({ trial: true, timeout: 1_000 });
+      await leaveButton.click({ timeout: 5_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+
+    const viewport = page.viewportSize();
+    const tapX = Math.floor((viewport?.width ?? 1280) / 2);
+    const tapY = Math.floor((viewport?.height ?? 720) / 2);
+    await page.mouse.click(tapX, tapY);
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error(`Leave button did not become actionable within ${timeoutMs}ms: ${String(lastError)}`);
+}
+
 test('smoke: join, verify peer, leave, rejoin', async ({ page }) => {
   // Log console errors for debugging
   page.on('console', (msg) => {
@@ -65,8 +89,7 @@ test('smoke: join, verify peer, leave, rejoin', async ({ page }) => {
 
   // Phase 2: Leave
   await barrierWait('leave', 30_000);
-  const leaveButton = page.locator('button.btn-leave');
-  await leaveButton.click();
+  await revealControlsAndClickLeave(page);
 
   // Should navigate home
   await page.waitForURL('**/', { timeout: 15_000 });
@@ -87,8 +110,7 @@ test('smoke: join, verify peer, leave, rejoin', async ({ page }) => {
 
   // Phase 4: End
   await barrierWait('end', 30_000);
-  const endButton = page.locator('button.btn-leave');
-  await endButton.click();
+  await revealControlsAndClickLeave(page);
   await page.waitForURL('**/', { timeout: 15_000 });
   barrierWrite(`${ROLE}.done`);
 });

@@ -205,6 +205,7 @@ ADB-based script. No instrumented test APK needed.
 
 - `wait_for_element(tag, timeout)`: Loops `adb shell uiautomator dump`, greps XML for the testTag string
 - `tap_element(tag)`: Dumps UI, parses `bounds="[x1,y1][x2,y2]"` for the node containing the tag, computes center, runs `adb shell input tap X Y`
+- `tap_end_call_with_controls(timeout)`: Taps `call.screen` center to reveal auto-hidden controls, waits for `call.endCall`, then taps it
 - `take_screenshot(name)`: `adb shell screencap` + `adb pull`
 
 ### Flow
@@ -215,13 +216,13 @@ ADB-based script. No instrumented test APK needed.
 4. Wait for barrier `peer.ready`
 5. Brief stabilization (3s) → write `android.in-call`
 6. Wait for barrier `leave`
-7. `tap_element "call.endCall"`
+7. `tap_end_call_with_controls 12`
 8. `wait_for_element "join.screen" 20` → write `android.left`
 9. Wait for barrier `rejoin`
 10. Launch deep link with `$REJOIN_ROOM_ID`
 11. `wait_for_element "call.screen" 30` → write `android.rejoined`
 12. Wait for `peer.ready.2`, stabilize → write `android.rejoin-in-call`
-13. Wait for `end`, tap end call → write `android.done`
+13. Wait for `end`, `tap_end_call_with_controls 12` → write `android.done`
 
 ---
 
@@ -231,7 +232,11 @@ ADB-based script. No instrumented test APK needed.
 
 The iOS test reuses the existing `DeepLinkRejoinFlowUITests.swift` which already implements the full join/leave/rejoin-from-recents cycle. The orchestrator passes the room ID via `SERENADA_UI_TEST_REJOIN_DEEPLINK` env var.
 
-**Synchronization approach**: Since XCUITest runs autonomously (we can't inject barrier signals mid-test), the partner client (Web) joins first and stays in the room. When iOS joins, both connect. When iOS leaves, the Web partner remains in-room (the Web client stays on the call screen and shows `.waiting-message` again when the remote peer disconnects — verified in `CallRoom.tsx` lines 462-475). When iOS rejoins from recents, they reconnect. The Web partner just needs to stay alive for the duration.
+**Synchronization approach**: Since XCUITest runs autonomously (we can't inject barrier signals mid-test), the partner client (Web) joins first and stays in the room. The web holder now writes barriers to prove participation:
+- `web.holder.joined` after web successfully enters call screen
+- `web.holder.peer-connected` when peer presence is observed (best-effort diagnostic signal)
+
+The orchestrator requires `web.holder.joined` (plus successful iOS test) before marking `web+ios` as pass.
 
 ### Flow
 
@@ -255,11 +260,12 @@ The iOS test reuses the existing `DeepLinkRejoinFlowUITests.swift` which already
 
 ```
 1. Create room
-2. Launch hold-room.spec.ts (Playwright joins room, stays indefinitely)
-3. Launch smoke-ios.sh (runs XCUITest: joins, leaves, rejoins × 2)
-4. Wait for xcodebuild to complete
-5. Kill web holder
-6. Record pass/fail
+2. Launch hold-room.spec.ts (Playwright joins room, writes `web.holder.joined`, then waits)
+3. Wait for `web.holder.joined`
+4. Launch smoke-ios.sh (runs XCUITest: joins, leaves, rejoins × 2)
+5. Wait for xcodebuild (and ensure web holder process is still alive)
+6. Kill web holder
+7. Record pass/fail
 ```
 
 This requires a second Playwright spec: `web/hold-room.spec.ts` — joins the room and waits until the process is killed.

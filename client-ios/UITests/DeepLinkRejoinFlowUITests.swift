@@ -204,9 +204,15 @@ final class DeepLinkRejoinFlowUITests: XCTestCase {
             return false
         }
 
-        if !endCallButton.isHittable {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        guard revealCallControlsAndWaitForEndCall(in: app, timeout: 6) else {
+            let hierarchyAttachment = XCTAttachment(string: app.debugDescription)
+            hierarchyAttachment.name = "LeaveCallControlsNotHittableHierarchy"
+            hierarchyAttachment.lifetime = .keepAlways
+            add(hierarchyAttachment)
+            XCTFail("End call control did not become hittable", file: file, line: line)
+            return false
         }
+
         endCallButton.tap()
         return true
     }
@@ -251,6 +257,24 @@ final class DeepLinkRejoinFlowUITests: XCTestCase {
             }
         }
         return false
+    }
+
+    private func revealCallControlsAndWaitForEndCall(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let endCallButton = app.buttons["call.endCall"]
+        if endCallButton.isHittable {
+            return true
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            if endCallButton.waitForExistence(timeout: 1.0), endCallButton.isHittable {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+
+        return endCallButton.exists && endCallButton.isHittable
     }
 
     private func createRoomId() async throws -> String {
