@@ -84,6 +84,7 @@ fi
 log_info "Running DeepLinkRejoinFlowUITests on device $UDID ..."
 set +e
 SERENADA_UI_TEST_REJOIN_DEEPLINK="$DEEP_LINK" \
+TEST_RUNNER_SERENADA_UI_TEST_REJOIN_DEEPLINK="$DEEP_LINK" \
 xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tail -20
 EXIT_CODE=${PIPESTATUS[0]}
 set -e

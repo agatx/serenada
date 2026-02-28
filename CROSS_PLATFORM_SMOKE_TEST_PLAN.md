@@ -238,6 +238,8 @@ The iOS test reuses the existing `DeepLinkRejoinFlowUITests.swift` which already
 
 The orchestrator requires `web.holder.joined` (plus successful iOS test) before marking `web+ios` as pass.
 
+`DeepLinkRejoinFlowUITests` now also waits for `call.participantCount >= 2` before each leave step, which ensures a real peer overlap occurred (not just local call-screen rendering).
+
 ### Flow
 
 1. Auto-detect device UDID via `xcrun devicectl list devices`

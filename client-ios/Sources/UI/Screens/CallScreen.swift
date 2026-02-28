@@ -300,9 +300,23 @@ struct CallScreen: View {
             ActivityView(items: ["https://\(serverHost)/call/\(roomId)"])
         }
         .overlay(alignment: .topLeading) {
-            Color.clear
-                .frame(width: 1, height: 1)
-                .accessibilityIdentifier("call.screen")
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityIdentifier("call.screen")
+
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("call.participantCount")
+                    .accessibilityValue("\(uiState.participantCount)")
+
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("call.phase")
+                    .accessibilityValue(uiState.phase.rawValue)
+            }
         }
     }
 
@@ -528,6 +542,7 @@ struct CallScreen: View {
                 .padding(.vertical, 12)
                 .background(Color.black.opacity(0.45))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+                .accessibilityIdentifier("call.waitingOverlay")
             }
         }
         .padding(.horizontal, 16)
