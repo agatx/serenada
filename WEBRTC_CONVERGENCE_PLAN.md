@@ -39,7 +39,6 @@ Evidence references:
 - Server TURN token TTL mismatch: [signaling.go](/Users/alexeygavrilov/Developer/src/connected/server/signaling.go:333) (5-min token) vs [turn_auth.go](/Users/alexeygavrilov/Developer/src/connected/server/turn_auth.go:145) (15-min credentials)
 - Server unauthenticated reconnectCID: [signaling.go](/Users/alexeygavrilov/Developer/src/connected/server/signaling.go:229) (any client can claim any CID)
 - Server SSE stale timeout: [sse.go](/Users/alexeygavrilov/Developer/src/connected/server/sse.go:18) (60s evicts active listeners)
-- Server WriteTimeout disabled: [main.go](/Users/alexeygavrilov/Developer/src/connected/server/main.go:115) (`WriteTimeout: 0`)
 
 ---
 
@@ -70,9 +69,6 @@ Evidence references:
    - On reconnect join, client must provide `reconnectCid` + `reconnectToken`. Server validates the HMAC before allowing ghost eviction.
    - Wire-protocol addition: `reconnectToken` field in `joined` response and `join` request payloads.
 
-5. **Enable HTTP WriteTimeout** (`main.go:115`):
-   - Set `WriteTimeout: 30s` to prevent slow-client goroutine exhaustion.
-   - Exempt SSE handler (SSE connections are long-lived by design) using per-handler `http.TimeoutHandler` or by resetting the deadline in the SSE write loop.
 
 ### Phase 1: Critical Client Reliability Parity (highest impact)
 1. **Standardize resilience constants across all clients:**
