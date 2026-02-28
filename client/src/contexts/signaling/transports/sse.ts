@@ -49,6 +49,12 @@ export class SseTransport implements SignalingTransport {
         }
     }
 
+    private detachEventSourceHandlers(es: EventSource) {
+        es.onopen = null;
+        es.onerror = null;
+        es.onmessage = null;
+    }
+
     connect() {
         if (typeof EventSource === 'undefined') {
             this.open = false;
@@ -61,7 +67,7 @@ export class SseTransport implements SignalingTransport {
 
         this.connectTimeout = window.setTimeout(() => {
             if (this.es && this.es.readyState !== EventSource.OPEN) {
-                console.warn('[SSE] Connection timeout after 2s');
+                console.warn(`[SSE] Connection timeout after ${CONNECT_TIMEOUT_MS}ms`);
                 this.es.close();
                 this.es = null;
                 this.open = false;
@@ -96,11 +102,25 @@ export class SseTransport implements SignalingTransport {
 
     close() {
         this.clearConnectTimeout();
-        if (this.es) {
-            this.es.close();
-            this.es = null;
+        const es = this.es;
+        this.es = null;
+        if (es) {
+            this.detachEventSourceHandlers(es);
+            es.close();
         }
         this.open = false;
+    }
+
+    forceClose(reason: string) {
+        this.clearConnectTimeout();
+        const es = this.es;
+        this.es = null;
+        if (es) {
+            this.detachEventSourceHandlers(es);
+            es.close();
+        }
+        this.open = false;
+        this.handlers.onClose(reason);
     }
 
     isOpen() {

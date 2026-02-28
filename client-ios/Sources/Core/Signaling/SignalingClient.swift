@@ -101,8 +101,9 @@ final class SignalingClient {
                 if !self.connected { continue }
 
                 // Check for missed pongs
+                let pingTimeoutSeconds = Double(WebRtcResilience.pingIntervalMs) / 1000.0
                 let elapsed = CFAbsoluteTimeGetCurrent() - self.lastPongAt
-                if elapsed > 12.0 {
+                if elapsed > pingTimeoutSeconds {
                     self.missedPongs += 1
                     if self.missedPongs >= WebRtcResilience.pongMissThreshold {
                         self.missedPongs = 0

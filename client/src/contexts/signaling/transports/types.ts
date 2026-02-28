@@ -12,6 +12,7 @@ export interface SignalingTransport {
     kind: TransportKind;
     connect: () => void;
     close: () => void;
+    forceClose?: (reason: string) => void;
     send: (msg: SignalingMessage) => void;
     isOpen: () => boolean;
     getSessionId?: () => string;

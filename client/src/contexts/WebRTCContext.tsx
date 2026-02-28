@@ -69,8 +69,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // RTC Config State — init with default STUN immediately (non-blocking ICE bootstrap)
     const [rtcConfig, setRtcConfig] = useState<RTCConfiguration>(DEFAULT_RTC_CONFIG);
-    const rtcConfigRef = useRef<RTCConfiguration>(DEFAULT_RTC_CONFIG);
-    const signalingBufferRef = useRef<any[]>([]);
     const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
     const facingModeRef = useRef<'user' | 'environment'>('user');
     const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
@@ -216,19 +214,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         fetchIceServers();
         return () => controller.abort();
     }, [turnToken]);
-
-    // Sync rtcConfig to ref and flush buffered messages
-    useEffect(() => {
-        rtcConfigRef.current = rtcConfig;
-        if (signalingBufferRef.current.length > 0) {
-            console.log(`[WebRTC] Flushing ${signalingBufferRef.current.length} buffered signaling messages`);
-            const msgs = [...signalingBufferRef.current];
-            signalingBufferRef.current = [];
-            msgs.forEach(msg => {
-                setTimeout(() => processSignalingMessage(msg), 0);
-            });
-        }
-    }, [rtcConfig]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Buffer ICE candidates if remote description not set
     const iceBufferRef = useRef<RTCIceCandidateInit[]>([]);
@@ -414,8 +399,33 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 const offer = await currentPc.createOffer();
                 await currentPc.setLocalDescription(offer as RTCSessionDescriptionInit);
                 sendMessage('offer', { sdp: offer.sdp });
+
+                // Schedule answer timeout — rollback and reschedule (no ICE restart)
+                clearOfferTimeout();
+                offerTimeoutRef.current = window.setTimeout(async () => {
+                    offerTimeoutRef.current = null;
+                    const pc = pcRef.current;
+                    if (!pc) return;
+                    if (pc.signalingState === 'have-local-offer') {
+                        console.warn('[WebRTC] Non-host fallback offer timed out, rolling back');
+                        try {
+                            await pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit);
+                        } catch (rollbackErr) {
+                            console.warn('[WebRTC] Non-host fallback rollback failed', rollbackErr);
+                        }
+                    }
+                    scheduleNonHostFallback();
+                }, OFFER_TIMEOUT_MS);
             } catch (err) {
                 console.error('[WebRTC] Non-host fallback offer failed', err);
+                if (currentPc.localDescription?.type === 'offer') {
+                    try {
+                        await currentPc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit);
+                    } catch (rollbackErr) {
+                        console.error('[WebRTC] Non-host fallback rollback failed', rollbackErr);
+                    }
+                }
+                scheduleNonHostFallback();
             }
         }, NON_HOST_FALLBACK_DELAY_MS);
     };
@@ -565,7 +575,10 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     useEffect(() => {
         const handleOnline = () => {
-            scheduleIceRestart('network-online', 0);
+            const pc = pcRef.current;
+            if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
+                scheduleIceRestart('network-online', 0);
+            }
         };
         const handleNetworkChange = () => {
             const pc = pcRef.current;

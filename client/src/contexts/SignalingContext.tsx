@@ -76,6 +76,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const lastClientIdRef = useRef<string | null>(null);
     const needsRejoinRef = useRef(false);
     const reconnectTokenRef = useRef<string | null>(null);
+    const reconnectTokenRoomIdRef = useRef<string | null>(null);
     const turnRefreshTimerRef = useRef<number | null>(null);
     const lastPongAtRef = useRef<number>(Date.now());
     const missedPongsRef = useRef<number>(0);
@@ -88,15 +89,18 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const joinHardTimeoutRef = useRef<number | null>(null);
     const reconnectStorageKey = 'serenada.reconnectCid';
     const reconnectTokenStorageKey = 'serenada.reconnectToken';
+    const reconnectTokenRoomStorageKey = 'serenada.reconnectTokenRoom';
 
     const clearReconnectStorage = useCallback(() => {
         try {
             window.sessionStorage.removeItem(reconnectStorageKey);
             window.sessionStorage.removeItem(reconnectTokenStorageKey);
+            window.sessionStorage.removeItem(reconnectTokenRoomStorageKey);
         } catch (err) {
             console.warn('[Signaling] Failed to clear reconnectCid', err);
         }
         reconnectTokenRef.current = null;
+        reconnectTokenRoomIdRef.current = null;
     }, []);
 
     // Sync ref
@@ -120,6 +124,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             const storedToken = window.sessionStorage.getItem(reconnectTokenStorageKey);
             if (storedToken && !reconnectTokenRef.current) {
                 reconnectTokenRef.current = storedToken;
+            }
+            const storedTokenRoom = window.sessionStorage.getItem(reconnectTokenRoomStorageKey);
+            if (storedTokenRoom && !reconnectTokenRoomIdRef.current) {
+                reconnectTokenRoomIdRef.current = storedTokenRoom;
             }
         } catch (err) {
             console.warn('[Signaling] Failed to load reconnectCid', err);
@@ -165,8 +173,12 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     // Store reconnect token for authenticated reconnection
                     if (msg.payload.reconnectToken) {
                         reconnectTokenRef.current = msg.payload.reconnectToken as string;
+                        reconnectTokenRoomIdRef.current = msg.rid || currentRoomIdRef.current;
                         try {
                             window.sessionStorage.setItem(reconnectTokenStorageKey, msg.payload.reconnectToken as string);
+                            if (reconnectTokenRoomIdRef.current) {
+                                window.sessionStorage.setItem(reconnectTokenRoomStorageKey, reconnectTokenRoomIdRef.current);
+                            }
                         } catch (err) {
                             console.warn('[Signaling] Failed to persist reconnectToken', err);
                         }
@@ -257,7 +269,11 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     console.warn(`[Signaling] ${missedPongsRef.current} missed pongs, treating connection as dead`);
                     missedPongsRef.current = 0;
                     if (transportRef.current) {
-                        transportRef.current.close();
+                        if (transportRef.current.forceClose) {
+                            transportRef.current.forceClose('ping-timeout');
+                        } else {
+                            transportRef.current.close();
+                        }
                     }
                     return;
                 }
@@ -289,7 +305,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             const reconnectCid = clientIdRef.current || lastClientIdRef.current;
             if (reconnectCid) {
                 payload.reconnectCid = reconnectCid;
-                if (reconnectTokenRef.current) {
+                if (reconnectTokenRef.current && reconnectTokenRoomIdRef.current === roomId) {
                     payload.reconnectToken = reconnectTokenRef.current;
                 }
             }

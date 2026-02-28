@@ -123,6 +123,13 @@ func (h *Hub) getClientBySID(sid string) *Client {
 	return client
 }
 
+func (h *Hub) isClientActive(c *Client) bool {
+	h.mu.RLock()
+	_, exists := h.clients[c]
+	h.mu.RUnlock()
+	return exists
+}
+
 func (h *Hub) replaceClient(oldClient, newClient *Client) {
 	h.mu.Lock()
 	delete(h.clients, oldClient)
@@ -162,6 +169,13 @@ func (c *Client) sendMessage(msg interface{}) {
 		return
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			// Transport send channel may be closed during forced cleanup.
+			stats.IncSendQueueDrop()
+		}
+	}()
+
 	select {
 	case c.send <- b:
 		stats.IncMessageTX(extractMessageType(msg))
@@ -174,6 +188,10 @@ func (c *Client) sendMessage(msg interface{}) {
 // Logic
 
 func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
+	if !h.isClientActive(c) {
+		return
+	}
+
 	var msg Message
 	if err := json.Unmarshal(msgBytes, &msg); err != nil {
 		stats.IncMessageRX("invalid_json")
@@ -308,6 +326,12 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		room.mu.Unlock()
 		h.cleanupEvictedClient(ghostToEvict)
 		room.mu.Lock()
+		if len(room.Participants) >= 2 {
+			room.mu.Unlock()
+			log.Printf("[JOIN] Room %s is full after ghost cleanup", rid)
+			c.sendError(rid, "ROOM_FULL", "Room is full")
+			return
+		}
 	}
 
 	cid := generateID("C-")
@@ -582,6 +606,7 @@ func (h *Hub) disconnectClient(c *Client) {
 	if c.rid != "" {
 		h.removeClientFromRoom(c)
 	}
+	closeClientSend(c.send)
 }
 
 func (h *Hub) removeClientFromRoom(c *Client) {
@@ -711,6 +736,15 @@ func (h *Hub) cleanupEvictedClient(ghost *Client) {
 	case TransportSSE:
 		stats.AddActiveSSEClients(-1)
 	}
+
+	closeClientSend(ghost.send)
+}
+
+func closeClientSend(ch chan []byte) {
+	defer func() {
+		_ = recover()
+	}()
+	close(ch)
 }
 
 func extractMessageType(msg interface{}) string {
