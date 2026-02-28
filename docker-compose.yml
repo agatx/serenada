@@ -47,6 +47,7 @@ services:
   nginx:
     image: nginx:alpine
     container_name: serenada-nginx
+    restart: unless-stopped
     ports:
       - "80:80"
     volumes:
