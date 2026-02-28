@@ -113,9 +113,7 @@ Join a room.
     "capabilities": {
       "trickleIce": true
     },
-    "reconnectCid": "optionalPreviousClientId",
-    "pushEndpoint": "optionalPushEndpointOrFcmToken",
-    "snapshotId": "optionalSnapshotId"
+    "reconnectCid": "optionalPreviousClientId"
   }
 }
 ```
@@ -124,10 +122,8 @@ Join a room.
 - Validate `rid` as a signed 27-character room token (generated via `/api/room-id`).
 - If room is empty, make this participant host.
 - If room already has 2 participants, reject with `ROOM_FULL` (unless `reconnectCid` matches a ghost session, in which case the server evicts the ghost and reuses the CID).
-- `pushEndpoint` is optional and used only to suppress self-notifications on join:
-  - web clients pass their Web Push endpoint URL.
-  - native Android clients pass their FCM registration token.
 - On success, respond with `joined`.
+- Push notifications are **not** triggered on join. Instead, clients send a separate `POST /api/push/notify` request after receiving `joined` (see push-notifications.md).
 
 ---
 

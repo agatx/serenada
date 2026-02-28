@@ -32,7 +32,6 @@ Cross-platform parity is enforced by `node scripts/check-resilience-constants.mj
 | `PING_INTERVAL_MS` | 12,000 ms | Signaling | Keep-alive ping frequency |
 | `PONG_MISS_THRESHOLD` | 2 | Signaling | Consecutive missed pongs before force-close |
 | `WS_FALLBACK_CONSECUTIVE_FAILURES` | 3 | Signaling | WS failures before SSE fallback allowed |
-| `JOIN_PUSH_ENDPOINT_WAIT_MS` | 250 ms | Join | Max wait for push endpoint before sending join |
 | `JOIN_CONNECT_KICKSTART_MS` | 1,200 ms | Join | Force signaling connect if not started |
 | `JOIN_RECOVERY_MS` | 4,000 ms | Join | Re-send join or promote to Waiting |
 | `JOIN_HARD_TIMEOUT_MS` | 15,000 ms | Join | Fail entire join attempt |
@@ -117,15 +116,8 @@ sequenceDiagram
     WC->>WC: getUserMedia({video, audio})
     WC-->>CR: localStream ready
 
-    CR->>CR: Prepare snapshot (≤2s timeout)
-    CR->>SC: joinRoom(roomId, {snapshotId})
-
-    alt Push endpoint available
-        SC->>SC: Wait ≤250ms for push endpoint
-        SC->>T: send({type: "join", payload: {pushEndpoint, reconnectCid, snapshotId}})
-    else No push support
-        SC->>T: send({type: "join", payload: {reconnectCid, snapshotId}})
-    end
+    CR->>SC: joinRoom(roomId)
+    SC->>T: send({type: "join", payload: {reconnectCid}})
 
     Note over SC: Start join timers:<br/>Kickstart: 1.2s<br/>Recovery: 4s<br/>Hard timeout: 15s
 
@@ -134,6 +126,13 @@ sequenceDiagram
     T->>SC: handleIncomingMessage("joined")
     SC->>SC: Clear join timers
     SC->>SC: Store cid, roomState, turnToken
+
+    Note over CR: Post-join push notify (async, non-blocking)
+    CR->>CR: Capture snapshot (≤2s timeout)
+    CR->>CR: Encrypt snapshot per recipient
+    CR->>S: POST /api/push/snapshot → snapshotId
+    CR->>S: POST /api/push/notify {cid, snapshotId, pushEndpoint}
+    Note over S: Server sends push notifications
 
     SC->>WC: turnToken updated (via React state)
     WC->>S: GET /api/turn-credentials?token=... (≤2s timeout)
@@ -308,12 +307,10 @@ sequenceDiagram
     CM->>WE: startLocalMedia(preferVideo)
     CM->>WE: toggleAudio()/applyVideoPreference()
 
-    CM->>CM: prepareJoinSnapshotAndConnect()
-    CM->>CM: Prepare snapshot ID (≤2s)
     CM->>CM: ensureSignalingConnection()
 
     alt Already connected
-        CM->>CM: sendJoin(roomId, snapshotId)
+        CM->>CM: sendJoin(roomId)
     else Not connected
         CM->>CM: pendingJoinRoom = roomId
         CM->>SC: connect(host)
@@ -326,8 +323,7 @@ sequenceDiagram
         CM->>CM: sendJoin(pendingJoinRoom)
     end
 
-    CM->>CM: fetchPushEndpoint (≤250ms)
-    CM->>SC: send({type: "join", rid, payload: {device: "ios", reconnectCid, pushEndpoint, snapshotId}})
+    CM->>SC: send({type: "join", rid, payload: {device: "ios", reconnectCid}})
 
     Note over CM: Schedule join recovery (4s)
 
@@ -340,6 +336,13 @@ sequenceDiagram
     CM->>CM: Clear join timers
     CM->>CM: Store cid, reconnectToken
     CM->>CM: scheduleTurnRefresh(ttlMs × 0.8)
+
+    Note over CM: Post-join push notify (async, non-blocking)
+    CM->>CM: Capture snapshot (≤2s timeout)
+    CM->>CM: Encrypt snapshot per recipient
+    CM->>S: POST /api/push/snapshot → snapshotId
+    CM->>S: POST /api/push/notify {cid, snapshotId, pushEndpoint}
+    Note over S: Server sends push notifications
 
     CM->>CM: ensureIceSetupIfNeeded()
     CM->>WE: setIceServers(default STUN)
@@ -532,12 +535,10 @@ sequenceDiagram
     CM->>WE: toggleAudio() / applyVideoPreference()
 
     CM->>CM: startRemoteVideoStatePolling()
-    CM->>CM: prepareJoinSnapshotAndConnect()
-    CM->>CM: Prepare snapshot ID (≤2s)
     CM->>CM: ensureSignalingConnection()
 
     alt Already connected
-        CM->>CM: sendJoin(roomId, snapshotId)
+        CM->>CM: sendJoin(roomId)
     else Not connected
         CM->>CM: pendingJoinRoom = roomId
         CM->>SC: connect(host)
@@ -550,8 +551,7 @@ sequenceDiagram
         CM->>CM: sendJoin(pendingJoinRoom)
     end
 
-    CM->>CM: Wait ≤250ms for FCM token
-    CM->>SC: send({type: "join", rid, payload: {device: "android", reconnectCid, pushEndpoint, snapshotId}})
+    CM->>SC: send({type: "join", rid, payload: {device: "android", reconnectCid}})
 
     Note over CM: Schedule join recovery (4s)
 
@@ -564,6 +564,13 @@ sequenceDiagram
     CM->>CM: Clear join timers
     CM->>CM: Store cid, reconnectToken
     CM->>CM: scheduleTurnRefresh(ttlMs × 0.8)
+
+    Note over CM: Post-join push notify (async, non-blocking)
+    CM->>CM: Capture snapshot (≤2s timeout)
+    CM->>CM: Encrypt snapshot per recipient
+    CM->>S: POST /api/push/snapshot → snapshotId
+    CM->>S: POST /api/push/notify {cid, snapshotId, pushEndpoint}
+    Note over S: Server sends push notifications
 
     CM->>WE: setIceServers(default STUN)
     CM->>S: GET /api/turn-credentials?token=... (≤2s)
