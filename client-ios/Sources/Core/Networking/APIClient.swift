@@ -247,6 +247,36 @@ final class APIClient {
         }
     }
 
+    func notifyRoom(host: String, roomId: String, cid: String, snapshotId: String?, pushEndpoint: String?) async throws {
+        guard let url = buildHTTPSURL(host: host, path: "/api/push/notify", query: ["roomId": roomId]) else {
+            throw APIError.invalidHost
+        }
+
+        struct NotifyPayload: Codable {
+            let cid: String
+            let snapshotId: String?
+            let pushEndpoint: String?
+        }
+
+        let trimmedSnapshotId = snapshotId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEndpoint = pushEndpoint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = NotifyPayload(
+            cid: cid,
+            snapshotId: (trimmedSnapshotId?.isEmpty == true) ? nil : trimmedSnapshotId,
+            pushEndpoint: (trimmedEndpoint?.isEmpty == true) ? nil : trimmedEndpoint
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw APIError.http("Push notify failed")
+        }
+    }
+
     private func parseRoomIdResponse(_ data: Data) throws -> String {
         let decoded = try JSONDecoder().decode(RoomIdResponse.self, from: data)
         guard !decoded.roomId.isEmpty else {

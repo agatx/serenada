@@ -103,7 +103,7 @@ class CallManager(context: Context) {
     private var callStartTimeMs: Long? = null
     private var watchedRoomIds: List<String> = emptyList()
     private var pendingJoinRoom: String? = null
-    private var pendingJoinSnapshotId: String? = null
+    private var hasNotifiedPushForJoin = false
     // All mutable state below is accessed exclusively from the handler thread — no synchronization needed.
     private var joinAttemptSerial = 0L
     private var reconnectAttempts = 0
@@ -167,7 +167,7 @@ class CallManager(context: Context) {
             )
             pendingJoinRoom?.let { join ->
                 pendingJoinRoom = null
-                sendJoin(join, pendingJoinSnapshotId)
+                sendJoin(join)
             }
             sendWatchRoomsIfNeeded()
             if (pendingIceRestart) {
@@ -659,9 +659,9 @@ class CallManager(context: Context) {
         callStartTimeMs = System.currentTimeMillis()
         sentOffer = false
         pendingMessages.clear()
-        pendingJoinSnapshotId = null
         hasJoinSignalStarted = false
         hasJoinAcknowledged = false
+        hasNotifiedPushForJoin = false
 
         recreateWebRtcEngineForNewCall()
 
@@ -697,7 +697,7 @@ class CallManager(context: Context) {
         applyLocalVideoPreference()
 
         startRemoteVideoStatePolling()
-        prepareJoinSnapshotAndConnect(roomId, joinAttemptId)
+        ensureSignalingConnection()
         CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
     }
 
@@ -859,7 +859,7 @@ class CallManager(context: Context) {
         if (signalingClient.isConnected()) {
             if (!roomToJoin.isNullOrBlank()) {
                 pendingJoinRoom = null
-                sendJoin(roomToJoin, pendingJoinSnapshotId)
+                sendJoin(roomToJoin)
             }
             sendWatchRoomsIfNeeded()
             return
@@ -868,25 +868,18 @@ class CallManager(context: Context) {
         signalingClient.connect(currentSignalingHost())
     }
 
-    private fun sendJoin(roomId: String, snapshotId: String? = null) {
-        val buildPayload = { endpoint: String? ->
+    private fun sendJoin(roomId: String) {
+        val buildPayload = {
             JSONObject().apply {
                 put("device", "android")
                 put("capabilities", JSONObject().apply { put("trickleIce", true) })
                 val reconnectCid = clientId ?: settingsStore.reconnectCid
                 reconnectCid?.let { put("reconnectCid", it) }
                 reconnectToken?.let { put("reconnectToken", it) }
-                endpoint?.trim()?.takeIf { it.isNotBlank() }?.let { put("pushEndpoint", it) }
-                val joinSnapshotId = snapshotId?.ifBlank { null }
-                if (joinSnapshotId != null) {
-                    put("snapshotId", joinSnapshotId)
-                    Log.d("CallManager", "Including snapshotId in join payload")
-                }
             }
         }
-        pendingJoinSnapshotId = null
         val sent = AtomicBoolean(false)
-        fun sendWithEndpoint(endpoint: String?) {
+        fun sendOnce() {
             if (!sent.compareAndSet(false, true)) return
             if (currentRoomId != roomId) return
             if (!signalingClient.isConnected()) return
@@ -896,42 +889,13 @@ class CallManager(context: Context) {
                 sid = null,
                 cid = null,
                 to = null,
-                payload = buildPayload(endpoint)
+                payload = buildPayload()
             )
             signalingClient.send(msg)
         }
 
-        val fallbackSend = Runnable { sendWithEndpoint(null) }
-        val cachedEndpoint = pushSubscriptionManager.cachedEndpoint()
-        if (!cachedEndpoint.isNullOrBlank()) {
-            sendWithEndpoint(cachedEndpoint)
-            scheduleJoinRecovery(roomId)
-            return
-        }
-
-        handler.postDelayed(fallbackSend, WebRtcResilienceConstants.JOIN_PUSH_ENDPOINT_WAIT_MS)
-        pushSubscriptionManager.refreshPushEndpoint { endpoint ->
-            handler.post {
-                handler.removeCallbacks(fallbackSend)
-                sendWithEndpoint(endpoint)
-                scheduleJoinRecovery(roomId)
-            }
-        }
-    }
-
-    private fun prepareJoinSnapshotAndConnect(roomId: String, joinAttemptId: Long) {
-        joinSnapshotFeature.prepareSnapshotId(
-            host = currentSignalingHost(),
-            roomId = roomId,
-            isVideoEnabled = { _uiState.value.localVideoEnabled },
-            isJoinAttemptActive = { isJoinAttemptActive(roomId, joinAttemptId) }
-        ) { snapshotId ->
-            if (!isJoinAttemptActive(roomId, joinAttemptId)) {
-                return@prepareSnapshotId
-            }
-            pendingJoinSnapshotId = snapshotId
-            ensureSignalingConnection()
-        }
+        sendOnce()
+        scheduleJoinRecovery(roomId)
     }
 
     private fun isJoinAttemptActive(roomId: String, joinAttemptId: Long): Boolean {
@@ -1016,6 +980,28 @@ class CallManager(context: Context) {
             fetchTurnCredentials(token)
         } else {
             applyDefaultIceServers()
+        }
+
+        // Fire async post-join push notification (fresh joins only)
+        if (!hasNotifiedPushForJoin) {
+            hasNotifiedPushForJoin = true
+            val notifyRoomId = joinedRoomId ?: return
+            val notifyCid = clientId ?: return
+            val notifyHost = currentSignalingHost()
+            val notifyJoinAttempt = joinAttemptSerial
+            joinSnapshotFeature.prepareSnapshotId(
+                host = notifyHost,
+                roomId = notifyRoomId,
+                isVideoEnabled = { _uiState.value.localVideoEnabled },
+                isJoinAttemptActive = { joinAttemptSerial == notifyJoinAttempt && currentRoomId == notifyRoomId }
+            ) { snapshotId ->
+                val endpoint = pushSubscriptionManager.cachedEndpoint()
+                apiClient.notifyRoom(notifyHost, notifyRoomId, notifyCid, snapshotId, endpoint) { result ->
+                    result.onFailure { e ->
+                        Log.w("CallManager", "Post-join push notify failed", e)
+                    }
+                }
+            }
         }
     }
 
@@ -1639,7 +1625,6 @@ class CallManager(context: Context) {
         callStartTimeMs = null
         activeCallHostOverride = null
         pendingJoinRoom = null
-        pendingJoinSnapshotId = null
         pendingMessages.clear()
         reconnectAttempts = 0
         sentOffer = false
