@@ -11,6 +11,9 @@ import { useTranslation } from 'react-i18next';
 const RECONNECT_BACKOFF_BASE_MS = 500;
 const RECONNECT_BACKOFF_CAP_MS = 5000;
 const JOIN_PUSH_ENDPOINT_WAIT_MS = 250;
+const JOIN_CONNECT_KICKSTART_MS = 1200;
+const JOIN_RECOVERY_MS = 4000;
+const JOIN_HARD_TIMEOUT_MS = 15000;
 const PONG_MISS_THRESHOLD = 2;
 const WS_FALLBACK_CONSECUTIVE_FAILURES = 3;
 const TURN_REFRESH_TRIGGER_RATIO = 0.8;
@@ -77,6 +80,11 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const missedPongsRef = useRef<number>(0);
     const wsConsecutiveFailuresRef = useRef<number>(0);
     const sseSidRef = useRef<string | null>(null);
+    const joinAttemptIdRef = useRef(0);
+    const joinAckedRef = useRef(false);
+    const joinKickstartTimerRef = useRef<number | null>(null);
+    const joinRecoveryTimerRef = useRef<number | null>(null);
+    const joinHardTimeoutRef = useRef<number | null>(null);
     const reconnectStorageKey = 'serenada.reconnectCid';
     const reconnectTokenStorageKey = 'serenada.reconnectToken';
 
@@ -122,11 +130,28 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, [isConnected]);
 
 
+    const clearJoinTimers = useCallback(() => {
+        if (joinKickstartTimerRef.current !== null) {
+            window.clearTimeout(joinKickstartTimerRef.current);
+            joinKickstartTimerRef.current = null;
+        }
+        if (joinRecoveryTimerRef.current !== null) {
+            window.clearTimeout(joinRecoveryTimerRef.current);
+            joinRecoveryTimerRef.current = null;
+        }
+        if (joinHardTimeoutRef.current !== null) {
+            window.clearTimeout(joinHardTimeoutRef.current);
+            joinHardTimeoutRef.current = null;
+        }
+    }, []);
+
     const handleIncomingMessage = useCallback((msg: SignalingMessage) => {
         console.log('RX:', msg);
 
         switch (msg.type) {
             case 'joined':
+                clearJoinTimers();
+                joinAckedRef.current = true;
                 if (msg.cid) setClientId(msg.cid);
                 if (msg.payload) {
                     setRoomState(msg.payload as RoomState);
@@ -168,6 +193,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 }
                 break;
             case 'room_ended':
+                clearJoinTimers();
                 setRoomState(null);
                 currentRoomIdRef.current = null;
                 needsRejoinRef.current = false;
@@ -195,7 +221,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setLastMessage(msg);
         // Copy array before iteration to prevent mutation during callback dispatch
         [...listenersRef.current].forEach(listener => listener(msg));
-    }, [clearReconnectStorage, showToast]);
+    }, [clearJoinTimers, clearReconnectStorage, showToast]);
 
     const sendMessage = useCallback((type: string, payload?: any, to?: string) => {
         if (transportRef.current && transportRef.current.isOpen()) {
@@ -246,8 +272,13 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const joinRoom = useCallback((roomId: string, opts?: { snapshotId?: string }) => {
         console.log(`[Signaling] joinRoom call for ${roomId}`);
         setError(null);
+        clearJoinTimers();
         needsRejoinRef.current = false;
         currentRoomIdRef.current = roomId;
+        joinAttemptIdRef.current += 1;
+        const attemptId = joinAttemptIdRef.current;
+        joinAckedRef.current = false;
+
         if (transportRef.current && transportRef.current.isOpen()) {
             const payload: any = { capabilities: { trickleIce: true } };
             if (opts?.snapshotId) {
@@ -261,14 +292,20 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     payload.reconnectToken = reconnectTokenRef.current;
                 }
             }
-            let sent = false;
-            const sendJoin = (endpoint?: string) => {
-                if (sent) return;
+
+            const doSendJoin = (endpoint?: string) => {
+                if (joinAttemptIdRef.current !== attemptId) return;
                 if (endpoint) {
                     payload.pushEndpoint = endpoint;
                 }
                 sendMessage('join', payload);
-                sent = true;
+            };
+
+            let initialSent = false;
+            const sendJoinOnce = (endpoint?: string) => {
+                if (initialSent) return;
+                initialSent = true;
+                doSendJoin(endpoint);
             };
 
             const hasPushSupport =
@@ -277,26 +314,51 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 'PushManager' in window;
 
             if (hasPushSupport) {
-                const fallbackTimer = window.setTimeout(() => sendJoin(), JOIN_PUSH_ENDPOINT_WAIT_MS);
+                const fallbackTimer = window.setTimeout(() => sendJoinOnce(), JOIN_PUSH_ENDPOINT_WAIT_MS);
                 navigator.serviceWorker.ready
                     .then((reg) => reg.pushManager.getSubscription())
                     .then((sub) => {
                         window.clearTimeout(fallbackTimer);
-                        sendJoin(sub?.endpoint);
+                        sendJoinOnce(sub?.endpoint);
                     })
                     .catch(() => {
                         window.clearTimeout(fallbackTimer);
-                        sendJoin();
+                        sendJoinOnce();
                     });
             } else {
-                sendJoin();
+                sendJoinOnce();
             }
+
+            // Join kickstart: re-send join if no ack after 1.2s
+            joinKickstartTimerRef.current = window.setTimeout(() => {
+                joinKickstartTimerRef.current = null;
+                if (joinAttemptIdRef.current !== attemptId || joinAckedRef.current) return;
+                console.log('[Signaling] Join kickstart: re-sending join');
+                doSendJoin();
+            }, JOIN_CONNECT_KICKSTART_MS);
+
+            // Join recovery: re-send join if still no ack after 4s
+            joinRecoveryTimerRef.current = window.setTimeout(() => {
+                joinRecoveryTimerRef.current = null;
+                if (joinAttemptIdRef.current !== attemptId || joinAckedRef.current) return;
+                console.log('[Signaling] Join recovery: re-sending join');
+                doSendJoin();
+            }, JOIN_RECOVERY_MS);
+
+            // Hard timeout: give up after 15s
+            joinHardTimeoutRef.current = window.setTimeout(() => {
+                joinHardTimeoutRef.current = null;
+                if (joinAttemptIdRef.current !== attemptId || joinAckedRef.current) return;
+                console.error('[Signaling] Join hard timeout reached');
+                clearJoinTimers();
+                setError('Join timed out');
+            }, JOIN_HARD_TIMEOUT_MS);
         } else {
             console.log('[Signaling] Transport not ready, buffering join');
             pendingJoinRef.current = roomId;
             pendingJoinPayloadRef.current = opts ?? null;
         }
-    }, [sendMessage]);
+    }, [clearJoinTimers, sendMessage]);
 
     useEffect(() => {
         const reconnectAttemptsRef = { current: 0 };
@@ -482,6 +544,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const clearError = useCallback(() => setError(null), []);
 
     const leaveRoom = useCallback(() => {
+        clearJoinTimers();
         sendMessage('leave');
         currentRoomIdRef.current = null;
         lastClientIdRef.current = null;
@@ -490,11 +553,12 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setRoomState(null);
         setTurnToken(null);
         setTurnTokenTTLMs(null);
-    }, [clearReconnectStorage, sendMessage]);
+    }, [clearJoinTimers, clearReconnectStorage, sendMessage]);
 
     const endRoom = useCallback(() => {
+        clearJoinTimers();
         sendMessage('end_room');
-    }, [sendMessage]);
+    }, [clearJoinTimers, sendMessage]);
 
     const watchRooms = useCallback((rids: string[]) => {
         if (rids.length === 0) return;

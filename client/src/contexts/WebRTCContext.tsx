@@ -567,9 +567,18 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const handleOnline = () => {
             scheduleIceRestart('network-online', 0);
         };
+        const handleNetworkChange = () => {
+            const pc = pcRef.current;
+            if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
+                scheduleIceRestart('network-change', 0);
+            }
+        };
         window.addEventListener('online', handleOnline);
+        const conn = (navigator as any).connection;
+        conn?.addEventListener?.('change', handleNetworkChange);
         return () => {
             window.removeEventListener('online', handleOnline);
+            conn?.removeEventListener?.('change', handleNetworkChange);
         };
     }, []);
 

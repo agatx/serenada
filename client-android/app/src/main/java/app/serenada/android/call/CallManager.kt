@@ -104,6 +104,7 @@ class CallManager(context: Context) {
     private var watchedRoomIds: List<String> = emptyList()
     private var pendingJoinRoom: String? = null
     private var pendingJoinSnapshotId: String? = null
+    // All mutable state below is accessed exclusively from the handler thread — no synchronization needed.
     private var joinAttemptSerial = 0L
     private var reconnectAttempts = 0
     private var sentOffer = false
