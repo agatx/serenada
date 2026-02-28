@@ -30,3 +30,4 @@ secrets/
 /.webrtc-ios-build
 client-ios/Resources/GoogleService-Info.plist
 /.claude/worktrees
+/tools/smoke-test/artifacts

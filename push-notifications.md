@@ -8,7 +8,7 @@
 - Keep snapshots short-lived (10 minute TTL).
 
 ## Client support
-- Snapshot sender on join: web client, native Android client, and native iOS client.
+- Snapshot sender after join: web client, native Android client, and native iOS client.
 - Push subscription + notification rendering:
   - Web: service worker (`webpush` transport).
   - Native Android: Firebase Cloud Messaging (`fcm` transport).
@@ -22,8 +22,8 @@
 - The public key is sent to the server with the subscription.
 - The server stores the public key alongside the subscription record (`enc_pubkey`).
 
-### Snapshot encryption (per join)
-1. Joiner captures a camera frame at Join time and compresses it (JPEG, ~320px width, ~200KB target).
+### Snapshot encryption (post-join, async)
+1. After receiving the `joined` acknowledgement, the client asynchronously captures a camera frame and compresses it (JPEG, ~320px width, ~200KB target). This happens in the background and does not block the call setup.
 2. Joiner generates a random AES-256-GCM content key and encrypts the snapshot with a random IV.
 3. Joiner generates an ephemeral ECDH key pair for this snapshot.
 4. For each recipient public key:
@@ -40,7 +40,7 @@
 - Never sees plaintext.
 - Cleanup runs on snapshot upload and removes files older than 10 minutes.
 - Enforces a max ciphertext size of 300KB per snapshot.
-- On join, server sends push notifications (`kind: "join"`) that include:
+- On client-initiated notify request (`POST /api/push/notify`), server sends push notifications (`kind: "join"`) that include:
   - `host` (preferred backend host for deep-link/snapshot fetch routing)
   - `snapshotId`
   - `snapshotIv`
@@ -120,6 +120,25 @@ Android (`fcm`) subscription example:
   { "id": 123, "publicKey": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." } }
 ]
 ```
+
+### Notify (post-join push trigger)
+`POST /api/push/notify?roomId=...`
+
+Triggers push notifications for the room after a successful join. The caller must be a current room participant (verified by CID). This decouples push notifications from the join flow so calls connect instantly.
+
+```json
+{
+  "cid": "client-id-from-joined-response",
+  "snapshotId": "SNAP-...",
+  "pushEndpoint": "optional-sender-endpoint-or-fcm-token"
+}
+```
+
+- `cid` (required): The client's CID, used for room membership verification.
+- `snapshotId` (optional): If a snapshot was captured and uploaded, its ID.
+- `pushEndpoint` (optional): The sender's push endpoint to exclude from notifications.
+
+Returns `200 OK` on success, `403 Forbidden` if the CID is not in the room.
 
 ### Invite trigger
 `POST /api/push/invite?roomId=...`

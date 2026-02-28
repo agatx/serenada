@@ -11,6 +11,6 @@ if [ ! -d "$WEBRTC_XCFRAMEWORK" ]; then
   exit 1
 fi
 
-CHECKSUM="$(find "$WEBRTC_XCFRAMEWORK" -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')"
+CHECKSUM="$(cd "$WEBRTC_DIR" && find "WebRTC.xcframework" -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')"
 echo "$CHECKSUM" > "$CHECKSUM_FILE"
 echo "Updated $CHECKSUM_FILE"

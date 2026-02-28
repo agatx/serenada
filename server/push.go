@@ -729,6 +729,53 @@ func handlePushInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func handlePushNotify(hub *Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "OPTIONS" {
+			return
+		}
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		roomID := strings.TrimSpace(r.URL.Query().Get("roomId"))
+		if writeRoomIDValidationError(w, roomID) {
+			return
+		}
+
+		var body struct {
+			CID          string `json:"cid"`
+			SnapshotID   string `json:"snapshotId"`
+			PushEndpoint string `json:"pushEndpoint"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
+		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "Invalid body", http.StatusBadRequest)
+			return
+		}
+
+		cid := strings.TrimSpace(body.CID)
+		if cid == "" {
+			http.Error(w, "Missing cid", http.StatusBadRequest)
+			return
+		}
+
+		if !hub.IsClientInRoom(roomID, cid) {
+			http.Error(w, "Not a room participant", http.StatusForbidden)
+			return
+		}
+
+		if pushService == nil {
+			http.Error(w, "Push service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		go pushService.SendNotificationToRoom(roomID, strings.TrimSpace(body.PushEndpoint), strings.TrimSpace(body.SnapshotID))
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 func handlePushSnapshot(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "OPTIONS":

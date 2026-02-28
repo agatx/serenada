@@ -20,5 +20,8 @@ Then run:
 ./scripts/update_webrtc_checksum.sh
 ```
 
+The checksum workflow is repository-path stable (relative-path based), so
+identical artifacts verify consistently across machines and CI workspaces.
+
 The app build includes a pre-build checksum verification step. If the artifact is missing,
 the app compiles in local stub mode (no real media/call transport).

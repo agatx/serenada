@@ -573,21 +573,10 @@ const CallRoom: React.FC = () => {
                     requestFullscreen.call(rootElement).catch(() => { });
                 }
             }
-            const stream = await startLocalMedia();
-            let snapshotId: string | null = null;
-            if (stream) {
-                const snapshotPromise = buildEncryptedSnapshot(stream, roomId).catch((err) => {
-                    console.warn('[Push] Failed to build encrypted snapshot', err);
-                    return null;
-                });
-                snapshotId = await Promise.race([
-                    snapshotPromise,
-                    new Promise<null>((resolve) => setTimeout(() => resolve(null), SNAPSHOT_PREPARE_TIMEOUT_MS))
-                ]);
-            }
-            // Tiny delay to ensure state propagates
+            await startLocalMedia();
+            // Join immediately — push notification will fire asynchronously after join
             setTimeout(() => {
-                joinRoom(roomId, snapshotId ? { snapshotId } : undefined);
+                joinRoom(roomId);
                 setHasJoined(true);
                 callStartTimeRef.current = Date.now();
             }, 50);
@@ -608,6 +597,56 @@ const CallRoom: React.FC = () => {
             stopLocalMedia();
         }
     }, [signalingError, hasJoined, roomState, stopLocalMedia]);
+
+    // Post-join: asynchronously capture snapshot and trigger push notification
+    const pushNotifySentRef = useRef(false);
+    useEffect(() => {
+        if (!hasJoined) {
+            pushNotifySentRef.current = false;
+            return;
+        }
+        if (!roomId || !clientId || !localStream) return;
+        const isCurrentParticipant = roomState?.participants?.some((participant) => participant.cid === clientId) ?? false;
+        if (!isCurrentParticipant) return;
+        if (pushNotifySentRef.current) return;
+        pushNotifySentRef.current = true;
+
+        (async () => {
+            try {
+                const [snapshotId, pushEndpoint] = await Promise.all([
+                    Promise.race([
+                        buildEncryptedSnapshot(localStream, roomId).catch((err) => {
+                            console.warn('[Push] Failed to build encrypted snapshot', err);
+                            return null;
+                        }),
+                        new Promise<null>((resolve) => setTimeout(() => resolve(null), SNAPSHOT_PREPARE_TIMEOUT_MS))
+                    ]),
+                    (async (): Promise<string | undefined> => {
+                        try {
+                            if ('serviceWorker' in navigator && 'PushManager' in window) {
+                                const reg = await navigator.serviceWorker.ready;
+                                const sub = await reg.pushManager.getSubscription();
+                                return sub?.endpoint;
+                            }
+                        } catch { /* ignore */ }
+                        return undefined;
+                    })()
+                ]);
+
+                await fetch(`/api/push/notify?roomId=${encodeURIComponent(roomId)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        cid: clientId,
+                        snapshotId: snapshotId || undefined,
+                        pushEndpoint: pushEndpoint || undefined
+                    })
+                });
+            } catch (err) {
+                console.warn('[Push] Post-join push notify failed', err);
+            }
+        })();
+    }, [hasJoined, roomId, clientId, localStream, roomState]);
 
     const handleLeave = () => {
         if (callStartTimeRef.current && roomId) {

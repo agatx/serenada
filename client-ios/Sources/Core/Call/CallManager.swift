@@ -85,7 +85,7 @@ final class CallManager: ObservableObject {
 
     private var watchedRoomIds: [String] = []
     private var pendingJoinRoom: String?
-    private var pendingJoinSnapshotId: String?
+    private var hasNotifiedPushForJoin = false
 
     private var joinAttemptSerial: Int64 = 0
     private var reconnectAttempts = 0
@@ -374,7 +374,7 @@ final class CallManager: ObservableObject {
 
         sentOffer = false
         pendingMessages.removeAll()
-        pendingJoinSnapshotId = nil
+        hasNotifiedPushForJoin = false
         hasJoinSignalStartedForAttempt = false
         hasJoinAcknowledgedCurrentAttempt = false
         hasInitializedIceSetupForAttempt = false
@@ -580,7 +580,7 @@ final class CallManager: ObservableObject {
         if signalingClient.isConnected() {
             if let roomToJoin {
                 pendingJoinRoom = nil
-                sendJoin(roomId: roomToJoin, snapshotId: pendingJoinSnapshotId)
+                sendJoin(roomId: roomToJoin)
             }
             sendWatchRoomsIfNeeded()
             return
@@ -590,86 +590,39 @@ final class CallManager: ObservableObject {
         signalingClient.connect(host: currentSignalingHost())
     }
 
-    private func sendJoin(roomId: String, snapshotId: String? = nil) {
+    private func sendJoin(roomId: String) {
         debugTrace("sendJoin begin rid=\(roomId) connected=\(signalingClient.isConnected())")
-        let trimmedSnapshotId = snapshotId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveSnapshotId: String? = {
-            if let trimmedSnapshotId, !trimmedSnapshotId.isEmpty {
-                return trimmedSnapshotId
-            }
-            if let pending = pendingJoinSnapshotId?.trimmingCharacters(in: .whitespacesAndNewlines), !pending.isEmpty {
-                return pending
-            }
-            return nil
-        }()
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let endpoint = await self.fetchJoinPushEndpointWithTimeout()
-            self.debugTrace("sendJoin endpointReady rid=\(roomId) endpoint=\(endpoint?.isEmpty == false ? "yes" : "no")")
-            guard self.currentRoomId == roomId else { return }
-            guard self.signalingClient.isConnected() else {
-                self.debugTrace("sendJoin deferred rid=\(roomId) reason=disconnected")
-                self.pendingJoinRoom = roomId
-                self.pendingJoinSnapshotId = effectiveSnapshotId
-                self.ensureSignalingConnection()
-                return
-            }
-
-            var payload: [String: JSONValue] = [
-                "device": .string("ios"),
-                "capabilities": .object(["trickleIce": .bool(true)])
-            ]
-
-            let reconnectCid = self.clientId ?? self.settingsStore.reconnectCid
-            if let reconnectCid {
-                payload["reconnectCid"] = .string(reconnectCid)
-            }
-            if let reconnectToken = self.reconnectToken {
-                payload["reconnectToken"] = .string(reconnectToken)
-            }
-            if let endpoint, !endpoint.isEmpty {
-                payload["pushEndpoint"] = .string(endpoint)
-            }
-            if let effectiveSnapshotId {
-                payload["snapshotId"] = .string(effectiveSnapshotId)
-            }
-
-            let message = SignalingMessage(
-                type: "join",
-                rid: roomId,
-                payload: .object(payload)
-            )
-
-            self.signalingClient.send(message)
-            self.debugTrace(
-                "sendJoin sent rid=\(roomId) reconnectCid=\(self.clientId ?? self.settingsStore.reconnectCid ?? "-") " +
-                    "snapshot=\(effectiveSnapshotId == nil ? "no" : "yes")"
-            )
-            self.pendingJoinSnapshotId = nil
-            self.scheduleJoinRecovery(for: roomId)
-        }
-    }
-
-    private func fetchJoinPushEndpointWithTimeout() async -> String? {
-        if let cached = pushSubscriptionManager.cachedEndpoint() {
-            return cached
+        guard signalingClient.isConnected() else {
+            debugTrace("sendJoin deferred rid=\(roomId) reason=disconnected")
+            pendingJoinRoom = roomId
+            ensureSignalingConnection()
+            return
         }
 
-        return await withTaskGroup(of: String?.self) { group in
-            group.addTask { @MainActor [weak self] in
-                guard let self else { return nil }
-                return await self.pushSubscriptionManager.refreshPushEndpoint()
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: WebRtcResilience.joinPushEndpointWaitNs)
-                return nil
-            }
+        var payload: [String: JSONValue] = [
+            "device": .string("ios"),
+            "capabilities": .object(["trickleIce": .bool(true)])
+        ]
 
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+        let reconnectCid = clientId ?? settingsStore.reconnectCid
+        if let reconnectCid {
+            payload["reconnectCid"] = .string(reconnectCid)
         }
+        if let reconnectToken {
+            payload["reconnectToken"] = .string(reconnectToken)
+        }
+
+        let message = SignalingMessage(
+            type: "join",
+            rid: roomId,
+            payload: .object(payload)
+        )
+
+        signalingClient.send(message)
+        debugTrace(
+            "sendJoin sent rid=\(roomId) reconnectCid=\(clientId ?? settingsStore.reconnectCid ?? "-")"
+        )
+        scheduleJoinRecovery(for: roomId)
     }
 
     private func sendMessage(type: String, payload: JSONValue? = nil, to: String? = nil) {
@@ -762,6 +715,45 @@ final class CallManager: ObservableObject {
         } else {
             debugTrace("handleJoined parseRoomState=nil participantsHint=\(participantCountHint(payload: message.payload)?.description ?? "-")")
             recoverFromJoiningIfNeeded(participantHint: participantCountHint(payload: message.payload))
+        }
+        // Fire async post-join push notification (fresh joins only)
+        if !hasNotifiedPushForJoin {
+            hasNotifiedPushForJoin = true
+            let notifyRoomId = message.rid ?? currentRoomId ?? ""
+            let notifyCid = clientId ?? ""
+            let notifyHost = currentSignalingHost()
+            let notifyJoinAttempt = joinAttemptSerial
+            if notifyRoomId.isEmpty || notifyCid.isEmpty {
+                debugTrace("handleJoined pushNotify skipped: missing roomId or cid")
+            } else {
+                joinSnapshotFeature.prepareSnapshotId(
+                    host: notifyHost,
+                    roomId: notifyRoomId,
+                    isVideoEnabled: { [weak self] in
+                        self?.uiState.localVideoEnabled ?? false
+                    },
+                    isJoinAttemptActive: { [weak self] in
+                        self?.joinAttemptSerial == notifyJoinAttempt && self?.currentRoomId == notifyRoomId
+                    },
+                    onReady: { [weak self] snapshotId in
+                        guard let self else { return }
+                        let endpoint = self.pushSubscriptionManager.cachedEndpoint()
+                        Task {
+                            do {
+                                try await self.apiClient.notifyRoom(
+                                    host: notifyHost,
+                                    roomId: notifyRoomId,
+                                    cid: notifyCid,
+                                    snapshotId: snapshotId,
+                                    pushEndpoint: endpoint
+                                )
+                            } catch {
+                                self.debugTrace("Post-join push notify failed: \(error)")
+                            }
+                        }
+                    }
+                )
+            }
         }
         debugTrace("handleJoined end")
     }
@@ -1491,7 +1483,6 @@ final class CallManager: ObservableObject {
         callStartTimeMs = nil
 
         pendingJoinRoom = nil
-        pendingJoinSnapshotId = nil
         pendingMessages.removeAll()
 
         reconnectAttempts = 0
@@ -1512,6 +1503,7 @@ final class CallManager: ObservableObject {
 
         userPreferredVideoEnabled = true
         isVideoPausedByProximity = false
+        hasNotifiedPushForJoin = false
         hasJoinSignalStartedForAttempt = false
         hasJoinAcknowledgedCurrentAttempt = false
         hasInitializedIceSetupForAttempt = false
@@ -1572,27 +1564,7 @@ final class CallManager: ObservableObject {
         startRemoteVideoStatePolling()
 
         clearJoinConnectKickstart()
-        prepareJoinSnapshotAndConnect(roomId: roomId, joinAttempt: joinAttempt)
-    }
-
-    private func prepareJoinSnapshotAndConnect(roomId: String, joinAttempt: Int64) {
-        joinSnapshotFeature.prepareSnapshotId(
-            host: currentSignalingHost(),
-            roomId: roomId,
-            isVideoEnabled: { [weak self] in
-                self?.uiState.localVideoEnabled ?? false
-            },
-            isJoinAttemptActive: { [weak self] in
-                self?.isJoinAttemptActive(roomId: roomId, joinAttempt: joinAttempt) ?? false
-            },
-            onReady: { [weak self] snapshotId in
-                guard let self else { return }
-                guard self.isJoinAttemptActive(roomId: roomId, joinAttempt: joinAttempt) else { return }
-                self.debugTrace("joinSnapshot ready rid=\(roomId) hasSnapshot=\(snapshotId == nil ? "no" : "yes")")
-                self.pendingJoinSnapshotId = snapshotId
-                self.ensureSignalingConnection()
-            }
-        )
+        ensureSignalingConnection()
     }
 
     private func isJoinAttemptActive(roomId: String, joinAttempt: Int64) -> Bool {
@@ -2077,7 +2049,7 @@ extension CallManager: SignalingClientListener {
 
         if let join = pendingJoinRoom {
             pendingJoinRoom = nil
-            sendJoin(roomId: join, snapshotId: pendingJoinSnapshotId)
+            sendJoin(roomId: join)
         }
 
         sendWatchRoomsIfNeeded()

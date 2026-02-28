@@ -50,6 +50,9 @@ cd client-ios
 ./scripts/update_webrtc_checksum.sh
 ```
 
+Checksum generation is repository-path stable (it hashes relative framework paths),
+so identical artifacts produce the same digest across different checkout locations.
+
 Builds run `scripts/verify_webrtc_checksum.sh` pre-build.
 
 If the WebRTC artifact is missing, the app builds in a local stub mode (UI/state/signaling scaffolding still compiles, but media transport is non-functional).

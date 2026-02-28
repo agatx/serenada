@@ -130,6 +130,25 @@ func (h *Hub) isClientActive(c *Client) bool {
 	return exists
 }
 
+// IsClientInRoom checks whether a client with the given CID is a participant
+// in the specified room. Thread-safe for use from HTTP handlers.
+func (h *Hub) IsClientInRoom(roomID, cid string) bool {
+	h.mu.RLock()
+	room, exists := h.rooms[roomID]
+	h.mu.RUnlock()
+	if !exists {
+		return false
+	}
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	for _, clientCID := range room.Participants {
+		if clientCID == cid {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Hub) replaceClient(oldClient, newClient *Client) {
 	h.mu.Lock()
 	delete(h.clients, oldClient)
@@ -268,8 +287,6 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	var joinPayload struct {
 		ReconnectCID   string `json:"reconnectCid"`
 		ReconnectToken string `json:"reconnectToken"`
-		PushEndpoint   string `json:"pushEndpoint"`
-		SnapshotID     string `json:"snapshotId"`
 	}
 	if len(msg.Payload) > 0 {
 		if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
@@ -279,8 +296,6 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	reconnectCID := joinPayload.ReconnectCID
 	reconnectToken := joinPayload.ReconnectToken
-	excludeEndpoint := joinPayload.PushEndpoint
-	snapshotID := joinPayload.SnapshotID
 	reusedCID := false
 
 	// Single-pass ghost eviction: find ghost client with reconnectCID, mark for removal under room lock
@@ -355,11 +370,6 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	room.mu.Unlock() // <--- CRITICAL FIX: Unlock before broadcast/send to avoid deadlock/blocking
-
-	// Trigger Push Notification only for fresh joins (not reconnects)
-	if pushService != nil && !reusedCID {
-		go pushService.SendNotificationToRoom(rid, excludeEndpoint, snapshotID)
-	}
 
 	payload := map[string]interface{}{
 		"hostCid":      room.HostCID,
