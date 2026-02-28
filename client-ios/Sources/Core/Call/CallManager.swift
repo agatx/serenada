@@ -1575,6 +1575,7 @@ final class CallManager: ObservableObject {
 
         startRemoteVideoStatePolling()
 
+        clearJoinConnectKickstart()
         prepareJoinSnapshotAndConnect(roomId: roomId, joinAttempt: joinAttempt)
     }
 
