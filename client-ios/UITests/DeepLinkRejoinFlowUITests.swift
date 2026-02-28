@@ -132,7 +132,7 @@ final class DeepLinkRejoinFlowUITests: XCTestCase {
             return false
         }
 
-        guard waitForEndCallButton(in: app, timeout: 12) else {
+        guard revealCallControlsAndWaitForEndCall(in: app, timeout: 12) else {
             let hierarchyAttachment = XCTAttachment(string: app.debugDescription)
             hierarchyAttachment.name = "MissingEndCallHierarchy"
             hierarchyAttachment.lifetime = .keepAlways
@@ -198,16 +198,7 @@ final class DeepLinkRejoinFlowUITests: XCTestCase {
         line: UInt = #line
     ) -> Bool {
         let endCallButton = app.buttons["call.endCall"]
-        guard waitForEndCallButton(in: app, timeout: 12) else {
-            let hierarchyAttachment = XCTAttachment(string: app.debugDescription)
-            hierarchyAttachment.name = "LeaveCallMissingButtonHierarchy"
-            hierarchyAttachment.lifetime = .keepAlways
-            add(hierarchyAttachment)
-            XCTFail("Unable to find end call button", file: file, line: line)
-            return false
-        }
-
-        guard revealCallControlsAndWaitForEndCall(in: app, timeout: 6) else {
+        guard revealCallControlsAndWaitForEndCall(in: app, timeout: 12) else {
             let hierarchyAttachment = XCTAttachment(string: app.debugDescription)
             hierarchyAttachment.name = "LeaveCallControlsNotHittableHierarchy"
             hierarchyAttachment.lifetime = .keepAlways
@@ -243,23 +234,6 @@ final class DeepLinkRejoinFlowUITests: XCTestCase {
         }
         recentCallButton.tap()
         return true
-    }
-
-    private func waitForEndCallButton(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        let endCallButton = app.buttons["call.endCall"]
-        if endCallButton.waitForExistence(timeout: 1.5) {
-            return true
-        }
-
-        // Call controls can be hidden by a prior tap; poke the center to reveal them.
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            if endCallButton.waitForExistence(timeout: 1.0) {
-                return true
-            }
-        }
-        return false
     }
 
     private func revealCallControlsAndWaitForEndCall(in app: XCUIApplication, timeout: TimeInterval) -> Bool {

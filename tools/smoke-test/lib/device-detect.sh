@@ -37,8 +37,10 @@ detect_ios() {
 
     local udid
     # Try xcrun devicectl first (Xcode 15+)
-    if xcrun devicectl list devices 2>/dev/null | grep -q 'connected'; then
-        udid=$(xcrun devicectl list devices 2>/dev/null \
+    local devicectl_output
+    devicectl_output=$(xcrun devicectl list devices 2>/dev/null || true)
+    if echo "$devicectl_output" | grep -q 'connected'; then
+        udid=$(echo "$devicectl_output" \
             | grep 'connected' \
             | head -1 \
             | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9A-Fa-f]{40}' \

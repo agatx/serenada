@@ -28,11 +28,13 @@ barrier_write() {
 
 barrier_wait() {
     local dir="$1" name="$2" timeout="${3:-30}"
-    local elapsed=0
+    local start
+    start=$(date +%s)
     while [ ! -f "$dir/$name" ]; do
-        sleep 0.5
-        elapsed=$(echo "$elapsed + 0.5" | bc)
-        if (( $(echo "$elapsed >= $timeout" | bc -l) )); then
+        sleep 1
+        local now
+        now=$(date +%s)
+        if [ $((now - start)) -ge "$timeout" ]; then
             log_error "Barrier timeout: waited ${timeout}s for '$name'"
             return 1
         fi

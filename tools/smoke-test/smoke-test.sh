@@ -6,7 +6,6 @@
 # Environment variables:
 #   SMOKE_SERVER        — Server URL override (empty = local Docker)
 #   SMOKE_PAIRS         — Comma-separated test pairs (default: web+android,web+ios)
-#   SMOKE_TIMEOUT       — Max seconds per pair (default: 120)
 #   SMOKE_ARTIFACTS_DIR — Screenshots and logs dir (default: tools/smoke-test/artifacts)
 #   SMOKE_SKIP_BUILD    — Skip platform builds (default: 0)
 #   SMOKE_KEEP_SERVER   — Don't stop Docker on exit (default: 0)
@@ -23,7 +22,6 @@ source "$SCRIPT_DIR/lib/report.sh"
 # --- Configuration ---
 SMOKE_SERVER="${SMOKE_SERVER:-}"
 SMOKE_PAIRS="${SMOKE_PAIRS:-web+android,web+ios}"
-SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-120}"
 SMOKE_ARTIFACTS_DIR="${SMOKE_ARTIFACTS_DIR:-$SCRIPT_DIR/artifacts}"
 SMOKE_SKIP_BUILD="${SMOKE_SKIP_BUILD:-0}"
 SMOKE_KEEP_SERVER="${SMOKE_KEEP_SERVER:-0}"
