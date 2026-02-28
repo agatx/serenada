@@ -144,10 +144,13 @@ final class JoinSnapshotFeature {
             renderer = LocalFrameSnapshotRenderer { [weak self] frame in
                 guard let self else {
                     finish(nil)
-                    return
+                    return true
                 }
-                let image = self.encodeSnapshot(frame: frame)
+                guard let image = self.encodeSnapshot(frame: frame) else {
+                    return false // black frame — skip, try next
+                }
                 finish(image)
+                return true
             }
 
             if let renderer {
@@ -262,7 +265,7 @@ final class JoinSnapshotFeature {
         }
 
         let ephemeralPrivate = P256.KeyAgreement.PrivateKey()
-        let ephemeralPublicRaw = ephemeralPrivate.publicKey.rawRepresentation
+        let ephemeralPublicRaw = ephemeralPrivate.publicKey.x963Representation
         let salt = randomBytes(Constants.saltBytes)
         let info = Data(Constants.hkdfInfo.utf8)
 
@@ -322,7 +325,7 @@ final class JoinSnapshotFeature {
         var raw = Data([0x04])
         raw.append(x)
         raw.append(y)
-        return try? P256.KeyAgreement.PublicKey(rawRepresentation: raw)
+        return try? P256.KeyAgreement.PublicKey(x963Representation: raw)
     }
 
     private func encryptAESGCM(plaintext: Data, keyData: Data, iv: Data) -> Data? {
@@ -365,11 +368,11 @@ final class JoinSnapshotFeature {
 
 #if canImport(WebRTC)
 private final class LocalFrameSnapshotRenderer: NSObject, RTCVideoRenderer {
-    private let onFrame: (RTCVideoFrame) -> Void
+    private let onFrame: (RTCVideoFrame) -> Bool
     private let lock = NSLock()
     private var consumed = false
 
-    init(onFrame: @escaping (RTCVideoFrame) -> Void) {
+    init(onFrame: @escaping (RTCVideoFrame) -> Bool) {
         self.onFrame = onFrame
     }
 
@@ -378,14 +381,17 @@ private final class LocalFrameSnapshotRenderer: NSObject, RTCVideoRenderer {
     func renderFrame(_ frame: RTCVideoFrame?) {
         guard let frame else { return }
         lock.lock()
-        let shouldConsume = !consumed
-        if shouldConsume {
-            consumed = true
+        if consumed {
+            lock.unlock()
+            return
         }
         lock.unlock()
 
-        guard shouldConsume else { return }
-        onFrame(frame)
+        if onFrame(frame) {
+            lock.lock()
+            consumed = true
+            lock.unlock()
+        }
     }
 }
 #endif
