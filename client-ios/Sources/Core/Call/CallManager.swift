@@ -723,37 +723,37 @@ final class CallManager: ObservableObject {
             let notifyCid = clientId ?? ""
             let notifyHost = currentSignalingHost()
             let notifyJoinAttempt = joinAttemptSerial
-            guard !notifyRoomId.isEmpty, !notifyCid.isEmpty else {
+            if notifyRoomId.isEmpty || notifyCid.isEmpty {
                 debugTrace("handleJoined pushNotify skipped: missing roomId or cid")
-                return
-            }
-            joinSnapshotFeature.prepareSnapshotId(
-                host: notifyHost,
-                roomId: notifyRoomId,
-                isVideoEnabled: { [weak self] in
-                    self?.uiState.localVideoEnabled ?? false
-                },
-                isJoinAttemptActive: { [weak self] in
-                    self?.joinAttemptSerial == notifyJoinAttempt && self?.currentRoomId == notifyRoomId
-                },
-                onReady: { [weak self] snapshotId in
-                    guard let self else { return }
-                    let endpoint = self.pushSubscriptionManager.cachedEndpoint()
-                    Task {
-                        do {
-                            try await self.apiClient.notifyRoom(
-                                host: notifyHost,
-                                roomId: notifyRoomId,
-                                cid: notifyCid,
-                                snapshotId: snapshotId,
-                                pushEndpoint: endpoint
-                            )
-                        } catch {
-                            self.debugTrace("Post-join push notify failed: \(error)")
+            } else {
+                joinSnapshotFeature.prepareSnapshotId(
+                    host: notifyHost,
+                    roomId: notifyRoomId,
+                    isVideoEnabled: { [weak self] in
+                        self?.uiState.localVideoEnabled ?? false
+                    },
+                    isJoinAttemptActive: { [weak self] in
+                        self?.joinAttemptSerial == notifyJoinAttempt && self?.currentRoomId == notifyRoomId
+                    },
+                    onReady: { [weak self] snapshotId in
+                        guard let self else { return }
+                        let endpoint = self.pushSubscriptionManager.cachedEndpoint()
+                        Task {
+                            do {
+                                try await self.apiClient.notifyRoom(
+                                    host: notifyHost,
+                                    roomId: notifyRoomId,
+                                    cid: notifyCid,
+                                    snapshotId: snapshotId,
+                                    pushEndpoint: endpoint
+                                )
+                            } catch {
+                                self.debugTrace("Post-join push notify failed: \(error)")
+                            }
                         }
                     }
-                }
-            )
+                )
+            }
         }
         debugTrace("handleJoined end")
     }

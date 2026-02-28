@@ -15,7 +15,6 @@ object WebRtcResilienceConstants {
     const val WS_FALLBACK_CONSECUTIVE_FAILURES = 3
 
     // ── Join ─────────────────────────────────────────────────────────
-    const val JOIN_PUSH_ENDPOINT_WAIT_MS = 250L
     const val JOIN_CONNECT_KICKSTART_MS = 1_200L
     const val JOIN_RECOVERY_MS = 4_000L
     const val JOIN_HARD_TIMEOUT_MS = 15_000L

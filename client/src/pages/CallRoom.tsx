@@ -601,28 +601,35 @@ const CallRoom: React.FC = () => {
     // Post-join: asynchronously capture snapshot and trigger push notification
     const pushNotifySentRef = useRef(false);
     useEffect(() => {
-        if (!hasJoined || !roomId || !clientId || !localStream) return;
+        if (!hasJoined) {
+            pushNotifySentRef.current = false;
+            return;
+        }
+        if (!roomId || !clientId || !localStream) return;
         if (pushNotifySentRef.current) return;
         pushNotifySentRef.current = true;
 
         (async () => {
             try {
-                const snapshotId = await Promise.race([
-                    buildEncryptedSnapshot(localStream, roomId).catch((err) => {
-                        console.warn('[Push] Failed to build encrypted snapshot', err);
-                        return null;
-                    }),
-                    new Promise<null>((resolve) => setTimeout(() => resolve(null), SNAPSHOT_PREPARE_TIMEOUT_MS))
+                const [snapshotId, pushEndpoint] = await Promise.all([
+                    Promise.race([
+                        buildEncryptedSnapshot(localStream, roomId).catch((err) => {
+                            console.warn('[Push] Failed to build encrypted snapshot', err);
+                            return null;
+                        }),
+                        new Promise<null>((resolve) => setTimeout(() => resolve(null), SNAPSHOT_PREPARE_TIMEOUT_MS))
+                    ]),
+                    (async (): Promise<string | undefined> => {
+                        try {
+                            if ('serviceWorker' in navigator && 'PushManager' in window) {
+                                const reg = await navigator.serviceWorker.ready;
+                                const sub = await reg.pushManager.getSubscription();
+                                return sub?.endpoint;
+                            }
+                        } catch { /* ignore */ }
+                        return undefined;
+                    })()
                 ]);
-
-                let pushEndpoint: string | undefined;
-                try {
-                    if ('serviceWorker' in navigator && 'PushManager' in window) {
-                        const reg = await navigator.serviceWorker.ready;
-                        const sub = await reg.pushManager.getSubscription();
-                        pushEndpoint = sub?.endpoint;
-                    }
-                } catch { /* ignore */ }
 
                 await fetch(`/api/push/notify?roomId=${encodeURIComponent(roomId)}`, {
                     method: 'POST',
