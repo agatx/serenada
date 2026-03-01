@@ -30,7 +30,7 @@ final class WebSocketSignalingTransport: NSObject, SignalingTransport {
 
         let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = false
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: OperationQueue.main)
         self.session = session
 
         let task = session.webSocketTask(with: url)
@@ -40,10 +40,11 @@ final class WebSocketSignalingTransport: NSObject, SignalingTransport {
     }
 
     func send(_ message: SignalingMessage) {
-        guard let webSocket else { return }
+        guard let ws = webSocket else { return }
         guard let raw = try? message.toJSONString() else { return }
-        webSocket.send(.string(raw)) { [weak self] error in
+        ws.send(.string(raw)) { [weak self] error in
             guard let self else { return }
+            guard ws === self.webSocket else { return }
             if let error {
                 self.triggerClosed(reason: error.localizedDescription)
             }
@@ -62,8 +63,10 @@ final class WebSocketSignalingTransport: NSObject, SignalingTransport {
     }
 
     private func receiveLoop() {
-        webSocket?.receive { [weak self] result in
+        guard let ws = webSocket else { return }
+        ws.receive { [weak self] result in
             guard let self else { return }
+            guard ws === self.webSocket else { return }
             switch result {
             case .success(let message):
                 switch message {
@@ -111,6 +114,7 @@ extension WebSocketSignalingTransport: URLSessionWebSocketDelegate {
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
+        guard webSocketTask === self.webSocket else { return }
         onOpenCallback?()
     }
 
@@ -120,6 +124,7 @@ extension WebSocketSignalingTransport: URLSessionWebSocketDelegate {
         didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
         reason: Data?
     ) {
+        guard webSocketTask === self.webSocket else { return }
         let reasonText: String
         if let reason, let text = String(data: reason, encoding: .utf8), !text.isEmpty {
             reasonText = text

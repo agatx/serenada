@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -89,6 +90,8 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private val JoinSectionRowMinHeight = 48.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JoinScreen(
@@ -98,10 +101,11 @@ fun JoinScreen(
     savedRooms: List<SavedRoom>,
     areSavedRoomsShownFirst: Boolean,
     roomStatuses: Map<String, Int>,
+    serverHost: String,
     onOpenJoinWithCode: () -> Unit,
     onOpenSettings: () -> Unit,
     onStartCall: () -> Unit,
-    onJoinRecentCall: (String) -> Unit,
+    onJoinRecentCall: (RecentCall) -> Unit,
     onJoinSavedRoom: (SavedRoom) -> Unit,
     onRemoveRecentCall: (String) -> Unit,
     onSaveRoom: (String, String) -> Unit,
@@ -207,6 +211,7 @@ fun JoinScreen(
                     SavedRoomsSection(
                         rooms = savedRooms,
                         roomStatuses = roomStatuses,
+                        serverHost = serverHost,
                         removingRoomIds = removingSavedRoomIds.toSet(),
                         isBusy = isBusy,
                         onCreateRoom = { showCreateRoomDialog = true },
@@ -238,6 +243,7 @@ fun JoinScreen(
                         RecentCallsSection(
                             calls = recentCalls,
                             roomStatuses = roomStatuses,
+                            serverHost = serverHost,
                             savedRoomNameById = savedRoomNameById,
                             removingRoomIds = removingRecentRoomIds.toSet(),
                             isBusy = isBusy,
@@ -261,6 +267,7 @@ fun JoinScreen(
                         RecentCallsSection(
                             calls = recentCalls,
                             roomStatuses = roomStatuses,
+                            serverHost = serverHost,
                             savedRoomNameById = savedRoomNameById,
                             removingRoomIds = removingRecentRoomIds.toSet(),
                             isBusy = isBusy,
@@ -283,6 +290,7 @@ fun JoinScreen(
                     SavedRoomsSection(
                         rooms = savedRooms,
                         roomStatuses = roomStatuses,
+                        serverHost = serverHost,
                         removingRoomIds = removingSavedRoomIds.toSet(),
                         isBusy = isBusy,
                         onCreateRoom = { showCreateRoomDialog = true },
@@ -411,10 +419,11 @@ fun JoinScreen(
 private fun RecentCallsSection(
     calls: List<RecentCall>,
     roomStatuses: Map<String, Int>,
+    serverHost: String,
     savedRoomNameById: Map<String, String>,
     removingRoomIds: Set<String>,
     isBusy: Boolean,
-    onJoinRecentCall: (String) -> Unit,
+    onJoinRecentCall: (RecentCall) -> Unit,
     onSaveRecentCall: (String) -> Unit,
     onRemoveRecentCall: (String) -> Unit
 ) {
@@ -429,12 +438,19 @@ private fun RecentCallsSection(
                 .fillMaxWidth()
                 .animateContentSize()
         ) {
-            Text(
-                text = stringResource(R.string.recent_calls_title),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = JoinSectionRowMinHeight)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.recent_calls_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
             calls.forEachIndexed { index, call ->
                 val isRemoving = removingRoomIds.contains(call.roomId)
@@ -451,7 +467,8 @@ private fun RecentCallsSection(
                             enabled = !isBusy && !isRemoving,
                             atText = atText,
                             savedRoomName = savedRoomNameById[call.roomId],
-                            onClick = { onJoinRecentCall(call.roomId) },
+                            hostLabel = call.host?.takeUnless { it.equals(serverHost, ignoreCase = true) },
+                            onClick = { onJoinRecentCall(call) },
                             onSave = { onSaveRecentCall(call.roomId) },
                             onRemove = { onRemoveRecentCall(call.roomId) }
                         )
@@ -472,6 +489,7 @@ private fun RecentCallsSection(
 private fun SavedRoomsSection(
     rooms: List<SavedRoom>,
     roomStatuses: Map<String, Int>,
+    serverHost: String,
     removingRoomIds: Set<String>,
     isBusy: Boolean,
     onCreateRoom: () -> Unit,
@@ -500,6 +518,7 @@ private fun SavedRoomsSection(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = JoinSectionRowMinHeight)
                     .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -530,6 +549,7 @@ private fun SavedRoomsSection(
                                     lastJoinedLabel = lastJoinedLabel,
                                     neverJoinedLabel = neverJoinedLabel
                                 ),
+                                hostLabel = room.host?.takeUnless { it.equals(serverHost, ignoreCase = true) },
                                 count = roomStatuses[room.roomId] ?: 0,
                                 enabled = !isBusy && !isRemoving,
                                 onClick = { onJoinSavedRoom(room) },
@@ -559,6 +579,7 @@ private fun RecentCallRow(
     enabled: Boolean,
     atText: String,
     savedRoomName: String?,
+    hostLabel: String?,
     onClick: () -> Unit,
     onSave: () -> Unit,
     onRemove: () -> Unit
@@ -573,6 +594,7 @@ private fun RecentCallRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(min = JoinSectionRowMinHeight)
                 .combinedClickable(
                     enabled = enabled,
                     onClick = onClick,
@@ -593,6 +615,15 @@ private fun RecentCallRow(
                         text = savedRoomName.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+                if (!hostLabel.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = hostLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         maxLines = 1
                     )
                 }
@@ -668,6 +699,7 @@ private fun RecentCallRow(
 private fun SavedRoomRow(
     room: SavedRoom,
     detailsText: String,
+    hostLabel: String?,
     count: Int,
     enabled: Boolean,
     onClick: () -> Unit,
@@ -683,6 +715,7 @@ private fun SavedRoomRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(min = JoinSectionRowMinHeight)
                 .combinedClickable(
                     enabled = enabled,
                     onClick = onClick,
@@ -702,6 +735,15 @@ private fun SavedRoomRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (!hostLabel.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = hostLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        maxLines = 1
+                    )
+                }
             }
             Spacer(modifier = Modifier.width(12.dp))
             if (count > 0) {
@@ -930,10 +972,14 @@ private fun formatDateTime(timestamp: Long, atText: String): String {
 
 private fun formatDuration(durationSeconds: Int): String {
     val seconds = durationSeconds.coerceAtLeast(0)
-    if (seconds < 60) return "${seconds}s"
-    val mins = seconds / 60
-    val secs = seconds % 60
-    return "${mins}m ${secs}s"
+    if (seconds < 120) {
+        val mins = seconds / 60
+        val secs = seconds % 60
+        if (mins == 0) return "${secs}s"
+        return "${mins}m ${secs}s"
+    }
+    val mins = kotlin.math.round(seconds / 60.0).toInt()
+    return "${mins}m"
 }
 
 private fun formatLastJoined(timestamp: Long?, lastJoinedLabel: String, neverJoinedLabel: String): String {
