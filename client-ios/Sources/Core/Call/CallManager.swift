@@ -294,7 +294,7 @@ final class CallManager: ObservableObject {
             saveRoom(
                 roomId: target.roomId,
                 name: target.savedRoomName ?? target.roomId,
-                host: hostPolicy.oneOffHost
+                host: target.host
             )
             return
         }
@@ -320,7 +320,7 @@ final class CallManager: ObservableObject {
                 saveRoom(
                     roomId: target.roomId,
                     name: target.savedRoomName ?? target.roomId,
-                    host: hostPolicy.oneOffHost
+                    host: target.host
                 )
             } else {
                 joinRoom(target.roomId, oneOffHost: hostPolicy.oneOffHost)
@@ -367,6 +367,9 @@ final class CallManager: ObservableObject {
             refreshSavedRooms()
         }
         activeCallHostOverride = DeepLinkParser.normalizeHostValue(oneOffHost)
+        if activeCallHostOverride != nil && signalingClient.isConnected() {
+            signalingClient.close()
+        }
         currentRoomId = trimmed
         debugTraceReset("joinRoom rid=\(trimmed) host=\(currentSignalingHost()) oneOff=\(activeCallHostOverride ?? "-")")
         joinAttemptSerial += 1
@@ -445,14 +448,18 @@ final class CallManager: ObservableObject {
         guard !normalizedRoomId.isEmpty else { return }
         guard let normalizedName = DeepLinkParser.normalizeSavedRoomName(name) else { return }
 
-        let normalizedHost = DeepLinkParser.normalizeHostValue(host)
-        let hostOverride = normalizedHost.flatMap { DeepLinkParser.isTrustedHost($0) ? nil : $0 }
+        let existingHost = savedRooms.first(where: { $0.roomId == normalizedRoomId })?.host
+        let recentHost = recentCalls.first(where: { $0.roomId == normalizedRoomId })?.host
+        let resolvedHost = DeepLinkParser.normalizeHostValue(host)
+            ?? existingHost
+            ?? recentHost
+            ?? serverHost
 
         let room = SavedRoom(
             roomId: normalizedRoomId,
             name: normalizedName,
             createdAt: Int64(Date().timeIntervalSince1970 * 1000),
-            host: hostOverride,
+            host: resolvedHost,
             lastJoinedAt: nil
         )
         savedRoomStore.saveRoom(room)
@@ -460,7 +467,11 @@ final class CallManager: ObservableObject {
     }
 
     func joinSavedRoom(_ room: SavedRoom) {
-        joinRoom(room.roomId, oneOffHost: room.host)
+        joinRoom(room.roomId, oneOffHost: hostOverrideOrNull(room.host))
+    }
+
+    func joinRecentCall(_ call: RecentCall) {
+        joinRoom(call.roomId, oneOffHost: hostOverrideOrNull(call.host))
     }
 
     func removeSavedRoom(roomId: String) {
@@ -482,8 +493,7 @@ final class CallManager: ObservableObject {
 
         do {
             let roomId = try await apiClient.createRoomId(host: normalizedHost)
-            let roomHostOverride = DeepLinkParser.isTrustedHost(normalizedHost) ? nil : normalizedHost
-            saveRoom(roomId: roomId, name: normalizedName, host: roomHostOverride)
+            saveRoom(roomId: roomId, name: normalizedName, host: normalizedHost)
             return .success(buildSavedRoomInviteLink(host: normalizedHost, roomId: roomId, roomName: normalizedName))
         } catch {
             return .failure(error)
@@ -1752,20 +1762,39 @@ final class CallManager: ObservableObject {
 
     private func refreshRecentCalls() {
         let calls = recentCallStore.getRecentCalls()
-        recentCalls = calls
+        if calls.contains(where: { $0.host == nil }) {
+            let host = serverHost
+            let patched = calls.map { call in
+                call.host == nil
+                    ? RecentCall(roomId: call.roomId, startTime: call.startTime, durationSeconds: call.durationSeconds, host: host)
+                    : call
+            }
+            patched.forEach { recentCallStore.saveCall($0) }
+            recentCalls = patched
+        } else {
+            recentCalls = calls
+        }
         refreshWatchedRooms()
     }
 
     private func refreshSavedRooms() {
         let rooms = savedRoomStore.getSavedRooms()
-        savedRooms = rooms
-        syncSavedRoomPushSubscriptions(rooms)
+        if rooms.contains(where: { $0.host == nil }) {
+            let host = serverHost
+            for room in rooms where room.host == nil {
+                savedRoomStore.saveRoom(SavedRoom(roomId: room.roomId, name: room.name, createdAt: room.createdAt, host: host, lastJoinedAt: room.lastJoinedAt))
+            }
+            savedRooms = savedRoomStore.getSavedRooms()
+        } else {
+            savedRooms = rooms
+        }
+        syncSavedRoomPushSubscriptions(savedRooms)
         refreshWatchedRooms()
     }
 
     private func syncSavedRoomPushSubscriptions(_ rooms: [SavedRoom]) {
         let host = serverHost
-        for room in rooms where shouldWatchSavedRoom(room) {
+        for room in rooms where isCurrentServerHost(room.host) {
             pushSubscriptionManager.subscribeRoom(roomId: room.roomId, host: host)
         }
     }
@@ -1774,13 +1803,13 @@ final class CallManager: ObservableObject {
         var merged = [String]()
         var seen = Set<String>()
 
-        for room in savedRooms where shouldWatchSavedRoom(room) {
+        for room in savedRooms where isCurrentServerHost(room.host) {
             if seen.insert(room.roomId).inserted {
                 merged.append(room.roomId)
             }
         }
 
-        for call in recentCalls {
+        for call in recentCalls where isCurrentServerHost(call.host) {
             if seen.insert(call.roomId).inserted {
                 merged.append(call.roomId)
             }
@@ -1793,9 +1822,13 @@ final class CallManager: ObservableObject {
         watchRoomsIfNeeded()
     }
 
-    private func shouldWatchSavedRoom(_ room: SavedRoom) -> Bool {
-        guard let host = room.host else { return true }
-        return host.compare(serverHost, options: .caseInsensitive) == .orderedSame
+    private func isCurrentServerHost(_ host: String?) -> Bool {
+        guard let h = host else { return true }
+        return h.compare(serverHost, options: .caseInsensitive) == .orderedSame
+    }
+
+    private func hostOverrideOrNull(_ host: String?) -> String? {
+        DeepLinkParser.normalizeHostValue(host).flatMap { isCurrentServerHost($0) ? nil : $0 }
     }
 
     private func watchRoomsIfNeeded() {
@@ -1820,7 +1853,7 @@ final class CallManager: ObservableObject {
         let duration = max(0, Int((nowMs - startTime) / 1000))
 
         recentCallStore.saveCall(
-            RecentCall(roomId: roomId, startTime: startTime, durationSeconds: duration)
+            RecentCall(roomId: roomId, startTime: startTime, durationSeconds: duration, host: currentSignalingHost())
         )
 
         callStartTimeMs = nil

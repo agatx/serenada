@@ -8,7 +8,8 @@ import org.json.JSONObject
 data class RecentCall(
     val roomId: String,
     val startTime: Long,
-    val durationSeconds: Int
+    val durationSeconds: Int,
+    val host: String? = null
 )
 
 class RecentCallStore(context: Context) {
@@ -41,12 +42,14 @@ class RecentCallStore(context: Context) {
             val startTime = item.optLong("startTime", 0L)
             val duration = item.optInt("duration", 0)
             if (startTime <= 0L) continue
+            val host: String? = item.optString("host", null)?.ifBlank { null }
 
             calls.add(
                 RecentCall(
                     roomId = roomId,
                     startTime = startTime,
-                    durationSeconds = duration.coerceAtLeast(0)
+                    durationSeconds = duration.coerceAtLeast(0),
+                    host = host
                 )
             )
         }
@@ -75,6 +78,7 @@ class RecentCallStore(context: Context) {
                     put("roomId", call.roomId)
                     put("startTime", call.startTime)
                     put("duration", call.durationSeconds)
+                    call.host?.let { put("host", it) }
                 }
             )
         }

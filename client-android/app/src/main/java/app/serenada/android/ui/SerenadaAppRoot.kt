@@ -391,6 +391,7 @@ fun SerenadaAppRoot(
                         savedRooms = savedRooms,
                         areSavedRoomsShownFirst = areSavedRoomsShownFirst,
                         roomStatuses = roomStatuses,
+                        serverHost = serverHost,
                         onOpenJoinWithCode = { showJoinWithCode = true },
                         onOpenSettings = {
                             hostInput = serverHost
@@ -403,9 +404,8 @@ fun SerenadaAppRoot(
                             callManager.updateServerHost(hostInput)
                             runWithCallPermissions { callManager.startNewCall() }
                         },
-                        onJoinRecentCall = { roomId ->
-                            callManager.updateServerHost(hostInput)
-                            runWithCallPermissions { callManager.joinRoom(roomId) }
+                        onJoinRecentCall = { call ->
+                            runWithCallPermissions { callManager.joinRecentCall(call) }
                         },
                         onJoinSavedRoom = { room ->
                             runWithCallPermissions { callManager.joinSavedRoom(room) }

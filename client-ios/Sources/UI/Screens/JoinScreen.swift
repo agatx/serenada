@@ -7,10 +7,11 @@ struct JoinScreen: View {
     let savedRooms: [SavedRoom]
     let areSavedRoomsShownFirst: Bool
     let roomStatuses: [String: Int]
+    let serverHost: String
     let onOpenJoinWithCode: () -> Void
     let onOpenSettings: () -> Void
     let onStartCall: () -> Void
-    let onJoinRecentCall: (String) -> Void
+    let onJoinRecentCall: (RecentCall) -> Void
     let onJoinSavedRoom: (SavedRoom) -> Void
     let onRemoveRecentCall: (String) -> Void
     let onSaveRoom: (String, String) -> Void
@@ -121,6 +122,7 @@ struct JoinScreen: View {
         SavedRoomsSection(
             rooms: savedRooms,
             roomStatuses: roomStatuses,
+            serverHost: serverHost,
             isBusy: isBusy,
             onCreate: {
                 savedRoomSheetContext = SavedRoomSheetContext(mode: .create, initialName: "")
@@ -140,6 +142,7 @@ struct JoinScreen: View {
         RecentCallsSection(
             calls: recentCalls,
             roomStatuses: roomStatuses,
+            serverHost: serverHost,
             savedRoomNameById: Dictionary(uniqueKeysWithValues: savedRooms.map { ($0.roomId, $0.name) }),
             isBusy: isBusy,
             onJoinRecentCall: onJoinRecentCall,
@@ -204,9 +207,10 @@ struct JoinScreen: View {
 private struct RecentCallsSection: View {
     let calls: [RecentCall]
     let roomStatuses: [String: Int]
+    let serverHost: String
     let savedRoomNameById: [String: String]
     let isBusy: Bool
-    let onJoinRecentCall: (String) -> Void
+    let onJoinRecentCall: (RecentCall) -> Void
     let onSaveRecentCall: (String, String?) -> Void
     let onRemoveRecentCall: (String) -> Void
 
@@ -222,8 +226,12 @@ private struct RecentCallsSection: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(calls) { call in
                     let roomName = savedRoomNameById[call.roomId]
+                    let hostLabel: String? = {
+                        guard let h = call.host, h.compare(serverHost, options: .caseInsensitive) != .orderedSame else { return nil }
+                        return h
+                    }()
                     Button {
-                        onJoinRecentCall(call.roomId)
+                        onJoinRecentCall(call)
                     } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 3) {
@@ -236,6 +244,13 @@ private struct RecentCallsSection: View {
                                     Text(roomName)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+
+                                if let hostLabel {
+                                    Text(hostLabel)
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
                                         .lineLimit(1)
                                 }
                             }
@@ -299,16 +314,21 @@ private struct RecentCallsSection: View {
 
     private func formatDuration(_ durationSeconds: Int) -> String {
         let seconds = max(0, durationSeconds)
-        if seconds < 60 { return "\(seconds)s" }
-        let minutes = seconds / 60
-        let remainderSeconds = seconds % 60
-        return "\(minutes)m \(remainderSeconds)s"
+        if seconds < 120 {
+            let minutes = seconds / 60
+            let remainderSeconds = seconds % 60
+            if minutes == 0 { return "\(remainderSeconds)s" }
+            return "\(minutes)m \(remainderSeconds)s"
+        }
+        let minutes = Int((Double(seconds) / 60.0).rounded())
+        return "\(minutes)m"
     }
 }
 
 private struct SavedRoomsSection: View {
     let rooms: [SavedRoom]
     let roomStatuses: [String: Int]
+    let serverHost: String
     let isBusy: Bool
     let onCreate: () -> Void
     let onJoinSavedRoom: (SavedRoom) -> Void
@@ -332,6 +352,10 @@ private struct SavedRoomsSection: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(rooms) { room in
+                    let hostLabel: String? = {
+                        guard let h = room.host, h.compare(serverHost, options: .caseInsensitive) != .orderedSame else { return nil }
+                        return h
+                    }()
                     Button {
                         onJoinSavedRoom(room)
                     } label: {
@@ -343,6 +367,12 @@ private struct SavedRoomsSection: View {
                                 Text(formatLastJoined(room.lastJoinedAt))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if let hostLabel {
+                                    Text(hostLabel)
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             Spacer()

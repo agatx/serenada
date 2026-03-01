@@ -22,7 +22,8 @@ final class RecentCallStore {
             RecentCall(
                 roomId: call.roomId,
                 startTime: call.startTime,
-                durationSeconds: max(0, call.durationSeconds)
+                durationSeconds: max(0, call.durationSeconds),
+                host: call.host
             ),
             at: 0
         )
@@ -46,7 +47,8 @@ final class RecentCallStore {
                 RecentCall(
                     roomId: item.roomId,
                     startTime: item.startTime,
-                    durationSeconds: max(0, item.durationSeconds)
+                    durationSeconds: max(0, item.durationSeconds),
+                    host: item.host
                 )
             )
             if deduped.count >= maxRecentCalls { break }

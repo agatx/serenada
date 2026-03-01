@@ -42,6 +42,7 @@ struct RootView: View {
                     savedRooms: callManager.savedRooms,
                     areSavedRoomsShownFirst: callManager.areSavedRoomsShownFirst,
                     roomStatuses: callManager.roomStatuses,
+                    serverHost: callManager.serverHost,
                     onOpenJoinWithCode: {
                         showJoinWithCode = true
                     },
@@ -54,8 +55,8 @@ struct RootView: View {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         callManager.startNewCall()
                     },
-                    onJoinRecentCall: { roomId in
-                        callManager.joinRoom(roomId)
+                    onJoinRecentCall: { call in
+                        callManager.joinRecentCall(call)
                     },
                     onJoinSavedRoom: { room in
                         callManager.joinSavedRoom(room)
