@@ -294,6 +294,7 @@ struct CallScreen: View {
         .task(id: shouldRunAutoHideTask) {
             guard shouldRunAutoHideTask else { return }
             try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled else { return }
             guard areControlsVisible, uiState.phase == .inCall, isControlsAutoHideEnabled else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
                 wereControlsLastHiddenByAutoHide = true
