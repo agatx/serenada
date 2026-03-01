@@ -64,7 +64,13 @@ class CallManager(context: Context) {
         override fun onAvailable(network: Network) {
             handler.post {
                 if (_uiState.value.phase == CallPhase.InCall) {
-                    markConnectionDegraded()
+                    val state = _uiState.value
+                    if (isConnectionDegraded(state)) {
+                        markConnectionDegraded()
+                    }
+                    // Keep opportunistic ICE restart on network transitions so the call can
+                    // migrate to a better path (for example mobile -> Wi-Fi) without forcing UI
+                    // into degraded mode when media is still flowing.
                     scheduleIceRestart("network-online", 0)
                 }
             }
@@ -73,7 +79,11 @@ class CallManager(context: Context) {
         override fun onLost(network: Network) {
             handler.post {
                 if (_uiState.value.phase == CallPhase.InCall) {
-                    markConnectionDegraded()
+                    val state = _uiState.value
+                    val hasAnyActiveNetwork = connectivityManager.activeNetwork != null
+                    if (!hasAnyActiveNetwork || isConnectionDegraded(state)) {
+                        markConnectionDegraded()
+                    }
                 }
             }
         }
@@ -432,19 +442,20 @@ class CallManager(context: Context) {
             return
         }
 
-        val isDegraded =
-            !state.isSignalingConnected ||
-                state.iceConnectionState == "DISCONNECTED" ||
-                state.iceConnectionState == "FAILED" ||
-                state.connectionState == "DISCONNECTED" ||
-                state.connectionState == "FAILED"
-
-        if (isDegraded) {
+        if (isConnectionDegraded(state)) {
             markConnectionDegraded()
             return
         }
 
         resetConnectionStatusMachine()
+    }
+
+    private fun isConnectionDegraded(state: CallUiState): Boolean {
+        return !state.isSignalingConnected ||
+            state.iceConnectionState == "DISCONNECTED" ||
+            state.iceConnectionState == "FAILED" ||
+            state.connectionState == "DISCONNECTED" ||
+            state.connectionState == "FAILED"
     }
 
     fun updateServerHost(host: String) {

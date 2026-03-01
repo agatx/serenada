@@ -676,17 +676,19 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     useEffect(() => {
         const handleOnline = () => {
-            setConnectionRecovering();
             const pc = pcRef.current;
-            if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
+            if (pc) {
+                // Keep opportunistic ICE restart on network transitions to migrate transport
+                // paths (for example mobile -> Wi-Fi) without forcing degraded UI when healthy.
                 scheduleIceRestart('network-online', 0);
+                updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
             }
         };
         const handleNetworkChange = () => {
-            setConnectionRecovering();
             const pc = pcRef.current;
-            if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
+            if (pc) {
                 scheduleIceRestart('network-change', 0);
+                updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
             }
         };
         window.addEventListener('online', handleOnline);

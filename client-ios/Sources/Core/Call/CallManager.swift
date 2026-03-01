@@ -1958,19 +1958,20 @@ final class CallManager: ObservableObject {
             return
         }
 
-        let isDegraded =
-            !uiState.isSignalingConnected ||
-            uiState.iceConnectionState == "DISCONNECTED" ||
-            uiState.iceConnectionState == "FAILED" ||
-            uiState.connectionState == "DISCONNECTED" ||
-            uiState.connectionState == "FAILED"
-
-        if isDegraded {
+        if isConnectionDegraded(uiState) {
             markConnectionDegraded()
             return
         }
 
         resetConnectionStatusMachine()
+    }
+
+    private func isConnectionDegraded(_ state: CallUiState) -> Bool {
+        !state.isSignalingConnected ||
+        state.iceConnectionState == "DISCONNECTED" ||
+        state.iceConnectionState == "FAILED" ||
+        state.connectionState == "DISCONNECTED" ||
+        state.connectionState == "FAILED"
     }
 
     private func updateState(_ mutate: (inout CallUiState) -> Void) {
@@ -2145,10 +2146,15 @@ final class CallManager: ObservableObject {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             Task { @MainActor in
-                if self.uiState.phase == .inCall {
+                guard self.uiState.phase == .inCall else { return }
+
+                if self.isConnectionDegraded(self.uiState) {
                     self.markConnectionDegraded()
                 }
-                if path.status == .satisfied && self.uiState.phase == .inCall {
+
+                if path.status == .satisfied {
+                    // Keep opportunistic ICE restart on network transitions so the call can
+                    // migrate to a better path without forcing degraded UI when healthy.
                     self.scheduleIceRestart(reason: "network-online", delayMs: 0)
                 }
             }
