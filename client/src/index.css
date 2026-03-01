@@ -418,6 +418,38 @@ body {
   font-size: 0.85rem;
   letter-spacing: 0.02em;
   backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.reconnect-badge-retrying {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 14px;
+  padding: 0.55rem 0.95rem;
+}
+
+.reconnect-badge-subtext {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  opacity: 0.95;
+}
+
+.reconnect-leave-link {
+  border: none;
+  background: transparent;
+  color: #fff;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0;
+}
+
+.reconnect-leave-link:hover {
+  opacity: 0.8;
 }
 
 .debug-panel {

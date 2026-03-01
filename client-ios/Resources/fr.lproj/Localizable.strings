@@ -56,6 +56,8 @@
 "call_waiting_short" = "En attente...";
 "call_video_off" = "Vidéo désactivée";
 "call_reconnecting" = "Reconnexion...";
+"call_taking_longer_than_usual" = "Cela prend plus de temps que d'habitude...";
+"call_leave_call" = "Quitter l'appel";
 "call_waiting_overlay" = "En attente d’un participant...";
 "call_qr_code" = "Code QR";
 "call_share_invitation" = "Partager l’invitation";

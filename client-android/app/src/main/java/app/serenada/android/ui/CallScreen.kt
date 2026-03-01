@@ -70,6 +70,7 @@ import androidx.compose.ui.zIndex
 import app.serenada.android.R
 import app.serenada.android.call.CallPhase
 import app.serenada.android.call.CallUiState
+import app.serenada.android.call.ConnectionStatus
 import app.serenada.android.call.LocalCameraMode
 import app.serenada.android.call.RealtimeCallStats
 import java.text.SimpleDateFormat
@@ -134,7 +135,7 @@ fun CallScreen(
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
-    var showReconnecting by remember { mutableStateOf(false) }
+    var showRecoveringBadge by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val localRenderer = remember { SurfaceViewRenderer(context) }
     val remoteRenderer = remember { SurfaceViewRenderer(context) }
@@ -225,31 +226,20 @@ fun CallScreen(
         }
     }
 
-    val isReconnecting =
-        remember(
-            uiState.iceConnectionState,
-            uiState.connectionState,
-            uiState.isSignalingConnected
-        ) {
-            val iceState = uiState.iceConnectionState
-            val connState = uiState.connectionState
-            !uiState.isSignalingConnected ||
-                    iceState == "DISCONNECTED" ||
-                    iceState == "FAILED" ||
-                    connState == "DISCONNECTED" ||
-                    connState == "FAILED"
-        }
-
-    LaunchedEffect(uiState.phase, isReconnecting) {
-        if (uiState.phase != CallPhase.InCall || !isReconnecting) {
-            showReconnecting = false
+    LaunchedEffect(uiState.phase, uiState.connectionStatus) {
+        if (uiState.phase != CallPhase.InCall || uiState.connectionStatus != ConnectionStatus.Recovering) {
+            showRecoveringBadge = false
             return@LaunchedEffect
         }
         delay(800)
-        if (uiState.phase == CallPhase.InCall && isReconnecting) {
-            showReconnecting = true
+        if (uiState.phase == CallPhase.InCall && uiState.connectionStatus == ConnectionStatus.Recovering) {
+            showRecoveringBadge = true
         }
     }
+
+    val showReconnectingBadge =
+        uiState.phase == CallPhase.InCall &&
+            (uiState.connectionStatus == ConnectionStatus.Retrying || showRecoveringBadge)
 
     val debugSections =
         remember(
@@ -260,7 +250,7 @@ fun CallScreen(
             uiState.signalingState,
             uiState.roomId,
             uiState.participantCount,
-            showReconnecting,
+            uiState.connectionStatus,
             uiState.realtimeCallStats
         ) {
             buildDebugPanelSections(
@@ -270,7 +260,7 @@ fun CallScreen(
                 connectionState = uiState.connectionState,
                 signalingState = uiState.signalingState,
                 roomParticipantCount = if (uiState.roomId != null) uiState.participantCount else null,
-                showReconnecting = showReconnecting,
+                showReconnecting = uiState.connectionStatus != ConnectionStatus.Connected,
                 realtimeStats = uiState.realtimeCallStats
             )
         }
@@ -553,18 +543,46 @@ fun CallScreen(
 
         // Reconnecting Indicator
         AnimatedVisibility(
-            visible = showReconnecting && uiState.phase == CallPhase.InCall,
+            visible = showReconnectingBadge,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp)
         ) {
             Surface(color = Color.Black.copy(alpha = 0.6f), shape = RoundedCornerShape(20.dp)) {
-                Text(
-                    text = stringResource(R.string.call_reconnecting),
-                    color = Color.White,
+                Column(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    fontSize = 14.sp
-                )
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.call_reconnecting),
+                        color = Color.White,
+                        fontSize = 14.sp
+                    )
+
+                    if (uiState.connectionStatus == ConnectionStatus.Retrying) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(R.string.call_taking_longer_than_usual),
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 12.sp
+                            )
+                            TextButton(
+                                onClick = onEndCall,
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.call_leave_call),
+                                    color = Color.White,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 

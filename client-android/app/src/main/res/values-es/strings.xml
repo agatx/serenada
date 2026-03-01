@@ -99,6 +99,8 @@
     <string name="call_waiting_short">Esperando...</string>
     <string name="call_video_off">Video apagado</string>
     <string name="call_reconnecting">Reconectando...</string>
+    <string name="call_taking_longer_than_usual">Está tardando más de lo habitual...</string>
+    <string name="call_leave_call">Salir de la llamada</string>
     <string name="call_toggle_flashlight">Alternar linterna</string>
     <string name="call_toggle_video_fit">Cambiar ajuste de video</string>
     <string name="call_waiting_overlay">Esperando a que alguien se una...</string>

@@ -226,7 +226,8 @@ const CallRoom: React.FC = () => {
         peerConnection,
         iceConnectionState,
         connectionState,
-        signalingState
+        signalingState,
+        connectionStatus
     } = useWebRTC();
     const { showToast } = useToast();
 
@@ -236,7 +237,7 @@ const CallRoom: React.FC = () => {
     const [areControlsVisible, setAreControlsVisible] = useState(true);
     const [isLocalLarge, setIsLocalLarge] = useState(false);
     const [remoteVideoFit, setRemoteVideoFit] = useState<'cover' | 'contain'>('cover');
-    const [showReconnecting, setShowReconnecting] = useState(false);
+    const [showRecoveringBadge, setShowRecoveringBadge] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
 
     const lastFacingModeRef = useRef(facingMode);
@@ -374,29 +375,27 @@ const CallRoom: React.FC = () => {
 
     useEffect(() => {
         if (!hasJoined) {
-            setShowReconnecting(false);
+            setShowRecoveringBadge(false);
             return;
         }
-        const reconnecting =
-            !isConnected ||
-            iceConnectionState === 'disconnected' ||
-            iceConnectionState === 'failed' ||
-            connectionState === 'disconnected' ||
-            connectionState === 'failed';
 
-        if (!reconnecting) {
-            setShowReconnecting(false);
+        if (connectionStatus !== 'recovering') {
+            setShowRecoveringBadge(false);
             return;
         }
 
         const timer = window.setTimeout(() => {
-            setShowReconnecting(true);
+            setShowRecoveringBadge(true);
         }, 800);
 
         return () => {
             window.clearTimeout(timer);
         };
-    }, [hasJoined, isConnected, iceConnectionState, connectionState]);
+    }, [hasJoined, connectionStatus]);
+
+    const showReconnecting =
+        hasJoined &&
+        (connectionStatus === 'retrying' || (connectionStatus === 'recovering' && showRecoveringBadge));
 
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -869,7 +868,7 @@ const CallRoom: React.FC = () => {
         connectionState,
         signalingState,
         roomParticipantCount: roomState ? roomState.participants.length : null,
-        showReconnecting,
+        showReconnecting: connectionStatus !== 'connected',
         realtimeStats
     });
 
@@ -907,7 +906,27 @@ const CallRoom: React.FC = () => {
             )}
             {showReconnecting && (
                 <div className="reconnect-overlay" aria-live="polite">
-                    <div className="reconnect-badge">{t('connecting')}</div>
+                    <div className={`reconnect-badge ${connectionStatus === 'retrying' ? 'reconnect-badge-retrying' : ''}`}>
+                        <span>{t('reconnecting', { defaultValue: 'Reconnecting...' })}</span>
+                        {connectionStatus === 'retrying' && (
+                            <span className="reconnect-badge-subtext">
+                                {t('reconnecting_taking_longer', { defaultValue: 'Taking longer than usual...' })}
+                                <button
+                                    className="reconnect-leave-link"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        handleLeave();
+                                    }}
+                                    onPointerUp={(event) => {
+                                        event.stopPropagation();
+                                        handleControlsInteraction();
+                                    }}
+                                >
+                                    {t('leave_call', { defaultValue: 'Leave call' })}
+                                </button>
+                            </span>
+                        )}
+                    </div>
                 </div>
             )}
             {/* Primary Video (Full Screen) */}

@@ -6,9 +6,7 @@ final class CallScreenStateTests: XCTestCase {
         XCTAssertFalse(
             shouldShowCallStatusLabel(
                 phase: .waiting,
-                isSignalingConnected: true,
-                iceConnectionState: "CONNECTED",
-                connectionState: "CONNECTED"
+                connectionStatus: .connected
             )
         )
         XCTAssertTrue(shouldShowWaitingOverlay(phase: .waiting))
@@ -18,18 +16,21 @@ final class CallScreenStateTests: XCTestCase {
         XCTAssertFalse(
             shouldShowCallStatusLabel(
                 phase: .inCall,
-                isSignalingConnected: true,
-                iceConnectionState: "CONNECTED",
-                connectionState: "CONNECTED"
+                connectionStatus: .connected
             )
         )
 
         XCTAssertTrue(
             shouldShowCallStatusLabel(
                 phase: .inCall,
-                isSignalingConnected: false,
-                iceConnectionState: "CONNECTED",
-                connectionState: "CONNECTED"
+                connectionStatus: .recovering
+            )
+        )
+
+        XCTAssertTrue(
+            shouldShowCallStatusLabel(
+                phase: .inCall,
+                connectionStatus: .retrying
             )
         )
     }

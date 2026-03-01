@@ -11,7 +11,7 @@ data class CallUiState(
     val localAudioEnabled: Boolean = true,
     val localVideoEnabled: Boolean = true,
     val remoteVideoEnabled: Boolean = false,
-    val isReconnecting: Boolean = false,
+    val connectionStatus: ConnectionStatus = ConnectionStatus.Connected,
     val isSignalingConnected: Boolean = false,
     val iceConnectionState: String = "NEW",
     val connectionState: String = "NEW",

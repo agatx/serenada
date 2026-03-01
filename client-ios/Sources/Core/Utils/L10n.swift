@@ -116,6 +116,8 @@ enum L10n {
     static var callWaitingShort: String { text("call_waiting_short") }
     static var callVideoOff: String { text("call_video_off") }
     static var callReconnecting: String { text("call_reconnecting") }
+    static var callTakingLongerThanUsual: String { text("call_taking_longer_than_usual") }
+    static var callLeaveCall: String { text("call_leave_call") }
     static var callWaitingOverlay: String { text("call_waiting_overlay") }
     static var callQrCode: String { text("call_qr_code") }
     static var callShareInvitation: String { text("call_share_invitation") }

@@ -16,6 +16,8 @@ const DEFAULT_RTC_CONFIG: RTCConfiguration = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
+export type ConnectionStatus = 'connected' | 'recovering' | 'retrying';
+
 interface WebRTCContextValue {
     localStream: MediaStream | null;
     remoteStream: MediaStream | null;
@@ -32,6 +34,7 @@ interface WebRTCContextValue {
     iceConnectionState: RTCIceConnectionState;
     connectionState: RTCPeerConnectionState;
     signalingState: RTCSignalingState;
+    connectionStatus: ConnectionStatus;
 }
 
 const WebRTCContext = createContext<WebRTCContextValue | null>(null);
@@ -64,6 +67,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const iceRestartTimerRef = useRef<number | null>(null);
     const offerTimeoutRef = useRef<number | null>(null);
     const isConnectedRef = useRef(isConnected);
+    const connectionStatusRef = useRef<ConnectionStatus>('connected');
+    const retryingTimerRef = useRef<number | null>(null);
     const nonHostFallbackTimerRef = useRef<number | null>(null);
     const nonHostFallbackAttemptsRef = useRef(0);
 
@@ -79,10 +84,16 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [iceConnectionState, setIceConnectionState] = useState<RTCIceConnectionState>('new');
     const [connectionState, setConnectionState] = useState<RTCPeerConnectionState>('new');
     const [signalingState, setSignalingState] = useState<RTCSignalingState>('stable');
+    const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connected');
 
     useEffect(() => {
         isConnectedRef.current = isConnected;
-    }, [isConnected]);
+        const pc = pcRef.current;
+        updateConnectionStatus(
+            pc?.iceConnectionState ?? iceConnectionState,
+            pc?.connectionState ?? connectionState
+        );
+    }, [isConnected, iceConnectionState, connectionState]);
 
     useEffect(() => {
         setCanScreenShare(!!navigator.mediaDevices?.getDisplayMedia);
@@ -138,6 +149,10 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     useEffect(() => {
         return () => {
             unmountedRef.current = true;
+            if (retryingTimerRef.current) {
+                window.clearTimeout(retryingTimerRef.current);
+                retryingTimerRef.current = null;
+            }
             stopLocalMedia();
         };
     }, []);
@@ -305,6 +320,80 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
     };
 
+    const clearRetryingTimer = () => {
+        if (retryingTimerRef.current) {
+            window.clearTimeout(retryingTimerRef.current);
+            retryingTimerRef.current = null;
+        }
+    };
+
+    const setConnectionStatusValue = (nextStatus: ConnectionStatus) => {
+        if (connectionStatusRef.current === nextStatus) {
+            return;
+        }
+        connectionStatusRef.current = nextStatus;
+        setConnectionStatus(nextStatus);
+    };
+
+    const resetConnectionStatusMachine = () => {
+        clearRetryingTimer();
+        setConnectionStatusValue('connected');
+    };
+
+    const isConnectionStatusMachineActive = () => {
+        const state = roomStateRef.current;
+        return !!state && (state.participants?.length ?? 0) > 1;
+    };
+
+    const scheduleRetryingTransition = () => {
+        if (retryingTimerRef.current) {
+            return;
+        }
+        retryingTimerRef.current = window.setTimeout(() => {
+            retryingTimerRef.current = null;
+            if (connectionStatusRef.current === 'recovering' && isConnectionStatusMachineActive()) {
+                setConnectionStatusValue('retrying');
+            }
+        }, 10_000);
+    };
+
+    const setConnectionRecovering = () => {
+        if (!isConnectionStatusMachineActive()) {
+            resetConnectionStatusMachine();
+            return;
+        }
+        if (connectionStatusRef.current === 'connected') {
+            setConnectionStatusValue('recovering');
+        }
+        if (connectionStatusRef.current !== 'retrying') {
+            scheduleRetryingTransition();
+        }
+    };
+
+    const updateConnectionStatus = (
+        currentIceState: RTCIceConnectionState,
+        currentConnectionState: RTCPeerConnectionState
+    ) => {
+        if (!isConnectionStatusMachineActive()) {
+            resetConnectionStatusMachine();
+            return;
+        }
+
+        const isDegraded =
+            !isConnectedRef.current ||
+            currentIceState === 'disconnected' ||
+            currentIceState === 'failed' ||
+            currentConnectionState === 'disconnected' ||
+            currentConnectionState === 'failed';
+
+        if (isDegraded) {
+            setConnectionRecovering();
+            return;
+        }
+
+        resetConnectionStatusMachine();
+    };
+
     const scheduleIceRestart = (reason: string, delayMs: number) => {
         if (!pcRef.current) return;
         if (!isHost()) return;
@@ -438,6 +527,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setIceConnectionState(pc.iceConnectionState);
         setConnectionState(pc.connectionState);
         setSignalingState(pc.signalingState);
+        updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
 
         // Add local tracks if available
         if (localStream) {
@@ -485,6 +575,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             } else if (pc.iceConnectionState === 'failed') {
                 scheduleIceRestart('ice-failed', 0);
             }
+
+            updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
         };
 
         pc.onconnectionstatechange = () => {
@@ -502,6 +594,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             } else if (pc.connectionState === 'failed') {
                 scheduleIceRestart('conn-failed', 0);
             }
+
+            updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
         };
 
         pc.onsignalingstatechange = () => {
@@ -548,12 +642,14 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         clearIceRestartTimer();
         clearOfferTimeout();
+        clearRetryingTimer();
         clearNonHostFallback();
         nonHostFallbackAttemptsRef.current = 0;
         pendingIceRestartRef.current = false;
         setIceConnectionState('closed');
         setConnectionState('closed');
         setSignalingState('closed');
+        setConnectionStatusValue('connected');
         remoteStreamRef.current = null;
         setRemoteStream(null);
         // We do NOT stop local stream here to allow reuse? 
@@ -567,7 +663,12 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     useEffect(() => {
         roomStateRef.current = roomState;
-    }, [roomState]);
+        const pc = pcRef.current;
+        updateConnectionStatus(
+            pc?.iceConnectionState ?? iceConnectionState,
+            pc?.connectionState ?? connectionState
+        );
+    }, [roomState, iceConnectionState, connectionState]);
 
     useEffect(() => {
         clientIdRef.current = clientId;
@@ -575,12 +676,14 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     useEffect(() => {
         const handleOnline = () => {
+            setConnectionRecovering();
             const pc = pcRef.current;
             if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
                 scheduleIceRestart('network-online', 0);
             }
         };
         const handleNetworkChange = () => {
+            setConnectionRecovering();
             const pc = pcRef.current;
             if (pc && (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')) {
                 scheduleIceRestart('network-change', 0);
@@ -992,7 +1095,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             peerConnection: pcRef.current,
             iceConnectionState,
             connectionState,
-            signalingState
+            signalingState,
+            connectionStatus
         }}>
             {children}
         </WebRTCContext.Provider>

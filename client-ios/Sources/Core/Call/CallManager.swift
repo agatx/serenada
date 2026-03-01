@@ -31,6 +31,7 @@ func resolveJoinRecoveryState(
 @MainActor
 final class CallManager: ObservableObject {
     private let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
+    private let connectionStatusRetryingDelayNs: UInt64 = 10_000_000_000
 
     #if DEBUG
     private enum DebugTrace {
@@ -99,6 +100,7 @@ final class CallManager: ObservableObject {
     private var joinConnectKickstartTask: Task<Void, Never>?
     private var joinRecoveryTask: Task<Void, Never>?
     private var iceRestartTask: Task<Void, Never>?
+    private var connectionStatusRetryingTask: Task<Void, Never>?
     private var offerTimeoutTask: Task<Void, Never>?
     private var nonHostOfferFallbackTask: Task<Void, Never>?
     private var nonHostOfferFallbackAttempts = 0
@@ -185,6 +187,7 @@ final class CallManager: ObservableObject {
         joinConnectKickstartTask?.cancel()
         joinRecoveryTask?.cancel()
         iceRestartTask?.cancel()
+        connectionStatusRetryingTask?.cancel()
         offerTimeoutTask?.cancel()
         nonHostOfferFallbackTask?.cancel()
         turnRefreshTask?.cancel()
@@ -398,6 +401,7 @@ final class CallManager: ObservableObject {
             $0.localVideoEnabled = defaultVideo
             $0.localCameraMode = .selfie
             $0.cameraZoomFactor = 1
+            $0.connectionStatus = .connected
             $0.webrtcStatsSummary = ""
             $0.realtimeStats = .empty
             $0.isFlashAvailable = false
@@ -948,6 +952,7 @@ final class CallManager: ObservableObject {
             $0.participantCount = count
             $0.statusMessage = count <= 1 ? L10n.callStatusWaitingForJoin : L10n.callStatusInCall
         }
+        updateConnectionStatusFromSignals()
         debugTrace("updateParticipants stateApplied count=\(count) phase=\(phase.rawValue)")
 
         if count > 1 {
@@ -1509,6 +1514,7 @@ final class CallManager: ObservableObject {
         clearNonHostOfferFallback()
         nonHostOfferFallbackAttempts = 0
         clearIceRestartTimer()
+        clearConnectionStatusRetryingTimer()
         clearTurnRefresh()
 
         userPreferredVideoEnabled = true
@@ -1729,6 +1735,7 @@ final class CallManager: ObservableObject {
                 ? L10n.callStatusInCall
                 : L10n.callStatusWaitingForJoin
         }
+        updateConnectionStatusFromSignals()
     }
 
     private func scheduleReconnect() {
@@ -1890,6 +1897,82 @@ final class CallManager: ObservableObject {
         currentRoomId != nil || !watchedRoomIds.isEmpty
     }
 
+    private func clearConnectionStatusRetryingTimer() {
+        connectionStatusRetryingTask?.cancel()
+        connectionStatusRetryingTask = nil
+    }
+
+    private func setConnectionStatus(_ status: ConnectionStatus) {
+        if uiState.connectionStatus == status {
+            return
+        }
+        let previous = uiState.connectionStatus
+        updateState { $0.connectionStatus = status }
+        if previous != .retrying && status == .retrying {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
+    private func resetConnectionStatusMachine() {
+        clearConnectionStatusRetryingTimer()
+        setConnectionStatus(.connected)
+    }
+
+    private func scheduleConnectionStatusRetryingTimer() {
+        guard connectionStatusRetryingTask == nil else { return }
+
+        connectionStatusRetryingTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: self.connectionStatusRetryingDelayNs)
+            guard !Task.isCancelled else { return }
+            guard self.uiState.phase == .inCall else {
+                self.resetConnectionStatusMachine()
+                return
+            }
+            guard self.uiState.connectionStatus == .recovering else { return }
+            self.connectionStatusRetryingTask = nil
+            self.setConnectionStatus(.retrying)
+        }
+    }
+
+    private func markConnectionDegraded() {
+        guard uiState.phase == .inCall else {
+            resetConnectionStatusMachine()
+            return
+        }
+
+        switch uiState.connectionStatus {
+        case .connected:
+            setConnectionStatus(.recovering)
+            scheduleConnectionStatusRetryingTimer()
+        case .recovering:
+            scheduleConnectionStatusRetryingTimer()
+        case .retrying:
+            break
+        }
+    }
+
+    private func updateConnectionStatusFromSignals() {
+        guard uiState.phase == .inCall else {
+            resetConnectionStatusMachine()
+            return
+        }
+
+        let isDegraded =
+            !uiState.isSignalingConnected ||
+            uiState.iceConnectionState == "DISCONNECTED" ||
+            uiState.iceConnectionState == "FAILED" ||
+            uiState.connectionState == "DISCONNECTED" ||
+            uiState.connectionState == "FAILED"
+
+        if isDegraded {
+            markConnectionDegraded()
+            return
+        }
+
+        resetConnectionStatusMachine()
+    }
+
     private func updateState(_ mutate: (inout CallUiState) -> Void) {
         var next = uiState
         mutate(&next)
@@ -1969,6 +2052,7 @@ final class CallManager: ObservableObject {
                     default:
                         break
                     }
+                    eventSink.updateConnectionStatusFromSignals()
                 }
             },
             onIceConnectionState: { [weak eventSink] state in
@@ -1987,6 +2071,7 @@ final class CallManager: ObservableObject {
                     default:
                         break
                     }
+                    eventSink.updateConnectionStatusFromSignals()
                 }
             },
             onSignalingState: { [weak eventSink] state in
@@ -2060,6 +2145,9 @@ final class CallManager: ObservableObject {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             Task { @MainActor in
+                if self.uiState.phase == .inCall {
+                    self.markConnectionDegraded()
+                }
                 if path.status == .satisfied && self.uiState.phase == .inCall {
                     self.scheduleIceRestart(reason: "network-online", delayMs: 0)
                 }
@@ -2077,8 +2165,8 @@ extension CallManager: SignalingClientListener {
         updateState {
             $0.isSignalingConnected = true
             $0.activeTransport = activeTransport
-            $0.isReconnecting = false
         }
+        updateConnectionStatusFromSignals()
 
         if let join = pendingJoinRoom {
             pendingJoinRoom = nil
@@ -2105,8 +2193,8 @@ extension CallManager: SignalingClientListener {
         updateState {
             $0.isSignalingConnected = false
             $0.activeTransport = nil
-            $0.isReconnecting = shouldReconnectSignaling()
         }
+        updateConnectionStatusFromSignals()
 
         if shouldReconnectSignaling() {
             scheduleReconnect()

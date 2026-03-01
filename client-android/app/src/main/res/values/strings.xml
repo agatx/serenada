@@ -115,6 +115,8 @@
     <string name="call_waiting_short">Waiting...</string>
     <string name="call_video_off">Video off</string>
     <string name="call_reconnecting">Reconnecting...</string>
+    <string name="call_taking_longer_than_usual">Taking longer than usual...</string>
+    <string name="call_leave_call">Leave call</string>
     <string name="call_toggle_flashlight">Toggle flashlight</string>
     <string name="call_toggle_video_fit">Toggle video fit</string>
     <string name="call_waiting_overlay">Waiting for someone to join...</string>

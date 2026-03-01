@@ -1,5 +1,11 @@
 import Foundation
 
+enum ConnectionStatus: String, Equatable {
+    case connected
+    case recovering
+    case retrying
+}
+
 struct CallUiState: Equatable {
     var phase: CallPhase = .idle
     var roomId: String?
@@ -10,7 +16,7 @@ struct CallUiState: Equatable {
     var localAudioEnabled: Bool = true
     var localVideoEnabled: Bool = true
     var remoteVideoEnabled: Bool = false
-    var isReconnecting: Bool = false
+    var connectionStatus: ConnectionStatus = .connected
     var isSignalingConnected: Bool = false
     var iceConnectionState: String = "NEW"
     var connectionState: String = "NEW"
