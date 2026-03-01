@@ -370,10 +370,11 @@ class CallManager(context: Context) {
 
     private fun vibrateOnRetrying() {
         val vibrator = vibrator ?: return
+        if (!vibrator.hasVibrator()) return
         runCatching {
             when {
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                    vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+                    vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
                 }
 
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
@@ -385,6 +386,8 @@ class CallManager(context: Context) {
                     vibrator.vibrate(30)
                 }
             }
+        }.onFailure { error ->
+            Log.w("CallManager", "Failed to trigger retrying haptic", error)
         }
     }
 
