@@ -561,26 +561,11 @@ fun CallScreen(
                     )
 
                     if (uiState.connectionStatus == ConnectionStatus.Retrying) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = stringResource(R.string.call_taking_longer_than_usual),
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 12.sp
-                            )
-                            TextButton(
-                                onClick = onEndCall,
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.call_leave_call),
-                                    color = Color.White,
-                                    fontSize = 12.sp
-                                )
-                            }
-                        }
+                        Text(
+                            text = stringResource(R.string.call_taking_longer_than_usual),
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 12.sp
+                        )
                     }
                 }
             }

@@ -911,19 +911,6 @@ const CallRoom: React.FC = () => {
                         {connectionStatus === 'retrying' && (
                             <span className="reconnect-badge-subtext">
                                 {t('reconnecting_taking_longer', { defaultValue: 'Taking longer than usual...' })}
-                                <button
-                                    className="reconnect-leave-link"
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        handleLeave();
-                                    }}
-                                    onPointerUp={(event) => {
-                                        event.stopPropagation();
-                                        handleControlsInteraction();
-                                    }}
-                                >
-                                    {t('leave_call', { defaultValue: 'Leave call' })}
-                                </button>
                             </span>
                         )}
                     </div>

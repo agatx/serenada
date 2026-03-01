@@ -57,7 +57,6 @@
 "call_video_off" = "Видео выключено";
 "call_reconnecting" = "Переподключение...";
 "call_taking_longer_than_usual" = "Это занимает больше времени, чем обычно...";
-"call_leave_call" = "Выйти из звонка";
 "call_waiting_overlay" = "Ждем, пока кто-то присоединится...";
 "call_qr_code" = "QR-код";
 "call_share_invitation" = "Поделиться приглашением";

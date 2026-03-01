@@ -433,23 +433,8 @@ body {
 .reconnect-badge-subtext {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
   font-size: 0.78rem;
   opacity: 0.95;
-}
-
-.reconnect-leave-link {
-  border: none;
-  background: transparent;
-  color: #fff;
-  text-decoration: underline;
-  cursor: pointer;
-  font-size: 0.78rem;
-  padding: 0;
-}
-
-.reconnect-leave-link:hover {
-  opacity: 0.8;
 }
 
 .debug-panel {

@@ -469,16 +469,6 @@ struct CallScreen: View {
                             Text(L10n.callTakingLongerThanUsual)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.white.opacity(0.92))
-
-                            Button {
-                                onEndCall()
-                            } label: {
-                                Text(L10n.callLeaveCall)
-                                    .font(.caption.weight(.semibold))
-                                    .underline()
-                                    .foregroundStyle(.white)
-                            }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 10)

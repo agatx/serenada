@@ -100,7 +100,6 @@
     <string name="call_video_off">Видео выключено</string>
     <string name="call_reconnecting">Переподключение...</string>
     <string name="call_taking_longer_than_usual">Это занимает больше времени, чем обычно...</string>
-    <string name="call_leave_call">Выйти из звонка</string>
     <string name="call_toggle_flashlight">Переключить фонарик</string>
     <string name="call_toggle_video_fit">Переключить режим видео</string>
     <string name="call_waiting_overlay">Ожидание собеседника...</string>

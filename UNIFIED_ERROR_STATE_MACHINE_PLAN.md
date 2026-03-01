@@ -23,7 +23,7 @@ No `failed` state. The system retries with exponential backoff until the server 
 |---|---|---|---|
 | `connected` | ICE `connected`/`completed`, signaling up | Nothing (normal call) | — |
 | `recovering` | ICE `disconnected`, signaling transport dropped, network change | Subtle "Reconnecting…" badge (after 800ms debounce) | Kickstart + backoff reconnect |
-| `retrying` | 10s in `recovering` without recovery | Badge with "Taking longer than usual…" sub-text + inline "Leave call" link | Continue escalation with exponential backoff: ICE restart → offer resend → rejoin → transport fallback → repeat |
+| `retrying` | 10s in `recovering` without recovery | Badge with "Taking longer than usual…" sub-text | Continue escalation with exponential backoff: ICE restart → offer resend → rejoin → transport fallback → repeat |
 
 ## State Transitions
 
@@ -33,7 +33,7 @@ No `failed` state. The system retries with exponential backoff until the server 
 | `recovering` | `connected` | ICE `connected`/`completed`, signaling re-established |
 | `recovering` | `retrying` | 10s elapsed without recovery |
 | `retrying` | `connected` | Any reconnect attempt succeeds |
-| `retrying` | `idle` | User taps "Leave call" in badge, OR server confirms room is gone (other peer left, room expired) |
+| `retrying` | `idle` | User leaves call, OR server confirms room is gone (other peer left, room expired) |
 
 ## Current State per Platform
 
@@ -113,7 +113,7 @@ on ICE connected/completed AND signaling connected:
 on server confirms room gone (other peer left, room expired):
     leaveRoom / endRoom as normal
 
-on user taps "Leave call" (from retrying badge):
+on user leaves call:
     leaveRoom / endRoom as normal
 ```
 
@@ -141,17 +141,17 @@ on user taps "Leave call" (from retrying badge):
 - Render based on status:
   - `connected` → nothing
   - `recovering` → "Reconnecting…" badge (keep 800ms debounce before showing)
-  - `retrying` → same badge + "Taking longer than usual…" sub-text + "Leave call" link
+  - `retrying` → same badge + "Taking longer than usual…" sub-text
 
 **iOS** (`CallScreen.swift`):
 - Keep `shouldShowCallStatusLabel` for `recovering` and `retrying` states
 - For `recovering`: "Reconnecting…" capsule (existing)
-- For `retrying`: "Reconnecting… Taking longer than usual" capsule + "Leave call" tap target
+- For `retrying`: "Reconnecting… Taking longer than usual" capsule
 
 **Android** (`CallScreen.kt`):
 - Replace `isReconnecting` derivation with reading `uiState.connectionStatus`
 - For `recovering`: "Reconnecting…" badge (with 800ms debounce)
-- For `retrying`: same badge + "Taking longer than usual…" sub-text + "Leave call" tap target
+- For `retrying`: same badge + "Taking longer than usual…" sub-text
 
 ### Step 4: Guard state machine — only active during `inCall` phase
 
@@ -168,9 +168,9 @@ The `connectionStatus` state machine is only meaningful when the user is in an a
 
 2. **"Taking longer than usual" threshold**: **10 seconds**. Long enough to avoid false alarms on brief network hiccups.
 
-3. **No failed state / no full-screen overlay**: The system retries indefinitely with exponential backoff. The user is never forced to interact — if the connection comes back after minutes, the call auto-resumes. The `retrying` badge includes an inline "Leave call" link for users who want to give up voluntarily.
+3. **No failed state / no full-screen overlay**: The system retries indefinitely with exponential backoff. The user is never forced to interact — if the connection comes back after minutes, the call auto-resumes.
 
-4. **Retry strategy**: Exponential backoff cycling through escalation steps (ICE restart → offer resend → rejoin → transport fallback → repeat). Only stop when the server confirms the room is gone or the user taps "Leave call".
+4. **Retry strategy**: Exponential backoff cycling through escalation steps (ICE restart → offer resend → rejoin → transport fallback → repeat). Only stop when the server confirms the room is gone or the user leaves the call.
 
 5. **Sound/haptic**: **Short haptic on iOS/Android** when entering the `retrying` state. No sound. No haptic on web.
 
@@ -195,8 +195,8 @@ The `connectionStatus` state machine is only meaningful when the user is in an a
 
 1. **Happy path**: Join a call → verify `connectionStatus` stays `connected`
 2. **Recovering**: Toggle airplane mode briefly → badge appears after 800ms → badge disappears on reconnect
-3. **Retrying**: Block network for >10s → badge shows "Taking longer than usual…" sub-text with "Leave call" link
+3. **Retrying**: Block network for >10s → badge shows "Taking longer than usual…" sub-text
 4. **Long outage auto-resume**: Block network for 2+ minutes → restore network → call auto-resumes, badge disappears, no user interaction needed
-5. **Leave from retrying**: Tap "Leave call" in badge → returns to home screen
+5. **Leave during retrying**: Use normal hang-up controls → returns to home screen
 6. **Server-side room gone**: Other peer leaves during outage → system detects room gone on next reconnect attempt → auto-navigates to home
 7. **Cross-platform consistency**: All three platforms show same transitions at same thresholds

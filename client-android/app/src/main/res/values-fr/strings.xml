@@ -97,7 +97,6 @@
     <string name="call_video_off">Vidéo désactivée</string>
     <string name="call_reconnecting">Reconnexion...</string>
     <string name="call_taking_longer_than_usual">Cela prend plus de temps que d\'habitude...</string>
-    <string name="call_leave_call">Quitter l\'appel</string>
     <string name="call_toggle_flashlight">Activer/désactiver la lampe</string>
     <string name="call_toggle_video_fit">Changer l\'ajustement vidéo</string>
     <string name="call_waiting_overlay">En attente de quelqu\'un...</string>
