@@ -251,6 +251,7 @@ struct CallScreen: View {
             isLocalLarge: isLocalLarge
         )
         let isPinchZoomEnabled = shouldEnablePinchZoom(showLocalAsPrimarySurface: showLocalAsPrimarySurface)
+        let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
 
         ZStack {
             Color.black.ignoresSafeArea()
@@ -290,10 +291,10 @@ struct CallScreen: View {
                 onResetCameraZoom()
             }
         }
-        .task(id: areControlsVisible) {
-            guard areControlsVisible, uiState.phase == .inCall, isControlsAutoHideEnabled else { return }
+        .task(id: shouldRunAutoHideTask) {
+            guard shouldRunAutoHideTask else { return }
             try? await Task.sleep(nanoseconds: 8_000_000_000)
-            guard uiState.phase == .inCall, isControlsAutoHideEnabled else { return }
+            guard areControlsVisible, uiState.phase == .inCall, isControlsAutoHideEnabled else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
                 wereControlsLastHiddenByAutoHide = true
                 areControlsVisible = false
