@@ -14,6 +14,7 @@ import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -370,22 +371,32 @@ class CallManager(context: Context) {
 
     private fun vibrateOnRetrying() {
         val vibrator = vibrator ?: return
-        if (!vibrator.hasVibrator()) return
+        if (!vibrator.hasVibrator()) {
+            Log.d("CallManager", "Retrying haptic skipped: no vibrator hardware")
+            return
+        }
+        val hapticFeedbackEnabled =
+            runCatching {
+                Settings.System.getInt(
+                    appContext.contentResolver,
+                    Settings.System.HAPTIC_FEEDBACK_ENABLED,
+                    -1
+                )
+            }.getOrDefault(-1)
+        Log.d(
+            "CallManager",
+            "Retrying haptic attempt (hapticFeedbackEnabled=$hapticFeedbackEnabled)"
+        )
         runCatching {
-            when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                    vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
-                }
-
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
-                    vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
-                }
-
-                else -> {
-                    @Suppress("DEPRECATION")
-                    vibrator.vibrate(30)
-                }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // Use an explicit, stronger pulse to remain noticeable on devices with subtle defaults.
+                vibrator.vibrate(VibrationEffect.createOneShot(160, 255))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(160)
             }
+        }.onSuccess {
+            Log.d("CallManager", "Retrying haptic triggered")
         }.onFailure { error ->
             Log.w("CallManager", "Failed to trigger retrying haptic", error)
         }
@@ -394,6 +405,7 @@ class CallManager(context: Context) {
     private fun setConnectionStatus(status: ConnectionStatus) {
         val current = _uiState.value.connectionStatus
         if (current == status) return
+        Log.d("CallManager", "Connection status: $current -> $status")
         updateState(_uiState.value.copy(connectionStatus = status))
         if (current != ConnectionStatus.Retrying && status == ConnectionStatus.Retrying) {
             vibrateOnRetrying()

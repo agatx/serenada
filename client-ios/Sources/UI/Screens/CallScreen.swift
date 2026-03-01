@@ -236,6 +236,7 @@ struct CallScreen: View {
     @State private var showDebugPanel = false
     @State private var lastDebugTapAt: Date?
     @State private var lastMagnificationValue: CGFloat = 1
+    @State private var showRecoveringBadge = false
 
     var body: some View {
         let showLocalAsPrimarySurface = shouldRenderLocalAsPrimarySurface(
@@ -292,6 +293,18 @@ struct CallScreen: View {
                 wereControlsLastHiddenByAutoHide = true
                 areControlsVisible = false
             }
+        }
+        .onChange(of: uiState.connectionStatus) { status in
+            if status != .recovering {
+                showRecoveringBadge = false
+            }
+        }
+        .task(id: uiState.connectionStatus == .recovering && uiState.phase == .inCall) {
+            guard uiState.connectionStatus == .recovering, uiState.phase == .inCall else { return }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled else { return }
+            guard uiState.connectionStatus == .recovering, uiState.phase == .inCall else { return }
+            showRecoveringBadge = true
         }
         .sheet(isPresented: $showShareSheet) {
             ActivityView(items: ["https://\(serverHost)/call/\(roomId)"])
@@ -456,10 +469,8 @@ struct CallScreen: View {
     private var topStatus: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                if shouldShowCallStatusLabel(
-                    phase: uiState.phase,
-                    connectionStatus: uiState.connectionStatus
-                ) {
+                if uiState.phase == .inCall &&
+                    (uiState.connectionStatus == .retrying || showRecoveringBadge) {
                     HStack(spacing: 8) {
                         Text(L10n.callReconnecting)
                             .font(.footnote.weight(.semibold))

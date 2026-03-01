@@ -88,12 +88,15 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     useEffect(() => {
         isConnectedRef.current = isConnected;
+    }, [isConnected]);
+
+    useEffect(() => {
         const pc = pcRef.current;
         updateConnectionStatus(
             pc?.iceConnectionState ?? iceConnectionState,
             pc?.connectionState ?? connectionState
         );
-    }, [isConnected, iceConnectionState, connectionState]);
+    }, [isConnected, iceConnectionState, connectionState, roomState]);
 
     useEffect(() => {
         setCanScreenShare(!!navigator.mediaDevices?.getDisplayMedia);
@@ -527,7 +530,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setIceConnectionState(pc.iceConnectionState);
         setConnectionState(pc.connectionState);
         setSignalingState(pc.signalingState);
-        updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
 
         // Add local tracks if available
         if (localStream) {
@@ -575,8 +577,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             } else if (pc.iceConnectionState === 'failed') {
                 scheduleIceRestart('ice-failed', 0);
             }
-
-            updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
         };
 
         pc.onconnectionstatechange = () => {
@@ -594,8 +594,6 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             } else if (pc.connectionState === 'failed') {
                 scheduleIceRestart('conn-failed', 0);
             }
-
-            updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
         };
 
         pc.onsignalingstatechange = () => {
@@ -663,12 +661,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     useEffect(() => {
         roomStateRef.current = roomState;
-        const pc = pcRef.current;
-        updateConnectionStatus(
-            pc?.iceConnectionState ?? iceConnectionState,
-            pc?.connectionState ?? connectionState
-        );
-    }, [roomState, iceConnectionState, connectionState]);
+    }, [roomState]);
 
     useEffect(() => {
         clientIdRef.current = clientId;
@@ -681,14 +674,12 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 // Keep opportunistic ICE restart on network transitions to migrate transport
                 // paths (for example mobile -> Wi-Fi) without forcing degraded UI when healthy.
                 scheduleIceRestart('network-online', 0);
-                updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
             }
         };
         const handleNetworkChange = () => {
             const pc = pcRef.current;
             if (pc) {
                 scheduleIceRestart('network-change', 0);
-                updateConnectionStatus(pc.iceConnectionState, pc.connectionState);
             }
         };
         window.addEventListener('online', handleOnline);
