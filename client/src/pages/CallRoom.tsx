@@ -401,6 +401,8 @@ const CallRoom: React.FC = () => {
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
     const idleTimeoutRef = useRef<number | null>(null);
+    const isControlsAutoHideEnabledRef = useRef(true);
+    const wereControlsLastHiddenByAutoHideRef = useRef(false);
     const waitingTimerRef = useRef<number | null>(null);
     const [showDebug, setShowDebug] = useState(false);
     const debugTapRef = useRef<number>(0);
@@ -670,10 +672,14 @@ const CallRoom: React.FC = () => {
 
 
     const scheduleIdleHide = () => {
+        if (!isControlsAutoHideEnabledRef.current) {
+            return;
+        }
         if (idleTimeoutRef.current) {
             window.clearTimeout(idleTimeoutRef.current);
         }
         idleTimeoutRef.current = window.setTimeout(() => {
+            wereControlsLastHiddenByAutoHideRef.current = true;
             setAreControlsVisible(false);
         }, 10000);
     };
@@ -688,8 +694,15 @@ const CallRoom: React.FC = () => {
         setAreControlsVisible(prev => {
             const next = !prev;
             if (next) {
-                scheduleIdleHide();
+                if (wereControlsLastHiddenByAutoHideRef.current) {
+                    isControlsAutoHideEnabledRef.current = false;
+                    wereControlsLastHiddenByAutoHideRef.current = false;
+                    clearIdleHide();
+                } else {
+                    scheduleIdleHide();
+                }
             } else {
+                wereControlsLastHiddenByAutoHideRef.current = false;
                 clearIdleHide();
             }
             return next;
@@ -698,11 +711,19 @@ const CallRoom: React.FC = () => {
 
     const handleControlsInteraction = () => {
         setAreControlsVisible(true);
+        if (wereControlsLastHiddenByAutoHideRef.current) {
+            isControlsAutoHideEnabledRef.current = false;
+            wereControlsLastHiddenByAutoHideRef.current = false;
+            clearIdleHide();
+            return;
+        }
         scheduleIdleHide();
     };
 
     useEffect(() => {
         if (!hasJoined) return;
+        isControlsAutoHideEnabledRef.current = true;
+        wereControlsLastHiddenByAutoHideRef.current = false;
         scheduleIdleHide();
         const handleBeforeUnload = () => {
             exitFullscreenIfActive();

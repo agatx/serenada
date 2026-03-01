@@ -125,6 +125,8 @@ fun CallScreen(
     }
 
     var areControlsVisible by remember { mutableStateOf(true) }
+    var isControlsAutoHideEnabled by remember { mutableStateOf(true) }
+    var wereControlsLastHiddenByAutoHide by remember { mutableStateOf(false) }
     var isLocalLarge by rememberSaveable { mutableStateOf(false) }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(true) }
     var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
@@ -273,10 +275,24 @@ fun CallScreen(
             )
         }
 
+    val toggleControlsVisibility: () -> Unit = {
+        if (areControlsVisible) {
+            areControlsVisible = false
+            wereControlsLastHiddenByAutoHide = false
+        } else {
+            areControlsVisible = true
+            if (wereControlsLastHiddenByAutoHide) {
+                isControlsAutoHideEnabled = false
+                wereControlsLastHiddenByAutoHide = false
+            }
+        }
+    }
+
     // Auto-hide controls
-    LaunchedEffect(areControlsVisible, uiState.phase) {
-        if (areControlsVisible && uiState.phase == CallPhase.InCall) {
+    LaunchedEffect(areControlsVisible, uiState.phase, isControlsAutoHideEnabled) {
+        if (areControlsVisible && uiState.phase == CallPhase.InCall && isControlsAutoHideEnabled) {
             delay(8000)
+            wereControlsLastHiddenByAutoHide = true
             areControlsVisible = false
         }
     }
@@ -298,7 +314,7 @@ fun CallScreen(
                 .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
-            ) { areControlsVisible = !areControlsVisible }
+            ) { toggleControlsVisibility() }
     ) {
         val controlsAnimationDuration = 320
         val showPip =
@@ -323,7 +339,7 @@ fun CallScreen(
             Modifier.fillMaxSize().clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
-            ) { areControlsVisible = !areControlsVisible }
+            ) { toggleControlsVisibility() }
         val debugPanelWidth = minOf(maxWidth * 0.92f, 430.dp)
         val debugPanelMaxHeight = (maxHeight - 140.dp).coerceAtLeast(120.dp)
 

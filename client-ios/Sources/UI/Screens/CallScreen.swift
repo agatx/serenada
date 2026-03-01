@@ -235,6 +235,8 @@ struct CallScreen: View {
 
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var areControlsVisible = true
+    @State private var isControlsAutoHideEnabled = true
+    @State private var wereControlsLastHiddenByAutoHide = false
     @State private var isLocalLarge = false
     @State private var remoteVideoFitCover = true
     @State private var showShareSheet = false
@@ -289,10 +291,11 @@ struct CallScreen: View {
             }
         }
         .task(id: areControlsVisible) {
-            guard areControlsVisible, uiState.phase == .inCall else { return }
+            guard areControlsVisible, uiState.phase == .inCall, isControlsAutoHideEnabled else { return }
             try? await Task.sleep(nanoseconds: 8_000_000_000)
-            guard uiState.phase == .inCall else { return }
+            guard uiState.phase == .inCall, isControlsAutoHideEnabled else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
+                wereControlsLastHiddenByAutoHide = true
                 areControlsVisible = false
             }
         }
@@ -325,7 +328,16 @@ struct CallScreen: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    areControlsVisible.toggle()
+                    if areControlsVisible {
+                        areControlsVisible = false
+                        wereControlsLastHiddenByAutoHide = false
+                    } else {
+                        areControlsVisible = true
+                        if wereControlsLastHiddenByAutoHide {
+                            isControlsAutoHideEnabled = false
+                            wereControlsLastHiddenByAutoHide = false
+                        }
+                    }
                 }
             }
             .simultaneousGesture(
