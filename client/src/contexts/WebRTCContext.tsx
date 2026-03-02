@@ -94,7 +94,8 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const pc = pcRef.current;
         updateConnectionStatus(
             pc?.iceConnectionState ?? iceConnectionState,
-            pc?.connectionState ?? connectionState
+            pc?.connectionState ?? connectionState,
+            roomState
         );
     }, [isConnected, iceConnectionState, connectionState, roomState]);
 
@@ -343,8 +344,9 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setConnectionStatusValue('connected');
     };
 
-    const isConnectionStatusMachineActive = () => {
-        const state = roomStateRef.current;
+    const isConnectionStatusMachineActive = (
+        state: typeof roomStateRef.current = roomStateRef.current
+    ) => {
         return !!state && (state.participants?.length ?? 0) > 1;
     };
 
@@ -360,8 +362,10 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }, 10_000);
     };
 
-    const setConnectionRecovering = () => {
-        if (!isConnectionStatusMachineActive()) {
+    const setConnectionRecovering = (
+        state: typeof roomStateRef.current = roomStateRef.current
+    ) => {
+        if (!isConnectionStatusMachineActive(state)) {
             resetConnectionStatusMachine();
             return;
         }
@@ -375,9 +379,10 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const updateConnectionStatus = (
         currentIceState: RTCIceConnectionState,
-        currentConnectionState: RTCPeerConnectionState
+        currentConnectionState: RTCPeerConnectionState,
+        state: typeof roomStateRef.current = roomStateRef.current
     ) => {
-        if (!isConnectionStatusMachineActive()) {
+        if (!isConnectionStatusMachineActive(state)) {
             resetConnectionStatusMachine();
             return;
         }
@@ -390,7 +395,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             currentConnectionState === 'failed';
 
         if (isDegraded) {
-            setConnectionRecovering();
+            setConnectionRecovering(state);
             return;
         }
 
