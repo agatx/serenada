@@ -8,10 +8,11 @@ import { useTranslation } from 'react-i18next';
 import { SavedRoomDialog } from './SavedRoomDialog';
 import { useToast } from '../contexts/ToastContext';
 import { saveRoom } from '../utils/savedRooms';
+import { getRoomStatusState, type RoomStatuses } from '../contexts/signaling/roomStatuses';
 
 interface RecentCallsProps {
     calls: RecentCall[];
-    roomStatuses: Record<string, number>;
+    roomStatuses: RoomStatuses;
     savedRooms: SavedRoom[];
     onCallUpdate?: () => void;
 }
@@ -111,11 +112,11 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
     };
 
     const renderStatusDot = (roomId: string) => {
-        const count = roomStatuses[roomId] || 0;
-        if (count === 0) return null;
+        const statusState = getRoomStatusState(roomStatuses[roomId]);
+        if (statusState === 'hidden') return null;
 
-        const statusClass = count === 1 ? 'status-waiting' : 'status-full';
-        const title = count === 1 ? t('someone_waiting') : t('room_full');
+        const statusClass = statusState === 'full' ? 'status-full' : 'status-waiting';
+        const title = statusState === 'full' ? t('room_full') : t('someone_waiting');
 
         return (
             <div className={`status-dot ${statusClass}`} title={title} />

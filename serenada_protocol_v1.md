@@ -423,21 +423,21 @@ Subscribe to updates for a list of rooms.
 ```
 
 #### `room_statuses` (server → client)
-Immediate response to `watch_rooms` with current counts.
+Immediate response to `watch_rooms` with current room occupancy and, when the room exists, its capacity.
 
 ```json
 {
   "v": 1,
   "type": "room_statuses",
   "payload": {
-    "AbC123": 1,
-    "XyZ789": 2
+    "AbC123": { "count": 1, "maxParticipants": 4 },
+    "XyZ789": { "count": 0 }
   }
 }
 ```
 
 #### `room_status_update` (server → client)
-Pushed whenever a watched room's participant count changes.
+Pushed whenever a watched room's participant count changes. `maxParticipants` is included whenever the room currently exists.
 
 ```json
 {
@@ -445,7 +445,8 @@ Pushed whenever a watched room's participant count changes.
   "type": "room_status_update",
   "payload": {
     "rid": "AbC123",
-    "count": 0
+    "count": 3,
+    "maxParticipants": 4
   }
 }
 ```

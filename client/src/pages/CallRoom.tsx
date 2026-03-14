@@ -799,7 +799,9 @@ const CallRoom: React.FC = () => {
                 markRoomJoined(rid, Date.now());
                 callStartTimeRef.current = null;
             }
-            lr();
+            // Preserve reconnect identity on unload so a refreshed tab can reclaim
+            // its room slot before the server's disconnect grace period expires.
+            lr({ preserveReconnectState: true });
             slm();
             mediaStartedRef.current = false;
         };
