@@ -112,7 +112,7 @@ func TestLegacyClientCreates1v1Room(t *testing.T) {
 	}
 }
 
-func TestNewClientCreatesGroupRoom(t *testing.T) {
+func TestNewClientCreatesGroupRoomProvisionallyAs1v1(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
 	hub := newHub(4)
@@ -129,43 +129,14 @@ func TestNewClientCreatesGroupRoom(t *testing.T) {
 	if room == nil {
 		t.Fatal("room was not created")
 	}
-	if room.MaxParticipants != 4 {
-		t.Fatalf("expected room maxParticipants=4, got %d", room.MaxParticipants)
+	if room.MaxParticipants != 2 {
+		t.Fatalf("expected provisional room maxParticipants=2, got %d", room.MaxParticipants)
 	}
-}
-
-func TestLegacyClientRejectedFromGroupRoom(t *testing.T) {
-	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
-	rid := mustTestRoomID(t)
-	hub := newHub(4)
-
-	// First client creates a group room
-	c1 := fakeClient(hub)
-	hub.registerClient(c1)
-	hub.handleMessage(c1, joinPayload(rid, 4, 4))
-	drainMessages(c1)
-
-	// Legacy client tries to join
-	c2 := fakeClient(hub)
-	hub.registerClient(c2)
-	hub.handleMessage(c2, legacyJoinPayload(rid))
-
-	msgs := drainMessages(c2)
-	found := false
-	for _, msg := range msgs {
-		if msg.Type == "error" {
-			var payload struct {
-				Code string `json:"code"`
-			}
-			if err := json.Unmarshal(msg.Payload, &payload); err == nil {
-				if payload.Code == "ROOM_CAPACITY_UNSUPPORTED" {
-					found = true
-				}
-			}
-		}
+	if room.RequestedMaxParticipants != 4 {
+		t.Fatalf("expected requested maxParticipants=4, got %d", room.RequestedMaxParticipants)
 	}
-	if !found {
-		t.Fatal("expected ROOM_CAPACITY_UNSUPPORTED error for legacy client joining group room")
+	if room.CapacityLocked {
+		t.Fatal("expected room capacity to remain unlocked until the second participant joins")
 	}
 }
 
@@ -194,6 +165,83 @@ func TestNewClientCanJoin1v1Room(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected new client to successfully join 1:1 room")
+	}
+}
+
+func TestLegacySecondClientLocksRequestedGroupRoomTo1v1(t *testing.T) {
+	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	c1 := fakeClient(hub)
+	hub.registerClient(c1)
+	hub.handleMessage(c1, joinPayload(rid, 4, 4))
+	drainMessages(c1)
+
+	c2 := fakeClient(hub)
+	hub.registerClient(c2)
+	hub.handleMessage(c2, legacyJoinPayload(rid))
+
+	msgs := drainMessages(c2)
+	foundJoined := false
+	for _, msg := range msgs {
+		if msg.Type == "joined" {
+			foundJoined = true
+		}
+	}
+	if !foundJoined {
+		t.Fatal("expected legacy second client to successfully join provisional room")
+	}
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+
+	if room == nil {
+		t.Fatal("room was not created")
+	}
+	if room.MaxParticipants != 2 {
+		t.Fatalf("expected room maxParticipants=2 after mixed-capability join, got %d", room.MaxParticipants)
+	}
+	if !room.CapacityLocked {
+		t.Fatal("expected room capacity to lock after the second participant joins")
+	}
+}
+
+func TestLegacyClientRejectedFromLockedGroupRoom(t *testing.T) {
+	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	c1 := fakeClient(hub)
+	hub.registerClient(c1)
+	hub.handleMessage(c1, joinPayload(rid, 4, 4))
+	drainMessages(c1)
+
+	c2 := fakeClient(hub)
+	hub.registerClient(c2)
+	hub.handleMessage(c2, joinPayload(rid, 4, 4))
+	drainMessages(c1)
+	drainMessages(c2)
+
+	c3 := fakeClient(hub)
+	hub.registerClient(c3)
+	hub.handleMessage(c3, legacyJoinPayload(rid))
+
+	msgs := drainMessages(c3)
+	found := false
+	for _, msg := range msgs {
+		if msg.Type == "error" {
+			var payload struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(msg.Payload, &payload); err == nil && payload.Code == "ROOM_CAPACITY_UNSUPPORTED" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected ROOM_CAPACITY_UNSUPPORTED error for legacy client joining locked group room")
 	}
 }
 
@@ -378,8 +426,8 @@ func TestJoinedPayloadIncludesMaxParticipantsAndJoinedAt(t *testing.T) {
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				t.Fatalf("failed to parse joined payload: %v", err)
 			}
-			if payload.MaxParticipants != 4 {
-				t.Fatalf("expected maxParticipants=4, got %d", payload.MaxParticipants)
+			if payload.MaxParticipants != 2 {
+				t.Fatalf("expected provisional maxParticipants=2, got %d", payload.MaxParticipants)
 			}
 			if len(payload.Participants) != 1 {
 				t.Fatalf("expected 1 participant, got %d", len(payload.Participants))
@@ -398,10 +446,17 @@ func TestCreateMaxParticipantsClampedToServerCeiling(t *testing.T) {
 	rid := mustTestRoomID(t)
 	hub := newHub(3) // Server ceiling is 3
 
-	c := fakeClient(hub)
-	hub.registerClient(c)
-	// Client requests 4, but server ceiling is 3
-	hub.handleMessage(c, joinPayload(rid, 4, 4))
+	c1 := fakeClient(hub)
+	hub.registerClient(c1)
+	// Client requests 4, but server ceiling is 3.
+	hub.handleMessage(c1, joinPayload(rid, 4, 4))
+	drainMessages(c1)
+
+	c2 := fakeClient(hub)
+	hub.registerClient(c2)
+	hub.handleMessage(c2, joinPayload(rid, 4, 4))
+	drainMessages(c1)
+	drainMessages(c2)
 
 	hub.mu.RLock()
 	room := hub.rooms[rid]
@@ -409,6 +464,9 @@ func TestCreateMaxParticipantsClampedToServerCeiling(t *testing.T) {
 
 	if room == nil {
 		t.Fatal("room was not created")
+	}
+	if room.RequestedMaxParticipants != 3 {
+		t.Fatalf("expected requested maxParticipants clamped to 3, got %d", room.RequestedMaxParticipants)
 	}
 	if room.MaxParticipants != 3 {
 		t.Fatalf("expected room maxParticipants clamped to 3, got %d", room.MaxParticipants)
@@ -452,8 +510,8 @@ func TestWatchRoomsIncludesMaxParticipants(t *testing.T) {
 		if payload[rid].Count != 1 {
 			t.Fatalf("expected count=1, got %d", payload[rid].Count)
 		}
-		if payload[rid].MaxParticipants != 4 {
-			t.Fatalf("expected maxParticipants=4, got %d", payload[rid].MaxParticipants)
+		if payload[rid].MaxParticipants != 2 {
+			t.Fatalf("expected provisional maxParticipants=2, got %d", payload[rid].MaxParticipants)
 		}
 		return
 	}
@@ -483,6 +541,7 @@ func TestRoomStatusUpdateIncludesMaxParticipants(t *testing.T) {
 	hub.handleMessage(participant, joinPayload(rid, 4, 4))
 
 	msgs := drainMessages(watcher)
+	foundFirstUpdate := false
 	for _, msg := range msgs {
 		if msg.Type != "room_status_update" {
 			continue
@@ -495,16 +554,35 @@ func TestRoomStatusUpdateIncludesMaxParticipants(t *testing.T) {
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			t.Fatalf("failed to parse room_status_update payload: %v", err)
 		}
-		if payload.RID != rid {
-			t.Fatalf("expected rid=%s, got %s", rid, payload.RID)
+		if payload.RID == rid && payload.Count == 1 && payload.MaxParticipants == 2 {
+			foundFirstUpdate = true
+			break
 		}
-		if payload.Count != 1 {
-			t.Fatalf("expected count=1, got %d", payload.Count)
-		}
-		if payload.MaxParticipants != 4 {
-			t.Fatalf("expected maxParticipants=4, got %d", payload.MaxParticipants)
-		}
-		return
 	}
-	t.Fatal("did not receive room_status_update message")
+	if !foundFirstUpdate {
+		t.Fatal("expected room_status_update with provisional maxParticipants=2 after first join")
+	}
+
+	secondParticipant := fakeClient(hub)
+	hub.registerClient(secondParticipant)
+	hub.handleMessage(secondParticipant, joinPayload(rid, 4, 4))
+
+	msgs = drainMessages(watcher)
+	for _, msg := range msgs {
+		if msg.Type != "room_status_update" {
+			continue
+		}
+		var payload struct {
+			RID             string `json:"rid"`
+			Count           int    `json:"count"`
+			MaxParticipants int    `json:"maxParticipants"`
+		}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_status_update payload: %v", err)
+		}
+		if payload.RID == rid && payload.Count == 2 && payload.MaxParticipants == 4 {
+			return
+		}
+	}
+	t.Fatal("expected room_status_update with locked maxParticipants=4 after second join")
 }

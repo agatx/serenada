@@ -8,7 +8,7 @@
 - Capability-aware room creation and admission
 - SDP offer/answer exchange
 - ICE candidate exchange (trickle ICE)
-- Room capacity enforcement (legacy 2-party rooms and group-capable rooms up to 4 participants)
+- Room capacity negotiation and enforcement
 - Basic error handling
 
 **Out of scope:** analytics, auth accounts, chat, recording, presence across devices
@@ -90,15 +90,18 @@ Host privileges:
 ## 3. Room model
 
 - A **room** is identified by `rid` and exists only while participants are connected (deleted when empty or when host ends the room).
-- A **call session** is the live WebRTC mesh between the currently connected participants in that room.
-- **Capacity:** rooms are fixed when the first participant joins:
-  - legacy / unspecified clients create **2-participant** rooms
-  - new-capable clients may create **group-capable** rooms up to **4 participants**
+- A **call session** is the live WebRTC mesh between the room's current participants.
+- Rooms start with an effective capacity of **2** participants.
+- When the creator requested a higher room size, the room stays provisional at **2** until a second distinct participant joins.
+- At that second join, the server locks the room's final capacity for the rest of the room lifetime:
+  - `min(creatorRequestedMaxParticipants, secondParticipantSupportedMaxParticipants, serverCeiling)`
+  - if that result is `2`, the room stays 1:1
+  - if that result is greater than `2`, the room becomes a group-capable room
 
-If a join would exceed room capacity:
-- Server responds with `error` (code: `ROOM_FULL`) and must not add the participant to the room.
+If a join would exceed the room's locked capacity:
+- Server responds with `error` (code: `ROOM_FULL`) and must not add that client to the room.
 
-If a legacy 1:1-only client tries to join a room whose `maxParticipants` is greater than `2`:
+If a legacy 1:1-only client tries to join a room whose locked `maxParticipants` is greater than `2`:
 - Server responds with `error` (code: `ROOM_CAPACITY_UNSUPPORTED`) and must not add the participant to the room.
 
 ---
@@ -128,10 +131,13 @@ Join a room.
 
 **Server behavior**
 - Validate `rid` as a signed 27-character room token (generated via `/api/room-id`).
-- If room is empty, make this participant host and fix the room’s `maxParticipants` from `createMaxParticipants` when the client advertises matching capability. Otherwise default to `2`.
-- If room already exists, reject with `ROOM_FULL` when the room is at capacity.
-- If room already exists with `maxParticipants > 2` and the joining client only supports `2`, reject with `ROOM_CAPACITY_UNSUPPORTED`.
-- If `reconnectCid` matches a ghost session, server may evict the ghost and reuse the CID.
+- If room is empty, make this participant host.
+- If the room does not yet exist, clamp `createMaxParticipants` by the creator's `capabilities.maxParticipants` and the server ceiling, then create the room:
+  - if the clamped value is `2`, the room is immediately locked as 1:1
+  - if the clamped value is greater than `2`, the room is created provisionally with effective `maxParticipants=2`
+- When a second distinct participant joins a provisional room, lock the room's final `maxParticipants` using the rule from section 3.
+- If a client joins after the room capacity is locked and its `capabilities.maxParticipants` is lower than the room's locked capacity, reject with `ROOM_CAPACITY_UNSUPPORTED`.
+- If room occupancy already equals the room's current effective capacity, reject with `ROOM_FULL` (unless `reconnectCid` matches a ghost session, in which case the server evicts the ghost and reuses the CID).
 - On success, respond with `joined`.
 - Push notifications are **not** triggered on join. Instead, clients send a separate `POST /api/push/notify` request after receiving `joined` (see push-notifications.md).
 
@@ -162,7 +168,7 @@ Acknowledges join success and provides room state.
 
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
-- `maxParticipants` *(number)*: fixed capacity of this room.
+- `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
 - `participants` *(array)*: list of current participants.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
@@ -195,6 +201,7 @@ Sent when participants join/leave or host changes.
 
 **Client behavior**
 - Update UI for “waiting for someone to join” vs “in call”.
+- Treat `maxParticipants` as the room's current effective capacity. It may increase from `2` to a higher locked value when the second participant joins a provisional room.
 - Preserve `joinedAt` ordering because it is used to choose the per-peer offerer in multi-party rooms.
 - If participant list shrinks to 1 during a call, treat as remote left.
 
@@ -397,8 +404,8 @@ Standard error message.
 **Error codes**
 - `BAD_REQUEST` — invalid JSON, missing required fields, invalid types
 - `UNSUPPORTED_VERSION` — `v` not supported
-- `ROOM_FULL` — capacity exceeded for this room’s fixed `maxParticipants`
-- `ROOM_CAPACITY_UNSUPPORTED` — client only supports 1:1 rooms but the room is group-capable
+- `ROOM_FULL` — current room capacity exceeded
+- `ROOM_CAPACITY_UNSUPPORTED` — this client does not support the room's locked group capacity
 - `NOT_HOST` — non-host attempted `end_room`
 - `SERVER_NOT_CONFIGURED` — room ID secret missing on server
 - `INVALID_ROOM_ID` — room ID failed validation
@@ -445,14 +452,14 @@ Immediate response to `watch_rooms` with current room occupancy and, when the ro
   "v": 1,
   "type": "room_statuses",
   "payload": {
-    "AbC123": { "count": 1, "maxParticipants": 4 },
+    "AbC123": { "count": 1, "maxParticipants": 2 },
     "XyZ789": { "count": 0 }
   }
 }
 ```
 
 #### `room_status_update` (server → client)
-Pushed whenever a watched room's participant count changes. `maxParticipants` is included whenever the room currently exists.
+Pushed whenever a watched room's participant count changes. `maxParticipants` is included whenever the room currently exists and reflects the room's current effective capacity.
 
 ```json
 {
@@ -528,8 +535,9 @@ For `offer`, `answer`, `ice`:
 - Do not persist SDP/ICE long-term; keep in-memory only.
 
 ### 7.3 Capacity enforcement
-- Never allow more participants than the room’s fixed `maxParticipants`.
-- Refuse legacy 1:1-only clients from joining group-capable rooms.
+- Never allow more participants than the room's current `maxParticipants`.
+- Group-requested rooms remain joinable as provisional 1:1 rooms until a second distinct participant joins and locks the final capacity.
+- Reject clients that do not support a locked group room with `ROOM_CAPACITY_UNSUPPORTED`.
 
 ### 7.4 Cleanup
 - On socket disconnect: treat as `leave`.
