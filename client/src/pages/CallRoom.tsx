@@ -191,15 +191,175 @@ async function captureSnapshotBytes(stream: MediaStream): Promise<{ bytes: Uint8
     return { bytes: new Uint8Array(buffer), mime: 'image/jpeg' };
 }
 
-// Multi-party grid video tile (defined outside component to avoid remounts)
-const VideoTile: React.FC<{ stream: MediaStream; label?: string }> = ({ stream, label }) => {
+const MIN_STAGE_TILE_ASPECT = 9 / 16;
+const MAX_STAGE_TILE_ASPECT = 16 / 9;
+const DEFAULT_STAGE_TILE_ASPECT = 16 / 9;
+const STAGE_TILE_GAP_PX = 12;
+
+type StageTileSpec = {
+    cid: string;
+    stream: MediaStream;
+    aspectRatio: number;
+};
+
+type StageTileLayout = {
+    cid: string;
+    width: number;
+    height: number;
+};
+
+type StageRowLayout = {
+    items: StageTileLayout[];
+};
+
+function clampStageTileAspectRatio(ratio?: number | null): number {
+    if (!ratio || !Number.isFinite(ratio) || ratio <= 0) {
+        return DEFAULT_STAGE_TILE_ASPECT;
+    }
+    return Math.min(MAX_STAGE_TILE_ASPECT, Math.max(MIN_STAGE_TILE_ASPECT, ratio));
+}
+
+function getStreamAspectRatio(stream: MediaStream): number | null {
+    const track = stream.getVideoTracks()[0];
+    if (!track) return null;
+    const settings = track.getSettings?.();
+    if (!settings) return null;
+    if (typeof settings.aspectRatio === 'number' && settings.aspectRatio > 0) {
+        return settings.aspectRatio;
+    }
+    if (typeof settings.width === 'number' && typeof settings.height === 'number' && settings.height > 0) {
+        return settings.width / settings.height;
+    }
+    return null;
+}
+
+function computeStageLayout(tiles: StageTileSpec[], availableWidth: number, availableHeight: number, gap: number): StageRowLayout[] {
+    if (tiles.length === 0 || availableWidth <= 0 || availableHeight <= 0) {
+        return [];
+    }
+
+    const candidateRows: number[][][] = tiles.length === 1
+        ? [[[0]]]
+        : tiles.length === 2
+            ? [[[0, 1]], [[0], [1]]]
+            : [[[0, 1, 2]], [[0, 1], [2]], [[0], [1, 2]], [[0], [1], [2]]];
+
+    let bestLayout: StageRowLayout[] = [];
+    let bestHarmonicShortEdge = -1;
+    let bestMinShortEdge = -1;
+    let bestArea = -1;
+    let bestRowCount = Number.POSITIVE_INFINITY;
+
+    for (const rows of candidateRows) {
+        const baseHeights = rows.map((row) => {
+            const totalAspect = row.reduce((sum, index) => sum + tiles[index].aspectRatio, 0);
+            const rowWidth = availableWidth - gap * Math.max(0, row.length - 1);
+            return rowWidth > 0 && totalAspect > 0 ? rowWidth / totalAspect : 0;
+        });
+
+        const verticalGap = gap * Math.max(0, rows.length - 1);
+        const totalBaseHeight = baseHeights.reduce((sum, value) => sum + value, 0);
+        if (totalBaseHeight <= 0 || availableHeight <= verticalGap) {
+            continue;
+        }
+
+        const scale = Math.min(1, (availableHeight - verticalGap) / totalBaseHeight);
+        if (scale <= 0) {
+            continue;
+        }
+
+        const layout = rows.map((row, rowIndex) => {
+            const rowHeight = Math.max(1, Math.floor(baseHeights[rowIndex] * scale));
+            const items = row.map((index) => {
+                const tile = tiles[index];
+                return {
+                    cid: tile.cid,
+                    width: Math.max(1, Math.floor(tile.aspectRatio * rowHeight)),
+                    height: rowHeight
+                };
+            });
+            return { items };
+        });
+
+        const area = layout.reduce((sum, row) => (
+            sum + row.items.reduce((rowArea, tile) => rowArea + tile.width * tile.height, 0)
+        ), 0);
+        const shortEdges = layout.flatMap((row) => row.items.map((tile) => Math.min(tile.width, tile.height)));
+        const minShortEdge = shortEdges.reduce((currentMin, shortEdge) => Math.min(currentMin, shortEdge), Number.POSITIVE_INFINITY);
+        const harmonicShortEdge = shortEdges.length / shortEdges.reduce((sum, shortEdge) => sum + (1 / shortEdge), 0);
+        const rowCount = layout.length;
+
+        const shortEdgeGainIsMeaningful = harmonicShortEdge > bestHarmonicShortEdge + 6;
+        const shortEdgeIsComparable = Math.abs(harmonicShortEdge - bestHarmonicShortEdge) <= 6;
+        const minShortEdgeImproved = minShortEdge > bestMinShortEdge + 1;
+        const minShortEdgeComparable = Math.abs(minShortEdge - bestMinShortEdge) <= 1;
+
+        if (
+            shortEdgeGainIsMeaningful ||
+            (
+                shortEdgeIsComparable && (
+                    rowCount < bestRowCount ||
+                    (rowCount === bestRowCount && (
+                        minShortEdgeImproved ||
+                        (minShortEdgeComparable && area > bestArea)
+                    ))
+                )
+            ) ||
+            (
+                !shortEdgeIsComparable &&
+                harmonicShortEdge > bestHarmonicShortEdge &&
+                minShortEdgeImproved
+            )
+        ) {
+            bestHarmonicShortEdge = harmonicShortEdge;
+            bestMinShortEdge = minShortEdge;
+            bestArea = area;
+            bestRowCount = rowCount;
+            bestLayout = layout;
+        }
+    }
+
+    return bestLayout;
+}
+
+// Multi-party remote tile (defined outside component to avoid remounts)
+const VideoTile: React.FC<{
+    stream: MediaStream;
+    tileStyle?: React.CSSProperties;
+    label?: string;
+    onAspectRatioChange?: (ratio: number) => void;
+}> = ({ stream, tileStyle, label, onAspectRatioChange }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
+
     useEffect(() => {
-        if (videoRef.current) videoRef.current.srcObject = stream;
+        if (videoRef.current && videoRef.current.srcObject !== stream) {
+            videoRef.current.srcObject = stream;
+        }
     }, [stream]);
+
+    useEffect(() => {
+        if (!onAspectRatioChange || !videoRef.current) return;
+
+        const video = videoRef.current;
+        const updateAspectRatio = () => {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+                onAspectRatioChange(clampStageTileAspectRatio(video.videoWidth / video.videoHeight));
+            }
+        };
+
+        updateAspectRatio();
+        video.addEventListener('loadedmetadata', updateAspectRatio);
+        video.addEventListener('resize', updateAspectRatio);
+
+        return () => {
+            video.removeEventListener('loadedmetadata', updateAspectRatio);
+            video.removeEventListener('resize', updateAspectRatio);
+        };
+    }, [onAspectRatioChange, stream]);
+
     return (
-        <div className="video-grid-cell">
-            <video ref={videoRef} autoPlay playsInline className="video-remote" />
+        <div className="video-stage-tile" style={tileStyle}>
+            <video ref={videoRef} autoPlay playsInline className="video-stage-remote" />
             {label && <div className="video-grid-label">{label}</div>}
         </div>
     );
@@ -423,6 +583,7 @@ const CallRoom: React.FC = () => {
 
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
+    const stageViewportRef = useRef<HTMLDivElement | null>(null);
     const idleTimeoutRef = useRef<number | null>(null);
     const isControlsAutoHideEnabledRef = useRef(true);
     const wereControlsLastHiddenByAutoHideRef = useRef(false);
@@ -430,6 +591,11 @@ const CallRoom: React.FC = () => {
     const [showDebug, setShowDebug] = useState(false);
     const debugTapRef = useRef<number>(0);
     const debugTapTimeoutRef = useRef<number | null>(null);
+    const [stageViewportSize, setStageViewportSize] = useState(() => ({
+        width: typeof window !== 'undefined' ? window.innerWidth : 0,
+        height: typeof window !== 'undefined' ? window.innerHeight : 0
+    }));
+    const [remoteStageAspectRatios, setRemoteStageAspectRatios] = useState<Record<string, number>>({});
     const realtimeStats = useRealtimeCallStats(peerConnectionsArray, showDebug && hasJoined);
 
     const isMobileDevice = () => {
@@ -474,6 +640,39 @@ const CallRoom: React.FC = () => {
         attachVideoStream(node, remoteStream);
     }, [attachVideoStream, remoteStream]);
 
+    const setStageViewportNode = useCallback((node: HTMLDivElement | null) => {
+        stageViewportRef.current = node;
+    }, []);
+
+    const updateRemoteStageAspectRatio = useCallback((cid: string, ratio: number) => {
+        setRemoteStageAspectRatios((prev) => {
+            const nextRatio = clampStageTileAspectRatio(ratio);
+            if (prev[cid] === nextRatio) {
+                return prev;
+            }
+            return {
+                ...prev,
+                [cid]: nextRatio
+            };
+        });
+    }, []);
+
+    const remoteStageTiles = useMemo(() => (
+        remoteStreamEntries.map(([cid, stream]) => ({
+            cid,
+            stream,
+            aspectRatio: remoteStageAspectRatios[cid] ?? clampStageTileAspectRatio(getStreamAspectRatio(stream))
+        }))
+    ), [remoteStageAspectRatios, remoteStreamEntries]);
+
+    const remoteStageTileMap = useMemo(() => (
+        new Map(remoteStageTiles.map((tile) => [tile.cid, tile]))
+    ), [remoteStageTiles]);
+
+    const remoteStageLayout = useMemo(() => (
+        computeStageLayout(remoteStageTiles, stageViewportSize.width, stageViewportSize.height, STAGE_TILE_GAP_PX)
+    ), [remoteStageTiles, stageViewportSize.height, stageViewportSize.width]);
+
     // Handle stream attachment
     useEffect(() => {
         attachVideoStream(localVideoRef.current, localStream);
@@ -482,6 +681,43 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         attachVideoStream(remoteVideoRef.current, remoteStream);
     }, [attachVideoStream, remoteStream]);
+
+    useEffect(() => {
+        const activeRemoteCids = new Set(remoteStreamEntries.map(([cid]) => cid));
+        setRemoteStageAspectRatios((prev) => {
+            const nextEntries = Object.entries(prev).filter(([cid]) => activeRemoteCids.has(cid));
+            if (nextEntries.length === Object.keys(prev).length) {
+                return prev;
+            }
+            return Object.fromEntries(nextEntries);
+        });
+    }, [remoteStreamEntries]);
+
+    useEffect(() => {
+        if (!isMultiParty || !stageViewportRef.current) {
+            return;
+        }
+
+        const node = stageViewportRef.current;
+        const updateViewportSize = () => {
+            const rect = node.getBoundingClientRect();
+            setStageViewportSize({
+                width: Math.max(0, Math.floor(rect.width)),
+                height: Math.max(0, Math.floor(rect.height))
+            });
+        };
+
+        updateViewportSize();
+
+        if (typeof ResizeObserver !== 'undefined') {
+            const observer = new ResizeObserver(updateViewportSize);
+            observer.observe(node);
+            return () => observer.disconnect();
+        }
+
+        window.addEventListener('resize', updateViewportSize);
+        return () => window.removeEventListener('resize', updateViewportSize);
+    }, [isMultiParty]);
 
     useEffect(() => {
         const clearWaitingTimer = () => {
@@ -1001,33 +1237,56 @@ const CallRoom: React.FC = () => {
         </>
     );
 
-    // Multi-party grid layout (3+ participants)
+    // Multi-party stage layout (3+ participants)
     if (isMultiParty) {
-        const totalTiles = remoteStreamEntries.length + 1; // +1 for local
-        const gridClass = `video-grid video-grid-${Math.min(totalTiles, 4)}`;
-
         return (
             <div
-                className={`call-container ${areControlsVisible ? '' : 'controls-hidden'}`}
+                className={`call-container multi-party-call ${areControlsVisible ? '' : 'controls-hidden'}`}
                 onPointerUp={handleScreenTap}
             >
                 {overlayContent}
-                <div className={gridClass} data-count={totalTiles}>
-                    {/* Local video tile */}
-                    <div className="video-grid-cell">
-                        <video
-                            ref={setLocalVideoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className={`video-local ${shouldMirrorLocalVideo ? 'mirrored' : ''}`}
-                            style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
-                        />
+                <div className="video-stage">
+                    <div className="video-stage-viewport" ref={setStageViewportNode}>
+                        <div className="video-stage-rows">
+                            {remoteStageLayout.map((row, rowIndex) => (
+                                <div className="video-stage-row" key={`row-${rowIndex}`}>
+                                    {row.items.map((tile) => {
+                                        const stageTile = remoteStageTileMap.get(tile.cid);
+                                        if (!stageTile) {
+                                            return null;
+                                        }
+                                        return (
+                                            <VideoTile
+                                                key={tile.cid}
+                                                stream={stageTile.stream}
+                                                tileStyle={{
+                                                    width: `${tile.width}px`,
+                                                    height: `${tile.height}px`
+                                                }}
+                                                onAspectRatioChange={(ratio) => updateRemoteStageAspectRatio(tile.cid, ratio)}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
                     </div>
-                    {/* Remote video tiles */}
-                    {remoteStreamEntries.map(([cid, stream]) => (
-                        <VideoTile key={cid} stream={stream} />
-                    ))}
+                </div>
+                <div
+                    className="video-local-container pip video-local-container-stage"
+                    onPointerUp={(event) => {
+                        event.stopPropagation();
+                        handleControlsInteraction();
+                    }}
+                >
+                    <video
+                        ref={setLocalVideoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className={`video-local ${shouldMirrorLocalVideo ? 'mirrored' : ''}`}
+                        style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
+                    />
                 </div>
                 {controlsBar}
             </div>
