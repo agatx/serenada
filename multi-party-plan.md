@@ -308,18 +308,23 @@ else:
 
 For 1:1, pull the single stream from the `Map` instead of the old scalar state. Same DOM, same CSS. This means a group-capable room still shows the unchanged 1:1 experience for the first two participants, and only flips to the multi-party layout when there are at least 2 remote streams.
 
-### 4.3 Tile rendering in `CallRoom.tsx`
+### 4.3 Stage rendering rules in `CallRoom.tsx`
 
 **File: `client/src/pages/CallRoom.tsx`**
 
-- Keep tile rendering local to `CallRoom.tsx` with a small inline `VideoTile` helper
-- Render one local tile plus one tile per remote stream
-- Local tile remains mirrored when `facingMode === 'user'`
+- Keep stage rendering local to `CallRoom.tsx` with a small inline `VideoTile` helper for remote participants
+- Render only remote streams inside the multi-party stage
+- Keep the local video in a separate PIP container, preserving the same mental model as the existing 1:1 view
+- Local video remains mirrored when `facingMode === 'user'`
 
 Layout rules (total tiles = remotes + 1 local):
 - **2 tiles total**: stay in the existing 1:1 layout
-- **3-4 tiles total**: switch to a centered, wrapping stage with consistent 16:9 tiles
-- Count-specific sizing can still be applied via `data-count`, but avoid rigid span rules or a hardcoded "hero on top" composition
+- **3-4 tiles total**: switch to an adaptive remote-participant stage while local stays in PIP
+- Remote tile aspect ratio should follow the actual stream aspect ratio, but clamp it to the range `9:16` to `16:9`
+- Compute the row arrangement from the current stage viewport instead of using a rigid grid; choose the arrangement that maximizes usable on-screen tile dimensions for the viewer
+- When candidate arrangements are close, prefer fewer rows instead of adding extra stacking for marginal gains
+- Keep every remote tile fully contained within the stage viewport; do not crop tiles to fit a predetermined grid
+- Use the full stage width for remote layout. Do not reserve an entire right-side safe column for the PIP; minor overlap in the lower-right corner is acceptable
 
 Each tile is a `<video autoPlay playsInline>` element. The layout should feel closer to a modern conferencing stage than to a fixed CCTV-style grid.
 
@@ -327,11 +332,13 @@ Each tile is a `<video autoPlay playsInline>` element. The layout should feel cl
 
 **File: `client/src/index.css`**
 
-Add `.video-grid`, `.video-grid-cell`, and count-aware sizing styles that:
-- center the participant tiles within the viewport
-- preserve a consistent 16:9 tile shape
-- allow wrapping for 3-4 participants
-- keep mobile in a single-column stack
+Add stage-oriented styles such as `.video-stage`, `.video-stage-viewport`, `.video-stage-rows`, `.video-stage-row`, `.video-stage-tile`, `.video-stage-remote`, and `.video-local-container-stage` that:
+- center the remote participant stage within the viewport
+- let tile dimensions be driven by the computed layout, not by a hardcoded grid template
+- render remote video with `object-fit: contain`
+- keep a small outer gutter and bottom space for controls, but allow the stage to use the full available width
+- keep the local PIP pinned to the lower-right corner during multi-party
+- use slightly reduced tile / PIP corner radii compared to the earlier grid styling
 
 Reuse existing 1:1 styles unchanged.
 
@@ -389,9 +396,9 @@ Both platforms: local audio/video tracks remain singletons shared across all PCs
 2. **1:1 regression**: Two browser tabs in a default web-created room — verify identical UX to before (PIP layout, screen share, camera flip, reconnection)
 3. **Legacy compatibility**: Legacy/mobile client creates a room, new web client joins successfully, and old mobile clients can still join
 4. **Group-room incompatibility path**: New web client creates a default room, old mobile client is rejected cleanly
-5. **3-party**: Three web tabs in a default web-created room — verify the layout switches from 1:1 into the multi-party stage, all video/audio flowing
-6. **4-party**: Four web tabs in a default web-created room — verify the adaptive stage layout with 4 tiles and all streams
-7. **Join/leave mid-call**: Start 3-party, one leaves — verify the layout transitions back to the 1:1 view, remaining PC is unaffected
+5. **3-party**: Three web tabs in a default web-created room — verify the layout switches from 1:1 into the multi-party stage, local video stays in PIP, and the remote stage uses the full viewport width
+6. **4-party**: Four web tabs in a default web-created room — verify the adaptive remote stage chooses a viewport-fitting row arrangement, keeps tile aspect ratios within `9:16` to `16:9`, and all streams flow
+7. **Join/leave mid-call**: Start 3-party, one leaves — verify the layout transitions back to the 1:1 view, the remaining PC is unaffected, and the local video stays live through the remount
 8. **Screen share in multi-party**: Verify track replacement propagates to all peers
 9. **ICE restart**: Kill network on one tab, verify only that peer's connection recovers
 
@@ -413,5 +420,6 @@ Update the protocol and user-facing docs as part of the implementation:
 - `README.md`
   - clarify that new web-created rooms are group-capable by default
   - clarify that the UI remains in the familiar 1:1 layout until participant #3 joins
+  - clarify that the multi-party view uses a remote-only adaptive stage with the local camera in PIP
   - clarify that legacy mobile clients remain 1:1-only
   - clarify that group calls are web-first until native clients add support
