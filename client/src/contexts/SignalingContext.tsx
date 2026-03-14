@@ -26,7 +26,7 @@ interface SignalingContextValue {
     turnToken: string | null;
     turnTokenTTLMs: number | null;
     joinRoom: (roomId: string, options?: { createMaxParticipants?: number }) => void;
-    leaveRoom: () => void;
+    leaveRoom: (options?: { preserveReconnectState?: boolean }) => void;
     endRoom: () => void;
     sendMessage: (type: string, payload?: any, to?: string) => void;
     lastMessage: SignalingMessage | null;
@@ -527,13 +527,20 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const clearError = useCallback(() => setError(null), []);
 
-    const leaveRoom = useCallback(() => {
+    const leaveRoom = useCallback((options?: { preserveReconnectState?: boolean }) => {
+        const preserveReconnectState = options?.preserveReconnectState === true;
         clearJoinTimers();
         sendMessage('leave');
         currentRoomIdRef.current = null;
-        lastClientIdRef.current = null;
         needsRejoinRef.current = false;
-        clearReconnectStorage();
+        if (preserveReconnectState) {
+            lastClientIdRef.current = clientIdRef.current;
+        } else {
+            lastClientIdRef.current = null;
+            clearReconnectStorage();
+        }
+        clientIdRef.current = null;
+        setClientId(null);
         setRoomState(null);
         setTurnToken(null);
         setTurnTokenTTLMs(null);
