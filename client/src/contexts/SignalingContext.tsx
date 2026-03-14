@@ -3,6 +3,7 @@ import { useToast } from './ToastContext';
 import { createSignalingTransport } from './signaling/transports';
 import type { TransportKind } from './signaling/transports';
 import type { RoomState, SignalingMessage } from './signaling/types';
+import type { RoomStatuses } from './signaling/roomStatuses';
 import { getConfiguredTransportOrder, parseTransportOrder } from './signaling/transportConfig';
 import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './signaling/roomStatuses';
 import { useTranslation } from 'react-i18next';
@@ -34,7 +35,7 @@ interface SignalingContextValue {
     error: string | null;
     clearError: () => void;
     watchRooms: (rids: string[]) => void;
-    roomStatuses: Record<string, number>;
+    roomStatuses: RoomStatuses;
 }
 
 const SignalingContext = createContext<SignalingContextValue | null>(null);
@@ -54,7 +55,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [lastMessage, setLastMessage] = useState<SignalingMessage | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [roomStatuses, setRoomStatuses] = useState<Record<string, number>>({});
+    const [roomStatuses, setRoomStatuses] = useState<RoomStatuses>({});
     const [turnToken, setTurnToken] = useState<string | null>(null);
     const [turnTokenTTLMs, setTurnTokenTTLMs] = useState<number | null>(null);
     const { showToast } = useToast();

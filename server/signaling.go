@@ -86,7 +86,7 @@ type Room struct {
 	RID             string
 	Participants    map[*Client]string // client -> cid
 	HostCID         string
-	MaxParticipants int            // per-room capacity (set at creation)
+	MaxParticipants int              // per-room capacity (set at creation)
 	JoinedAt        map[string]int64 // cid -> join timestamp (ms)
 	mu              sync.Mutex
 }
@@ -280,10 +280,10 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Parse join payload before acquiring locks
 	var joinPayload struct {
-		ReconnectCID         string `json:"reconnectCid"`
-		ReconnectToken       string `json:"reconnectToken"`
-		CreateMaxParticipants int   `json:"createMaxParticipants"`
-		Capabilities         struct {
+		ReconnectCID          string `json:"reconnectCid"`
+		ReconnectToken        string `json:"reconnectToken"`
+		CreateMaxParticipants int    `json:"createMaxParticipants"`
+		Capabilities          struct {
 			MaxParticipants int `json:"maxParticipants"`
 		} `json:"capabilities"`
 	}
@@ -848,7 +848,7 @@ func (h *Hub) handleWatchRooms(c *Client, msg Message) {
 	}
 
 	h.mu.Lock()
-	status := make(map[string]int)
+	status := make(map[string]map[string]int)
 	for _, rid := range payload.RIDs {
 		if err := validateRoomID(rid); err != nil {
 			continue
@@ -862,10 +862,15 @@ func (h *Hub) handleWatchRooms(c *Client, msg Message) {
 		// Get current count
 		if room, ok := h.rooms[rid]; ok {
 			room.mu.Lock()
-			status[rid] = len(room.Participants)
+			status[rid] = map[string]int{
+				"count":           len(room.Participants),
+				"maxParticipants": room.MaxParticipants,
+			}
 			room.mu.Unlock()
 		} else {
-			status[rid] = 0
+			status[rid] = map[string]int{
+				"count": 0,
+			}
 		}
 	}
 	h.mu.Unlock()
@@ -888,17 +893,23 @@ func (h *Hub) broadcastRoomStatusUpdate(rid string) {
 
 	// Get current count
 	count := 0
+	maxParticipants := 0
 	if room, ok := h.rooms[rid]; ok {
 		room.mu.Lock()
 		count = len(room.Participants)
+		maxParticipants = room.MaxParticipants
 		room.mu.Unlock()
 	}
 	h.mu.RUnlock()
 
-	payload, _ := json.Marshal(map[string]interface{}{
+	payloadMap := map[string]interface{}{
 		"rid":   rid,
 		"count": count,
-	})
+	}
+	if maxParticipants > 0 {
+		payloadMap["maxParticipants"] = maxParticipants
+	}
+	payload, _ := json.Marshal(payloadMap)
 
 	msg := Message{
 		V:       1,

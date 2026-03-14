@@ -7,10 +7,11 @@ import { useTranslation } from 'react-i18next';
 import { SavedRoomDialog } from './SavedRoomDialog';
 import { useToast } from '../contexts/ToastContext';
 import { createRoomId } from '../utils/roomApi';
+import { getRoomStatusState, type RoomStatuses } from '../contexts/signaling/roomStatuses';
 
 interface SavedRoomsProps {
     rooms: SavedRoom[];
-    roomStatuses: Record<string, number>;
+    roomStatuses: RoomStatuses;
     onRoomUpdate: () => void;
 }
 
@@ -43,11 +44,11 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
     };
 
     const renderStatusDot = (roomId: string) => {
-        const count = roomStatuses[roomId] || 0;
-        if (count === 0) return null;
+        const statusState = getRoomStatusState(roomStatuses[roomId]);
+        if (statusState === 'hidden') return null;
 
-        const statusClass = count === 1 ? 'status-waiting' : 'status-full';
-        const title = count === 1 ? t('someone_waiting') : t('room_full');
+        const statusClass = statusState === 'full' ? 'status-full' : 'status-waiting';
+        const title = statusState === 'full' ? t('room_full') : t('someone_waiting');
 
         return (
             <div className={`status-dot ${statusClass}`} title={title} />

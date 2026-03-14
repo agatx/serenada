@@ -51,10 +51,10 @@ func joinPayload(rid string, capMax int, createMax int) []byte {
 		MaxParticipants int `json:"maxParticipants,omitempty"`
 	}
 	payload := struct {
-		Capabilities         caps `json:"capabilities,omitempty"`
+		Capabilities          caps `json:"capabilities,omitempty"`
 		CreateMaxParticipants int  `json:"createMaxParticipants,omitempty"`
 	}{
-		Capabilities:         caps{MaxParticipants: capMax},
+		Capabilities:          caps{MaxParticipants: capMax},
 		CreateMaxParticipants: createMax,
 	}
 	payloadBytes, _ := json.Marshal(payload)
@@ -413,4 +413,98 @@ func TestCreateMaxParticipantsClampedToServerCeiling(t *testing.T) {
 	if room.MaxParticipants != 3 {
 		t.Fatalf("expected room maxParticipants clamped to 3, got %d", room.MaxParticipants)
 	}
+}
+
+func TestWatchRoomsIncludesMaxParticipants(t *testing.T) {
+	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	participant := fakeClient(hub)
+	hub.registerClient(participant)
+	hub.handleMessage(participant, joinPayload(rid, 4, 4))
+	drainMessages(participant)
+
+	watcher := fakeClient(hub)
+	hub.registerClient(watcher)
+	watchPayload, _ := json.Marshal(map[string]interface{}{
+		"rids": []string{rid},
+	})
+	watchMsg, _ := json.Marshal(Message{
+		V:       1,
+		Type:    "watch_rooms",
+		Payload: watchPayload,
+	})
+	hub.handleMessage(watcher, watchMsg)
+
+	msgs := drainMessages(watcher)
+	for _, msg := range msgs {
+		if msg.Type != "room_statuses" {
+			continue
+		}
+		var payload map[string]struct {
+			Count           int `json:"count"`
+			MaxParticipants int `json:"maxParticipants"`
+		}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_statuses payload: %v", err)
+		}
+		if payload[rid].Count != 1 {
+			t.Fatalf("expected count=1, got %d", payload[rid].Count)
+		}
+		if payload[rid].MaxParticipants != 4 {
+			t.Fatalf("expected maxParticipants=4, got %d", payload[rid].MaxParticipants)
+		}
+		return
+	}
+	t.Fatal("did not receive room_statuses message")
+}
+
+func TestRoomStatusUpdateIncludesMaxParticipants(t *testing.T) {
+	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	watcher := fakeClient(hub)
+	hub.registerClient(watcher)
+	watchPayload, _ := json.Marshal(map[string]interface{}{
+		"rids": []string{rid},
+	})
+	watchMsg, _ := json.Marshal(Message{
+		V:       1,
+		Type:    "watch_rooms",
+		Payload: watchPayload,
+	})
+	hub.handleMessage(watcher, watchMsg)
+	drainMessages(watcher)
+
+	participant := fakeClient(hub)
+	hub.registerClient(participant)
+	hub.handleMessage(participant, joinPayload(rid, 4, 4))
+
+	msgs := drainMessages(watcher)
+	for _, msg := range msgs {
+		if msg.Type != "room_status_update" {
+			continue
+		}
+		var payload struct {
+			RID             string `json:"rid"`
+			Count           int    `json:"count"`
+			MaxParticipants int    `json:"maxParticipants"`
+		}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_status_update payload: %v", err)
+		}
+		if payload.RID != rid {
+			t.Fatalf("expected rid=%s, got %s", rid, payload.RID)
+		}
+		if payload.Count != 1 {
+			t.Fatalf("expected count=1, got %d", payload.Count)
+		}
+		if payload.MaxParticipants != 4 {
+			t.Fatalf("expected maxParticipants=4, got %d", payload.MaxParticipants)
+		}
+		return
+	}
+	t.Fatal("did not receive room_status_update message")
 }
