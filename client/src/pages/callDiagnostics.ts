@@ -178,17 +178,22 @@ const ratioPercent = (numerator: number, denominator: number): number | null => 
 };
 
 export const useRealtimeCallStats = (
-    peerConnection: RTCPeerConnection | null,
+    peerConnections: RTCPeerConnection[],
     enabled: boolean
 ): RealtimeCallStats | null => {
     const [realtimeStats, setRealtimeStats] = useState<RealtimeCallStats | null>(null);
     const statsSampleRef = useRef<StatsSample | null>(null);
     const freezeSamplesRef = useRef<FreezeSample[]>([]);
 
+    // Stable key for the current set of PCs (reset samples when set changes)
+    const pcCountRef = useRef(0);
     useEffect(() => {
-        statsSampleRef.current = null;
-        freezeSamplesRef.current = [];
-    }, [peerConnection]);
+        if (peerConnections.length !== pcCountRef.current) {
+            pcCountRef.current = peerConnections.length;
+            statsSampleRef.current = null;
+            freezeSamplesRef.current = [];
+        }
+    }, [peerConnections.length]);
 
     useEffect(() => {
         if (!enabled) {
@@ -201,20 +206,18 @@ export const useRealtimeCallStats = (
         let cancelled = false;
 
         const pollRealtimeStats = async () => {
-            const pc = peerConnection;
-            if (!pc) {
-                if (!cancelled) {
-                    setRealtimeStats(null);
-                }
+            if (peerConnections.length === 0) {
+                if (!cancelled) setRealtimeStats(null);
                 return;
             }
 
             try {
-                const report = await pc.getStats();
+                // Merge stats from all peer connections
+                const reports = await Promise.all(peerConnections.map(pc => pc.getStats()));
                 const statsById = new Map<string, RTCStats>();
-                report.forEach(stat => {
-                    statsById.set(stat.id, stat);
-                });
+                for (const r of reports) {
+                    r.forEach(stat => statsById.set(stat.id, stat));
+                }
 
                 const media = {
                     audio: createMediaTotals(),
@@ -226,7 +229,7 @@ export const useRealtimeCallStats = (
                 let remoteInboundRttSumSeconds = 0;
                 let remoteInboundRttCount = 0;
 
-                report.forEach(stat => {
+                statsById.forEach(stat => {
                     if (stat.type === 'candidate-pair') {
                         const isSelected = getStatBoolean(stat, 'selected') === true;
                         const isNominated = getStatBoolean(stat, 'nominated') === true;
@@ -440,7 +443,7 @@ export const useRealtimeCallStats = (
             cancelled = true;
             window.clearInterval(timer);
         };
-    }, [enabled, peerConnection]);
+    }, [enabled, peerConnections]);
 
     return realtimeStats;
 };

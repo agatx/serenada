@@ -10,7 +10,7 @@ func TestInternalStatsDisabledReturnsNotFound(t *testing.T) {
 	t.Setenv("ENABLE_INTERNAL_STATS", "0")
 	t.Setenv("INTERNAL_STATS_TOKEN", "test-token")
 
-	handler := handleInternalStats(newHub())
+	handler := handleInternalStats(newHub(4))
 	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
 	rec := httptest.NewRecorder()
 
@@ -25,7 +25,7 @@ func TestInternalStatsEnabledRequiresConfiguredToken(t *testing.T) {
 	t.Setenv("ENABLE_INTERNAL_STATS", "1")
 	t.Setenv("INTERNAL_STATS_TOKEN", "")
 
-	handler := handleInternalStats(newHub())
+	handler := handleInternalStats(newHub(4))
 	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
 	rec := httptest.NewRecorder()
 
@@ -40,7 +40,7 @@ func TestInternalStatsRejectsMissingHeaderToken(t *testing.T) {
 	t.Setenv("ENABLE_INTERNAL_STATS", "1")
 	t.Setenv("INTERNAL_STATS_TOKEN", "test-token")
 
-	handler := handleInternalStats(newHub())
+	handler := handleInternalStats(newHub(4))
 	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
 	rec := httptest.NewRecorder()
 
@@ -55,7 +55,7 @@ func TestInternalStatsSuccessWithToken(t *testing.T) {
 	t.Setenv("ENABLE_INTERNAL_STATS", "1")
 	t.Setenv("INTERNAL_STATS_TOKEN", "test-token")
 
-	handler := handleInternalStats(newHub())
+	handler := handleInternalStats(newHub(4))
 	req := httptest.NewRequest(http.MethodGet, "/api/internal/stats", nil)
 	req.Header.Set("X-Internal-Token", "test-token")
 	rec := httptest.NewRecorder()

@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,14 @@ func main() {
 	rateLimitBypass = parseRateLimitBypass(os.Getenv("RATE_LIMIT_BYPASS_IPS"))
 
 	// Initialize signaling
-	hub := newHub()
+	maxParticipants := 4
+	if v := os.Getenv("MAX_ROOM_PARTICIPANTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 2 {
+			maxParticipants = n
+		}
+	}
+	log.Printf("Max room participants limit: %d", maxParticipants)
+	hub := newHub(maxParticipants)
 	go hub.run()
 
 	// Initialize Push Service

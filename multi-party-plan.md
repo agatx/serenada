@@ -2,11 +2,11 @@
 
 ## Context
 
-Serenada currently supports only 1:1 calls. The room model hard-caps at 2 participants (server/signaling.go:332,344), and all clients assume a single RTCPeerConnection with a single remote stream. This plan adds optional multi-party support using full-mesh WebRTC (each client maintains N-1 peer connections), capped at 4 participants. The 1:1 UX remains untouched; multi-party uses an adaptive tiling grid.
+Serenada currently supports only 1:1 calls. The room model hard-caps at 2 participants (server/signaling.go:332,344), and all clients assume a single RTCPeerConnection with a single remote stream. This plan adds optional multi-party support using full-mesh WebRTC (each client maintains N-1 peer connections), capped at 4 participants. New-capable web clients create group-capable rooms by default, but the in-call UX remains in the existing 1:1 layout until a third participant joins. At 3-4 participants, the UI switches to an adaptive stage-style tile layout.
 
 **Compatibility requirement**: Existing Android and iOS builds must keep working unchanged. Legacy mobile clients may create and join only 1:1 rooms. They must be rejected from multi-party rooms even if the room currently has fewer than 2 participants.
 
-**Rollout**: Server + Web client first, but not as a global room-capacity change. Multi-party becomes an explicit room mode selected by new web clients. Legacy clients continue using 1:1 rooms only. Android and iOS native multi-party support follows in a separate phase.
+**Rollout**: Server + Web client first, but not as a global room-capacity change. Room capacity is decided when the room is created: legacy/unspecified clients create 1:1 rooms (`maxParticipants=2`), while new web clients create group-capable rooms (`maxParticipants=4`) by default. Existing rooms keep that capacity for their lifetime; later joiners cannot upgrade or downgrade them. Android and iOS native multi-party support follows in a separate phase.
 
 **Negotiation strategy**: Existing participants offer to the newcomer. When a new participant joins, every already-present participant creates a PC and sends an offer. The newcomer answers each.
 
@@ -28,9 +28,9 @@ Small, surgical changes, but now per-room rather than hub-global. No new depende
 - Change `newHub()` signature to `newHub(maxParticipantsLimit int) *Hub`
 - Guard: `if maxParticipantsLimit < 2 { maxParticipantsLimit = 2 }`
 - In `main.go`, parse `MAX_ROOM_PARTICIPANTS` and pass it to `newHub`
-- Use `4` as the ceiling default, but note that legacy compatibility is enforced by room mode, not by this ceiling alone
+- Use `4` as the ceiling default, but note that legacy compatibility is enforced by the room capacity chosen at creation, not by this ceiling alone
 
-### 1.2 Extend join payload for capability + room mode
+### 1.2 Extend join payload for capability + room capacity
 
 **File: `server/signaling.go`**
 
@@ -104,7 +104,7 @@ Add: `# MAX_ROOM_PARTICIPANTS=4`
 
 ---
 
-## Phase 2: Web Client — Signaling / Room Mode
+## Phase 2: Web Client — Signaling / Room Capacity Selection
 
 This is the compatibility layer that keeps old mobile clients working.
 
@@ -119,14 +119,15 @@ This is the compatibility layer that keeps old mobile clients working.
   - `capabilities.maxParticipants`
   - `createMaxParticipants`
 
-### 2.2 Advertise web capability, request room mode explicitly
+### 2.2 Advertise web capability, request room capacity on create
 
 **File: `client/src/contexts/SignalingContext.tsx`**
 
 - New web clients always advertise `capabilities.maxParticipants = 4`
-- Normal join flow requests `createMaxParticipants = 2`
-- Explicit group-call flow requests `createMaxParticipants = 4`
+- On room creation, new web clients request `createMaxParticipants = 4` by default
+- Legacy/unspecified clients omit capability metadata and therefore create `maxParticipants = 2` rooms
 - Existing rooms ignore `createMaxParticipants`; compatibility is checked by the server against `room.maxParticipants`
+- A narrow opt-out path may still request `createMaxParticipants = 2` when a deliberately 1:1 room is needed, but there is no separate primary UI for this
 
 ### 2.3 Handle the new server error cleanly
 
@@ -284,17 +285,17 @@ When `startLocalMedia` is called and peers already exist, add tracks to all exis
 
 ## Phase 4: Web Client — CallRoom.tsx UI Changes
 
-### 4.1 Add an explicit room-mode entry point
+### 4.1 Keep room creation simple; switch layouts in-call
 
 **Files:**
 - `client/src/pages/CallRoom.tsx`
-- any room-create / share entry UI that chooses call type
 
-- Default flow stays 1:1 to preserve compatibility with old mobile clients
-- Add an explicit "Group call" path for new web clients that sets `createMaxParticipants=4` on room creation
-- Standard room joins should continue requesting `createMaxParticipants=2` unless the user explicitly chose group mode
+- Do not add a separate "1:1 vs group" start-call UI
+- New web-created rooms request `createMaxParticipants=4` by default
+- Legacy-created rooms remain `maxParticipants=2` and therefore stay mobile-compatible
+- A default web-created room still behaves like a normal 1:1 call until participant #3 joins
 
-### 4.2 Conditional layout: 1:1 vs grid
+### 4.2 Conditional layout: 1:1 vs multi-party stage
 
 **File: `client/src/pages/CallRoom.tsx`**
 
@@ -302,34 +303,37 @@ When `startLocalMedia` is called and peers already exist, add tracks to all exis
 if remoteStreams.size <= 1:
   render existing 1:1 layout (large remote + PIP local)
 else:
-  render VideoGrid
+  render multi-party tile stage
 ```
 
-For 1:1, pull the single stream from the `Map` instead of the old scalar state. Same DOM, same CSS.
+For 1:1, pull the single stream from the `Map` instead of the old scalar state. Same DOM, same CSS. This means a group-capable room still shows the unchanged 1:1 experience for the first two participants, and only flips to the multi-party layout when there are at least 2 remote streams.
 
-### 4.3 New component: `VideoGrid`
+### 4.3 Tile rendering in `CallRoom.tsx`
 
-**File: `client/src/components/VideoGrid.tsx`** (new file)
+**File: `client/src/pages/CallRoom.tsx`**
 
-```typescript
-interface VideoGridProps {
-    localStream: MediaStream | null;
-    remoteStreams: Map<string, MediaStream>;
-    facingMode: 'user' | 'environment';
-}
-```
+- Keep tile rendering local to `CallRoom.tsx` with a small inline `VideoTile` helper
+- Render one local tile plus one tile per remote stream
+- Local tile remains mirrored when `facingMode === 'user'`
 
 Layout rules (total tiles = remotes + 1 local):
-- **3 tiles**: 1 top spanning full width, 2 bottom
-- **4 tiles**: 2x2 grid
+- **2 tiles total**: stay in the existing 1:1 layout
+- **3-4 tiles total**: switch to a centered, wrapping stage with consistent 16:9 tiles
+- Count-specific sizing can still be applied via `data-count`, but avoid rigid span rules or a hardcoded "hero on top" composition
 
-Each tile is a `<video autoPlay playsInline>` element. Local tile is mirrored when `facingMode === 'user'`.
+Each tile is a `<video autoPlay playsInline>` element. The layout should feel closer to a modern conferencing stage than to a fixed CCTV-style grid.
 
-### 4.4 CSS grid styles
+### 4.4 CSS stage styles
 
 **File: `client/src/index.css`**
 
-Add `.video-grid`, `.video-grid-3`, `.video-grid-4`, and `.video-grid-cell` styles. Reuse existing 1:1 styles unchanged.
+Add `.video-grid`, `.video-grid-cell`, and count-aware sizing styles that:
+- center the participant tiles within the viewport
+- preserve a consistent 16:9 tile shape
+- allow wrapping for 3-4 participants
+- keep mobile in a single-column stack
+
+Reuse existing 1:1 styles unchanged.
 
 ### 4.5 Update waiting/status messages
 
@@ -337,8 +341,8 @@ Add `.video-grid`, `.video-grid-3`, `.video-grid-4`, and `.video-grid-cell` styl
 
 - Show "Waiting..." when `remoteStreams.size === 0`
 - Remove single-peer `otherParticipant` logic and replace it with participant count / room mode checks
-- Preserve the existing 1:1 waiting-room/share UX for 1:1 rooms
-- For group rooms, update copy to refer to participants rather than a single "other participant"
+- Preserve the existing 1:1 waiting-room/share UX while there are fewer than 3 participants on the call
+- Once the call becomes multi-party, stop relying on single-peer assumptions in copy and status logic
 
 ### 4.6 Update diagnostics
 
@@ -375,19 +379,19 @@ Both platforms: local audio/video tracks remain singletons shared across all PCs
 ### Server
 
 1. `cd server && go test ./...`
-2. Manual: create a normal 1:1 room from web, confirm legacy/mobile-compatible clients can join it
-3. Manual: create a 4-party room from new web UI, confirm old mobile client is rejected with the explicit unsupported-capacity error
-4. Manual: join 4 browser tabs to the same group room, confirm all receive `joined` and `room_state` with correct participant lists. Confirm 5th gets `ROOM_FULL`.
+2. Manual: create a room from a legacy/mobile-compatible client, confirm it is capped at `2` and legacy clients can join it
+3. Manual: create a room from the new web flow, confirm it is `maxParticipants=4` and old mobile client is rejected with the explicit unsupported-capacity error
+4. Manual: join 4 browser tabs to the same default web-created room, confirm all receive `joined` and `room_state` with correct participant lists. Confirm 5th gets `ROOM_FULL`.
 
 ### Web Client
 
 1. `cd client && npm run lint && npm run test`
-2. **1:1 regression**: Two browser tabs in a normal room — verify identical UX to before (PIP layout, screen share, camera flip, reconnection)
-3. **Legacy compatibility**: New web client creates a normal room, old mobile client joins successfully
-4. **Group-room incompatibility path**: New web client creates a group room, old mobile client is rejected cleanly
-5. **3-party**: Three web tabs in a group room — verify grid layout with 3 tiles, all video/audio flowing
-6. **4-party**: Four web tabs in a group room — verify 2x2 grid, all streams
-7. **Join/leave mid-call**: Start 3-party, one leaves — verify grid transitions back to 1:1 layout, remaining PC is unaffected
+2. **1:1 regression**: Two browser tabs in a default web-created room — verify identical UX to before (PIP layout, screen share, camera flip, reconnection)
+3. **Legacy compatibility**: Legacy/mobile client creates a room, new web client joins successfully, and old mobile clients can still join
+4. **Group-room incompatibility path**: New web client creates a default room, old mobile client is rejected cleanly
+5. **3-party**: Three web tabs in a default web-created room — verify the layout switches from 1:1 into the multi-party stage, all video/audio flowing
+6. **4-party**: Four web tabs in a default web-created room — verify the adaptive stage layout with 4 tiles and all streams
+7. **Join/leave mid-call**: Start 3-party, one leaves — verify the layout transitions back to the 1:1 view, remaining PC is unaffected
 8. **Screen share in multi-party**: Verify track replacement propagates to all peers
 9. **ICE restart**: Kill network on one tab, verify only that peer's connection recovers
 
@@ -407,5 +411,7 @@ Update the protocol and user-facing docs as part of the implementation:
   - document per-room `maxParticipants`
   - document the legacy-client rejection path for group rooms
 - `README.md`
-  - clarify that 1:1 remains the default mode
+  - clarify that new web-created rooms are group-capable by default
+  - clarify that the UI remains in the familiar 1:1 layout until participant #3 joins
+  - clarify that legacy mobile clients remain 1:1-only
   - clarify that group calls are web-first until native clients add support

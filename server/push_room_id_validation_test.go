@@ -8,9 +8,11 @@ import (
 )
 
 func makeTestHubWithParticipant(roomID string, cid string) *Hub {
-	hub := newHub()
+	hub := newHub(4)
 	hub.rooms[roomID] = &Room{
-		RID: roomID,
+		RID:             roomID,
+		MaxParticipants: 2,
+		JoinedAt:        map[string]int64{cid: 1},
 		Participants: map[*Client]string{
 			&Client{}: cid,
 		},
@@ -65,7 +67,7 @@ func TestHandlePushNotifyRejectsInvalidRoomID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/push/notify?roomId=bad", strings.NewReader(`{"cid":"cid-1"}`))
 	rec := httptest.NewRecorder()
 
-	handlePushNotify(newHub())(rec, req)
+	handlePushNotify(newHub(4))(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d", http.StatusBadRequest, rec.Code)
@@ -77,7 +79,7 @@ func TestHandlePushNotifyRejectsMissingCID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/push/notify?roomId="+roomID, strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 
-	handlePushNotify(newHub())(rec, req)
+	handlePushNotify(newHub(4))(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected %d, got %d", http.StatusBadRequest, rec.Code)

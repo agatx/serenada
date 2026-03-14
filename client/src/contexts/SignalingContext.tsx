@@ -25,7 +25,7 @@ interface SignalingContextValue {
     roomState: RoomState | null;
     turnToken: string | null;
     turnTokenTTLMs: number | null;
-    joinRoom: (roomId: string) => void;
+    joinRoom: (roomId: string, options?: { createMaxParticipants?: number }) => void;
     leaveRoom: () => void;
     endRoom: () => void;
     sendMessage: (type: string, payload?: any, to?: string) => void;
@@ -284,7 +284,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         };
     }, [isConnected, sendMessage]);
 
-    const joinRoom = useCallback((roomId: string) => {
+    const joinRoom = useCallback((roomId: string, options?: { createMaxParticipants?: number }) => {
         console.log(`[Signaling] joinRoom call for ${roomId}`);
         setError(null);
         clearJoinTimers();
@@ -295,7 +295,10 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         joinAckedRef.current = false;
 
         if (transportRef.current && transportRef.current.isOpen()) {
-            const payload: any = { capabilities: { trickleIce: true } };
+            const payload: any = {
+                capabilities: { trickleIce: true, maxParticipants: 4 },
+                createMaxParticipants: options?.createMaxParticipants ?? 2,
+            };
             // If we have a previous client ID, send it to help server evict ghosts
             const reconnectCid = clientIdRef.current || lastClientIdRef.current;
             if (reconnectCid) {

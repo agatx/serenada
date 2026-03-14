@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSignaling } from '../contexts/SignalingContext';
 import { useWebRTC } from '../contexts/WebRTCContext';
@@ -191,6 +191,20 @@ async function captureSnapshotBytes(stream: MediaStream): Promise<{ bytes: Uint8
     return { bytes: new Uint8Array(buffer), mime: 'image/jpeg' };
 }
 
+// Multi-party grid video tile (defined outside component to avoid remounts)
+const VideoTile: React.FC<{ stream: MediaStream; label?: string }> = ({ stream, label }) => {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    useEffect(() => {
+        if (videoRef.current) videoRef.current.srcObject = stream;
+    }, [stream]);
+    return (
+        <div className="video-grid-cell">
+            <video ref={videoRef} autoPlay playsInline className="video-remote" />
+            {label && <div className="video-grid-label">{label}</div>}
+        </div>
+    );
+};
+
 const CallRoom: React.FC = () => {
     const { t } = useTranslation();
     const { roomId } = useParams<{ roomId: string }>();
@@ -200,6 +214,8 @@ const CallRoom: React.FC = () => {
     const location = window.location;
     const urlParams = new URLSearchParams(location.search);
     const sharedName = urlParams.get('name');
+    // Web clients always create group-capable rooms unless explicitly restricted
+    const isGroupCallRequested = urlParams.get('group') !== '0';
 
     const {
         joinRoom,
@@ -223,14 +239,21 @@ const CallRoom: React.FC = () => {
         facingMode,
         hasMultipleCameras,
         localStream,
-        remoteStream,
-        peerConnection,
+        remoteStreams,
+        peerConnections,
         iceConnectionState,
         connectionState,
         signalingState,
         connectionStatus
     } = useWebRTC();
     const { showToast } = useToast();
+
+    // Derive single remote stream for 1:1 layout and multi-party flag (memoized)
+    const remoteStreamEntries = useMemo(() => Array.from(remoteStreams.entries()), [remoteStreams]);
+    const isMultiParty = remoteStreamEntries.length > 1;
+    const remoteStream = remoteStreamEntries.length === 1 ? remoteStreamEntries[0][1] : null;
+    // For diagnostics (memoized to avoid effect churn)
+    const peerConnectionsArray = useMemo(() => Array.from(peerConnections.values()), [peerConnections]);
 
     const [hasJoined, setHasJoined] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
@@ -407,7 +430,7 @@ const CallRoom: React.FC = () => {
     const [showDebug, setShowDebug] = useState(false);
     const debugTapRef = useRef<number>(0);
     const debugTapTimeoutRef = useRef<number | null>(null);
-    const realtimeStats = useRealtimeCallStats(peerConnection, showDebug && hasJoined);
+    const realtimeStats = useRealtimeCallStats(peerConnectionsArray, showDebug && hasJoined);
 
     const isMobileDevice = () => {
         if (typeof window === 'undefined') return false;
@@ -434,18 +457,31 @@ const CallRoom: React.FC = () => {
         }
     };
 
+    const attachVideoStream = useCallback((video: HTMLVideoElement | null, stream: MediaStream | null) => {
+        if (!video) return;
+        if (video.srcObject !== stream) {
+            video.srcObject = stream;
+        }
+    }, []);
+
+    const setLocalVideoRef = useCallback((node: HTMLVideoElement | null) => {
+        localVideoRef.current = node;
+        attachVideoStream(node, localStream);
+    }, [attachVideoStream, localStream]);
+
+    const setRemoteVideoRef = useCallback((node: HTMLVideoElement | null) => {
+        remoteVideoRef.current = node;
+        attachVideoStream(node, remoteStream);
+    }, [attachVideoStream, remoteStream]);
+
     // Handle stream attachment
     useEffect(() => {
-        if (localVideoRef.current && localStream) {
-            localVideoRef.current.srcObject = localStream;
-        }
-    }, [localStream, hasJoined]);
+        attachVideoStream(localVideoRef.current, localStream);
+    }, [attachVideoStream, localStream, hasJoined]);
 
     useEffect(() => {
-        if (remoteVideoRef.current && remoteStream) {
-            remoteVideoRef.current.srcObject = remoteStream;
-        }
-    }, [remoteStream]);
+        attachVideoStream(remoteVideoRef.current, remoteStream);
+    }, [attachVideoStream, remoteStream]);
 
     useEffect(() => {
         const clearWaitingTimer = () => {
@@ -462,7 +498,7 @@ const CallRoom: React.FC = () => {
             return clearWaitingTimer;
         }
 
-        if (remoteStream) {
+        if (remoteStreams.size > 0) {
             setShowWaiting(false);
             return clearWaitingTimer;
         }
@@ -477,7 +513,7 @@ const CallRoom: React.FC = () => {
 
         setShowWaiting(true);
         return clearWaitingTimer;
-    }, [hasJoined, remoteStream, showReconnecting]);
+    }, [hasJoined, remoteStreams.size, showReconnecting]);
 
     // Handle room state changes
     useEffect(() => {
@@ -578,7 +614,7 @@ const CallRoom: React.FC = () => {
             await startLocalMedia();
             // Join immediately — push notification will fire asynchronously after join
             setTimeout(() => {
-                joinRoom(roomId);
+                joinRoom(roomId, isGroupCallRequested ? { createMaxParticipants: 4 } : undefined);
                 setHasJoined(true);
                 callStartTimeRef.current = Date.now();
             }, 50);
@@ -820,7 +856,7 @@ const CallRoom: React.FC = () => {
                     )}
                     <div className="video-preview-container">
                         <video
-                            ref={localVideoRef}
+                            ref={setLocalVideoRef}
                             autoPlay
                             playsInline
                             muted
@@ -864,7 +900,8 @@ const CallRoom: React.FC = () => {
     }
 
     // Render In-Call
-    const otherParticipant = roomState?.participants?.find(p => p.cid !== clientId);
+    const otherParticipants = roomState?.participants?.filter(p => p.cid !== clientId) ?? [];
+    const otherParticipant = otherParticipants.length > 0 ? otherParticipants[0] : undefined;
     const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
     const debugSections = buildDebugPanelSections({
         isConnected,
@@ -878,11 +915,51 @@ const CallRoom: React.FC = () => {
     });
 
 
-    return (
+    // Shared controls bar (used in both 1:1 and multi-party layouts)
+    const controlsBar = (
         <div
-            className={`call-container ${areControlsVisible ? '' : 'controls-hidden'} ${isLocalLarge ? 'local-large' : ''}`}
-            onPointerUp={handleScreenTap}
+            className="controls-bar"
+            onPointerUp={event => {
+                event.stopPropagation();
+                handleControlsInteraction();
+            }}
         >
+            <button onClick={toggleMute} className={`btn-control ${isMuted ? 'active' : ''}`}>
+                {isMuted ? <MicOff /> : <Mic />}
+            </button>
+            <button onClick={toggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
+                {isCameraOff ? <VideoOff /> : <Video />}
+            </button>
+            {hasMultipleCameras && (
+                <button onClick={flipCamera} className="btn-control" disabled={isScreenSharing}>
+                    <RotateCcw />
+                </button>
+            )}
+            {showScreenShareControl && (
+                <button
+                    onClick={() => {
+                        if (isScreenSharing) {
+                            void stopScreenShare();
+                        } else {
+                            void startScreenShare();
+                        }
+                    }}
+                    className={`btn-control ${isScreenSharing ? 'active-screen-share' : ''}`}
+                    title={isScreenSharing ? t('screen_share_stop') : t('screen_share_start')}
+                    aria-label={isScreenSharing ? t('screen_share_stop') : t('screen_share_start')}
+                >
+                    {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
+                </button>
+            )}
+            <button onClick={handleLeave} className="btn-control btn-leave">
+                <PhoneOff />
+            </button>
+        </div>
+    );
+
+    // Shared debug/reconnecting overlay
+    const overlayContent = (
+        <>
             <div
                 className="debug-toggle-zone"
                 onPointerDown={handleDebugCornerTap}
@@ -921,6 +998,49 @@ const CallRoom: React.FC = () => {
                     </div>
                 </div>
             )}
+        </>
+    );
+
+    // Multi-party grid layout (3+ participants)
+    if (isMultiParty) {
+        const totalTiles = remoteStreamEntries.length + 1; // +1 for local
+        const gridClass = `video-grid video-grid-${Math.min(totalTiles, 4)}`;
+
+        return (
+            <div
+                className={`call-container ${areControlsVisible ? '' : 'controls-hidden'}`}
+                onPointerUp={handleScreenTap}
+            >
+                {overlayContent}
+                <div className={gridClass} data-count={totalTiles}>
+                    {/* Local video tile */}
+                    <div className="video-grid-cell">
+                        <video
+                            ref={setLocalVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className={`video-local ${shouldMirrorLocalVideo ? 'mirrored' : ''}`}
+                            style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
+                        />
+                    </div>
+                    {/* Remote video tiles */}
+                    {remoteStreamEntries.map(([cid, stream]) => (
+                        <VideoTile key={cid} stream={stream} />
+                    ))}
+                </div>
+                {controlsBar}
+            </div>
+        );
+    }
+
+    // --- 1:1 layout (existing) ---
+    return (
+        <div
+            className={`call-container ${areControlsVisible ? '' : 'controls-hidden'} ${isLocalLarge ? 'local-large' : ''}`}
+            onPointerUp={handleScreenTap}
+        >
+            {overlayContent}
             {/* Primary Video (Full Screen) */}
             <div
                 className={`video-remote-container ${isLocalLarge ? 'pip' : 'primary'}`}
@@ -930,7 +1050,7 @@ const CallRoom: React.FC = () => {
                 } : undefined}
             >
                 <video
-                    ref={remoteVideoRef}
+                    ref={setRemoteVideoRef}
                     autoPlay
                     playsInline
                     className="video-remote"
@@ -1008,7 +1128,7 @@ const CallRoom: React.FC = () => {
                 } : undefined}
             >
                 <video
-                    ref={localVideoRef}
+                    ref={setLocalVideoRef}
                     autoPlay
                     playsInline
                     muted
@@ -1017,45 +1137,7 @@ const CallRoom: React.FC = () => {
                 />
             </div>
 
-            {/* Controls */}
-            <div
-                className="controls-bar"
-                onPointerUp={event => {
-                    event.stopPropagation();
-                    handleControlsInteraction();
-                }}
-            >
-                <button onClick={toggleMute} className={`btn-control ${isMuted ? 'active' : ''}`}>
-                    {isMuted ? <MicOff /> : <Mic />}
-                </button>
-                <button onClick={toggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
-                    {isCameraOff ? <VideoOff /> : <Video />}
-                </button>
-                {hasMultipleCameras && (
-                    <button onClick={flipCamera} className="btn-control" disabled={isScreenSharing}>
-                        <RotateCcw />
-                    </button>
-                )}
-                {showScreenShareControl && (
-                    <button
-                        onClick={() => {
-                            if (isScreenSharing) {
-                                void stopScreenShare();
-                            } else {
-                                void startScreenShare();
-                            }
-                        }}
-                        className={`btn-control ${isScreenSharing ? 'active-screen-share' : ''}`}
-                        title={isScreenSharing ? t('screen_share_stop') : t('screen_share_start')}
-                        aria-label={isScreenSharing ? t('screen_share_stop') : t('screen_share_start')}
-                    >
-                        {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
-                    </button>
-                )}
-                <button onClick={handleLeave} className="btn-control btn-leave">
-                    <PhoneOff />
-                </button>
-            </div>
+            {controlsBar}
         </div >
     );
 };

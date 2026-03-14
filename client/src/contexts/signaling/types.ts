@@ -1,6 +1,7 @@
 export type RoomState = {
     hostCid: string | null;
     participants: { cid: string; joinedAt?: number }[];
+    maxParticipants?: number;
 };
 
 export type SignalingMessage = {
