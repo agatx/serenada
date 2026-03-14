@@ -37,6 +37,7 @@
 "error_enter_room_or_id" = "Enter a room link or ID";
 "error_failed_create_room" = "Failed to create room";
 "error_invalid_room_id" = "Invalid room ID";
+"error_room_capacity_unsupported" = "This room requires a newer app version.";
 "error_unknown" = "Unknown error";
 
 "call_status_connected" = "Connected";

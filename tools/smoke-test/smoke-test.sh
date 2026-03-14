@@ -5,7 +5,8 @@
 #
 # Environment variables:
 #   SMOKE_SERVER        — Server URL override (empty = local Docker)
-#   SMOKE_PAIRS         — Comma-separated test pairs (default: web+android,web+ios)
+#   SMOKE_SCENARIOS     — Comma-separated scenarios (default: web+android,web+ios,web+android+ios)
+#   SMOKE_PAIRS         — Back-compat alias for SMOKE_SCENARIOS
 #   SMOKE_ARTIFACTS_DIR — Screenshots and logs dir (default: tools/smoke-test/artifacts)
 #   SMOKE_SKIP_BUILD    — Skip platform builds (default: 0)
 #   SMOKE_KEEP_SERVER   — Don't stop Docker on exit (default: 0)
@@ -21,7 +22,7 @@ source "$SCRIPT_DIR/lib/report.sh"
 
 # --- Configuration ---
 SMOKE_SERVER="${SMOKE_SERVER:-}"
-SMOKE_PAIRS="${SMOKE_PAIRS:-web+android,web+ios}"
+SMOKE_SCENARIOS="${SMOKE_SCENARIOS:-${SMOKE_PAIRS:-web+android,web+ios,web+android+ios}}"
 SMOKE_ARTIFACTS_DIR="${SMOKE_ARTIFACTS_DIR:-$SCRIPT_DIR/artifacts}"
 SMOKE_SKIP_BUILD="${SMOKE_SKIP_BUILD:-0}"
 SMOKE_KEEP_SERVER="${SMOKE_KEEP_SERVER:-0}"
@@ -67,11 +68,11 @@ IOS_UDID=""
 ANDROID_AVAILABLE=false
 IOS_AVAILABLE=false
 
-if echo "$SMOKE_PAIRS" | grep -q "android"; then
+if echo "$SMOKE_SCENARIOS" | grep -q "android"; then
     ANDROID_SERIAL=$(detect_android 2>/dev/null) && ANDROID_AVAILABLE=true || true
 fi
 
-if echo "$SMOKE_PAIRS" | grep -q "ios"; then
+if echo "$SMOKE_SCENARIOS" | grep -q "ios"; then
     IOS_UDID=$(detect_ios 2>/dev/null) && IOS_AVAILABLE=true || true
 fi
 
@@ -124,40 +125,132 @@ log_info "Installing Playwright dependencies ..."
     exit 1
 }
 
-# --- Step 6: Run test pairs ---
+# --- Step 6: Run test scenarios ---
 mkdir -p "$SMOKE_ARTIFACTS_DIR"
 
-IFS=',' read -ra PAIRS <<< "$SMOKE_PAIRS"
+IFS=',' read -ra SCENARIOS <<< "$SMOKE_SCENARIOS"
 
-for pair in "${PAIRS[@]}"; do
-    pair=$(echo "$pair" | tr -d ' ')
+for scenario in "${SCENARIOS[@]}"; do
+    scenario=$(echo "$scenario" | tr -d ' ')
     log_info "=========================================="
-    log_info "Running pair: $pair"
+    log_info "Running scenario: $scenario"
     log_info "=========================================="
 
-    # Parse pair
-    IFS='+' read -r PLATFORM_A PLATFORM_B <<< "$pair"
+    IFS='+' read -ra PLATFORMS <<< "$scenario"
+    PLATFORM_A="${PLATFORMS[0]:-}"
+    PLATFORM_B="${PLATFORMS[1]:-}"
+    PLATFORM_C="${PLATFORMS[2]:-}"
+    PLATFORM_COUNT="${#PLATFORMS[@]}"
+
+    if [ "$PLATFORM_COUNT" -lt 2 ] || [ "$PLATFORM_COUNT" -gt 3 ]; then
+        log_warn "Skipping $scenario — unsupported platform set"
+        report_result "$scenario" "SKIP" "0"
+        continue
+    fi
 
     # Check device availability
-    if [ "$PLATFORM_B" = "android" ] && [ "$ANDROID_AVAILABLE" != true ]; then
-        log_warn "Skipping $pair — no Android device"
-        report_result "$pair" "SKIP" "0"
+    if echo "$scenario" | grep -q "android" && [ "$ANDROID_AVAILABLE" != true ]; then
+        log_warn "Skipping $scenario — no Android device"
+        report_result "$scenario" "SKIP" "0"
         continue
     fi
-    if [ "$PLATFORM_B" = "ios" ] && [ "$IOS_AVAILABLE" != true ]; then
-        log_warn "Skipping $pair — no iOS device"
-        report_result "$pair" "SKIP" "0"
+    if echo "$scenario" | grep -q "ios" && [ "$IOS_AVAILABLE" != true ]; then
+        log_warn "Skipping $scenario — no iOS device"
+        report_result "$scenario" "SKIP" "0"
         continue
     fi
 
-    PAIR_START=$(date +%s)
-    PAIR_STATUS="FAIL"
+    SCENARIO_START=$(date +%s)
+    SCENARIO_STATUS="FAIL"
 
     # Create room
-    ROOM_ID=$(create_room "$SERVER_URL") || { report_result "$pair" "FAIL" "0"; continue; }
+    ROOM_ID=$(create_room "$SERVER_URL") || { report_result "$scenario" "FAIL" "0"; continue; }
     log_info "Room created: $ROOM_ID"
 
-    if [ "$PLATFORM_B" = "ios" ]; then
+    if [ "$PLATFORM_COUNT" -eq 3 ]; then
+        # --- Three-platform validation flow ---
+        BARRIER_DIR=$(mktemp -d)
+        BARRIER_DIRS+=("$BARRIER_DIR")
+
+        run_three_platform_scenario() {
+            local room_id="$1"
+            local barrier_dir="$2"
+            local web_pid="" android_pid="" ios_pid=""
+            local ios_exit=0
+
+            kill_scenario() {
+                for p in "$web_pid" "$android_pid" "$ios_pid"; do
+                    if [ -n "$p" ]; then
+                        kill "$p" 2>/dev/null || true
+                        wait "$p" 2>/dev/null || true
+                    fi
+                done
+            }
+
+            log_info "Starting web leg ..."
+            (
+                cd "$WEB_DIR" && \
+                SMOKE_SERVER_URL="$WEB_URL" \
+                SMOKE_ROOM_ID="$room_id" \
+                SMOKE_BARRIER_DIR="$barrier_dir" \
+                SMOKE_ROLE="web" \
+                SMOKE_EXPECTED_PARTICIPANTS="3" \
+                exec npx playwright test multiparty.spec.ts
+            ) &
+            web_pid=$!
+            PIDS+=("$web_pid")
+
+            barrier_wait "$barrier_dir" "web.joined" 30 || { kill_scenario; return 1; }
+
+            log_info "Starting android leg ..."
+            SMOKE_SERVER_URL="$MOBILE_URL" \
+            SMOKE_ROOM_ID="$room_id" \
+            SMOKE_BARRIER_DIR="$barrier_dir" \
+            SMOKE_ARTIFACTS_DIR="$SMOKE_ARTIFACTS_DIR" \
+            SMOKE_FLOW="group" \
+            SMOKE_EXPECTED_PARTICIPANTS="3" \
+            ANDROID_SERIAL="$ANDROID_SERIAL" \
+            bash "$SCRIPT_DIR/android/smoke-android.sh" &
+            android_pid=$!
+            PIDS+=("$android_pid")
+
+            barrier_wait "$barrier_dir" "android.joined" 30 || { kill_scenario; return 1; }
+
+            log_info "Starting iOS leg ..."
+            SMOKE_SERVER_URL="$MOBILE_URL" \
+            SMOKE_ROOM_ID="$room_id" \
+            SMOKE_ARTIFACTS_DIR="$SMOKE_ARTIFACTS_DIR" \
+            IOS_UDID="$IOS_UDID" \
+            SMOKE_IOS_TEST_CLASS="DeepLinkParticipantCountUITests" \
+            SMOKE_EXPECTED_PARTICIPANTS="3" \
+            bash "$SCRIPT_DIR/ios/smoke-ios.sh" &
+            ios_pid=$!
+            PIDS+=("$ios_pid")
+
+            barrier_wait_all "$barrier_dir" 90 "web.participant-count-ok" "android.participant-count-ok" || {
+                kill_scenario
+                return 1
+            }
+
+            wait "$ios_pid" || ios_exit=$?
+            if [ "$ios_exit" -ne 0 ]; then
+                kill_scenario
+                return "$ios_exit"
+            fi
+
+            barrier_write "$barrier_dir" "end"
+            barrier_wait_all "$barrier_dir" 30 "web.done" "android.done" || { kill_scenario; return 1; }
+
+            wait "$web_pid" || { kill_scenario; return 1; }
+            wait "$android_pid" || { kill_scenario; return 1; }
+
+            return 0
+        }
+
+        if run_three_platform_scenario "$ROOM_ID" "$BARRIER_DIR"; then
+            SCENARIO_STATUS="PASS"
+        fi
+    elif [ "$PLATFORM_B" = "ios" ]; then
         # --- iOS-specific flow (section 5 of plan) ---
         BARRIER_DIR=$(mktemp -d)
         BARRIER_DIRS+=("$BARRIER_DIR")
@@ -214,7 +307,7 @@ for pair in "${PAIRS[@]}"; do
         }
 
         if run_ios_pair "$ROOM_ID" "$BARRIER_DIR"; then
-            PAIR_STATUS="PASS"
+            SCENARIO_STATUS="PASS"
         fi
     else
         # --- Standard barrier-synchronized flow (section 6 of plan) ---
@@ -303,13 +396,13 @@ for pair in "${PAIRS[@]}"; do
         }
 
         if run_standard_pair "$PLATFORM_A" "$PLATFORM_B" "$ROOM_ID"; then
-            PAIR_STATUS="PASS"
+            SCENARIO_STATUS="PASS"
         fi
     fi
 
-    PAIR_END=$(date +%s)
-    PAIR_ELAPSED=$((PAIR_END - PAIR_START))
-    report_result "$pair" "$PAIR_STATUS" "$PAIR_ELAPSED"
+    SCENARIO_END=$(date +%s)
+    SCENARIO_ELAPSED=$((SCENARIO_END - SCENARIO_START))
+    report_result "$scenario" "$SCENARIO_STATUS" "$SCENARIO_ELAPSED"
 done
 
 # --- Step 7: Print summary ---

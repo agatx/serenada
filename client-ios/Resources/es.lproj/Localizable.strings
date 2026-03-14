@@ -37,6 +37,7 @@
 "error_enter_room_or_id" = "Introduce un enlace o ID de sala";
 "error_failed_create_room" = "No se pudo crear la sala";
 "error_invalid_room_id" = "ID de sala inválido";
+"error_room_capacity_unsupported" = "Esta sala requiere una versión más reciente de la aplicación.";
 "error_unknown" = "Error desconocido";
 
 "call_status_connected" = "Conectado";

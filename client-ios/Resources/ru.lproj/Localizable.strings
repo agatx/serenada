@@ -37,6 +37,7 @@
 "error_enter_room_or_id" = "Введите ссылку или ID комнаты";
 "error_failed_create_room" = "Не удалось создать комнату";
 "error_invalid_room_id" = "Некорректный ID комнаты";
+"error_room_capacity_unsupported" = "Для этой комнаты требуется более новая версия приложения.";
 "error_unknown" = "Неизвестная ошибка";
 
 "call_status_connected" = "Подключено";

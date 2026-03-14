@@ -21,6 +21,8 @@ function barrierWrite(name: string, content?: string) {
  * The process is killed by the orchestrator when the iOS test completes.
  */
 test('hold room open for iOS partner', async ({ page }) => {
+  test.setTimeout(10 * 60_000);
+
   // Log console errors for debugging
   page.on('console', (msg) => {
     if (msg.type() === 'error') {

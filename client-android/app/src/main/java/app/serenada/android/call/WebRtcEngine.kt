@@ -100,7 +100,7 @@ class WebRtcEngine(
         val minFps: Int
     )
 
-    private data class VideoSenderPolicy(
+    data class VideoSenderPolicy(
         val maxBitrateBps: Int?,
         val minBitrateBps: Int?,
         val maxFramerate: Int?,
@@ -190,6 +190,7 @@ class WebRtcEngine(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val localSinks = LinkedHashSet<VideoSink>()
+    private val peerSlots = LinkedHashSet<PeerConnectionSlot>()
     private var remoteSink: VideoSink? = null
     private var remoteVideoTrack: VideoTrack? = null
     private val remoteBlackFrameAnalyzer = RemoteBlackFrameAnalyzer()
@@ -335,7 +336,9 @@ class WebRtcEngine(
         localSinks.forEach { sink ->
             localVideoTrack?.addSink(sink)
         }
-        createPeerConnectionIfReady()
+        peerSlots.forEach { slot ->
+            slot.attachLocalTracks(localAudioTrack, localVideoTrack)
+        }
     }
 
     fun stopLocalMedia() {
@@ -383,6 +386,10 @@ class WebRtcEngine(
         if (released) return
         released = true
         stopLocalMedia()
+        peerSlots.toList().forEach { slot ->
+            slot.closePeerConnection()
+        }
+        peerSlots.clear()
         closePeerConnection()
         localSinks.clear()
         runCatching { peerConnectionFactory.dispose() }
@@ -394,8 +401,12 @@ class WebRtcEngine(
         if (released) return
         Log.d("WebRtcEngine", "ICE servers set: ${servers.size}")
         iceServers = servers
-        createPeerConnectionIfReady()
+        peerSlots.forEach { slot ->
+            slot.setIceServers(servers)
+        }
     }
+
+    fun hasIceServers(): Boolean = !iceServers.isNullOrEmpty()
 
     fun isReady(): Boolean = peerConnection != null
     fun ensurePeerConnection() {
@@ -669,6 +680,42 @@ class WebRtcEngine(
         isRemoteBlackFrameAnalysisEnabled = enabled
     }
 
+    fun createSlot(
+        remoteCid: String,
+        onLocalIceCandidate: (String, IceCandidate) -> Unit,
+        onRemoteVideoTrack: (String, VideoTrack?) -> Unit,
+        onConnectionStateChange: (String, PeerConnection.PeerConnectionState) -> Unit,
+        onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
+        onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
+        onRenegotiationNeeded: (String) -> Unit,
+    ): PeerConnectionSlot {
+        val slot = PeerConnectionSlot(
+            remoteCid = remoteCid,
+            factory = peerConnectionFactory,
+            iceServers = iceServers,
+            localAudioTrack = localAudioTrack,
+            localVideoTrack = localVideoTrack,
+            onLocalIceCandidate = onLocalIceCandidate,
+            onRemoteVideoTrack = onRemoteVideoTrack,
+            onConnectionStateChange = onConnectionStateChange,
+            onIceConnectionStateChange = onIceConnectionStateChange,
+            onSignalingStateChange = onSignalingStateChange,
+            onRenegotiationNeeded = onRenegotiationNeeded,
+            applyAudioSenderParameters = ::applyAudioSenderParameters,
+            currentVideoSenderPolicy = ::activeVideoSenderPolicy,
+            isRemoteBlackFrameAnalysisEnabled = { isRemoteBlackFrameAnalysisEnabled },
+        )
+        peerSlots.add(slot)
+        if (!iceServers.isNullOrEmpty()) {
+            slot.ensurePeerConnection()
+        }
+        return slot
+    }
+
+    fun removeSlot(slot: PeerConnectionSlot) {
+        peerSlots.remove(slot)
+    }
+
     fun isRemoteVideoTrackEnabled(): Boolean {
         val track = remoteVideoTrack ?: return false
         if (!track.enabled()) return false
@@ -754,7 +801,7 @@ class WebRtcEngine(
         }
     }
 
-    private fun initRenderer(
+    fun initRenderer(
         renderer: SurfaceViewRenderer,
         rendererEvents: RendererCommon.RendererEvents?
     ) {
@@ -897,9 +944,12 @@ class WebRtcEngine(
     }
 
     private fun applyVideoSenderParameters(pc: PeerConnection? = peerConnection) {
+        val policy = activeVideoSenderPolicy()
+        peerSlots.forEach { slot ->
+            slot.applyVideoSenderParameters(policy)
+        }
         val activePc = pc ?: return
         val sender = activePc.senders.firstOrNull { it.track()?.kind() == "video" } ?: return
-        val policy = activeVideoSenderPolicy()
         try {
             val params = sender.parameters
             val encodings = params.encodings

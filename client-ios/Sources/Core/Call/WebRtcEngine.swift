@@ -189,6 +189,7 @@ final class WebRtcEngine {
 #if canImport(WebRTC)
     private var peerConnectionFactory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
+    private var peerSlots: [PeerConnectionSlot] = []
 
     private var localAudioSource: RTCAudioSource?
     private var localAudioTrack: RTCAudioTrack?
@@ -268,7 +269,11 @@ final class WebRtcEngine {
         }
 
         attachTrackToRegisteredRenderers()
-        createPeerConnectionIfReady()
+        if peerSlots.isEmpty {
+            createPeerConnectionIfReady()
+        } else {
+            peerSlots.forEach { $0.attachLocalTracks(audioTrack: localAudioTrack, videoTrack: localVideoTrack) }
+        }
 #else
         onCameraFacingChanged(true)
         onCameraModeChanged(.selfie)
@@ -317,12 +322,22 @@ final class WebRtcEngine {
 
     func release() {
         stopLocalMedia()
+        peerSlots.forEach { $0.closePeerConnection() }
+        peerSlots.removeAll()
         closePeerConnection()
     }
 
     func setIceServers(_ servers: [IceServerConfig]) {
         iceServers = servers
-        createPeerConnectionIfReady()
+        if peerSlots.isEmpty {
+            createPeerConnectionIfReady()
+        } else {
+            peerSlots.forEach { $0.setIceServers(servers) }
+        }
+    }
+
+    func hasIceServers() -> Bool {
+        iceServers != nil
     }
 
     func isReady() -> Bool {
@@ -335,6 +350,45 @@ final class WebRtcEngine {
 
     func ensurePeerConnection() {
         createPeerConnectionIfReady()
+    }
+
+    func createSlot(
+        remoteCid: String,
+        onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
+        onRemoteVideoTrack: @escaping (String, AnyObject?) -> Void,
+        onConnectionStateChange: @escaping (String, String) -> Void,
+        onIceConnectionStateChange: @escaping (String, String) -> Void,
+        onSignalingStateChange: @escaping (String, String) -> Void,
+        onRenegotiationNeeded: @escaping (String) -> Void
+    ) -> PeerConnectionSlot? {
+#if canImport(WebRTC)
+        guard let peerConnectionFactory else { return nil }
+        let slot = PeerConnectionSlot(
+            remoteCid: remoteCid,
+            factory: peerConnectionFactory,
+            iceServers: iceServers,
+            localAudioTrack: localAudioTrack,
+            localVideoTrack: localVideoTrack,
+            onLocalIceCandidate: onLocalIceCandidate,
+            onRemoteVideoTrack: { remoteCid, track in
+                onRemoteVideoTrack(remoteCid, track)
+            },
+            onConnectionStateChange: onConnectionStateChange,
+            onIceConnectionStateChange: onIceConnectionStateChange,
+            onSignalingStateChange: onSignalingStateChange,
+            onRenegotiationNeeded: onRenegotiationNeeded
+        )
+        peerSlots.append(slot)
+        return slot
+#else
+        return nil
+#endif
+    }
+
+    func removeSlot(_ slot: PeerConnectionSlot) {
+#if canImport(WebRTC)
+        peerSlots.removeAll { $0 === slot }
+#endif
     }
 
     func signalingStateRaw() -> String? {
