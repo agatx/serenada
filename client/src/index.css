@@ -269,7 +269,7 @@ body {
 .multi-party-call .video-stage {
   position: absolute;
   inset: 0;
-  padding: 16px max(16px, min(34vw, 152px)) 184px 16px;
+  padding: 16px 16px 184px;
   background:
     radial-gradient(circle at top, rgba(47, 129, 247, 0.14), transparent 32%),
     radial-gradient(circle at bottom, rgba(255, 255, 255, 0.05), transparent 30%),
@@ -348,7 +348,7 @@ body {
 
 @media (min-width: 768px) {
   .multi-party-call .video-stage {
-    padding: 24px max(32px, min(24vw, 280px)) 136px 28px;
+    padding: 24px 28px 136px;
   }
 
   .multi-party-call .video-stage-tile {
