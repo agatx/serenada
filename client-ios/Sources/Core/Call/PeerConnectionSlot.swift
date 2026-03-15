@@ -152,37 +152,49 @@ final class PeerConnectionSlot {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let observer = SlotPeerConnectionObserverProxy(
             onIceCandidate: { [weak self] candidate in
-                guard let self else { return }
-                self.onLocalIceCandidate(
-                    self.remoteCid,
-                    IceCandidatePayload(
-                        sdpMid: candidate.sdpMid,
-                        sdpMLineIndex: candidate.sdpMLineIndex,
-                        candidate: candidate.sdp
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.onLocalIceCandidate(
+                        self.remoteCid,
+                        IceCandidatePayload(
+                            sdpMid: candidate.sdpMid,
+                            sdpMLineIndex: candidate.sdpMLineIndex,
+                            candidate: candidate.sdp
+                        )
                     )
-                )
+                }
             },
             onConnectionState: { [weak self] state in
-                guard let self else { return }
-                self.onConnectionStateChange(self.remoteCid, connectionStateString(state))
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.onConnectionStateChange(self.remoteCid, connectionStateString(state))
+                }
             },
             onIceConnectionState: { [weak self] state in
-                guard let self else { return }
-                self.onIceConnectionStateChange(self.remoteCid, iceConnectionStateString(state))
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.onIceConnectionStateChange(self.remoteCid, iceConnectionStateString(state))
+                }
             },
             onSignalingState: { [weak self] state in
-                guard let self else { return }
-                self.onSignalingStateChange(self.remoteCid, signalingStateString(state))
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.onSignalingStateChange(self.remoteCid, signalingStateString(state))
+                }
             },
             onRenegotiationNeeded: { [weak self] in
-                guard let self else { return }
-                self.onRenegotiationNeeded(self.remoteCid)
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.onRenegotiationNeeded(self.remoteCid)
+                }
             },
             onRemoteVideoTrack: { [weak self] track in
-                guard let self else { return }
-                self.remoteVideoTrack = track
-                self.attachRemoteTrackToRegisteredRenderers()
-                self.onRemoteVideoTrack(self.remoteCid, track)
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.remoteVideoTrack = track
+                    self.attachRemoteTrackToRegisteredRenderers()
+                    self.onRemoteVideoTrack(self.remoteCid, track)
+                }
             }
         )
         observerProxy = observer
@@ -341,12 +353,14 @@ final class PeerConnectionSlot {
         }
 
         peerConnection.setRemoteDescription(RTCSessionDescription(type: rtcType, sdp: sdp)) { [weak self] error in
-            guard let self else { return }
-            if error == nil {
-                self.flushPendingIceCandidates()
-                onComplete?(true)
-            } else {
-                onComplete?(false)
+            Task { @MainActor in
+                guard let self else { return }
+                if error == nil {
+                    self.flushPendingIceCandidates()
+                    onComplete?(true)
+                } else {
+                    onComplete?(false)
+                }
             }
         }
 #else
@@ -424,11 +438,13 @@ final class PeerConnectionSlot {
         }
 
         peerConnection.statistics { [weak self] report in
-            guard let self else {
-                onComplete(.empty)
-                return
+            Task { @MainActor in
+                guard let self else {
+                    onComplete(.empty)
+                    return
+                }
+                onComplete(self.buildRealtimeCallStats(report))
             }
-            onComplete(self.buildRealtimeCallStats(report))
         }
 #else
         onComplete(.empty)
@@ -444,12 +460,14 @@ final class PeerConnectionSlot {
             return
         }
         peerConnection.statistics { [weak self] report in
-            let summary = "stats=\(report.statistics.count)"
-            guard let self else {
-                onComplete(.empty, summary)
-                return
+            Task { @MainActor in
+                let summary = "stats=\(report.statistics.count)"
+                guard let self else {
+                    onComplete(.empty, summary)
+                    return
+                }
+                onComplete(self.buildRealtimeCallStats(report), summary)
             }
-            onComplete(self.buildRealtimeCallStats(report), summary)
         }
 #else
         onComplete(.empty, "pc=stub")
