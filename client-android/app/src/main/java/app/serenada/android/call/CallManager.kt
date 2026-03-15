@@ -781,13 +781,7 @@ class CallManager(context: Context) {
     }
 
     fun endCall() {
-        if (_uiState.value.phase == CallPhase.Idle) return
-        if (isHost()) {
-            sendMessage("end_room", null)
-        } else {
-            sendMessage("leave", null)
-        }
-        cleanupCall(R.string.call_status_call_ended)
+        leaveCall()
     }
 
     fun toggleAudio() {

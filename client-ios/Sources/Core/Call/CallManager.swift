@@ -531,13 +531,8 @@ final class CallManager: ObservableObject {
 
     func endCall() {
         guard uiState.phase != .idle else { return }
-        debugTrace("ui endCall phase=\(uiState.phase.rawValue) room=\(currentRoomId ?? "-") isHost=\(isHost())")
-        if isHost() {
-            sendMessage(type: "end_room")
-        } else {
-            sendMessage(type: "leave")
-        }
-        cleanupCall(message: L10n.callStatusLeftRoom)
+        debugTrace("ui endCall phase=\(uiState.phase.rawValue) room=\(currentRoomId ?? "-")")
+        leaveCall()
     }
 
     func toggleAudio() {
