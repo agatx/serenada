@@ -185,15 +185,18 @@ export const useRealtimeCallStats = (
     const statsSampleRef = useRef<StatsSample | null>(null);
     const freezeSamplesRef = useRef<FreezeSample[]>([]);
 
-    // Stable key for the current set of PCs (reset samples when set changes)
-    const pcCountRef = useRef(0);
+    // Reset samples when the set of PCs changes (identity, not just count)
+    const prevPcsRef = useRef<RTCPeerConnection[]>([]);
     useEffect(() => {
-        if (peerConnections.length !== pcCountRef.current) {
-            pcCountRef.current = peerConnections.length;
+        const prev = prevPcsRef.current;
+        const changed = prev.length !== peerConnections.length ||
+            peerConnections.some((pc, i) => pc !== prev[i]);
+        if (changed) {
+            prevPcsRef.current = peerConnections;
             statsSampleRef.current = null;
             freezeSamplesRef.current = [];
         }
-    }, [peerConnections.length]);
+    }, [peerConnections]);
 
     useEffect(() => {
         if (!enabled) {
@@ -212,12 +215,16 @@ export const useRealtimeCallStats = (
             }
 
             try {
-                // Merge stats from all peer connections
+                // Merge stats from all peer connections (namespace IDs by peer index)
                 const reports = await Promise.all(peerConnections.map(pc => pc.getStats()));
                 const statsById = new Map<string, RTCStats>();
-                for (const r of reports) {
-                    r.forEach(stat => statsById.set(stat.id, stat));
-                }
+                reports.forEach((r, i) => {
+                    const prefix = `p${i}:`;
+                    r.forEach(stat => {
+                        const namespacedId = prefix + stat.id;
+                        statsById.set(namespacedId, { ...stat, id: namespacedId } as RTCStats);
+                    });
+                });
 
                 const media = {
                     audio: createMediaTotals(),
@@ -296,11 +303,13 @@ export const useRealtimeCallStats = (
                 }
 
                 const selectedPair = selectedCandidatePair;
+                // Extract the namespace prefix (e.g. "p0:") from the selected pair's ID
+                const pairPrefix = selectedPair ? selectedPair.id.substring(0, selectedPair.id.indexOf(':') + 1) : '';
                 const localCandidate = selectedPair
-                    ? statsById.get(getStatString(selectedPair, 'localCandidateId') ?? '')
+                    ? statsById.get(pairPrefix + (getStatString(selectedPair, 'localCandidateId') ?? ''))
                     : null;
                 const remoteCandidate = selectedPair
-                    ? statsById.get(getStatString(selectedPair, 'remoteCandidateId') ?? '')
+                    ? statsById.get(pairPrefix + (getStatString(selectedPair, 'remoteCandidateId') ?? ''))
                     : null;
 
                 const localCandidateType = localCandidate ? getStatString(localCandidate, 'candidateType') : null;

@@ -89,6 +89,7 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const reconnectStorageKey = 'serenada.reconnectCid';
     const reconnectTokenStorageKey = 'serenada.reconnectToken';
     const reconnectTokenRoomStorageKey = 'serenada.reconnectTokenRoom';
+    const lastCreateMaxParticipantsRef = useRef<number | undefined>(undefined);
 
     const clearReconnectStorage = useCallback(() => {
         try {
@@ -295,10 +296,15 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const attemptId = joinAttemptIdRef.current;
         joinAckedRef.current = false;
 
+        // Remember the requested capacity so reconnect/rejoin replays don't downgrade
+        if (options?.createMaxParticipants !== undefined) {
+            lastCreateMaxParticipantsRef.current = options.createMaxParticipants;
+        }
+
         if (transportRef.current && transportRef.current.isOpen()) {
             const payload: any = {
                 capabilities: { trickleIce: true, maxParticipants: 4 },
-                createMaxParticipants: options?.createMaxParticipants ?? 2,
+                createMaxParticipants: options?.createMaxParticipants ?? lastCreateMaxParticipantsRef.current ?? 2,
             };
             // If we have a previous client ID, send it to help server evict ghosts
             const reconnectCid = clientIdRef.current || lastClientIdRef.current;

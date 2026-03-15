@@ -107,14 +107,12 @@ wait_for_participant_count() {
         local stats_lines
         stats_lines=$(adb_cmd logcat -d 2>/dev/null | grep '\[WebRTCStats\]' | tail -20 || true)
         if [ -n "$stats_lines" ]; then
-            while IFS= read -r line; do
-                local remote_count
-                remote_count=$(printf '%s\n' "$line" | grep -o 'remote=' | wc -l | tr -d ' ')
-                if [ "$remote_count" -ge "$expected_remote_peers" ]; then
-                    log_ok "Android: WebRTC stats observed $remote_count remote peers"
-                    return 0
-                fi
-            done <<< "$stats_lines"
+            local remote_count
+            remote_count=$(printf '%s\n' "$stats_lines" | sed -n 's/.*remote=\([^ ,]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')
+            if [ "$remote_count" -ge "$expected_remote_peers" ]; then
+                log_ok "Android: WebRTC stats observed $remote_count distinct remote peers"
+                return 0
+            fi
         fi
 
         sleep 1
