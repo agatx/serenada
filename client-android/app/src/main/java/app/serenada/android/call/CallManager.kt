@@ -230,6 +230,15 @@ class CallManager(context: Context) {
             onCameraModeChanged = { mode ->
                 handler.post {
                     updateState(_uiState.value.copy(localCameraMode = mode))
+                    // Broadcast content state when entering/leaving world/composite mode
+                    val isContent = mode == LocalCameraMode.WORLD || mode == LocalCameraMode.COMPOSITE
+                    if (isContent) {
+                        val type = if (mode == LocalCameraMode.WORLD) "worldCamera" else "compositeCamera"
+                        broadcastContentState(true, type)
+                    } else if (_uiState.value.localCameraMode == LocalCameraMode.WORLD ||
+                        _uiState.value.localCameraMode == LocalCameraMode.COMPOSITE) {
+                        broadcastContentState(false)
+                    }
                 }
             },
             onFlashlightStateChanged = { available, enabled ->
@@ -246,6 +255,7 @@ class CallManager(context: Context) {
                 handler.post {
                     if (_uiState.value.isScreenSharing) {
                         updateState(_uiState.value.copy(isScreenSharing = false))
+                        broadcastContentState(false)
                     }
                     applyLocalVideoPreference()
                 }
@@ -838,6 +848,7 @@ class CallManager(context: Context) {
             CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
         }
         updateState(_uiState.value.copy(isScreenSharing = false))
+        broadcastContentState(false)
         applyLocalVideoPreference()
     }
 
@@ -853,6 +864,7 @@ class CallManager(context: Context) {
                 return
             }
             updateState(_uiState.value.copy(isScreenSharing = true))
+            broadcastContentState(true, "screenShare")
             applyLocalVideoPreference()
             return
         }
@@ -1032,6 +1044,7 @@ class CallManager(context: Context) {
             "pong" -> signalingClient.recordPong()
             "turn-refreshed" -> handleTurnRefreshed(msg)
             "offer", "answer", "ice" -> handleSignalingPayload(msg)
+            "content_state" -> handleContentState(msg)
             "error" -> handleError(msg)
         }
     }
@@ -1127,6 +1140,26 @@ class CallManager(context: Context) {
         val rid = payload.optString("rid").orEmpty()
         if (!watchedRoomIds.contains(rid)) return
         _roomStatuses.value = RoomStatuses.mergeStatusUpdatePayload(previous = _roomStatuses.value, payload = payload)
+    }
+
+    private fun handleContentState(msg: SignalingMessage) {
+        val fromCid = msg.payload?.optString("from") ?: return
+        val active = msg.payload?.optBoolean("active") == true
+        val contentType = if (active) msg.payload?.optString("contentType") else null
+        updateState(
+            _uiState.value.copy(
+                remoteContentCid = if (active) fromCid else null,
+                remoteContentType = contentType,
+            )
+        )
+    }
+
+    fun broadcastContentState(active: Boolean, contentType: String? = null) {
+        val payload = JSONObject().apply {
+            put("active", active)
+            if (active && contentType != null) put("contentType", contentType)
+        }
+        sendMessage("content_state", payload)
     }
 
     private fun handleError(msg: SignalingMessage) {
@@ -1701,11 +1734,20 @@ class CallManager(context: Context) {
             }
         val state = _uiState.value
         if (state.remoteParticipants == remoteParticipants) {
+            // Still check if remote content CID left
+            val activeCids = remoteParticipants.map { it.cid }.toSet()
+            if (state.remoteContentCid != null && state.remoteContentCid !in activeCids) {
+                updateState(state.copy(remoteContentCid = null, remoteContentType = null))
+            }
             return
         }
+        val activeCids = remoteParticipants.map { it.cid }.toSet()
+        val clearContent = state.remoteContentCid != null && state.remoteContentCid !in activeCids
         updateState(
             state.copy(
-                remoteParticipants = remoteParticipants
+                remoteParticipants = remoteParticipants,
+                remoteContentCid = if (clearContent) null else state.remoteContentCid,
+                remoteContentType = if (clearContent) null else state.remoteContentType,
             )
         )
     }

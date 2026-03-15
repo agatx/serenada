@@ -24,7 +24,9 @@ data class CallUiState(
     val isScreenSharing: Boolean = false,
     val localCameraMode: LocalCameraMode = LocalCameraMode.SELFIE,
     val isFlashAvailable: Boolean = false,
-    val isFlashEnabled: Boolean = false
+    val isFlashEnabled: Boolean = false,
+    val remoteContentCid: String? = null,
+    val remoteContentType: String? = null,
 ) {
     val remoteVideoEnabled: Boolean
         get() = remoteParticipants.firstOrNull()?.videoEnabled ?: false

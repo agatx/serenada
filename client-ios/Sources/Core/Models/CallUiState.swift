@@ -31,6 +31,8 @@ struct CallUiState: Equatable {
     var cameraZoomFactor: Double = 1
     var isFlashAvailable: Bool = false
     var isFlashEnabled: Bool = false
+    var remoteContentCid: String?
+    var remoteContentType: String?
 
     var remoteVideoEnabled: Bool {
         remoteParticipants.first?.videoEnabled ?? false

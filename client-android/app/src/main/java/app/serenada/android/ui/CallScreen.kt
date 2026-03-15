@@ -385,6 +385,14 @@ fun CallScreen(
                 attachRemoteRendererForCid = attachRemoteRendererForCid,
                 detachRemoteRendererForCid = detachRemoteRendererForCid,
                 bottomPadding = animatedPipBottomPadding,
+                remoteContentCid = uiState.remoteContentCid,
+                remoteContentType = uiState.remoteContentType,
+                remoteVideoFitCover = remoteVideoFitCover,
+                onToggleRemoteVideoFit = {
+                    val next = !remoteVideoFitCover
+                    remoteVideoFitCover = next
+                    settingsStore.isRemoteVideoFitCover = next
+                },
                 pinnedParticipantId = pinnedParticipantId,
                 onPinnedParticipantIdChanged = { pinnedParticipantId = it },
             )
@@ -1292,6 +1300,10 @@ private fun MultiPartyStage(
     attachRemoteRendererForCid: (String, SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachRemoteRendererForCid: (String, SurfaceViewRenderer) -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
+    remoteContentCid: String?,
+    remoteContentType: String?,
+    remoteVideoFitCover: Boolean,
+    onToggleRemoteVideoFit: () -> Unit,
     pinnedParticipantId: String?,
     onPinnedParticipantIdChanged: (String?) -> Unit,
 ) {
@@ -1315,15 +1327,16 @@ private fun MultiPartyStage(
             val availableWidthPx = with(density) { maxWidth.toPx() }
             val availableHeightPx = with(density) { maxHeight.toPx() }
 
-            // Content source: world/composite camera or screen share triggers content layout
-            val hasContentSource = isScreenSharing ||
+            // Content source: local world/composite/screen share or remote content
+            val hasLocalContent = isScreenSharing ||
                 localCameraMode == LocalCameraMode.WORLD ||
                 localCameraMode == LocalCameraMode.COMPOSITE
+            val hasContentSource = hasLocalContent || remoteContentCid != null
             val useComputedLayout = localCid != null && (pinnedParticipantId != null || hasContentSource)
 
             if (useComputedLayout && localCid != null) {
                 // Focus/content mode: use computeLayout for primary + filmstrip rendering
-                val contentSource = if (hasContentSource) {
+                val contentSource = if (hasLocalContent) {
                     val type = when {
                         isScreenSharing -> ContentType.SCREEN_SHARE
                         localCameraMode == LocalCameraMode.WORLD -> ContentType.WORLD_CAMERA
@@ -1334,11 +1347,22 @@ private fun MultiPartyStage(
                         ownerParticipantId = localCid,
                         aspectRatio = null,
                     )
+                } else if (remoteContentCid != null) {
+                    val type = when (remoteContentType) {
+                        "worldCamera" -> ContentType.WORLD_CAMERA
+                        "compositeCamera" -> ContentType.COMPOSITE_CAMERA
+                        else -> ContentType.SCREEN_SHARE
+                    }
+                    app.serenada.android.layout.ContentSource(
+                        type = type,
+                        ownerParticipantId = remoteContentCid,
+                        aspectRatio = null,
+                    )
                 } else null
 
                 val computedLayout = remember(
                     pinnedParticipantId, contentSource, remoteParticipants, remoteAspectRatios.toMap(),
-                    localCid, localVideoEnabled, availableWidthPx, availableHeightPx
+                    localCid, localVideoEnabled, availableWidthPx, availableHeightPx, remoteVideoFitCover
                 ) {
                     val participants = remoteParticipants.map { p ->
                         SceneParticipant(
@@ -1364,7 +1388,9 @@ private fun MultiPartyStage(
                             activeSpeakerId = null,
                             pinnedParticipantId = if (contentSource != null) null else pinnedParticipantId,
                             contentSource = contentSource,
-                            userPrefs = UserLayoutPrefs(),
+                            userPrefs = UserLayoutPrefs(
+                                dominantFit = if (remoteVideoFitCover) FitMode.COVER else FitMode.CONTAIN,
+                            ),
                         )
                     )
                 }
@@ -1461,6 +1487,23 @@ private fun MultiPartyStage(
                                     )
                                 }
                             }
+                            // Fit toggle on primary tile
+                            if (tile.zOrder == 0) {
+                                IconButton(
+                                    onClick = onToggleRemoteVideoFit,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(8.dp)
+                                        .size(44.dp)
+                                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                ) {
+                                    Icon(
+                                        imageVector = if (remoteVideoFitCover) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                        contentDescription = stringResource(R.string.call_toggle_video_fit),
+                                        tint = Color.White
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1527,10 +1570,11 @@ private fun MultiPartyStage(
         }
 
         // Hide local PIP when in focus/content mode (local is in the filmstrip)
-        val hasContentSource = isScreenSharing ||
-            localCameraMode == LocalCameraMode.WORLD ||
-            localCameraMode == LocalCameraMode.COMPOSITE
-        if (pinnedParticipantId == null && !hasContentSource) {
+        val showLocalPip = pinnedParticipantId == null && !isScreenSharing &&
+            localCameraMode != LocalCameraMode.WORLD &&
+            localCameraMode != LocalCameraMode.COMPOSITE &&
+            remoteContentCid == null
+        if (showLocalPip) {
             Box(
                 modifier =
                     Modifier.align(Alignment.BottomEnd)

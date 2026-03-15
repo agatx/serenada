@@ -254,7 +254,7 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 		h.handleWatchRooms(c, msg)
 	case "turn-refresh":
 		h.handleTurnRefresh(c, msg)
-	case "offer", "answer", "ice":
+	case "offer", "answer", "ice", "content_state":
 		// log.Printf("[%s] Relay from %s to room %s", msg.Type, c.cid, c.rid) // verbose
 		h.handleRelay(c, msg)
 	default:

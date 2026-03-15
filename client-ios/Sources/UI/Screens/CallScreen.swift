@@ -306,6 +306,9 @@ struct CallScreen: View {
                     localMirror: uiState.isFrontCamera,
                     localCameraMode: uiState.localCameraMode,
                     isScreenSharing: uiState.isScreenSharing,
+                    remoteContentCid: uiState.remoteContentCid,
+                    remoteContentType: uiState.remoteContentType,
+                    remoteVideoFitCover: $remoteVideoFitCover,
                     bottomPadding: pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible),
                     callManager: callManager,
                     pinnedParticipantId: $pinnedParticipantId
@@ -793,6 +796,9 @@ private struct MultiPartyStage: View {
     let localMirror: Bool
     let localCameraMode: LocalCameraMode
     let isScreenSharing: Bool
+    let remoteContentCid: String?
+    let remoteContentType: String?
+    @Binding var remoteVideoFitCover: Bool
     let bottomPadding: CGFloat
     let callManager: CallManager
     @Binding var pinnedParticipantId: String?
@@ -802,8 +808,12 @@ private struct MultiPartyStage: View {
     private let tileCornerRadius: CGFloat = 16
     private let pipCornerRadius: CGFloat = 12
 
-    private var hasContentSource: Bool {
+    private var hasLocalContent: Bool {
         isScreenSharing || localCameraMode == .world || localCameraMode == .composite
+    }
+
+    private var hasContentSource: Bool {
+        hasLocalContent || remoteContentCid != nil
     }
 
     var body: some View {
@@ -814,14 +824,26 @@ private struct MultiPartyStage: View {
 
             if useComputedLayout, let localCid {
                 // Focus/content mode: use computeLayout for primary + filmstrip rendering
-                let activeContentSource: ContentSource? = hasContentSource ? {
-                    let type: ContentType = {
-                        if isScreenSharing { return .screenShare }
-                        if localCameraMode == .world { return .worldCamera }
-                        return .compositeCamera
-                    }()
-                    return ContentSource(type: type, ownerParticipantId: localCid, aspectRatio: nil)
-                }() : nil
+                let activeContentSource: ContentSource? = {
+                    if hasLocalContent {
+                        let type: ContentType = {
+                            if isScreenSharing { return .screenShare }
+                            if localCameraMode == .world { return .worldCamera }
+                            return .compositeCamera
+                        }()
+                        return ContentSource(type: type, ownerParticipantId: localCid, aspectRatio: nil)
+                    } else if let remoteCid = remoteContentCid {
+                        let type: ContentType = {
+                            switch remoteContentType {
+                            case "worldCamera": return .worldCamera
+                            case "compositeCamera": return .compositeCamera
+                            default: return .screenShare
+                            }
+                        }()
+                        return ContentSource(type: type, ownerParticipantId: remoteCid, aspectRatio: nil)
+                    }
+                    return nil
+                }()
 
                 let participants: [SceneParticipant] = remoteParticipants.map { p in
                     SceneParticipant(
@@ -846,7 +868,7 @@ private struct MultiPartyStage: View {
                     activeSpeakerId: nil,
                     pinnedParticipantId: activeContentSource != nil ? nil : pinnedParticipantId,
                     contentSource: activeContentSource,
-                    userPrefs: UserLayoutPrefs()
+                    userPrefs: UserLayoutPrefs(dominantFit: remoteVideoFitCover ? .cover : .contain)
                 ))
 
                 ZStack {
@@ -899,6 +921,31 @@ private struct MultiPartyStage: View {
                                             .padding(8)
                                     }
                                     Spacer()
+                                }
+                            }
+
+                            // Fit toggle on primary tile
+                            if tile.zOrder == 0 {
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        Spacer()
+                                        Button {
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                remoteVideoFitCover.toggle()
+                                            }
+                                        } label: {
+                                            Image(systemName: remoteVideoFitCover
+                                                ? "arrow.down.right.and.arrow.up.left"
+                                                : "arrow.up.left.and.arrow.down.right")
+                                                .font(.system(size: 16, weight: .semibold))
+                                                .foregroundStyle(.white)
+                                                .frame(width: 44, height: 44)
+                                                .background(Color.black.opacity(0.4))
+                                                .clipShape(Circle())
+                                        }
+                                        .padding(8)
+                                    }
                                 }
                             }
                         }

@@ -281,6 +281,7 @@ const CallRoom: React.FC = () => {
         clientId,
         isConnected,
         activeTransport,
+        subscribeToMessages,
         error: signalingError,
         clearError
     } = useSignaling();
@@ -320,6 +321,7 @@ const CallRoom: React.FC = () => {
     const [showRecoveringBadge, setShowRecoveringBadge] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
     const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
+    const [remoteContentState, setRemoteContentState] = useState<{ cid: string; contentType: ContentSource['type'] } | null>(null);
 
     const lastFacingModeRef = useRef(facingMode);
 
@@ -570,11 +572,17 @@ const CallRoom: React.FC = () => {
         computeStageLayout(remoteStageTiles, stageViewportSize.width, stageViewportSize.height, STAGE_TILE_GAP_PX)
     ), [remoteStageTiles, stageViewportSize.height, stageViewportSize.width]);
 
-    // Content source: screen share in multi-party triggers content layout
+    // Content source: local screen share or remote content in multi-party triggers content layout
     const contentSource = useMemo((): ContentSource | null => {
-        if (!isScreenSharing || !isMultiParty || !clientId) return null;
-        return { type: 'screenShare', ownerParticipantId: clientId, aspectRatio: null };
-    }, [isScreenSharing, isMultiParty, clientId]);
+        if (!isMultiParty) return null;
+        if (isScreenSharing && clientId) {
+            return { type: 'screenShare', ownerParticipantId: clientId, aspectRatio: null };
+        }
+        if (remoteContentState) {
+            return { type: remoteContentState.contentType, ownerParticipantId: remoteContentState.cid, aspectRatio: null };
+        }
+        return null;
+    }, [isScreenSharing, isMultiParty, clientId, remoteContentState]);
 
     // Compute focus/content layout when pinned or content source active
     const computedLayout = useMemo((): LayoutResult | null => {
@@ -604,11 +612,11 @@ const CallRoom: React.FC = () => {
             activeSpeakerId: null,
             pinnedParticipantId: contentSource ? null : pinnedParticipantId,
             contentSource,
-            userPrefs: { swappedLocalAndRemote: false, dominantFit: 'cover' },
+            userPrefs: { swappedLocalAndRemote: false, dominantFit: remoteVideoFit },
         };
 
         return computeLayout(scene);
-    }, [pinnedParticipantId, contentSource, isMultiParty, clientId, remoteStreamEntries, remoteStageAspectRatios, isCameraOff, stageViewportSize]);
+    }, [pinnedParticipantId, contentSource, isMultiParty, clientId, remoteStreamEntries, remoteStageAspectRatios, isCameraOff, stageViewportSize, remoteVideoFit]);
 
     // Handle stream attachment
     useEffect(() => {
@@ -632,7 +640,24 @@ const CallRoom: React.FC = () => {
         if (pinnedParticipantId && !activeRemoteCids.has(pinnedParticipantId)) {
             setPinnedParticipantId(null);
         }
-    }, [remoteStreamEntries, pinnedParticipantId]);
+        // Clear remote content state if sharing participant left
+        if (remoteContentState && !activeRemoteCids.has(remoteContentState.cid)) {
+            setRemoteContentState(null);
+        }
+    }, [remoteStreamEntries, pinnedParticipantId, remoteContentState]);
+
+    // Listen for content_state messages from remote participants
+    useEffect(() => {
+        return subscribeToMessages((msg: any) => {
+            if (msg.type === 'content_state' && msg.payload?.from) {
+                if (msg.payload.active && msg.payload.contentType) {
+                    setRemoteContentState({ cid: msg.payload.from, contentType: msg.payload.contentType });
+                } else {
+                    setRemoteContentState(null);
+                }
+            }
+        });
+    }, [subscribeToMessages]);
 
     useEffect(() => {
         if (!isMultiParty || !stageViewportRef.current) {
@@ -1216,13 +1241,17 @@ const CallRoom: React.FC = () => {
                                 {computedLayout.tiles.map((tile) => {
                                     const isContentTile = tile.type === 'contentSource';
                                     const isLocal = tile.id === clientId;
-                                    // Content source tile: render local stream (screen share)
-                                    // Local participant tile in content mode: show placeholder
-                                    // Otherwise: render participant's stream
-                                    const isLocalPlaceholder = isLocal && contentSource !== null;
-                                    const stream = isContentTile || isLocal
+                                    const contentOwnerCid = contentSource?.ownerParticipantId;
+                                    const isLocalContent = isContentTile && contentOwnerCid === clientId;
+                                    const isRemoteContent = isContentTile && contentOwnerCid !== clientId;
+                                    // Local participant tile in content mode: camera replaced, show placeholder
+                                    const isLocalPlaceholder = isLocal && contentSource !== null && !isContentTile;
+                                    // Resolve the stream for this tile
+                                    const stream = isLocalContent || isLocal
                                         ? localStream
-                                        : remoteStageTileMap.get(tile.id)?.stream;
+                                        : isRemoteContent
+                                            ? remoteStageTileMap.get(contentOwnerCid!)?.stream
+                                            : remoteStageTileMap.get(tile.id)?.stream;
                                     if (!stream && !isLocalPlaceholder) return null;
 
                                     const tileStyle: React.CSSProperties = {
@@ -1245,24 +1274,35 @@ const CallRoom: React.FC = () => {
                                         );
                                     }
 
+                                    const isPrimaryTile = tile.zOrder === 0;
                                     return (
-                                        <VideoTile
-                                            key={tile.id}
-                                            stream={stream!}
-                                            tileStyle={tileStyle}
-                                            videoFit={isContentTile ? 'contain' : tile.fit}
-                                            onAspectRatioChange={
-                                                isLocal || isContentTile ? undefined : (ratio) => updateRemoteStageAspectRatio(tile.id, ratio)
-                                            }
-                                            onClick={() => {
-                                                if (!isContentTile) {
-                                                    setPinnedParticipantId(
-                                                        tile.id === pinnedParticipantId ? null : tile.id
-                                                    );
+                                        <div key={tile.id} className="video-stage-tile" style={tileStyle}>
+                                            <VideoTile
+                                                stream={stream!}
+                                                tileStyle={{ width: '100%', height: '100%', borderRadius: 'inherit' }}
+                                                videoFit={tile.fit}
+                                                onAspectRatioChange={
+                                                    isLocal || isContentTile ? undefined : (ratio) => updateRemoteStageAspectRatio(tile.id, ratio)
                                                 }
-                                            }}
-                                            pinned={tile.id === pinnedParticipantId}
-                                        />
+                                                onClick={() => {
+                                                    if (!isContentTile) {
+                                                        setPinnedParticipantId(
+                                                            tile.id === pinnedParticipantId ? null : tile.id
+                                                        );
+                                                    }
+                                                }}
+                                                pinned={tile.id === pinnedParticipantId}
+                                            />
+                                            {isPrimaryTile && (
+                                                <button
+                                                    className="btn-zoom"
+                                                    onPointerUp={toggleRemoteVideoFit}
+                                                    title={remoteVideoFit === 'cover' ? t('zoom_fit') : t('zoom_fill')}
+                                                >
+                                                    {remoteVideoFit === 'cover' ? <Minimize2 /> : <Maximize2 />}
+                                                </button>
+                                            )}
+                                        </div>
                                     );
                                 })}
                             </div>

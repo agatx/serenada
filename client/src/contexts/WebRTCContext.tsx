@@ -864,7 +864,7 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const stopScreenShare = useCallback(async () => {
         if (!isScreenSharingRef.current) return;
         const currentStream = localStreamRef.current;
-        if (!currentStream) { setIsScreenSharing(false); return; }
+        if (!currentStream) { setIsScreenSharing(false); sendMessage('content_state', { active: false }); return; }
 
         const screenShareTrack = screenShareTrackRef.current;
         if (screenShareTrack) {
@@ -888,15 +888,17 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setLocalStream(new MediaStream([cameraTrack, ...currentStream.getAudioTracks()]));
             if (previousVideoTrack) previousVideoTrack.stop();
             setIsScreenSharing(false);
+            sendMessage('content_state', { active: false });
         } catch (err) {
             console.error('[WebRTC] Failed to stop screen share and restore camera', err);
             await replaceVideoTrackOnAllPeers(null);
             if (previousVideoTrack) previousVideoTrack.stop();
             setLocalStream(new MediaStream([...currentStream.getAudioTracks()]));
             setIsScreenSharing(false);
+            sendMessage('content_state', { active: false });
             showToast('error', t('toast_camera_error'));
         }
-    }, [showToast, t]);
+    }, [sendMessage, showToast, t]);
 
     const startScreenShare = useCallback(async () => {
         if (isScreenSharingRef.current || !canScreenShare) return;
@@ -927,11 +929,12 @@ export const WebRTCProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setLocalStream(new MediaStream([displayTrack, ...currentStream.getAudioTracks()]));
             if (previousVideoTrack) previousVideoTrack.stop();
             setIsScreenSharing(true);
+            sendMessage('content_state', { active: true, contentType: 'screenShare' });
         } catch (err) {
             console.error('[WebRTC] Failed to start screen share', err);
             showToast('error', t('toast_screen_share_error'));
         }
-    }, [canScreenShare, showToast, stopScreenShare, t]);
+    }, [canScreenShare, sendMessage, showToast, stopScreenShare, t]);
 
     const flipCamera = async () => {
         if (isScreenSharingRef.current) return;
