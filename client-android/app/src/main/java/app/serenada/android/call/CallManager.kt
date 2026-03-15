@@ -1259,10 +1259,10 @@ class CallManager(context: Context) {
     }
 
     private fun removePeerSlot(remoteCid: String) {
-        val slot = peerSlots.remove(remoteCid) ?: return
         clearOfferTimeout(remoteCid)
         clearIceRestartTimer(remoteCid)
         clearNonHostOfferFallback(remoteCid)
+        val slot = peerSlots.remove(remoteCid) ?: return
         webRtcEngine.removeSlot(slot)
         slot.closePeerConnection()
     }
@@ -2043,6 +2043,8 @@ class CallManager(context: Context) {
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
         signalingClient.close()
+        clearOfferTimeout()
+        clearIceRestartTimer()
         peerSlots.clear()
         webRtcEngine.release()
         CallService.stop(appContext)
@@ -2055,8 +2057,6 @@ class CallManager(context: Context) {
         pendingJoinRoom = null
         pendingMessages.clear()
         reconnectAttempts = 0
-        clearOfferTimeout()
-        clearIceRestartTimer()
         clearConnectionStatusRetryingTimer()
         userPreferredVideoEnabled = true
         isVideoPausedByProximity = false
