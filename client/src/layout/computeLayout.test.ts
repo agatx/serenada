@@ -24,7 +24,7 @@ function assertFrameClose(
     actual: NormalizedFrame,
     expected: NormalizedFrame,
     tolerance: number,
-    label: string,
+    _label: string,
 ) {
     expect(Math.abs(actual.x - expected.x)).toBeLessThanOrEqual(tolerance);
     expect(Math.abs(actual.y - expected.y)).toBeLessThanOrEqual(tolerance);

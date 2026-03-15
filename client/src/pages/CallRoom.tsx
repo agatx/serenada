@@ -11,13 +11,7 @@ import { playJoinChime } from '../utils/audio';
 import {
     computeStageLayout,
     clampStageTileAspectRatio,
-    MIN_STAGE_TILE_ASPECT,
-    MAX_STAGE_TILE_ASPECT,
-    DEFAULT_STAGE_TILE_ASPECT,
     STAGE_TILE_GAP_PX,
-    type StageTileSpec,
-    type StageTileLayout,
-    type StageRowLayout,
 } from '../layout/computeLayout';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 import { getPersistedRemoteVideoFit, persistRemoteVideoFit, type RemoteVideoFit } from '../utils/remoteVideoFit';
@@ -201,10 +195,6 @@ async function captureSnapshotBytes(stream: MediaStream): Promise<{ bytes: Uint8
     const buffer = await blob.arrayBuffer();
     return { bytes: new Uint8Array(buffer), mime: 'image/jpeg' };
 }
-
-type StageTileSpecWithStream = StageTileSpec & {
-    stream: MediaStream;
-};
 
 function getStreamAspectRatio(stream: MediaStream): number | null {
     const track = stream.getVideoTracks()[0];
