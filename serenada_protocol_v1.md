@@ -1,10 +1,11 @@
 # Serenada Signaling Protocol (WebSocket + SSE) — v1
 
-**Purpose:** Define the signaling protocol used by the Serenada SPA and backend signaling service to establish and manage WebRTC calls (rooms) via **WebSocket or SSE**.
+**Purpose:** Define the signaling protocol used by Serenada clients and the backend signaling service to establish and manage WebRTC call rooms with **directed 1:1 or mesh multi-party connections (up to 4 participants)** via **WebSocket or SSE**.
 
 **Scope:**
 - Room join/leave
 - Host-designation and host “end call” for all participants
+- Capability-aware room creation and admission
 - SDP offer/answer exchange
 - ICE candidate exchange (trickle ICE)
 - Room capacity negotiation and enforcement
@@ -89,7 +90,7 @@ Host privileges:
 ## 3. Room model
 
 - A **room** is identified by `rid` and exists only while participants are connected (deleted when empty or when host ends the room).
-- A **call session** is the live WebRTC connection between the room's current participants.
+- A **call session** is the live WebRTC mesh between the room's current participants.
 - Rooms start with an effective capacity of **2** participants.
 - When the creator requested a higher room size, the room stays provisional at **2** until a second distinct participant joins.
 - At that second join, the server locks the room's final capacity for the rest of the room lifetime:
@@ -99,6 +100,9 @@ Host privileges:
 
 If a join would exceed the room's locked capacity:
 - Server responds with `error` (code: `ROOM_FULL`) and must not add that client to the room.
+
+If a legacy 1:1-only client tries to join a room whose locked `maxParticipants` is greater than `2`:
+- Server responds with `error` (code: `ROOM_CAPACITY_UNSUPPORTED`) and must not add the participant to the room.
 
 ---
 
@@ -151,7 +155,7 @@ Acknowledges join success and provides room state.
   "cid": "C-a1b2...",
   "payload": {
     "hostCid": "C-a1b2...",
-    "maxParticipants": 2,
+    "maxParticipants": 4,
     "participants": [
       { "cid": "C-a1b2...", "joinedAt": 1735171200000 },
       { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
@@ -188,8 +192,8 @@ Sent when participants join/leave or host changes.
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
     "participants": [
-      { "cid": "C-a1b2..." },
-      { "cid": "C-c3d4..." }
+      { "cid": "C-a1b2...", "joinedAt": 1735171200000 },
+      { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
     ]
   }
 }
@@ -198,6 +202,7 @@ Sent when participants join/leave or host changes.
 **Client behavior**
 - Update UI for “waiting for someone to join” vs “in call”.
 - Treat `maxParticipants` as the room's current effective capacity. It may increase from `2` to a higher locked value when the second participant joins a provisional room.
+- Preserve `joinedAt` ordering because it is used to choose the per-peer offerer in multi-party rooms.
 - If participant list shrinks to 1 during a call, treat as remote left.
 
 ---
@@ -470,18 +475,19 @@ Pushed whenever a watched room's participant count changes. `maxParticipants` is
 
 ---
 
-## 5. WebRTC negotiation rules (1:1)
+## 5. WebRTC negotiation rules (mesh)
 
 ### 5.1 Roles for offer/answer
-To avoid “glare” (both sides sending offers), assign roles deterministically:
+To avoid “glare” (both sides sending offers), assign offer ownership per peer edge:
 
-- **Host is the offerer** when a second participant joins.
-- Non-host is the answerer.
+- Build a deterministic ordering from `participants[].joinedAt`.
+- Earlier joiner is the offerer for that pair.
+- If `joinedAt` ties, break ties by lexical `cid`.
 
 **Rule:**
-- When a client receives `room_state` showing exactly 2 participants:
-  - If you are host: create and send `offer` to the other participant.
-  - If you are not host: wait for `offer` and respond with `answer`.
+- For each remote participant, if your `(joinedAt, cid)` tuple sorts before theirs, create and send `offer` to that participant.
+- Otherwise wait for their `offer` and respond with `answer`.
+- All `offer`, `answer`, and `ice` messages should be directed with `to`.
 
 ### 5.2 Local media
 - Client may attempt to start local media before join for preview; browsers may require user gesture.
@@ -492,9 +498,9 @@ To avoid “glare” (both sides sending offers), assign roles deterministically
 - Both sides add received candidates promptly.
 
 ### 5.4 Disconnect / remote leave
-- If remote leaves (room_state goes to 1 participant) or a `room_ended` is received:
-  - Close RTCPeerConnection and clear remote media
-  - Keep local media running while waiting (stop when user leaves)
+- If a participant leaves or a `room_ended` is received:
+  - Close only the affected peer connection(s) and clear media for that participant
+  - Keep remaining peer connections and local media running while waiting (stop when user leaves)
 
 ---
 
@@ -615,8 +621,8 @@ Triggers a room invite push notification to subscribers of the room.
 → **SocketConnected**
 → send `join`
 → **Joined (Waiting)** (1 participant)
-→ if 2 participants & host: create offer → **Negotiating**
-→ if receive offer: set remote, create answer → **Negotiating**
+→ for each remote peer where you are the deterministic offerer: create offer → **Negotiating**
+→ if receive offer from a peer: set remote, create answer → **Negotiating**
 → when ICE connected: **InCall**
 → on remote leave: **Joined (Waiting)**
 → on `room_ended`: **Ended**
@@ -629,7 +635,7 @@ Triggers a room invite push notification to subscribers of the room.
 ### Client
 - [ ] Connect WS/SSE, send `join` on call page
 - [ ] Show “Join Call” and only call `getUserMedia` after user gesture
-- [ ] Implement host-as-offerer rule to avoid glare
+- [ ] Implement deterministic per-peer offer ownership to avoid glare
 - [ ] Trickle ICE send/receive with queueing before remote SDP is set
 - [ ] Handle `room_state`, `room_ended`, and `error`
 - [ ] Stop local tracks on explicit leave
@@ -637,7 +643,7 @@ Triggers a room invite push notification to subscribers of the room.
 ### Backend
 - [ ] Accept WS/SSE, parse JSON, validate schema
 - [ ] Create room on first join
-- [ ] Enforce max 2 participants
+- [ ] Enforce per-room `maxParticipants` and legacy compatibility admission
 - [ ] Assign hostCid and transfer host if host leaves
 - [ ] Relay offer/answer/ice to correct peer
 - [ ] Broadcast `room_state` updates

@@ -87,61 +87,9 @@ enum SessionDescriptionType {
 
 @MainActor
 final class WebRtcEngine {
-    private struct RealtimeStatsSample {
-        let timestampMs: Int64
-        let audioRxBytes: Int64
-        let audioTxBytes: Int64
-        let videoRxBytes: Int64
-        let videoTxBytes: Int64
-        let videoFramesDecoded: Int64
-        let videoNackCount: Int64
-        let videoPliCount: Int64
-        let videoFirCount: Int64
-    }
-
-    private struct FreezeSample {
-        let timestampMs: Int64
-        let freezeCount: Int64
-        let freezeDurationSeconds: Double
-    }
-
-    private struct MediaTotals {
-        var inboundPacketsReceived: Int64 = 0
-        var inboundPacketsLost: Int64 = 0
-        var inboundBytes: Int64 = 0
-
-        var outboundPacketsSent: Int64 = 0
-        var outboundBytes: Int64 = 0
-        var outboundPacketsRetransmitted: Int64 = 0
-
-        var remoteInboundPacketsLost: Int64 = 0
-
-        var inboundJitterSumSeconds: Double = 0
-        var inboundJitterCount: Int64 = 0
-
-        var inboundJitterBufferDelaySeconds: Double = 0
-        var inboundJitterBufferEmittedCount: Int64 = 0
-        var inboundConcealedSamples: Int64 = 0
-        var inboundTotalSamples: Int64 = 0
-
-        var inboundFpsSum: Double = 0
-        var inboundFpsCount: Int64 = 0
-        var inboundFrameWidth: Int = 0
-        var inboundFrameHeight: Int = 0
-        var inboundFramesDecoded: Int64 = 0
-
-        var inboundFreezeCount: Int64 = 0
-        var inboundFreezeDurationSeconds: Double = 0
-
-        var inboundNackCount: Int64 = 0
-        var inboundPliCount: Int64 = 0
-        var inboundFirCount: Int64 = 0
-    }
-
     private enum Constants {
         static let maxCaptureZoom: CGFloat = 4
         static let minZoomDeltaEpsilon: CGFloat = 0.01
-        static let freezeWindowMs: Int64 = 60_000
     }
 
     private enum LocalCameraSource {
@@ -150,12 +98,6 @@ final class WebRtcEngine {
         case composite
     }
 
-    private let onLocalIceCandidate: (IceCandidatePayload) -> Void
-    private let onConnectionState: (String) -> Void
-    private let onIceConnectionState: (String) -> Void
-    private let onSignalingState: (String) -> Void
-    private let onRenegotiationNeededCallback: () -> Void
-    private let onRemoteVideoTrack: (Bool) -> Void
     private let onCameraFacingChanged: (Bool) -> Void
     private let onCameraModeChanged: (LocalCameraMode) -> Void
     private let onFlashlightStateChanged: (Bool, Bool) -> Void
@@ -177,9 +119,6 @@ final class WebRtcEngine {
     private var currentZoomFactor: CGFloat = 1
 
     private var iceServers: [IceServerConfig]?
-    private var pendingRemoteIceCandidates: [IceCandidatePayload] = []
-    private var lastRealtimeStatsSample: RealtimeStatsSample?
-    private var freezeSamples: [FreezeSample] = []
     private let rendererAttachmentQueue = DispatchQueue(label: "serenada.ios.webrtc.renderer-attachment", qos: .userInitiated)
 
 #if canImport(WebRTC)
@@ -188,7 +127,7 @@ final class WebRtcEngine {
 
 #if canImport(WebRTC)
     private var peerConnectionFactory: RTCPeerConnectionFactory?
-    private var peerConnection: RTCPeerConnection?
+    private var peerSlots: [PeerConnectionSlot] = []
 
     private var localAudioSource: RTCAudioSource?
     private var localAudioTrack: RTCAudioTrack?
@@ -200,22 +139,10 @@ final class WebRtcEngine {
     private var replayKitCapturer: ReplayKitVideoCapturer?
     #endif
 
-    private var remoteVideoTrack: RTCVideoTrack?
-    private var remoteVideoTrackDelivered = false
-
     private var localRenderers: [WeakAnyBox] = []
-    private var remoteRenderers: [WeakAnyBox] = []
-
-    private var observerProxy: PeerConnectionObserverProxy?
 #endif
 
     init(
-        onLocalIceCandidate: @escaping (IceCandidatePayload) -> Void,
-        onConnectionState: @escaping (String) -> Void,
-        onIceConnectionState: @escaping (String) -> Void,
-        onSignalingState: @escaping (String) -> Void,
-        onRenegotiationNeededCallback: @escaping () -> Void,
-        onRemoteVideoTrack: @escaping (Bool) -> Void,
         onCameraFacingChanged: @escaping (Bool) -> Void,
         onCameraModeChanged: @escaping (LocalCameraMode) -> Void,
         onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
@@ -224,12 +151,6 @@ final class WebRtcEngine {
         onDebugTrace: ((String) -> Void)? = nil,
         isHdVideoExperimentalEnabled: Bool
     ) {
-        self.onLocalIceCandidate = onLocalIceCandidate
-        self.onConnectionState = onConnectionState
-        self.onIceConnectionState = onIceConnectionState
-        self.onSignalingState = onSignalingState
-        self.onRenegotiationNeededCallback = onRenegotiationNeededCallback
-        self.onRemoteVideoTrack = onRemoteVideoTrack
         self.onCameraFacingChanged = onCameraFacingChanged
         self.onCameraModeChanged = onCameraModeChanged
         self.onFlashlightStateChanged = onFlashlightStateChanged
@@ -268,7 +189,7 @@ final class WebRtcEngine {
         }
 
         attachTrackToRegisteredRenderers()
-        createPeerConnectionIfReady()
+        peerSlots.forEach { $0.attachLocalTracks(audioTrack: localAudioTrack, videoTrack: localVideoTrack) }
 #else
         onCameraFacingChanged(true)
         onCameraModeChanged(.selfie)
@@ -303,192 +224,57 @@ final class WebRtcEngine {
 #endif
     }
 
-    func closePeerConnection() {
-#if canImport(WebRTC)
-        detachRemoteTrackFromRegisteredRenderers()
-        peerConnection?.close()
-        peerConnection = nil
-        remoteVideoTrack = nil
-        remoteVideoTrackDelivered = false
-        onRemoteVideoTrack(false)
-        pendingRemoteIceCandidates.removeAll()
-#endif
-    }
-
     func release() {
         stopLocalMedia()
-        closePeerConnection()
+        peerSlots.forEach { $0.closePeerConnection() }
+        peerSlots.removeAll()
     }
 
     func setIceServers(_ servers: [IceServerConfig]) {
         iceServers = servers
-        createPeerConnectionIfReady()
+        peerSlots.forEach { $0.setIceServers(servers) }
     }
 
-    func isReady() -> Bool {
+    func hasIceServers() -> Bool {
+        iceServers != nil
+    }
+
+    func createSlot(
+        remoteCid: String,
+        onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
+        onRemoteVideoTrack: @escaping (String, AnyObject?) -> Void,
+        onConnectionStateChange: @escaping (String, String) -> Void,
+        onIceConnectionStateChange: @escaping (String, String) -> Void,
+        onSignalingStateChange: @escaping (String, String) -> Void,
+        onRenegotiationNeeded: @escaping (String) -> Void
+    ) -> PeerConnectionSlot? {
 #if canImport(WebRTC)
-        return peerConnection != nil
-#else
-        return false
-#endif
-    }
-
-    func ensurePeerConnection() {
-        createPeerConnectionIfReady()
-    }
-
-    func signalingStateRaw() -> String? {
-#if canImport(WebRTC)
-        guard let peerConnection else { return nil }
-        return signalingStateString(peerConnection.signalingState)
+        guard let peerConnectionFactory else { return nil }
+        let slot = PeerConnectionSlot(
+            remoteCid: remoteCid,
+            factory: peerConnectionFactory,
+            iceServers: iceServers,
+            localAudioTrack: localAudioTrack,
+            localVideoTrack: localVideoTrack,
+            onLocalIceCandidate: onLocalIceCandidate,
+            onRemoteVideoTrack: { remoteCid, track in
+                onRemoteVideoTrack(remoteCid, track)
+            },
+            onConnectionStateChange: onConnectionStateChange,
+            onIceConnectionStateChange: onIceConnectionStateChange,
+            onSignalingStateChange: onSignalingStateChange,
+            onRenegotiationNeeded: onRenegotiationNeeded
+        )
+        peerSlots.append(slot)
+        return slot
 #else
         return nil
 #endif
     }
 
-    func hasRemoteDescription() -> Bool {
+    func removeSlot(_ slot: PeerConnectionSlot) {
 #if canImport(WebRTC)
-        peerConnection?.remoteDescription != nil
-#else
-        false
-#endif
-    }
-
-    func rollbackLocalDescription(onComplete: ((Bool) -> Void)? = nil) {
-#if canImport(WebRTC)
-        guard let peerConnection else {
-            onComplete?(false)
-            return
-        }
-
-        let rollback = RTCSessionDescription(type: .rollback, sdp: "")
-        peerConnection.setLocalDescription(rollback) { error in
-            onComplete?(error == nil)
-        }
-#else
-        onComplete?(false)
-#endif
-    }
-
-    @discardableResult
-    func createOffer(
-        iceRestart: Bool = false,
-        onSdp: @escaping (String) -> Void,
-        onComplete: ((Bool) -> Void)? = nil
-    ) -> Bool {
-#if canImport(WebRTC)
-        guard let peerConnection else {
-            onComplete?(false)
-            return false
-        }
-
-        if peerConnection.signalingState != .stable {
-            onComplete?(false)
-            return false
-        }
-
-        let constraints = RTCMediaConstraints(
-            mandatoryConstraints: nil,
-            optionalConstraints: iceRestart ? ["IceRestart": "true"] : nil
-        )
-
-        peerConnection.offer(for: constraints) { [weak self] description, error in
-            guard let self else { return }
-            guard error == nil, let description else {
-                onComplete?(false)
-                return
-            }
-
-            peerConnection.setLocalDescription(description) { setError in
-                if setError == nil {
-                    onSdp(description.sdp)
-                    onComplete?(true)
-                } else {
-                    onComplete?(false)
-                }
-            }
-        }
-
-        return true
-#else
-        onComplete?(false)
-        return false
-#endif
-    }
-
-    func createAnswer(onSdp: @escaping (String) -> Void, onComplete: ((Bool) -> Void)? = nil) {
-#if canImport(WebRTC)
-        guard let peerConnection else {
-            onComplete?(false)
-            return
-        }
-
-        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-        peerConnection.answer(for: constraints) { description, error in
-            guard error == nil, let description else {
-                onComplete?(false)
-                return
-            }
-
-            peerConnection.setLocalDescription(description) { setError in
-                if setError == nil {
-                    onSdp(description.sdp)
-                    onComplete?(true)
-                } else {
-                    onComplete?(false)
-                }
-            }
-        }
-#else
-        onComplete?(false)
-#endif
-    }
-
-    func setRemoteDescription(type: SessionDescriptionType, sdp: String, onComplete: ((Bool) -> Void)? = nil) {
-#if canImport(WebRTC)
-        guard let peerConnection else { return }
-        let rtcType: RTCSdpType
-        switch type {
-        case .offer:
-            rtcType = .offer
-        case .answer:
-            rtcType = .answer
-        case .rollback:
-            rtcType = .rollback
-        }
-
-        let description = RTCSessionDescription(type: rtcType, sdp: sdp)
-        peerConnection.setRemoteDescription(description) { [weak self] error in
-            guard let self else { return }
-            if error == nil {
-                self.flushPendingIceCandidates()
-                onComplete?(true)
-            } else {
-                onComplete?(false)
-            }
-        }
-#else
-        onComplete?(true)
-#endif
-    }
-
-    func addIceCandidate(_ candidate: IceCandidatePayload) {
-#if canImport(WebRTC)
-        guard let peerConnection else { return }
-
-        if peerConnection.remoteDescription == nil {
-            if pendingRemoteIceCandidates.count < WebRtcResilience.iceCandidateBufferMax {
-                pendingRemoteIceCandidates.append(candidate)
-            }
-            return
-        }
-
-        let rtcCandidate = RTCIceCandidate(
-            sdp: candidate.candidate,
-            sdpMLineIndex: candidate.sdpMLineIndex,
-            sdpMid: candidate.sdpMid
-        )
-        peerConnection.add(rtcCandidate)
+        peerSlots.removeAll { $0 === slot }
 #endif
     }
 
@@ -645,340 +431,6 @@ final class WebRtcEngine {
         return 1
     }
 
-    func isRemoteVideoTrackEnabled() -> Bool {
-#if canImport(WebRTC)
-        remoteVideoTrack?.isEnabled ?? false
-#else
-        false
-#endif
-    }
-
-    func remoteVideoDiagnostics() -> String {
-#if canImport(WebRTC)
-        "trackPresent=\(remoteVideoTrack != nil),trackEnabled=\(remoteVideoTrack?.isEnabled == true)"
-#else
-        "trackPresent=false,trackEnabled=false"
-#endif
-    }
-
-    func collectWebRtcStatsSummary(onComplete: @escaping (String) -> Void) {
-#if canImport(WebRTC)
-        guard let peerConnection else {
-            onComplete("pc=none")
-            return
-        }
-        peerConnection.statistics { report in
-            onComplete("stats=\(report.statistics.count)")
-        }
-#else
-        onComplete("pc=stub")
-#endif
-    }
-
-    func collectRealtimeCallStats(onComplete: @escaping (RealtimeCallStats) -> Void) {
-#if canImport(WebRTC)
-        guard let peerConnection else {
-            onComplete(.empty)
-            return
-        }
-        peerConnection.statistics { [weak self] report in
-            guard let self else {
-                onComplete(.empty)
-                return
-            }
-            onComplete(self.buildRealtimeCallStats(report))
-        }
-#else
-        onComplete(.empty)
-#endif
-    }
-
-#if canImport(WebRTC)
-    private func buildRealtimeCallStats(_ report: RTCStatisticsReport) -> RealtimeCallStats {
-        let stats = Array(report.statistics.values)
-        var audio = MediaTotals()
-        var video = MediaTotals()
-
-        var selectedCandidatePair: RTCStatistics?
-        var fallbackCandidatePair: RTCStatistics?
-        var remoteInboundRttSumSeconds = 0.0
-        var remoteInboundRttCount: Int64 = 0
-
-        for stat in stats {
-            if stat.type == "candidate-pair" {
-                let isSelected = memberBool(stat, key: "selected") == true
-                let isNominated = memberBool(stat, key: "nominated") == true
-                let pairState = memberString(stat, key: "state")
-                if isSelected {
-                    selectedCandidatePair = stat
-                } else if fallbackCandidatePair == nil && isNominated && pairState == "succeeded" {
-                    fallbackCandidatePair = stat
-                }
-                continue
-            }
-
-            guard let kind = mediaKind(for: stat) else { continue }
-            if kind == "audio" {
-                collectMediaStat(stat, into: &audio, remoteInboundRttSumSeconds: &remoteInboundRttSumSeconds, remoteInboundRttCount: &remoteInboundRttCount)
-            } else {
-                collectMediaStat(stat, into: &video, remoteInboundRttSumSeconds: &remoteInboundRttSumSeconds, remoteInboundRttCount: &remoteInboundRttCount)
-            }
-        }
-
-        let selectedPair = selectedCandidatePair ?? fallbackCandidatePair
-        let localCandidate = selectedPair.flatMap { pair -> RTCStatistics? in
-            guard let id = memberString(pair, key: "localCandidateId"), !id.isEmpty else { return nil }
-            return report.statistics[id]
-        }
-        let remoteCandidate = selectedPair.flatMap { pair -> RTCStatistics? in
-            guard let id = memberString(pair, key: "remoteCandidateId"), !id.isEmpty else { return nil }
-            return report.statistics[id]
-        }
-
-        let localCandidateType = memberString(localCandidate, key: "candidateType")
-        let remoteCandidateType = memberString(remoteCandidate, key: "candidateType")
-        let localProtocol = memberString(localCandidate, key: "protocol")
-        let remoteProtocol = memberString(remoteCandidate, key: "protocol")
-        let isRelay = localCandidateType == "relay" || remoteCandidateType == "relay"
-        let transportPath: String? = {
-            guard localCandidateType != nil || remoteCandidateType != nil else { return nil }
-            return "\(isRelay ? "TURN relay" : "Direct") (\(localCandidateType ?? "n/a") -> \(remoteCandidateType ?? "n/a"), \(localProtocol ?? remoteProtocol ?? "n/a"))"
-        }()
-
-        let candidateRttSeconds = memberDouble(selectedPair, key: "currentRoundTripTime")
-        let remoteInboundRttSeconds: Double? = remoteInboundRttCount > 0
-            ? (remoteInboundRttSumSeconds / Double(remoteInboundRttCount))
-            : nil
-        let chosenRttSeconds = candidateRttSeconds ?? remoteInboundRttSeconds
-        let rttMs = chosenRttSeconds.map { $0 * 1000.0 }
-        let availableOutgoingKbps = memberDouble(selectedPair, key: "availableOutgoingBitrate").map { $0 / 1000.0 }
-
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        let previousSample = lastRealtimeStatsSample
-        let elapsedSeconds: Double = {
-            guard let previousSample else { return 0 }
-            return max(0, Double(now - previousSample.timestampMs) / 1000.0)
-        }()
-
-        let audioRxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.audioRxBytes, currentBytes: audio.inboundBytes, elapsedSeconds: elapsedSeconds) }
-        let audioTxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.audioTxBytes, currentBytes: audio.outboundBytes, elapsedSeconds: elapsedSeconds) }
-        let videoRxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.videoRxBytes, currentBytes: video.inboundBytes, elapsedSeconds: elapsedSeconds) }
-        let videoTxKbps = previousSample.flatMap { calculateBitrateKbps(previousBytes: $0.videoTxBytes, currentBytes: video.outboundBytes, elapsedSeconds: elapsedSeconds) }
-
-        let videoFps: Double? = {
-            if video.inboundFpsCount > 0 {
-                return video.inboundFpsSum / Double(video.inboundFpsCount)
-            }
-            if let previousSample, elapsedSeconds > 0, video.inboundFramesDecoded >= previousSample.videoFramesDecoded {
-                return Double(video.inboundFramesDecoded - previousSample.videoFramesDecoded) / elapsedSeconds
-            }
-            return nil
-        }()
-
-        freezeSamples.append(
-            FreezeSample(
-                timestampMs: now,
-                freezeCount: video.inboundFreezeCount,
-                freezeDurationSeconds: video.inboundFreezeDurationSeconds
-            )
-        )
-        freezeSamples.removeAll { now - $0.timestampMs > Constants.freezeWindowMs }
-        let freezeWindowBase = freezeSamples.first
-        let videoFreezeCount60s = freezeWindowBase.map { max(0, video.inboundFreezeCount - $0.freezeCount) }
-        let videoFreezeDuration60s = freezeWindowBase.map { max(0, video.inboundFreezeDurationSeconds - $0.freezeDurationSeconds) }
-
-        let audioRxPacketLossPct = ratioPercent(numerator: audio.inboundPacketsLost, denominator: audio.inboundPacketsLost + audio.inboundPacketsReceived)
-        let audioTxPacketLossPct = ratioPercent(numerator: audio.remoteInboundPacketsLost, denominator: audio.remoteInboundPacketsLost + audio.outboundPacketsSent)
-        let videoRxPacketLossPct = ratioPercent(numerator: video.inboundPacketsLost, denominator: video.inboundPacketsLost + video.inboundPacketsReceived)
-        let videoTxPacketLossPct = ratioPercent(numerator: video.remoteInboundPacketsLost, denominator: video.remoteInboundPacketsLost + video.outboundPacketsSent)
-
-        let audioJitterMs = audio.inboundJitterCount > 0
-            ? ((audio.inboundJitterSumSeconds / Double(audio.inboundJitterCount)) * 1000.0)
-            : nil
-        let audioPlayoutDelayMs = audio.inboundJitterBufferEmittedCount > 0
-            ? ((audio.inboundJitterBufferDelaySeconds / Double(audio.inboundJitterBufferEmittedCount)) * 1000.0)
-            : nil
-        let audioConcealedPct = ratioPercent(numerator: audio.inboundConcealedSamples, denominator: audio.inboundConcealedSamples + audio.inboundTotalSamples)
-        let videoRetransmitPct = ratioPercent(numerator: video.outboundPacketsRetransmitted, denominator: video.outboundPacketsSent)
-
-        let videoNackPerMin = previousSample.flatMap { positiveRatePerMinute(currentValue: video.inboundNackCount, previousValue: $0.videoNackCount, elapsedSeconds: elapsedSeconds) }
-        let videoPliPerMin = previousSample.flatMap { positiveRatePerMinute(currentValue: video.inboundPliCount, previousValue: $0.videoPliCount, elapsedSeconds: elapsedSeconds) }
-        let videoFirPerMin = previousSample.flatMap { positiveRatePerMinute(currentValue: video.inboundFirCount, previousValue: $0.videoFirCount, elapsedSeconds: elapsedSeconds) }
-
-        let videoResolution: String? = (video.inboundFrameWidth > 0 && video.inboundFrameHeight > 0)
-            ? "\(video.inboundFrameWidth)x\(video.inboundFrameHeight)"
-            : nil
-
-        lastRealtimeStatsSample = RealtimeStatsSample(
-            timestampMs: now,
-            audioRxBytes: audio.inboundBytes,
-            audioTxBytes: audio.outboundBytes,
-            videoRxBytes: video.inboundBytes,
-            videoTxBytes: video.outboundBytes,
-            videoFramesDecoded: video.inboundFramesDecoded,
-            videoNackCount: video.inboundNackCount,
-            videoPliCount: video.inboundPliCount,
-            videoFirCount: video.inboundFirCount
-        )
-
-        return RealtimeCallStats(
-            transportPath: transportPath,
-            rttMs: rttMs,
-            availableOutgoingKbps: availableOutgoingKbps,
-            audioRxPacketLossPct: audioRxPacketLossPct,
-            audioTxPacketLossPct: audioTxPacketLossPct,
-            audioJitterMs: audioJitterMs,
-            audioPlayoutDelayMs: audioPlayoutDelayMs,
-            audioConcealedPct: audioConcealedPct,
-            audioRxKbps: audioRxKbps,
-            audioTxKbps: audioTxKbps,
-            videoRxPacketLossPct: videoRxPacketLossPct,
-            videoTxPacketLossPct: videoTxPacketLossPct,
-            videoRxKbps: videoRxKbps,
-            videoTxKbps: videoTxKbps,
-            videoFps: videoFps,
-            videoResolution: videoResolution,
-            videoFreezeCount60s: videoFreezeCount60s,
-            videoFreezeDuration60s: videoFreezeDuration60s,
-            videoRetransmitPct: videoRetransmitPct,
-            videoNackPerMin: videoNackPerMin,
-            videoPliPerMin: videoPliPerMin,
-            videoFirPerMin: videoFirPerMin,
-            updatedAtMs: now
-        )
-    }
-
-    private func collectMediaStat(
-        _ stat: RTCStatistics,
-        into totals: inout MediaTotals,
-        remoteInboundRttSumSeconds: inout Double,
-        remoteInboundRttCount: inout Int64
-    ) {
-        switch stat.type {
-        case "inbound-rtp":
-            totals.inboundPacketsReceived += memberInt64(stat, key: "packetsReceived") ?? 0
-            totals.inboundPacketsLost += max(0, memberInt64(stat, key: "packetsLost") ?? 0)
-            totals.inboundBytes += memberInt64(stat, key: "bytesReceived") ?? 0
-
-            if let jitter = memberDouble(stat, key: "jitter") {
-                totals.inboundJitterSumSeconds += jitter
-                totals.inboundJitterCount += 1
-            }
-
-            totals.inboundJitterBufferDelaySeconds += memberDouble(stat, key: "jitterBufferDelay") ?? 0
-            totals.inboundJitterBufferEmittedCount += memberInt64(stat, key: "jitterBufferEmittedCount") ?? 0
-            totals.inboundConcealedSamples += memberInt64(stat, key: "concealedSamples") ?? 0
-            totals.inboundTotalSamples += memberInt64(stat, key: "totalSamplesReceived") ?? 0
-
-            if let fps = memberDouble(stat, key: "framesPerSecond") {
-                totals.inboundFpsSum += fps
-                totals.inboundFpsCount += 1
-            }
-
-            let frameWidth = Int(memberInt64(stat, key: "frameWidth") ?? 0)
-            let frameHeight = Int(memberInt64(stat, key: "frameHeight") ?? 0)
-            totals.inboundFrameWidth = max(totals.inboundFrameWidth, frameWidth)
-            totals.inboundFrameHeight = max(totals.inboundFrameHeight, frameHeight)
-            totals.inboundFramesDecoded += memberInt64(stat, key: "framesDecoded") ?? 0
-
-            totals.inboundFreezeCount += memberInt64(stat, key: "freezeCount") ?? 0
-            totals.inboundFreezeDurationSeconds += memberDouble(stat, key: "totalFreezesDuration") ?? 0
-            totals.inboundNackCount += memberInt64(stat, key: "nackCount") ?? 0
-            totals.inboundPliCount += memberInt64(stat, key: "pliCount") ?? 0
-            totals.inboundFirCount += memberInt64(stat, key: "firCount") ?? 0
-
-        case "outbound-rtp":
-            totals.outboundPacketsSent += memberInt64(stat, key: "packetsSent") ?? 0
-            totals.outboundBytes += memberInt64(stat, key: "bytesSent") ?? 0
-            totals.outboundPacketsRetransmitted += memberInt64(stat, key: "retransmittedPacketsSent") ?? 0
-
-        case "remote-inbound-rtp":
-            totals.remoteInboundPacketsLost += max(0, memberInt64(stat, key: "packetsLost") ?? 0)
-            if let remoteRtt = memberDouble(stat, key: "roundTripTime") {
-                remoteInboundRttSumSeconds += remoteRtt
-                remoteInboundRttCount += 1
-            }
-
-        default:
-            break
-        }
-    }
-
-    private func mediaKind(for stat: RTCStatistics) -> String? {
-        let kind = memberString(stat, key: "kind") ?? memberString(stat, key: "mediaType")
-        if kind == "audio" || kind == "video" {
-            return kind
-        }
-        return nil
-    }
-
-    private func memberString(_ stat: RTCStatistics?, key: String) -> String? {
-        guard let value = stat?.values[key] else { return nil }
-        if let str = value as? String {
-            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        let text = value.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
-    }
-
-    private func memberDouble(_ stat: RTCStatistics?, key: String) -> Double? {
-        guard let value = stat?.values[key] else { return nil }
-        if let number = value as? NSNumber {
-            return number.doubleValue
-        }
-        if let text = value as? String {
-            return Double(text)
-        }
-        return nil
-    }
-
-    private func memberInt64(_ stat: RTCStatistics?, key: String) -> Int64? {
-        guard let value = stat?.values[key] else { return nil }
-        if let number = value as? NSNumber {
-            return number.int64Value
-        }
-        if let text = value as? String {
-            return Int64(text)
-        }
-        return nil
-    }
-
-    private func memberBool(_ stat: RTCStatistics?, key: String) -> Bool? {
-        guard let value = stat?.values[key] else { return nil }
-        if let number = value as? NSNumber {
-            return number.boolValue
-        }
-        if let text = value as? String {
-            switch text.lowercased() {
-            case "true":
-                return true
-            case "false":
-                return false
-            default:
-                return nil
-            }
-        }
-        return nil
-    }
-
-    private func calculateBitrateKbps(previousBytes: Int64, currentBytes: Int64, elapsedSeconds: Double) -> Double? {
-        guard elapsedSeconds > 0, currentBytes >= previousBytes else { return nil }
-        let bits = Double(currentBytes - previousBytes) * 8
-        return bits / elapsedSeconds / 1000.0
-    }
-
-    private func ratioPercent(numerator: Int64, denominator: Int64) -> Double? {
-        guard denominator > 0 else { return nil }
-        return (Double(numerator) / Double(denominator)) * 100.0
-    }
-
-    private func positiveRatePerMinute(currentValue: Int64, previousValue: Int64, elapsedSeconds: Double) -> Double? {
-        guard elapsedSeconds > 0, currentValue >= previousValue else { return nil }
-        return (Double(currentValue - previousValue) / elapsedSeconds) * 60.0
-    }
-#endif
-
     func attachLocalRenderer(_ renderer: AnyObject) {
 #if canImport(WebRTC)
         localRenderers.append(WeakAnyBox(value: renderer))
@@ -1001,31 +453,6 @@ final class WebRtcEngine {
             }
         }
         localRenderers.removeAll { $0.value === renderer || $0.value == nil }
-#endif
-    }
-
-    func attachRemoteRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
-        remoteRenderers.append(WeakAnyBox(value: renderer))
-        compactRenderers()
-        if let renderer = renderer as? RTCVideoRenderer {
-            let track = remoteVideoTrack
-            rendererAttachmentQueue.async {
-                track?.add(renderer)
-            }
-        }
-#endif
-    }
-
-    func detachRemoteRenderer(_ renderer: AnyObject) {
-#if canImport(WebRTC)
-        if let renderer = renderer as? RTCVideoRenderer {
-            let track = remoteVideoTrack
-            rendererAttachmentQueue.async {
-                track?.remove(renderer)
-            }
-        }
-        remoteRenderers.removeAll { $0.value === renderer || $0.value == nil }
 #endif
     }
 
@@ -1053,88 +480,6 @@ final class WebRtcEngine {
         guard !sslInitialized else { return }
         RTCInitializeSSL()
         sslInitialized = true
-    }
-
-    private func createPeerConnectionIfReady() {
-        guard peerConnection == nil else { return }
-        guard let factory = peerConnectionFactory else { return }
-        guard let iceServers else { return }
-
-        let rtcServers = iceServers.map {
-            RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
-        }
-
-        let config = RTCConfiguration()
-        config.iceServers = rtcServers
-        config.sdpSemantics = .unifiedPlan
-
-        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-
-        let observer = PeerConnectionObserverProxy(
-            onIceCandidate: { [weak self] candidate in
-                guard let self else { return }
-                self.onLocalIceCandidate(
-                    IceCandidatePayload(
-                        sdpMid: candidate.sdpMid,
-                        sdpMLineIndex: candidate.sdpMLineIndex,
-                        candidate: candidate.sdp
-                    )
-                )
-            },
-            onConnectionState: { [weak self] state in
-                guard let self else { return }
-                self.onConnectionState(self.connectionStateString(state))
-            },
-            onIceConnectionState: { [weak self] state in
-                guard let self else { return }
-                self.onIceConnectionState(self.iceConnectionStateString(state))
-            },
-            onSignalingState: { [weak self] state in
-                guard let self else { return }
-                self.onSignalingState(self.signalingStateString(state))
-            },
-            onRenegotiationNeeded: { [weak self] in
-                self?.onRenegotiationNeededCallback()
-            },
-            onRemoteVideoTrack: { [weak self] track in
-                guard let self else { return }
-                if let track {
-                    guard !self.remoteVideoTrackDelivered else { return }
-                    self.remoteVideoTrackDelivered = true
-                    self.remoteVideoTrack = track
-                    self.attachRemoteTrackToRegisteredRenderers()
-                    self.onRemoteVideoTrack(true)
-                } else {
-                    self.remoteVideoTrackDelivered = false
-                    self.remoteVideoTrack = nil
-                    self.onRemoteVideoTrack(false)
-                }
-            }
-        )
-        observerProxy = observer
-
-        guard let peerConnection = factory.peerConnection(with: config, constraints: constraints, delegate: observer) else {
-            return
-        }
-
-        self.peerConnection = peerConnection
-
-        if let localAudioTrack {
-            _ = peerConnection.add(localAudioTrack, streamIds: ["serenada"])
-        } else {
-            addReceiveOnlyTransceiver(mediaType: .audio, to: peerConnection)
-        }
-        if let localVideoTrack {
-            _ = peerConnection.add(localVideoTrack, streamIds: ["serenada"])
-        } else {
-            addReceiveOnlyTransceiver(mediaType: .video, to: peerConnection)
-        }
-    }
-
-    private func addReceiveOnlyTransceiver(mediaType: RTCRtpMediaType, to peerConnection: RTCPeerConnection) {
-        let transceiverInit = RTCRtpTransceiverInit()
-        transceiverInit.direction = .recvOnly
-        _ = peerConnection.addTransceiver(of: mediaType, init: transceiverInit)
     }
 
     private func restartVideoCapturer(source: LocalCameraSource) -> Bool {
@@ -1298,22 +643,6 @@ final class WebRtcEngine {
         return min(maxFps, 24)
     }
 
-    private func flushPendingIceCandidates() {
-        guard let peerConnection else { return }
-        guard peerConnection.remoteDescription != nil else { return }
-
-        let pending = pendingRemoteIceCandidates
-        pendingRemoteIceCandidates.removeAll()
-        for candidate in pending {
-            let rtcCandidate = RTCIceCandidate(
-                sdp: candidate.candidate,
-                sdpMLineIndex: candidate.sdpMLineIndex,
-                sdpMid: candidate.sdpMid
-            )
-            peerConnection.add(rtcCandidate)
-        }
-    }
-
     private func attachTrackToRegisteredRenderers() {
         compactRenderers()
         guard let localVideoTrack else { return }
@@ -1325,114 +654,23 @@ final class WebRtcEngine {
         }
     }
 
-    private func attachRemoteTrackToRegisteredRenderers() {
-        compactRenderers()
-        guard let remoteVideoTrack else { return }
-        let renderers = remoteRenderers.compactMap { $0.value as? RTCVideoRenderer }
-        rendererAttachmentQueue.async {
-            for renderer in renderers {
-                remoteVideoTrack.add(renderer)
-            }
-        }
-    }
-
     private func compactRenderers() {
         localRenderers.removeAll { $0.value == nil }
-        remoteRenderers.removeAll { $0.value == nil }
     }
 
     private func detachTracksFromRegisteredRenderers() {
         compactRenderers()
         let localTrack = localVideoTrack
-        let remoteTrack = remoteVideoTrack
         let localRendererList = localRenderers.compactMap { $0.value as? RTCVideoRenderer }
-        let remoteRendererList = remoteRenderers.compactMap { $0.value as? RTCVideoRenderer }
         rendererAttachmentQueue.async {
             if let localTrack {
                 for renderer in localRendererList {
                     localTrack.remove(renderer)
                 }
             }
-            if let remoteTrack {
-                for renderer in remoteRendererList {
-                    remoteTrack.remove(renderer)
-                }
-            }
         }
     }
 
-    private func detachRemoteTrackFromRegisteredRenderers() {
-        compactRenderers()
-
-        guard let remoteVideoTrack else { return }
-        let renderers = remoteRenderers.compactMap { $0.value as? RTCVideoRenderer }
-        rendererAttachmentQueue.async {
-            for renderer in renderers {
-                remoteVideoTrack.remove(renderer)
-            }
-        }
-    }
-
-    private func connectionStateString(_ state: RTCPeerConnectionState) -> String {
-        switch state {
-        case .new:
-            return "NEW"
-        case .connecting:
-            return "CONNECTING"
-        case .connected:
-            return "CONNECTED"
-        case .disconnected:
-            return "DISCONNECTED"
-        case .failed:
-            return "FAILED"
-        case .closed:
-            return "CLOSED"
-        @unknown default:
-            return "UNKNOWN"
-        }
-    }
-
-    private func iceConnectionStateString(_ state: RTCIceConnectionState) -> String {
-        switch state {
-        case .new:
-            return "NEW"
-        case .checking:
-            return "CHECKING"
-        case .connected:
-            return "CONNECTED"
-        case .completed:
-            return "COMPLETED"
-        case .failed:
-            return "FAILED"
-        case .disconnected:
-            return "DISCONNECTED"
-        case .closed:
-            return "CLOSED"
-        case .count:
-            return "COUNT"
-        @unknown default:
-            return "UNKNOWN"
-        }
-    }
-
-    private func signalingStateString(_ state: RTCSignalingState) -> String {
-        switch state {
-        case .stable:
-            return "STABLE"
-        case .haveLocalOffer:
-            return "HAVE_LOCAL_OFFER"
-        case .haveLocalPrAnswer:
-            return "HAVE_LOCAL_PRANSWER"
-        case .haveRemoteOffer:
-            return "HAVE_REMOTE_OFFER"
-        case .haveRemotePrAnswer:
-            return "HAVE_REMOTE_PRANSWER"
-        case .closed:
-            return "CLOSED"
-        @unknown default:
-            return "UNKNOWN"
-        }
-    }
 #endif
 
     private func canUseCompositeSource() -> Bool {
@@ -1576,76 +814,6 @@ final class WebRtcEngine {
 }
 
 #if canImport(WebRTC)
-private final class PeerConnectionObserverProxy: NSObject, RTCPeerConnectionDelegate {
-    private let onIceCandidate: (RTCIceCandidate) -> Void
-    private let onConnectionState: (RTCPeerConnectionState) -> Void
-    private let onIceConnectionState: (RTCIceConnectionState) -> Void
-    private let onSignalingState: (RTCSignalingState) -> Void
-    private let onRenegotiationNeeded: () -> Void
-    private let onRemoteVideoTrack: (RTCVideoTrack?) -> Void
-
-    init(
-        onIceCandidate: @escaping (RTCIceCandidate) -> Void,
-        onConnectionState: @escaping (RTCPeerConnectionState) -> Void,
-        onIceConnectionState: @escaping (RTCIceConnectionState) -> Void,
-        onSignalingState: @escaping (RTCSignalingState) -> Void,
-        onRenegotiationNeeded: @escaping () -> Void,
-        onRemoteVideoTrack: @escaping (RTCVideoTrack?) -> Void
-    ) {
-        self.onIceCandidate = onIceCandidate
-        self.onConnectionState = onConnectionState
-        self.onIceConnectionState = onIceConnectionState
-        self.onSignalingState = onSignalingState
-        self.onRenegotiationNeeded = onRenegotiationNeeded
-        self.onRemoteVideoTrack = onRemoteVideoTrack
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
-        onSignalingState(stateChanged)
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-        if let track = stream.videoTracks.first {
-            onRemoteVideoTrack(track)
-        }
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
-        onRemoteVideoTrack(nil)
-    }
-
-    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
-        onRenegotiationNeeded()
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
-        onIceConnectionState(newState)
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
-        onConnectionState(newState)
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        onIceCandidate(candidate)
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCIceGatheringState) {}
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {
-        if let track = rtpReceiver.track as? RTCVideoTrack {
-            onRemoteVideoTrack(track)
-        }
-    }
-}
-
 private final class WeakAnyBox {
     weak var value: AnyObject?
 
@@ -2263,10 +1431,4 @@ private final class ReplayKitVideoCapturer: RTCVideoCapturer {
     }
 }
 #endif
-#endif
-
-#if !canImport(WebRTC)
-private extension WebRtcEngine {
-    func createPeerConnectionIfReady() {}
-}
 #endif

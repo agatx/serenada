@@ -129,6 +129,7 @@ class CallManager(context: Context) {
     private var activeCallHostOverride: String? = null
     private var clientId: String? = null
     private var hostCid: String? = null
+    private var currentRoomState: RoomState? = null
     private var callStartTimeMs: Long? = null
     private var watchedRoomIds: List<String> = emptyList()
     private var pendingJoinRoom: String? = null
@@ -136,23 +137,16 @@ class CallManager(context: Context) {
     // All mutable state below is accessed exclusively from the handler thread — no synchronization needed.
     private var joinAttemptSerial = 0L
     private var reconnectAttempts = 0
-    private var sentOffer = false
-    private var isMakingOffer = false
-    private var pendingIceRestart = false
-    private var lastIceRestartAt = 0L
-    private var iceRestartRunnable: Runnable? = null
     private var connectionStatusRetryingRunnable: Runnable? = null
-    private var offerTimeoutRunnable: Runnable? = null
     private var joinTimeoutRunnable: Runnable? = null
     private var joinKickstartRunnable: Runnable? = null
     private var joinRecoveryRunnable: Runnable? = null
-    private var nonHostOfferFallbackRunnable: Runnable? = null
-    private var nonHostOfferFallbackAttempts = 0
     private var turnRefreshRunnable: Runnable? = null
     private var remoteVideoStatePollRunnable: Runnable? = null
     private var webrtcStatsRequestInFlight = false
     private var lastWebRtcStatsPollAtMs = 0L
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
+    private val peerSlots = mutableMapOf<String, PeerConnectionSlot>()
     private var reconnectToken: String? = null
     private var turnTokenTTLMs: Long? = null
     private var hasJoinSignalStarted = false
@@ -200,9 +194,6 @@ class CallManager(context: Context) {
                 sendJoin(join)
             }
             sendWatchRoomsIfNeeded()
-            if (pendingIceRestart) {
-                handler.post { triggerIceRestart("signaling-reconnect") }
-            }
         }
 
         override fun onMessage(message: SignalingMessage) {
@@ -231,90 +222,6 @@ class CallManager(context: Context) {
     private fun buildWebRtcEngine(): WebRtcEngine {
         return WebRtcEngine(
             context = appContext,
-            onLocalIceCandidate = { candidate ->
-                val payload = JSONObject().apply {
-                    val candidateJson = JSONObject()
-                    candidateJson.put("candidate", candidate.sdp)
-                    candidateJson.put("sdpMid", candidate.sdpMid)
-                    candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
-                    put("candidate", candidateJson)
-                }
-                sendMessage("ice", payload)
-            },
-            onConnectionState = { state ->
-                handler.post {
-                    val messageResId = when (state) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> R.string.call_status_connected
-                        PeerConnection.PeerConnectionState.CONNECTING -> R.string.call_status_connecting
-                        PeerConnection.PeerConnectionState.DISCONNECTED -> R.string.call_status_disconnected
-                        PeerConnection.PeerConnectionState.FAILED -> R.string.call_status_connection_failed
-                        PeerConnection.PeerConnectionState.CLOSED -> R.string.call_status_call_ended
-                        else -> null
-                    }
-                    updateState(
-                        _uiState.value.copy(
-                            statusMessageResId = messageResId,
-                            connectionState = state.name
-                        )
-                    )
-                    when (state) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> {
-                            clearIceRestartTimer()
-                            pendingIceRestart = false
-                        }
-
-                        PeerConnection.PeerConnectionState.DISCONNECTED -> scheduleIceRestart(
-                            "conn-disconnected",
-                            2000
-                        )
-
-                        PeerConnection.PeerConnectionState.FAILED -> scheduleIceRestart("conn-failed", 0)
-                        else -> {}
-                    }
-                    updateConnectionStatusFromSignals()
-                }
-            },
-            onIceConnectionState = { state ->
-                handler.post {
-                    updateState(_uiState.value.copy(iceConnectionState = state.name))
-                    when (state) {
-                        PeerConnection.IceConnectionState.DISCONNECTED -> scheduleIceRestart(
-                            "ice-disconnected",
-                            2000
-                        )
-
-                        PeerConnection.IceConnectionState.FAILED -> scheduleIceRestart("ice-failed", 0)
-                        PeerConnection.IceConnectionState.CONNECTED,
-                        PeerConnection.IceConnectionState.COMPLETED -> {
-                            clearIceRestartTimer()
-                            pendingIceRestart = false
-                        }
-
-                        else -> {}
-                    }
-                    updateConnectionStatusFromSignals()
-                }
-            },
-            onSignalingState = { state ->
-                handler.post {
-                    if (state == PeerConnection.SignalingState.STABLE) {
-                        clearOfferTimeout()
-                        if (pendingIceRestart) {
-                            pendingIceRestart = false
-                            triggerIceRestart("pending-retry")
-                        }
-                    }
-                    updateState(_uiState.value.copy(signalingState = state.name))
-                }
-            },
-            onRenegotiationNeededCallback = {
-                handler.post { maybeSendOffer(force = true, iceRestart = false) }
-            },
-            onRemoteVideoTrack = { _ ->
-                handler.post {
-                    refreshRemoteVideoEnabled()
-                }
-            },
             onCameraFacingChanged = { isFront ->
                 handler.post {
                     updateState(_uiState.value.copy(isFrontCamera = isFront))
@@ -807,8 +714,9 @@ class CallManager(context: Context) {
         currentRoomId = roomId
         val joinAttemptId = ++joinAttemptSerial
         callStartTimeMs = System.currentTimeMillis()
-        sentOffer = false
         pendingMessages.clear()
+        peerSlots.clear()
+        currentRoomState = null
         hasJoinSignalStarted = false
         hasJoinAcknowledged = false
         hasNotifiedPushForJoin = false
@@ -828,6 +736,7 @@ class CallManager(context: Context) {
                 errorMessageText = null,
                 localAudioEnabled = defaultAudio,
                 localVideoEnabled = defaultVideo,
+                remoteParticipants = emptyList(),
                 localCameraMode = LocalCameraMode.SELFIE,
                 connectionStatus = ConnectionStatus.Connected,
                 webrtcStatsSummary = "",
@@ -979,11 +888,19 @@ class CallManager(context: Context) {
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null
     ) {
-        webRtcEngine.attachRemoteRenderer(renderer, rendererEvents)
+        val remoteCid = currentRoomState
+            ?.participants
+            ?.firstOrNull { it.cid != clientId }
+            ?.cid
+            ?: peerSlots.keys.firstOrNull()
+            ?: return
+        attachRemoteRendererForCid(remoteCid, renderer, rendererEvents)
     }
 
     fun detachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
-        webRtcEngine.detachRemoteRenderer(renderer)
+        peerSlots.values.forEach { slot ->
+            slot.detachRemoteRenderer(renderer)
+        }
     }
 
     fun attachLocalSink(sink: org.webrtc.VideoSink) {
@@ -995,11 +912,35 @@ class CallManager(context: Context) {
     }
 
     fun attachRemoteSink(sink: org.webrtc.VideoSink) {
-        webRtcEngine.attachRemoteSink(sink)
+        val remoteCid = currentRoomState
+            ?.participants
+            ?.firstOrNull { it.cid != clientId }
+            ?.cid
+            ?: peerSlots.keys.firstOrNull()
+            ?: return
+        peerSlots[remoteCid]?.attachRemoteSink(sink)
     }
 
     fun detachRemoteSink(sink: org.webrtc.VideoSink) {
-        webRtcEngine.detachRemoteSink(sink)
+        peerSlots.values.forEach { slot ->
+            slot.detachRemoteSink(sink)
+        }
+    }
+
+    fun attachRemoteRendererForCid(
+        cid: String,
+        renderer: org.webrtc.SurfaceViewRenderer,
+        rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null,
+    ) {
+        webRtcEngine.initRenderer(renderer, rendererEvents)
+        peerSlots[cid]?.attachRemoteRenderer(renderer)
+    }
+
+    fun detachRemoteRendererForCid(
+        cid: String,
+        renderer: org.webrtc.SurfaceViewRenderer,
+    ) {
+        peerSlots[cid]?.detachRemoteRenderer(renderer)
     }
 
     fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
@@ -1023,7 +964,14 @@ class CallManager(context: Context) {
         val buildPayload = {
             JSONObject().apply {
                 put("device", "android")
-                put("capabilities", JSONObject().apply { put("trickleIce", true) })
+                put(
+                    "capabilities",
+                    JSONObject().apply {
+                        put("trickleIce", true)
+                        put("maxParticipants", 4)
+                    }
+                )
+                put("createMaxParticipants", 4)
                 val reconnectCid = clientId ?: settingsStore.reconnectCid
                 reconnectCid?.let { put("reconnectCid", it) }
                 reconnectToken?.let { put("reconnectToken", it) }
@@ -1117,6 +1065,7 @@ class CallManager(context: Context) {
         }
         val roomState = parseRoomState(msg.payload)
         if (roomState != null) {
+            currentRoomState = roomState
             hostCid = roomState.hostCid
             updateParticipants(roomState)
         }
@@ -1156,6 +1105,7 @@ class CallManager(context: Context) {
         clearJoinRecovery()
         hasJoinAcknowledged = true
         val roomState = parseRoomState(msg.payload) ?: return
+        currentRoomState = roomState
         hostCid = roomState.hostCid
         updateParticipants(roomState)
     }
@@ -1193,47 +1143,199 @@ class CallManager(context: Context) {
     }
 
     private fun handleError(msg: SignalingMessage) {
+        val code = msg.payload?.optString("code").orEmpty().ifBlank { null }
         val rawMessage = msg.payload?.optString("message").orEmpty().ifBlank { null }
+        val resolvedMessage =
+            when (code) {
+                "ROOM_CAPACITY_UNSUPPORTED" ->
+                    rawMessage ?: appContext.getString(R.string.error_room_capacity_unsupported)
+                else -> rawMessage
+            }
         clearJoinTimeout()
         resetResources()
         updateState(
             CallUiState(
                 phase = CallPhase.Error,
-                errorMessageResId = if (rawMessage == null) R.string.error_unknown else null,
-                errorMessageText = rawMessage
+                errorMessageResId = if (resolvedMessage == null) R.string.error_unknown else null,
+                errorMessageText = resolvedMessage
             )
         )
     }
 
     private fun handleSignalingPayload(msg: SignalingMessage) {
-        if (!webRtcEngine.isReady()) {
-            webRtcEngine.ensurePeerConnection()
-            if (!webRtcEngine.isReady()) {
-                pendingMessages.add(msg)
-                return
-            }
+        if (!webRtcEngine.hasIceServers()) {
+            pendingMessages.add(msg)
+            return
         }
         processSignalingPayload(msg)
     }
 
+    private fun getOrCreateSlot(remoteCid: String): PeerConnectionSlot {
+        return peerSlots.getOrPut(remoteCid) {
+            webRtcEngine.createSlot(
+                remoteCid = remoteCid,
+                onLocalIceCandidate = { cid: String, candidate: IceCandidate ->
+                    val payload = JSONObject().apply {
+                        val candidateJson = JSONObject()
+                        candidateJson.put("candidate", candidate.sdp)
+                        candidateJson.put("sdpMid", candidate.sdpMid)
+                        candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
+                        put("candidate", candidateJson)
+                    }
+                    sendMessage("ice", payload, to = cid)
+                },
+                onRemoteVideoTrack = { _, _ ->
+                    handler.post { refreshRemoteParticipants() }
+                },
+                onConnectionStateChange = { cid, state ->
+                    handler.post {
+                        when (state) {
+                            PeerConnection.PeerConnectionState.CONNECTED -> {
+                                clearIceRestartTimer(cid)
+                                peerSlots[cid]?.pendingIceRestart = false
+                            }
+
+                            PeerConnection.PeerConnectionState.DISCONNECTED -> {
+                                scheduleIceRestart(cid, "conn-disconnected", 2000)
+                            }
+
+                            PeerConnection.PeerConnectionState.FAILED -> {
+                                scheduleIceRestart(cid, "conn-failed", 0)
+                            }
+
+                            else -> Unit
+                        }
+                        refreshRemoteParticipants()
+                        updateAggregatePeerState()
+                        updateConnectionStatusFromSignals()
+                    }
+                },
+                onIceConnectionStateChange = { cid, state ->
+                    handler.post {
+                        when (state) {
+                            PeerConnection.IceConnectionState.CONNECTED,
+                            PeerConnection.IceConnectionState.COMPLETED -> {
+                                clearIceRestartTimer(cid)
+                                peerSlots[cid]?.pendingIceRestart = false
+                            }
+
+                            PeerConnection.IceConnectionState.DISCONNECTED -> {
+                                scheduleIceRestart(cid, "ice-disconnected", 2000)
+                            }
+
+                            PeerConnection.IceConnectionState.FAILED -> {
+                                scheduleIceRestart(cid, "ice-failed", 0)
+                            }
+
+                            else -> Unit
+                        }
+                        refreshRemoteParticipants()
+                        updateAggregatePeerState()
+                        updateConnectionStatusFromSignals()
+                    }
+                },
+                onSignalingStateChange = { cid, state ->
+                    handler.post {
+                        if (state == PeerConnection.SignalingState.STABLE) {
+                            clearOfferTimeout(cid)
+                            if (peerSlots[cid]?.pendingIceRestart == true) {
+                                peerSlots[cid]?.pendingIceRestart = false
+                                triggerIceRestart(cid, "pending-retry")
+                            }
+                        }
+                        updateAggregatePeerState()
+                        updateConnectionStatusFromSignals()
+                    }
+                },
+                onRenegotiationNeeded = { cid ->
+                    handler.post {
+                        peerSlots[cid]?.let { slot ->
+                            maybeSendOffer(slot, force = true, iceRestart = false)
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    private fun removePeerSlot(remoteCid: String) {
+        clearOfferTimeout(remoteCid)
+        clearIceRestartTimer(remoteCid)
+        clearNonHostOfferFallback(remoteCid)
+        val slot = peerSlots.remove(remoteCid) ?: return
+        webRtcEngine.removeSlot(slot)
+        slot.closePeerConnection()
+    }
+
+    private fun updateAggregatePeerState() {
+        var bestIcePriority = Int.MAX_VALUE
+        var bestIceState = "NEW"
+        var bestConnPriority = Int.MAX_VALUE
+        var bestConnState = "NEW"
+        var bestSigPriority = Int.MAX_VALUE
+        var bestSigState = "STABLE"
+        for (slot in peerSlots.values) {
+            val icePri = ICE_CONNECTION_PRIORITY[slot.getIceConnectionState()] ?: Int.MAX_VALUE
+            if (icePri < bestIcePriority) { bestIcePriority = icePri; bestIceState = slot.getIceConnectionState().name }
+            val connPri = CONNECTION_PRIORITY[slot.getConnectionState()] ?: Int.MAX_VALUE
+            if (connPri < bestConnPriority) { bestConnPriority = connPri; bestConnState = slot.getConnectionState().name }
+            val sigPri = SIGNALING_PRIORITY[slot.getSignalingState()] ?: Int.MAX_VALUE
+            if (sigPri < bestSigPriority) { bestSigPriority = sigPri; bestSigState = slot.getSignalingState().name }
+        }
+        val nextIceState = bestIceState
+        val nextConnectionState = bestConnState
+        val nextSignalingState = bestSigState
+        val state = _uiState.value
+        if (
+            state.iceConnectionState == nextIceState &&
+            state.connectionState == nextConnectionState &&
+            state.signalingState == nextSignalingState
+        ) {
+            return
+        }
+        updateState(
+            state.copy(
+                iceConnectionState = nextIceState,
+                connectionState = nextConnectionState,
+                signalingState = nextSignalingState
+            )
+        )
+    }
+
+    private fun shouldIOffer(remoteCid: String, roomState: RoomState? = currentRoomState): Boolean {
+        val state = roomState ?: return false
+        val myCid = clientId ?: return false
+        val myJoinedAt = state.participants.find { it.cid == myCid }?.joinedAt ?: 0L
+        val theirJoinedAt = state.participants.find { it.cid == remoteCid }?.joinedAt ?: 0L
+        return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
+    }
+
     private fun processSignalingPayload(msg: SignalingMessage) {
+        val fromCid = msg.payload?.optString("from").orEmpty().ifBlank { return }
+        val slot = getOrCreateSlot(fromCid)
+        if (!slot.isReady() && !slot.ensurePeerConnection()) {
+            pendingMessages.add(msg)
+            return
+        }
         when (msg.type) {
             "offer" -> {
-                clearNonHostOfferFallback()
+                clearNonHostOfferFallback(fromCid)
                 val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
-                webRtcEngine.setRemoteDescription(SessionDescription.Type.OFFER, sdp) {
-                    webRtcEngine.createAnswer(onSdp = { answerSdp ->
+                slot.setRemoteDescription(SessionDescription.Type.OFFER, sdp) {
+                    slot.createAnswer(onSdp = { answerSdp ->
                         val payload = JSONObject().apply { put("sdp", answerSdp) }
-                        sendMessage("answer", payload)
+                        sendMessage("answer", payload, to = fromCid)
                     })
                 }
             }
             "answer" -> {
-                clearNonHostOfferFallback()
+                clearNonHostOfferFallback(fromCid)
                 val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
-                webRtcEngine.setRemoteDescription(SessionDescription.Type.ANSWER, sdp) {
-                    clearOfferTimeout()
-                    pendingIceRestart = false
+                slot.setRemoteDescription(SessionDescription.Type.ANSWER, sdp) {
+                    clearOfferTimeout(fromCid)
+                    slot.pendingIceRestart = false
+                    updateAggregatePeerState()
+                    updateConnectionStatusFromSignals()
                 }
             }
             "ice" -> {
@@ -1243,7 +1345,7 @@ class CallManager(context: Context) {
                     candidateJson.optInt("sdpMLineIndex", 0),
                     candidateJson.optString("candidate", "")
                 )
-                webRtcEngine.addIceCandidate(candidate)
+                slot.addIceCandidate(candidate)
             }
         }
     }
@@ -1251,6 +1353,8 @@ class CallManager(context: Context) {
     private fun updateParticipants(roomState: RoomState) {
         val count = roomState.participants.size
         val isHostNow = clientId != null && clientId == roomState.hostCid
+        val remotePeers = roomState.participants.filter { it.cid != clientId }
+        val remoteCids = remotePeers.map { it.cid }.toSet()
         val phase = when {
             count <= 1 -> CallPhase.Waiting
             else -> CallPhase.InCall
@@ -1258,16 +1362,26 @@ class CallManager(context: Context) {
         if (phase != CallPhase.Joining) {
             clearJoinTimeout()
         }
-        if (count <= 1) {
-            sentOffer = false
+
+        val departing = peerSlots.keys.filter { it !in remoteCids }
+        departing.forEach { remoteCid -> removePeerSlot(remoteCid) }
+        if (remotePeers.isEmpty()) {
             clearOfferTimeout()
             clearIceRestartTimer()
-            pendingIceRestart = false
-            isMakingOffer = false
-            if (webRtcEngine.isReady()) {
-                webRtcEngine.closePeerConnection()
+            clearNonHostOfferFallback()
+        }
+
+        remotePeers.forEach { participant ->
+            val slot = getOrCreateSlot(participant.cid)
+            slot.ensurePeerConnection()
+            if (shouldIOffer(participant.cid, roomState)) {
+                clearNonHostOfferFallback(participant.cid)
+                maybeSendOffer(slot)
+            } else {
+                maybeScheduleNonHostOfferFallback(participant.cid, "participants")
             }
         }
+
         updateState(
             _uiState.value.copy(
                 phase = phase,
@@ -1281,88 +1395,103 @@ class CallManager(context: Context) {
                     }
             )
         )
+        refreshRemoteParticipants()
+        updateAggregatePeerState()
         updateConnectionStatusFromSignals()
-        if (count > 1) {
-            webRtcEngine.ensurePeerConnection()
-        }
-        if (count > 1 && isHostNow) {
-            clearNonHostOfferFallback()
-            maybeSendOffer()
-        } else if (count > 1) {
-            maybeScheduleNonHostOfferFallback("participants")
-        }
     }
 
     private fun maybeSendOffer(force: Boolean = false, iceRestart: Boolean = false) {
-        if (isMakingOffer) {
+        peerSlots.values.forEach { slot ->
+            if (shouldIOffer(slot.remoteCid, currentRoomState)) {
+                maybeSendOffer(slot, force, iceRestart)
+            }
+        }
+    }
+
+    private fun maybeSendOffer(
+        slot: PeerConnectionSlot,
+        force: Boolean = false,
+        iceRestart: Boolean = false,
+    ) {
+        if (slot.isMakingOffer) {
             if (iceRestart) {
-                pendingIceRestart = true
+                slot.pendingIceRestart = true
             }
             return
         }
-        if (!force && sentOffer) return
-        if (!canOffer()) return
-        val signalingState = webRtcEngine.getSignalingState()
-        if (signalingState != null && signalingState != PeerConnection.SignalingState.STABLE) {
+        if (!force && slot.sentOffer) return
+        if (!canOffer(slot)) return
+        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) {
             if (iceRestart) {
-                pendingIceRestart = true
+                slot.pendingIceRestart = true
             }
             return
         }
-        isMakingOffer = true
-        val started = webRtcEngine.createOffer(
+        slot.isMakingOffer = true
+        val started = slot.createOffer(
             iceRestart = iceRestart,
             onSdp = { sdp ->
                 val payload = JSONObject().apply { put("sdp", sdp) }
-                sendMessage("offer", payload)
-                scheduleOfferTimeout()
+                sendMessage("offer", payload, to = slot.remoteCid)
+                scheduleOfferTimeout(slot.remoteCid)
             },
             onComplete = { success ->
                 handler.post {
-                    isMakingOffer = false
+                    slot.isMakingOffer = false
                     if (!success && iceRestart) {
-                        scheduleIceRestart("offer-failed", 500)
+                        scheduleIceRestart(slot.remoteCid, "offer-failed", 500)
                     }
                 }
             }
         )
         if (!started) {
-            isMakingOffer = false
+            slot.isMakingOffer = false
             if (iceRestart) {
-                pendingIceRestart = true
+                slot.pendingIceRestart = true
             }
             return
         }
         if (!force) {
-            sentOffer = true
+            slot.sentOffer = true
         }
     }
 
-    private fun canOffer(): Boolean {
-        val state = _uiState.value
-        if (!state.isHost || state.participantCount <= 1) return false
-        if (!webRtcEngine.isReady()) return false
+    private fun canOffer(slot: PeerConnectionSlot): Boolean {
+        if (currentRoomId == null) return false
         if (!signalingClient.isConnected()) return false
-        return true
+        if (!slot.isReady()) return false
+        if (!shouldIOffer(slot.remoteCid, currentRoomState)) return false
+        val participantCids = currentRoomState?.participants?.map { it.cid }?.toSet() ?: emptySet()
+        return slot.remoteCid in participantCids
     }
 
-    private fun scheduleOfferTimeout() {
-        clearOfferTimeout()
+    private fun scheduleOfferTimeout(remoteCid: String) {
+        val slot = peerSlots[remoteCid] ?: return
+        clearOfferTimeout(remoteCid)
         val runnable = Runnable {
-            offerTimeoutRunnable = null
-            val signalingState = webRtcEngine.getSignalingState()
+            slot.offerTimeoutTask = null
+            val signalingState = slot.getSignalingState()
             if (signalingState == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
-                Log.w("CallManager", "Offer timeout; rolling back and retrying")
-                pendingIceRestart = true
-                webRtcEngine.rollbackLocalDescription {
-                    handler.post { scheduleIceRestart("offer-timeout", 0) }
+                Log.w("CallManager", "Offer timeout for $remoteCid; rolling back and retrying")
+                slot.pendingIceRestart = true
+                slot.rollbackLocalDescription {
+                    handler.post {
+                        if (shouldIOffer(remoteCid, currentRoomState)) {
+                            scheduleIceRestart(remoteCid, "offer-timeout", 0)
+                        } else {
+                            maybeScheduleNonHostOfferFallback(remoteCid, "offer-timeout")
+                        }
+                    }
                 }
             } else {
-                // Always schedule ICE restart on offer timeout regardless of signaling state
-                scheduleIceRestart("offer-timeout-stale", 0)
+                if (shouldIOffer(remoteCid, currentRoomState)) {
+                    scheduleIceRestart(remoteCid, "offer-timeout-stale", 0)
+                } else {
+                    maybeScheduleNonHostOfferFallback(remoteCid, "offer-timeout-stale")
+                }
             }
         }
-        offerTimeoutRunnable = runnable
+        slot.offerTimeoutTask = runnable
         handler.postDelayed(runnable, WebRtcResilienceConstants.OFFER_TIMEOUT_MS)
     }
 
@@ -1399,45 +1528,77 @@ class CallManager(context: Context) {
         )
     }
 
-    private fun clearOfferTimeout() {
-        offerTimeoutRunnable?.let { handler.removeCallbacks(it) }
-        offerTimeoutRunnable = null
+    private fun clearOfferTimeout(remoteCid: String? = null) {
+        if (remoteCid != null) {
+            peerSlots[remoteCid]?.offerTimeoutTask?.let { handler.removeCallbacks(it) }
+            peerSlots[remoteCid]?.offerTimeoutTask = null
+            return
+        }
+        peerSlots.values.forEach { slot ->
+            slot.offerTimeoutTask?.let { handler.removeCallbacks(it) }
+            slot.offerTimeoutTask = null
+        }
     }
 
     private fun scheduleIceRestart(reason: String, delayMs: Long) {
-        if (!canOffer()) {
-            pendingIceRestart = true
+        peerSlots.values.forEach { slot ->
+            if (shouldIOffer(slot.remoteCid, currentRoomState)) {
+                scheduleIceRestart(slot.remoteCid, reason, delayMs)
+            }
+        }
+    }
+
+    private fun scheduleIceRestart(remoteCid: String, reason: String, delayMs: Long) {
+        val slot = peerSlots[remoteCid] ?: return
+        if (!canOffer(slot)) {
+            slot.pendingIceRestart = true
             return
         }
-        if (iceRestartRunnable != null) return
+        if (slot.iceRestartTask != null) return
         val now = System.currentTimeMillis()
-        if (now - lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
+        if (now - slot.lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
         val runnable = Runnable {
-            iceRestartRunnable = null
-            triggerIceRestart(reason)
+            slot.iceRestartTask = null
+            triggerIceRestart(remoteCid, reason)
         }
-        iceRestartRunnable = runnable
+        slot.iceRestartTask = runnable
         handler.postDelayed(runnable, delayMs)
     }
 
-    private fun clearIceRestartTimer() {
-        iceRestartRunnable?.let { handler.removeCallbacks(it) }
-        iceRestartRunnable = null
+    private fun clearIceRestartTimer(remoteCid: String? = null) {
+        if (remoteCid != null) {
+            peerSlots[remoteCid]?.iceRestartTask?.let { handler.removeCallbacks(it) }
+            peerSlots[remoteCid]?.iceRestartTask = null
+            return
+        }
+        peerSlots.values.forEach { slot ->
+            slot.iceRestartTask?.let { handler.removeCallbacks(it) }
+            slot.iceRestartTask = null
+        }
     }
 
     private fun triggerIceRestart(reason: String) {
-        if (!canOffer()) {
-            pendingIceRestart = true
+        peerSlots.values.forEach { slot ->
+            if (shouldIOffer(slot.remoteCid, currentRoomState)) {
+                triggerIceRestart(slot.remoteCid, reason)
+            }
+        }
+    }
+
+    private fun triggerIceRestart(remoteCid: String, reason: String) {
+        val slot = peerSlots[remoteCid] ?: return
+        if (!canOffer(slot)) {
+            slot.pendingIceRestart = true
             return
         }
-        if (isMakingOffer) {
-            pendingIceRestart = true
+        if (slot.isMakingOffer) {
+            slot.pendingIceRestart = true
             return
         }
-        Log.w("CallManager", "ICE restart triggered ($reason)")
-        lastIceRestartAt = System.currentTimeMillis()
-        pendingIceRestart = false
-        maybeSendOffer(force = true, iceRestart = true)
+        Log.w("CallManager", "ICE restart triggered for $remoteCid ($reason)")
+        slot.lastIceRestartAt = System.currentTimeMillis()
+        slot.pendingIceRestart = false
+        maybeSendOffer(slot, force = true, iceRestart = true)
     }
 
     private fun fetchTurnCredentials(token: String) {
@@ -1472,19 +1633,27 @@ class CallManager(context: Context) {
                 .createIceServer()
         }
         webRtcEngine.setIceServers(servers)
-        flushPendingMessages()
-        maybeSendOffer()
+        onIceServersReady()
     }
 
     private fun applyDefaultIceServers() {
         val servers = listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         webRtcEngine.setIceServers(servers)
+        onIceServersReady()
+    }
+
+    private fun onIceServersReady() {
         flushPendingMessages()
         maybeSendOffer()
+        peerSlots.values.forEach { slot ->
+            if (!shouldIOffer(slot.remoteCid, currentRoomState)) {
+                maybeScheduleNonHostOfferFallback(slot.remoteCid, "ice-ready")
+            }
+        }
     }
 
     private fun flushPendingMessages() {
-        while (pendingMessages.isNotEmpty()) {
+        while (pendingMessages.isNotEmpty() && webRtcEngine.hasIceServers()) {
             processSignalingPayload(pendingMessages.removeFirst())
         }
     }
@@ -1492,6 +1661,7 @@ class CallManager(context: Context) {
     private fun parseRoomState(payload: JSONObject?): RoomState? {
         if (payload == null) return null
         val parsedHostCid = payload.optString("hostCid", "").ifBlank { null }
+        val maxParticipants = payload.optInt("maxParticipants", 0).takeIf { it > 0 }
         val participantsJson = payload.optJSONArray("participants")
         val participants = mutableListOf<Participant>()
         if (participantsJson != null) {
@@ -1514,29 +1684,50 @@ class CallManager(context: Context) {
             }
         }
         if (resolvedHostCid.isNullOrBlank()) return null
-        return RoomState(resolvedHostCid, participants)
+        return RoomState(
+            hostCid = resolvedHostCid,
+            participants = participants,
+            maxParticipants = maxParticipants,
+        )
     }
 
     private fun updateState(state: CallUiState) {
         _uiState.value = state
     }
 
-    private fun refreshRemoteVideoEnabled() {
-        val remoteVideoEnabled = webRtcEngine.isRemoteVideoTrackEnabled()
-        if (_uiState.value.remoteVideoEnabled != remoteVideoEnabled) {
-            Log.d(
-                "CallManager",
-                "[RemoteVideo] uiEnabled->$remoteVideoEnabled ${webRtcEngine.remoteVideoDiagnostics()}"
-            )
-            updateState(_uiState.value.copy(remoteVideoEnabled = remoteVideoEnabled))
+    private fun refreshRemoteParticipants() {
+        val myCid = clientId
+        val orderedRemoteCids =
+            currentRoomState
+                ?.participants
+                ?.map { it.cid }
+                ?.filter { it != myCid }
+                ?: peerSlots.keys.toList()
+        val remoteParticipants =
+            orderedRemoteCids.mapNotNull { cid ->
+                val slot = peerSlots[cid] ?: return@mapNotNull null
+                RemoteParticipant(
+                    cid = cid,
+                    videoEnabled = slot.isRemoteVideoTrackEnabled(),
+                    connectionState = slot.getConnectionState().name,
+                )
+            }
+        val state = _uiState.value
+        if (state.remoteParticipants == remoteParticipants) {
+            return
         }
+        updateState(
+            state.copy(
+                remoteParticipants = remoteParticipants
+            )
+        )
     }
 
     private fun startRemoteVideoStatePolling() {
         if (remoteVideoStatePollRunnable != null) return
         val runnable = object : Runnable {
             override fun run() {
-                refreshRemoteVideoEnabled()
+                refreshRemoteParticipants()
                 pollWebRtcStats()
                 handler.postDelayed(this, 500)
             }
@@ -1559,25 +1750,96 @@ class CallManager(context: Context) {
         if (webrtcStatsRequestInFlight) return
         if (now - lastWebRtcStatsPollAtMs < WEBRTC_STATS_POLL_INTERVAL_MS) return
 
+        val slots = peerSlots.values.toList()
+        if (slots.isEmpty()) {
+            val state = _uiState.value
+            if (state.webrtcStatsSummary.isNotEmpty() || state.realtimeCallStats != null) {
+                updateState(
+                    state.copy(
+                        webrtcStatsSummary = "",
+                        realtimeCallStats = null
+                    )
+                )
+            }
+            return
+        }
+
         webrtcStatsRequestInFlight = true
         webRtcStatsExecutor.execute {
-            webRtcEngine.collectWebRtcStats { summary, realtimeStats ->
-                handler.post {
-                    webrtcStatsRequestInFlight = false
-                    lastWebRtcStatsPollAtMs = System.currentTimeMillis()
-                    val state = _uiState.value
-                    if (state.webrtcStatsSummary != summary || state.realtimeCallStats != realtimeStats) {
-                        updateState(
-                            state.copy(
-                                webrtcStatsSummary = summary,
-                                realtimeCallStats = realtimeStats
-                            )
-                        )
+            val summaries = mutableListOf<String>()
+            val stats = mutableListOf<RealtimeCallStats>()
+            var remaining = slots.size
+            slots.forEach { slot ->
+                slot.collectWebRtcStats { summary, realtimeStats ->
+                    synchronized(summaries) {
+                        summaries.add(summary)
+                        realtimeStats?.let(stats::add)
+                        remaining -= 1
+                        if (remaining == 0) {
+                            val mergedSummary = summaries.joinToString(" | ")
+                            val mergedStats = mergeRealtimeStats(stats)
+                            handler.post {
+                                webrtcStatsRequestInFlight = false
+                                lastWebRtcStatsPollAtMs = System.currentTimeMillis()
+                                val state = _uiState.value
+                                if (
+                                    state.webrtcStatsSummary != mergedSummary ||
+                                    state.realtimeCallStats != mergedStats
+                                ) {
+                                    updateState(
+                                        state.copy(
+                                            webrtcStatsSummary = mergedSummary,
+                                            realtimeCallStats = mergedStats
+                                        )
+                                    )
+                                }
+                                Log.d("CallManager", "[WebRTCStats] $mergedSummary")
+                            }
+                        }
                     }
-                    Log.d("CallManager", "[WebRTCStats] $summary")
                 }
             }
         }
+    }
+
+    private fun mergeRealtimeStats(stats: List<RealtimeCallStats>): RealtimeCallStats? {
+        if (stats.isEmpty()) return null
+        fun sumNullable(selector: (RealtimeCallStats) -> Double?): Double? {
+            val values = stats.mapNotNull(selector)
+            return if (values.isEmpty()) null else values.sum()
+        }
+        fun maxNullable(selector: (RealtimeCallStats) -> Double?): Double? {
+            val values = stats.mapNotNull(selector)
+            return values.maxOrNull()
+        }
+        fun latestNullable(selector: (RealtimeCallStats) -> String?): String? =
+            stats.asReversed().firstNotNullOfOrNull(selector)
+
+        return RealtimeCallStats(
+            transportPath = stats.mapNotNull { it.transportPath }.distinct().joinToString().ifBlank { null },
+            rttMs = maxNullable { it.rttMs },
+            availableOutgoingKbps = sumNullable { it.availableOutgoingKbps },
+            audioRxPacketLossPct = maxNullable { it.audioRxPacketLossPct },
+            audioTxPacketLossPct = maxNullable { it.audioTxPacketLossPct },
+            audioJitterMs = maxNullable { it.audioJitterMs },
+            audioPlayoutDelayMs = maxNullable { it.audioPlayoutDelayMs },
+            audioConcealedPct = maxNullable { it.audioConcealedPct },
+            audioRxKbps = sumNullable { it.audioRxKbps },
+            audioTxKbps = sumNullable { it.audioTxKbps },
+            videoRxPacketLossPct = maxNullable { it.videoRxPacketLossPct },
+            videoTxPacketLossPct = maxNullable { it.videoTxPacketLossPct },
+            videoRxKbps = sumNullable { it.videoRxKbps },
+            videoTxKbps = sumNullable { it.videoTxKbps },
+            videoFps = maxNullable { it.videoFps },
+            videoResolution = latestNullable { it.videoResolution },
+            videoFreezeCount60s = stats.mapNotNull { it.videoFreezeCount60s }.sum().takeIf { it > 0 },
+            videoFreezeDuration60s = sumNullable { it.videoFreezeDuration60s },
+            videoRetransmitPct = maxNullable { it.videoRetransmitPct },
+            videoNackPerMin = sumNullable { it.videoNackPerMin },
+            videoPliPerMin = sumNullable { it.videoPliPerMin },
+            videoFirPerMin = sumNullable { it.videoFirPerMin },
+            updatedAtMs = stats.maxOf { it.updatedAtMs },
+        )
     }
 
     private fun isHost(): Boolean = clientId != null && clientId == hostCid
@@ -1669,69 +1931,87 @@ class CallManager(context: Context) {
     }
 
     private fun maybeScheduleNonHostOfferFallback(reason: String) {
+        peerSlots.values.forEach { slot ->
+            if (!shouldIOffer(slot.remoteCid, currentRoomState)) {
+                maybeScheduleNonHostOfferFallback(slot.remoteCid, reason)
+            }
+        }
+    }
+
+    private fun maybeScheduleNonHostOfferFallback(remoteCid: String, reason: String) {
+        val slot = peerSlots[remoteCid] ?: return
         if (currentRoomId == null) return
-        val state = _uiState.value
-        if (state.participantCount <= 1) { clearNonHostOfferFallback(); return }
-        if (state.isHost) { clearNonHostOfferFallback(); return }
+        if (shouldIOffer(remoteCid, currentRoomState)) {
+            clearNonHostOfferFallback(remoteCid)
+            return
+        }
         if (!signalingClient.isConnected()) return
-        if (nonHostOfferFallbackRunnable != null) return
-        if (nonHostOfferFallbackAttempts >= WebRtcResilienceConstants.NON_HOST_FALLBACK_MAX_ATTEMPTS) return
+        if (slot.nonHostFallbackTask != null) return
+        if (slot.nonHostFallbackAttempts >= WebRtcResilienceConstants.NON_HOST_FALLBACK_MAX_ATTEMPTS) return
 
         val roomId = currentRoomId
-        Log.d("CallManager", "Non-host fallback scheduled ($reason)")
+        Log.d("CallManager", "Non-host fallback scheduled for $remoteCid ($reason)")
         val runnable = Runnable {
-            nonHostOfferFallbackRunnable = null
+            slot.nonHostFallbackTask = null
             if (currentRoomId != roomId) return@Runnable
-            nonHostOfferFallbackAttempts++
-            Log.w("CallManager", "Non-host fallback offer (attempt $nonHostOfferFallbackAttempts)")
-            maybeSendNonHostFallbackOffer()
+            slot.nonHostFallbackAttempts++
+            Log.w(
+                "CallManager",
+                "Non-host fallback offer for $remoteCid (attempt ${slot.nonHostFallbackAttempts})"
+            )
+            maybeSendNonHostFallbackOffer(remoteCid)
         }
-        nonHostOfferFallbackRunnable = runnable
+        slot.nonHostFallbackTask = runnable
         handler.postDelayed(runnable, WebRtcResilienceConstants.NON_HOST_FALLBACK_DELAY_MS)
     }
 
-    private fun clearNonHostOfferFallback() {
-        nonHostOfferFallbackRunnable?.let { handler.removeCallbacks(it) }
-        nonHostOfferFallbackRunnable = null
+    private fun clearNonHostOfferFallback(remoteCid: String? = null) {
+        if (remoteCid != null) {
+            peerSlots[remoteCid]?.nonHostFallbackTask?.let { handler.removeCallbacks(it) }
+            peerSlots[remoteCid]?.nonHostFallbackTask = null
+            return
+        }
+        peerSlots.values.forEach { slot ->
+            slot.nonHostFallbackTask?.let { handler.removeCallbacks(it) }
+            slot.nonHostFallbackTask = null
+        }
     }
 
-    private fun maybeSendNonHostFallbackOffer() {
-        val state = _uiState.value
-        if (state.participantCount <= 1) return
-        if (state.isHost) return
+    private fun maybeSendNonHostFallbackOffer(remoteCid: String) {
+        val slot = peerSlots[remoteCid] ?: return
+        if (shouldIOffer(remoteCid, currentRoomState)) return
         if (!signalingClient.isConnected()) return
-        if (!webRtcEngine.isReady()) return
-        val signalingState = webRtcEngine.getSignalingState()
-        if (signalingState != null && signalingState != PeerConnection.SignalingState.STABLE) {
-            maybeScheduleNonHostOfferFallback("signaling-not-stable")
+        if (!slot.isReady() && !slot.ensurePeerConnection()) return
+        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) {
+            maybeScheduleNonHostOfferFallback(remoteCid, "signaling-not-stable")
             return
         }
-        if (webRtcEngine.hasRemoteDescription()) return
-        if (isMakingOffer) {
-            maybeScheduleNonHostOfferFallback("already-making-offer")
+        if (slot.hasRemoteDescription()) return
+        if (slot.isMakingOffer) {
+            maybeScheduleNonHostOfferFallback(remoteCid, "already-making-offer")
             return
         }
 
-        Log.d("CallManager", "Non-host fallback offer triggered")
-        isMakingOffer = true
-        val started = webRtcEngine.createOffer(
+        Log.d("CallManager", "Non-host fallback offer triggered for $remoteCid")
+        slot.isMakingOffer = true
+        val started = slot.createOffer(
             onSdp = { sdp ->
                 val payload = JSONObject().apply { put("sdp", sdp) }
-                sendMessage("offer", payload)
-                scheduleOfferTimeout()
+                sendMessage("offer", payload, to = remoteCid)
+                scheduleOfferTimeout(remoteCid)
             },
             onComplete = { success ->
                 handler.post {
-                    isMakingOffer = false
+                    slot.isMakingOffer = false
                     if (!success) {
-                        maybeScheduleNonHostOfferFallback("offer-failed")
+                        maybeScheduleNonHostOfferFallback(remoteCid, "offer-failed")
                     }
                 }
             }
         )
         if (!started) {
-            isMakingOffer = false
-            maybeScheduleNonHostOfferFallback("offer-not-started")
+            slot.isMakingOffer = false
+            maybeScheduleNonHostOfferFallback(remoteCid, "offer-not-started")
         }
     }
 
@@ -1758,27 +2038,25 @@ class CallManager(context: Context) {
         clearJoinKickstart()
         clearJoinRecovery()
         clearNonHostOfferFallback()
-        nonHostOfferFallbackAttempts = 0
         clearTurnRefresh()
         deactivateAudioSession()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
         signalingClient.close()
+        clearOfferTimeout()
+        clearIceRestartTimer()
+        peerSlots.clear()
         webRtcEngine.release()
         CallService.stop(appContext)
         currentRoomId = null
         hostCid = null
         clientId = null
+        currentRoomState = null
         callStartTimeMs = null
         activeCallHostOverride = null
         pendingJoinRoom = null
         pendingMessages.clear()
         reconnectAttempts = 0
-        sentOffer = false
-        isMakingOffer = false
-        pendingIceRestart = false
-        clearOfferTimeout()
-        clearIceRestartTimer()
         clearConnectionStatusRetryingTimer()
         userPreferredVideoEnabled = true
         isVideoPausedByProximity = false
@@ -2027,5 +2305,33 @@ class CallManager(context: Context) {
         const val WIFI_PERF_LOCK_TAG = "serenada:call-wifi"
         const val MAX_SAVED_ROOM_NAME_LENGTH = 120
         val ROOM_ID_REGEX = Regex("^[A-Za-z0-9_-]{27}$")
+        val ICE_CONNECTION_PRIORITY =
+            mapOf(
+                PeerConnection.IceConnectionState.FAILED to 0,
+                PeerConnection.IceConnectionState.DISCONNECTED to 1,
+                PeerConnection.IceConnectionState.CHECKING to 2,
+                PeerConnection.IceConnectionState.NEW to 3,
+                PeerConnection.IceConnectionState.CONNECTED to 4,
+                PeerConnection.IceConnectionState.COMPLETED to 5,
+                PeerConnection.IceConnectionState.CLOSED to 6,
+            )
+        val CONNECTION_PRIORITY =
+            mapOf(
+                PeerConnection.PeerConnectionState.FAILED to 0,
+                PeerConnection.PeerConnectionState.DISCONNECTED to 1,
+                PeerConnection.PeerConnectionState.CONNECTING to 2,
+                PeerConnection.PeerConnectionState.NEW to 3,
+                PeerConnection.PeerConnectionState.CONNECTED to 4,
+                PeerConnection.PeerConnectionState.CLOSED to 5,
+            )
+        val SIGNALING_PRIORITY =
+            mapOf(
+                PeerConnection.SignalingState.CLOSED to 0,
+                PeerConnection.SignalingState.HAVE_LOCAL_OFFER to 1,
+                PeerConnection.SignalingState.HAVE_REMOTE_OFFER to 2,
+                PeerConnection.SignalingState.HAVE_LOCAL_PRANSWER to 3,
+                PeerConnection.SignalingState.HAVE_REMOTE_PRANSWER to 4,
+                PeerConnection.SignalingState.STABLE to 5,
+            )
     }
 }

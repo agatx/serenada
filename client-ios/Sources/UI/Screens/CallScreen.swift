@@ -1,5 +1,9 @@
 import SwiftUI
 
+private let minStageTileAspect: CGFloat = 9.0 / 16.0
+private let maxStageTileAspect: CGFloat = 16.0 / 9.0
+private let defaultStageTileAspect: CGFloat = 16.0 / 9.0
+
 func shouldShowCallStatusLabel(
     phase: CallPhase,
     connectionStatus: ConnectionStatus
@@ -247,6 +251,7 @@ struct CallScreen: View {
     @State private var lastDebugTapAt: Date?
     @State private var lastMagnificationValue: CGFloat = 1
     @State private var showRecoveringBadge = false
+    @State private var remoteTileAspectRatios: [String: CGFloat] = [:]
 
     init(
         roomId: String,
@@ -295,6 +300,15 @@ struct CallScreen: View {
             if uiState.phase == .waiting {
                 waitingMainSurface
                 smallLocalView
+            } else if isMultiParty {
+                MultiPartyStage(
+                    remoteParticipants: uiState.remoteParticipants,
+                    remoteTileAspectRatios: $remoteTileAspectRatios,
+                    localVideoEnabled: uiState.localVideoEnabled,
+                    localMirror: uiState.isFrontCamera,
+                    bottomPadding: pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible),
+                    callManager: callManager
+                )
             } else if showLocalAsPrimarySurface {
                 mainVideoSurface(
                     kind: .local,
@@ -321,6 +335,10 @@ struct CallScreen: View {
         }
         .onChange(of: uiState.isFrontCamera) { isFront in
             isLocalLarge = !isFront
+        }
+        .onChange(of: uiState.remoteParticipants.map(\.cid)) { remoteCids in
+            let active = Set(remoteCids)
+            remoteTileAspectRatios = remoteTileAspectRatios.filter { active.contains($0.key) }
         }
         .onChange(of: isPinchZoomEnabled) { enabled in
             if !enabled {
@@ -420,7 +438,7 @@ struct CallScreen: View {
                 kind: kind,
                 callManager: callManager,
                 videoContentMode: videoContentMode,
-                isMirrored: kind == .local && uiState.isFrontCamera
+                isMirrored: kind.isLocal && uiState.isFrontCamera
             )
                 .ignoresSafeArea()
 
@@ -553,7 +571,7 @@ struct CallScreen: View {
                     phase: uiState.phase,
                     remoteVideoEnabled: uiState.remoteVideoEnabled,
                     isLocalLarge: isLocalLarge
-                ) {
+                ) && !isMultiParty {
                     iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", accessibilityLabel: remoteVideoFitCover ? L10n.callA11yVideoFit : L10n.callA11yVideoFill) {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             remoteVideoFitCover.toggle()
@@ -744,8 +762,281 @@ struct CallScreen: View {
         verticalSizeClass == .compact
     }
 
+    private var isMultiParty: Bool {
+        uiState.remoteParticipants.count > 1
+    }
+
     private var savedRoomName: String? {
         callManager.savedRooms.first(where: { $0.roomId == roomId })?.name
+    }
+}
+
+private struct StageTileSpec {
+    let cid: String
+    let aspectRatio: CGFloat
+}
+
+private struct StageTileLayout: Identifiable {
+    let cid: String
+    let width: CGFloat
+    let height: CGFloat
+
+    var id: String { cid }
+}
+
+private struct StageRowLayout: Identifiable {
+    let items: [StageTileLayout]
+    let index: Int
+
+    var id: Int { index }
+}
+
+private func clampStageTileAspectRatio(_ ratio: CGFloat?) -> CGFloat {
+    guard let ratio, ratio.isFinite, ratio > 0 else {
+        return defaultStageTileAspect
+    }
+    return min(max(ratio, minStageTileAspect), maxStageTileAspect)
+}
+
+private func quantizedStageTileAspectRatio(_ size: CGSize) -> CGFloat {
+    guard size.width > 0, size.height > 0 else {
+        return defaultStageTileAspect
+    }
+    let rawRatio = size.width / size.height
+    let quantized = (rawRatio / 0.05).rounded() * 0.05
+    return clampStageTileAspectRatio(max(0.1, quantized))
+}
+
+private func computeStageLayout(
+    tiles: [StageTileSpec],
+    availableWidth: CGFloat,
+    availableHeight: CGFloat,
+    gap: CGFloat
+) -> [StageRowLayout] {
+    guard !tiles.isEmpty, availableWidth > 0, availableHeight > 0 else { return [] }
+
+    let candidateRows: [[[Int]]]
+    switch tiles.count {
+    case 1:
+        candidateRows = [[[0]]]
+    case 2:
+        candidateRows = [[[0, 1]], [[0], [1]]]
+    default:
+        candidateRows = [
+            [[0, 1, 2]],
+            [[0, 1], [2]],
+            [[0], [1, 2]],
+            [[0], [1], [2]],
+        ]
+    }
+
+    var bestLayout: [StageRowLayout] = []
+    var bestHarmonicShortEdge: CGFloat = -1
+    var bestMinShortEdge: CGFloat = -1
+    var bestArea: CGFloat = -1
+    var bestRowCount = Int.max
+
+    for rows in candidateRows {
+        let baseHeights = rows.map { row -> CGFloat in
+            let totalAspect = row.reduce(CGFloat.zero) { partial, index in
+                partial + tiles[index].aspectRatio
+            }
+            let rowWidth = availableWidth - gap * CGFloat(max(0, row.count - 1))
+            guard rowWidth > 0, totalAspect > 0 else { return 0 }
+            return rowWidth / totalAspect
+        }
+        let verticalGap = gap * CGFloat(max(0, rows.count - 1))
+        let totalBaseHeight = baseHeights.reduce(0, +)
+        guard totalBaseHeight > 0, availableHeight > verticalGap else { continue }
+
+        let scale = min(1, (availableHeight - verticalGap) / totalBaseHeight)
+        guard scale > 0 else { continue }
+
+        let layout = rows.enumerated().map { rowIndex, row in
+            let rowHeight = max(1, floor(baseHeights[rowIndex] * scale))
+            return StageRowLayout(
+                items: row.map { index in
+                    let tile = tiles[index]
+                    return StageTileLayout(
+                        cid: tile.cid,
+                        width: max(1, floor(tile.aspectRatio * rowHeight)),
+                        height: rowHeight
+                    )
+                },
+                index: rowIndex
+            )
+        }
+
+        let shortEdges = layout.flatMap { $0.items.map { min($0.width, $0.height) } }
+        guard let minShortEdge = shortEdges.min(), !shortEdges.isEmpty else { continue }
+        let harmonicShortEdge = CGFloat(shortEdges.count) / shortEdges.reduce(CGFloat.zero) { partial, shortEdge in
+            partial + (1 / shortEdge)
+        }
+        let area = layout.reduce(CGFloat.zero) { partial, row in
+            partial + row.items.reduce(CGFloat.zero) { rowPartial, item in
+                rowPartial + item.width * item.height
+            }
+        }
+        let rowCount = layout.count
+
+        let shortEdgeGainIsMeaningful = harmonicShortEdge > bestHarmonicShortEdge + 6
+        let shortEdgeIsComparable = abs(harmonicShortEdge - bestHarmonicShortEdge) <= 6
+        let minShortEdgeImproved = minShortEdge > bestMinShortEdge + 1
+        let minShortEdgeComparable = abs(minShortEdge - bestMinShortEdge) <= 1
+
+        let shouldSelectLayout =
+            shortEdgeGainIsMeaningful ||
+            (
+                shortEdgeIsComparable &&
+                (
+                    rowCount < bestRowCount ||
+                    (rowCount == bestRowCount && (
+                        minShortEdgeImproved ||
+                        (minShortEdgeComparable && area > bestArea)
+                    ))
+                )
+            ) ||
+            (
+                !shortEdgeIsComparable &&
+                harmonicShortEdge > bestHarmonicShortEdge &&
+                minShortEdgeImproved
+            )
+
+        if shouldSelectLayout {
+            bestLayout = layout
+            bestHarmonicShortEdge = harmonicShortEdge
+            bestMinShortEdge = minShortEdge
+            bestArea = area
+            bestRowCount = rowCount
+        }
+    }
+
+    return bestLayout
+}
+
+private struct MultiPartyStage: View {
+    let remoteParticipants: [RemoteParticipant]
+    @Binding var remoteTileAspectRatios: [String: CGFloat]
+    let localVideoEnabled: Bool
+    let localMirror: Bool
+    let bottomPadding: CGFloat
+    let callManager: CallManager
+
+    private let gap: CGFloat = 12
+    private let outerPadding: CGFloat = 16
+    private let tileCornerRadius: CGFloat = 16
+    private let pipCornerRadius: CGFloat = 12
+
+    var body: some View {
+        GeometryReader { geometry in
+            let availableWidth = geometry.size.width - outerPadding * 2
+            let availableHeight = max(0, geometry.size.height - (20 + bottomPadding + 12))
+            let layout = computeStageLayout(
+                tiles: remoteParticipants.map { participant in
+                    StageTileSpec(
+                        cid: participant.cid,
+                        aspectRatio: clampStageTileAspectRatio(remoteTileAspectRatios[participant.cid])
+                    )
+                },
+                availableWidth: availableWidth,
+                availableHeight: availableHeight,
+                gap: gap
+            )
+
+            ZStack(alignment: .bottomTrailing) {
+                VStack(spacing: gap) {
+                    ForEach(layout) { row in
+                        HStack(spacing: gap) {
+                            ForEach(row.items) { tile in
+                                if let participant = remoteParticipants.first(where: { $0.cid == tile.cid }) {
+                                    RemoteParticipantStageTile(
+                                        participant: participant,
+                                        size: CGSize(width: tile.width, height: tile.height),
+                                        cornerRadius: tileCornerRadius,
+                                        callManager: callManager,
+                                        onVideoSizeChanged: { size in
+                                            remoteTileAspectRatios[tile.cid] = quantizedStageTileAspectRatio(size)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, outerPadding)
+                .padding(.top, 20)
+                .padding(.bottom, bottomPadding + 12)
+
+                MultiPartyLocalPip(
+                    localVideoEnabled: localVideoEnabled,
+                    localMirror: localMirror,
+                    cornerRadius: pipCornerRadius,
+                    callManager: callManager
+                )
+                .padding(.trailing, 16)
+                .padding(.bottom, bottomPadding)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
+}
+
+private struct RemoteParticipantStageTile: View {
+    let participant: RemoteParticipant
+    let size: CGSize
+    let cornerRadius: CGFloat
+    let callManager: CallManager
+    let onVideoSizeChanged: (CGSize) -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black
+            WebRTCVideoView(
+                kind: .remoteForCid(participant.cid),
+                callManager: callManager,
+                videoContentMode: .scaleAspectFit,
+                onVideoSizeChanged: onVideoSizeChanged
+            )
+            if !participant.videoEnabled {
+                VideoPlaceholderTile(text: L10n.callVideoOff, compact: false)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+}
+
+private struct MultiPartyLocalPip: View {
+    let localVideoEnabled: Bool
+    let localMirror: Bool
+    let cornerRadius: CGFloat
+    let callManager: CallManager
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if localVideoEnabled {
+                WebRTCVideoView(
+                    kind: .local,
+                    callManager: callManager,
+                    videoContentMode: .scaleAspectFill,
+                    isMirrored: localMirror
+                )
+            } else {
+                VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
+            }
+        }
+        .frame(width: 100, height: 150)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(Color.white.opacity(0.32), lineWidth: 1)
+        )
     }
 }
 

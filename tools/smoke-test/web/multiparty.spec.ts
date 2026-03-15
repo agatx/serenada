@@ -6,6 +6,7 @@ const SERVER_URL = process.env.SMOKE_SERVER_URL!;
 const ROOM_ID = process.env.SMOKE_ROOM_ID!;
 const BARRIER_DIR = process.env.SMOKE_BARRIER_DIR!;
 const ROLE = process.env.SMOKE_ROLE || 'web';
+const EXPECTED_PARTICIPANTS = Number.parseInt(process.env.SMOKE_EXPECTED_PARTICIPANTS || '3', 10);
 
 function barrierWrite(name: string, content?: string) {
   const filePath = path.join(BARRIER_DIR, name);
@@ -19,20 +20,15 @@ async function barrierWait(name: string, timeoutMs = 30_000): Promise<string> {
     if (Date.now() - start > timeoutMs) {
       throw new Error(`Barrier timeout: waited ${timeoutMs}ms for '${name}'`);
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return fs.readFileSync(filePath, 'utf-8').trim();
 }
 
 async function clickJoinAndWaitForCall(page: import('@playwright/test').Page) {
-  // Wait for the Join Call button with exact text (ensures signaling is connected)
   const joinButton = page.getByRole('button', { name: /join call/i });
   await joinButton.waitFor({ state: 'visible', timeout: 15_000 });
-
-  // Click and wait for the call screen to appear
   await joinButton.click();
-
-  // Wait for the pre-join card to disappear (hasJoined becomes true)
   await page.waitForSelector('.prejoin-card', { state: 'detached', timeout: 30_000 });
 }
 
@@ -60,10 +56,9 @@ async function revealControlsAndClickLeave(page: import('@playwright/test').Page
   throw new Error(`Leave button did not become actionable within ${timeoutMs}ms: ${String(lastError)}`);
 }
 
-test('smoke: join, verify peer, leave, rejoin', async ({ page }) => {
+test('smoke: join and validate multiparty participant count', async ({ page }) => {
   test.setTimeout(10 * 60_000);
 
-  // Log console errors for debugging
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
       console.log(`[BROWSER ERROR] ${msg.text()}`);
@@ -73,45 +68,35 @@ test('smoke: join, verify peer, leave, rejoin', async ({ page }) => {
     console.log(`[PAGE ERROR] ${err.message}`);
   });
 
-  // Phase 1: Join room
   await page.goto(`${SERVER_URL}/call/${ROOM_ID}`);
   await clickJoinAndWaitForCall(page);
-
-  // Signal that web has joined
   barrierWrite(`${ROLE}.joined`);
 
-  // Wait for the other participant to join
-  await barrierWait('peer.ready', 45_000);
+  await page.waitForFunction(
+    (expectedParticipants) => {
+      const probe = document.querySelector<HTMLElement>('[data-testid="call-participant-count"]');
+      if (!probe) {
+        const multiPartyRoot = document.querySelector<HTMLElement>('.multi-party-call');
+        if (!multiPartyRoot) {
+          return false;
+        }
+        const visibleVideos = Array.from(multiPartyRoot.querySelectorAll('video')).filter((video) => {
+          const rect = video.getBoundingClientRect();
+          return rect.width >= 8 && rect.height >= 8;
+        });
+        return visibleVideos.length >= expectedParticipants;
+      }
+      const rawValue = probe.dataset.count || probe.textContent || '0';
+      const count = Number.parseInt(rawValue, 10);
+      return Number.isFinite(count) && count >= expectedParticipants;
+    },
+    EXPECTED_PARTICIPANTS,
+    { timeout: 75_000 }
+  );
 
-  // Wait for remote stream — .waiting-message should become hidden
-  await page.waitForSelector('.waiting-message', { state: 'hidden', timeout: 45_000 });
+  barrierWrite(`${ROLE}.participant-count-ok`, String(EXPECTED_PARTICIPANTS));
 
-  // Signal in-call
-  barrierWrite(`${ROLE}.in-call`);
-
-  // Phase 2: Leave
-  await barrierWait('leave', 30_000);
-  await revealControlsAndClickLeave(page);
-
-  // Should navigate home
-  await page.waitForURL('**/', { timeout: 15_000 });
-  barrierWrite(`${ROLE}.left`);
-
-  // Phase 3: Rejoin
-  const rejoinContent = await barrierWait('rejoin', 30_000);
-  const rejoinRoomId = rejoinContent || ROOM_ID;
-
-  await page.goto(`${SERVER_URL}/call/${rejoinRoomId}`);
-  await clickJoinAndWaitForCall(page);
-  barrierWrite(`${ROLE}.rejoined`);
-
-  // Wait for peer again
-  await barrierWait('peer.ready.2', 45_000);
-  await page.waitForSelector('.waiting-message', { state: 'hidden', timeout: 45_000 });
-  barrierWrite(`${ROLE}.rejoin-in-call`);
-
-  // Phase 4: End
-  await barrierWait('end', 30_000);
+  await barrierWait('end', 45_000);
   await revealControlsAndClickLeave(page);
   await page.waitForURL('**/', { timeout: 15_000 });
   barrierWrite(`${ROLE}.done`);

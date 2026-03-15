@@ -15,7 +15,7 @@ struct CallUiState: Equatable {
     var participantCount: Int = 0
     var localAudioEnabled: Bool = true
     var localVideoEnabled: Bool = true
-    var remoteVideoEnabled: Bool = false
+    var remoteParticipants: [RemoteParticipant] = []
     var connectionStatus: ConnectionStatus = .connected
     var isSignalingConnected: Bool = false
     var iceConnectionState: String = "NEW"
@@ -30,4 +30,8 @@ struct CallUiState: Equatable {
     var cameraZoomFactor: Double = 1
     var isFlashAvailable: Bool = false
     var isFlashEnabled: Bool = false
+
+    var remoteVideoEnabled: Bool {
+        remoteParticipants.first?.videoEnabled ?? false
+    }
 }

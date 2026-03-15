@@ -10,7 +10,7 @@ data class CallUiState(
     val participantCount: Int = 0,
     val localAudioEnabled: Boolean = true,
     val localVideoEnabled: Boolean = true,
-    val remoteVideoEnabled: Boolean = false,
+    val remoteParticipants: List<RemoteParticipant> = emptyList(),
     val connectionStatus: ConnectionStatus = ConnectionStatus.Connected,
     val isSignalingConnected: Boolean = false,
     val iceConnectionState: String = "NEW",
@@ -24,4 +24,7 @@ data class CallUiState(
     val localCameraMode: LocalCameraMode = LocalCameraMode.SELFIE,
     val isFlashAvailable: Boolean = false,
     val isFlashEnabled: Boolean = false
-)
+) {
+    val remoteVideoEnabled: Boolean
+        get() = remoteParticipants.firstOrNull()?.videoEnabled ?: false
+}

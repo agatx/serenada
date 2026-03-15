@@ -84,27 +84,38 @@ struct WebRTCVideoView: UIViewRepresentable {
     enum Kind {
         case local
         case remote
+        case remoteForCid(String)
+
+        var isLocal: Bool {
+            if case .local = self {
+                return true
+            }
+            return false
+        }
     }
 
     let kind: Kind
     let callManager: CallManager
     let videoContentMode: UIView.ContentMode
     let isMirrored: Bool
+    let onVideoSizeChanged: ((CGSize) -> Void)?
 
     init(
         kind: Kind,
         callManager: CallManager,
         videoContentMode: UIView.ContentMode = .scaleAspectFill,
-        isMirrored: Bool = false
+        isMirrored: Bool = false,
+        onVideoSizeChanged: ((CGSize) -> Void)? = nil
     ) {
         self.kind = kind
         self.callManager = callManager
         self.videoContentMode = videoContentMode
         self.isMirrored = isMirrored
+        self.onVideoSizeChanged = onVideoSizeChanged
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(kind: kind, callManager: callManager)
+        Coordinator(kind: kind, callManager: callManager, onVideoSizeChanged: onVideoSizeChanged)
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -126,8 +137,20 @@ struct WebRTCVideoView: UIViewRepresentable {
             renderer.videoContentMode = videoContentMode
             renderer.clipsToBounds = true
             renderer.isUserInteractionEnabled = false
+            renderer.delegate = context.coordinator
             Task { @MainActor in
                 callManager.attachRemoteRenderer(renderer)
+            }
+            context.coordinator.renderer = renderer
+            return renderer
+        case .remoteForCid(let cid):
+            let renderer = RTCMTLVideoView(frame: .zero)
+            renderer.videoContentMode = videoContentMode
+            renderer.clipsToBounds = true
+            renderer.isUserInteractionEnabled = false
+            renderer.delegate = context.coordinator
+            Task { @MainActor in
+                callManager.attachRemoteRenderer(renderer, forCid: cid)
             }
             context.coordinator.renderer = renderer
             return renderer
@@ -142,7 +165,12 @@ struct WebRTCVideoView: UIViewRepresentable {
         label.numberOfLines = 2
         label.textColor = .label
         label.font = UIFont.systemFont(ofSize: 13, weight: .medium)
-        label.text = kind == .local ? "Local video\n(WebRTC stub)" : "Remote video\n(WebRTC stub)"
+        switch kind {
+        case .local:
+            label.text = "Local video\n(WebRTC stub)"
+        case .remote, .remoteForCid:
+            label.text = "Remote video\n(WebRTC stub)"
+        }
         placeholder.addSubview(label)
 
         NSLayoutConstraint.activate([
@@ -218,20 +246,33 @@ struct WebRTCVideoView: UIViewRepresentable {
                 coordinator.callManager?.detachLocalRenderer(renderer)
             case .remote:
                 coordinator.callManager?.detachRemoteRenderer(renderer)
+            case .remoteForCid(let cid):
+                coordinator.callManager?.detachRemoteRenderer(renderer, forCid: cid)
             }
         }
 #endif
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject {
         let kind: Kind
         weak var callManager: CallManager?
         var isMirrored: Bool = false
         weak var renderer: AnyObject?
+        let onVideoSizeChanged: ((CGSize) -> Void)?
 
-        init(kind: Kind, callManager: CallManager) {
+        init(kind: Kind, callManager: CallManager, onVideoSizeChanged: ((CGSize) -> Void)?) {
             self.kind = kind
             self.callManager = callManager
+            self.onVideoSizeChanged = onVideoSizeChanged
+            super.init()
         }
     }
 }
+
+#if canImport(WebRTC)
+extension WebRTCVideoView.Coordinator: RTCVideoViewDelegate {
+    func videoView(_ videoView: RTCVideoRenderer, didChangeVideoSize size: CGSize) {
+        onVideoSizeChanged?(size)
+    }
+}
+#endif

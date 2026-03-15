@@ -1,9 +1,11 @@
 # Serenada Android Client
 
-Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors the core call flow of the web client and prefers WebSocket signaling with automatic SSE fallback.
+Native Android (Kotlin) client for Serenada WebRTC calls. This app mirrors the core call flow of the web client, prefers WebSocket signaling with automatic SSE fallback, and supports the same adaptive 1:1-to-group room behavior as web.
 
 ## Features
-- 1:1 WebRTC audio/video calls
+- WebRTC audio/video calls with adaptive mesh multi-party rooms (up to 4 participants)
+- New-capable clients create group-capable rooms by default; legacy-first rooms stay capped at 2 participants
+- Calls stay in the familiar 1:1 presentation until participant `#3` joins, then switch to the adaptive remote-stage + local-PIP layout
 - WebSocket signaling with automatic SSE fallback (protocol v1)
 - In-call camera source cycle: `selfie` (default) -> `world` -> `composite` (world view with circular mirrored selfie overlay), with automatic composite skip on unsupported devices or composite start failure
 - In-call pinch zoom for `world`/`composite` when local feed is the large view (not PIP), applied at camera capture level so remote participants receive the zoomed stream too
@@ -23,9 +25,6 @@ Native Android (Kotlin) client for Serenada 1:1 WebRTC calls. This app mirrors t
 - Android system back support for internal navigation (toolbar back button, hardware back, and edge-swipe gesture behave the same across Settings/Diagnostics/Join-by-code/Error screens)
 - Encrypted join snapshot upload (`snapshotId` on `join`) so server push notifications can include a thumbnail when Android is the joiner
 - Native push receive via Firebase Cloud Messaging, including encrypted snapshot decryption and `BigPicture` notifications in background/terminated app states
-
-## Not included (current build)
-- Multi-party calls
 
 ## Requirements
 - Android Studio (Giraffe+ recommended)

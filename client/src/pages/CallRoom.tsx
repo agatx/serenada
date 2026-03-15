@@ -1140,6 +1140,7 @@ const CallRoom: React.FC = () => {
     // Render In-Call
     const otherParticipants = roomState?.participants?.filter(p => p.cid !== clientId) ?? [];
     const otherParticipant = otherParticipants.length > 0 ? otherParticipants[0] : undefined;
+    const participantCount = roomState?.participants.length ?? 1;
     const shareUrl = typeof window !== 'undefined' ? window.location.href : '';
     const debugSections = buildDebugPanelSections({
         isConnected,
@@ -1151,6 +1152,24 @@ const CallRoom: React.FC = () => {
         showReconnecting: connectionStatus !== 'connected',
         realtimeStats
     });
+    const callProbe = (
+        <div
+            data-testid="call-participant-count"
+            data-count={participantCount}
+            data-phase={connectionStatus}
+            aria-hidden="true"
+            style={{
+                position: 'absolute',
+                width: 1,
+                height: 1,
+                overflow: 'hidden',
+                opacity: 0,
+                pointerEvents: 'none'
+            }}
+        >
+            {participantCount}
+        </div>
+    );
 
 
     // Shared controls bar (used in both 1:1 and multi-party layouts)
@@ -1246,6 +1265,7 @@ const CallRoom: React.FC = () => {
                 className={`call-container multi-party-call ${areControlsVisible ? '' : 'controls-hidden'}`}
                 onPointerUp={handleScreenTap}
             >
+                {callProbe}
                 {overlayContent}
                 <div className="video-stage">
                     <div className="video-stage-viewport" ref={setStageViewportNode}>
@@ -1301,6 +1321,7 @@ const CallRoom: React.FC = () => {
             className={`call-container ${areControlsVisible ? '' : 'controls-hidden'} ${isLocalLarge ? 'local-large' : ''}`}
             onPointerUp={handleScreenTap}
         >
+            {callProbe}
             {overlayContent}
             {/* Primary Video (Full Screen) */}
             <div

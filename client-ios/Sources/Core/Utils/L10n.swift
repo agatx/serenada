@@ -95,6 +95,7 @@ enum L10n {
     static var errorEnterRoomOrId: String { text("error_enter_room_or_id") }
     static var errorFailedCreateRoom: String { text("error_failed_create_room") }
     static var errorInvalidRoomId: String { text("error_invalid_room_id") }
+    static var errorRoomCapacityUnsupported: String { text("error_room_capacity_unsupported") }
     static var errorInvalidSavedRoomName: String { text("error_invalid_saved_room_name") }
     static var errorFailedCreateSavedRoomLink: String { text("error_failed_create_saved_room_link") }
     static var errorUnknown: String { text("error_unknown") }

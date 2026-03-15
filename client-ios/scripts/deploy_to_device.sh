@@ -12,6 +12,24 @@ DEFAULT_LOCAL_XCCONFIG="$ROOT_DIR/LocalSigning.xcconfig"
 UDID="${IOS_DEVICE_UDID:-}"
 SHOULD_LAUNCH=1
 
+resolve_xcode_udid() {
+  candidate="$1"
+  details="$(xcrun devicectl device info details --device "$candidate" 2>/dev/null || true)"
+  resolved="$(printf '%s\n' "$details" | sed -n 's/^[[:space:]]*• udid: //p' | head -n 1)"
+  if [ -n "$resolved" ]; then
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+
+  printf '%s\n' "$candidate"
+}
+
+detect_default_udid() {
+  xcodebuild -project "$PROJECT" -scheme "$SCHEME" -showdestinations 2>/dev/null |
+    sed -n 's/.*platform:iOS, arch:arm64, id:\([^,}]*\), name:.*/\1/p' |
+    head -n 1
+}
+
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [options]
@@ -81,19 +99,18 @@ if ! command -v xcrun >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ -z "$UDID" ]; then
-  DEVICE_JSON="$(xcrun devicectl list devices --json-output - 2>/dev/null | sed -n '/^{/,$p')"
-  if [ -n "$DEVICE_JSON" ]; then
-    UDID="$(printf '%s' "$DEVICE_JSON" | plutil -extract result.devices.0.hardwareProperties.udid raw - 2>/dev/null || true)"
-  fi
+cd "$ROOT_DIR"
+
+if [ -n "$UDID" ]; then
+  UDID="$(resolve_xcode_udid "$UDID")"
+else
+  UDID="$(detect_default_udid)"
 fi
 
 if [ -z "$UDID" ]; then
   echo "error: no connected paired iOS device detected. Pass --udid <device-udid>." >&2
   exit 1
 fi
-
-cd "$ROOT_DIR"
 
 echo "Using device UDID: $UDID"
 if [ -n "$XCCONFIG_PATH" ]; then

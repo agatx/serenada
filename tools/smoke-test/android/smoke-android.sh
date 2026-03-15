@@ -9,6 +9,8 @@
 #
 # Optional:
 #   ANDROID_SERIAL    — ADB serial (defaults to first device)
+#   SMOKE_FLOW        — "pair" (default) or "group"
+#   SMOKE_EXPECTED_PARTICIPANTS — required for group flow
 
 set -euo pipefail
 
@@ -20,6 +22,8 @@ SERVER_URL="${SMOKE_SERVER_URL:?}"
 ROOM_ID="${SMOKE_ROOM_ID:?}"
 BARRIER_DIR="${SMOKE_BARRIER_DIR:?}"
 ARTIFACTS_DIR="${SMOKE_ARTIFACTS_DIR:-$SCRIPT_DIR/../artifacts}"
+SMOKE_FLOW="${SMOKE_FLOW:-pair}"
+SMOKE_EXPECTED_PARTICIPANTS="${SMOKE_EXPECTED_PARTICIPANTS:-0}"
 
 adb_cmd() {
     if [ -n "${ANDROID_SERIAL:-}" ]; then
@@ -27,6 +31,10 @@ adb_cmd() {
     else
         adb "$@"
     fi
+}
+
+clear_logcat() {
+    adb_cmd logcat -c 2>/dev/null || true
 }
 
 # Dump UI hierarchy and return XML
@@ -62,6 +70,61 @@ element_exists() {
     local xml
     xml=$(ui_dump)
     echo "$xml" | grep -q "$tag"
+}
+
+element_value() {
+    local tag="$1"
+    local xml node value
+    xml=$(ui_dump)
+    node=$(echo "$xml" | grep "$tag" | head -1 || true)
+    if [ -z "$node" ]; then
+        return 1
+    fi
+
+    value=$(echo "$node" | sed -n 's/.*content-desc="\([^"]*\)".*/\1/p')
+    if [ -z "$value" ]; then
+        value=$(echo "$node" | sed -n 's/.*text="\([^"]*\)".*/\1/p')
+    fi
+    if [ -n "$value" ]; then
+        echo "$value"
+    fi
+}
+
+wait_for_participant_count() {
+    local expected="$1" timeout="${2:-60}"
+    local expected_remote_peers=$((expected - 1))
+    local elapsed=0
+
+    log_info "Android: waiting for participant count >= $expected (${timeout}s timeout) ..."
+    while true; do
+        local value
+        value=$(element_value "call.participantCount" || true)
+        if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge "$expected" ]; then
+            log_ok "Android: participant count reached $value"
+            return 0
+        fi
+
+        local stats_lines
+        stats_lines=$(adb_cmd logcat -d 2>/dev/null | grep '\[WebRTCStats\]' | tail -20 || true)
+        if [ -n "$stats_lines" ]; then
+            while IFS= read -r line; do
+                local remote_count
+                remote_count=$(printf '%s\n' "$line" | grep -o 'remote=' | wc -l | tr -d ' ')
+                if [ "$remote_count" -ge "$expected_remote_peers" ]; then
+                    log_ok "Android: WebRTC stats observed $remote_count remote peers"
+                    return 0
+                fi
+            done <<< "$stats_lines"
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            log_error "Android: participant count did not reach $expected after ${timeout}s (last='$value')"
+            take_screenshot "timeout_participant_count_${expected}"
+            return 1
+        fi
+    done
 }
 
 # Tap an element by its testTag — finds bounds and computes center
@@ -145,46 +208,67 @@ launch_deep_link() {
 log_info "=== Android Smoke Test ==="
 
 pre_grant_permissions
+clear_logcat
 
-# Phase 1: Join
-launch_deep_link "$ROOM_ID"
-wait_for_element "call.screen" 30
-barrier_write "$BARRIER_DIR" "android.joined"
+if [ "$SMOKE_FLOW" = "group" ]; then
+    if ! [[ "$SMOKE_EXPECTED_PARTICIPANTS" =~ ^[0-9]+$ ]] || [ "$SMOKE_EXPECTED_PARTICIPANTS" -lt 2 ]; then
+        log_error "Android: SMOKE_EXPECTED_PARTICIPANTS must be >= 2 for group flow"
+        exit 1
+    fi
 
-# Wait for peer
-barrier_wait "$BARRIER_DIR" "peer.ready" 45
+    launch_deep_link "$ROOM_ID"
+    wait_for_element "call.screen" 30
+    barrier_write "$BARRIER_DIR" "android.joined"
 
-# Stabilize — brief pause for media connection
-sleep 3
-take_screenshot "in_call_1"
-barrier_write "$BARRIER_DIR" "android.in-call"
+    wait_for_participant_count "$SMOKE_EXPECTED_PARTICIPANTS" 75
+    take_screenshot "group_in_call"
+    barrier_write "$BARRIER_DIR" "android.participant-count-ok" "$SMOKE_EXPECTED_PARTICIPANTS"
 
-# Phase 2: Leave
-barrier_wait "$BARRIER_DIR" "leave" 30
-tap_end_call_with_controls 12
-wait_for_element "join.screen" 20
-barrier_write "$BARRIER_DIR" "android.left"
+    barrier_wait "$BARRIER_DIR" "end" 45
+    tap_end_call_with_controls 12
+    wait_for_element "join.screen" 20
+    barrier_write "$BARRIER_DIR" "android.done"
+else
+    # Phase 1: Join
+    launch_deep_link "$ROOM_ID"
+    wait_for_element "call.screen" 30
+    barrier_write "$BARRIER_DIR" "android.joined"
 
-# Phase 3: Rejoin
-REJOIN_ROOM_ID=$(barrier_wait "$BARRIER_DIR" "rejoin" 30)
-if [ -z "$REJOIN_ROOM_ID" ]; then
-    REJOIN_ROOM_ID="$ROOM_ID"
+    # Wait for peer
+    barrier_wait "$BARRIER_DIR" "peer.ready" 45
+
+    # Stabilize — brief pause for media connection
+    sleep 3
+    take_screenshot "in_call_1"
+    barrier_write "$BARRIER_DIR" "android.in-call"
+
+    # Phase 2: Leave
+    barrier_wait "$BARRIER_DIR" "leave" 30
+    tap_end_call_with_controls 12
+    wait_for_element "join.screen" 20
+    barrier_write "$BARRIER_DIR" "android.left"
+
+    # Phase 3: Rejoin
+    REJOIN_ROOM_ID=$(barrier_wait "$BARRIER_DIR" "rejoin" 30)
+    if [ -z "$REJOIN_ROOM_ID" ]; then
+        REJOIN_ROOM_ID="$ROOM_ID"
+    fi
+
+    launch_deep_link "$REJOIN_ROOM_ID"
+    wait_for_element "call.screen" 30
+    barrier_write "$BARRIER_DIR" "android.rejoined"
+
+    # Wait for peer again
+    barrier_wait "$BARRIER_DIR" "peer.ready.2" 45
+    sleep 3
+    take_screenshot "in_call_2"
+    barrier_write "$BARRIER_DIR" "android.rejoin-in-call"
+
+    # Phase 4: End
+    barrier_wait "$BARRIER_DIR" "end" 30
+    tap_end_call_with_controls 12
+    wait_for_element "join.screen" 20
+    barrier_write "$BARRIER_DIR" "android.done"
 fi
-
-launch_deep_link "$REJOIN_ROOM_ID"
-wait_for_element "call.screen" 30
-barrier_write "$BARRIER_DIR" "android.rejoined"
-
-# Wait for peer again
-barrier_wait "$BARRIER_DIR" "peer.ready.2" 45
-sleep 3
-take_screenshot "in_call_2"
-barrier_write "$BARRIER_DIR" "android.rejoin-in-call"
-
-# Phase 4: End
-barrier_wait "$BARRIER_DIR" "end" 30
-tap_end_call_with_controls 12
-wait_for_element "join.screen" 20
-barrier_write "$BARRIER_DIR" "android.done"
 
 log_ok "=== Android Smoke Test Complete ==="

@@ -1,9 +1,11 @@
 # Serenada iOS Client
 
-Native iOS (SwiftUI) client for Serenada 1:1 WebRTC calls.
+Native iOS (SwiftUI) client for Serenada WebRTC calls.
 
-This v1 port mirrors Android/web call flow and signaling semantics:
-- 1:1 calls with host-based offer flow
+This native client mirrors Android/web call flow and signaling semantics:
+- 1:1 and adaptive mesh multi-party calls (up to 4 participants)
+- New-capable clients create group-capable rooms by default; legacy-first rooms stay capped at 2 participants
+- Calls stay in the familiar 1:1 presentation until participant `#3` joins, then switch to the adaptive remote-stage + local-PIP layout
 - WebSocket signaling with automatic SSE fallback
 - Room watch statuses for merged recent calls + saved rooms
 - Saved rooms (create, rename, remove, quick-join, share link) with Android-parity host override semantics

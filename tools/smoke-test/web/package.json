@@ -4,7 +4,8 @@
   "scripts": {
     "test": "npx playwright test",
     "test:smoke": "npx playwright test smoke.spec.ts",
-    "test:hold": "npx playwright test hold-room.spec.ts"
+    "test:hold": "npx playwright test hold-room.spec.ts",
+    "test:multiparty": "npx playwright test multiparty.spec.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0"

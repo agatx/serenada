@@ -61,6 +61,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -72,6 +74,7 @@ import app.serenada.android.call.CallPhase
 import app.serenada.android.call.CallUiState
 import app.serenada.android.call.ConnectionStatus
 import app.serenada.android.call.LocalCameraMode
+import app.serenada.android.call.RemoteParticipant
 import app.serenada.android.call.RealtimeCallStats
 import app.serenada.android.data.SettingsStore
 import java.text.SimpleDateFormat
@@ -91,6 +94,9 @@ import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 
 private const val PINCH_ZOOM_CHANGE_THRESHOLD = 0.01f
+private const val MIN_STAGE_TILE_ASPECT = 9f / 16f
+private const val MAX_STAGE_TILE_ASPECT = 16f / 9f
+private const val DEFAULT_STAGE_TILE_ASPECT = 16f / 9f
 
 @Composable
 fun CallScreen(
@@ -114,6 +120,8 @@ fun CallScreen(
     detachLocalSink: (VideoSink) -> Unit,
     attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
+    attachRemoteRendererForCid: (String, SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
+    detachRemoteRendererForCid: (String, SurfaceViewRenderer) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit
 ) {
@@ -136,6 +144,7 @@ fun CallScreen(
     var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
+    val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var showRecoveringBadge by remember { mutableStateOf(false) }
@@ -153,6 +162,7 @@ fun CallScreen(
     val isWorldOrCompositeMode =
         uiState.localCameraMode == LocalCameraMode.WORLD ||
                 uiState.localCameraMode == LocalCameraMode.COMPOSITE
+    val isMultiParty = uiState.remoteParticipants.size > 1
     val isLocalPinchZoomEnabled =
         uiState.phase == CallPhase.InCall &&
                 isLocalLarge &&
@@ -173,49 +183,10 @@ fun CallScreen(
     }
 
     val remoteRendererEvents = remember {
-        object : RendererCommon.RendererEvents {
-            override fun onFirstFrameRendered() = Unit
-
-            override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
-                val rotatedWidth = if (rotation % 180 == 0) width else height
-                val rotatedHeight = if (rotation % 180 == 0) height else width
-                if (rotatedWidth == 0 || rotatedHeight == 0) return
-                val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
-                // Quantize minor encoder size swings so we don't keep relaying out the SurfaceView.
-                val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
-                mainHandler.post {
-                    val current = remoteAspectRatio
-                    val orientationChanged =
-                        current != null && ((current > 1f) != (ratio > 1f))
-                    val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
-                    if (current == null || abs(current - ratio) > deltaThreshold) {
-                        remoteAspectRatio = ratio
-                    }
-                }
-            }
-        }
+        aspectRatioRendererEvents(mainHandler) { ratio -> remoteAspectRatio = ratio }
     }
     val localRendererEvents = remember {
-        object : RendererCommon.RendererEvents {
-            override fun onFirstFrameRendered() = Unit
-
-            override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
-                val rotatedWidth = if (rotation % 180 == 0) width else height
-                val rotatedHeight = if (rotation % 180 == 0) height else width
-                if (rotatedWidth == 0 || rotatedHeight == 0) return
-                val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
-                val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
-                mainHandler.post {
-                    val current = localAspectRatio
-                    val orientationChanged =
-                        current != null && ((current > 1f) != (ratio > 1f))
-                    val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
-                    if (current == null || abs(current - ratio) > deltaThreshold) {
-                        localAspectRatio = ratio
-                    }
-                }
-            }
-        }
+        aspectRatioRendererEvents(mainHandler) { ratio -> localAspectRatio = ratio }
     }
 
     DisposableEffect(Unit) {
@@ -238,6 +209,13 @@ fun CallScreen(
         if (uiState.phase == CallPhase.InCall && uiState.connectionStatus == ConnectionStatus.Recovering) {
             showRecoveringBadge = true
         }
+    }
+
+    LaunchedEffect(uiState.remoteParticipants.map { it.cid }) {
+        val activeCids = uiState.remoteParticipants.map { it.cid }.toSet()
+        remoteTileAspectRatios.keys
+            .filter { it !in activeCids }
+            .forEach { remoteTileAspectRatios.remove(it) }
     }
 
     val showReconnectingBadge =
@@ -309,11 +287,22 @@ fun CallScreen(
                 indication = null
             ) { toggleControlsVisibility() }
     ) {
+        Box(
+            modifier = Modifier
+                .size(1.dp)
+                .align(Alignment.TopStart)
+                .testTag("call.participantCount")
+                .semantics {
+                    contentDescription = uiState.participantCount.toString()
+                }
+        )
+
         val controlsAnimationDuration = 320
         val showPip =
-            uiState.phase == CallPhase.InCall ||
-                    uiState.phase == CallPhase.Waiting ||
-                    uiState.connectionState == "CONNECTED"
+            !isMultiParty &&
+                    (uiState.phase == CallPhase.InCall ||
+                        uiState.phase == CallPhase.Waiting ||
+                        uiState.connectionState == "CONNECTED")
         val animatedPipBottomPadding by
         animateDpAsState(
             targetValue = if (areControlsVisible) 160.dp else 48.dp,
@@ -364,7 +353,21 @@ fun CallScreen(
             Box(modifier = pipBackgroundModifier)
         }
 
-        if (isLocalLarge) {
+        if (isMultiParty) {
+            MultiPartyStage(
+                modifier = Modifier.fillMaxSize(),
+                remoteParticipants = uiState.remoteParticipants,
+                remoteAspectRatios = remoteTileAspectRatios,
+                localVideoEnabled = uiState.localVideoEnabled,
+                localMirror = uiState.isFrontCamera && !uiState.isScreenSharing,
+                localPipRenderer = localPipRenderer,
+                attachLocalSink = attachLocalSink,
+                detachLocalSink = detachLocalSink,
+                attachRemoteRendererForCid = attachRemoteRendererForCid,
+                detachRemoteRendererForCid = detachRemoteRendererForCid,
+                bottomPadding = animatedPipBottomPadding,
+            )
+        } else if (isLocalLarge) {
             val ratio = localAspectRatio ?: 0f
             val containerRatio = if (maxHeight == 0.dp) 1f else maxWidth / maxHeight
             val safeContainerRatio = if (containerRatio > 0f) containerRatio else 1f
@@ -401,8 +404,8 @@ fun CallScreen(
                         renderer = localRenderer,
                         onAttach = { renderer -> attachLocalRenderer(renderer, localRendererEvents) },
                         onDetach = detachLocalRenderer,
-                        mirror = uiState.isFrontCamera && !uiState.isScreenSharing, // No mirror if screen share
-                        contentScale = if(uiState.isScreenSharing) ContentScale.Fit else ContentScale.Fit,
+                        mirror = uiState.isFrontCamera && !uiState.isScreenSharing,
+                        contentScale = ContentScale.Fit,
                         isMediaOverlay = false
                     )
                 }
@@ -440,11 +443,11 @@ fun CallScreen(
                 coverScale = 1f
             }
             val animatedRemoteScale by
-            animateFloatAsState(
-                targetValue = if (remoteVideoFitCover) coverScale else 1f,
-                animationSpec = tween(durationMillis = 260),
-                label = "remote_video_scale"
-            )
+                animateFloatAsState(
+                    targetValue = if (remoteVideoFitCover) coverScale else 1f,
+                    animationSpec = tween(durationMillis = 260),
+                    label = "remote_video_scale"
+                )
             if (uiState.remoteVideoEnabled) {
                 Box(modifier = remoteModifier.clipToBounds()) {
                     VideoSurface(
@@ -471,13 +474,13 @@ fun CallScreen(
                     renderer = localPipRenderer,
                     onAttach = attachLocalSink,
                     onDetach = detachLocalSink,
-                    mirror = uiState.isFrontCamera && !uiState.isScreenSharing, // No mirror if screen share
-                    contentScale = if(uiState.isScreenSharing) ContentScale.Fit else ContentScale.Crop
+                    mirror = uiState.isFrontCamera && !uiState.isScreenSharing,
+                    contentScale = if (uiState.isScreenSharing) ContentScale.Fit else ContentScale.Crop
                 )
             }
         }
 
-        if (!uiState.localVideoEnabled) {
+        if (!isMultiParty && !uiState.localVideoEnabled) {
             Box(modifier = localModifier) {
                 VideoPlaceholder(
                     text =
@@ -489,7 +492,8 @@ fun CallScreen(
         }
 
         val showRemotePlaceholder =
-            !uiState.remoteVideoEnabled &&
+            !isMultiParty &&
+                    !uiState.remoteVideoEnabled &&
                     (uiState.phase == CallPhase.InCall ||
                             (uiState.phase == CallPhase.Waiting && isLocalLarge))
         if (showRemotePlaceholder) {
@@ -1221,6 +1225,320 @@ private fun WaitingOverlay(roomId: String, serverHost: String, onInviteToRoom: (
             Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text(stringResource(R.string.call_invite_to_room))
+        }
+    }
+}
+
+private data class StageTileSpec(
+    val cid: String,
+    val aspectRatio: Float,
+)
+
+private data class StageTileLayout(
+    val cid: String,
+    val widthPx: Int,
+    val heightPx: Int,
+)
+
+private data class StageRowLayout(
+    val items: List<StageTileLayout>,
+)
+
+private fun aspectRatioRendererEvents(
+    handler: android.os.Handler,
+    onAspectRatioChanged: (Float) -> Unit,
+): RendererCommon.RendererEvents = object : RendererCommon.RendererEvents {
+    private var current: Float? = null
+
+    override fun onFirstFrameRendered() = Unit
+
+    override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
+        val rotatedWidth = if (rotation % 180 == 0) width else height
+        val rotatedHeight = if (rotation % 180 == 0) height else width
+        if (rotatedWidth == 0 || rotatedHeight == 0) return
+        val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+        val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
+        handler.post {
+            val prev = current
+            val orientationChanged = prev != null && ((prev > 1f) != (ratio > 1f))
+            val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
+            if (prev == null || abs(prev - ratio) > deltaThreshold) {
+                current = ratio
+                onAspectRatioChanged(ratio)
+            }
+        }
+    }
+}
+
+private fun clampStageTileAspectRatio(ratio: Float?): Float {
+    val safeRatio = ratio ?: return DEFAULT_STAGE_TILE_ASPECT
+    if (!safeRatio.isFinite() || safeRatio <= 0f) return DEFAULT_STAGE_TILE_ASPECT
+    return safeRatio.coerceIn(MIN_STAGE_TILE_ASPECT, MAX_STAGE_TILE_ASPECT)
+}
+
+private fun computeStageLayout(
+    tiles: List<StageTileSpec>,
+    availableWidthPx: Float,
+    availableHeightPx: Float,
+    gapPx: Float,
+): List<StageRowLayout> {
+    if (tiles.isEmpty() || availableWidthPx <= 0f || availableHeightPx <= 0f) return emptyList()
+
+    val candidateRows =
+        when (tiles.size) {
+            1 -> listOf(listOf(listOf(0)))
+            2 -> listOf(listOf(listOf(0, 1)), listOf(listOf(0), listOf(1)))
+            else ->
+                listOf(
+                    listOf(listOf(0, 1, 2)),
+                    listOf(listOf(0, 1), listOf(2)),
+                    listOf(listOf(0), listOf(1, 2)),
+                    listOf(listOf(0), listOf(1), listOf(2)),
+                )
+        }
+
+    var bestLayout = emptyList<StageRowLayout>()
+    var bestHarmonicShortEdge = -1f
+    var bestMinShortEdge = -1f
+    var bestArea = -1f
+    var bestRowCount = Int.MAX_VALUE
+
+    candidateRows.forEach { rows ->
+        val baseHeights =
+            rows.map { row ->
+                val totalAspect = row.sumOf { index -> tiles[index].aspectRatio.toDouble() }.toFloat()
+                val rowWidth = availableWidthPx - gapPx * (row.size - 1).coerceAtLeast(0)
+                if (rowWidth > 0f && totalAspect > 0f) rowWidth / totalAspect else 0f
+            }
+        val verticalGap = gapPx * (rows.size - 1).coerceAtLeast(0)
+        val totalBaseHeight = baseHeights.sum()
+        if (totalBaseHeight <= 0f || availableHeightPx <= verticalGap) return@forEach
+
+        val scale = minOf(1f, (availableHeightPx - verticalGap) / totalBaseHeight)
+        if (scale <= 0f) return@forEach
+
+        val layout =
+            rows.mapIndexed { rowIndex, row ->
+                val rowHeight = maxOf(1, (baseHeights[rowIndex] * scale).toInt())
+                StageRowLayout(
+                    items =
+                        row.map { index ->
+                            val tile = tiles[index]
+                            StageTileLayout(
+                                cid = tile.cid,
+                                widthPx = maxOf(1, (tile.aspectRatio * rowHeight).toInt()),
+                                heightPx = rowHeight,
+                            )
+                        }
+                )
+            }
+
+        val shortEdges = layout.flatMap { row -> row.items.map { minOf(it.widthPx, it.heightPx).toFloat() } }
+        val minShortEdge = shortEdges.minOrNull() ?: return@forEach
+        val harmonicShortEdge = shortEdges.size / shortEdges.sumOf { shortEdge -> (1f / shortEdge).toDouble() }.toFloat()
+        val area = layout.sumOf { row -> row.items.sumOf { it.widthPx * it.heightPx } }.toFloat()
+        val rowCount = layout.size
+
+        val shortEdgeGainIsMeaningful = harmonicShortEdge > bestHarmonicShortEdge + 6f
+        val shortEdgeIsComparable = kotlin.math.abs(harmonicShortEdge - bestHarmonicShortEdge) <= 6f
+        val minShortEdgeImproved = minShortEdge > bestMinShortEdge + 1f
+        val minShortEdgeComparable = kotlin.math.abs(minShortEdge - bestMinShortEdge) <= 1f
+
+        if (
+            shortEdgeGainIsMeaningful ||
+            (
+                shortEdgeIsComparable && (
+                    rowCount < bestRowCount ||
+                        (rowCount == bestRowCount && (
+                            minShortEdgeImproved ||
+                                (minShortEdgeComparable && area > bestArea)
+                            ))
+                    )
+                ) ||
+            (
+                !shortEdgeIsComparable &&
+                    harmonicShortEdge > bestHarmonicShortEdge &&
+                    minShortEdgeImproved
+                )
+        ) {
+            bestLayout = layout
+            bestHarmonicShortEdge = harmonicShortEdge
+            bestMinShortEdge = minShortEdge
+            bestArea = area
+            bestRowCount = rowCount
+        }
+    }
+
+    return bestLayout
+}
+
+@Composable
+private fun MultiPartyStage(
+    modifier: Modifier,
+    remoteParticipants: List<RemoteParticipant>,
+    remoteAspectRatios: MutableMap<String, Float>,
+    localVideoEnabled: Boolean,
+    localMirror: Boolean,
+    localPipRenderer: PipTextureRendererView,
+    attachLocalSink: (VideoSink) -> Unit,
+    detachLocalSink: (VideoSink) -> Unit,
+    attachRemoteRendererForCid: (String, SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
+    detachRemoteRendererForCid: (String, SurfaceViewRenderer) -> Unit,
+    bottomPadding: androidx.compose.ui.unit.Dp,
+) {
+    val density = LocalDensity.current
+    val gap = 12.dp
+    val outerPadding = 16.dp
+    val pipCornerRadius = 12.dp
+    val tileCornerRadius = 16.dp
+
+    Box(modifier = modifier) {
+        BoxWithConstraints(
+            modifier =
+                Modifier.fillMaxSize()
+                    .padding(
+                        start = outerPadding,
+                        end = outerPadding,
+                        top = 20.dp,
+                        bottom = bottomPadding + 12.dp
+                    )
+        ) {
+            val layout = remember(remoteParticipants, remoteAspectRatios.toMap(), maxWidth, maxHeight) {
+                computeStageLayout(
+                    tiles =
+                        remoteParticipants.map { participant ->
+                            StageTileSpec(
+                                cid = participant.cid,
+                                aspectRatio = clampStageTileAspectRatio(remoteAspectRatios[participant.cid]),
+                            )
+                        },
+                    availableWidthPx = with(density) { maxWidth.toPx() },
+                    availableHeightPx = with(density) { maxHeight.toPx() },
+                    gapPx = with(density) { gap.toPx() },
+                )
+            }
+
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                layout.forEachIndexed { rowIndex, row ->
+                    if (rowIndex > 0) {
+                        Spacer(modifier = Modifier.height(gap))
+                    }
+                    Row(horizontalArrangement = Arrangement.Center) {
+                        row.items.forEachIndexed { itemIndex, tile ->
+                            if (itemIndex > 0) {
+                                Spacer(modifier = Modifier.width(gap))
+                            }
+                            val participant = remoteParticipants.first { it.cid == tile.cid }
+                            RemoteParticipantStageTile(
+                                participant = participant,
+                                width = with(density) { tile.widthPx.toDp() },
+                                height = with(density) { tile.heightPx.toDp() },
+                                cornerRadius = tileCornerRadius,
+                                onAspectRatioChanged = { ratio ->
+                                    remoteAspectRatios[tile.cid] = ratio
+                                },
+                                attachRemoteRenderer = { renderer, events ->
+                                    attachRemoteRendererForCid(tile.cid, renderer, events)
+                                },
+                                detachRemoteRenderer = { renderer ->
+                                    detachRemoteRendererForCid(tile.cid, renderer)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Box(
+            modifier =
+                Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = bottomPadding)
+                    .size(100.dp, 150.dp)
+                    .clip(RoundedCornerShape(pipCornerRadius))
+                    .background(Color(0xFF222222))
+        ) {
+            if (localVideoEnabled) {
+                TextureVideoSurface(
+                    modifier = Modifier.fillMaxSize().padding(2.5.dp).clip(RoundedCornerShape(10.dp)),
+                    renderer = localPipRenderer,
+                    onAttach = attachLocalSink,
+                    onDetach = detachLocalSink,
+                    mirror = localMirror,
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                VideoPlaceholder(
+                    text = stringResource(R.string.call_camera_off),
+                    fontSize = 10.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemoteParticipantStageTile(
+    participant: RemoteParticipant,
+    width: androidx.compose.ui.unit.Dp,
+    height: androidx.compose.ui.unit.Dp,
+    cornerRadius: androidx.compose.ui.unit.Dp,
+    onAspectRatioChanged: (Float) -> Unit,
+    attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
+    detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
+) {
+    val context = LocalContext.current
+    val renderer = remember(participant.cid) { SurfaceViewRenderer(context) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val rendererEvents =
+        remember(participant.cid) {
+            object : RendererCommon.RendererEvents {
+                override fun onFirstFrameRendered() = Unit
+
+                override fun onFrameResolutionChanged(widthPx: Int, heightPx: Int, rotation: Int) {
+                    val rotatedWidth = if (rotation % 180 == 0) widthPx else heightPx
+                    val rotatedHeight = if (rotation % 180 == 0) heightPx else widthPx
+                    if (rotatedWidth == 0 || rotatedHeight == 0) return
+                    val ratio = clampStageTileAspectRatio(rotatedWidth.toFloat() / rotatedHeight.toFloat())
+                    mainHandler.post {
+                        onAspectRatioChanged(ratio)
+                    }
+                }
+            }
+        }
+
+    DisposableEffect(renderer) {
+        onDispose {
+            renderer.release()
+        }
+    }
+
+    Box(
+        modifier =
+            Modifier.size(width = width, height = height)
+                .clip(RoundedCornerShape(cornerRadius))
+                .background(Color(0xFF111111))
+    ) {
+        VideoSurface(
+            modifier = Modifier.fillMaxSize(),
+            renderer = renderer,
+            onAttach = { attachRemoteRenderer(it, rendererEvents) },
+            onDetach = detachRemoteRenderer,
+            contentScale = ContentScale.Fit,
+            cornerRadius = cornerRadius,
+            isMediaOverlay = false
+        )
+        if (!participant.videoEnabled) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                VideoPlaceholder(
+                    text = stringResource(R.string.call_video_off),
+                    fontSize = 14.sp
+                )
+            }
         }
     }
 }

@@ -40,6 +40,38 @@ final class CallManager: ObservableObject {
     }
     #endif
 
+    private static let iceConnectionPriority: [String: Int] = [
+        "FAILED": 0,
+        "DISCONNECTED": 1,
+        "CHECKING": 2,
+        "NEW": 3,
+        "CONNECTED": 4,
+        "COMPLETED": 5,
+        "CLOSED": 6,
+        "COUNT": 7,
+        "UNKNOWN": 8,
+    ]
+
+    private static let connectionPriority: [String: Int] = [
+        "FAILED": 0,
+        "DISCONNECTED": 1,
+        "CONNECTING": 2,
+        "NEW": 3,
+        "CONNECTED": 4,
+        "CLOSED": 5,
+        "UNKNOWN": 6,
+    ]
+
+    private static let signalingPriority: [String: Int] = [
+        "HAVE_LOCAL_OFFER": 0,
+        "HAVE_REMOTE_OFFER": 1,
+        "HAVE_LOCAL_PRANSWER": 2,
+        "HAVE_REMOTE_PRANSWER": 3,
+        "STABLE": 4,
+        "CLOSED": 5,
+        "UNKNOWN": 6,
+    ]
+
     private struct MediaPermissions {
         let cameraGranted: Bool
         let microphoneGranted: Bool
@@ -82,7 +114,9 @@ final class CallManager: ObservableObject {
     private var activeCallHostOverride: String?
     private var clientId: String?
     private var hostCid: String?
+    private var currentRoomState: RoomState?
     private var callStartTimeMs: Int64?
+    private var peerSlots: [String: PeerConnectionSlot] = [:]
 
     private var watchedRoomIds: [String] = []
     private var pendingJoinRoom: String?
@@ -90,20 +124,12 @@ final class CallManager: ObservableObject {
 
     private var joinAttemptSerial: Int64 = 0
     private var reconnectAttempts = 0
-    private var sentOffer = false
-    private var isMakingOffer = false
-    private var pendingIceRestart = false
-    private var lastIceRestartAt: TimeInterval = 0
 
     private var reconnectTask: Task<Void, Never>?
     private var joinTimeoutTask: Task<Void, Never>?
     private var joinConnectKickstartTask: Task<Void, Never>?
     private var joinRecoveryTask: Task<Void, Never>?
-    private var iceRestartTask: Task<Void, Never>?
     private var connectionStatusRetryingTask: Task<Void, Never>?
-    private var offerTimeoutTask: Task<Void, Never>?
-    private var nonHostOfferFallbackTask: Task<Void, Never>?
-    private var nonHostOfferFallbackAttempts = 0
     private var turnRefreshTask: Task<Void, Never>?
     private var remoteVideoPollTimer: Timer?
 
@@ -186,10 +212,7 @@ final class CallManager: ObservableObject {
         joinTimeoutTask?.cancel()
         joinConnectKickstartTask?.cancel()
         joinRecoveryTask?.cancel()
-        iceRestartTask?.cancel()
         connectionStatusRetryingTask?.cancel()
-        offerTimeoutTask?.cancel()
-        nonHostOfferFallbackTask?.cancel()
         turnRefreshTask?.cancel()
         remoteVideoPollTimer?.invalidate()
         UIApplication.shared.isIdleTimerDisabled = false
@@ -378,8 +401,9 @@ final class CallManager: ObservableObject {
         joinAttemptSerial += 1
         callStartTimeMs = Int64(Date().timeIntervalSince1970 * 1000)
 
-        sentOffer = false
         pendingMessages.removeAll()
+        peerSlots.removeAll()
+        currentRoomState = nil
         hasNotifiedPushForJoin = false
         hasJoinSignalStartedForAttempt = false
         hasJoinAcknowledgedCurrentAttempt = false
@@ -399,6 +423,7 @@ final class CallManager: ObservableObject {
             $0.errorMessage = nil
             $0.localAudioEnabled = defaultAudio
             $0.localVideoEnabled = defaultVideo
+            $0.remoteParticipants = []
             $0.localCameraMode = .selfie
             $0.cameraZoomFactor = 1
             $0.connectionStatus = .connected
@@ -506,8 +531,12 @@ final class CallManager: ObservableObject {
 
     func endCall() {
         guard uiState.phase != .idle else { return }
-        debugTrace("ui endCall phase=\(uiState.phase.rawValue) room=\(currentRoomId ?? "-")")
-        sendMessage(type: "leave")
+        debugTrace("ui endCall phase=\(uiState.phase.rawValue) room=\(currentRoomId ?? "-") isHost=\(isHost())")
+        if isHost() {
+            sendMessage(type: "end_room")
+        } else {
+            sendMessage(type: "leave")
+        }
         cleanupCall(message: L10n.callStatusLeftRoom)
     }
 
@@ -580,11 +609,24 @@ final class CallManager: ObservableObject {
     }
 
     func attachRemoteRenderer(_ renderer: AnyObject) {
-        webRtcEngine.attachRemoteRenderer(renderer)
+        let remoteCid = currentRoomState?
+            .participants
+            .first(where: { $0.cid != clientId })?
+            .cid ?? peerSlots.keys.first
+        guard let remoteCid else { return }
+        attachRemoteRenderer(renderer, forCid: remoteCid)
     }
 
     func detachRemoteRenderer(_ renderer: AnyObject) {
-        webRtcEngine.detachRemoteRenderer(renderer)
+        peerSlots.values.forEach { $0.detachRemoteRenderer(renderer) }
+    }
+
+    func attachRemoteRenderer(_ renderer: AnyObject, forCid cid: String) {
+        peerSlots[cid]?.attachRemoteRenderer(renderer)
+    }
+
+    func detachRemoteRenderer(_ renderer: AnyObject, forCid cid: String) {
+        peerSlots[cid]?.detachRemoteRenderer(renderer)
     }
 
     private func ensureSignalingConnection() {
@@ -615,7 +657,11 @@ final class CallManager: ObservableObject {
 
         var payload: [String: JSONValue] = [
             "device": .string("ios"),
-            "capabilities": .object(["trickleIce": .bool(true)])
+            "capabilities": .object([
+                "trickleIce": .bool(true),
+                "maxParticipants": .number(4)
+            ]),
+            "createMaxParticipants": .number(4)
         ]
 
         let reconnectCid = clientId ?? settingsStore.reconnectCid
@@ -827,7 +873,15 @@ final class CallManager: ObservableObject {
     }
 
     private func handleError(_ message: SignalingMessage) {
+        let code = message.payload?.objectValue?["code"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         let rawMessage = message.payload?.objectValue?["message"]?.stringValue
+        let resolvedMessage: String?
+        switch code {
+        case "ROOM_CAPACITY_UNSUPPORTED":
+            resolvedMessage = rawMessage?.isEmpty == false ? rawMessage : L10n.errorRoomCapacityUnsupported
+        default:
+            resolvedMessage = rawMessage
+        }
         debugTrace("rx error rid=\(message.rid ?? "-") message=\(rawMessage ?? "-")")
         clearJoinTimeout()
         clearJoinConnectKickstart()
@@ -835,7 +889,7 @@ final class CallManager: ObservableObject {
         resetResources()
         setUiState(CallUiState(
             phase: .error,
-            errorMessage: rawMessage?.isEmpty == false ? rawMessage : L10n.errorUnknown
+            errorMessage: resolvedMessage?.isEmpty == false ? resolvedMessage : L10n.errorUnknown
         ))
     }
 
@@ -843,76 +897,222 @@ final class CallManager: ObservableObject {
         if message.type == "offer" || message.type == "answer" || message.type == "ice" {
             recoverFromJoiningIfNeeded(participantHint: participantCountHint(payload: message.payload), preferInCall: true)
         }
-        if message.type == "answer" {
-            clearNonHostOfferFallback()
+        if message.type == "answer",
+           let fromCid = message.payload?.objectValue?["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fromCid.isEmpty {
+            clearNonHostOfferFallback(remoteCid: fromCid)
         }
 
-        if !webRtcEngine.isReady() {
-            debugTrace("handleSignalingPayload ensurePc type=\(message.type)")
-            ensureIceSetupIfNeeded(turnToken: nil, source: "payload-\(message.type)")
-            webRtcEngine.ensurePeerConnection()
-            if !webRtcEngine.isReady() {
-                debugTrace("handleSignalingPayload queued type=\(message.type) reason=pc-not-ready")
-                pendingMessages.append(message)
-                return
-            }
-        }
-
-        if message.type == "offer" || message.type == "answer" {
-            debugTrace("handleSignalingPayload process type=\(message.type)")
+        guard webRtcEngine.hasIceServers() else {
+            debugTrace("handleSignalingPayload queued type=\(message.type) reason=ice-not-ready")
+            pendingMessages.append(message)
+            return
         }
         processSignalingPayload(message)
     }
 
+    private func getOrCreateSlot(remoteCid: String) -> PeerConnectionSlot {
+        if let slot = peerSlots[remoteCid] {
+            return slot
+        }
+
+        guard let slot = webRtcEngine.createSlot(
+            remoteCid: remoteCid,
+            onLocalIceCandidate: { [weak self] cid, candidate in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.sendMessage(
+                        type: "ice",
+                        payload: .object([
+                            "candidate": .object([
+                                "candidate": .string(candidate.candidate),
+                                "sdpMid": candidate.sdpMid.map(JSONValue.string) ?? .null,
+                                "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
+                            ])
+                        ]),
+                        to: cid
+                    )
+                }
+            },
+            onRemoteVideoTrack: { [weak self] _, _ in
+                Task { @MainActor in
+                    self?.refreshRemoteParticipants()
+                }
+            },
+            onConnectionStateChange: { [weak self] cid, state in
+                Task { @MainActor in
+                    guard let self else { return }
+                    switch state {
+                    case "CONNECTED":
+                        self.clearIceRestartTimer(remoteCid: cid)
+                        self.peerSlots[cid]?.pendingIceRestart = false
+                    case "DISCONNECTED":
+                        self.scheduleIceRestart(remoteCid: cid, reason: "conn-disconnected", delayMs: 2000)
+                    case "FAILED":
+                        self.scheduleIceRestart(remoteCid: cid, reason: "conn-failed", delayMs: 0)
+                    default:
+                        break
+                    }
+                    self.refreshRemoteParticipants()
+                    self.updateAggregatePeerState()
+                    self.updateConnectionStatusFromSignals()
+                }
+            },
+            onIceConnectionStateChange: { [weak self] cid, state in
+                Task { @MainActor in
+                    guard let self else { return }
+                    switch state {
+                    case "CONNECTED", "COMPLETED":
+                        self.clearIceRestartTimer(remoteCid: cid)
+                        self.peerSlots[cid]?.pendingIceRestart = false
+                    case "DISCONNECTED":
+                        self.scheduleIceRestart(remoteCid: cid, reason: "ice-disconnected", delayMs: 2000)
+                    case "FAILED":
+                        self.scheduleIceRestart(remoteCid: cid, reason: "ice-failed", delayMs: 0)
+                    default:
+                        break
+                    }
+                    self.refreshRemoteParticipants()
+                    self.updateAggregatePeerState()
+                    self.updateConnectionStatusFromSignals()
+                }
+            },
+            onSignalingStateChange: { [weak self] cid, state in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if state == "STABLE" {
+                        self.clearOfferTimeout(remoteCid: cid)
+                        if self.peerSlots[cid]?.pendingIceRestart == true {
+                            self.peerSlots[cid]?.pendingIceRestart = false
+                            self.triggerIceRestart(remoteCid: cid, reason: "pending-retry")
+                        }
+                    }
+                    self.updateAggregatePeerState()
+                    self.updateConnectionStatusFromSignals()
+                }
+            },
+            onRenegotiationNeeded: { [weak self] cid in
+                Task { @MainActor in
+                    guard let self, let slot = self.peerSlots[cid] else { return }
+                    self.maybeSendOffer(slot: slot, force: true, iceRestart: false)
+                }
+            }
+        ) else {
+            preconditionFailure("WebRTC peer slot factory is unavailable")
+        }
+
+        peerSlots[remoteCid] = slot
+        return slot
+    }
+
+    private func removePeerSlot(remoteCid: String) {
+        guard let slot = peerSlots.removeValue(forKey: remoteCid) else { return }
+        clearOfferTimeout(remoteCid: remoteCid)
+        clearIceRestartTimer(remoteCid: remoteCid)
+        clearNonHostOfferFallback(remoteCid: remoteCid)
+        webRtcEngine.removeSlot(slot)
+        slot.closePeerConnection()
+    }
+
+    private func updateAggregatePeerState() {
+        var bestIcePri = Int.max, nextIceState = "NEW"
+        var bestConnPri = Int.max, nextConnectionState = "NEW"
+        var bestSigPri = Int.max, nextSignalingState = "STABLE"
+        for slot in peerSlots.values {
+            let icePri = Self.iceConnectionPriority[slot.getIceConnectionState()] ?? .max
+            if icePri < bestIcePri { bestIcePri = icePri; nextIceState = slot.getIceConnectionState() }
+            let connPri = Self.connectionPriority[slot.getConnectionState()] ?? .max
+            if connPri < bestConnPri { bestConnPri = connPri; nextConnectionState = slot.getConnectionState() }
+            let sigPri = Self.signalingPriority[slot.getSignalingState()] ?? .max
+            if sigPri < bestSigPri { bestSigPri = sigPri; nextSignalingState = slot.getSignalingState() }
+        }
+
+        if uiState.iceConnectionState == nextIceState &&
+            uiState.connectionState == nextConnectionState &&
+            uiState.signalingState == nextSignalingState {
+            return
+        }
+
+        updateState {
+            $0.iceConnectionState = nextIceState
+            $0.connectionState = nextConnectionState
+            $0.signalingState = nextSignalingState
+        }
+    }
+
+    private func shouldIOffer(remoteCid: String, roomState: RoomState? = nil) -> Bool {
+        let roomState = roomState ?? currentRoomState
+        guard let roomState, let myCid = clientId else { return false }
+        let myJoinedAt = roomState.participants.first(where: { $0.cid == myCid })?.joinedAt ?? 0
+        let theirJoinedAt = roomState.participants.first(where: { $0.cid == remoteCid })?.joinedAt ?? 0
+        return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
+    }
+
     private func processSignalingPayload(_ message: SignalingMessage) {
+        guard let fromCid = message.payload?.objectValue?["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !fromCid.isEmpty else {
+            return
+        }
+
+        let slot = getOrCreateSlot(remoteCid: fromCid)
+        if !slot.isReady(), !slot.ensurePeerConnection() {
+            pendingMessages.append(message)
+            return
+        }
+
         switch message.type {
         case "offer":
+            clearNonHostOfferFallback(remoteCid: fromCid)
             guard let sdp = message.payload?.objectValue?["sdp"]?.stringValue, !sdp.isEmpty else { return }
-            webRtcEngine.setRemoteDescription(type: .offer, sdp: sdp) { [weak self] success in
+            slot.setRemoteDescription(type: .offer, sdp: sdp) { [weak self] success in
                 guard let self else { return }
                 guard success else {
-                    self.debugTrace("offer apply failed rid=\(message.rid ?? "-")")
-                    self.maybeScheduleNonHostOfferFallback(reason: "offer-apply-failed")
+                    self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "offer-apply-failed")
                     return
                 }
-                self.clearNonHostOfferFallback()
-                self.webRtcEngine.createAnswer(onSdp: { answerSdp in
-                    self.debugTrace("answer send rid=\(self.currentRoomId ?? "-")")
-                    self.sendMessage(type: "answer", payload: .object(["sdp": .string(answerSdp)]))
+                self.clearNonHostOfferFallback(remoteCid: fromCid)
+                slot.createAnswer(onSdp: { [weak self] answerSdp in
+                    self?.sendMessage(
+                        type: "answer",
+                        payload: .object(["sdp": .string(answerSdp)]),
+                        to: fromCid
+                    )
                 }, onComplete: { [weak self] answerSuccess in
                     Task { @MainActor in
                         guard let self else { return }
                         if !answerSuccess {
-                            self.debugTrace("answer create failed rid=\(self.currentRoomId ?? "-")")
-                            self.maybeScheduleNonHostOfferFallback(reason: "answer-create-failed")
+                            self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "answer-create-failed")
                         }
                     }
                 })
             }
 
         case "answer":
+            clearNonHostOfferFallback(remoteCid: fromCid)
             guard let sdp = message.payload?.objectValue?["sdp"]?.stringValue, !sdp.isEmpty else { return }
-            webRtcEngine.setRemoteDescription(type: .answer, sdp: sdp) { [weak self] success in
+            slot.setRemoteDescription(type: .answer, sdp: sdp) { [weak self] success in
                 guard let self else { return }
                 if success {
-                    self.clearOfferTimeout()
-                    self.pendingIceRestart = false
+                    self.clearOfferTimeout(remoteCid: fromCid)
+                    self.peerSlots[fromCid]?.pendingIceRestart = false
+                    self.updateAggregatePeerState()
+                    self.updateConnectionStatusFromSignals()
+                } else if self.shouldIOffer(remoteCid: fromCid) {
+                    self.scheduleIceRestart(remoteCid: fromCid, reason: "answer-apply-failed", delayMs: 0)
                 } else {
-                    self.debugTrace("answer apply failed rid=\(message.rid ?? "-")")
-                    self.scheduleIceRestart(reason: "answer-apply-failed", delayMs: 0)
+                    self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "answer-apply-failed")
                 }
             }
 
         case "ice":
-            guard let candidateObject = message.payload?.objectValue?["candidate"]?.objectValue else { return }
-            guard let candidate = candidateObject["candidate"]?.stringValue else { return }
-            let sdpMid = candidateObject["sdpMid"]?.stringValue
-            let sdpMLineIndex = Int32(candidateObject["sdpMLineIndex"]?.intValue ?? 0)
-
-            webRtcEngine.addIceCandidate(
+            guard let candidateObject = message.payload?.objectValue?["candidate"]?.objectValue,
+                  let candidate = candidateObject["candidate"]?.stringValue else {
+                return
+            }
+            slot.addIceCandidate(
                 IceCandidatePayload(
-                    sdpMid: sdpMid,
-                    sdpMLineIndex: sdpMLineIndex,
+                    sdpMid: candidateObject["sdpMid"]?.stringValue,
+                    sdpMLineIndex: Int32(candidateObject["sdpMLineIndex"]?.intValue ?? 0),
                     candidate: candidate
                 )
             )
@@ -923,27 +1123,27 @@ final class CallManager: ObservableObject {
     }
 
     private func updateParticipants(_ roomState: RoomState) {
+        currentRoomState = roomState
+
         let count = max(1, roomState.participants.count)
         let isHostNow = clientId != nil && clientId == roomState.hostCid
+        let phase: CallPhase = count <= 1 ? .waiting : .inCall
+        let remoteParticipants = roomState.participants.filter { $0.cid != clientId }
+        let remoteCids = Set(remoteParticipants.map(\.cid))
 
-        let phase: CallPhase = (count <= 1) ? .waiting : .inCall
-        debugTrace(
-            "updateParticipants count=\(count) hostCid=\(roomState.hostCid) isHost=\(isHostNow) nextPhase=\(phase.rawValue)"
-        )
         if phase != .joining {
             clearJoinTimeout()
         }
 
+        let departing = Set(peerSlots.keys).subtracting(remoteCids)
+        for remoteCid in departing {
+            removePeerSlot(remoteCid: remoteCid)
+        }
+
         if count <= 1 {
-            sentOffer = false
             clearOfferTimeout()
             clearIceRestartTimer()
             clearNonHostOfferFallback()
-            pendingIceRestart = false
-            isMakingOffer = false
-            if webRtcEngine.isReady() {
-                webRtcEngine.closePeerConnection()
-            }
         }
 
         updateState {
@@ -952,106 +1152,125 @@ final class CallManager: ObservableObject {
             $0.participantCount = count
             $0.statusMessage = count <= 1 ? L10n.callStatusWaitingForJoin : L10n.callStatusInCall
         }
-        updateConnectionStatusFromSignals()
-        debugTrace("updateParticipants stateApplied count=\(count) phase=\(phase.rawValue)")
 
         if count > 1 {
-            debugTrace("updateParticipants ensurePeerConnection begin")
-            webRtcEngine.ensurePeerConnection()
-            debugTrace("updateParticipants ensurePeerConnection end")
-        }
-
-        if count > 1 && isHostNow {
-            clearNonHostOfferFallback()
-            debugTrace("updateParticipants maybeSendOffer host=true")
-            maybeSendOffer()
-        } else if count > 1 {
-            debugTrace("updateParticipants maybeScheduleFallback host=false")
-            DispatchQueue.main.async { [weak self] in
-                self?.maybeScheduleNonHostOfferFallback(reason: "participants")
+            for participant in remoteParticipants {
+                let slot = getOrCreateSlot(remoteCid: participant.cid)
+                _ = slot.ensurePeerConnection()
+                if shouldIOffer(remoteCid: participant.cid, roomState: roomState) {
+                    clearNonHostOfferFallback(remoteCid: participant.cid)
+                    maybeSendOffer(slot: slot)
+                } else {
+                    maybeScheduleNonHostOfferFallback(remoteCid: participant.cid, reason: "participants")
+                }
             }
         }
+
+        refreshRemoteParticipants()
+        updateAggregatePeerState()
+        updateConnectionStatusFromSignals()
     }
 
     private func maybeSendOffer(force: Bool = false, iceRestart: Bool = false) {
-        if isMakingOffer {
+        for slot in peerSlots.values where shouldIOffer(remoteCid: slot.remoteCid) {
+            maybeSendOffer(slot: slot, force: force, iceRestart: iceRestart)
+        }
+    }
+
+    private func maybeSendOffer(slot: PeerConnectionSlot, force: Bool = false, iceRestart: Bool = false) {
+        if slot.isMakingOffer {
             if iceRestart {
-                pendingIceRestart = true
+                slot.pendingIceRestart = true
             }
             return
         }
 
-        if !force && sentOffer {
+        if !force && slot.sentOffer {
             return
         }
 
-        if !canOffer() {
+        if !canOffer(slot: slot) {
             return
         }
 
-        if webRtcEngine.signalingStateRaw() != "STABLE" {
+        if slot.getSignalingState() != "STABLE" {
             if iceRestart {
-                pendingIceRestart = true
+                slot.pendingIceRestart = true
             }
             return
         }
 
-        isMakingOffer = true
-
-        let started = webRtcEngine.createOffer(
+        slot.isMakingOffer = true
+        let started = slot.createOffer(
             iceRestart: iceRestart,
             onSdp: { [weak self] sdp in
-                self?.sendMessage(type: "offer", payload: .object(["sdp": .string(sdp)]))
-                self?.scheduleOfferTimeout()
+                self?.sendMessage(
+                    type: "offer",
+                    payload: .object(["sdp": .string(sdp)]),
+                    to: slot.remoteCid
+                )
+                self?.scheduleOfferTimeout(remoteCid: slot.remoteCid)
             },
             onComplete: { [weak self] success in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.isMakingOffer = false
-                    if !success && iceRestart {
-                        self.scheduleIceRestart(reason: "offer-failed", delayMs: 500)
+                    slot.isMakingOffer = false
+                    if !success {
+                        if iceRestart {
+                            self.scheduleIceRestart(remoteCid: slot.remoteCid, reason: "offer-failed", delayMs: 500)
+                        } else if self.shouldIOffer(remoteCid: slot.remoteCid) {
+                            self.maybeSendOffer(slot: slot)
+                        }
                     }
                 }
             }
         )
 
         if !started {
-            isMakingOffer = false
+            slot.isMakingOffer = false
             if iceRestart {
-                pendingIceRestart = true
+                slot.pendingIceRestart = true
             }
             return
         }
 
         if !force {
-            sentOffer = true
+            slot.sentOffer = true
         }
     }
 
-    private func canOffer() -> Bool {
-        if !uiState.isHost || uiState.participantCount <= 1 { return false }
-        if !webRtcEngine.isReady() { return false }
-        if !signalingClient.isConnected() { return false }
-        return true
+    private func canOffer(slot: PeerConnectionSlot) -> Bool {
+        guard uiState.participantCount > 1 else { return false }
+        guard signalingClient.isConnected() else { return false }
+        guard shouldIOffer(remoteCid: slot.remoteCid) else { return false }
+        return slot.isReady() || slot.ensurePeerConnection()
     }
 
-    private func scheduleOfferTimeout(triggerIceRestart: Bool = true, onTimedOut: (() -> Void)? = nil) {
-        clearOfferTimeout()
+    private func scheduleOfferTimeout(
+        remoteCid: String,
+        triggerIceRestart: Bool = true,
+        onTimedOut: (() -> Void)? = nil
+    ) {
+        clearOfferTimeout(remoteCid: remoteCid)
+        guard let slot = peerSlots[remoteCid] else { return }
 
-        offerTimeoutTask = Task { [weak self] in
+        slot.offerTimeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: WebRtcResilience.offerTimeoutNs)
             guard !Task.isCancelled else { return }
-            guard let self else { return }
-
-            if self.webRtcEngine.signalingStateRaw() == "HAVE_LOCAL_OFFER" {
+            await MainActor.run {
+                guard let self, let slot = self.peerSlots[remoteCid] else { return }
+                guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else { return }
                 if triggerIceRestart {
-                    self.pendingIceRestart = true
+                    slot.pendingIceRestart = true
                 }
-                self.webRtcEngine.rollbackLocalDescription { [weak self] _ in
+                slot.rollbackLocalDescription { _ in
                     Task { @MainActor in
-                        guard let self else { return }
                         if triggerIceRestart {
-                            self.scheduleIceRestart(reason: "offer-timeout", delayMs: 0)
+                            if self.shouldIOffer(remoteCid: remoteCid) {
+                                self.scheduleIceRestart(remoteCid: remoteCid, reason: "offer-timeout", delayMs: 0)
+                            } else {
+                                self.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-timeout")
+                            }
                         } else {
                             onTimedOut?()
                         }
@@ -1061,87 +1280,112 @@ final class CallManager: ObservableObject {
         }
     }
 
-    private func clearOfferTimeout() {
-        offerTimeoutTask?.cancel()
-        offerTimeoutTask = nil
+    private func clearOfferTimeout(remoteCid: String? = nil) {
+        if let remoteCid {
+            peerSlots[remoteCid]?.offerTimeoutTask?.cancel()
+            peerSlots[remoteCid]?.offerTimeoutTask = nil
+            return
+        }
+
+        for slot in peerSlots.values {
+            slot.offerTimeoutTask?.cancel()
+            slot.offerTimeoutTask = nil
+        }
     }
 
     private func maybeScheduleNonHostOfferFallback(reason: String) {
-        guard let roomId = currentRoomId else { return }
+        for slot in peerSlots.values where !shouldIOffer(remoteCid: slot.remoteCid) {
+            maybeScheduleNonHostOfferFallback(remoteCid: slot.remoteCid, reason: reason)
+        }
+    }
+
+    private func maybeScheduleNonHostOfferFallback(remoteCid: String, reason: String) {
+        guard let roomId = currentRoomId, let slot = peerSlots[remoteCid] else { return }
         guard uiState.participantCount > 1 else {
-            clearNonHostOfferFallback()
+            clearNonHostOfferFallback(remoteCid: remoteCid)
             return
         }
-        guard !uiState.isHost else {
-            clearNonHostOfferFallback()
+        guard !shouldIOffer(remoteCid: remoteCid) else {
+            clearNonHostOfferFallback(remoteCid: remoteCid)
             return
         }
         guard signalingClient.isConnected() else { return }
-        guard nonHostOfferFallbackTask == nil else { return }
-        guard nonHostOfferFallbackAttempts < WebRtcResilience.nonHostFallbackMaxAttempts else { return }
+        guard slot.nonHostFallbackTask == nil else { return }
+        guard slot.nonHostFallbackAttempts < WebRtcResilience.nonHostFallbackMaxAttempts else { return }
 
-        debugTrace("nonHostOfferFallback scheduled rid=\(roomId) reason=\(reason)")
-        nonHostOfferFallbackTask = Task { [weak self] in
+        debugTrace("nonHostOfferFallback scheduled rid=\(roomId) remote=\(remoteCid) reason=\(reason)")
+        slot.nonHostFallbackTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: WebRtcResilience.nonHostFallbackDelayNs)
             guard !Task.isCancelled else { return }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.nonHostOfferFallbackTask = nil
+            await MainActor.run {
+                guard let self, let slot = self.peerSlots[remoteCid] else { return }
+                slot.nonHostFallbackTask = nil
                 guard self.currentRoomId == roomId else { return }
-                self.nonHostOfferFallbackAttempts += 1
-                self.debugTrace("nonHostOfferFallback trigger (attempt \(self.nonHostOfferFallbackAttempts))")
-                self.maybeSendNonHostFallbackOffer()
+                slot.nonHostFallbackAttempts += 1
+                self.maybeSendNonHostFallbackOffer(remoteCid: remoteCid)
             }
         }
     }
 
-    private func clearNonHostOfferFallback() {
-        nonHostOfferFallbackTask?.cancel()
-        nonHostOfferFallbackTask = nil
+    private func clearNonHostOfferFallback(remoteCid: String? = nil) {
+        if let remoteCid {
+            peerSlots[remoteCid]?.nonHostFallbackTask?.cancel()
+            peerSlots[remoteCid]?.nonHostFallbackTask = nil
+            return
+        }
+
+        for slot in peerSlots.values {
+            slot.nonHostFallbackTask?.cancel()
+            slot.nonHostFallbackTask = nil
+        }
     }
 
-    private func maybeSendNonHostFallbackOffer() {
+    private func maybeSendNonHostFallbackOffer(remoteCid: String) {
+        guard let slot = peerSlots[remoteCid] else { return }
         guard uiState.participantCount > 1 else { return }
-        guard !uiState.isHost else { return }
+        guard !shouldIOffer(remoteCid: remoteCid) else { return }
         guard signalingClient.isConnected() else { return }
-        guard webRtcEngine.isReady() else { return }
-        guard webRtcEngine.signalingStateRaw() == "STABLE" else {
-            maybeScheduleNonHostOfferFallback(reason: "signaling-not-stable")
+        guard slot.isReady() || slot.ensurePeerConnection() else { return }
+        guard slot.getSignalingState() == "STABLE" else {
+            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "signaling-not-stable")
             return
         }
-        guard !webRtcEngine.hasRemoteDescription() else { return }
-        guard !isMakingOffer else {
-            maybeScheduleNonHostOfferFallback(reason: "already-making-offer")
+        guard !slot.hasRemoteDescription() else { return }
+        guard !slot.isMakingOffer else {
+            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "already-making-offer")
             return
         }
 
-        debugTrace(
-            "nonHostOfferFallback trigger rid=\(currentRoomId ?? "-") cid=\(clientId ?? "-") hostCid=\(hostCid ?? "-")"
-        )
-
-        isMakingOffer = true
-
-        let started = webRtcEngine.createOffer(
+        slot.isMakingOffer = true
+        let started = slot.createOffer(
             onSdp: { [weak self] sdp in
-                self?.sendMessage(type: "offer", payload: .object(["sdp": .string(sdp)]))
-                self?.scheduleOfferTimeout(triggerIceRestart: false, onTimedOut: { [weak self] in
-                    self?.maybeScheduleNonHostOfferFallback(reason: "offer-timeout")
-                })
+                self?.sendMessage(
+                    type: "offer",
+                    payload: .object(["sdp": .string(sdp)]),
+                    to: remoteCid
+                )
+                self?.scheduleOfferTimeout(
+                    remoteCid: remoteCid,
+                    triggerIceRestart: false,
+                    onTimedOut: { [weak self] in
+                        self?.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-timeout")
+                    }
+                )
             },
             onComplete: { [weak self] success in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.isMakingOffer = false
+                    slot.isMakingOffer = false
                     if !success {
-                        self.maybeScheduleNonHostOfferFallback(reason: "offer-failed")
+                        self.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-failed")
                     }
                 }
             }
         )
 
         if !started {
-            isMakingOffer = false
-            maybeScheduleNonHostOfferFallback(reason: "offer-not-started")
+            slot.isMakingOffer = false
+            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-not-started")
         }
     }
 
@@ -1206,52 +1450,72 @@ final class CallManager: ObservableObject {
     }
 
     private func scheduleIceRestart(reason: String, delayMs: Int) {
-        if !canOffer() {
-            pendingIceRestart = true
+        for slot in peerSlots.values where shouldIOffer(remoteCid: slot.remoteCid) {
+            scheduleIceRestart(remoteCid: slot.remoteCid, reason: reason, delayMs: delayMs)
+        }
+    }
+
+    private func scheduleIceRestart(remoteCid: String, reason: String, delayMs: Int) {
+        guard let slot = peerSlots[remoteCid] else { return }
+        if !canOffer(slot: slot) {
+            slot.pendingIceRestart = true
             return
         }
 
-        if iceRestartTask != nil {
-            return
-        }
+        guard slot.iceRestartTask == nil else { return }
 
         let now = Date().timeIntervalSince1970 * 1000
-        if now - lastIceRestartAt < Double(WebRtcResilience.iceRestartCooldownMs) {
-            return
-        }
+        guard now - slot.lastIceRestartAt >= Double(WebRtcResilience.iceRestartCooldownMs) else { return }
 
-        iceRestartTask = Task { [weak self] in
+        slot.iceRestartTask = Task { [weak self] in
             if delayMs > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             }
             guard !Task.isCancelled else { return }
-            await self?.triggerIceRestart(reason: reason)
+            await MainActor.run {
+                self?.triggerIceRestart(remoteCid: remoteCid, reason: reason)
+            }
         }
     }
 
-    private func clearIceRestartTimer() {
-        iceRestartTask?.cancel()
-        iceRestartTask = nil
+    private func clearIceRestartTimer(remoteCid: String? = nil) {
+        if let remoteCid {
+            peerSlots[remoteCid]?.iceRestartTask?.cancel()
+            peerSlots[remoteCid]?.iceRestartTask = nil
+            return
+        }
+
+        for slot in peerSlots.values {
+            slot.iceRestartTask?.cancel()
+            slot.iceRestartTask = nil
+        }
     }
 
     private func triggerIceRestart(reason: String) {
-        iceRestartTask?.cancel()
-        iceRestartTask = nil
+        for slot in peerSlots.values where shouldIOffer(remoteCid: slot.remoteCid) {
+            triggerIceRestart(remoteCid: slot.remoteCid, reason: reason)
+        }
+    }
 
-        if !canOffer() {
-            pendingIceRestart = true
+    private func triggerIceRestart(remoteCid: String, reason: String) {
+        guard let slot = peerSlots[remoteCid] else { return }
+        slot.iceRestartTask?.cancel()
+        slot.iceRestartTask = nil
+
+        guard canOffer(slot: slot) else {
+            slot.pendingIceRestart = true
             return
         }
 
-        if isMakingOffer {
-            pendingIceRestart = true
+        debugTrace("triggerIceRestart cid=\(remoteCid) reason=\(reason)")
+        if slot.isMakingOffer {
+            slot.pendingIceRestart = true
             return
         }
 
-        _ = reason
-        lastIceRestartAt = Date().timeIntervalSince1970 * 1000
-        pendingIceRestart = false
-        maybeSendOffer(force: true, iceRestart: true)
+        slot.lastIceRestartAt = Date().timeIntervalSince1970 * 1000
+        slot.pendingIceRestart = false
+        maybeSendOffer(slot: slot, force: true, iceRestart: true)
     }
 
     private func fetchTurnCredentials(token: String, applyDefaultOnFailure: Bool = true) {
@@ -1365,6 +1629,7 @@ final class CallManager: ObservableObject {
     }
 
     private func flushPendingMessages() {
+        guard webRtcEngine.hasIceServers() else { return }
         let pending = pendingMessages
         pendingMessages.removeAll()
         for message in pending {
@@ -1398,13 +1663,38 @@ final class CallManager: ObservableObject {
         }
 
         guard let resolvedHostCid, !resolvedHostCid.isEmpty else { return nil }
-        return RoomState(hostCid: resolvedHostCid, participants: participants)
+        let maxParticipants = payload["maxParticipants"]?.intValue
+        return RoomState(hostCid: resolvedHostCid, participants: participants, maxParticipants: maxParticipants)
     }
 
-    private func refreshRemoteVideoEnabled() {
-        let enabled = webRtcEngine.isRemoteVideoTrackEnabled()
-        if uiState.remoteVideoEnabled != enabled {
-            updateState { $0.remoteVideoEnabled = enabled }
+    private func refreshRemoteParticipants() {
+        guard let roomState = currentRoomState else {
+            if uiState.remoteParticipants.isEmpty {
+                return
+            }
+            updateState {
+                $0.remoteParticipants = []
+            }
+            return
+        }
+
+        let participants = roomState.participants
+            .filter { $0.cid != clientId }
+            .map { participant in
+                let slot = peerSlots[participant.cid]
+                return RemoteParticipant(
+                    cid: participant.cid,
+                    videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
+                    connectionState: slot?.getConnectionState() ?? "NEW"
+                )
+            }
+
+        if uiState.remoteParticipants == participants {
+            return
+        }
+
+        updateState {
+            $0.remoteParticipants = participants
         }
     }
 
@@ -1414,7 +1704,7 @@ final class CallManager: ObservableObject {
         remoteVideoPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.refreshRemoteVideoEnabled()
+                self.refreshRemoteParticipants()
                 self.pollWebRtcStats()
             }
         }
@@ -1438,25 +1728,87 @@ final class CallManager: ObservableObject {
 
         webrtcStatsRequestInFlight = true
 
-        webRtcEngine.collectRealtimeCallStats { [weak self] realtimeStats in
-            Task { @MainActor in
-                guard let self else { return }
-                if self.uiState.realtimeStats != realtimeStats {
-                    self.updateState { $0.realtimeStats = realtimeStats }
+        let slots = Array(peerSlots.values)
+        guard !slots.isEmpty else {
+            webrtcStatsRequestInFlight = false
+            lastWebRtcStatsPollAtMs = now
+            if uiState.realtimeStats != .empty || uiState.webrtcStatsSummary != "pc=none" {
+                updateState {
+                    $0.realtimeStats = .empty
+                    $0.webrtcStatsSummary = "pc=none"
                 }
+            }
+            return
+        }
 
-                self.webRtcEngine.collectWebRtcStatsSummary { [weak self] summary in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        self.webrtcStatsRequestInFlight = false
-                        self.lastWebRtcStatsPollAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-                        if self.uiState.webrtcStatsSummary != summary {
-                            self.updateState { $0.webrtcStatsSummary = summary }
-                        }
-                    }
+        let group = DispatchGroup()
+        var stats: [RealtimeCallStats] = []
+        var summaries: [String] = []
+        let lock = NSLock()
+
+        for slot in slots {
+            group.enter()
+            slot.collectRealtimeCallStatsAndSummary { realtimeStats, summary in
+                lock.lock()
+                stats.append(realtimeStats)
+                summaries.append("\(slot.remoteCid):\(summary)")
+                lock.unlock()
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.webrtcStatsRequestInFlight = false
+            self.lastWebRtcStatsPollAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+
+            let mergedStats = self.mergeRealtimeStats(stats)
+            let mergedSummary = summaries.sorted().joined(separator: " | ")
+            if self.uiState.realtimeStats != mergedStats || self.uiState.webrtcStatsSummary != mergedSummary {
+                self.updateState {
+                    $0.realtimeStats = mergedStats
+                    $0.webrtcStatsSummary = mergedSummary
                 }
             }
         }
+    }
+
+    private func mergeRealtimeStats(_ stats: [RealtimeCallStats]) -> RealtimeCallStats {
+        guard !stats.isEmpty else { return .empty }
+        var merged = RealtimeCallStats.empty
+        merged.transportPath = Array(Set(stats.compactMap(\.transportPath))).sorted().joined(separator: " | ")
+        if merged.transportPath?.isEmpty == true {
+            merged.transportPath = nil
+        }
+        merged.rttMs = stats.compactMap(\.rttMs).max()
+        merged.availableOutgoingKbps = stats.compactMap(\.availableOutgoingKbps).min()
+        merged.audioRxPacketLossPct = stats.compactMap(\.audioRxPacketLossPct).max()
+        merged.audioTxPacketLossPct = stats.compactMap(\.audioTxPacketLossPct).max()
+        merged.audioJitterMs = stats.compactMap(\.audioJitterMs).max()
+        merged.audioPlayoutDelayMs = stats.compactMap(\.audioPlayoutDelayMs).max()
+        merged.audioConcealedPct = stats.compactMap(\.audioConcealedPct).max()
+        merged.audioRxKbps = sumNonNil(stats.compactMap(\.audioRxKbps))
+        merged.audioTxKbps = sumNonNil(stats.compactMap(\.audioTxKbps))
+        merged.videoRxPacketLossPct = stats.compactMap(\.videoRxPacketLossPct).max()
+        merged.videoTxPacketLossPct = stats.compactMap(\.videoTxPacketLossPct).max()
+        merged.videoRxKbps = sumNonNil(stats.compactMap(\.videoRxKbps))
+        merged.videoTxKbps = sumNonNil(stats.compactMap(\.videoTxKbps))
+        merged.videoFps = stats.compactMap(\.videoFps).min()
+        let resolutions = Array(Set(stats.compactMap(\.videoResolution))).sorted()
+        merged.videoResolution = resolutions.isEmpty ? nil : resolutions.joined(separator: " | ")
+        merged.videoFreezeCount60s = stats.compactMap(\.videoFreezeCount60s).reduce(0, +)
+        merged.videoFreezeDuration60s = sumNonNil(stats.compactMap(\.videoFreezeDuration60s))
+        merged.videoRetransmitPct = stats.compactMap(\.videoRetransmitPct).max()
+        merged.videoNackPerMin = sumNonNil(stats.compactMap(\.videoNackPerMin))
+        merged.videoPliPerMin = sumNonNil(stats.compactMap(\.videoPliPerMin))
+        merged.videoFirPerMin = sumNonNil(stats.compactMap(\.videoFirPerMin))
+        merged.updatedAtMs = stats.map(\.updatedAtMs).max() ?? 0
+        return merged
+    }
+
+    private func sumNonNil(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +)
     }
 
     private func cleanupCall(message: String) {
@@ -1468,7 +1820,7 @@ final class CallManager: ObservableObject {
             $0.phase = .ending
             $0.statusMessage = message
             $0.localVideoEnabled = false
-            $0.remoteVideoEnabled = false
+            $0.remoteParticipants = []
         }
 
         saveCurrentCallToHistoryIfNeeded()
@@ -1488,12 +1840,15 @@ final class CallManager: ObservableObject {
         stopRemoteVideoStatePolling()
 
         signalingClient.close()
+        peerSlots.values.forEach { $0.closePeerConnection() }
+        peerSlots.removeAll()
         webRtcEngine.release()
         deactivateAudioSession()
 
         currentRoomId = nil
         activeCallHostOverride = nil
         hostCid = nil
+        currentRoomState = nil
         clientId = nil
         callStartTimeMs = nil
 
@@ -1501,9 +1856,6 @@ final class CallManager: ObservableObject {
         pendingMessages.removeAll()
 
         reconnectAttempts = 0
-        sentOffer = false
-        isMakingOffer = false
-        pendingIceRestart = false
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -1512,7 +1864,6 @@ final class CallManager: ObservableObject {
         clearJoinRecovery()
         clearOfferTimeout()
         clearNonHostOfferFallback()
-        nonHostOfferFallbackAttempts = 0
         clearIceRestartTimer()
         clearConnectionStatusRetryingTimer()
         clearTurnRefresh()
@@ -2007,97 +2358,6 @@ final class CallManager: ObservableObject {
 
     private static func buildWebRtcEngine(isHdVideoExperimentalEnabled: Bool, eventSink: CallManager) -> WebRtcEngine {
         WebRtcEngine(
-            onLocalIceCandidate: { [weak eventSink] candidate in
-                Task { @MainActor in
-                    guard let eventSink else { return }
-                    let payload: JSONValue = .object([
-                        "candidate": .object([
-                            "candidate": .string(candidate.candidate),
-                            "sdpMid": candidate.sdpMid.map(JSONValue.string) ?? .null,
-                            "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
-                        ])
-                    ])
-                    eventSink.sendMessage(type: "ice", payload: payload)
-                }
-            },
-            onConnectionState: { [weak eventSink] state in
-                Task { @MainActor in
-                    guard let eventSink else { return }
-                    eventSink.updateState {
-                        $0.connectionState = state
-                        switch state {
-                        case "CONNECTED":
-                            $0.statusMessage = L10n.callStatusConnected
-                        case "CONNECTING":
-                            $0.statusMessage = L10n.callStatusConnecting
-                        case "DISCONNECTED":
-                            $0.statusMessage = L10n.callStatusDisconnected
-                        case "FAILED":
-                            $0.statusMessage = L10n.callStatusConnectionFailed
-                        case "CLOSED":
-                            $0.statusMessage = L10n.callStatusCallEnded
-                        default:
-                            break
-                        }
-                    }
-
-                    switch state {
-                    case "CONNECTED":
-                        eventSink.recoverFromJoiningIfNeeded(participantHint: nil, preferInCall: true)
-                        eventSink.clearIceRestartTimer()
-                        eventSink.pendingIceRestart = false
-                    case "DISCONNECTED":
-                        eventSink.scheduleIceRestart(reason: "conn-disconnected", delayMs: 2000)
-                    case "FAILED":
-                        eventSink.scheduleIceRestart(reason: "conn-failed", delayMs: 0)
-                    default:
-                        break
-                    }
-                    eventSink.updateConnectionStatusFromSignals()
-                }
-            },
-            onIceConnectionState: { [weak eventSink] state in
-                Task { @MainActor in
-                    guard let eventSink else { return }
-                    eventSink.updateState { $0.iceConnectionState = state }
-
-                    switch state {
-                    case "DISCONNECTED":
-                        eventSink.scheduleIceRestart(reason: "ice-disconnected", delayMs: 2000)
-                    case "FAILED":
-                        eventSink.scheduleIceRestart(reason: "ice-failed", delayMs: 0)
-                    case "CONNECTED", "COMPLETED":
-                        eventSink.clearIceRestartTimer()
-                        eventSink.pendingIceRestart = false
-                    default:
-                        break
-                    }
-                    eventSink.updateConnectionStatusFromSignals()
-                }
-            },
-            onSignalingState: { [weak eventSink] state in
-                Task { @MainActor in
-                    guard let eventSink else { return }
-                    if state == "STABLE" {
-                        eventSink.clearOfferTimeout()
-                        if eventSink.pendingIceRestart {
-                            eventSink.pendingIceRestart = false
-                            eventSink.triggerIceRestart(reason: "pending-retry")
-                        }
-                    }
-                    eventSink.updateState { $0.signalingState = state }
-                }
-            },
-            onRenegotiationNeededCallback: { [weak eventSink] in
-                Task { @MainActor in
-                    eventSink?.maybeSendOffer(force: true, iceRestart: false)
-                }
-            },
-            onRemoteVideoTrack: { [weak eventSink] _ in
-                Task { @MainActor in
-                    eventSink?.refreshRemoteVideoEnabled()
-                }
-            },
             onCameraFacingChanged: { [weak eventSink] isFront in
                 Task { @MainActor in
                     eventSink?.updateState { $0.isFrontCamera = isFront }
@@ -2186,7 +2446,7 @@ extension CallManager: SignalingClientListener {
 
         sendWatchRoomsIfNeeded()
 
-        if pendingIceRestart {
+        if uiState.phase == .inCall {
             triggerIceRestart(reason: "signaling-reconnect")
         }
     }

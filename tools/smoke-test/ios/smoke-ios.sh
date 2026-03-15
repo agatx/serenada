@@ -8,6 +8,8 @@
 #
 # Optional:
 #   IOS_UDID            — Device UDID (auto-detected if not set)
+#   SMOKE_IOS_TEST_CLASS — UI test class to run (default: DeepLinkRejoinFlowUITests)
+#   SMOKE_EXPECTED_PARTICIPANTS — forwarded to participant-count UI test
 
 set -euo pipefail
 
@@ -28,6 +30,7 @@ if [ -z "$XCCONFIG_PATH" ] && [ -f "$DEFAULT_LOCAL_XCCONFIG" ]; then
 fi
 TEAM_ID="${DEVELOPMENT_TEAM:-}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/connected-ios-smoke-build}"
+SMOKE_IOS_TEST_CLASS="${SMOKE_IOS_TEST_CLASS:-DeepLinkRejoinFlowUITests}"
 
 log_info "=== iOS Smoke Test ==="
 
@@ -61,7 +64,7 @@ XCODEBUILD_ARGS=(
     -project "$REPO_ROOT/client-ios/SerenadaiOS.xcodeproj"
     -scheme SerenadaiOS
     -destination "id=$UDID"
-    -only-testing:SerenadaiOSUITests/DeepLinkRejoinFlowUITests
+    "-only-testing:SerenadaiOSUITests/${SMOKE_IOS_TEST_CLASS}"
     -resultBundlePath "$ARTIFACTS_DIR/ios-smoke.xcresult"
     -derivedDataPath "$DERIVED_DATA_PATH"
     -allowProvisioningUpdates
@@ -81,10 +84,13 @@ fi
 
 # Run XCUITest on the physical device
 # Disable set -e around the pipeline so we can capture PIPESTATUS
-log_info "Running DeepLinkRejoinFlowUITests on device $UDID ..."
+log_info "Running ${SMOKE_IOS_TEST_CLASS} on device $UDID ..."
 set +e
 SERENADA_UI_TEST_REJOIN_DEEPLINK="$DEEP_LINK" \
 TEST_RUNNER_SERENADA_UI_TEST_REJOIN_DEEPLINK="$DEEP_LINK" \
+SERENADA_UI_TEST_PARTICIPANT_COUNT_DEEPLINK="$DEEP_LINK" \
+TEST_RUNNER_SERENADA_UI_TEST_PARTICIPANT_COUNT_DEEPLINK="$DEEP_LINK" \
+SERENADA_UI_TEST_EXPECTED_PARTICIPANTS="${SMOKE_EXPECTED_PARTICIPANTS:-3}" \
 xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tail -20
 EXIT_CODE=${PIPESTATUS[0]}
 set -e
