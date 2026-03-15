@@ -531,8 +531,12 @@ final class CallManager: ObservableObject {
 
     func endCall() {
         guard uiState.phase != .idle else { return }
-        debugTrace("ui endCall phase=\(uiState.phase.rawValue) room=\(currentRoomId ?? "-")")
-        sendMessage(type: "leave")
+        debugTrace("ui endCall phase=\(uiState.phase.rawValue) room=\(currentRoomId ?? "-") isHost=\(isHost())")
+        if isHost() {
+            sendMessage(type: "end_room")
+        } else {
+            sendMessage(type: "leave")
+        }
         cleanupCall(message: L10n.callStatusLeftRoom)
     }
 
@@ -1011,19 +1015,17 @@ final class CallManager: ObservableObject {
     }
 
     private func updateAggregatePeerState() {
-        let slots = Array(peerSlots.values)
-        let nextIceState = slots.min { lhs, rhs in
-            (Self.iceConnectionPriority[lhs.getIceConnectionState()] ?? .max) <
-                (Self.iceConnectionPriority[rhs.getIceConnectionState()] ?? .max)
-        }?.getIceConnectionState() ?? "NEW"
-        let nextConnectionState = slots.min { lhs, rhs in
-            (Self.connectionPriority[lhs.getConnectionState()] ?? .max) <
-                (Self.connectionPriority[rhs.getConnectionState()] ?? .max)
-        }?.getConnectionState() ?? "NEW"
-        let nextSignalingState = slots.min { lhs, rhs in
-            (Self.signalingPriority[lhs.getSignalingState()] ?? .max) <
-                (Self.signalingPriority[rhs.getSignalingState()] ?? .max)
-        }?.getSignalingState() ?? "STABLE"
+        var bestIcePri = Int.max, nextIceState = "NEW"
+        var bestConnPri = Int.max, nextConnectionState = "NEW"
+        var bestSigPri = Int.max, nextSignalingState = "STABLE"
+        for slot in peerSlots.values {
+            let icePri = Self.iceConnectionPriority[slot.getIceConnectionState()] ?? .max
+            if icePri < bestIcePri { bestIcePri = icePri; nextIceState = slot.getIceConnectionState() }
+            let connPri = Self.connectionPriority[slot.getConnectionState()] ?? .max
+            if connPri < bestConnPri { bestConnPri = connPri; nextConnectionState = slot.getConnectionState() }
+            let sigPri = Self.signalingPriority[slot.getSignalingState()] ?? .max
+            if sigPri < bestSigPri { bestSigPri = sigPri; nextSignalingState = slot.getSignalingState() }
+        }
 
         if uiState.iceConnectionState == nextIceState &&
             uiState.connectionState == nextConnectionState &&
@@ -1505,7 +1507,7 @@ final class CallManager: ObservableObject {
             return
         }
 
-        _ = reason
+        debugTrace("triggerIceRestart cid=\(remoteCid) reason=\(reason)")
         if slot.isMakingOffer {
             slot.pendingIceRestart = true
             return
@@ -1746,16 +1748,9 @@ final class CallManager: ObservableObject {
 
         for slot in slots {
             group.enter()
-            slot.collectRealtimeCallStats { realtimeStats in
+            slot.collectRealtimeCallStatsAndSummary { realtimeStats, summary in
                 lock.lock()
                 stats.append(realtimeStats)
-                lock.unlock()
-                group.leave()
-            }
-
-            group.enter()
-            slot.collectStatsSummary { summary in
-                lock.lock()
                 summaries.append("\(slot.remoteCid):\(summary)")
                 lock.unlock()
                 group.leave()

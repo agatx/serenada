@@ -1268,22 +1268,23 @@ class CallManager(context: Context) {
     }
 
     private fun updateAggregatePeerState() {
-        val slots = peerSlots.values.toList()
-        val nextIceState =
-            slots.minByOrNull { ICE_CONNECTION_PRIORITY[it.getIceConnectionState()] ?: Int.MAX_VALUE }
-                ?.getIceConnectionState()
-                ?.name
-                ?: "NEW"
-        val nextConnectionState =
-            slots.minByOrNull { CONNECTION_PRIORITY[it.getConnectionState()] ?: Int.MAX_VALUE }
-                ?.getConnectionState()
-                ?.name
-                ?: "NEW"
-        val nextSignalingState =
-            slots.minByOrNull { SIGNALING_PRIORITY[it.getSignalingState()] ?: Int.MAX_VALUE }
-                ?.getSignalingState()
-                ?.name
-                ?: "STABLE"
+        var bestIcePriority = Int.MAX_VALUE
+        var bestIceState = "NEW"
+        var bestConnPriority = Int.MAX_VALUE
+        var bestConnState = "NEW"
+        var bestSigPriority = Int.MAX_VALUE
+        var bestSigState = "STABLE"
+        for (slot in peerSlots.values) {
+            val icePri = ICE_CONNECTION_PRIORITY[slot.getIceConnectionState()] ?: Int.MAX_VALUE
+            if (icePri < bestIcePriority) { bestIcePriority = icePri; bestIceState = slot.getIceConnectionState().name }
+            val connPri = CONNECTION_PRIORITY[slot.getConnectionState()] ?: Int.MAX_VALUE
+            if (connPri < bestConnPriority) { bestConnPriority = connPri; bestConnState = slot.getConnectionState().name }
+            val sigPri = SIGNALING_PRIORITY[slot.getSignalingState()] ?: Int.MAX_VALUE
+            if (sigPri < bestSigPriority) { bestSigPriority = sigPri; bestSigState = slot.getSignalingState().name }
+        }
+        val nextIceState = bestIceState
+        val nextConnectionState = bestConnState
+        val nextSignalingState = bestSigState
         val state = _uiState.value
         if (
             state.iceConnectionState == nextIceState &&
@@ -1350,7 +1351,6 @@ class CallManager(context: Context) {
     }
 
     private fun updateParticipants(roomState: RoomState) {
-        currentRoomState = roomState
         val count = roomState.participants.size
         val isHostNow = clientId != null && clientId == roomState.hostCid
         val remotePeers = roomState.participants.filter { it.cid != clientId }

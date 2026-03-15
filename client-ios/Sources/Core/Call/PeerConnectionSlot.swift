@@ -435,17 +435,24 @@ final class PeerConnectionSlot {
 #endif
     }
 
-    func collectStatsSummary(onComplete: @escaping (String) -> Void) {
+    func collectRealtimeCallStatsAndSummary(
+        onComplete: @escaping (RealtimeCallStats, String) -> Void
+    ) {
 #if canImport(WebRTC)
         guard let peerConnection else {
-            onComplete("pc=none")
+            onComplete(.empty, "pc=none")
             return
         }
-        peerConnection.statistics { report in
-            onComplete("stats=\(report.statistics.count)")
+        peerConnection.statistics { [weak self] report in
+            let summary = "stats=\(report.statistics.count)"
+            guard let self else {
+                onComplete(.empty, summary)
+                return
+            }
+            onComplete(self.buildRealtimeCallStats(report), summary)
         }
 #else
-        onComplete("pc=stub")
+        onComplete(.empty, "pc=stub")
 #endif
     }
 
