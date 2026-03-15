@@ -222,84 +222,6 @@ class CallManager(context: Context) {
     private fun buildWebRtcEngine(): WebRtcEngine {
         return WebRtcEngine(
             context = appContext,
-            onLocalIceCandidate = { candidate ->
-                val payload = JSONObject().apply {
-                    val candidateJson = JSONObject()
-                    candidateJson.put("candidate", candidate.sdp)
-                    candidateJson.put("sdpMid", candidate.sdpMid)
-                    candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
-                    put("candidate", candidateJson)
-                }
-                sendMessage("ice", payload)
-            },
-            onConnectionState = { state ->
-                handler.post {
-                    val messageResId = when (state) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> R.string.call_status_connected
-                        PeerConnection.PeerConnectionState.CONNECTING -> R.string.call_status_connecting
-                        PeerConnection.PeerConnectionState.DISCONNECTED -> R.string.call_status_disconnected
-                        PeerConnection.PeerConnectionState.FAILED -> R.string.call_status_connection_failed
-                        PeerConnection.PeerConnectionState.CLOSED -> R.string.call_status_call_ended
-                        else -> null
-                    }
-                    updateState(
-                        _uiState.value.copy(
-                            statusMessageResId = messageResId,
-                            connectionState = state.name
-                        )
-                    )
-                    when (state) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> {
-                            clearIceRestartTimer()
-                        }
-
-                        PeerConnection.PeerConnectionState.DISCONNECTED -> scheduleIceRestart(
-                            "conn-disconnected",
-                            2000
-                        )
-
-                        PeerConnection.PeerConnectionState.FAILED -> scheduleIceRestart("conn-failed", 0)
-                        else -> {}
-                    }
-                    updateConnectionStatusFromSignals()
-                }
-            },
-            onIceConnectionState = { state ->
-                handler.post {
-                    updateState(_uiState.value.copy(iceConnectionState = state.name))
-                    when (state) {
-                        PeerConnection.IceConnectionState.DISCONNECTED -> scheduleIceRestart(
-                            "ice-disconnected",
-                            2000
-                        )
-
-                        PeerConnection.IceConnectionState.FAILED -> scheduleIceRestart("ice-failed", 0)
-                        PeerConnection.IceConnectionState.CONNECTED,
-                        PeerConnection.IceConnectionState.COMPLETED -> {
-                            clearIceRestartTimer()
-                        }
-
-                        else -> {}
-                    }
-                    updateConnectionStatusFromSignals()
-                }
-            },
-            onSignalingState = { state ->
-                handler.post {
-                    if (state == PeerConnection.SignalingState.STABLE) {
-                        clearOfferTimeout()
-                    }
-                    updateState(_uiState.value.copy(signalingState = state.name))
-                }
-            },
-            onRenegotiationNeededCallback = {
-                handler.post { maybeSendOffer(force = true, iceRestart = false) }
-            },
-            onRemoteVideoTrack = { _ ->
-                handler.post {
-                    refreshRemoteParticipants()
-                }
-            },
             onCameraFacingChanged = { isFront ->
                 handler.post {
                     updateState(_uiState.value.copy(isFrontCamera = isFront))
@@ -1252,7 +1174,7 @@ class CallManager(context: Context) {
         return peerSlots.getOrPut(remoteCid) {
             webRtcEngine.createSlot(
                 remoteCid = remoteCid,
-                onLocalIceCandidate = { cid, candidate ->
+                onLocalIceCandidate = { cid: String, candidate: IceCandidate ->
                     val payload = JSONObject().apply {
                         val candidateJson = JSONObject()
                         candidateJson.put("candidate", candidate.sdp)
