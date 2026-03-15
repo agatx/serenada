@@ -8,6 +8,17 @@ import QRCode from 'react-qr-code';
 import { saveCall } from '../utils/callHistory';
 import { useTranslation } from 'react-i18next';
 import { playJoinChime } from '../utils/audio';
+import {
+    computeStageLayout,
+    clampStageTileAspectRatio,
+    MIN_STAGE_TILE_ASPECT,
+    MAX_STAGE_TILE_ASPECT,
+    DEFAULT_STAGE_TILE_ASPECT,
+    STAGE_TILE_GAP_PX,
+    type StageTileSpec,
+    type StageTileLayout,
+    type StageRowLayout,
+} from '../layout/computeLayout';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 import { getPersistedRemoteVideoFit, persistRemoteVideoFit, type RemoteVideoFit } from '../utils/remoteVideoFit';
 import { saveRoom, markRoomJoined, type SaveRoomResult } from '../utils/savedRooms';
@@ -191,33 +202,9 @@ async function captureSnapshotBytes(stream: MediaStream): Promise<{ bytes: Uint8
     return { bytes: new Uint8Array(buffer), mime: 'image/jpeg' };
 }
 
-const MIN_STAGE_TILE_ASPECT = 9 / 16;
-const MAX_STAGE_TILE_ASPECT = 16 / 9;
-const DEFAULT_STAGE_TILE_ASPECT = 16 / 9;
-const STAGE_TILE_GAP_PX = 12;
-
-type StageTileSpec = {
-    cid: string;
+type StageTileSpecWithStream = StageTileSpec & {
     stream: MediaStream;
-    aspectRatio: number;
 };
-
-type StageTileLayout = {
-    cid: string;
-    width: number;
-    height: number;
-};
-
-type StageRowLayout = {
-    items: StageTileLayout[];
-};
-
-function clampStageTileAspectRatio(ratio?: number | null): number {
-    if (!ratio || !Number.isFinite(ratio) || ratio <= 0) {
-        return DEFAULT_STAGE_TILE_ASPECT;
-    }
-    return Math.min(MAX_STAGE_TILE_ASPECT, Math.max(MIN_STAGE_TILE_ASPECT, ratio));
-}
 
 function getStreamAspectRatio(stream: MediaStream): number | null {
     const track = stream.getVideoTracks()[0];
@@ -231,95 +218,6 @@ function getStreamAspectRatio(stream: MediaStream): number | null {
         return settings.width / settings.height;
     }
     return null;
-}
-
-function computeStageLayout(tiles: StageTileSpec[], availableWidth: number, availableHeight: number, gap: number): StageRowLayout[] {
-    if (tiles.length === 0 || availableWidth <= 0 || availableHeight <= 0) {
-        return [];
-    }
-
-    const candidateRows: number[][][] = tiles.length === 1
-        ? [[[0]]]
-        : tiles.length === 2
-            ? [[[0, 1]], [[0], [1]]]
-            : [[[0, 1, 2]], [[0, 1], [2]], [[0], [1, 2]], [[0], [1], [2]]];
-
-    let bestLayout: StageRowLayout[] = [];
-    let bestHarmonicShortEdge = -1;
-    let bestMinShortEdge = -1;
-    let bestArea = -1;
-    let bestRowCount = Number.POSITIVE_INFINITY;
-
-    for (const rows of candidateRows) {
-        const baseHeights = rows.map((row) => {
-            const totalAspect = row.reduce((sum, index) => sum + tiles[index].aspectRatio, 0);
-            const rowWidth = availableWidth - gap * Math.max(0, row.length - 1);
-            return rowWidth > 0 && totalAspect > 0 ? rowWidth / totalAspect : 0;
-        });
-
-        const verticalGap = gap * Math.max(0, rows.length - 1);
-        const totalBaseHeight = baseHeights.reduce((sum, value) => sum + value, 0);
-        if (totalBaseHeight <= 0 || availableHeight <= verticalGap) {
-            continue;
-        }
-
-        const scale = Math.min(1, (availableHeight - verticalGap) / totalBaseHeight);
-        if (scale <= 0) {
-            continue;
-        }
-
-        const layout = rows.map((row, rowIndex) => {
-            const rowHeight = Math.max(1, Math.floor(baseHeights[rowIndex] * scale));
-            const items = row.map((index) => {
-                const tile = tiles[index];
-                return {
-                    cid: tile.cid,
-                    width: Math.max(1, Math.floor(tile.aspectRatio * rowHeight)),
-                    height: rowHeight
-                };
-            });
-            return { items };
-        });
-
-        const area = layout.reduce((sum, row) => (
-            sum + row.items.reduce((rowArea, tile) => rowArea + tile.width * tile.height, 0)
-        ), 0);
-        const shortEdges = layout.flatMap((row) => row.items.map((tile) => Math.min(tile.width, tile.height)));
-        const minShortEdge = shortEdges.reduce((currentMin, shortEdge) => Math.min(currentMin, shortEdge), Number.POSITIVE_INFINITY);
-        const harmonicShortEdge = shortEdges.length / shortEdges.reduce((sum, shortEdge) => sum + (1 / shortEdge), 0);
-        const rowCount = layout.length;
-
-        const shortEdgeGainIsMeaningful = harmonicShortEdge > bestHarmonicShortEdge + 6;
-        const shortEdgeIsComparable = Math.abs(harmonicShortEdge - bestHarmonicShortEdge) <= 6;
-        const minShortEdgeImproved = minShortEdge > bestMinShortEdge + 1;
-        const minShortEdgeComparable = Math.abs(minShortEdge - bestMinShortEdge) <= 1;
-
-        if (
-            shortEdgeGainIsMeaningful ||
-            (
-                shortEdgeIsComparable && (
-                    rowCount < bestRowCount ||
-                    (rowCount === bestRowCount && (
-                        minShortEdgeImproved ||
-                        (minShortEdgeComparable && area > bestArea)
-                    ))
-                )
-            ) ||
-            (
-                !shortEdgeIsComparable &&
-                harmonicShortEdge > bestHarmonicShortEdge &&
-                minShortEdgeImproved
-            )
-        ) {
-            bestHarmonicShortEdge = harmonicShortEdge;
-            bestMinShortEdge = minShortEdge;
-            bestArea = area;
-            bestRowCount = rowCount;
-            bestLayout = layout;
-        }
-    }
-
-    return bestLayout;
 }
 
 // Multi-party remote tile (defined outside component to avoid remounts)
