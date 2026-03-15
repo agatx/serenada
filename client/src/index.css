@@ -347,7 +347,7 @@ body {
 .video-stage-pin-indicator {
   position: absolute;
   top: 8px;
-  right: 8px;
+  left: 8px;
   color: white;
   background: rgba(0, 0, 0, 0.56);
   padding: 4px;

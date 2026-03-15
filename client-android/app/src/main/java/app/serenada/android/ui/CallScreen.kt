@@ -1471,7 +1471,7 @@ private fun MultiPartyStage(
                             if (tile.id == pinnedParticipantId) {
                                 Box(
                                     modifier = Modifier
-                                        .align(Alignment.TopEnd)
+                                        .align(Alignment.TopStart)
                                         .padding(8.dp)
                                         .background(
                                             Color.Black.copy(alpha = 0.56f),

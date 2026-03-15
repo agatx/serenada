@@ -253,7 +253,7 @@ const VideoTile: React.FC<{
     }, [onAspectRatioChange, stream]);
 
     return (
-        <div className="video-stage-tile" style={tileStyle} onClick={onClick}>
+        <div className="video-stage-tile" style={tileStyle} onPointerUp={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}>
             <video ref={videoRef} autoPlay playsInline className="video-stage-remote" style={videoFit ? { objectFit: videoFit } : undefined} />
             {label && <div className="video-grid-label">{label}</div>}
             {pinned && <div className="video-stage-pin-indicator"><Pin size={16} /></div>}
@@ -650,6 +650,7 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         return subscribeToMessages((msg: any) => {
             if (msg.type === 'content_state' && msg.payload?.from) {
+                console.log('[CallRoom] content_state received:', msg.payload);
                 if (msg.payload.active && msg.payload.contentType) {
                     setRemoteContentState({ cid: msg.payload.from, contentType: msg.payload.contentType });
                 } else {
@@ -1244,8 +1245,8 @@ const CallRoom: React.FC = () => {
                                     const contentOwnerCid = contentSource?.ownerParticipantId;
                                     const isLocalContent = isContentTile && contentOwnerCid === clientId;
                                     const isRemoteContent = isContentTile && contentOwnerCid !== clientId;
-                                    // Local participant tile in content mode: camera replaced, show placeholder
-                                    const isLocalPlaceholder = isLocal && contentSource !== null && !isContentTile;
+                                    // Local participant tile when LOCAL user owns content: camera replaced, show placeholder
+                                    const isLocalPlaceholder = isLocal && contentOwnerCid === clientId && !isContentTile;
                                     // Resolve the stream for this tile
                                     const stream = isLocalContent || isLocal
                                         ? localStream

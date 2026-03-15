@@ -911,7 +911,6 @@ private struct MultiPartyStage: View {
                             if let pinned = pinnedParticipantId, tile.id == pinned {
                                 VStack {
                                     HStack {
-                                        Spacer()
                                         Image(systemName: "pin.fill")
                                             .font(.system(size: 12, weight: .semibold))
                                             .foregroundStyle(.white)
@@ -919,6 +918,7 @@ private struct MultiPartyStage: View {
                                             .background(Color.black.opacity(0.56))
                                             .clipShape(RoundedRectangle(cornerRadius: 6))
                                             .padding(8)
+                                        Spacer()
                                     }
                                     Spacer()
                                 }

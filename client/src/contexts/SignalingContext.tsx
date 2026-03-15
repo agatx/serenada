@@ -563,12 +563,12 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         sendMessage('watch_rooms', { rids });
     }, [sendMessage]);
 
-    const subscribeToMessages = (cb: (msg: SignalingMessage) => void) => {
+    const subscribeToMessages = useCallback((cb: (msg: SignalingMessage) => void) => {
         listenersRef.current.push(cb);
         return () => {
             listenersRef.current = listenersRef.current.filter(l => l !== cb);
         };
-    };
+    }, []);
 
     return (
         <SignalingContext.Provider value={{
