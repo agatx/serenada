@@ -66,7 +66,7 @@
 
     <string name="join_enter_code_or_link">Introduce un código o enlace</string>
     <string name="join_settings">Ajustes</string>
-    <string name="join_subtitle">Videollamadas privadas 1:1, sin cuentas.</string>
+    <string name="join_subtitle">Videollamadas privadas, sin cuentas.</string>
     <string name="join_start_call">Iniciar llamada</string>
     <string name="recent_calls_title">Tus llamadas recientes</string>
     <string name="recent_calls_at">a las</string>

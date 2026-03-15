@@ -66,7 +66,7 @@
 
     <string name="join_enter_code_or_link">Saisir un code ou un lien</string>
     <string name="join_settings">Paramètres</string>
-    <string name="join_subtitle">Appels vidéo privés 1:1, sans compte.</string>
+    <string name="join_subtitle">Appels vidéo privés, sans compte.</string>
     <string name="join_start_call">Démarrer l\'appel</string>
     <string name="join_with_code_title">Rejoindre avec un code</string>
     <string name="join_with_code_action">Rejoindre</string>

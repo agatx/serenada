@@ -66,7 +66,7 @@
 
     <string name="join_enter_code_or_link">Введите код или ссылку</string>
     <string name="join_settings">Настройки</string>
-    <string name="join_subtitle">Приватные видеозвонки 1:1 без аккаунтов.</string>
+    <string name="join_subtitle">Приватные видеозвонки без аккаунтов.</string>
     <string name="join_start_call">Начать звонок</string>
     <string name="recent_calls_title">Ваши недавние звонки</string>
     <string name="recent_calls_at">в</string>

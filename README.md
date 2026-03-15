@@ -1,12 +1,12 @@
 # Serenada
 
-A simple, privacy-focused video calling application built with WebRTC. No accounts, no tracking, just instant calls that start as familiar 1:1 rooms and expand to up to 4 participants when more people join.
+A simple, privacy-focused video calling application built with WebRTC. No accounts, no tracking, just instant calls with up to 4 participants.
 
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 
 ## Features
 
-- **Instant calls** – One tap to start, share a link to connect, stay in the 1:1 layout until participant `#3` joins
+- **Instant calls** – One tap to start, share a link to connect
 - **No accounts required** – Just open and call
 - **Privacy-first** – No tracking, no analytics, end-to-end encrypted peer-to-peer video
 - **Resilient signaling** – WebSocket with SSE fallback when WS is blocked
