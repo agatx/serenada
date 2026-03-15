@@ -79,6 +79,9 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.serenada.android.R
+import app.serenada.android.call.RoomStatus
+import app.serenada.android.call.RoomStatusIndicatorState
+import app.serenada.android.call.RoomStatuses
 import app.serenada.android.data.RecentCall
 import app.serenada.android.data.SavedRoom
 import app.serenada.android.data.SettingsStore
@@ -100,7 +103,7 @@ fun JoinScreen(
     recentCalls: List<RecentCall>,
     savedRooms: List<SavedRoom>,
     areSavedRoomsShownFirst: Boolean,
-    roomStatuses: Map<String, Int>,
+    roomStatuses: Map<String, RoomStatus>,
     serverHost: String,
     onOpenJoinWithCode: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -418,7 +421,7 @@ fun JoinScreen(
 @Composable
 private fun RecentCallsSection(
     calls: List<RecentCall>,
-    roomStatuses: Map<String, Int>,
+    roomStatuses: Map<String, RoomStatus>,
     serverHost: String,
     savedRoomNameById: Map<String, String>,
     removingRoomIds: Set<String>,
@@ -463,7 +466,7 @@ private fun RecentCallsSection(
                         .testTag("join.recentCall.${call.roomId}")) {
                         RecentCallRow(
                             call = call,
-                            count = roomStatuses[call.roomId] ?: 0,
+                            status = roomStatuses[call.roomId],
                             enabled = !isBusy && !isRemoving,
                             atText = atText,
                             savedRoomName = savedRoomNameById[call.roomId],
@@ -488,7 +491,7 @@ private fun RecentCallsSection(
 @Composable
 private fun SavedRoomsSection(
     rooms: List<SavedRoom>,
-    roomStatuses: Map<String, Int>,
+    roomStatuses: Map<String, RoomStatus>,
     serverHost: String,
     removingRoomIds: Set<String>,
     isBusy: Boolean,
@@ -550,7 +553,7 @@ private fun SavedRoomsSection(
                                     neverJoinedLabel = neverJoinedLabel
                                 ),
                                 hostLabel = room.host?.takeUnless { it.equals(serverHost, ignoreCase = true) },
-                                count = roomStatuses[room.roomId] ?: 0,
+                                status = roomStatuses[room.roomId],
                                 enabled = !isBusy && !isRemoving,
                                 onClick = { onJoinSavedRoom(room) },
                                 onRename = { onRenameSavedRoom(room.roomId) },
@@ -575,7 +578,7 @@ private fun SavedRoomsSection(
 @Composable
 private fun RecentCallRow(
     call: RecentCall,
-    count: Int,
+    status: RoomStatus?,
     enabled: Boolean,
     atText: String,
     savedRoomName: String?,
@@ -635,9 +638,9 @@ private fun RecentCallRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (count > 0) {
+                if (RoomStatuses.indicatorState(status) != RoomStatusIndicatorState.Hidden) {
                     Spacer(modifier = Modifier.width(10.dp))
-                    StatusDot(count = count)
+                    StatusDot(status = status)
                 }
             }
         }
@@ -700,7 +703,7 @@ private fun SavedRoomRow(
     room: SavedRoom,
     detailsText: String,
     hostLabel: String?,
-    count: Int,
+    status: RoomStatus?,
     enabled: Boolean,
     onClick: () -> Unit,
     onRename: () -> Unit,
@@ -746,8 +749,8 @@ private fun SavedRoomRow(
                 }
             }
             Spacer(modifier = Modifier.width(12.dp))
-            if (count > 0) {
-                StatusDot(count = count)
+            if (RoomStatuses.indicatorState(status) != RoomStatusIndicatorState.Hidden) {
+                StatusDot(status = status)
             }
         }
 
@@ -950,9 +953,13 @@ private fun CreateRoomDialog(
 }
 
 @Composable
-private fun StatusDot(count: Int) {
-    if (count < 1) return
-    val color = if (count == 1) Color(0xFF3FB950) else Color(0xFFD29922)
+private fun StatusDot(status: RoomStatus?) {
+    val color =
+        when (RoomStatuses.indicatorState(status)) {
+            RoomStatusIndicatorState.Hidden -> return
+            RoomStatusIndicatorState.Waiting -> Color(0xFF3FB950)
+            RoomStatusIndicatorState.Full -> Color(0xFFD29922)
+        }
     Box(
         modifier = Modifier
             .size(8.dp)

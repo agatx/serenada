@@ -88,7 +88,7 @@ final class CallManager: ObservableObject {
     @Published private(set) var appVersion: String
     @Published private(set) var recentCalls: [RecentCall] = []
     @Published private(set) var savedRooms: [SavedRoom] = []
-    @Published private(set) var roomStatuses: [String: Int] = [:]
+    @Published private(set) var roomStatuses: [String: RoomStatus] = [:]
 
     var locale: Locale {
         if selectedLanguage == AppConstants.languageAuto {
@@ -2048,7 +2048,7 @@ final class CallManager: ObservableObject {
                 return
             }
 
-            let occupancyHint = self.roomStatuses[roomId]
+            let occupancyHint = self.roomStatuses[roomId]?.count
             self.recoverFromJoiningIfNeeded(participantHint: occupancyHint)
         }
     }

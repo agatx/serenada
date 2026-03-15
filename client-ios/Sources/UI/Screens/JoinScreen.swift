@@ -6,7 +6,7 @@ struct JoinScreen: View {
     let recentCalls: [RecentCall]
     let savedRooms: [SavedRoom]
     let areSavedRoomsShownFirst: Bool
-    let roomStatuses: [String: Int]
+    let roomStatuses: [String: RoomStatus]
     let serverHost: String
     let onOpenJoinWithCode: () -> Void
     let onOpenSettings: () -> Void
@@ -206,7 +206,7 @@ struct JoinScreen: View {
 
 private struct RecentCallsSection: View {
     let calls: [RecentCall]
-    let roomStatuses: [String: Int]
+    let roomStatuses: [String: RoomStatus]
     let serverHost: String
     let savedRoomNameById: [String: String]
     let isBusy: Bool
@@ -262,7 +262,7 @@ private struct RecentCallsSection: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
 
-                                StatusDot(count: roomStatuses[call.roomId] ?? 0)
+                                StatusDot(status: roomStatuses[call.roomId])
                             }
                         }
                         .padding(.horizontal, 14)
@@ -327,7 +327,7 @@ private struct RecentCallsSection: View {
 
 private struct SavedRoomsSection: View {
     let rooms: [SavedRoom]
-    let roomStatuses: [String: Int]
+    let roomStatuses: [String: RoomStatus]
     let serverHost: String
     let isBusy: Bool
     let onCreate: () -> Void
@@ -377,7 +377,7 @@ private struct SavedRoomsSection: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             Spacer()
 
-                            StatusDot(count: roomStatuses[room.roomId] ?? 0)
+                            StatusDot(status: roomStatuses[room.roomId])
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 16)
@@ -583,23 +583,20 @@ private func buildSavedRoomShareLink(for room: SavedRoom) -> String {
 }
 
 private struct StatusDot: View {
-    let count: Int
-
-    private var dotColor: Color {
-        if count == 1 {
-            return Color(UIColor.systemGreen)
-        }
-        if count >= 2 {
-            return Color(UIColor.systemOrange)
-        }
-        return .clear
-    }
+    let status: RoomStatus?
 
     var body: some View {
         Group {
-            if count >= 1 {
+            switch RoomStatuses.indicatorState(for: status) {
+            case .hidden:
+                EmptyView()
+            case .waiting:
                 Circle()
-                    .fill(dotColor)
+                    .fill(Color(UIColor.systemGreen))
+                    .frame(width: 8, height: 8)
+            case .full:
+                Circle()
+                    .fill(Color(UIColor.systemOrange))
                     .frame(width: 8, height: 8)
             }
         }

@@ -122,8 +122,8 @@ class CallManager(context: Context) {
         mutableStateOf(settingsStore.areRoomInviteNotificationsEnabled)
     val areRoomInviteNotificationsEnabled: State<Boolean> = _areRoomInviteNotificationsEnabled
 
-    private val _roomStatuses = mutableStateOf<Map<String, Int>>(emptyMap())
-    val roomStatuses: State<Map<String, Int>> = _roomStatuses
+    private val _roomStatuses = mutableStateOf<Map<String, RoomStatus>>(emptyMap())
+    val roomStatuses: State<Map<String, RoomStatus>> = _roomStatuses
 
     private var currentRoomId: String? = null
     private var activeCallHostOverride: String? = null
@@ -1116,24 +1116,16 @@ class CallManager(context: Context) {
             return
         }
 
-        val statuses = mutableMapOf<String, Int>()
-        val keys = payload.keys()
-        while (keys.hasNext()) {
-            val rid = keys.next()
-            if (!watched.contains(rid)) continue
-            statuses[rid] = payload.optInt(rid, 0).coerceAtLeast(0)
-        }
-        _roomStatuses.value = statuses
+        _roomStatuses.value = RoomStatuses
+            .mergeStatusesPayload(previous = _roomStatuses.value, payload = payload)
+            .filterKeys { watched.contains(it) }
     }
 
     private fun handleRoomStatusUpdate(msg: SignalingMessage) {
         val payload = msg.payload ?: return
         val rid = payload.optString("rid").orEmpty()
         if (!watchedRoomIds.contains(rid)) return
-        val count = payload.optInt("count", 0).coerceAtLeast(0)
-        _roomStatuses.value = _roomStatuses.value.toMutableMap().apply {
-            this[rid] = count
-        }
+        _roomStatuses.value = RoomStatuses.mergeStatusUpdatePayload(previous = _roomStatuses.value, payload = payload)
     }
 
     private fun handleError(msg: SignalingMessage) {
