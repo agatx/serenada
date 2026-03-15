@@ -164,21 +164,26 @@ private enum LayoutConstants {
     static let thumbnailMinSize: [DeviceGroup: CGFloat] = [.phone: 72, .tablet: 96, .desktop: 120]
 }
 
-// MARK: - Private helper types
+// MARK: - Stage layout types (used by UI for row-based grid rendering)
 
-private struct StageTileSpec {
+struct StageTileSpec {
     let cid: String
     let aspectRatio: CGFloat
 }
 
-private struct StageTileLayout {
+struct StageTileLayout: Identifiable {
     let cid: String
     let width: CGFloat
     let height: CGFloat
+
+    var id: String { cid }
 }
 
-private struct StageRowLayout {
+struct StageRowLayout: Identifiable {
     let items: [StageTileLayout]
+    let index: Int
+
+    var id: Int { index }
 }
 
 // MARK: - Private helpers
@@ -198,7 +203,7 @@ private func deriveMode(_ scene: CallScene) -> LayoutMode {
     return .grid
 }
 
-private func clampStageTileAspectRatio(_ ratio: CGFloat?) -> CGFloat {
+func clampStageTileAspectRatio(_ ratio: CGFloat?) -> CGFloat {
     guard let ratio, ratio.isFinite, ratio > 0 else {
         return LayoutConstants.defaultTileAspect
     }
@@ -207,7 +212,7 @@ private func clampStageTileAspectRatio(_ ratio: CGFloat?) -> CGFloat {
 
 // MARK: - Grid algorithm (harmonic-mean best-fit)
 
-private func computeStageLayout(
+func computeStageLayout(
     tiles: [StageTileSpec],
     availableWidth: CGFloat,
     availableHeight: CGFloat,
@@ -262,7 +267,8 @@ private func computeStageLayout(
                         width: max(1, floor(tile.aspectRatio * rowHeight)),
                         height: rowHeight
                     )
-                }
+                },
+                index: rowIndex
             )
         }
 
@@ -378,6 +384,116 @@ private func computePip(
     )
 }
 
+// MARK: - Focus / Content: primary + filmstrip layout
+
+private func computePrimaryWithFilmstrip(
+    primaryId: String,
+    primaryType: OccupantType,
+    primaryFit: FitMode,
+    filmstripParticipants: [SceneParticipant],
+    areaX: CGFloat,
+    areaY: CGFloat,
+    areaWidth: CGFloat,
+    areaHeight: CGFloat,
+    gap: CGFloat,
+    cornerRadius: CGFloat,
+    group: DeviceGroup
+) -> [TileLayout] {
+    let isLandscape = areaWidth > areaHeight
+    let thumbnailMin = LayoutConstants.thumbnailMinSize[group]!
+    let filmstripCount = filmstripParticipants.count
+
+    var primaryRatio = LayoutConstants.primaryRatio
+    if filmstripCount > 0 {
+        if isLandscape {
+            let secondaryWidth = areaWidth * (1 - primaryRatio)
+            let tileHeight = (areaHeight - gap * CGFloat(max(0, filmstripCount - 1))) / CGFloat(filmstripCount)
+            if tileHeight < thumbnailMin || secondaryWidth < thumbnailMin {
+                let ratioFromHeight = (thumbnailMin * CGFloat(filmstripCount) + gap * CGFloat(max(0, filmstripCount - 1))) > areaHeight ? 0.5 : primaryRatio
+                let ratioFromWidth = 1 - thumbnailMin / areaWidth
+                primaryRatio = max(0.5, min(primaryRatio, min(ratioFromHeight, ratioFromWidth)))
+            }
+        } else {
+            let secondaryHeight = areaHeight * (1 - primaryRatio)
+            let tileWidth = (areaWidth - gap * CGFloat(max(0, filmstripCount - 1))) / CGFloat(filmstripCount)
+            if tileWidth < thumbnailMin || secondaryHeight < thumbnailMin {
+                let ratioFromWidth = (thumbnailMin * CGFloat(filmstripCount) + gap * CGFloat(max(0, filmstripCount - 1))) > areaWidth ? 0.5 : primaryRatio
+                let ratioFromHeight = 1 - thumbnailMin / areaHeight
+                primaryRatio = max(0.5, min(primaryRatio, min(ratioFromWidth, ratioFromHeight)))
+            }
+        }
+    }
+
+    var tiles: [TileLayout] = []
+
+    if isLandscape {
+        let primaryWidth = areaWidth * primaryRatio - gap / 2
+        let secondaryWidth = areaWidth - primaryWidth - gap
+
+        tiles.append(TileLayout(
+            id: primaryId, type: primaryType,
+            frame: LayoutRect(x: areaX, y: areaY, width: primaryWidth, height: areaHeight),
+            fit: primaryFit, cornerRadius: cornerRadius, zOrder: 0
+        ))
+
+        if filmstripCount > 0 {
+            let stripX = areaX + primaryWidth + gap
+            let tileHeight = (areaHeight - gap * CGFloat(max(0, filmstripCount - 1))) / CGFloat(filmstripCount)
+            for (i, p) in filmstripParticipants.enumerated() {
+                tiles.append(TileLayout(
+                    id: p.id, type: .participant,
+                    frame: LayoutRect(
+                        x: stripX,
+                        y: areaY + CGFloat(i) * (tileHeight + gap),
+                        width: secondaryWidth,
+                        height: tileHeight
+                    ),
+                    fit: .cover, cornerRadius: cornerRadius, zOrder: i + 1
+                ))
+            }
+        }
+    } else {
+        let primaryHeight = areaHeight * primaryRatio - gap / 2
+        let secondaryHeight = areaHeight - primaryHeight - gap
+
+        tiles.append(TileLayout(
+            id: primaryId, type: primaryType,
+            frame: LayoutRect(x: areaX, y: areaY, width: areaWidth, height: primaryHeight),
+            fit: primaryFit, cornerRadius: cornerRadius, zOrder: 0
+        ))
+
+        if filmstripCount > 0 {
+            let stripY = areaY + primaryHeight + gap
+            let tileWidth = (areaWidth - gap * CGFloat(max(0, filmstripCount - 1))) / CGFloat(filmstripCount)
+            for (i, p) in filmstripParticipants.enumerated() {
+                tiles.append(TileLayout(
+                    id: p.id, type: .participant,
+                    frame: LayoutRect(
+                        x: areaX + CGFloat(i) * (tileWidth + gap),
+                        y: stripY,
+                        width: tileWidth,
+                        height: secondaryHeight
+                    ),
+                    fit: .cover, cornerRadius: cornerRadius, zOrder: i + 1
+                ))
+            }
+        }
+    }
+
+    return tiles
+}
+
+// MARK: - Stable participant ordering
+
+private func participantsStableOrder(
+    _ participants: [SceneParticipant],
+    localParticipantId: String
+) -> [SceneParticipant] {
+    let remotes = participants.filter { $0.id != localParticipantId }
+    let local = participants.filter { $0.id == localParticipantId }
+    return remotes + local
+}
+
 // MARK: - Main entry point
 
 func computeLayout(scene: CallScene) -> LayoutResult {
@@ -387,127 +503,124 @@ func computeLayout(scene: CallScene) -> LayoutResult {
     let outerPadding = LayoutConstants.outerPadding[group]!
     let cornerRadius = LayoutConstants.cornerRadius[group]!
 
-    // Available area after safe-area insets
     let availableX = scene.safeAreaInsets.left
     let availableY = scene.safeAreaInsets.top
-    let availableWidth =
-        scene.viewportWidth - scene.safeAreaInsets.left - scene.safeAreaInsets.right
-    let availableHeight =
-        scene.viewportHeight - scene.safeAreaInsets.top - scene.safeAreaInsets.bottom
+    let availableWidth = scene.viewportWidth - scene.safeAreaInsets.left - scene.safeAreaInsets.right
+    let availableHeight = scene.viewportHeight - scene.safeAreaInsets.top - scene.safeAreaInsets.bottom
+
+    let paddedX = availableX + outerPadding
+    let paddedY = availableY + outerPadding
+    let paddedWidth = availableWidth - outerPadding * 2
+    let paddedHeight = availableHeight - outerPadding * 2
 
     let localParticipant = scene.participants.first { $0.id == scene.localParticipantId }
 
     switch mode {
 
-    // ----- solo: no remote tiles, local shown as PIP ---------------------------
     case .solo:
         return LayoutResult(
-            mode: mode,
-            tiles: [],
+            mode: mode, tiles: [],
             localPip: localParticipant.map {
-                computePip(
-                    participantId: $0.id,
-                    viewportWidth: scene.viewportWidth,
-                    viewportHeight: scene.viewportHeight,
-                    group: group,
-                    videoAspectRatio: $0.videoAspectRatio
-                )
+                computePip(participantId: $0.id, viewportWidth: scene.viewportWidth,
+                           viewportHeight: scene.viewportHeight, group: group,
+                           videoAspectRatio: $0.videoAspectRatio)
             }
         )
 
-    // ----- pair: one tile fills area, other as PIP -----------------------------
     case .pair:
         let remoteParticipant = scene.participants.first { $0.role == .remote }
-
-        let dominant = scene.userPrefs.swappedLocalAndRemote
-            ? localParticipant
-            : remoteParticipant
-        let pipParticipant = scene.userPrefs.swappedLocalAndRemote
-            ? remoteParticipant
-            : localParticipant
+        let dominant = scene.userPrefs.swappedLocalAndRemote ? localParticipant : remoteParticipant
+        let pipParticipant = scene.userPrefs.swappedLocalAndRemote ? remoteParticipant : localParticipant
 
         let tiles: [TileLayout] = dominant.map { d in
             [TileLayout(
-                id: d.id,
-                type: .participant,
-                frame: LayoutRect(
-                    x: availableX,
-                    y: availableY,
-                    width: availableWidth,
-                    height: availableHeight
-                ),
-                fit: scene.userPrefs.dominantFit,
-                cornerRadius: 0,
-                zOrder: 0
+                id: d.id, type: .participant,
+                frame: LayoutRect(x: availableX, y: availableY, width: availableWidth, height: availableHeight),
+                fit: scene.userPrefs.dominantFit, cornerRadius: 0, zOrder: 0
             )]
         } ?? []
 
-        let localPip = pipParticipant.map {
-            computePip(
-                participantId: $0.id,
-                viewportWidth: scene.viewportWidth,
-                viewportHeight: scene.viewportHeight,
-                group: group,
-                videoAspectRatio: $0.videoAspectRatio
-            )
-        }
+        return LayoutResult(
+            mode: mode, tiles: tiles,
+            localPip: pipParticipant.map {
+                computePip(participantId: $0.id, viewportWidth: scene.viewportWidth,
+                           viewportHeight: scene.viewportHeight, group: group,
+                           videoAspectRatio: $0.videoAspectRatio)
+            }
+        )
 
-        return LayoutResult(mode: mode, tiles: tiles, localPip: localPip)
-
-    // ----- grid / focus / content: harmonic-mean grid --------------------------
-    case .grid, .focus, .content:
+    case .grid:
         let remoteParticipants = scene.participants.filter { $0.role == .remote }
-
-        let stageTiles: [StageTileSpec] = remoteParticipants.map {
-            StageTileSpec(
-                cid: $0.id,
-                aspectRatio: clampStageTileAspectRatio($0.videoAspectRatio)
-            )
+        let stageTiles = remoteParticipants.map {
+            StageTileSpec(cid: $0.id, aspectRatio: clampStageTileAspectRatio($0.videoAspectRatio))
         }
+        let rows = computeStageLayout(tiles: stageTiles, availableWidth: paddedWidth, availableHeight: paddedHeight, gap: gap)
+        let absoluteTiles = gridTilesToAbsolute(rows, availableX: paddedX, availableY: paddedY, availableWidth: paddedWidth, availableHeight: paddedHeight, gap: gap)
 
-        // Grid available area = viewport minus safe area minus outerPadding
-        let gridX = availableX + outerPadding
-        let gridY = availableY + outerPadding
-        let gridWidth = availableWidth - outerPadding * 2
-        let gridHeight = availableHeight - outerPadding * 2
-
-        let rows = computeStageLayout(
-            tiles: stageTiles,
-            availableWidth: gridWidth,
-            availableHeight: gridHeight,
-            gap: gap
+        return LayoutResult(
+            mode: mode,
+            tiles: absoluteTiles.enumerated().map { index, t in
+                TileLayout(id: t.cid, type: .participant, frame: t.frame, fit: .cover, cornerRadius: cornerRadius, zOrder: index)
+            },
+            localPip: localParticipant.map {
+                computePip(participantId: $0.id, viewportWidth: scene.viewportWidth,
+                           viewportHeight: scene.viewportHeight, group: group,
+                           videoAspectRatio: $0.videoAspectRatio)
+            }
         )
 
-        let absoluteTiles = gridTilesToAbsolute(
-            rows,
-            availableX: gridX,
-            availableY: gridY,
-            availableWidth: gridWidth,
-            availableHeight: gridHeight,
-            gap: gap
+    case .focus:
+        guard let pinnedParticipant = scene.participants.first(where: { $0.id == scene.pinnedParticipantId }) else {
+            return computeLayout(scene: CallScene(
+                viewportWidth: scene.viewportWidth, viewportHeight: scene.viewportHeight,
+                safeAreaInsets: scene.safeAreaInsets, participants: scene.participants,
+                localParticipantId: scene.localParticipantId, activeSpeakerId: scene.activeSpeakerId,
+                pinnedParticipantId: nil, contentSource: scene.contentSource, userPrefs: scene.userPrefs
+            ))
+        }
+
+        let secondaryParticipants = participantsStableOrder(
+            scene.participants.filter { $0.id != pinnedParticipant.id },
+            localParticipantId: scene.localParticipantId
         )
 
-        let tiles: [TileLayout] = absoluteTiles.enumerated().map { index, t in
-            TileLayout(
-                id: t.cid,
-                type: .participant,
-                frame: t.frame,
-                fit: .cover,
-                cornerRadius: cornerRadius,
-                zOrder: index
-            )
+        return LayoutResult(
+            mode: mode,
+            tiles: computePrimaryWithFilmstrip(
+                primaryId: pinnedParticipant.id, primaryType: .participant,
+                primaryFit: scene.userPrefs.dominantFit,
+                filmstripParticipants: secondaryParticipants,
+                areaX: paddedX, areaY: paddedY, areaWidth: paddedWidth, areaHeight: paddedHeight,
+                gap: gap, cornerRadius: cornerRadius, group: group
+            ),
+            localPip: nil
+        )
+
+    case .content:
+        guard let cs = scene.contentSource else {
+            return computeLayout(scene: CallScene(
+                viewportWidth: scene.viewportWidth, viewportHeight: scene.viewportHeight,
+                safeAreaInsets: scene.safeAreaInsets, participants: scene.participants,
+                localParticipantId: scene.localParticipantId, activeSpeakerId: scene.activeSpeakerId,
+                pinnedParticipantId: scene.pinnedParticipantId, contentSource: nil, userPrefs: scene.userPrefs
+            ))
         }
 
-        let localPip = localParticipant.map {
-            computePip(
-                participantId: $0.id,
-                viewportWidth: scene.viewportWidth,
-                viewportHeight: scene.viewportHeight,
-                group: group,
-                videoAspectRatio: $0.videoAspectRatio
-            )
-        }
+        let secondaryParticipants = participantsStableOrder(
+            scene.participants,
+            localParticipantId: scene.localParticipantId
+        )
 
-        return LayoutResult(mode: mode, tiles: tiles, localPip: localPip)
+        return LayoutResult(
+            mode: mode,
+            tiles: computePrimaryWithFilmstrip(
+                primaryId: cs.ownerParticipantId + "_content", primaryType: .contentSource,
+                primaryFit: scene.userPrefs.dominantFit,
+                filmstripParticipants: secondaryParticipants,
+                areaX: paddedX, areaY: paddedY, areaWidth: paddedWidth, areaHeight: paddedHeight,
+                gap: gap, cornerRadius: cornerRadius, group: group
+            ),
+            localPip: nil
+        )
     }
 }

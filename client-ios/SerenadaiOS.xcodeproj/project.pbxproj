@@ -32,6 +32,7 @@
 		5999F7198524B83CC99F9EF7 /* LocalCameraMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 303C1730C037405575173314 /* LocalCameraMode.swift */; };
 		5AE74F66C6B194F70EC28357 /* DeepLinkParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA1B2270ACAB900CC69BC699 /* DeepLinkParserTests.swift */; };
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
+		5CC7887AE80A9B6424553E65 /* ComputeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0085AD65AA56B17ABD380202 /* ComputeLayout.swift */; };
 		5EA0D8F3AC25ECC78C79E491 /* TurnCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF8E62B4D813B9D13ED9461F /* TurnCredentials.swift */; };
 		691A7EA5E1AB4B402D91A90C /* CallScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17000DBF4640C9A33AA00C70 /* CallScreen.swift */; };
 		69CEC70224A4A74EF1814A2C /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D576F4E596F3BD8F5BAA7C /* ActivityView.swift */; };
@@ -40,6 +41,7 @@
 		6EE2ED9D63185C2AA8581CFE /* L10nTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8656DA5A095E572174461E96 /* L10nTests.swift */; };
 		71320D322F59D2244B5A2027 /* RoomStatusesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */; };
 		7260FA8E0FC5EC6D345B2FD2 /* CaptureResolutionSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2486CC31E85D120A0B2C140D /* CaptureResolutionSelectionTests.swift */; };
+		7328682B1CAB5046FE3E0360 /* LayoutConformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39223DF6E618EDBF3CEEE46E /* LayoutConformanceTests.swift */; };
 		7340BEC27B7FE054BC7A3CA8 /* RealtimeCallStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9719A0065F1C4857A1F9917D /* RealtimeCallStats.swift */; };
 		7480FCA8B0FAB831740061CA /* BackoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE5F241AA65BDF199921519B /* BackoffTests.swift */; };
 		74B240627568F93A79266E40 /* CallUiState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28CB4C0739C327F4BB42BF9B /* CallUiState.swift */; };
@@ -79,6 +81,7 @@
 		FC3F9A13E5F2E25598BCB5CC /* SerenadaNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2E86658C3658DD731910A0A6 /* SerenadaNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		FC70B7DC409BF413B381CCB0 /* PeerConnectionSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3894047379F7743BD0987F /* PeerConnectionSlot.swift */; };
 		FCCDFAB2D752D00E905BAAF6 /* SignalingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B55A3575079D0B073AB0D7C /* SignalingClient.swift */; };
+		FD3131471A3CB6A29EE341FA /* layout_conformance_v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 70D055EA10214AFAD5F76FFE /* layout_conformance_v1.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -131,6 +134,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0085AD65AA56B17ABD380202 /* ComputeLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComputeLayout.swift; sourceTree = "<group>"; };
 		018403014C9AEDF89B039618 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
 		08BED6C2775E7E4CB2896F08 /* DeepLinkRejoinFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkRejoinFlowUITests.swift; sourceTree = "<group>"; };
 		0A244DB0F6B199EF5BF486FF /* WebRTCVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCVideoView.swift; sourceTree = "<group>"; };
@@ -150,6 +154,7 @@
 		303C1730C037405575173314 /* LocalCameraMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCameraMode.swift; sourceTree = "<group>"; };
 		34F0B8DB451442FAB82D1D94 /* JoinScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinScreen.swift; sourceTree = "<group>"; };
 		3529A15EA2C43DB2F91F46FC /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		39223DF6E618EDBF3CEEE46E /* LayoutConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutConformanceTests.swift; sourceTree = "<group>"; };
 		3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomStatusesTests.swift; sourceTree = "<group>"; };
 		43E2F0452DE65337073894BF /* RecentCallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCallStore.swift; sourceTree = "<group>"; };
 		48FB4B4943231481B509B421 /* DeepLinkParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkParser.swift; sourceTree = "<group>"; };
@@ -161,6 +166,7 @@
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		70435689E4086A8106CC45D2 /* RtcStatsHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RtcStatsHelpers.swift; sourceTree = "<group>"; };
 		70B1FBDAE9C6D5498DFA0A42 /* SignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingTransport.swift; sourceTree = "<group>"; };
+		70D055EA10214AFAD5F76FFE /* layout_conformance_v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = layout_conformance_v1.json; sourceTree = "<group>"; };
 		734875A19A797AA3C724DDC1 /* CallAudioSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudioSessionController.swift; sourceTree = "<group>"; };
 		749A9E8145B6C5211E844E65 /* EndpointHostParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointHostParser.swift; sourceTree = "<group>"; };
 		7C5B216BB8A302914AB1CA5B /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
@@ -312,6 +318,7 @@
 			isa = PBXGroup;
 			children = (
 				DC182EC6B44E4E8A699BAA74 /* Call */,
+				AD34F6661F48F6766E84EE95 /* Layout */,
 				22483D3AB8F5BFA5D8F6B3BE /* Models */,
 				7EAAB204F172A0E5B35978B2 /* Networking */,
 				D67D9D9D6E20F61AB5A0BB84 /* Push */,
@@ -395,6 +402,14 @@
 			path = Screens;
 			sourceTree = "<group>";
 		};
+		AD34F6661F48F6766E84EE95 /* Layout */ = {
+			isa = PBXGroup;
+			children = (
+				0085AD65AA56B17ABD380202 /* ComputeLayout.swift */,
+			);
+			path = Layout;
+			sourceTree = "<group>";
+		};
 		C1A806C098276BA628000BEF /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -404,6 +419,14 @@
 				E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		CA4C6C0A828720547ED2F42A /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				70D055EA10214AFAD5F76FFE /* layout_conformance_v1.json */,
+			);
+			path = Fixtures;
 			sourceTree = "<group>";
 		};
 		CF8ED7F99104C94EC09DEACA /* Tests */ = {
@@ -417,11 +440,13 @@
 				AA94DD46C2CBF626ACAE2EDC /* EndpointHostParserTests.swift */,
 				C9CA838043C3D3C9D89F8C00 /* JoinRecoveryTests.swift */,
 				8656DA5A095E572174461E96 /* L10nTests.swift */,
+				39223DF6E618EDBF3CEEE46E /* LayoutConformanceTests.swift */,
 				F9816C392666DC51C1838319 /* RecentCallStoreTests.swift */,
 				3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */,
 				9BD7296B4488661AE49A34BA /* RootViewRoutingTests.swift */,
 				4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */,
 				F6439AE14D068A9566D42DFB /* SignalingMessageTests.swift */,
+				CA4C6C0A828720547ED2F42A /* Fixtures */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -509,6 +534,7 @@
 			buildConfigurationList = 2670B3F56D68BD7FF226F4B1 /* Build configuration list for PBXNativeTarget "SerenadaiOSTests" */;
 			buildPhases = (
 				A2F987B3F34AAF77D2BB7CC8 /* Sources */,
+				1121B33E89E24382B1B092E5 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -596,6 +622,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		1121B33E89E24382B1B092E5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FD3131471A3CB6A29EE341FA /* layout_conformance_v1.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6A244A834479079D8A68C055 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -646,6 +680,7 @@
 				B08BB9CB1E3E37F57FC3DE07 /* CallPhase.swift in Sources */,
 				691A7EA5E1AB4B402D91A90C /* CallScreen.swift in Sources */,
 				74B240627568F93A79266E40 /* CallUiState.swift in Sources */,
+				5CC7887AE80A9B6424553E65 /* ComputeLayout.swift in Sources */,
 				AE0131D6BE35E90A8AC757A1 /* DeepLinkParser.swift in Sources */,
 				46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */,
 				D3A54CE33A7E93E24D714361 /* EndpointHostParser.swift in Sources */,
@@ -707,6 +742,7 @@
 				44918B67779BBD217266CBC3 /* EndpointHostParserTests.swift in Sources */,
 				F2F58ECBF303ACB0312CBCD2 /* JoinRecoveryTests.swift in Sources */,
 				6EE2ED9D63185C2AA8581CFE /* L10nTests.swift in Sources */,
+				7328682B1CAB5046FE3E0360 /* LayoutConformanceTests.swift in Sources */,
 				C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */,
 				71320D322F59D2244B5A2027 /* RoomStatusesTests.swift in Sources */,
 				3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */,

@@ -334,6 +334,30 @@ body {
   backdrop-filter: blur(6px);
 }
 
+.video-stage-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: #111;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.video-stage-pin-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: white;
+  background: rgba(0, 0, 0, 0.56);
+  padding: 4px;
+  border-radius: 6px;
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .multi-party-call .video-local-container-stage {
   bottom: 108px;
   right: 16px;

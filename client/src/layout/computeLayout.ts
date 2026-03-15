@@ -308,6 +308,138 @@ function computePip(
     };
 }
 
+// ===== Focus / Content: primary + filmstrip layout ==========================
+
+function computePrimaryWithFilmstrip(
+    primaryId: string,
+    primaryType: 'participant' | 'contentSource',
+    primaryFit: FitMode,
+    filmstripParticipants: SceneParticipant[],
+    areaX: number,
+    areaY: number,
+    areaWidth: number,
+    areaHeight: number,
+    gap: number,
+    cornerRadius: number,
+    group: DeviceGroup,
+): TileLayout[] {
+    const isLandscape = areaWidth > areaHeight;
+    const thumbnailMin = LAYOUT_CONSTANTS.thumbnailMinSize[group];
+    const filmstripCount = filmstripParticipants.length;
+
+    // Compute split ratio, ensuring filmstrip tiles meet minimum size
+    let primaryRatio = LAYOUT_CONSTANTS.primaryRatio;
+    if (filmstripCount > 0) {
+        if (isLandscape) {
+            // Secondary is a vertical strip on the right
+            const secondaryWidth = areaWidth * (1 - primaryRatio);
+            const tileHeight = (areaHeight - gap * Math.max(0, filmstripCount - 1)) / filmstripCount;
+            if (tileHeight < thumbnailMin || secondaryWidth < thumbnailMin) {
+                // Increase secondary proportion
+                const neededHeight = thumbnailMin * filmstripCount + gap * Math.max(0, filmstripCount - 1);
+                const neededWidth = thumbnailMin;
+                const ratioFromHeight = neededHeight > areaHeight ? 0.5 : primaryRatio;
+                const ratioFromWidth = 1 - neededWidth / areaWidth;
+                primaryRatio = Math.max(0.5, Math.min(primaryRatio, Math.min(ratioFromHeight, ratioFromWidth)));
+            }
+        } else {
+            // Secondary is a horizontal strip at the bottom
+            const secondaryHeight = areaHeight * (1 - primaryRatio);
+            const tileWidth = (areaWidth - gap * Math.max(0, filmstripCount - 1)) / filmstripCount;
+            if (tileWidth < thumbnailMin || secondaryHeight < thumbnailMin) {
+                const neededWidth = thumbnailMin * filmstripCount + gap * Math.max(0, filmstripCount - 1);
+                const neededHeight = thumbnailMin;
+                const ratioFromWidth = neededWidth > areaWidth ? 0.5 : primaryRatio;
+                const ratioFromHeight = 1 - neededHeight / areaHeight;
+                primaryRatio = Math.max(0.5, Math.min(primaryRatio, Math.min(ratioFromWidth, ratioFromHeight)));
+            }
+        }
+    }
+
+    const tiles: TileLayout[] = [];
+
+    if (isLandscape) {
+        // Primary on left, filmstrip on right
+        const primaryWidth = areaWidth * primaryRatio - gap / 2;
+        const secondaryWidth = areaWidth - primaryWidth - gap;
+
+        tiles.push({
+            id: primaryId,
+            type: primaryType,
+            frame: { x: areaX, y: areaY, width: primaryWidth, height: areaHeight },
+            fit: primaryFit,
+            cornerRadius,
+            zOrder: 0,
+        });
+
+        if (filmstripCount > 0) {
+            const stripX = areaX + primaryWidth + gap;
+            const tileHeight = (areaHeight - gap * Math.max(0, filmstripCount - 1)) / filmstripCount;
+            filmstripParticipants.forEach((p, i) => {
+                tiles.push({
+                    id: p.id,
+                    type: 'participant',
+                    frame: {
+                        x: stripX,
+                        y: areaY + i * (tileHeight + gap),
+                        width: secondaryWidth,
+                        height: tileHeight,
+                    },
+                    fit: 'cover',
+                    cornerRadius,
+                    zOrder: i + 1,
+                });
+            });
+        }
+    } else {
+        // Primary on top, filmstrip on bottom
+        const primaryHeight = areaHeight * primaryRatio - gap / 2;
+        const secondaryHeight = areaHeight - primaryHeight - gap;
+
+        tiles.push({
+            id: primaryId,
+            type: primaryType,
+            frame: { x: areaX, y: areaY, width: areaWidth, height: primaryHeight },
+            fit: primaryFit,
+            cornerRadius,
+            zOrder: 0,
+        });
+
+        if (filmstripCount > 0) {
+            const stripY = areaY + primaryHeight + gap;
+            const tileWidth = (areaWidth - gap * Math.max(0, filmstripCount - 1)) / filmstripCount;
+            filmstripParticipants.forEach((p, i) => {
+                tiles.push({
+                    id: p.id,
+                    type: 'participant',
+                    frame: {
+                        x: areaX + i * (tileWidth + gap),
+                        y: stripY,
+                        width: tileWidth,
+                        height: secondaryHeight,
+                    },
+                    fit: 'cover',
+                    cornerRadius,
+                    zOrder: i + 1,
+                });
+            });
+        }
+    }
+
+    return tiles;
+}
+
+// ===== Stable participant ordering ==========================================
+
+function participantsStableOrder(
+    participants: SceneParticipant[],
+    localParticipantId: string,
+): SceneParticipant[] {
+    const remotes = participants.filter((p) => p.id !== localParticipantId);
+    const local = participants.filter((p) => p.id === localParticipantId);
+    return [...remotes, ...local];
+}
+
 // ===== Main computeLayout entry point =======================================
 
 export function computeLayout(scene: CallScene): LayoutResult {
@@ -324,6 +456,12 @@ export function computeLayout(scene: CallScene): LayoutResult {
         scene.viewportWidth - scene.safeAreaInsets.left - scene.safeAreaInsets.right;
     const availableHeight =
         scene.viewportHeight - scene.safeAreaInsets.top - scene.safeAreaInsets.bottom;
+
+    // Padded area for layouts with outerPadding
+    const paddedX = availableX + outerPadding;
+    const paddedY = availableY + outerPadding;
+    const paddedWidth = availableWidth - outerPadding * 2;
+    const paddedHeight = availableHeight - outerPadding * 2;
 
     const localParticipant = scene.participants.find(
         (p) => p.id === scene.localParticipantId,
@@ -391,10 +529,8 @@ export function computeLayout(scene: CallScene): LayoutResult {
             return { mode, tiles, localPip };
         }
 
-        // ----- grid / focus / content: harmonic-mean grid -----------------------
-        case 'grid':
-        case 'focus':
-        case 'content': {
+        // ----- grid: harmonic-mean optimized grid, local as PIP ----------------
+        case 'grid': {
             const remoteParticipants = scene.participants.filter(
                 (p) => p.role === 'remote',
             );
@@ -404,20 +540,14 @@ export function computeLayout(scene: CallScene): LayoutResult {
                 aspectRatio: clampStageTileAspectRatio(p.videoAspectRatio),
             }));
 
-            // Grid available area = viewport minus safe area minus outerPadding
-            const gridX = availableX + outerPadding;
-            const gridY = availableY + outerPadding;
-            const gridWidth = availableWidth - outerPadding * 2;
-            const gridHeight = availableHeight - outerPadding * 2;
-
-            const rows = computeStageLayout(stageTiles, gridWidth, gridHeight, gap);
+            const rows = computeStageLayout(stageTiles, paddedWidth, paddedHeight, gap);
 
             const absoluteTiles = gridTilesToAbsolute(
                 rows,
-                gridX,
-                gridY,
-                gridWidth,
-                gridHeight,
+                paddedX,
+                paddedY,
+                paddedWidth,
+                paddedHeight,
                 gap,
             );
 
@@ -441,6 +571,69 @@ export function computeLayout(scene: CallScene): LayoutResult {
                 : null;
 
             return { mode, tiles, localPip };
+        }
+
+        // ----- focus: pinned participant primary + filmstrip --------------------
+        case 'focus': {
+            const pinnedParticipant = scene.participants.find(
+                (p) => p.id === scene.pinnedParticipantId,
+            );
+            if (!pinnedParticipant) {
+                // Fallback: if pinned participant not found, use grid
+                return computeLayout({ ...scene, pinnedParticipantId: null });
+            }
+
+            // Secondary: all participants except the pinned, in stable order (local last)
+            const secondaryParticipants = participantsStableOrder(
+                scene.participants.filter((p) => p.id !== pinnedParticipant.id),
+                scene.localParticipantId,
+            );
+
+            const tiles = computePrimaryWithFilmstrip(
+                pinnedParticipant.id,
+                'participant',
+                scene.userPrefs.dominantFit,
+                secondaryParticipants,
+                paddedX,
+                paddedY,
+                paddedWidth,
+                paddedHeight,
+                gap,
+                cornerRadius,
+                group,
+            );
+
+            return { mode, tiles, localPip: null };
+        }
+
+        // ----- content: content source primary + filmstrip ----------------------
+        case 'content': {
+            if (!scene.contentSource) {
+                // Fallback: if content source disappeared, use grid
+                return computeLayout({ ...scene, contentSource: null });
+            }
+
+            // Secondary: ALL participants in stable order (local last)
+            const secondaryParticipants = participantsStableOrder(
+                scene.participants,
+                scene.localParticipantId,
+            );
+
+            const tiles = computePrimaryWithFilmstrip(
+                scene.contentSource.ownerParticipantId + '_content',
+                'contentSource',
+                scene.userPrefs.dominantFit,
+                secondaryParticipants,
+                paddedX,
+                paddedY,
+                paddedWidth,
+                paddedHeight,
+                gap,
+                cornerRadius,
+                group,
+            );
+
+            return { mode, tiles, localPip: null };
         }
     }
 }

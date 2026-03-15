@@ -1,9 +1,5 @@
 import SwiftUI
 
-private let minStageTileAspect: CGFloat = 9.0 / 16.0
-private let maxStageTileAspect: CGFloat = 16.0 / 9.0
-private let defaultStageTileAspect: CGFloat = 16.0 / 9.0
-
 func shouldShowCallStatusLabel(
     phase: CallPhase,
     connectionStatus: ConnectionStatus
@@ -252,6 +248,7 @@ struct CallScreen: View {
     @State private var lastMagnificationValue: CGFloat = 1
     @State private var showRecoveringBadge = false
     @State private var remoteTileAspectRatios: [String: CGFloat] = [:]
+    @State private var pinnedParticipantId: String?
 
     init(
         roomId: String,
@@ -304,10 +301,14 @@ struct CallScreen: View {
                 MultiPartyStage(
                     remoteParticipants: uiState.remoteParticipants,
                     remoteTileAspectRatios: $remoteTileAspectRatios,
+                    localCid: uiState.localCid,
                     localVideoEnabled: uiState.localVideoEnabled,
                     localMirror: uiState.isFrontCamera,
+                    localCameraMode: uiState.localCameraMode,
+                    isScreenSharing: uiState.isScreenSharing,
                     bottomPadding: pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible),
-                    callManager: callManager
+                    callManager: callManager,
+                    pinnedParticipantId: $pinnedParticipantId
                 )
             } else if showLocalAsPrimarySurface {
                 mainVideoSurface(
@@ -339,6 +340,10 @@ struct CallScreen: View {
         .onChange(of: uiState.remoteParticipants.map(\.cid)) { remoteCids in
             let active = Set(remoteCids)
             remoteTileAspectRatios = remoteTileAspectRatios.filter { active.contains($0.key) }
+            // Auto-unpin if pinned participant left
+            if let pinned = pinnedParticipantId, !active.contains(pinned) {
+                pinnedParticipantId = nil
+            }
         }
         .onChange(of: isPinchZoomEnabled) { enabled in
             if !enabled {
@@ -771,213 +776,206 @@ struct CallScreen: View {
     }
 }
 
-private struct StageTileSpec {
-    let cid: String
-    let aspectRatio: CGFloat
-}
-
-private struct StageTileLayout: Identifiable {
-    let cid: String
-    let width: CGFloat
-    let height: CGFloat
-
-    var id: String { cid }
-}
-
-private struct StageRowLayout: Identifiable {
-    let items: [StageTileLayout]
-    let index: Int
-
-    var id: Int { index }
-}
-
-private func clampStageTileAspectRatio(_ ratio: CGFloat?) -> CGFloat {
-    guard let ratio, ratio.isFinite, ratio > 0 else {
-        return defaultStageTileAspect
-    }
-    return min(max(ratio, minStageTileAspect), maxStageTileAspect)
-}
-
 private func quantizedStageTileAspectRatio(_ size: CGSize) -> CGFloat {
     guard size.width > 0, size.height > 0 else {
-        return defaultStageTileAspect
+        return clampStageTileAspectRatio(nil)
     }
     let rawRatio = size.width / size.height
     let quantized = (rawRatio / 0.05).rounded() * 0.05
     return clampStageTileAspectRatio(max(0.1, quantized))
 }
 
-private func computeStageLayout(
-    tiles: [StageTileSpec],
-    availableWidth: CGFloat,
-    availableHeight: CGFloat,
-    gap: CGFloat
-) -> [StageRowLayout] {
-    guard !tiles.isEmpty, availableWidth > 0, availableHeight > 0 else { return [] }
-
-    let candidateRows: [[[Int]]]
-    switch tiles.count {
-    case 1:
-        candidateRows = [[[0]]]
-    case 2:
-        candidateRows = [[[0, 1]], [[0], [1]]]
-    default:
-        candidateRows = [
-            [[0, 1, 2]],
-            [[0, 1], [2]],
-            [[0], [1, 2]],
-            [[0], [1], [2]],
-        ]
-    }
-
-    var bestLayout: [StageRowLayout] = []
-    var bestHarmonicShortEdge: CGFloat = -1
-    var bestMinShortEdge: CGFloat = -1
-    var bestArea: CGFloat = -1
-    var bestRowCount = Int.max
-
-    for rows in candidateRows {
-        let baseHeights = rows.map { row -> CGFloat in
-            let totalAspect = row.reduce(CGFloat.zero) { partial, index in
-                partial + tiles[index].aspectRatio
-            }
-            let rowWidth = availableWidth - gap * CGFloat(max(0, row.count - 1))
-            guard rowWidth > 0, totalAspect > 0 else { return 0 }
-            return rowWidth / totalAspect
-        }
-        let verticalGap = gap * CGFloat(max(0, rows.count - 1))
-        let totalBaseHeight = baseHeights.reduce(0, +)
-        guard totalBaseHeight > 0, availableHeight > verticalGap else { continue }
-
-        let scale = min(1, (availableHeight - verticalGap) / totalBaseHeight)
-        guard scale > 0 else { continue }
-
-        let layout = rows.enumerated().map { rowIndex, row in
-            let rowHeight = max(1, floor(baseHeights[rowIndex] * scale))
-            return StageRowLayout(
-                items: row.map { index in
-                    let tile = tiles[index]
-                    return StageTileLayout(
-                        cid: tile.cid,
-                        width: max(1, floor(tile.aspectRatio * rowHeight)),
-                        height: rowHeight
-                    )
-                },
-                index: rowIndex
-            )
-        }
-
-        let shortEdges = layout.flatMap { $0.items.map { min($0.width, $0.height) } }
-        guard let minShortEdge = shortEdges.min(), !shortEdges.isEmpty else { continue }
-        let harmonicShortEdge = CGFloat(shortEdges.count) / shortEdges.reduce(CGFloat.zero) { partial, shortEdge in
-            partial + (1 / shortEdge)
-        }
-        let area = layout.reduce(CGFloat.zero) { partial, row in
-            partial + row.items.reduce(CGFloat.zero) { rowPartial, item in
-                rowPartial + item.width * item.height
-            }
-        }
-        let rowCount = layout.count
-
-        let shortEdgeGainIsMeaningful = harmonicShortEdge > bestHarmonicShortEdge + 6
-        let shortEdgeIsComparable = abs(harmonicShortEdge - bestHarmonicShortEdge) <= 6
-        let minShortEdgeImproved = minShortEdge > bestMinShortEdge + 1
-        let minShortEdgeComparable = abs(minShortEdge - bestMinShortEdge) <= 1
-
-        let shouldSelectLayout =
-            shortEdgeGainIsMeaningful ||
-            (
-                shortEdgeIsComparable &&
-                (
-                    rowCount < bestRowCount ||
-                    (rowCount == bestRowCount && (
-                        minShortEdgeImproved ||
-                        (minShortEdgeComparable && area > bestArea)
-                    ))
-                )
-            ) ||
-            (
-                !shortEdgeIsComparable &&
-                harmonicShortEdge > bestHarmonicShortEdge &&
-                minShortEdgeImproved
-            )
-
-        if shouldSelectLayout {
-            bestLayout = layout
-            bestHarmonicShortEdge = harmonicShortEdge
-            bestMinShortEdge = minShortEdge
-            bestArea = area
-            bestRowCount = rowCount
-        }
-    }
-
-    return bestLayout
-}
-
 private struct MultiPartyStage: View {
     let remoteParticipants: [RemoteParticipant]
     @Binding var remoteTileAspectRatios: [String: CGFloat]
+    let localCid: String?
     let localVideoEnabled: Bool
     let localMirror: Bool
+    let localCameraMode: LocalCameraMode
+    let isScreenSharing: Bool
     let bottomPadding: CGFloat
     let callManager: CallManager
+    @Binding var pinnedParticipantId: String?
 
     private let gap: CGFloat = 12
     private let outerPadding: CGFloat = 16
     private let tileCornerRadius: CGFloat = 16
     private let pipCornerRadius: CGFloat = 12
 
+    private var hasContentSource: Bool {
+        isScreenSharing || localCameraMode == .world || localCameraMode == .composite
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let availableWidth = geometry.size.width - outerPadding * 2
             let availableHeight = max(0, geometry.size.height - (20 + bottomPadding + 12))
-            let layout = computeStageLayout(
-                tiles: remoteParticipants.map { participant in
-                    StageTileSpec(
-                        cid: participant.cid,
-                        aspectRatio: clampStageTileAspectRatio(remoteTileAspectRatios[participant.cid])
-                    )
-                },
-                availableWidth: availableWidth,
-                availableHeight: availableHeight,
-                gap: gap
-            )
+            let useComputedLayout = localCid != nil && (pinnedParticipantId != nil || hasContentSource)
 
-            ZStack(alignment: .bottomTrailing) {
-                VStack(spacing: gap) {
-                    ForEach(layout) { row in
-                        HStack(spacing: gap) {
-                            ForEach(row.items) { tile in
-                                if let participant = remoteParticipants.first(where: { $0.cid == tile.cid }) {
-                                    RemoteParticipantStageTile(
-                                        participant: participant,
-                                        size: CGSize(width: tile.width, height: tile.height),
-                                        cornerRadius: tileCornerRadius,
+            if useComputedLayout, let localCid {
+                // Focus/content mode: use computeLayout for primary + filmstrip rendering
+                let activeContentSource: ContentSource? = hasContentSource ? {
+                    let type: ContentType = {
+                        if isScreenSharing { return .screenShare }
+                        if localCameraMode == .world { return .worldCamera }
+                        return .compositeCamera
+                    }()
+                    return ContentSource(type: type, ownerParticipantId: localCid, aspectRatio: nil)
+                }() : nil
+
+                let participants: [SceneParticipant] = remoteParticipants.map { p in
+                    SceneParticipant(
+                        id: p.cid,
+                        role: .remote,
+                        videoEnabled: p.videoEnabled,
+                        videoAspectRatio: remoteTileAspectRatios[p.cid]
+                    )
+                } + [SceneParticipant(
+                    id: localCid,
+                    role: .local,
+                    videoEnabled: localVideoEnabled,
+                    videoAspectRatio: nil
+                )]
+
+                let layoutResult = computeLayout(scene: CallScene(
+                    viewportWidth: availableWidth,
+                    viewportHeight: availableHeight,
+                    safeAreaInsets: LayoutInsets(),
+                    participants: participants,
+                    localParticipantId: localCid,
+                    activeSpeakerId: nil,
+                    pinnedParticipantId: activeContentSource != nil ? nil : pinnedParticipantId,
+                    contentSource: activeContentSource,
+                    userPrefs: UserLayoutPrefs()
+                ))
+
+                ZStack {
+                    ForEach(Array(layoutResult.tiles.enumerated()), id: \.element.id) { _, tile in
+                        let isContentTile = tile.type == .contentSource
+                        let isLocal = tile.id == localCid
+                        let isLocalPlaceholder = isLocal && activeContentSource != nil
+
+                        ZStack {
+                            Color.black
+                            if isContentTile || (isLocal && !isLocalPlaceholder) {
+                                // Content source or local tile: render local video
+                                if localVideoEnabled || isContentTile {
+                                    WebRTCVideoView(
+                                        kind: .local,
                                         callManager: callManager,
-                                        onVideoSizeChanged: { size in
-                                            remoteTileAspectRatios[tile.cid] = quantizedStageTileAspectRatio(size)
-                                        }
+                                        videoContentMode: isContentTile ? .scaleAspectFit : (tile.fit == .contain ? .scaleAspectFit : .scaleAspectFill),
+                                        isMirrored: isContentTile ? false : localMirror
                                     )
+                                } else {
+                                    VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
                                 }
+                            } else if isLocalPlaceholder {
+                                VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
+                            } else if let participant = remoteParticipants.first(where: { $0.cid == tile.id }) {
+                                WebRTCVideoView(
+                                    kind: .remoteForCid(participant.cid),
+                                    callManager: callManager,
+                                    videoContentMode: tile.fit == .contain ? .scaleAspectFit : .scaleAspectFill,
+                                    onVideoSizeChanged: { size in
+                                        remoteTileAspectRatios[tile.id] = quantizedStageTileAspectRatio(size)
+                                    }
+                                )
+                                if !participant.videoEnabled {
+                                    VideoPlaceholderTile(text: L10n.callVideoOff, compact: false)
+                                }
+                            }
+
+                            // Pin indicator
+                            if let pinned = pinnedParticipantId, tile.id == pinned {
+                                VStack {
+                                    HStack {
+                                        Spacer()
+                                        Image(systemName: "pin.fill")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                            .padding(6)
+                                            .background(Color.black.opacity(0.56))
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                            .padding(8)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                        }
+                        .frame(width: tile.frame.width, height: tile.frame.height)
+                        .clipShape(RoundedRectangle(cornerRadius: tile.cornerRadius))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: tile.cornerRadius)
+                                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                        )
+                        .position(
+                            x: tile.frame.x + tile.frame.width / 2,
+                            y: tile.frame.y + tile.frame.height / 2
+                        )
+                        .onLongPressGesture {
+                            if !isContentTile {
+                                pinnedParticipantId = tile.id == pinnedParticipantId ? nil : tile.id
                             }
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: availableWidth, height: availableHeight)
                 .padding(.horizontal, outerPadding)
                 .padding(.top, 20)
                 .padding(.bottom, bottomPadding + 12)
-
-                MultiPartyLocalPip(
-                    localVideoEnabled: localVideoEnabled,
-                    localMirror: localMirror,
-                    cornerRadius: pipCornerRadius,
-                    callManager: callManager
+            } else {
+                // Grid mode: existing row-based rendering
+                let layout = computeStageLayout(
+                    tiles: remoteParticipants.map { participant in
+                        StageTileSpec(
+                            cid: participant.cid,
+                            aspectRatio: clampStageTileAspectRatio(remoteTileAspectRatios[participant.cid])
+                        )
+                    },
+                    availableWidth: availableWidth,
+                    availableHeight: availableHeight,
+                    gap: gap
                 )
-                .padding(.trailing, 16)
-                .padding(.bottom, bottomPadding)
+
+                ZStack(alignment: .bottomTrailing) {
+                    VStack(spacing: gap) {
+                        ForEach(layout) { row in
+                            HStack(spacing: gap) {
+                                ForEach(row.items) { tile in
+                                    if let participant = remoteParticipants.first(where: { $0.cid == tile.cid }) {
+                                        RemoteParticipantStageTile(
+                                            participant: participant,
+                                            size: CGSize(width: tile.width, height: tile.height),
+                                            cornerRadius: tileCornerRadius,
+                                            callManager: callManager,
+                                            onVideoSizeChanged: { size in
+                                                remoteTileAspectRatios[tile.cid] = quantizedStageTileAspectRatio(size)
+                                            }
+                                        )
+                                        .onLongPressGesture {
+                                            pinnedParticipantId = tile.cid
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, outerPadding)
+                    .padding(.top, 20)
+                    .padding(.bottom, bottomPadding + 12)
+
+                    MultiPartyLocalPip(
+                        localVideoEnabled: localVideoEnabled,
+                        localMirror: localMirror,
+                        cornerRadius: pipCornerRadius,
+                        callManager: callManager
+                    )
+                    .padding(.trailing, 16)
+                    .padding(.bottom, bottomPadding)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
-            .frame(width: geometry.size.width, height: geometry.size.height)
         }
     }
 }

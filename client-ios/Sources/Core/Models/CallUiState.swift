@@ -9,6 +9,7 @@ enum ConnectionStatus: String, Equatable {
 struct CallUiState: Equatable {
     var phase: CallPhase = .idle
     var roomId: String?
+    var localCid: String?
     var statusMessage: String?
     var errorMessage: String?
     var isHost: Bool = false

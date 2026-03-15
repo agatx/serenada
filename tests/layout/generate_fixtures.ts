@@ -271,6 +271,152 @@ for (const sa of SAFE_AREA_SETS) {
     );
 }
 
+// Focus mode: 3 participants × 6 viewports × 2 pin variants (remote, local)
+for (const vp of VIEWPORTS) {
+    // Pinned remote
+    const scene3Remote: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(3, [16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: 'A',
+        contentSource: null,
+        userPrefs: DEFAULT_PREFS,
+    };
+    cases.push(buildCase(`focus_3p_pinnedRemote_${vp.name}`, `Focus 3p pinned remote on ${vp.name}`, scene3Remote));
+
+    // Pinned local
+    const scene3Local: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(3, [16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: 'ME',
+        contentSource: null,
+        userPrefs: DEFAULT_PREFS,
+    };
+    cases.push(buildCase(`focus_3p_pinnedLocal_${vp.name}`, `Focus 3p pinned local on ${vp.name}`, scene3Local));
+}
+
+// Focus mode: 4 participants × 6 viewports, pinned remote
+for (const vp of VIEWPORTS) {
+    const scene: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(4, [16 / 9, 16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: 'A',
+        contentSource: null,
+        userPrefs: DEFAULT_PREFS,
+    };
+    cases.push(buildCase(`focus_4p_pinnedRemote_${vp.name}`, `Focus 4p pinned remote on ${vp.name}`, scene));
+}
+
+// Focus mode with contain fit: representative case
+{
+    const vp = VIEWPORTS[0];
+    const scene: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(3, [16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: 'A',
+        contentSource: null,
+        userPrefs: { swappedLocalAndRemote: false, dominantFit: 'contain' },
+    };
+    cases.push(buildCase(`focus_3p_contain_phone_portrait`, `Focus 3p contain on phone portrait`, scene));
+}
+
+// Content mode: 2 participants × 6 viewports, screenShare
+for (const vp of VIEWPORTS) {
+    const scene: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(2, [16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: null,
+        contentSource: { type: 'screenShare', ownerParticipantId: 'A', aspectRatio: 16 / 9 },
+        userPrefs: DEFAULT_PREFS,
+    };
+    cases.push(buildCase(`content_2p_screenShare_${vp.name}`, `Content 2p screenShare on ${vp.name}`, scene));
+}
+
+// Content mode: 3 participants × 6 viewports, screenShare
+for (const vp of VIEWPORTS) {
+    const scene: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(3, [16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: null,
+        contentSource: { type: 'screenShare', ownerParticipantId: 'A', aspectRatio: 16 / 9 },
+        userPrefs: DEFAULT_PREFS,
+    };
+    cases.push(buildCase(`content_3p_screenShare_${vp.name}`, `Content 3p screenShare on ${vp.name}`, scene));
+}
+
+// Content mode: 4 participants × 6 viewports, screenShare
+for (const vp of VIEWPORTS) {
+    const scene: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(4, [16 / 9, 16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: null,
+        contentSource: { type: 'screenShare', ownerParticipantId: 'A', aspectRatio: 16 / 9 },
+        userPrefs: DEFAULT_PREFS,
+    };
+    cases.push(buildCase(`content_4p_screenShare_${vp.name}`, `Content 4p screenShare on ${vp.name}`, scene));
+}
+
+// Content mode: worldCamera and compositeCamera on one viewport (verify layout equivalence)
+for (const contentType of ['worldCamera', 'compositeCamera'] as const) {
+    const vp = VIEWPORTS[0];
+    const scene: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(3, [16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: null,
+        contentSource: { type: contentType, ownerParticipantId: 'A', aspectRatio: 16 / 9 },
+        userPrefs: DEFAULT_PREFS,
+    };
+    cases.push(buildCase(`content_3p_${contentType}_phone_portrait`, `Content 3p ${contentType} on phone portrait`, scene));
+}
+
+// Content mode with contain fit: representative case
+{
+    const vp = VIEWPORTS[0];
+    const scene: CallScene = {
+        viewportWidth: vp.width,
+        viewportHeight: vp.height,
+        safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
+        participants: makeParticipants(3, [16 / 9, 16 / 9, 16 / 9]),
+        localParticipantId: 'ME',
+        activeSpeakerId: null,
+        pinnedParticipantId: null,
+        contentSource: { type: 'screenShare', ownerParticipantId: 'A', aspectRatio: 16 / 9 },
+        userPrefs: { swappedLocalAndRemote: false, dominantFit: 'contain' },
+    };
+    cases.push(buildCase(`content_3p_contain_phone_portrait`, `Content 3p contain on phone portrait`, scene));
+}
+
 // ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------

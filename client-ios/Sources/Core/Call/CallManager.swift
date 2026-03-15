@@ -742,6 +742,7 @@ final class CallManager: ObservableObject {
         hasJoinAcknowledgedCurrentAttempt = true
         clientId = message.cid
         settingsStore.reconnectCid = message.cid
+        uiState.localCid = clientId
 
         if let token = message.payload?.objectValue?["reconnectToken"]?.stringValue {
             reconnectToken = token

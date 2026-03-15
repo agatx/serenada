@@ -1,7 +1,7 @@
 {
   "version": 1,
   "description": "Canonical conformance cases for the shared layout algorithm.",
-  "caseCount": 53,
+  "caseCount": 93,
   "cases": [
     {
       "id": "solo_phone_portrait",
@@ -4167,6 +4167,3703 @@
             "height": 0.0624
           }
         }
+      }
+    },
+    {
+      "id": "focus_3p_pinnedRemote_phone_portrait",
+      "description": "Focus 3p pinned remote on phone_portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5103,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedLocal_phone_portrait",
+      "description": "Focus 3p pinned local on phone_portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "ME",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5103,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedRemote_phone_landscape",
+      "description": "Focus 3p pinned remote on phone_landscape",
+      "scene": {
+        "viewportWidth": 844,
+        "viewportHeight": 390,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0095,
+              "y": 0.0205,
+              "width": 0.731,
+              "height": 0.959
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.0205,
+              "width": 0.2405,
+              "height": 0.4692
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.5103,
+              "width": 0.2405,
+              "height": 0.4692
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedLocal_phone_landscape",
+      "description": "Focus 3p pinned local on phone_landscape",
+      "scene": {
+        "viewportWidth": 844,
+        "viewportHeight": 390,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "ME",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0095,
+              "y": 0.0205,
+              "width": 0.731,
+              "height": 0.959
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.0205,
+              "width": 0.2405,
+              "height": 0.4692
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.5103,
+              "width": 0.2405,
+              "height": 0.4692
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedRemote_tablet_portrait",
+      "description": "Focus 3p pinned remote on tablet_portrait",
+      "scene": {
+        "viewportWidth": 768,
+        "viewportHeight": 1024,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.0156,
+              "width": 0.9583,
+              "height": 0.7207
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.748,
+              "width": 0.4714,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5078,
+              "y": 0.748,
+              "width": 0.4714,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedLocal_tablet_portrait",
+      "description": "Focus 3p pinned local on tablet_portrait",
+      "scene": {
+        "viewportWidth": 768,
+        "viewportHeight": 1024,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "ME",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.0156,
+              "width": 0.9583,
+              "height": 0.7207
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.748,
+              "width": 0.4714,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5078,
+              "y": 0.748,
+              "width": 0.4714,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedRemote_tablet_landscape",
+      "description": "Focus 3p pinned remote on tablet_landscape",
+      "scene": {
+        "viewportWidth": 1024,
+        "viewportHeight": 768,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0156,
+              "y": 0.0208,
+              "width": 0.7207,
+              "height": 0.9583
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.0208,
+              "width": 0.2363,
+              "height": 0.4714
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.5078,
+              "width": 0.2363,
+              "height": 0.4714
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedLocal_tablet_landscape",
+      "description": "Focus 3p pinned local on tablet_landscape",
+      "scene": {
+        "viewportWidth": 1024,
+        "viewportHeight": 768,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "ME",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0156,
+              "y": 0.0208,
+              "width": 0.7207,
+              "height": 0.9583
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.0208,
+              "width": 0.2363,
+              "height": 0.4714
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.5078,
+              "width": 0.2363,
+              "height": 0.4714
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedRemote_desktop_compact",
+      "description": "Focus 3p pinned remote on desktop_compact",
+      "scene": {
+        "viewportWidth": 1280,
+        "viewportHeight": 720,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0125,
+              "y": 0.0222,
+              "width": 0.7266,
+              "height": 0.9556
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.0222,
+              "width": 0.2391,
+              "height": 0.4694
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.5083,
+              "width": 0.2391,
+              "height": 0.4694
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedLocal_desktop_compact",
+      "description": "Focus 3p pinned local on desktop_compact",
+      "scene": {
+        "viewportWidth": 1280,
+        "viewportHeight": 720,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "ME",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0125,
+              "y": 0.0222,
+              "width": 0.7266,
+              "height": 0.9556
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.0222,
+              "width": 0.2391,
+              "height": 0.4694
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.5083,
+              "width": 0.2391,
+              "height": 0.4694
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedRemote_desktop_wide",
+      "description": "Focus 3p pinned remote on desktop_wide",
+      "scene": {
+        "viewportWidth": 1600,
+        "viewportHeight": 900,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.01,
+              "y": 0.0178,
+              "width": 0.7313,
+              "height": 0.9644
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.0178,
+              "width": 0.2413,
+              "height": 0.4756
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.5067,
+              "width": 0.2413,
+              "height": 0.4756
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_pinnedLocal_desktop_wide",
+      "description": "Focus 3p pinned local on desktop_wide",
+      "scene": {
+        "viewportWidth": 1600,
+        "viewportHeight": 900,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "ME",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.01,
+              "y": 0.0178,
+              "width": 0.7313,
+              "height": 0.9644
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.0178,
+              "width": 0.2413,
+              "height": 0.4756
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.5067,
+              "width": 0.2413,
+              "height": 0.4756
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_4p_pinnedRemote_phone_portrait",
+      "description": "Focus 4p pinned remote on phone_portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.347,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.6735,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_4p_pinnedRemote_phone_landscape",
+      "description": "Focus 4p pinned remote on phone_landscape",
+      "scene": {
+        "viewportWidth": 844,
+        "viewportHeight": 390,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0095,
+              "y": 0.0205,
+              "width": 0.731,
+              "height": 0.959
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.0205,
+              "width": 0.2405,
+              "height": 0.306
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.347,
+              "width": 0.2405,
+              "height": 0.306
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.6735,
+              "width": 0.2405,
+              "height": 0.306
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_4p_pinnedRemote_tablet_portrait",
+      "description": "Focus 4p pinned remote on tablet_portrait",
+      "scene": {
+        "viewportWidth": 768,
+        "viewportHeight": 1024,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.0156,
+              "width": 0.9583,
+              "height": 0.7207
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.748,
+              "width": 0.309,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.3455,
+              "y": 0.748,
+              "width": 0.309,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.6701,
+              "y": 0.748,
+              "width": 0.309,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_4p_pinnedRemote_tablet_landscape",
+      "description": "Focus 4p pinned remote on tablet_landscape",
+      "scene": {
+        "viewportWidth": 1024,
+        "viewportHeight": 768,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0156,
+              "y": 0.0208,
+              "width": 0.7207,
+              "height": 0.9583
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.0208,
+              "width": 0.2363,
+              "height": 0.309
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.3455,
+              "width": 0.2363,
+              "height": 0.309
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.6701,
+              "width": 0.2363,
+              "height": 0.309
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_4p_pinnedRemote_desktop_compact",
+      "description": "Focus 4p pinned remote on desktop_compact",
+      "scene": {
+        "viewportWidth": 1280,
+        "viewportHeight": 720,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0125,
+              "y": 0.0222,
+              "width": 0.7266,
+              "height": 0.9556
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.0222,
+              "width": 0.2391,
+              "height": 0.3074
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.3463,
+              "width": 0.2391,
+              "height": 0.3074
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.6704,
+              "width": 0.2391,
+              "height": 0.3074
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_4p_pinnedRemote_desktop_wide",
+      "description": "Focus 4p pinned remote on desktop_wide",
+      "scene": {
+        "viewportWidth": 1600,
+        "viewportHeight": 900,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.01,
+              "y": 0.0178,
+              "width": 0.7313,
+              "height": 0.9644
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.0178,
+              "width": 0.2413,
+              "height": 0.3126
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.3437,
+              "width": 0.2413,
+              "height": 0.3126
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.6696,
+              "width": 0.2413,
+              "height": 0.3126
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "focus_3p_contain_phone_portrait",
+      "description": "Focus 3p contain on phone portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": "A",
+        "contentSource": null,
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "contain"
+        }
+      },
+      "expected": {
+        "mode": "focus",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "contain"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5103,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_2p_screenShare_phone_portrait",
+      "description": "Content 2p screenShare on phone_portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5103,
+              "y": 0.75,
+              "width": 0.4692,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_2p_screenShare_phone_landscape",
+      "description": "Content 2p screenShare on phone_landscape",
+      "scene": {
+        "viewportWidth": 844,
+        "viewportHeight": 390,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0095,
+              "y": 0.0205,
+              "width": 0.731,
+              "height": 0.959
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.0205,
+              "width": 0.2405,
+              "height": 0.4692
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.5103,
+              "width": 0.2405,
+              "height": 0.4692
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_2p_screenShare_tablet_portrait",
+      "description": "Content 2p screenShare on tablet_portrait",
+      "scene": {
+        "viewportWidth": 768,
+        "viewportHeight": 1024,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.0156,
+              "width": 0.9583,
+              "height": 0.7207
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.748,
+              "width": 0.4714,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5078,
+              "y": 0.748,
+              "width": 0.4714,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_2p_screenShare_tablet_landscape",
+      "description": "Content 2p screenShare on tablet_landscape",
+      "scene": {
+        "viewportWidth": 1024,
+        "viewportHeight": 768,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0156,
+              "y": 0.0208,
+              "width": 0.7207,
+              "height": 0.9583
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.0208,
+              "width": 0.2363,
+              "height": 0.4714
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.5078,
+              "width": 0.2363,
+              "height": 0.4714
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_2p_screenShare_desktop_compact",
+      "description": "Content 2p screenShare on desktop_compact",
+      "scene": {
+        "viewportWidth": 1280,
+        "viewportHeight": 720,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0125,
+              "y": 0.0222,
+              "width": 0.7266,
+              "height": 0.9556
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.0222,
+              "width": 0.2391,
+              "height": 0.4694
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.5083,
+              "width": 0.2391,
+              "height": 0.4694
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_2p_screenShare_desktop_wide",
+      "description": "Content 2p screenShare on desktop_wide",
+      "scene": {
+        "viewportWidth": 1600,
+        "viewportHeight": 900,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 3,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.01,
+              "y": 0.0178,
+              "width": 0.7313,
+              "height": 0.9644
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.0178,
+              "width": 0.2413,
+              "height": 0.4756
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.5067,
+              "width": 0.2413,
+              "height": 0.4756
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_screenShare_phone_portrait",
+      "description": "Content 3p screenShare on phone_portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.347,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.6735,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_screenShare_phone_landscape",
+      "description": "Content 3p screenShare on phone_landscape",
+      "scene": {
+        "viewportWidth": 844,
+        "viewportHeight": 390,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0095,
+              "y": 0.0205,
+              "width": 0.731,
+              "height": 0.959
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.0205,
+              "width": 0.2405,
+              "height": 0.306
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.347,
+              "width": 0.2405,
+              "height": 0.306
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.6735,
+              "width": 0.2405,
+              "height": 0.306
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_screenShare_tablet_portrait",
+      "description": "Content 3p screenShare on tablet_portrait",
+      "scene": {
+        "viewportWidth": 768,
+        "viewportHeight": 1024,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.0156,
+              "width": 0.9583,
+              "height": 0.7207
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.748,
+              "width": 0.309,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.3455,
+              "y": 0.748,
+              "width": 0.309,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.6701,
+              "y": 0.748,
+              "width": 0.309,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_screenShare_tablet_landscape",
+      "description": "Content 3p screenShare on tablet_landscape",
+      "scene": {
+        "viewportWidth": 1024,
+        "viewportHeight": 768,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0156,
+              "y": 0.0208,
+              "width": 0.7207,
+              "height": 0.9583
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.0208,
+              "width": 0.2363,
+              "height": 0.309
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.3455,
+              "width": 0.2363,
+              "height": 0.309
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.6701,
+              "width": 0.2363,
+              "height": 0.309
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_screenShare_desktop_compact",
+      "description": "Content 3p screenShare on desktop_compact",
+      "scene": {
+        "viewportWidth": 1280,
+        "viewportHeight": 720,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0125,
+              "y": 0.0222,
+              "width": 0.7266,
+              "height": 0.9556
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.0222,
+              "width": 0.2391,
+              "height": 0.3074
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.3463,
+              "width": 0.2391,
+              "height": 0.3074
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.6704,
+              "width": 0.2391,
+              "height": 0.3074
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_screenShare_desktop_wide",
+      "description": "Content 3p screenShare on desktop_wide",
+      "scene": {
+        "viewportWidth": 1600,
+        "viewportHeight": 900,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.01,
+              "y": 0.0178,
+              "width": 0.7313,
+              "height": 0.9644
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.0178,
+              "width": 0.2413,
+              "height": 0.3126
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.3437,
+              "width": 0.2413,
+              "height": 0.3126
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.6696,
+              "width": 0.2413,
+              "height": 0.3126
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_4p_screenShare_phone_portrait",
+      "description": "Content 4p screenShare on phone_portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 5,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.2244,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.2654,
+              "y": 0.75,
+              "width": 0.2244,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5103,
+              "y": 0.75,
+              "width": 0.2244,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7551,
+              "y": 0.75,
+              "width": 0.2244,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_4p_screenShare_phone_landscape",
+      "description": "Content 4p screenShare on phone_landscape",
+      "scene": {
+        "viewportWidth": 844,
+        "viewportHeight": 390,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 5,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0095,
+              "y": 0.0205,
+              "width": 0.731,
+              "height": 0.959
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.0205,
+              "width": 0.2405,
+              "height": 0.2244
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.2654,
+              "width": 0.2405,
+              "height": 0.2244
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.5103,
+              "width": 0.2405,
+              "height": 0.2244
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.75,
+              "y": 0.7551,
+              "width": 0.2405,
+              "height": 0.2244
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_4p_screenShare_tablet_portrait",
+      "description": "Content 4p screenShare on tablet_portrait",
+      "scene": {
+        "viewportWidth": 768,
+        "viewportHeight": 1024,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 5,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.0156,
+              "width": 0.9583,
+              "height": 0.7207
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0208,
+              "y": 0.748,
+              "width": 0.2279,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.2643,
+              "y": 0.748,
+              "width": 0.2279,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.5078,
+              "y": 0.748,
+              "width": 0.2279,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7513,
+              "y": 0.748,
+              "width": 0.2279,
+              "height": 0.2363
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_4p_screenShare_tablet_landscape",
+      "description": "Content 4p screenShare on tablet_landscape",
+      "scene": {
+        "viewportWidth": 1024,
+        "viewportHeight": 768,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 5,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0156,
+              "y": 0.0208,
+              "width": 0.7207,
+              "height": 0.9583
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.0208,
+              "width": 0.2363,
+              "height": 0.2279
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.2643,
+              "width": 0.2363,
+              "height": 0.2279
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.5078,
+              "width": 0.2363,
+              "height": 0.2279
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.748,
+              "y": 0.7513,
+              "width": 0.2363,
+              "height": 0.2279
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_4p_screenShare_desktop_compact",
+      "description": "Content 4p screenShare on desktop_compact",
+      "scene": {
+        "viewportWidth": 1280,
+        "viewportHeight": 720,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 5,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0125,
+              "y": 0.0222,
+              "width": 0.7266,
+              "height": 0.9556
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.0222,
+              "width": 0.2391,
+              "height": 0.2264
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.2653,
+              "width": 0.2391,
+              "height": 0.2264
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.5083,
+              "width": 0.2391,
+              "height": 0.2264
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7484,
+              "y": 0.7514,
+              "width": 0.2391,
+              "height": 0.2264
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_4p_screenShare_desktop_wide",
+      "description": "Content 4p screenShare on desktop_wide",
+      "scene": {
+        "viewportWidth": 1600,
+        "viewportHeight": 900,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "C",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 5,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.01,
+              "y": 0.0178,
+              "width": 0.7313,
+              "height": 0.9644
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.0178,
+              "width": 0.2413,
+              "height": 0.2311
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.2622,
+              "width": 0.2413,
+              "height": 0.2311
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "C",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.5067,
+              "width": 0.2413,
+              "height": 0.2311
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.7488,
+              "y": 0.7511,
+              "width": 0.2413,
+              "height": 0.2311
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_worldCamera_phone_portrait",
+      "description": "Content 3p worldCamera on phone portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "worldCamera",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.347,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.6735,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_compositeCamera_phone_portrait",
+      "description": "Content 3p compositeCamera on phone portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "compositeCamera",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "cover"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.347,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.6735,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
+      }
+    },
+    {
+      "id": "content_3p_contain_phone_portrait",
+      "description": "Content 3p contain on phone portrait",
+      "scene": {
+        "viewportWidth": 390,
+        "viewportHeight": 844,
+        "safeAreaInsets": {
+          "top": 0,
+          "bottom": 0,
+          "left": 0,
+          "right": 0
+        },
+        "participants": [
+          {
+            "id": "A",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "B",
+            "role": "remote",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          },
+          {
+            "id": "ME",
+            "role": "local",
+            "videoEnabled": true,
+            "videoAspectRatio": 1.7777777777777777
+          }
+        ],
+        "localParticipantId": "ME",
+        "activeSpeakerId": null,
+        "pinnedParticipantId": null,
+        "contentSource": {
+          "type": "screenShare",
+          "ownerParticipantId": "A",
+          "aspectRatio": 1.7777777777777777
+        },
+        "userPrefs": {
+          "swappedLocalAndRemote": false,
+          "dominantFit": "contain"
+        }
+      },
+      "expected": {
+        "mode": "content",
+        "tileCount": 4,
+        "tiles": [
+          {
+            "id": "A_content",
+            "type": "contentSource",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.0095,
+              "width": 0.959,
+              "height": 0.731
+            },
+            "fit": "contain"
+          },
+          {
+            "id": "A",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.0205,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "B",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.347,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          },
+          {
+            "id": "ME",
+            "type": "participant",
+            "normalizedFrame": {
+              "x": 0.6735,
+              "y": 0.75,
+              "width": 0.306,
+              "height": 0.2405
+            },
+            "fit": "cover"
+          }
+        ],
+        "localPip": null
       }
     }
   ]

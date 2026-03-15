@@ -1044,6 +1044,7 @@ class CallManager(context: Context) {
 
         clientId = msg.cid
         clientId?.let { settingsStore.reconnectCid = it }
+        updateState(_uiState.value.copy(localCid = clientId))
 
         msg.payload?.optString("reconnectToken").orEmpty().ifBlank { null }?.let {
             reconnectToken = it

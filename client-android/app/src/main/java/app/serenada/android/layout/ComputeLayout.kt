@@ -106,20 +106,20 @@ private object LayoutConstants {
     val thumbnailMinSize = mapOf(DeviceGroup.PHONE to 72f, DeviceGroup.TABLET to 96f, DeviceGroup.DESKTOP to 120f)
 }
 
-// ===== Private internal types (not exported) =================================
+// ===== Stage layout types (used by UI for row-based grid rendering) ==========
 
-private data class StageTileSpec(
+data class StageTileSpec(
     val cid: String,
     val aspectRatio: Float,
 )
 
-private data class StageTileLayout(
+data class StageTileLayout(
     val cid: String,
     val widthPx: Int,
     val heightPx: Int,
 )
 
-private data class StageRowLayout(
+data class StageRowLayout(
     val items: List<StageTileLayout>,
 )
 
@@ -144,7 +144,7 @@ private fun deriveMode(scene: CallScene): LayoutMode {
 
 // ===== Aspect ratio clamping =================================================
 
-private fun clampStageTileAspectRatio(ratio: Float?): Float {
+fun clampStageTileAspectRatio(ratio: Float?): Float {
     val safeRatio = ratio ?: return LayoutConstants.defaultTileAspect
     if (!safeRatio.isFinite() || safeRatio <= 0f) return LayoutConstants.defaultTileAspect
     return safeRatio.coerceIn(LayoutConstants.minTileAspect, LayoutConstants.maxTileAspect)
@@ -152,7 +152,7 @@ private fun clampStageTileAspectRatio(ratio: Float?): Float {
 
 // ===== Harmonic-mean grid algorithm (exact port from CallScreen.kt) ==========
 
-private fun computeStageLayout(
+fun computeStageLayout(
     tiles: List<StageTileSpec>,
     availableWidthPx: Float,
     availableHeightPx: Float,
@@ -327,6 +327,128 @@ private fun computePip(
     )
 }
 
+// ===== Focus / Content: primary + filmstrip layout ==========================
+
+private fun computePrimaryWithFilmstrip(
+    primaryId: String,
+    primaryType: OccupantType,
+    primaryFit: FitMode,
+    filmstripParticipants: List<SceneParticipant>,
+    areaX: Float,
+    areaY: Float,
+    areaWidth: Float,
+    areaHeight: Float,
+    gap: Float,
+    cornerRadius: Float,
+    group: DeviceGroup,
+): List<TileLayout> {
+    val isLandscape = areaWidth > areaHeight
+    val thumbnailMin = LayoutConstants.thumbnailMinSize.getValue(group)
+    val filmstripCount = filmstripParticipants.size
+
+    var primaryRatio = LayoutConstants.primaryRatio
+    if (filmstripCount > 0) {
+        if (isLandscape) {
+            val secondaryWidth = areaWidth * (1f - primaryRatio)
+            val tileHeight = (areaHeight - gap * max(0, filmstripCount - 1)) / filmstripCount
+            if (tileHeight < thumbnailMin || secondaryWidth < thumbnailMin) {
+                val ratioFromHeight = if (thumbnailMin * filmstripCount + gap * max(0, filmstripCount - 1) > areaHeight) 0.5f else primaryRatio
+                val ratioFromWidth = 1f - thumbnailMin / areaWidth
+                primaryRatio = max(0.5f, min(primaryRatio, min(ratioFromHeight, ratioFromWidth)))
+            }
+        } else {
+            val secondaryHeight = areaHeight * (1f - primaryRatio)
+            val tileWidth = (areaWidth - gap * max(0, filmstripCount - 1)) / filmstripCount
+            if (tileWidth < thumbnailMin || secondaryHeight < thumbnailMin) {
+                val ratioFromWidth = if (thumbnailMin * filmstripCount + gap * max(0, filmstripCount - 1) > areaWidth) 0.5f else primaryRatio
+                val ratioFromHeight = 1f - thumbnailMin / areaHeight
+                primaryRatio = max(0.5f, min(primaryRatio, min(ratioFromWidth, ratioFromHeight)))
+            }
+        }
+    }
+
+    val tiles = mutableListOf<TileLayout>()
+
+    if (isLandscape) {
+        val primaryWidth = areaWidth * primaryRatio - gap / 2f
+        val secondaryWidth = areaWidth - primaryWidth - gap
+
+        tiles += TileLayout(
+            id = primaryId,
+            type = primaryType,
+            frame = LayoutRect(x = areaX, y = areaY, width = primaryWidth, height = areaHeight),
+            fit = primaryFit,
+            cornerRadius = cornerRadius,
+            zOrder = 0,
+        )
+
+        if (filmstripCount > 0) {
+            val stripX = areaX + primaryWidth + gap
+            val tileHeight = (areaHeight - gap * max(0, filmstripCount - 1)) / filmstripCount
+            filmstripParticipants.forEachIndexed { i, p ->
+                tiles += TileLayout(
+                    id = p.id,
+                    type = OccupantType.PARTICIPANT,
+                    frame = LayoutRect(
+                        x = stripX,
+                        y = areaY + i * (tileHeight + gap),
+                        width = secondaryWidth,
+                        height = tileHeight,
+                    ),
+                    fit = FitMode.COVER,
+                    cornerRadius = cornerRadius,
+                    zOrder = i + 1,
+                )
+            }
+        }
+    } else {
+        val primaryHeight = areaHeight * primaryRatio - gap / 2f
+        val secondaryHeight = areaHeight - primaryHeight - gap
+
+        tiles += TileLayout(
+            id = primaryId,
+            type = primaryType,
+            frame = LayoutRect(x = areaX, y = areaY, width = areaWidth, height = primaryHeight),
+            fit = primaryFit,
+            cornerRadius = cornerRadius,
+            zOrder = 0,
+        )
+
+        if (filmstripCount > 0) {
+            val stripY = areaY + primaryHeight + gap
+            val tileWidth = (areaWidth - gap * max(0, filmstripCount - 1)) / filmstripCount
+            filmstripParticipants.forEachIndexed { i, p ->
+                tiles += TileLayout(
+                    id = p.id,
+                    type = OccupantType.PARTICIPANT,
+                    frame = LayoutRect(
+                        x = areaX + i * (tileWidth + gap),
+                        y = stripY,
+                        width = tileWidth,
+                        height = secondaryHeight,
+                    ),
+                    fit = FitMode.COVER,
+                    cornerRadius = cornerRadius,
+                    zOrder = i + 1,
+                )
+            }
+        }
+    }
+
+    return tiles
+}
+
+// ===== Stable participant ordering ==========================================
+
+private fun participantsStableOrder(
+    participants: List<SceneParticipant>,
+    localParticipantId: String,
+): List<SceneParticipant> {
+    val remotes = participants.filter { it.id != localParticipantId }
+    val local = participants.filter { it.id == localParticipantId }
+    return remotes + local
+}
+
 // ===== Main entry point ======================================================
 
 fun computeLayout(scene: CallScene): LayoutResult {
@@ -344,124 +466,110 @@ fun computeLayout(scene: CallScene): LayoutResult {
     val availableHeight =
         scene.viewportHeight - scene.safeAreaInsets.top - scene.safeAreaInsets.bottom
 
+    // Padded area
+    val paddedX = availableX + outerPadding
+    val paddedY = availableY + outerPadding
+    val paddedWidth = availableWidth - outerPadding * 2f
+    val paddedHeight = availableHeight - outerPadding * 2f
+
     val localParticipant = scene.participants.find { it.id == scene.localParticipantId }
 
     return when (mode) {
-        // ----- solo: no remote tiles, local shown as PIP -------------------------
+        // ----- solo ---------------------------------------------------------------
         LayoutMode.SOLO -> {
             LayoutResult(
                 mode = mode,
                 tiles = emptyList(),
                 localPip = localParticipant?.let {
-                    computePip(
-                        it.id,
-                        scene.viewportWidth,
-                        scene.viewportHeight,
-                        group,
-                        it.videoAspectRatio,
-                    )
+                    computePip(it.id, scene.viewportWidth, scene.viewportHeight, group, it.videoAspectRatio)
                 },
             )
         }
 
-        // ----- pair: one tile fills area, other as PIP ---------------------------
+        // ----- pair ---------------------------------------------------------------
         LayoutMode.PAIR -> {
             val remoteParticipant = scene.participants.find { it.role == ParticipantRole.REMOTE }
+            val dominant = if (scene.userPrefs.swappedLocalAndRemote) localParticipant else remoteParticipant
+            val pipParticipant = if (scene.userPrefs.swappedLocalAndRemote) remoteParticipant else localParticipant
 
-            val dominant = if (scene.userPrefs.swappedLocalAndRemote) {
-                localParticipant
-            } else {
-                remoteParticipant
-            }
-            val pipParticipant = if (scene.userPrefs.swappedLocalAndRemote) {
-                remoteParticipant
-            } else {
-                localParticipant
-            }
+            val tiles = if (dominant != null) {
+                listOf(TileLayout(
+                    id = dominant.id, type = OccupantType.PARTICIPANT,
+                    frame = LayoutRect(availableX, availableY, availableWidth, availableHeight),
+                    fit = scene.userPrefs.dominantFit, cornerRadius = 0f, zOrder = 0,
+                ))
+            } else emptyList()
 
-            val tiles: List<TileLayout> = if (dominant != null) {
-                listOf(
-                    TileLayout(
-                        id = dominant.id,
-                        type = OccupantType.PARTICIPANT,
-                        frame = LayoutRect(
-                            x = availableX,
-                            y = availableY,
-                            width = availableWidth,
-                            height = availableHeight,
-                        ),
-                        fit = scene.userPrefs.dominantFit,
-                        cornerRadius = 0f,
-                        zOrder = 0,
-                    )
-                )
-            } else {
-                emptyList()
-            }
-
-            val localPip = pipParticipant?.let {
-                computePip(
-                    it.id,
-                    scene.viewportWidth,
-                    scene.viewportHeight,
-                    group,
-                    it.videoAspectRatio,
-                )
-            }
-
-            LayoutResult(mode = mode, tiles = tiles, localPip = localPip)
+            LayoutResult(
+                mode = mode, tiles = tiles,
+                localPip = pipParticipant?.let {
+                    computePip(it.id, scene.viewportWidth, scene.viewportHeight, group, it.videoAspectRatio)
+                },
+            )
         }
 
-        // ----- grid / focus / content: harmonic-mean grid ------------------------
-        LayoutMode.GRID, LayoutMode.FOCUS, LayoutMode.CONTENT -> {
+        // ----- grid ---------------------------------------------------------------
+        LayoutMode.GRID -> {
             val remoteParticipants = scene.participants.filter { it.role == ParticipantRole.REMOTE }
+            val stageTiles = remoteParticipants.map { StageTileSpec(it.id, clampStageTileAspectRatio(it.videoAspectRatio)) }
+            val rows = computeStageLayout(stageTiles, paddedWidth, paddedHeight, gap)
+            val absoluteTiles = gridTilesToAbsolute(rows, paddedX, paddedY, paddedWidth, paddedHeight, gap)
 
-            val stageTiles: List<StageTileSpec> = remoteParticipants.map { p ->
-                StageTileSpec(
-                    cid = p.id,
-                    aspectRatio = clampStageTileAspectRatio(p.videoAspectRatio),
-                )
+            LayoutResult(
+                mode = mode,
+                tiles = absoluteTiles.mapIndexed { index, t ->
+                    TileLayout(t.cid, OccupantType.PARTICIPANT, t.frame, FitMode.COVER, cornerRadius, index)
+                },
+                localPip = localParticipant?.let {
+                    computePip(it.id, scene.viewportWidth, scene.viewportHeight, group, it.videoAspectRatio)
+                },
+            )
+        }
+
+        // ----- focus --------------------------------------------------------------
+        LayoutMode.FOCUS -> {
+            val pinnedParticipant = scene.participants.find { it.id == scene.pinnedParticipantId }
+            if (pinnedParticipant == null) {
+                return computeLayout(scene.copy(pinnedParticipantId = null))
             }
 
-            // Grid available area = viewport minus safe area minus outerPadding
-            val gridX = availableX + outerPadding
-            val gridY = availableY + outerPadding
-            val gridWidth = availableWidth - outerPadding * 2f
-            val gridHeight = availableHeight - outerPadding * 2f
-
-            val rows = computeStageLayout(stageTiles, gridWidth, gridHeight, gap)
-
-            val absoluteTiles = gridTilesToAbsolute(
-                rows,
-                gridX,
-                gridY,
-                gridWidth,
-                gridHeight,
-                gap,
+            val secondaryParticipants = participantsStableOrder(
+                scene.participants.filter { it.id != pinnedParticipant.id },
+                scene.localParticipantId,
             )
 
-            val tiles: List<TileLayout> = absoluteTiles.mapIndexed { index, t ->
-                TileLayout(
-                    id = t.cid,
-                    type = OccupantType.PARTICIPANT,
-                    frame = t.frame,
-                    fit = FitMode.COVER,
-                    cornerRadius = cornerRadius,
-                    zOrder = index,
-                )
+            LayoutResult(
+                mode = mode,
+                tiles = computePrimaryWithFilmstrip(
+                    pinnedParticipant.id, OccupantType.PARTICIPANT, scene.userPrefs.dominantFit,
+                    secondaryParticipants, paddedX, paddedY, paddedWidth, paddedHeight,
+                    gap, cornerRadius, group,
+                ),
+                localPip = null,
+            )
+        }
+
+        // ----- content ------------------------------------------------------------
+        LayoutMode.CONTENT -> {
+            val cs = scene.contentSource
+            if (cs == null) {
+                return computeLayout(scene.copy(contentSource = null))
             }
 
-            val localPip = localParticipant?.let {
-                computePip(
-                    it.id,
-                    scene.viewportWidth,
-                    scene.viewportHeight,
-                    group,
-                    it.videoAspectRatio,
-                )
-            }
+            val secondaryParticipants = participantsStableOrder(
+                scene.participants,
+                scene.localParticipantId,
+            )
 
-            LayoutResult(mode = mode, tiles = tiles, localPip = localPip)
+            LayoutResult(
+                mode = mode,
+                tiles = computePrimaryWithFilmstrip(
+                    cs.ownerParticipantId + "_content", OccupantType.CONTENT_SOURCE, scene.userPrefs.dominantFit,
+                    secondaryParticipants, paddedX, paddedY, paddedWidth, paddedHeight,
+                    gap, cornerRadius, group,
+                ),
+                localPip = null,
+            )
         }
     }
 }

@@ -3,6 +3,7 @@ package app.serenada.android.call
 data class CallUiState(
     val phase: CallPhase = CallPhase.Idle,
     val roomId: String? = null,
+    val localCid: String? = null,
     val statusMessageResId: Int? = null,
     val errorMessageResId: Int? = null,
     val errorMessageText: String? = null,
