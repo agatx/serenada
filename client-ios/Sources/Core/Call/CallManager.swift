@@ -124,20 +124,12 @@ final class CallManager: ObservableObject {
 
     private var joinAttemptSerial: Int64 = 0
     private var reconnectAttempts = 0
-    private var sentOffer = false
-    private var isMakingOffer = false
-    private var pendingIceRestart = false
-    private var lastIceRestartAt: TimeInterval = 0
 
     private var reconnectTask: Task<Void, Never>?
     private var joinTimeoutTask: Task<Void, Never>?
     private var joinConnectKickstartTask: Task<Void, Never>?
     private var joinRecoveryTask: Task<Void, Never>?
-    private var iceRestartTask: Task<Void, Never>?
     private var connectionStatusRetryingTask: Task<Void, Never>?
-    private var offerTimeoutTask: Task<Void, Never>?
-    private var nonHostOfferFallbackTask: Task<Void, Never>?
-    private var nonHostOfferFallbackAttempts = 0
     private var turnRefreshTask: Task<Void, Never>?
     private var remoteVideoPollTimer: Timer?
 
@@ -220,10 +212,7 @@ final class CallManager: ObservableObject {
         joinTimeoutTask?.cancel()
         joinConnectKickstartTask?.cancel()
         joinRecoveryTask?.cancel()
-        iceRestartTask?.cancel()
         connectionStatusRetryingTask?.cancel()
-        offerTimeoutTask?.cancel()
-        nonHostOfferFallbackTask?.cancel()
         turnRefreshTask?.cancel()
         remoteVideoPollTimer?.invalidate()
         UIApplication.shared.isIdleTimerDisabled = false
@@ -412,7 +401,6 @@ final class CallManager: ObservableObject {
         joinAttemptSerial += 1
         callStartTimeMs = Int64(Date().timeIntervalSince1970 * 1000)
 
-        sentOffer = false
         pendingMessages.removeAll()
         peerSlots.removeAll()
         currentRoomState = nil
@@ -436,7 +424,6 @@ final class CallManager: ObservableObject {
             $0.localAudioEnabled = defaultAudio
             $0.localVideoEnabled = defaultVideo
             $0.remoteParticipants = []
-            $0.remoteVideoEnabled = false
             $0.localCameraMode = .selfie
             $0.cameraZoomFactor = 1
             $0.connectionStatus = .connected
@@ -1680,12 +1667,11 @@ final class CallManager: ObservableObject {
 
     private func refreshRemoteParticipants() {
         guard let roomState = currentRoomState else {
-            if uiState.remoteParticipants.isEmpty && !uiState.remoteVideoEnabled {
+            if uiState.remoteParticipants.isEmpty {
                 return
             }
             updateState {
                 $0.remoteParticipants = []
-                $0.remoteVideoEnabled = false
             }
             return
         }
@@ -1701,14 +1687,12 @@ final class CallManager: ObservableObject {
                 )
             }
 
-        let primaryVideoEnabled = participants.first?.videoEnabled ?? false
-        if uiState.remoteParticipants == participants && uiState.remoteVideoEnabled == primaryVideoEnabled {
+        if uiState.remoteParticipants == participants {
             return
         }
 
         updateState {
             $0.remoteParticipants = participants
-            $0.remoteVideoEnabled = primaryVideoEnabled
         }
     }
 
@@ -1841,7 +1825,6 @@ final class CallManager: ObservableObject {
             $0.phase = .ending
             $0.statusMessage = message
             $0.localVideoEnabled = false
-            $0.remoteVideoEnabled = false
             $0.remoteParticipants = []
         }
 
@@ -1878,9 +1861,6 @@ final class CallManager: ObservableObject {
         pendingMessages.removeAll()
 
         reconnectAttempts = 0
-        sentOffer = false
-        isMakingOffer = false
-        pendingIceRestart = false
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -1889,7 +1869,6 @@ final class CallManager: ObservableObject {
         clearJoinRecovery()
         clearOfferTimeout()
         clearNonHostOfferFallback()
-        nonHostOfferFallbackAttempts = 0
         clearIceRestartTimer()
         clearConnectionStatusRetryingTimer()
         clearTurnRefresh()
@@ -2422,7 +2401,6 @@ final class CallManager: ObservableObject {
                     case "CONNECTED":
                         eventSink.recoverFromJoiningIfNeeded(participantHint: nil, preferInCall: true)
                         eventSink.clearIceRestartTimer()
-                        eventSink.pendingIceRestart = false
                     case "DISCONNECTED":
                         eventSink.scheduleIceRestart(reason: "conn-disconnected", delayMs: 2000)
                     case "FAILED":
@@ -2445,7 +2423,6 @@ final class CallManager: ObservableObject {
                         eventSink.scheduleIceRestart(reason: "ice-failed", delayMs: 0)
                     case "CONNECTED", "COMPLETED":
                         eventSink.clearIceRestartTimer()
-                        eventSink.pendingIceRestart = false
                     default:
                         break
                     }
@@ -2457,10 +2434,6 @@ final class CallManager: ObservableObject {
                     guard let eventSink else { return }
                     if state == "STABLE" {
                         eventSink.clearOfferTimeout()
-                        if eventSink.pendingIceRestart {
-                            eventSink.pendingIceRestart = false
-                            eventSink.triggerIceRestart(reason: "pending-retry")
-                        }
                     }
                     eventSink.updateState { $0.signalingState = state }
                 }

@@ -137,18 +137,10 @@ class CallManager(context: Context) {
     // All mutable state below is accessed exclusively from the handler thread — no synchronization needed.
     private var joinAttemptSerial = 0L
     private var reconnectAttempts = 0
-    private var sentOffer = false
-    private var isMakingOffer = false
-    private var pendingIceRestart = false
-    private var lastIceRestartAt = 0L
-    private var iceRestartRunnable: Runnable? = null
     private var connectionStatusRetryingRunnable: Runnable? = null
-    private var offerTimeoutRunnable: Runnable? = null
     private var joinTimeoutRunnable: Runnable? = null
     private var joinKickstartRunnable: Runnable? = null
     private var joinRecoveryRunnable: Runnable? = null
-    private var nonHostOfferFallbackRunnable: Runnable? = null
-    private var nonHostOfferFallbackAttempts = 0
     private var turnRefreshRunnable: Runnable? = null
     private var remoteVideoStatePollRunnable: Runnable? = null
     private var webrtcStatsRequestInFlight = false
@@ -202,9 +194,6 @@ class CallManager(context: Context) {
                 sendJoin(join)
             }
             sendWatchRoomsIfNeeded()
-            if (pendingIceRestart) {
-                handler.post { triggerIceRestart("signaling-reconnect") }
-            }
         }
 
         override fun onMessage(message: SignalingMessage) {
@@ -262,7 +251,6 @@ class CallManager(context: Context) {
                     when (state) {
                         PeerConnection.PeerConnectionState.CONNECTED -> {
                             clearIceRestartTimer()
-                            pendingIceRestart = false
                         }
 
                         PeerConnection.PeerConnectionState.DISCONNECTED -> scheduleIceRestart(
@@ -289,7 +277,6 @@ class CallManager(context: Context) {
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> {
                             clearIceRestartTimer()
-                            pendingIceRestart = false
                         }
 
                         else -> {}
@@ -301,10 +288,6 @@ class CallManager(context: Context) {
                 handler.post {
                     if (state == PeerConnection.SignalingState.STABLE) {
                         clearOfferTimeout()
-                        if (pendingIceRestart) {
-                            pendingIceRestart = false
-                            triggerIceRestart("pending-retry")
-                        }
                     }
                     updateState(_uiState.value.copy(signalingState = state.name))
                 }
@@ -809,7 +792,6 @@ class CallManager(context: Context) {
         currentRoomId = roomId
         val joinAttemptId = ++joinAttemptSerial
         callStartTimeMs = System.currentTimeMillis()
-        sentOffer = false
         pendingMessages.clear()
         peerSlots.clear()
         currentRoomState = null
@@ -1634,7 +1616,6 @@ class CallManager(context: Context) {
             slot.offerTimeoutTask?.let { handler.removeCallbacks(it) }
             slot.offerTimeoutTask = null
         }
-        offerTimeoutRunnable = null
     }
 
     private fun scheduleIceRestart(reason: String, delayMs: Long) {
@@ -1672,7 +1653,6 @@ class CallManager(context: Context) {
             slot.iceRestartTask?.let { handler.removeCallbacks(it) }
             slot.iceRestartTask = null
         }
-        iceRestartRunnable = null
     }
 
     private fun triggerIceRestart(reason: String) {
@@ -1731,18 +1711,16 @@ class CallManager(context: Context) {
                 .createIceServer()
         }
         webRtcEngine.setIceServers(servers)
-        flushPendingMessages()
-        maybeSendOffer()
-        peerSlots.values.forEach { slot ->
-            if (!shouldIOffer(slot.remoteCid, currentRoomState)) {
-                maybeScheduleNonHostOfferFallback(slot.remoteCid, "ice-ready")
-            }
-        }
+        onIceServersReady()
     }
 
     private fun applyDefaultIceServers() {
         val servers = listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         webRtcEngine.setIceServers(servers)
+        onIceServersReady()
+    }
+
+    private fun onIceServersReady() {
         flushPendingMessages()
         maybeSendOffer()
         peerSlots.values.forEach { slot ->
@@ -1812,18 +1790,13 @@ class CallManager(context: Context) {
                     connectionState = slot.getConnectionState().name,
                 )
             }
-        val remoteVideoEnabled = remoteParticipants.firstOrNull()?.videoEnabled ?: false
         val state = _uiState.value
-        if (
-            state.remoteParticipants == remoteParticipants &&
-            state.remoteVideoEnabled == remoteVideoEnabled
-        ) {
+        if (state.remoteParticipants == remoteParticipants) {
             return
         }
         updateState(
             state.copy(
-                remoteParticipants = remoteParticipants,
-                remoteVideoEnabled = remoteVideoEnabled
+                remoteParticipants = remoteParticipants
             )
         )
     }
@@ -2080,7 +2053,6 @@ class CallManager(context: Context) {
             slot.nonHostFallbackTask?.let { handler.removeCallbacks(it) }
             slot.nonHostFallbackTask = null
         }
-        nonHostOfferFallbackRunnable = null
     }
 
     private fun maybeSendNonHostFallbackOffer(remoteCid: String) {
@@ -2144,7 +2116,6 @@ class CallManager(context: Context) {
         clearJoinKickstart()
         clearJoinRecovery()
         clearNonHostOfferFallback()
-        nonHostOfferFallbackAttempts = 0
         clearTurnRefresh()
         deactivateAudioSession()
         releasePerformanceLocks()
@@ -2162,9 +2133,6 @@ class CallManager(context: Context) {
         pendingJoinRoom = null
         pendingMessages.clear()
         reconnectAttempts = 0
-        sentOffer = false
-        isMakingOffer = false
-        pendingIceRestart = false
         clearOfferTimeout()
         clearIceRestartTimer()
         clearConnectionStatusRetryingTimer()

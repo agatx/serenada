@@ -164,15 +164,15 @@ final class PeerConnectionSlot {
             },
             onConnectionState: { [weak self] state in
                 guard let self else { return }
-                self.onConnectionStateChange(self.remoteCid, self.connectionStateString(state))
+                self.onConnectionStateChange(self.remoteCid, connectionStateString(state))
             },
             onIceConnectionState: { [weak self] state in
                 guard let self else { return }
-                self.onIceConnectionStateChange(self.remoteCid, self.iceConnectionStateString(state))
+                self.onIceConnectionStateChange(self.remoteCid, iceConnectionStateString(state))
             },
             onSignalingState: { [weak self] state in
                 guard let self else { return }
-                self.onSignalingStateChange(self.remoteCid, self.signalingStateString(state))
+                self.onSignalingStateChange(self.remoteCid, signalingStateString(state))
             },
             onRenegotiationNeeded: { [weak self] in
                 guard let self else { return }
@@ -807,139 +807,6 @@ private extension PeerConnectionSlot {
         }
     }
 
-    private func mediaKind(for stat: RTCStatistics) -> String? {
-        let kind = memberString(stat, key: "kind") ?? memberString(stat, key: "mediaType")
-        if kind == "audio" || kind == "video" {
-            return kind
-        }
-        return nil
-    }
-
-    private func memberString(_ stat: RTCStatistics?, key: String) -> String? {
-        guard let value = stat?.values[key] else { return nil }
-        if let string = value as? String {
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        let description = value.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return description.isEmpty ? nil : description
-    }
-
-    private func memberDouble(_ stat: RTCStatistics?, key: String) -> Double? {
-        guard let value = stat?.values[key] else { return nil }
-        if let number = value as? NSNumber {
-            return number.doubleValue
-        }
-        if let string = value as? String {
-            return Double(string)
-        }
-        return nil
-    }
-
-    private func memberInt64(_ stat: RTCStatistics?, key: String) -> Int64? {
-        guard let value = stat?.values[key] else { return nil }
-        if let number = value as? NSNumber {
-            return number.int64Value
-        }
-        if let string = value as? String {
-            return Int64(string)
-        }
-        return nil
-    }
-
-    private func memberBool(_ stat: RTCStatistics?, key: String) -> Bool? {
-        guard let value = stat?.values[key] else { return nil }
-        if let number = value as? NSNumber {
-            return number.boolValue
-        }
-        if let string = value as? String {
-            switch string.lowercased() {
-            case "true":
-                return true
-            case "false":
-                return false
-            default:
-                return nil
-            }
-        }
-        return nil
-    }
-
-    private func calculateBitrateKbps(previousBytes: Int64, currentBytes: Int64, elapsedSeconds: Double) -> Double? {
-        guard elapsedSeconds > 0, currentBytes >= previousBytes else { return nil }
-        return Double(currentBytes - previousBytes) * 8.0 / elapsedSeconds / 1000.0
-    }
-
-    private func ratioPercent(numerator: Int64, denominator: Int64) -> Double? {
-        guard denominator > 0 else { return nil }
-        return Double(numerator) / Double(denominator) * 100.0
-    }
-
-    private func positiveRatePerMinute(currentValue: Int64, previousValue: Int64, elapsedSeconds: Double) -> Double? {
-        guard elapsedSeconds > 0, currentValue >= previousValue else { return nil }
-        return Double(currentValue - previousValue) / elapsedSeconds * 60.0
-    }
-
-    private func connectionStateString(_ state: RTCPeerConnectionState) -> String {
-        switch state {
-        case .new:
-            return "NEW"
-        case .connecting:
-            return "CONNECTING"
-        case .connected:
-            return "CONNECTED"
-        case .disconnected:
-            return "DISCONNECTED"
-        case .failed:
-            return "FAILED"
-        case .closed:
-            return "CLOSED"
-        @unknown default:
-            return "UNKNOWN"
-        }
-    }
-
-    private func iceConnectionStateString(_ state: RTCIceConnectionState) -> String {
-        switch state {
-        case .new:
-            return "NEW"
-        case .checking:
-            return "CHECKING"
-        case .connected:
-            return "CONNECTED"
-        case .completed:
-            return "COMPLETED"
-        case .failed:
-            return "FAILED"
-        case .disconnected:
-            return "DISCONNECTED"
-        case .closed:
-            return "CLOSED"
-        case .count:
-            return "COUNT"
-        @unknown default:
-            return "UNKNOWN"
-        }
-    }
-
-    private func signalingStateString(_ state: RTCSignalingState) -> String {
-        switch state {
-        case .stable:
-            return "STABLE"
-        case .haveLocalOffer:
-            return "HAVE_LOCAL_OFFER"
-        case .haveLocalPrAnswer:
-            return "HAVE_LOCAL_PRANSWER"
-        case .haveRemoteOffer:
-            return "HAVE_REMOTE_OFFER"
-        case .haveRemotePrAnswer:
-            return "HAVE_REMOTE_PRANSWER"
-        case .closed:
-            return "CLOSED"
-        @unknown default:
-            return "UNKNOWN"
-        }
-    }
 }
 
 private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnectionDelegate {

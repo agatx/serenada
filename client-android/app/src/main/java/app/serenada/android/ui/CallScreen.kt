@@ -183,49 +183,10 @@ fun CallScreen(
     }
 
     val remoteRendererEvents = remember {
-        object : RendererCommon.RendererEvents {
-            override fun onFirstFrameRendered() = Unit
-
-            override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
-                val rotatedWidth = if (rotation % 180 == 0) width else height
-                val rotatedHeight = if (rotation % 180 == 0) height else width
-                if (rotatedWidth == 0 || rotatedHeight == 0) return
-                val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
-                // Quantize minor encoder size swings so we don't keep relaying out the SurfaceView.
-                val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
-                mainHandler.post {
-                    val current = remoteAspectRatio
-                    val orientationChanged =
-                        current != null && ((current > 1f) != (ratio > 1f))
-                    val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
-                    if (current == null || abs(current - ratio) > deltaThreshold) {
-                        remoteAspectRatio = ratio
-                    }
-                }
-            }
-        }
+        aspectRatioRendererEvents(mainHandler) { ratio -> remoteAspectRatio = ratio }
     }
     val localRendererEvents = remember {
-        object : RendererCommon.RendererEvents {
-            override fun onFirstFrameRendered() = Unit
-
-            override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
-                val rotatedWidth = if (rotation % 180 == 0) width else height
-                val rotatedHeight = if (rotation % 180 == 0) height else width
-                if (rotatedWidth == 0 || rotatedHeight == 0) return
-                val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
-                val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
-                mainHandler.post {
-                    val current = localAspectRatio
-                    val orientationChanged =
-                        current != null && ((current > 1f) != (ratio > 1f))
-                    val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
-                    if (current == null || abs(current - ratio) > deltaThreshold) {
-                        localAspectRatio = ratio
-                    }
-                }
-            }
-        }
+        aspectRatioRendererEvents(mainHandler) { ratio -> localAspectRatio = ratio }
     }
 
     DisposableEffect(Unit) {
@@ -1283,6 +1244,32 @@ private data class StageRowLayout(
     val items: List<StageTileLayout>,
 )
 
+private fun aspectRatioRendererEvents(
+    handler: android.os.Handler,
+    onAspectRatioChanged: (Float) -> Unit,
+): RendererCommon.RendererEvents = object : RendererCommon.RendererEvents {
+    private var current: Float? = null
+
+    override fun onFirstFrameRendered() = Unit
+
+    override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
+        val rotatedWidth = if (rotation % 180 == 0) width else height
+        val rotatedHeight = if (rotation % 180 == 0) height else width
+        if (rotatedWidth == 0 || rotatedHeight == 0) return
+        val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+        val ratio = ((rawRatio / 0.05f).roundToInt() * 0.05f).coerceAtLeast(0.1f)
+        handler.post {
+            val prev = current
+            val orientationChanged = prev != null && ((prev > 1f) != (ratio > 1f))
+            val deltaThreshold = if (orientationChanged) 0.01f else 0.20f
+            if (prev == null || abs(prev - ratio) > deltaThreshold) {
+                current = ratio
+                onAspectRatioChanged(ratio)
+            }
+        }
+    }
+}
+
 private fun clampStageTileAspectRatio(ratio: Float?): Float {
     val safeRatio = ratio ?: return DEFAULT_STAGE_TILE_ASPECT
     if (!safeRatio.isFinite() || safeRatio <= 0f) return DEFAULT_STAGE_TILE_ASPECT
@@ -1416,7 +1403,7 @@ private fun MultiPartyStage(
                         bottom = bottomPadding + 12.dp
                     )
         ) {
-            val layout =
+            val layout = remember(remoteParticipants, remoteAspectRatios.toMap(), maxWidth, maxHeight) {
                 computeStageLayout(
                     tiles =
                         remoteParticipants.map { participant ->
@@ -1429,6 +1416,7 @@ private fun MultiPartyStage(
                     availableHeightPx = with(density) { maxHeight.toPx() },
                     gapPx = with(density) { gap.toPx() },
                 )
+            }
 
             Column(
                 modifier = Modifier.fillMaxSize(),

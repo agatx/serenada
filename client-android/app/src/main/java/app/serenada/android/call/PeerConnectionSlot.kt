@@ -415,38 +415,4 @@ class PeerConnectionSlot(
         pending.forEach { pc.addIceCandidate(it) }
     }
 
-    private fun memberString(stat: RTCStats?, key: String): String? =
-        stat?.members?.get(key)?.toString()?.takeIf { it.isNotBlank() }
-
-    private fun memberBoolean(stat: RTCStats?, key: String): Boolean? =
-        stat?.members?.get(key) as? Boolean
-
-    private fun memberLong(stat: RTCStats?, key: String): Long? {
-        val value = stat?.members?.get(key) ?: return null
-        return when (value) {
-            is Number -> value.toLong()
-            else -> value.toString().toLongOrNull()
-        }
-    }
-
-    private fun memberDouble(stat: RTCStats?, key: String): Double? {
-        val value = stat?.members?.get(key) ?: return null
-        return when (value) {
-            is Number -> value.toDouble()
-            else -> value.toString().toDoubleOrNull()
-        }
-    }
-
-    private fun getMediaKind(stat: RTCStats?): String? {
-        val kind = memberString(stat, "kind")
-        if (!kind.isNullOrBlank()) return kind
-        val mediaType = memberString(stat, "mediaType")
-        if (!mediaType.isNullOrBlank()) return mediaType
-        return null
-    }
-
-    private fun formatNumber(value: Double?, decimals: Int): String {
-        if (value == null || !value.isFinite()) return "n/a"
-        return "%.${decimals}f".format(value)
-    }
 }

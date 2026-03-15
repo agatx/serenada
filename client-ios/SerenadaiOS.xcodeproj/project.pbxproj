@@ -20,6 +20,7 @@
 		35B2C3834A362F96B5B9FFDC /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; };
 		3A954265ACD7FADB9138DC1B /* AppConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662332FB191C23A57DDBA4D /* AppConstants.swift */; };
 		3E06894D6424CFB4D21BF430 /* SignalingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B1FBDAE9C6D5498DFA0A42 /* SignalingTransport.swift */; };
+		3EDC6D2793D370B9051050BC /* RtcStatsHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70435689E4086A8106CC45D2 /* RtcStatsHelpers.swift */; };
 		3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */; };
 		44918B67779BBD217266CBC3 /* EndpointHostParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA94DD46C2CBF626ACAE2EDC /* EndpointHostParserTests.swift */; };
 		46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */; };
@@ -158,6 +159,7 @@
 		55C7196F10921F7DCB998749 /* JoinSnapshotFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinSnapshotFeature.swift; sourceTree = "<group>"; };
 		6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinWithCodeScreen.swift; sourceTree = "<group>"; };
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		70435689E4086A8106CC45D2 /* RtcStatsHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RtcStatsHelpers.swift; sourceTree = "<group>"; };
 		70B1FBDAE9C6D5498DFA0A42 /* SignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingTransport.swift; sourceTree = "<group>"; };
 		734875A19A797AA3C724DDC1 /* CallAudioSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAudioSessionController.swift; sourceTree = "<group>"; };
 		749A9E8145B6C5211E844E65 /* EndpointHostParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointHostParser.swift; sourceTree = "<group>"; };
@@ -441,6 +443,7 @@
 				734875A19A797AA3C724DDC1 /* CallAudioSessionController.swift */,
 				A48285CB0CBEE51504B0674B /* CallManager.swift */,
 				CA3894047379F7743BD0987F /* PeerConnectionSlot.swift */,
+				70435689E4086A8106CC45D2 /* RtcStatsHelpers.swift */,
 				CAFF8170B38C84FF4B68CAAD /* WebRtcEngine.swift */,
 				9721BFFAF6861BC8E54400A7 /* WebRtcResilienceConstants.swift */,
 			);
@@ -665,6 +668,7 @@
 				86C8CE59C62B299C6454E5D4 /* RoomState.swift in Sources */,
 				C8363EE39A1335203566D71B /* RoomStatuses.swift in Sources */,
 				6E92E404B6B3E0A636F21C56 /* RootView.swift in Sources */,
+				3EDC6D2793D370B9051050BC /* RtcStatsHelpers.swift in Sources */,
 				FB02BC3FE7EB98719C7BE654 /* SavedRoom.swift in Sources */,
 				22E7581EA45084E89DE3B268 /* SavedRoomStore.swift in Sources */,
 				BC3AE1438258D205BFE66CD2 /* SerenadaiOSApp.swift in Sources */,
