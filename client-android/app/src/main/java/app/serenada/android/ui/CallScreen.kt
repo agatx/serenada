@@ -164,6 +164,7 @@ fun CallScreen(
     val localRenderer = remember { SurfaceViewRenderer(context) }
     val remoteRenderer = remember { SurfaceViewRenderer(context) }
     val localPipRenderer = remember { PipTextureRendererView(context, "local-pip") }
+    val localFocusRenderer = remember { PipTextureRendererView(context, "local-focus") }
     val remotePipRenderer = remember { PipTextureRendererView(context, "remote-pip") }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val localZoomTransformState = rememberTransformableState { zoomChange, _, _ ->
@@ -203,11 +204,13 @@ fun CallScreen(
 
     DisposableEffect(Unit) {
         localPipRenderer.init(eglContext)
+        localFocusRenderer.init(eglContext)
         remotePipRenderer.init(eglContext)
         onDispose {
             localRenderer.release()
             remoteRenderer.release()
             localPipRenderer.release()
+            localFocusRenderer.release()
             remotePipRenderer.release()
         }
     }
@@ -380,6 +383,7 @@ fun CallScreen(
                 localCameraMode = uiState.localCameraMode,
                 isScreenSharing = uiState.isScreenSharing,
                 localPipRenderer = localPipRenderer,
+                localFocusRenderer = localFocusRenderer,
                 attachLocalSink = attachLocalSink,
                 detachLocalSink = detachLocalSink,
                 attachRemoteRendererForCid = attachRemoteRendererForCid,
@@ -1295,6 +1299,7 @@ private fun MultiPartyStage(
     localCameraMode: LocalCameraMode,
     isScreenSharing: Boolean,
     localPipRenderer: PipTextureRendererView,
+    localFocusRenderer: PipTextureRendererView,
     attachLocalSink: (VideoSink) -> Unit,
     detachLocalSink: (VideoSink) -> Unit,
     attachRemoteRendererForCid: (String, SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
@@ -1313,6 +1318,13 @@ private fun MultiPartyStage(
     val pipCornerRadius = 12.dp
     val tileCornerRadius = 16.dp
 
+    // Content source: local world/composite/screen share or remote content
+    val hasLocalContent = isScreenSharing ||
+        localCameraMode == LocalCameraMode.WORLD ||
+        localCameraMode == LocalCameraMode.COMPOSITE
+    val hasContentSource = hasLocalContent || remoteContentCid != null
+    val useComputedLayout = localCid != null && (pinnedParticipantId != null || hasContentSource)
+
     Box(modifier = modifier) {
         BoxWithConstraints(
             modifier =
@@ -1324,17 +1336,10 @@ private fun MultiPartyStage(
                         bottom = bottomPadding + 12.dp
                     )
         ) {
-            val availableWidthPx = with(density) { maxWidth.toPx() }
-            val availableHeightPx = with(density) { maxHeight.toPx() }
+                val availableWidthPx = with(density) { maxWidth.toPx() }
+                val availableHeightPx = with(density) { maxHeight.toPx() }
 
-            // Content source: local world/composite/screen share or remote content
-            val hasLocalContent = isScreenSharing ||
-                localCameraMode == LocalCameraMode.WORLD ||
-                localCameraMode == LocalCameraMode.COMPOSITE
-            val hasContentSource = hasLocalContent || remoteContentCid != null
-            val useComputedLayout = localCid != null && (pinnedParticipantId != null || hasContentSource)
-
-            if (useComputedLayout && localCid != null) {
+                if (useComputedLayout && localCid != null) {
                 // Focus/content mode: use computeLayout for primary + filmstrip rendering
                 val contentSource = if (hasLocalContent) {
                     val type = when {
@@ -1426,10 +1431,12 @@ private fun MultiPartyStage(
                         ) {
                             if (isContentTile || (isLocal && !isLocalPlaceholder)) {
                                 // Content source tile or local tile (non-content mode): render local video
+                                // Uses localFocusRenderer (separate from localPipRenderer used by grid PIP)
+                                // to avoid "child already has a parent" crash when switching modes
                                 if (localVideoEnabled || isContentTile) {
                                     TextureVideoSurface(
                                         modifier = Modifier.fillMaxSize(),
-                                        renderer = localPipRenderer,
+                                        renderer = localFocusRenderer,
                                         onAttach = attachLocalSink,
                                         onDetach = detachLocalSink,
                                         mirror = if (isContentTile) false else localMirror,
@@ -1570,11 +1577,7 @@ private fun MultiPartyStage(
         }
 
         // Hide local PIP when in focus/content mode (local is in the filmstrip)
-        val showLocalPip = pinnedParticipantId == null && !isScreenSharing &&
-            localCameraMode != LocalCameraMode.WORLD &&
-            localCameraMode != LocalCameraMode.COMPOSITE &&
-            remoteContentCid == null
-        if (showLocalPip) {
+        if (!useComputedLayout) {
             Box(
                 modifier =
                     Modifier.align(Alignment.BottomEnd)
