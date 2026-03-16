@@ -229,14 +229,15 @@ class CallManager(context: Context) {
             },
             onCameraModeChanged = { mode ->
                 handler.post {
+                    val previousMode = _uiState.value.localCameraMode
                     updateState(_uiState.value.copy(localCameraMode = mode))
                     // Broadcast content state when entering/leaving world/composite mode
                     val isContent = mode == LocalCameraMode.WORLD || mode == LocalCameraMode.COMPOSITE
+                    val wasContent = previousMode == LocalCameraMode.WORLD || previousMode == LocalCameraMode.COMPOSITE
                     if (isContent) {
                         val type = if (mode == LocalCameraMode.WORLD) "worldCamera" else "compositeCamera"
                         broadcastContentState(true, type)
-                    } else if (_uiState.value.localCameraMode == LocalCameraMode.WORLD ||
-                        _uiState.value.localCameraMode == LocalCameraMode.COMPOSITE) {
+                    } else if (wasContent) {
                         broadcastContentState(false)
                     }
                 }
@@ -814,6 +815,13 @@ class CallManager(context: Context) {
     fun flipCamera() {
         // Can only flip if not screen sharing
         if (!_uiState.value.isScreenSharing) {
+            // If currently in content mode (world/composite), broadcast deactivation
+            // before the flip. The onCameraModeChanged callback will broadcast
+            // activation if the new mode is also a content mode.
+            val currentMode = _uiState.value.localCameraMode
+            if (currentMode == LocalCameraMode.WORLD || currentMode == LocalCameraMode.COMPOSITE) {
+                broadcastContentState(false)
+            }
             webRtcEngine.flipCamera()
         }
     }

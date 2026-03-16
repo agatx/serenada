@@ -31,7 +31,9 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -156,7 +158,7 @@ fun CallScreen(
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
-    var pinnedParticipantId by remember { mutableStateOf<String?>(null) }
+    var pinnedParticipantId by rememberSaveable { mutableStateOf<String?>(null) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var showRecoveringBadge by remember { mutableStateOf(false) }
@@ -615,7 +617,7 @@ fun CallScreen(
             uiState.phase == CallPhase.InCall &&
                     isWorldOrCompositeMode &&
                     uiState.isFlashAvailable
-        val showRemoteFitButton = uiState.remoteVideoEnabled && !isLocalLarge
+        val showRemoteFitButton = uiState.remoteVideoEnabled && !isLocalLarge && !isMultiParty
         if (showFlashButton || showRemoteFitButton) {
             Column(
                 modifier =
@@ -1402,50 +1404,75 @@ private fun MultiPartyStage(
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     computedLayout.tiles.forEach { tile ->
+                        key(tile.id) {
                         val isContentTile = tile.type == OccupantType.CONTENT_SOURCE
                         val isLocal = tile.id == localCid
-                        val isLocalPlaceholder = isLocal && contentSource != null
+                        val contentOwnerCid = contentSource?.ownerParticipantId
+                        val isLocalContent = isContentTile && contentOwnerCid == localCid
+                        val isRemoteContent = isContentTile && contentOwnerCid != localCid
+                        val isLocalPlaceholder = isLocal && contentOwnerCid == localCid && !isContentTile
                         val tileWidthDp = with(density) { tile.frame.width.toDp() }
                         val tileHeightDp = with(density) { tile.frame.height.toDp() }
                         val tileXDp = with(density) { tile.frame.x.toDp() }
                         val tileYDp = with(density) { tile.frame.y.toDp() }
                         val tileCornerRadiusDp = with(density) { tile.cornerRadius.toDp() }
 
+                        @OptIn(ExperimentalFoundationApi::class)
                         Box(
                             modifier = Modifier
                                 .offset(x = tileXDp, y = tileYDp)
                                 .size(width = tileWidthDp, height = tileHeightDp)
                                 .clip(RoundedCornerShape(tileCornerRadiusDp))
                                 .background(Color(0xFF111111))
-                                .pointerInput(tile.id) {
-                                    detectTapGestures(
-                                        onLongPress = {
-                                            if (!isContentTile) {
-                                                onPinnedParticipantIdChanged(
-                                                    if (tile.id == pinnedParticipantId) null else tile.id
-                                                )
-                                            }
+                                .combinedClickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onLongClick = {
+                                        if (!isContentTile) {
+                                            onPinnedParticipantIdChanged(
+                                                if (tile.id == pinnedParticipantId) null else tile.id
+                                            )
                                         }
-                                    )
-                                }
+                                    },
+                                    onClick = {}
+                                )
                         ) {
-                            if (isContentTile || (isLocal && !isLocalPlaceholder)) {
-                                // Content source tile or local tile (non-content mode): render local video
-                                // Uses localFocusRenderer (separate from localPipRenderer used by grid PIP)
-                                // to avoid "child already has a parent" crash when switching modes
-                                if (localVideoEnabled || isContentTile) {
+                            if (isLocalContent || (isLocal && !isLocalPlaceholder)) {
+                                // Local content tile or local filmstrip tile: render local video
+                                if (localVideoEnabled || isLocalContent) {
                                     TextureVideoSurface(
                                         modifier = Modifier.fillMaxSize(),
                                         renderer = localFocusRenderer,
                                         onAttach = attachLocalSink,
                                         onDetach = detachLocalSink,
-                                        mirror = if (isContentTile) false else localMirror,
-                                        contentScale = if (isContentTile || tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop
+                                        mirror = if (isLocalContent) false else localMirror,
+                                        contentScale = if (isLocalContent || tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop
                                     )
                                 } else {
                                     VideoPlaceholder(
                                         text = stringResource(R.string.call_camera_off),
                                         fontSize = 10.sp
+                                    )
+                                }
+                            } else if (isRemoteContent) {
+                                // Remote content tile: render the content owner's video
+                                val ownerParticipant = remoteParticipants.firstOrNull { it.cid == contentOwnerCid }
+                                if (ownerParticipant != null) {
+                                    RemoteParticipantStageTile(
+                                        participant = ownerParticipant,
+                                        width = tileWidthDp,
+                                        height = tileHeightDp,
+                                        cornerRadius = tileCornerRadiusDp,
+                                        contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                                        onAspectRatioChanged = { ratio ->
+                                            remoteAspectRatios[ownerParticipant.cid] = ratio
+                                        },
+                                        attachRemoteRenderer = { renderer, events ->
+                                            attachRemoteRendererForCid(ownerParticipant.cid, renderer, events)
+                                        },
+                                        detachRemoteRenderer = { renderer ->
+                                            detachRemoteRendererForCid(ownerParticipant.cid, renderer)
+                                        }
                                     )
                                 }
                             } else if (isLocalPlaceholder) {
@@ -1462,6 +1489,7 @@ private fun MultiPartyStage(
                                         width = tileWidthDp,
                                         height = tileHeightDp,
                                         cornerRadius = tileCornerRadiusDp,
+                                        contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
                                         onAspectRatioChanged = { ratio ->
                                             remoteAspectRatios[tile.id] = ratio
                                         },
@@ -1512,6 +1540,7 @@ private fun MultiPartyStage(
                                 }
                             }
                         }
+                    } // key(tile.id)
                     }
                 }
             } else {
@@ -1546,12 +1575,18 @@ private fun MultiPartyStage(
                                     Spacer(modifier = Modifier.width(gap))
                                 }
                                 val participant = remoteParticipants.first { it.cid == tile.cid }
+                                @OptIn(ExperimentalFoundationApi::class)
                                 Box(
-                                    modifier = Modifier.pointerInput(tile.cid) {
-                                        detectTapGestures(
-                                            onLongPress = { onPinnedParticipantIdChanged(tile.cid) }
-                                        )
-                                    }
+                                    modifier = Modifier.combinedClickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onLongClick = {
+                                            onPinnedParticipantIdChanged(
+                                                if (tile.cid == pinnedParticipantId) null else tile.cid
+                                            )
+                                        },
+                                        onClick = {}
+                                    )
                                 ) {
                                     RemoteParticipantStageTile(
                                         participant = participant,
@@ -1612,6 +1647,7 @@ private fun RemoteParticipantStageTile(
     width: androidx.compose.ui.unit.Dp,
     height: androidx.compose.ui.unit.Dp,
     cornerRadius: androidx.compose.ui.unit.Dp,
+    contentScale: ContentScale = ContentScale.Fit,
     onAspectRatioChanged: (Float) -> Unit,
     attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
@@ -1653,7 +1689,7 @@ private fun RemoteParticipantStageTile(
             renderer = renderer,
             onAttach = { attachRemoteRenderer(it, rendererEvents) },
             onDetach = detachRemoteRenderer,
-            contentScale = ContentScale.Fit,
+            contentScale = contentScale,
             cornerRadius = cornerRadius,
             isMediaOverlay = false
         )
@@ -1684,7 +1720,12 @@ private fun TextureVideoSurface(
 
     AndroidView(
         modifier = modifier,
-        factory = { renderer },
+        factory = {
+            // Detach from any existing parent to prevent "child already has a parent"
+            // crash when Compose reuses the same View across composition slots
+            (renderer.parent as? ViewGroup)?.removeView(renderer)
+            renderer
+        },
         update = {
             it.setMirror(mirror)
             it.setScalingType(
