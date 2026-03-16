@@ -311,7 +311,21 @@ struct CallScreen: View {
                     remoteVideoFitCover: $remoteVideoFitCover,
                     bottomPadding: pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible),
                     callManager: callManager,
-                    pinnedParticipantId: $pinnedParticipantId
+                    pinnedParticipantId: $pinnedParticipantId,
+                    onTapBackground: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            if areControlsVisible {
+                                areControlsVisible = false
+                                wereControlsLastHiddenByAutoHide = false
+                            } else {
+                                areControlsVisible = true
+                                if wereControlsLastHiddenByAutoHide {
+                                    isControlsAutoHideEnabled = false
+                                    wereControlsLastHiddenByAutoHide = false
+                                }
+                            }
+                        }
+                    }
                 )
             } else if showLocalAsPrimarySurface {
                 mainVideoSurface(
@@ -334,7 +348,9 @@ struct CallScreen: View {
                 smallLocalView
             }
 
-            backgroundInteractionLayer(isPinchZoomEnabled: isPinchZoomEnabled)
+            if !isMultiParty {
+                backgroundInteractionLayer(isPinchZoomEnabled: isPinchZoomEnabled)
+            }
             overlays
         }
         .onChange(of: uiState.isFrontCamera) { isFront in
@@ -802,6 +818,7 @@ private struct MultiPartyStage: View {
     let bottomPadding: CGFloat
     let callManager: CallManager
     @Binding var pinnedParticipantId: String?
+    let onTapBackground: () -> Void
 
     private let gap: CGFloat = 12
     private let outerPadding: CGFloat = 16
@@ -875,22 +892,33 @@ private struct MultiPartyStage: View {
                     ForEach(Array(layoutResult.tiles.enumerated()), id: \.element.id) { _, tile in
                         let isContentTile = tile.type == .contentSource
                         let isLocal = tile.id == localCid
-                        let isLocalPlaceholder = isLocal && activeContentSource != nil
+                        let isLocalPlaceholder = isLocal && activeContentSource?.ownerParticipantId == localCid
+
+                        let contentOwnerCid = activeContentSource?.ownerParticipantId
+                        let isLocalContent = isContentTile && contentOwnerCid == localCid
+                        let isRemoteContent = isContentTile && contentOwnerCid != localCid
 
                         ZStack {
                             Color.black
-                            if isContentTile || (isLocal && !isLocalPlaceholder) {
-                                // Content source or local tile: render local video
-                                if localVideoEnabled || isContentTile {
+                            if isLocalContent || (isLocal && !isLocalPlaceholder) {
+                                // Local content tile or local filmstrip tile: render local video
+                                if localVideoEnabled || isLocalContent {
                                     WebRTCVideoView(
                                         kind: .local,
                                         callManager: callManager,
-                                        videoContentMode: isContentTile ? .scaleAspectFit : (tile.fit == .contain ? .scaleAspectFit : .scaleAspectFill),
-                                        isMirrored: isContentTile ? false : localMirror
+                                        videoContentMode: isLocalContent ? .scaleAspectFit : (tile.fit == .contain ? .scaleAspectFit : .scaleAspectFill),
+                                        isMirrored: isLocalContent ? false : localMirror
                                     )
                                 } else {
                                     VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
                                 }
+                            } else if isRemoteContent, let ownerCid = contentOwnerCid {
+                                // Remote content tile: render the content owner's video
+                                WebRTCVideoView(
+                                    kind: .remoteForCid(ownerCid),
+                                    callManager: callManager,
+                                    videoContentMode: tile.fit == .contain ? .scaleAspectFit : .scaleAspectFill
+                                )
                             } else if isLocalPlaceholder {
                                 VideoPlaceholderTile(text: L10n.callCameraOff, compact: true)
                             } else if let participant = remoteParticipants.first(where: { $0.cid == tile.id }) {
@@ -959,11 +987,14 @@ private struct MultiPartyStage: View {
                             x: tile.frame.x + tile.frame.width / 2,
                             y: tile.frame.y + tile.frame.height / 2
                         )
-                        .onLongPressGesture {
-                            if !isContentTile {
-                                pinnedParticipantId = tile.id == pinnedParticipantId ? nil : tile.id
-                            }
-                        }
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.5)
+                                .onEnded { _ in
+                                    if !isContentTile {
+                                        pinnedParticipantId = tile.id == pinnedParticipantId ? nil : tile.id
+                                    }
+                                }
+                        )
                     }
                 }
                 .frame(width: availableWidth, height: availableHeight)
@@ -999,9 +1030,12 @@ private struct MultiPartyStage: View {
                                                 remoteTileAspectRatios[tile.cid] = quantizedStageTileAspectRatio(size)
                                             }
                                         )
-                                        .onLongPressGesture {
-                                            pinnedParticipantId = tile.cid
-                                        }
+                                        .simultaneousGesture(
+                                            LongPressGesture(minimumDuration: 0.5)
+                                                .onEnded { _ in
+                                                    pinnedParticipantId = tile.cid == pinnedParticipantId ? nil : tile.cid
+                                                }
+                                        )
                                     }
                                 }
                             }
@@ -1024,6 +1058,8 @@ private struct MultiPartyStage: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture { onTapBackground() }
     }
 }
 
@@ -1031,6 +1067,7 @@ private struct RemoteParticipantStageTile: View {
     let participant: RemoteParticipant
     let size: CGSize
     let cornerRadius: CGFloat
+    var videoContentMode: UIView.ContentMode = .scaleAspectFit
     let callManager: CallManager
     let onVideoSizeChanged: (CGSize) -> Void
 
@@ -1040,7 +1077,7 @@ private struct RemoteParticipantStageTile: View {
             WebRTCVideoView(
                 kind: .remoteForCid(participant.cid),
                 callManager: callManager,
-                videoContentMode: .scaleAspectFit,
+                videoContentMode: videoContentMode,
                 onVideoSizeChanged: onVideoSizeChanged
             )
             if !participant.videoEnabled {

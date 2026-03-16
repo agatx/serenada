@@ -556,6 +556,12 @@ final class CallManager: ObservableObject {
     func flipCamera() {
         if !uiState.isScreenSharing {
             debugTrace("ui flipCamera mode=\(uiState.localCameraMode.rawValue)")
+            // If currently in content mode (world/composite), broadcast deactivation
+            // before the flip. The onCameraModeChanged callback will broadcast
+            // activation if the new mode is also a content mode.
+            if uiState.localCameraMode == .world || uiState.localCameraMode == .composite {
+                broadcastContentState(active: false)
+            }
             webRtcEngine.flipCamera()
         }
     }
