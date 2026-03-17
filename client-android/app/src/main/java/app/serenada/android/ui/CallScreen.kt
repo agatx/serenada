@@ -207,7 +207,7 @@ fun CallScreen(
 
     DisposableEffect(Unit) {
         localPipRenderer.init(eglContext)
-        localFocusRenderer.init(eglContext)
+        localFocusRenderer.init(eglContext, localRendererEvents)
         remotePipRenderer.init(eglContext)
         onDispose {
             localRenderer.release()
@@ -385,6 +385,7 @@ fun CallScreen(
                 localMirror = uiState.isFrontCamera && !uiState.isScreenSharing,
                 localCameraMode = uiState.localCameraMode,
                 isScreenSharing = uiState.isScreenSharing,
+                localAspectRatio = localAspectRatio ?: 0f,
                 localPipRenderer = localPipRenderer,
                 localFocusRenderer = localFocusRenderer,
                 attachLocalSink = attachLocalSink,
@@ -1302,6 +1303,7 @@ private fun MultiPartyStage(
     localMirror: Boolean,
     localCameraMode: LocalCameraMode,
     isScreenSharing: Boolean,
+    localAspectRatio: Float,
     localPipRenderer: PipTextureRendererView,
     localFocusRenderer: PipTextureRendererView,
     attachLocalSink: (VideoSink) -> Unit,
@@ -1441,13 +1443,46 @@ private fun MultiPartyStage(
                             if (isLocalContent || (isLocal && !isLocalPlaceholder)) {
                                 // Local content tile or local filmstrip tile: render local video
                                 if (localVideoEnabled || isLocalContent) {
+                                    val localIsCover = !isLocalContent && tile.fit != FitMode.CONTAIN
+                                    val tileWPx = with(density) { tileWidthDp.toPx() }
+                                    val tileHPx = with(density) { tileHeightDp.toPx() }
+                                    val localTileAspect = if (tileHPx > 0f) tileWPx / tileHPx else 1f
+                                    val localFitW: androidx.compose.ui.unit.Dp
+                                    val localFitH: androidx.compose.ui.unit.Dp
+                                    if (localAspectRatio <= 0f) {
+                                        localFitW = tileWidthDp
+                                        localFitH = tileHeightDp
+                                    } else {
+                                        if (localTileAspect > localAspectRatio) {
+                                            localFitH = tileHeightDp
+                                            localFitW = with(density) { (tileHPx * localAspectRatio).toDp() }
+                                        } else {
+                                            localFitW = tileWidthDp
+                                            localFitH = with(density) { (tileWPx / localAspectRatio).toDp() }
+                                        }
+                                    }
+                                    val localCoverScale = if (localAspectRatio > 0f) {
+                                        if (localTileAspect > localAspectRatio) localTileAspect / localAspectRatio
+                                        else localAspectRatio / localTileAspect
+                                    } else 1f
+                                    val localAnimatedScale by animateFloatAsState(
+                                        targetValue = if (localIsCover) localCoverScale else 1f,
+                                        animationSpec = tween(durationMillis = 260),
+                                        label = "local_tile_video_scale"
+                                    )
                                     TextureVideoSurface(
-                                        modifier = Modifier.fillMaxSize(),
+                                        modifier = Modifier
+                                            .size(localFitW, localFitH)
+                                            .align(Alignment.Center)
+                                            .graphicsLayer {
+                                                scaleX = localAnimatedScale
+                                                scaleY = localAnimatedScale
+                                            },
                                         renderer = localFocusRenderer,
                                         onAttach = attachLocalSink,
                                         onDetach = detachLocalSink,
                                         mirror = if (isLocalContent) false else localMirror,
-                                        contentScale = if (isLocalContent || tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop
+                                        contentScale = ContentScale.Crop
                                     )
                                 } else {
                                     VideoPlaceholder(
@@ -1530,7 +1565,7 @@ private fun MultiPartyStage(
                                 IconButton(
                                     onClick = onToggleRemoteVideoFit,
                                     modifier = Modifier
-                                        .align(Alignment.BottomEnd)
+                                        .align(Alignment.TopEnd)
                                         .padding(8.dp)
                                         .size(44.dp)
                                         .background(Color.Black.copy(alpha = 0.4f), CircleShape)
