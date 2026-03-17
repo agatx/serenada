@@ -404,6 +404,7 @@ fun CallScreen(
                 },
                 pinnedParticipantId = pinnedParticipantId,
                 onPinnedParticipantIdChanged = { pinnedParticipantId = it },
+                onTap = toggleControlsVisibility,
             )
         } else if (isLocalLarge) {
             val ratio = localAspectRatio ?: 0f
@@ -1318,6 +1319,7 @@ private fun MultiPartyStage(
     onToggleRemoteVideoFit: () -> Unit,
     pinnedParticipantId: String?,
     onPinnedParticipantIdChanged: (String?) -> Unit,
+    onTap: () -> Unit,
 ) {
     val density = LocalDensity.current
     val gap = 12.dp
@@ -1437,7 +1439,7 @@ private fun MultiPartyStage(
                                             )
                                         }
                                     },
-                                    onClick = {}
+                                    onClick = onTap
                                 )
                         ) {
                             if (isLocalContent || (isLocal && !isLocalPlaceholder)) {
@@ -1623,7 +1625,7 @@ private fun MultiPartyStage(
                                                 if (tile.cid == pinnedParticipantId) null else tile.cid
                                             )
                                         },
-                                        onClick = {}
+                                        onClick = onTap
                                     )
                                 ) {
                                     RemoteParticipantStageTile(
