@@ -1652,9 +1652,18 @@ private fun RemoteParticipantStageTile(
     attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
 ) {
-    val context = LocalContext.current
+val context = LocalContext.current
     val renderer = remember(participant.cid) { SurfaceViewRenderer(context) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    // Compute fit-to-cover scale using video aspect ratio (same approach as 1:1 mode)
+    var videoAspectRatio by remember { mutableStateOf(0f) }
+    val density = LocalDensity.current
+    val tileWidthPx = with(density) { width.toPx() }
+    val tileHeightPx = with(density) { height.toPx() }
+    val tileAspect = if (tileHeightPx > 0f) tileWidthPx / tileHeightPx else 1f
+    val isCover = contentScale == ContentScale.Crop
+
     val rendererEvents =
         remember(participant.cid) {
             object : RendererCommon.RendererEvents {
@@ -1666,6 +1675,7 @@ private fun RemoteParticipantStageTile(
                     if (rotatedWidth == 0 || rotatedHeight == 0) return
                     val ratio = clampStageTileAspectRatio(rotatedWidth.toFloat() / rotatedHeight.toFloat())
                     mainHandler.post {
+                        videoAspectRatio = ratio
                         onAspectRatioChanged(ratio)
                     }
                 }
@@ -1683,13 +1693,33 @@ private fun RemoteParticipantStageTile(
             Modifier.size(width = width, height = height)
                 .clip(RoundedCornerShape(cornerRadius))
                 .background(Color(0xFF111111))
+                .clipToBounds()
     ) {
+        // For CONTAIN: size the renderer to fit the video aspect ratio, center in tile
+        // For COVER: size the renderer to FILL the tile (overflows, clipped by parent)
+        // SurfaceView ignores graphicsLayer transforms, so we must change actual View size
+        val surfaceWidth: androidx.compose.ui.unit.Dp
+        val surfaceHeight: androidx.compose.ui.unit.Dp
+        if (isCover || videoAspectRatio <= 0f) {
+            surfaceWidth = width
+            surfaceHeight = height
+        } else {
+            if (tileAspect > videoAspectRatio) {
+                surfaceHeight = height
+                surfaceWidth = with(density) { (tileHeightPx * videoAspectRatio).toDp() }
+            } else {
+                surfaceWidth = width
+                surfaceHeight = with(density) { (tileWidthPx / videoAspectRatio).toDp() }
+            }
+        }
         VideoSurface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .size(surfaceWidth, surfaceHeight)
+                .align(Alignment.Center),
             renderer = renderer,
             onAttach = { attachRemoteRenderer(it, rendererEvents) },
             onDetach = detachRemoteRenderer,
-            contentScale = contentScale,
+            contentScale = ContentScale.Crop,
             cornerRadius = cornerRadius,
             isMediaOverlay = false
         )
@@ -1767,15 +1797,14 @@ private fun VideoSurface(
         },
         update = { container ->
             container.updateCornerRadius(cornerRadiusPx)
+            val scalingType = if (contentScale == ContentScale.Crop)
+                RendererCommon.ScalingType.SCALE_ASPECT_FILL
+            else RendererCommon.ScalingType.SCALE_ASPECT_FIT
             renderer.apply {
                 setZOrderOnTop(false)
                 setZOrderMediaOverlay(isMediaOverlay)
                 setMirror(mirror)
-                setScalingType(
-                    if (contentScale == ContentScale.Crop)
-                        RendererCommon.ScalingType.SCALE_ASPECT_FILL
-                    else RendererCommon.ScalingType.SCALE_ASPECT_FIT
-                )
+                setScalingType(scalingType)
             }
         }
     )
