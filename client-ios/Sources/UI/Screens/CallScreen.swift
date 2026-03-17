@@ -955,7 +955,6 @@ private struct MultiPartyStage: View {
                             // Fit toggle on primary tile
                             if tile.zOrder == 0 {
                                 VStack {
-                                    Spacer()
                                     HStack {
                                         Spacer()
                                         Button {
@@ -974,6 +973,7 @@ private struct MultiPartyStage: View {
                                         }
                                         .padding(8)
                                     }
+                                    Spacer()
                                 }
                             }
                         }
