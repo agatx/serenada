@@ -99,6 +99,11 @@ class LayoutConformanceTest(
             val at = result.tiles[i]
 
             assertEquals("tile[$i] id for $caseId", extractString(et, "id"), at.id)
+            val actualType = when (at.type) {
+                OccupantType.PARTICIPANT -> "participant"
+                OccupantType.CONTENT_SOURCE -> "contentSource"
+            }
+            assertEquals("tile[$i] type for $caseId", extractString(et, "type"), actualType)
             assertEquals("tile[$i] fit for $caseId", extractString(et, "fit"), at.fit.name.lowercase())
 
             val expectedFrame = extractObject(et, "normalizedFrame")

@@ -1334,17 +1334,12 @@ private fun MultiPartyStage(
 
     Box(modifier = modifier) {
         BoxWithConstraints(
-            modifier =
-                Modifier.fillMaxSize()
-                    .padding(
-                        start = outerPadding,
-                        end = outerPadding,
-                        top = 20.dp,
-                        bottom = bottomPadding + 12.dp
-                    )
+            modifier = Modifier.fillMaxSize()
         ) {
-                val availableWidthPx = with(density) { maxWidth.toPx() }
-                val availableHeightPx = with(density) { maxHeight.toPx() }
+                val fullWidthPx = with(density) { maxWidth.toPx() }
+                val fullHeightPx = with(density) { maxHeight.toPx() }
+                val topChromePx = with(density) { 20.dp.toPx() }
+                val bottomChromePx = with(density) { (bottomPadding + 12.dp).toPx() }
 
                 if (useComputedLayout && localCid != null) {
                 // Focus/content mode: use computeLayout for primary + filmstrip rendering
@@ -1370,7 +1365,7 @@ private fun MultiPartyStage(
 
                 val computedLayout = remember(
                     pinnedParticipantId, contentSource, remoteParticipants, remoteAspectRatios.toMap(),
-                    localCid, localVideoEnabled, availableWidthPx, availableHeightPx, remoteVideoFitCover
+                    localCid, localVideoEnabled, fullWidthPx, fullHeightPx, remoteVideoFitCover
                 ) {
                     val participants = remoteParticipants.map { p ->
                         SceneParticipant(
@@ -1388,9 +1383,12 @@ private fun MultiPartyStage(
 
                     computeLayout(
                         CallScene(
-                            viewportWidth = availableWidthPx,
-                            viewportHeight = availableHeightPx,
-                            safeAreaInsets = Insets(),
+                            viewportWidth = fullWidthPx,
+                            viewportHeight = fullHeightPx,
+                            safeAreaInsets = Insets(
+                                top = topChromePx,
+                                bottom = bottomChromePx,
+                            ),
                             participants = participants,
                             localParticipantId = localCid,
                             activeSpeakerId = null,
@@ -1560,8 +1558,10 @@ private fun MultiPartyStage(
                     }
                 }
             } else {
-                // Grid mode: existing row-based rendering
-                val layout = remember(remoteParticipants, remoteAspectRatios.toMap(), maxWidth, maxHeight) {
+                // Grid mode: existing row-based rendering (applies its own padding)
+                val gridWidthPx = fullWidthPx - with(density) { outerPadding.toPx() } * 2
+                val gridHeightPx = fullHeightPx - topChromePx - bottomChromePx
+                val layout = remember(remoteParticipants, remoteAspectRatios.toMap(), gridWidthPx, gridHeightPx) {
                     computeStageLayout(
                         tiles =
                             remoteParticipants.map { participant ->
@@ -1570,14 +1570,20 @@ private fun MultiPartyStage(
                                     aspectRatio = clampStageTileAspectRatio(remoteAspectRatios[participant.cid]),
                                 )
                             },
-                        availableWidthPx = availableWidthPx,
-                        availableHeightPx = availableHeightPx,
+                        availableWidthPx = gridWidthPx,
+                        availableHeightPx = gridHeightPx,
                         gapPx = with(density) { gap.toPx() },
                     )
                 }
 
                 Column(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize()
+                        .padding(
+                            start = outerPadding,
+                            end = outerPadding,
+                            top = 20.dp,
+                            bottom = bottomPadding + 12.dp
+                        ),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {

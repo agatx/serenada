@@ -877,9 +877,9 @@ private struct MultiPartyStage: View {
                 )]
 
                 let layoutResult = computeLayout(scene: CallScene(
-                    viewportWidth: availableWidth,
-                    viewportHeight: availableHeight,
-                    safeAreaInsets: LayoutInsets(),
+                    viewportWidth: geometry.size.width,
+                    viewportHeight: geometry.size.height,
+                    safeAreaInsets: LayoutInsets(top: 20, bottom: bottomPadding + 12, left: 0, right: 0),
                     participants: participants,
                     localParticipantId: localCid,
                     activeSpeakerId: nil,
@@ -997,10 +997,7 @@ private struct MultiPartyStage: View {
                         )
                     }
                 }
-                .frame(width: availableWidth, height: availableHeight)
-                .padding(.horizontal, outerPadding)
-                .padding(.top, 20)
-                .padding(.bottom, bottomPadding + 12)
+                .frame(width: geometry.size.width, height: geometry.size.height)
             } else {
                 // Grid mode: existing row-based rendering
                 let layout = computeStageLayout(

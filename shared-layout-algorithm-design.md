@@ -335,8 +335,8 @@ When a screen share, world camera, or composite camera is active, show the conte
 
 The layout structure is identical to focus mode, but:
 - Primary region: content source with `fit = userPrefs.dominantFit` (default `"contain"`, preserving content aspect ratio)
-- Secondary strip: ALL participants (including the content owner and local) with `fit = "cover"`
-- No local pip — the local participant is always in the secondary filmstrip
+- Secondary strip: all participants **except the content owner**, with `fit = "cover"` — the content owner's video is already represented by the primary content tile, so including them in the filmstrip would be redundant
+- No local pip — the local participant is always in the secondary filmstrip (unless they are the content owner, in which case they only appear as the primary content tile)
 
 **Dominant fit toggle:** The user can toggle `userPrefs.dominantFit` between `"cover"` and `"contain"` for the content area, consistent with pair and focus modes.
 

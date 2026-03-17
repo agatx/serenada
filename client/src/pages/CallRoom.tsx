@@ -253,10 +253,17 @@ const VideoTile: React.FC<{
     }, [onAspectRatioChange, stream]);
 
     return (
-        <div className="video-stage-tile" style={tileStyle} onPointerUp={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}>
+        <div
+            className="video-stage-tile"
+            style={tileStyle}
+            onPointerUp={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+            onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+            role={onClick ? 'button' : undefined}
+            tabIndex={onClick ? 0 : undefined}
+        >
             <video ref={videoRef} autoPlay playsInline className="video-stage-remote" style={videoFit ? { objectFit: videoFit } : undefined} />
             {label && <div className="video-grid-label">{label}</div>}
-            {pinned && <div className="video-stage-pin-indicator"><Pin size={16} /></div>}
+            {pinned && <div className="video-stage-pin-indicator" aria-hidden="true"><Pin size={16} /></div>}
         </div>
     );
 };
@@ -653,7 +660,10 @@ const CallRoom: React.FC = () => {
                 if (msg.payload.active && msg.payload.contentType) {
                     setRemoteContentState({ cid: msg.payload.from, contentType: msg.payload.contentType });
                 } else {
-                    setRemoteContentState(null);
+                    // Only clear if the inactive message is from the current content owner
+                    setRemoteContentState((prev) =>
+                        prev && prev.cid === msg.payload.from ? null : prev
+                    );
                 }
             }
         });

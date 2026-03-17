@@ -35,6 +35,7 @@ final class LayoutConformanceTests: XCTestCase {
                 let actualTile = result.tiles[i]
 
                 XCTAssertEqual(actualTile.id, expectedTile.id, "\(testCase.id) tile[\(i)] id")
+                XCTAssertEqual(actualTile.type.rawValue, expectedTile.type, "\(testCase.id) tile[\(i)] type")
                 XCTAssertEqual(actualTile.fit.rawValue, expectedTile.fit, "\(testCase.id) tile[\(i)] fit")
 
                 let actualNorm = normalizeFrame(
