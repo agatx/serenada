@@ -650,7 +650,6 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         return subscribeToMessages((msg: any) => {
             if (msg.type === 'content_state' && msg.payload?.from) {
-                console.log('[CallRoom] content_state received:', msg.payload);
                 if (msg.payload.active && msg.payload.contentType) {
                     setRemoteContentState({ cid: msg.payload.from, contentType: msg.payload.contentType });
                 } else {

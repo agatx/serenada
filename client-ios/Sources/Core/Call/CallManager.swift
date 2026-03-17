@@ -559,7 +559,7 @@ final class CallManager: ObservableObject {
             // If currently in content mode (world/composite), broadcast deactivation
             // before the flip. The onCameraModeChanged callback will broadcast
             // activation if the new mode is also a content mode.
-            if uiState.localCameraMode == .world || uiState.localCameraMode == .composite {
+            if uiState.localCameraMode.isContentMode {
                 broadcastContentState(active: false)
             }
             webRtcEngine.flipCamera()
@@ -583,7 +583,7 @@ final class CallManager: ObservableObject {
                     $0.localCameraMode = .screenShare
                     $0.cameraZoomFactor = 1
                 }
-                self.broadcastContentState(active: true, contentType: "screenShare")
+                self.broadcastContentState(active: true, contentType: ContentTypeWire.screenShare)
                 self.applyLocalVideoPreference()
             }
         }
@@ -591,7 +591,7 @@ final class CallManager: ObservableObject {
 
     func adjustCameraZoom(scaleDelta: CGFloat) {
         guard uiState.phase == .inCall else { return }
-        guard uiState.localCameraMode == .world || uiState.localCameraMode == .composite else { return }
+        guard uiState.localCameraMode.isContentMode else { return }
         if let zoom = webRtcEngine.adjustCaptureZoom(by: scaleDelta) {
             updateState { $0.cameraZoomFactor = zoom }
         }
@@ -2403,10 +2403,10 @@ final class CallManager: ObservableObject {
                     let previousMode = eventSink?.uiState.localCameraMode
                     eventSink?.updateState { $0.localCameraMode = mode }
                     // Broadcast content state for world/composite camera
-                    let isContent = mode == .world || mode == .composite
-                    let wasContent = previousMode == .world || previousMode == .composite
+                    let isContent = mode.isContentMode
+                    let wasContent = previousMode?.isContentMode ?? false
                     if isContent {
-                        let type = mode == .world ? "worldCamera" : "compositeCamera"
+                        let type = mode == .world ? ContentTypeWire.worldCamera : ContentTypeWire.compositeCamera
                         eventSink?.broadcastContentState(active: true, contentType: type)
                     } else if wasContent {
                         eventSink?.broadcastContentState(active: false)

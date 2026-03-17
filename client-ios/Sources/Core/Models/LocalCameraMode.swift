@@ -5,6 +5,14 @@ enum LocalCameraMode: String, Codable, Equatable {
     case world = "WORLD"
     case composite = "COMPOSITE"
     case screenShare = "SCREEN_SHARE"
+
+    var isContentMode: Bool { self == .world || self == .composite }
+}
+
+enum ContentTypeWire {
+    static let screenShare = "screenShare"
+    static let worldCamera = "worldCamera"
+    static let compositeCamera = "compositeCamera"
 }
 
 func nextFlipCameraMode(current: LocalCameraMode, compositeAvailable: Bool) -> LocalCameraMode {

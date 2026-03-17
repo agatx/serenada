@@ -232,10 +232,10 @@ class CallManager(context: Context) {
                     val previousMode = _uiState.value.localCameraMode
                     updateState(_uiState.value.copy(localCameraMode = mode))
                     // Broadcast content state when entering/leaving world/composite mode
-                    val isContent = mode == LocalCameraMode.WORLD || mode == LocalCameraMode.COMPOSITE
-                    val wasContent = previousMode == LocalCameraMode.WORLD || previousMode == LocalCameraMode.COMPOSITE
+                    val isContent = mode.isContentMode
+                    val wasContent = previousMode.isContentMode
                     if (isContent) {
-                        val type = if (mode == LocalCameraMode.WORLD) "worldCamera" else "compositeCamera"
+                        val type = if (mode == LocalCameraMode.WORLD) ContentTypeWire.WORLD_CAMERA else ContentTypeWire.COMPOSITE_CAMERA
                         broadcastContentState(true, type)
                     } else if (wasContent) {
                         broadcastContentState(false)
@@ -819,7 +819,7 @@ class CallManager(context: Context) {
             // before the flip. The onCameraModeChanged callback will broadcast
             // activation if the new mode is also a content mode.
             val currentMode = _uiState.value.localCameraMode
-            if (currentMode == LocalCameraMode.WORLD || currentMode == LocalCameraMode.COMPOSITE) {
+            if (currentMode.isContentMode) {
                 broadcastContentState(false)
             }
             webRtcEngine.flipCamera()
@@ -872,7 +872,7 @@ class CallManager(context: Context) {
                 return
             }
             updateState(_uiState.value.copy(isScreenSharing = true))
-            broadcastContentState(true, "screenShare")
+            broadcastContentState(true, ContentTypeWire.SCREEN_SHARE)
             applyLocalVideoPreference()
             return
         }
@@ -955,6 +955,14 @@ class CallManager(context: Context) {
         renderer: org.webrtc.SurfaceViewRenderer,
     ) {
         peerSlots[cid]?.detachRemoteRenderer(renderer)
+    }
+
+    fun attachRemoteSinkForCid(cid: String, sink: org.webrtc.VideoSink) {
+        peerSlots[cid]?.attachRemoteSink(sink)
+    }
+
+    fun detachRemoteSinkForCid(cid: String, sink: org.webrtc.VideoSink) {
+        peerSlots[cid]?.detachRemoteSink(sink)
     }
 
     fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
@@ -1741,16 +1749,15 @@ class CallManager(context: Context) {
                 )
             }
         val state = _uiState.value
+        val activeCids = remoteParticipants.map { it.cid }.toSet()
+        val clearContent = state.remoteContentCid != null && state.remoteContentCid !in activeCids
         if (state.remoteParticipants == remoteParticipants) {
             // Still check if remote content CID left
-            val activeCids = remoteParticipants.map { it.cid }.toSet()
-            if (state.remoteContentCid != null && state.remoteContentCid !in activeCids) {
+            if (clearContent) {
                 updateState(state.copy(remoteContentCid = null, remoteContentType = null))
             }
             return
         }
-        val activeCids = remoteParticipants.map { it.cid }.toSet()
-        val clearContent = state.remoteContentCid != null && state.remoteContentCid !in activeCids
         updateState(
             state.copy(
                 remoteParticipants = remoteParticipants,

@@ -89,6 +89,7 @@ import app.serenada.android.layout.computeStageLayout
 import app.serenada.android.call.CallPhase
 import app.serenada.android.call.CallUiState
 import app.serenada.android.call.ConnectionStatus
+import app.serenada.android.call.ContentTypeWire
 import app.serenada.android.call.LocalCameraMode
 import app.serenada.android.call.RemoteParticipant
 import app.serenada.android.call.RealtimeCallStats
@@ -133,8 +134,8 @@ fun CallScreen(
     detachLocalSink: (VideoSink) -> Unit,
     attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
-    attachRemoteRendererForCid: (String, SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
-    detachRemoteRendererForCid: (String, SurfaceViewRenderer) -> Unit,
+    attachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit
 ) {
@@ -388,8 +389,9 @@ fun CallScreen(
                 localFocusRenderer = localFocusRenderer,
                 attachLocalSink = attachLocalSink,
                 detachLocalSink = detachLocalSink,
-                attachRemoteRendererForCid = attachRemoteRendererForCid,
-                detachRemoteRendererForCid = detachRemoteRendererForCid,
+                eglContext = eglContext,
+                attachRemoteSinkForCid = attachRemoteSinkForCid,
+                detachRemoteSinkForCid = detachRemoteSinkForCid,
                 bottomPadding = animatedPipBottomPadding,
                 remoteContentCid = uiState.remoteContentCid,
                 remoteContentType = uiState.remoteContentType,
@@ -1304,8 +1306,9 @@ private fun MultiPartyStage(
     localFocusRenderer: PipTextureRendererView,
     attachLocalSink: (VideoSink) -> Unit,
     detachLocalSink: (VideoSink) -> Unit,
-    attachRemoteRendererForCid: (String, SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
-    detachRemoteRendererForCid: (String, SurfaceViewRenderer) -> Unit,
+    eglContext: EglBase.Context,
+    attachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
     remoteContentCid: String?,
     remoteContentType: String?,
@@ -1321,9 +1324,7 @@ private fun MultiPartyStage(
     val tileCornerRadius = 16.dp
 
     // Content source: local world/composite/screen share or remote content
-    val hasLocalContent = isScreenSharing ||
-        localCameraMode == LocalCameraMode.WORLD ||
-        localCameraMode == LocalCameraMode.COMPOSITE
+    val hasLocalContent = isScreenSharing || localCameraMode.isContentMode
     val hasContentSource = hasLocalContent || remoteContentCid != null
     val useComputedLayout = localCid != null && (pinnedParticipantId != null || hasContentSource)
 
@@ -1356,8 +1357,8 @@ private fun MultiPartyStage(
                     )
                 } else if (remoteContentCid != null) {
                     val type = when (remoteContentType) {
-                        "worldCamera" -> ContentType.WORLD_CAMERA
-                        "compositeCamera" -> ContentType.COMPOSITE_CAMERA
+                        ContentTypeWire.WORLD_CAMERA -> ContentType.WORLD_CAMERA
+                        ContentTypeWire.COMPOSITE_CAMERA -> ContentType.COMPOSITE_CAMERA
                         else -> ContentType.SCREEN_SHARE
                     }
                     app.serenada.android.layout.ContentSource(
@@ -1464,14 +1465,15 @@ private fun MultiPartyStage(
                                         height = tileHeightDp,
                                         cornerRadius = tileCornerRadiusDp,
                                         contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                                        eglContext = eglContext,
                                         onAspectRatioChanged = { ratio ->
                                             remoteAspectRatios[ownerParticipant.cid] = ratio
                                         },
-                                        attachRemoteRenderer = { renderer, events ->
-                                            attachRemoteRendererForCid(ownerParticipant.cid, renderer, events)
+                                        attachRemoteSink = { sink ->
+                                            attachRemoteSinkForCid(ownerParticipant.cid, sink)
                                         },
-                                        detachRemoteRenderer = { renderer ->
-                                            detachRemoteRendererForCid(ownerParticipant.cid, renderer)
+                                        detachRemoteSink = { sink ->
+                                            detachRemoteSinkForCid(ownerParticipant.cid, sink)
                                         }
                                     )
                                 }
@@ -1490,14 +1492,15 @@ private fun MultiPartyStage(
                                         height = tileHeightDp,
                                         cornerRadius = tileCornerRadiusDp,
                                         contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                                        eglContext = eglContext,
                                         onAspectRatioChanged = { ratio ->
                                             remoteAspectRatios[tile.id] = ratio
                                         },
-                                        attachRemoteRenderer = { renderer, events ->
-                                            attachRemoteRendererForCid(tile.id, renderer, events)
+                                        attachRemoteSink = { sink ->
+                                            attachRemoteSinkForCid(tile.id, sink)
                                         },
-                                        detachRemoteRenderer = { renderer ->
-                                            detachRemoteRendererForCid(tile.id, renderer)
+                                        detachRemoteSink = { sink ->
+                                            detachRemoteSinkForCid(tile.id, sink)
                                         }
                                     )
                                 }
@@ -1593,14 +1596,15 @@ private fun MultiPartyStage(
                                         width = with(density) { tile.widthPx.toDp() },
                                         height = with(density) { tile.heightPx.toDp() },
                                         cornerRadius = tileCornerRadius,
+                                        eglContext = eglContext,
                                         onAspectRatioChanged = { ratio ->
                                             remoteAspectRatios[tile.cid] = ratio
                                         },
-                                        attachRemoteRenderer = { renderer, events ->
-                                            attachRemoteRendererForCid(tile.cid, renderer, events)
+                                        attachRemoteSink = { sink ->
+                                            attachRemoteSinkForCid(tile.cid, sink)
                                         },
-                                        detachRemoteRenderer = { renderer ->
-                                            detachRemoteRendererForCid(tile.cid, renderer)
+                                        detachRemoteSink = { sink ->
+                                            detachRemoteSinkForCid(tile.cid, sink)
                                         }
                                     )
                                 }
@@ -1648,15 +1652,14 @@ private fun RemoteParticipantStageTile(
     height: androidx.compose.ui.unit.Dp,
     cornerRadius: androidx.compose.ui.unit.Dp,
     contentScale: ContentScale = ContentScale.Fit,
+    eglContext: EglBase.Context,
     onAspectRatioChanged: (Float) -> Unit,
-    attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
-    detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
+    attachRemoteSink: (VideoSink) -> Unit,
+    detachRemoteSink: (VideoSink) -> Unit,
 ) {
-val context = LocalContext.current
-    val renderer = remember(participant.cid) { SurfaceViewRenderer(context) }
+    val context = LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-    // Compute fit-to-cover scale using video aspect ratio (same approach as 1:1 mode)
     var videoAspectRatio by remember { mutableStateOf(0f) }
     val density = LocalDensity.current
     val tileWidthPx = with(density) { width.toPx() }
@@ -1682,11 +1685,45 @@ val context = LocalContext.current
             }
         }
 
+    // Use TextureView-based renderer so graphicsLayer clip/scale works correctly.
+    // SurfaceView renders on a separate hardware surface that ignores Compose clips,
+    // causing video to bleed outside rounded tile corners when scaled.
+    val renderer = remember(participant.cid) {
+        PipTextureRendererView(context, "remote-${participant.cid}").also {
+            it.init(eglContext, rendererEvents)
+        }
+    }
+
     DisposableEffect(renderer) {
         onDispose {
             renderer.release()
         }
     }
+
+    // Animate fit-to-cover scale (same approach as 1:1 mode)
+    val fitWidth: androidx.compose.ui.unit.Dp
+    val fitHeight: androidx.compose.ui.unit.Dp
+    if (videoAspectRatio <= 0f) {
+        fitWidth = width
+        fitHeight = height
+    } else {
+        if (tileAspect > videoAspectRatio) {
+            fitHeight = height
+            fitWidth = with(density) { (tileHeightPx * videoAspectRatio).toDp() }
+        } else {
+            fitWidth = width
+            fitHeight = with(density) { (tileWidthPx / videoAspectRatio).toDp() }
+        }
+    }
+    val coverScale = if (videoAspectRatio > 0f) {
+        if (tileAspect > videoAspectRatio) tileAspect / videoAspectRatio
+        else videoAspectRatio / tileAspect
+    } else 1f
+    val animatedScale by animateFloatAsState(
+        targetValue = if (isCover) coverScale else 1f,
+        animationSpec = tween(durationMillis = 260),
+        label = "tile_video_scale"
+    )
 
     Box(
         modifier =
@@ -1695,33 +1732,18 @@ val context = LocalContext.current
                 .background(Color(0xFF111111))
                 .clipToBounds()
     ) {
-        // For CONTAIN: size the renderer to fit the video aspect ratio, center in tile
-        // For COVER: size the renderer to FILL the tile (overflows, clipped by parent)
-        // SurfaceView ignores graphicsLayer transforms, so we must change actual View size
-        val surfaceWidth: androidx.compose.ui.unit.Dp
-        val surfaceHeight: androidx.compose.ui.unit.Dp
-        if (isCover || videoAspectRatio <= 0f) {
-            surfaceWidth = width
-            surfaceHeight = height
-        } else {
-            if (tileAspect > videoAspectRatio) {
-                surfaceHeight = height
-                surfaceWidth = with(density) { (tileHeightPx * videoAspectRatio).toDp() }
-            } else {
-                surfaceWidth = width
-                surfaceHeight = with(density) { (tileWidthPx / videoAspectRatio).toDp() }
-            }
-        }
-        VideoSurface(
+        TextureVideoSurface(
             modifier = Modifier
-                .size(surfaceWidth, surfaceHeight)
-                .align(Alignment.Center),
+                .size(fitWidth, fitHeight)
+                .align(Alignment.Center)
+                .graphicsLayer {
+                    scaleX = animatedScale
+                    scaleY = animatedScale
+                },
             renderer = renderer,
-            onAttach = { attachRemoteRenderer(it, rendererEvents) },
-            onDetach = detachRemoteRenderer,
-            contentScale = ContentScale.Crop,
-            cornerRadius = cornerRadius,
-            isMediaOverlay = false
+            onAttach = { attachRemoteSink(it) },
+            onDetach = { detachRemoteSink(it) },
+            contentScale = ContentScale.Crop
         )
         if (!participant.videoEnabled) {
             Box(modifier = Modifier.fillMaxSize()) {

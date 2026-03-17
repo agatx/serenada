@@ -1,5 +1,6 @@
 package app.serenada.android.layout
 
+import app.serenada.android.call.ContentTypeWire
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -145,8 +146,8 @@ class LayoutConformanceTest(
         val contentSource = contentSourceJson?.let { cs ->
             ContentSource(
                 type = when (extractString(cs, "type")) {
-                    "worldCamera" -> ContentType.WORLD_CAMERA
-                    "compositeCamera" -> ContentType.COMPOSITE_CAMERA
+                    ContentTypeWire.WORLD_CAMERA -> ContentType.WORLD_CAMERA
+                    ContentTypeWire.COMPOSITE_CAMERA -> ContentType.COMPOSITE_CAMERA
                     else -> ContentType.SCREEN_SHARE
                 },
                 ownerParticipantId = extractString(cs, "ownerParticipantId"),

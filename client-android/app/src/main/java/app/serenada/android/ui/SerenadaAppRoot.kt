@@ -373,11 +373,11 @@ fun SerenadaAppRoot(
                             callManager.attachRemoteRenderer(renderer, events)
                         },
                         detachRemoteRenderer = { callManager.detachRemoteRenderer(it) },
-                        attachRemoteRendererForCid = { cid, renderer, events ->
-                            callManager.attachRemoteRendererForCid(cid, renderer, events)
+                        attachRemoteSinkForCid = { cid, sink ->
+                            callManager.attachRemoteSinkForCid(cid, sink)
                         },
-                        detachRemoteRendererForCid = { cid, renderer ->
-                            callManager.detachRemoteRendererForCid(cid, renderer)
+                        detachRemoteSinkForCid = { cid, sink ->
+                            callManager.detachRemoteSinkForCid(cid, sink)
                         },
                         attachRemoteSink = { callManager.attachRemoteSink(it) },
                         detachRemoteSink = { callManager.detachRemoteSink(it) }
