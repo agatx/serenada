@@ -557,7 +557,7 @@ fun computeLayout(scene: CallScene): LayoutResult {
             }
 
             val secondaryParticipants = participantsStableOrder(
-                scene.participants,
+                scene.participants.filter { it.id != cs.ownerParticipantId },
                 scene.localParticipantId,
             )
 

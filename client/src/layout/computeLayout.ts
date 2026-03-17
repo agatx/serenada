@@ -613,9 +613,9 @@ export function computeLayout(scene: CallScene): LayoutResult {
                 return computeLayout({ ...scene, contentSource: null });
             }
 
-            // Secondary: ALL participants in stable order (local last)
+            // Secondary: all participants except content owner, in stable order (local last)
             const secondaryParticipants = participantsStableOrder(
-                scene.participants,
+                scene.participants.filter(p => p.id !== scene.contentSource!.ownerParticipantId),
                 scene.localParticipantId,
             );
 

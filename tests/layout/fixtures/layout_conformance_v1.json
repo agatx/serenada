@@ -5870,7 +5870,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 3,
+        "tileCount": 2,
         "tiles": [
           {
             "id": "A_content",
@@ -5884,23 +5884,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "ME",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0205,
               "y": 0.75,
-              "width": 0.4692,
-              "height": 0.2405
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "ME",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.5103,
-              "y": 0.75,
-              "width": 0.4692,
+              "width": 0.959,
               "height": 0.2405
             },
             "fit": "cover"
@@ -5950,7 +5939,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 3,
+        "tileCount": 2,
         "tiles": [
           {
             "id": "A_content",
@@ -5964,24 +5953,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "ME",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.75,
               "y": 0.0205,
               "width": 0.2405,
-              "height": 0.4692
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "ME",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.75,
-              "y": 0.5103,
-              "width": 0.2405,
-              "height": 0.4692
+              "height": 0.959
             },
             "fit": "cover"
           }
@@ -6030,7 +6008,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 3,
+        "tileCount": 2,
         "tiles": [
           {
             "id": "A_content",
@@ -6044,23 +6022,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "ME",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0208,
               "y": 0.748,
-              "width": 0.4714,
-              "height": 0.2363
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "ME",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.5078,
-              "y": 0.748,
-              "width": 0.4714,
+              "width": 0.9583,
               "height": 0.2363
             },
             "fit": "cover"
@@ -6110,7 +6077,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 3,
+        "tileCount": 2,
         "tiles": [
           {
             "id": "A_content",
@@ -6124,24 +6091,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "ME",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.748,
               "y": 0.0208,
               "width": 0.2363,
-              "height": 0.4714
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "ME",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.748,
-              "y": 0.5078,
-              "width": 0.2363,
-              "height": 0.4714
+              "height": 0.9583
             },
             "fit": "cover"
           }
@@ -6190,7 +6146,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 3,
+        "tileCount": 2,
         "tiles": [
           {
             "id": "A_content",
@@ -6204,24 +6160,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "ME",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7484,
               "y": 0.0222,
               "width": 0.2391,
-              "height": 0.4694
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "ME",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.7484,
-              "y": 0.5083,
-              "width": 0.2391,
-              "height": 0.4694
+              "height": 0.9556
             },
             "fit": "cover"
           }
@@ -6270,7 +6215,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 3,
+        "tileCount": 2,
         "tiles": [
           {
             "id": "A_content",
@@ -6284,24 +6229,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "ME",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7488,
               "y": 0.0178,
               "width": 0.2413,
-              "height": 0.4756
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "ME",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.7488,
-              "y": 0.5067,
-              "width": 0.2413,
-              "height": 0.4756
+              "height": 0.9644
             },
             "fit": "cover"
           }
@@ -6356,7 +6290,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -6370,23 +6304,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0205,
               "y": 0.75,
-              "width": 0.306,
-              "height": 0.2405
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.347,
-              "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"
@@ -6395,9 +6318,9 @@
             "id": "ME",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.6735,
+              "x": 0.5103,
               "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"
@@ -6453,7 +6376,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -6467,24 +6390,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.75,
               "y": 0.0205,
               "width": 0.2405,
-              "height": 0.306
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.75,
-              "y": 0.347,
-              "width": 0.2405,
-              "height": 0.306
+              "height": 0.4692
             },
             "fit": "cover"
           },
@@ -6493,9 +6405,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.75,
-              "y": 0.6735,
+              "y": 0.5103,
               "width": 0.2405,
-              "height": 0.306
+              "height": 0.4692
             },
             "fit": "cover"
           }
@@ -6550,7 +6462,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -6564,23 +6476,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0208,
               "y": 0.748,
-              "width": 0.309,
-              "height": 0.2363
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.3455,
-              "y": 0.748,
-              "width": 0.309,
+              "width": 0.4714,
               "height": 0.2363
             },
             "fit": "cover"
@@ -6589,9 +6490,9 @@
             "id": "ME",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.6701,
+              "x": 0.5078,
               "y": 0.748,
-              "width": 0.309,
+              "width": 0.4714,
               "height": 0.2363
             },
             "fit": "cover"
@@ -6647,7 +6548,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -6661,24 +6562,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.748,
               "y": 0.0208,
               "width": 0.2363,
-              "height": 0.309
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.748,
-              "y": 0.3455,
-              "width": 0.2363,
-              "height": 0.309
+              "height": 0.4714
             },
             "fit": "cover"
           },
@@ -6687,9 +6577,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.748,
-              "y": 0.6701,
+              "y": 0.5078,
               "width": 0.2363,
-              "height": 0.309
+              "height": 0.4714
             },
             "fit": "cover"
           }
@@ -6744,7 +6634,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -6758,24 +6648,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7484,
               "y": 0.0222,
               "width": 0.2391,
-              "height": 0.3074
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.7484,
-              "y": 0.3463,
-              "width": 0.2391,
-              "height": 0.3074
+              "height": 0.4694
             },
             "fit": "cover"
           },
@@ -6784,9 +6663,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7484,
-              "y": 0.6704,
+              "y": 0.5083,
               "width": 0.2391,
-              "height": 0.3074
+              "height": 0.4694
             },
             "fit": "cover"
           }
@@ -6841,7 +6720,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -6855,24 +6734,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7488,
               "y": 0.0178,
               "width": 0.2413,
-              "height": 0.3126
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.7488,
-              "y": 0.3437,
-              "width": 0.2413,
-              "height": 0.3126
+              "height": 0.4756
             },
             "fit": "cover"
           },
@@ -6881,9 +6749,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7488,
-              "y": 0.6696,
+              "y": 0.5067,
               "width": 0.2413,
-              "height": 0.3126
+              "height": 0.4756
             },
             "fit": "cover"
           }
@@ -6944,7 +6812,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 5,
+        "tileCount": 4,
         "tiles": [
           {
             "id": "A_content",
@@ -6958,23 +6826,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0205,
               "y": 0.75,
-              "width": 0.2244,
-              "height": 0.2405
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.2654,
-              "y": 0.75,
-              "width": 0.2244,
+              "width": 0.306,
               "height": 0.2405
             },
             "fit": "cover"
@@ -6983,9 +6840,9 @@
             "id": "C",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.5103,
+              "x": 0.347,
               "y": 0.75,
-              "width": 0.2244,
+              "width": 0.306,
               "height": 0.2405
             },
             "fit": "cover"
@@ -6994,9 +6851,9 @@
             "id": "ME",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.7551,
+              "x": 0.6735,
               "y": 0.75,
-              "width": 0.2244,
+              "width": 0.306,
               "height": 0.2405
             },
             "fit": "cover"
@@ -7058,7 +6915,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 5,
+        "tileCount": 4,
         "tiles": [
           {
             "id": "A_content",
@@ -7072,24 +6929,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.75,
               "y": 0.0205,
               "width": 0.2405,
-              "height": 0.2244
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.75,
-              "y": 0.2654,
-              "width": 0.2405,
-              "height": 0.2244
+              "height": 0.306
             },
             "fit": "cover"
           },
@@ -7098,9 +6944,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.75,
-              "y": 0.5103,
+              "y": 0.347,
               "width": 0.2405,
-              "height": 0.2244
+              "height": 0.306
             },
             "fit": "cover"
           },
@@ -7109,9 +6955,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.75,
-              "y": 0.7551,
+              "y": 0.6735,
               "width": 0.2405,
-              "height": 0.2244
+              "height": 0.306
             },
             "fit": "cover"
           }
@@ -7172,7 +7018,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 5,
+        "tileCount": 4,
         "tiles": [
           {
             "id": "A_content",
@@ -7186,23 +7032,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0208,
               "y": 0.748,
-              "width": 0.2279,
-              "height": 0.2363
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.2643,
-              "y": 0.748,
-              "width": 0.2279,
+              "width": 0.309,
               "height": 0.2363
             },
             "fit": "cover"
@@ -7211,9 +7046,9 @@
             "id": "C",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.5078,
+              "x": 0.3455,
               "y": 0.748,
-              "width": 0.2279,
+              "width": 0.309,
               "height": 0.2363
             },
             "fit": "cover"
@@ -7222,9 +7057,9 @@
             "id": "ME",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.7513,
+              "x": 0.6701,
               "y": 0.748,
-              "width": 0.2279,
+              "width": 0.309,
               "height": 0.2363
             },
             "fit": "cover"
@@ -7286,7 +7121,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 5,
+        "tileCount": 4,
         "tiles": [
           {
             "id": "A_content",
@@ -7300,24 +7135,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.748,
               "y": 0.0208,
               "width": 0.2363,
-              "height": 0.2279
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.748,
-              "y": 0.2643,
-              "width": 0.2363,
-              "height": 0.2279
+              "height": 0.309
             },
             "fit": "cover"
           },
@@ -7326,9 +7150,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.748,
-              "y": 0.5078,
+              "y": 0.3455,
               "width": 0.2363,
-              "height": 0.2279
+              "height": 0.309
             },
             "fit": "cover"
           },
@@ -7337,9 +7161,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.748,
-              "y": 0.7513,
+              "y": 0.6701,
               "width": 0.2363,
-              "height": 0.2279
+              "height": 0.309
             },
             "fit": "cover"
           }
@@ -7400,7 +7224,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 5,
+        "tileCount": 4,
         "tiles": [
           {
             "id": "A_content",
@@ -7414,24 +7238,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7484,
               "y": 0.0222,
               "width": 0.2391,
-              "height": 0.2264
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.7484,
-              "y": 0.2653,
-              "width": 0.2391,
-              "height": 0.2264
+              "height": 0.3074
             },
             "fit": "cover"
           },
@@ -7440,9 +7253,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7484,
-              "y": 0.5083,
+              "y": 0.3463,
               "width": 0.2391,
-              "height": 0.2264
+              "height": 0.3074
             },
             "fit": "cover"
           },
@@ -7451,9 +7264,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7484,
-              "y": 0.7514,
+              "y": 0.6704,
               "width": 0.2391,
-              "height": 0.2264
+              "height": 0.3074
             },
             "fit": "cover"
           }
@@ -7514,7 +7327,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 5,
+        "tileCount": 4,
         "tiles": [
           {
             "id": "A_content",
@@ -7528,24 +7341,13 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7488,
               "y": 0.0178,
               "width": 0.2413,
-              "height": 0.2311
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.7488,
-              "y": 0.2622,
-              "width": 0.2413,
-              "height": 0.2311
+              "height": 0.3126
             },
             "fit": "cover"
           },
@@ -7554,9 +7356,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7488,
-              "y": 0.5067,
+              "y": 0.3437,
               "width": 0.2413,
-              "height": 0.2311
+              "height": 0.3126
             },
             "fit": "cover"
           },
@@ -7565,9 +7367,9 @@
             "type": "participant",
             "normalizedFrame": {
               "x": 0.7488,
-              "y": 0.7511,
+              "y": 0.6696,
               "width": 0.2413,
-              "height": 0.2311
+              "height": 0.3126
             },
             "fit": "cover"
           }
@@ -7622,7 +7424,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -7636,23 +7438,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0205,
               "y": 0.75,
-              "width": 0.306,
-              "height": 0.2405
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.347,
-              "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"
@@ -7661,9 +7452,9 @@
             "id": "ME",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.6735,
+              "x": 0.5103,
               "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"
@@ -7719,7 +7510,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -7733,23 +7524,12 @@
             "fit": "cover"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0205,
               "y": 0.75,
-              "width": 0.306,
-              "height": 0.2405
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.347,
-              "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"
@@ -7758,9 +7538,9 @@
             "id": "ME",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.6735,
+              "x": 0.5103,
               "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"
@@ -7816,7 +7596,7 @@
       },
       "expected": {
         "mode": "content",
-        "tileCount": 4,
+        "tileCount": 3,
         "tiles": [
           {
             "id": "A_content",
@@ -7830,23 +7610,12 @@
             "fit": "contain"
           },
           {
-            "id": "A",
+            "id": "B",
             "type": "participant",
             "normalizedFrame": {
               "x": 0.0205,
               "y": 0.75,
-              "width": 0.306,
-              "height": 0.2405
-            },
-            "fit": "cover"
-          },
-          {
-            "id": "B",
-            "type": "participant",
-            "normalizedFrame": {
-              "x": 0.347,
-              "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"
@@ -7855,9 +7624,9 @@
             "id": "ME",
             "type": "participant",
             "normalizedFrame": {
-              "x": 0.6735,
+              "x": 0.5103,
               "y": 0.75,
-              "width": 0.306,
+              "width": 0.4692,
               "height": 0.2405
             },
             "fit": "cover"

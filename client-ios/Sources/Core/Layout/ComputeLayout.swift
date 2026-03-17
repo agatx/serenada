@@ -607,7 +607,7 @@ func computeLayout(scene: CallScene) -> LayoutResult {
         }
 
         let secondaryParticipants = participantsStableOrder(
-            scene.participants,
+            scene.participants.filter { $0.id != cs.ownerParticipantId },
             localParticipantId: scene.localParticipantId
         )
 
