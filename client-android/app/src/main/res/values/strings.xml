@@ -126,6 +126,9 @@
     <string name="call_invite_sent">Invite sent</string>
     <string name="call_invite_failed">Failed to send invite</string>
     <string name="call_share_link_chooser">Share call link</string>
+    <string name="call_wifi_jitter_title">Audio delay detected</string>
+    <string name="call_wifi_jitter_body">Your device\'s Wi-Fi is causing audio and video delay. This is a known hardware issue on some devices.\n\nTo fix it, try:\n\n\u2022 Restarting your device\n\u2022 Switching to mobile data\n\u2022 Moving closer to your Wi-Fi router</string>
+    <string name="call_wifi_jitter_dismiss">Got it</string>
 
     <string name="notification_call_title">Serenada call</string>
     <string name="notification_call_status_channel">Call status</string>

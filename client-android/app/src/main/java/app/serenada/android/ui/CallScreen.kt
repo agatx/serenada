@@ -148,6 +148,7 @@ fun CallScreen(
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var showRecoveringBadge by remember { mutableStateOf(false) }
+    var showWifiJitterSheet by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val localRenderer = remember { SurfaceViewRenderer(context) }
     val remoteRenderer = remember { SurfaceViewRenderer(context) }
@@ -578,6 +579,34 @@ fun CallScreen(
             }
         }
 
+        // WiFi jitter alert icon
+        AnimatedVisibility(
+            visible = uiState.isWifiJitterDetected && uiState.phase == CallPhase.InCall,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(top = 16.dp, start = 16.dp)
+                .zIndex(3f)
+        ) {
+            Surface(
+                onClick = { showWifiJitterSheet = true },
+                color = Color(0xFFCC3300).copy(alpha = 0.85f),
+                shape = CircleShape,
+                modifier = Modifier.size(44.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = stringResource(R.string.call_wifi_jitter_title),
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+
         val showFlashButton =
             uiState.phase == CallPhase.InCall &&
                     isWorldOrCompositeMode &&
@@ -736,6 +765,56 @@ fun CallScreen(
                         icon = Icons.Default.CallEnd,
                         backgroundColor = Color.Red,
                         modifier = Modifier.testTag("call.endCall")
+                    )
+                }
+            }
+        }
+    }
+
+    if (showWifiJitterSheet) {
+        @OptIn(ExperimentalMaterial3Api::class)
+        ModalBottomSheet(
+            onDismissRequest = { showWifiJitterSheet = false },
+            containerColor = Color(0xFF1A1A1A)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFFFF6633),
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.call_wifi_jitter_title),
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.call_wifi_jitter_body),
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp
+                )
+                Button(
+                    onClick = { showWifiJitterSheet = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.15f))
+                ) {
+                    Text(
+                        text = stringResource(R.string.call_wifi_jitter_dismiss),
+                        color = Color.White,
+                        fontSize = 16.sp
                     )
                 }
             }

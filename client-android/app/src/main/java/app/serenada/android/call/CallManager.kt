@@ -145,6 +145,7 @@ class CallManager(context: Context) {
     private var remoteVideoStatePollRunnable: Runnable? = null
     private var webrtcStatsRequestInFlight = false
     private var lastWebRtcStatsPollAtMs = 0L
+    private var wifiJitterConsecutiveCount = 0
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
     private val peerSlots = mutableMapOf<String, PeerConnectionSlot>()
     private var reconnectToken: String? = null
@@ -742,9 +743,11 @@ class CallManager(context: Context) {
                 webrtcStatsSummary = "",
                 realtimeCallStats = null,
                 isFlashAvailable = false,
-                isFlashEnabled = false
+                isFlashEnabled = false,
+                isWifiJitterDetected = false
             )
         )
+        wifiJitterConsecutiveCount = 0
         scheduleJoinTimeout(roomId, joinAttemptId)
         scheduleJoinKickstart(roomId, joinAttemptId)
 
@@ -1767,15 +1770,29 @@ class CallManager(context: Context) {
                             handler.post {
                                 webrtcStatsRequestInFlight = false
                                 lastWebRtcStatsPollAtMs = System.currentTimeMillis()
+                                // Detect WiFi-induced jitter: high playout delay with low RTT
+                                val playoutMs = mergedStats?.audioPlayoutDelayMs
+                                val rttMs = mergedStats?.rttMs
+                                val isJitterElevated = playoutMs != null && playoutMs > WIFI_JITTER_PLAYOUT_THRESHOLD_MS &&
+                                    (rttMs == null || rttMs < WIFI_JITTER_RTT_CEILING_MS)
+                                if (isJitterElevated) {
+                                    wifiJitterConsecutiveCount++
+                                } else {
+                                    wifiJitterConsecutiveCount = 0
+                                }
+                                val wifiJitterDetected = wifiJitterConsecutiveCount >= WIFI_JITTER_CONSECUTIVE_THRESHOLD
+
                                 val state = _uiState.value
                                 if (
                                     state.webrtcStatsSummary != mergedSummary ||
-                                    state.realtimeCallStats != mergedStats
+                                    state.realtimeCallStats != mergedStats ||
+                                    state.isWifiJitterDetected != wifiJitterDetected
                                 ) {
                                     updateState(
                                         state.copy(
                                             webrtcStatsSummary = mergedSummary,
-                                            realtimeCallStats = mergedStats
+                                            realtimeCallStats = mergedStats,
+                                            isWifiJitterDetected = wifiJitterDetected
                                         )
                                     )
                                 }
@@ -2287,6 +2304,9 @@ class CallManager(context: Context) {
 
     private companion object {
         const val WEBRTC_STATS_POLL_INTERVAL_MS = 2000L
+        const val WIFI_JITTER_PLAYOUT_THRESHOLD_MS = 500.0
+        const val WIFI_JITTER_RTT_CEILING_MS = 100.0
+        const val WIFI_JITTER_CONSECUTIVE_THRESHOLD = 3
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         const val WIFI_PERF_LOCK_TAG = "serenada:call-wifi"
         const val MAX_SAVED_ROOM_NAME_LENGTH = 120
