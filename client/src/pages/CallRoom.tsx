@@ -636,8 +636,8 @@ const CallRoom: React.FC = () => {
             }
             return Object.fromEntries(nextEntries);
         });
-        // Auto-unpin if pinned participant left
-        if (pinnedParticipantId && !activeRemoteCids.has(pinnedParticipantId)) {
+        // Auto-unpin if pinned participant left (but not if local is pinned)
+        if (pinnedParticipantId && pinnedParticipantId !== clientId && !activeRemoteCids.has(pinnedParticipantId)) {
             setPinnedParticipantId(null);
         }
         // Clear remote content state if sharing participant left

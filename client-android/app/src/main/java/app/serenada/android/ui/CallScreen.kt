@@ -1360,11 +1360,7 @@ private fun MultiPartyStage(
                         aspectRatio = null,
                     )
                 } else if (remoteContentCid != null) {
-                    val type = when (remoteContentType) {
-                        ContentTypeWire.WORLD_CAMERA -> ContentType.WORLD_CAMERA
-                        ContentTypeWire.COMPOSITE_CAMERA -> ContentType.COMPOSITE_CAMERA
-                        else -> ContentType.SCREEN_SHARE
-                    }
+                    val type = ContentType.fromWire(remoteContentType)
                     app.serenada.android.layout.ContentSource(
                         type = type,
                         ownerParticipantId = remoteContentCid,
@@ -1446,35 +1442,15 @@ private fun MultiPartyStage(
                                 // Local content tile or local filmstrip tile: render local video
                                 if (localVideoEnabled || isLocalContent) {
                                     val localIsCover = !isLocalContent && tile.fit != FitMode.CONTAIN
-                                    val tileWPx = with(density) { tileWidthDp.toPx() }
-                                    val tileHPx = with(density) { tileHeightDp.toPx() }
-                                    val localTileAspect = if (tileHPx > 0f) tileWPx / tileHPx else 1f
-                                    val localFitW: androidx.compose.ui.unit.Dp
-                                    val localFitH: androidx.compose.ui.unit.Dp
-                                    if (localAspectRatio <= 0f) {
-                                        localFitW = tileWidthDp
-                                        localFitH = tileHeightDp
-                                    } else {
-                                        if (localTileAspect > localAspectRatio) {
-                                            localFitH = tileHeightDp
-                                            localFitW = with(density) { (tileHPx * localAspectRatio).toDp() }
-                                        } else {
-                                            localFitW = tileWidthDp
-                                            localFitH = with(density) { (tileWPx / localAspectRatio).toDp() }
-                                        }
-                                    }
-                                    val localCoverScale = if (localAspectRatio > 0f) {
-                                        if (localTileAspect > localAspectRatio) localTileAspect / localAspectRatio
-                                        else localAspectRatio / localTileAspect
-                                    } else 1f
+                                    val localGeo = computeFitCoverGeometry(tileWidthDp, tileHeightDp, localAspectRatio)
                                     val localAnimatedScale by animateFloatAsState(
-                                        targetValue = if (localIsCover) localCoverScale else 1f,
+                                        targetValue = if (localIsCover) localGeo.coverScale else 1f,
                                         animationSpec = tween(durationMillis = 260),
                                         label = "local_tile_video_scale"
                                     )
                                     TextureVideoSurface(
                                         modifier = Modifier
-                                            .size(localFitW, localFitH)
+                                            .size(localGeo.fitWidth, localGeo.fitHeight)
                                             .align(Alignment.Center)
                                             .graphicsLayer {
                                                 scaleX = localAnimatedScale
@@ -1682,6 +1658,39 @@ private fun MultiPartyStage(
     }
 }
 
+private data class FitCoverGeometry(
+    val fitWidth: androidx.compose.ui.unit.Dp,
+    val fitHeight: androidx.compose.ui.unit.Dp,
+    val coverScale: Float,
+)
+
+@Composable
+private fun computeFitCoverGeometry(
+    tileWidth: androidx.compose.ui.unit.Dp,
+    tileHeight: androidx.compose.ui.unit.Dp,
+    videoAspectRatio: Float,
+): FitCoverGeometry {
+    val density = LocalDensity.current
+    val tileWidthPx = with(density) { tileWidth.toPx() }
+    val tileHeightPx = with(density) { tileHeight.toPx() }
+    val tileAspect = if (tileHeightPx > 0f) tileWidthPx / tileHeightPx else 1f
+    if (videoAspectRatio <= 0f) {
+        return FitCoverGeometry(tileWidth, tileHeight, 1f)
+    }
+    val fitWidth: androidx.compose.ui.unit.Dp
+    val fitHeight: androidx.compose.ui.unit.Dp
+    if (tileAspect > videoAspectRatio) {
+        fitHeight = tileHeight
+        fitWidth = with(density) { (tileHeightPx * videoAspectRatio).toDp() }
+    } else {
+        fitWidth = tileWidth
+        fitHeight = with(density) { (tileWidthPx / videoAspectRatio).toDp() }
+    }
+    val coverScale = if (tileAspect > videoAspectRatio) tileAspect / videoAspectRatio
+        else videoAspectRatio / tileAspect
+    return FitCoverGeometry(fitWidth, fitHeight, coverScale)
+}
+
 @Composable
 private fun RemoteParticipantStageTile(
     participant: RemoteParticipant,
@@ -1698,10 +1707,6 @@ private fun RemoteParticipantStageTile(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var videoAspectRatio by remember { mutableStateOf(0f) }
-    val density = LocalDensity.current
-    val tileWidthPx = with(density) { width.toPx() }
-    val tileHeightPx = with(density) { height.toPx() }
-    val tileAspect = if (tileHeightPx > 0f) tileWidthPx / tileHeightPx else 1f
     val isCover = contentScale == ContentScale.Crop
 
     val rendererEvents =
@@ -1738,26 +1743,9 @@ private fun RemoteParticipantStageTile(
     }
 
     // Animate fit-to-cover scale (same approach as 1:1 mode)
-    val fitWidth: androidx.compose.ui.unit.Dp
-    val fitHeight: androidx.compose.ui.unit.Dp
-    if (videoAspectRatio <= 0f) {
-        fitWidth = width
-        fitHeight = height
-    } else {
-        if (tileAspect > videoAspectRatio) {
-            fitHeight = height
-            fitWidth = with(density) { (tileHeightPx * videoAspectRatio).toDp() }
-        } else {
-            fitWidth = width
-            fitHeight = with(density) { (tileWidthPx / videoAspectRatio).toDp() }
-        }
-    }
-    val coverScale = if (videoAspectRatio > 0f) {
-        if (tileAspect > videoAspectRatio) tileAspect / videoAspectRatio
-        else videoAspectRatio / tileAspect
-    } else 1f
+    val geo = computeFitCoverGeometry(width, height, videoAspectRatio)
     val animatedScale by animateFloatAsState(
-        targetValue = if (isCover) coverScale else 1f,
+        targetValue = if (isCover) geo.coverScale else 1f,
         animationSpec = tween(durationMillis = 260),
         label = "tile_video_scale"
     )
@@ -1771,7 +1759,7 @@ private fun RemoteParticipantStageTile(
     ) {
         TextureVideoSurface(
             modifier = Modifier
-                .size(fitWidth, fitHeight)
+                .size(geo.fitWidth, geo.fitHeight)
                 .align(Alignment.Center)
                 .graphicsLayer {
                     scaleX = animatedScale

@@ -1,5 +1,6 @@
 package app.serenada.android.layout
 
+import app.serenada.android.call.ContentTypeWire
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -33,7 +34,17 @@ data class ContentSource(
     val aspectRatio: Float?,
 )
 
-enum class ContentType { SCREEN_SHARE, WORLD_CAMERA, COMPOSITE_CAMERA }
+enum class ContentType {
+    SCREEN_SHARE, WORLD_CAMERA, COMPOSITE_CAMERA;
+
+    companion object {
+        fun fromWire(wire: String?): ContentType = when (wire) {
+            ContentTypeWire.WORLD_CAMERA -> WORLD_CAMERA
+            ContentTypeWire.COMPOSITE_CAMERA -> COMPOSITE_CAMERA
+            else -> SCREEN_SHARE
+        }
+    }
+}
 
 data class UserLayoutPrefs(
     val swappedLocalAndRemote: Boolean = false,

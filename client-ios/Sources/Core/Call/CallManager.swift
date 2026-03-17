@@ -909,7 +909,7 @@ final class CallManager: ObservableObject {
         }
     }
 
-    func broadcastContentState(active: Bool, contentType: String? = nil) {
+    private func broadcastContentState(active: Bool, contentType: String? = nil) {
         var payload: [String: JSONValue] = ["active": .bool(active)]
         if active, let contentType { payload["contentType"] = .string(contentType) }
         sendMessage(type: "content_state", payload: .object(payload))

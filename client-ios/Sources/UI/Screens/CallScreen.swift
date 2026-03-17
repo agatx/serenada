@@ -359,8 +359,8 @@ struct CallScreen: View {
         .onChange(of: uiState.remoteParticipants.map(\.cid)) { remoteCids in
             let active = Set(remoteCids)
             remoteTileAspectRatios = remoteTileAspectRatios.filter { active.contains($0.key) }
-            // Auto-unpin if pinned participant left
-            if let pinned = pinnedParticipantId, !active.contains(pinned) {
+            // Auto-unpin if pinned participant left (but not if local is pinned)
+            if let pinned = pinnedParticipantId, pinned != uiState.localCid, !active.contains(pinned) {
                 pinnedParticipantId = nil
             }
         }
@@ -742,7 +742,7 @@ struct CallScreen: View {
         if uiState.phase != .inCall { return false }
         if uiState.isScreenSharing { return false }
         if !showLocalAsPrimarySurface { return false }
-        return uiState.localCameraMode == .world || uiState.localCameraMode == .composite
+        return uiState.localCameraMode.isContentMode
     }
 
     private func handleDebugTap() {
@@ -826,7 +826,7 @@ private struct MultiPartyStage: View {
     private let pipCornerRadius: CGFloat = 12
 
     private var hasLocalContent: Bool {
-        isScreenSharing || localCameraMode == .world || localCameraMode == .composite
+        isScreenSharing || localCameraMode.isContentMode
     }
 
     private var hasContentSource: Bool {
@@ -852,8 +852,8 @@ private struct MultiPartyStage: View {
                     } else if let remoteCid = remoteContentCid {
                         let type: ContentType = {
                             switch remoteContentType {
-                            case "worldCamera": return .worldCamera
-                            case "compositeCamera": return .compositeCamera
+                            case ContentTypeWire.worldCamera: return .worldCamera
+                            case ContentTypeWire.compositeCamera: return .compositeCamera
                             default: return .screenShare
                             }
                         }()

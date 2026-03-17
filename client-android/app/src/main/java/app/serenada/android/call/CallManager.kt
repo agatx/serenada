@@ -1170,7 +1170,7 @@ class CallManager(context: Context) {
         )
     }
 
-    fun broadcastContentState(active: Boolean, contentType: String? = null) {
+    private fun broadcastContentState(active: Boolean, contentType: String? = null) {
         val payload = JSONObject().apply {
             put("active", active)
             if (active && contentType != null) put("contentType", contentType)
