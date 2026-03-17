@@ -234,8 +234,8 @@ fun CallScreen(
         remoteTileAspectRatios.keys
             .filter { it !in activeCids }
             .forEach { remoteTileAspectRatios.remove(it) }
-        // Auto-unpin if pinned participant left
-        if (pinnedParticipantId != null && pinnedParticipantId !in activeCids) {
+        // Auto-unpin if pinned participant left (but not if local is pinned)
+        if (pinnedParticipantId != null && pinnedParticipantId != uiState.localCid && pinnedParticipantId !in activeCids) {
             pinnedParticipantId = null
         }
     }
