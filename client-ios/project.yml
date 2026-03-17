@@ -55,6 +55,9 @@ targets:
         product: FirebaseMessaging
       - target: SerenadaNotificationService
         embed: true
+      # Uncomment when App Group entitlement is provisioned:
+      # - target: SerenadaBroadcast
+      #   embed: true
     settings:
       base:
         INFOPLIST_FILE: Resources/Info.plist
@@ -80,6 +83,29 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: app.serenada.ios.notificationservice
         INFOPLIST_FILE: NotificationService/Info.plist
         CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
+  SerenadaBroadcast:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: BroadcastUpload
+        excludes:
+          - Info.plist
+    info:
+      path: BroadcastUpload/Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleDisplayName: Serenada Broadcast
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).SampleHandler"
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.serenada.ios.broadcast
+        INFOPLIST_FILE: BroadcastUpload/Info.plist
+        CODE_SIGN_ENTITLEMENTS: BroadcastUpload/BroadcastUpload.entitlements
   SerenadaiOSTests:
     type: bundle.unit-test
     platform: iOS

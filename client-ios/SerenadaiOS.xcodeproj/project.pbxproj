@@ -19,6 +19,7 @@
 		332B4061CA3CF448DBF766D6 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8648687C9C97AD05ABC9AEB /* AppDelegate.swift */; };
 		35B2C3834A362F96B5B9FFDC /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; };
 		3A954265ACD7FADB9138DC1B /* AppConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662332FB191C23A57DDBA4D /* AppConstants.swift */; };
+		3B240DC5B813D930328BDC99 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56B39E2A60D65FD1477B020 /* SampleHandler.swift */; };
 		3E06894D6424CFB4D21BF430 /* SignalingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B1FBDAE9C6D5498DFA0A42 /* SignalingTransport.swift */; };
 		3EDC6D2793D370B9051050BC /* RtcStatsHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70435689E4086A8106CC45D2 /* RtcStatsHelpers.swift */; };
 		3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */; };
@@ -34,6 +35,7 @@
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
 		5CC7887AE80A9B6424553E65 /* ComputeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0085AD65AA56B17ABD380202 /* ComputeLayout.swift */; };
 		5EA0D8F3AC25ECC78C79E491 /* TurnCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF8E62B4D813B9D13ED9461F /* TurnCredentials.swift */; };
+		66EDB96180E7A8AE970286C6 /* BroadcastPickerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B92C99BAF04DD4222883DAF /* BroadcastPickerButton.swift */; };
 		691A7EA5E1AB4B402D91A90C /* CallScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17000DBF4640C9A33AA00C70 /* CallScreen.swift */; };
 		69CEC70224A4A74EF1814A2C /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D576F4E596F3BD8F5BAA7C /* ActivityView.swift */; };
 		6CE5A873898B1A2456DB4B90 /* RemoteParticipant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24F7583F27DCF7AADA1D7581 /* RemoteParticipant.swift */; };
@@ -144,6 +146,7 @@
 		17000DBF4640C9A33AA00C70 /* CallScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallScreen.swift; sourceTree = "<group>"; };
 		175B5E9B7BA77160AF7DB9A6 /* Participant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Participant.swift; sourceTree = "<group>"; };
 		18568C3FC4A75A087A876FB4 /* SerenadaiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SerenadaiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1B3764EC96FDD478F4ADD4C4 /* BroadcastUpload.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BroadcastUpload.entitlements; sourceTree = "<group>"; };
 		1F9BAB04B56A4D0D4D41A615 /* QRCodeImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeImageView.swift; sourceTree = "<group>"; };
 		2486CC31E85D120A0B2C140D /* CaptureResolutionSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResolutionSelectionTests.swift; sourceTree = "<group>"; };
 		24F7583F27DCF7AADA1D7581 /* RemoteParticipant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteParticipant.swift; sourceTree = "<group>"; };
@@ -162,7 +165,9 @@
 		4ED070FA228FECAF62312895 /* SseSignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SseSignalingTransport.swift; sourceTree = "<group>"; };
 		53E3B13DA44022026D9F605D /* SavedRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStore.swift; sourceTree = "<group>"; };
 		55C7196F10921F7DCB998749 /* JoinSnapshotFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinSnapshotFeature.swift; sourceTree = "<group>"; };
+		5B92C99BAF04DD4222883DAF /* BroadcastPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastPickerButton.swift; sourceTree = "<group>"; };
 		6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinWithCodeScreen.swift; sourceTree = "<group>"; };
+		68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SerenadaBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		70435689E4086A8106CC45D2 /* RtcStatsHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RtcStatsHelpers.swift; sourceTree = "<group>"; };
 		70B1FBDAE9C6D5498DFA0A42 /* SignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingTransport.swift; sourceTree = "<group>"; };
@@ -187,6 +192,7 @@
 		A48285CB0CBEE51504B0674B /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
 		AA94DD46C2CBF626ACAE2EDC /* EndpointHostParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointHostParserTests.swift; sourceTree = "<group>"; };
 		B2B27D4928922728BD684878 /* SavedRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoom.swift; sourceTree = "<group>"; };
+		B56B39E2A60D65FD1477B020 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		B8648687C9C97AD05ABC9AEB /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B8DC46B13DBF27F02DA8B2D2 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
 		C3F9BB7205561A9FC615B5C0 /* Backoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Backoff.swift; sourceTree = "<group>"; };
@@ -233,6 +239,7 @@
 		00A34D701D66DCAB54FE6E0E /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */,
 				6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */,
 				F4BB4F1EC53EF165C9E75A96 /* SerenadaiOSTests.xctest */,
 				18568C3FC4A75A087A876FB4 /* SerenadaiOSUITests.xctest */,
@@ -303,6 +310,7 @@
 		4C2BB5F4B1F4D2ED577B9AF6 = {
 			isa = PBXGroup;
 			children = (
+				F86221F53AB93BC5BEEE7E9F /* BroadcastUpload */,
 				961901030B63AB715A9ED19C /* NotificationService */,
 				D67D9D9D6E20F61AB5A0BB84 /* Push */,
 				9DC24B91EF97AE50C603EEA7 /* Resources */,
@@ -352,6 +360,7 @@
 			isa = PBXGroup;
 			children = (
 				12D576F4E596F3BD8F5BAA7C /* ActivityView.swift */,
+				5B92C99BAF04DD4222883DAF /* BroadcastPickerButton.swift */,
 				1F9BAB04B56A4D0D4D41A615 /* QRCodeImageView.swift */,
 				0A244DB0F6B199EF5BF486FF /* WebRTCVideoView.swift */,
 			);
@@ -484,6 +493,15 @@
 			path = UI;
 			sourceTree = "<group>";
 		};
+		F86221F53AB93BC5BEEE7E9F /* BroadcastUpload */ = {
+			isa = PBXGroup;
+			children = (
+				1B3764EC96FDD478F4ADD4C4 /* BroadcastUpload.entitlements */,
+				B56B39E2A60D65FD1477B020 /* SampleHandler.swift */,
+			);
+			path = BroadcastUpload;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -548,6 +566,23 @@
 			productReference = F4BB4F1EC53EF165C9E75A96 /* SerenadaiOSTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		8983470B9AA32DF7F4E2428C /* SerenadaBroadcast */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1033E224C72FDC7B493F7FCC /* Build configuration list for PBXNativeTarget "SerenadaBroadcast" */;
+			buildPhases = (
+				ADD684ECE59B7FBE4DF0BA84 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SerenadaBroadcast;
+			packageProductDependencies = (
+			);
+			productName = SerenadaBroadcast;
+			productReference = 68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		952AC02A226F3D3E300DA6FF /* SerenadaNotificationService */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5A95854CD0C303B0C4BE4736 /* Build configuration list for PBXNativeTarget "SerenadaNotificationService" */;
@@ -587,6 +622,10 @@
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
+					8983470B9AA32DF7F4E2428C = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
 					952AC02A226F3D3E300DA6FF = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -613,6 +652,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				8983470B9AA32DF7F4E2428C /* SerenadaBroadcast */,
 				952AC02A226F3D3E300DA6FF /* SerenadaNotificationService */,
 				41F64433D4EA4277DDB75306 /* SerenadaiOS */,
 				6D47C94C3FF0AF5229EEC1C8 /* SerenadaiOSTests */,
@@ -675,6 +715,7 @@
 				332B4061CA3CF448DBF766D6 /* AppDelegate.swift in Sources */,
 				3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */,
 				4A6F5FCA6B5464133906FD88 /* Backoff.swift in Sources */,
+				66EDB96180E7A8AE970286C6 /* BroadcastPickerButton.swift in Sources */,
 				76821994724F4E37F2773EBE /* CallAudioSessionController.swift in Sources */,
 				DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */,
 				B08BB9CB1E3E37F57FC3DE07 /* CallPhase.swift in Sources */,
@@ -748,6 +789,14 @@
 				3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */,
 				F237C6E7ED0C17810C58C49F /* SavedRoomStoreTests.swift in Sources */,
 				A9394C5164C3DE80CA3C97F6 /* SignalingMessageTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ADD684ECE59B7FBE4DF0BA84 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3B240DC5B813D930328BDC99 /* SampleHandler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1041,6 +1090,23 @@
 			};
 			name = Debug;
 		};
+		B1F94F175A9E43B7EF04835B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = BroadcastUpload/BroadcastUpload.entitlements;
+				INFOPLIST_FILE = BroadcastUpload/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.serenada.ios.broadcast;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		D9B38A843816C2BF1203023D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1058,6 +1124,23 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SerenadaiOS.app/SerenadaiOS";
 			};
 			name = Debug;
+		};
+		DC856104C434C53DC834F966 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = BroadcastUpload/BroadcastUpload.entitlements;
+				INFOPLIST_FILE = BroadcastUpload/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.serenada.ios.broadcast;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
 		};
 		E9A38B45BBFCEADEED74B1E8 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -1079,6 +1162,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1033E224C72FDC7B493F7FCC /* Build configuration list for PBXNativeTarget "SerenadaBroadcast" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1F94F175A9E43B7EF04835B /* Debug */,
+				DC856104C434C53DC834F966 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		2670B3F56D68BD7FF226F4B1 /* Build configuration list for PBXNativeTarget "SerenadaiOSTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

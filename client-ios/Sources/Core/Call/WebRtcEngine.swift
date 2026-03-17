@@ -1,10 +1,10 @@
 import AVFoundation
 import CoreImage
 import Foundation
-import UIKit
-#if canImport(ReplayKit)
+#if !BROADCAST_EXTENSION && canImport(ReplayKit)
 import ReplayKit
 #endif
+import UIKit
 #if canImport(WebRTC)
 import WebRTC
 #endif
@@ -135,7 +135,9 @@ final class WebRtcEngine {
     private var localVideoTrack: RTCVideoTrack?
     private var localVideoCapturer: RTCCameraVideoCapturer?
     private var compositeVideoCapturer: CompositeCameraVideoCapturer?
-    #if canImport(ReplayKit)
+    #if BROADCAST_EXTENSION
+    private var broadcastFrameReader: BroadcastFrameReader?
+    #else
     private var replayKitCapturer: ReplayKitVideoCapturer?
     #endif
 
@@ -204,7 +206,10 @@ final class WebRtcEngine {
         localVideoTrack?.isEnabled = false
         localAudioTrack?.isEnabled = false
 
-        #if canImport(ReplayKit)
+        #if BROADCAST_EXTENSION
+        broadcastFrameReader?.stopListening()
+        broadcastFrameReader = nil
+        #else
         replayKitCapturer?.stopCapture()
         replayKitCapturer = nil
         #endif
@@ -322,7 +327,7 @@ final class WebRtcEngine {
     }
 
     func startScreenShare(onComplete: ((Bool) -> Void)? = nil) -> Bool {
-#if canImport(WebRTC) && canImport(ReplayKit)
+#if canImport(WebRTC)
         guard let localVideoSource else {
             onComplete?(false)
             return false
@@ -341,6 +346,51 @@ final class WebRtcEngine {
         compositeVideoCapturer = nil
         activeCaptureDevice = nil
 
+    #if BROADCAST_EXTENSION
+        let reader = BroadcastFrameReader(delegate: localVideoSource)
+        broadcastFrameReader = reader
+
+        var startTimeoutTask: Task<Void, Never>?
+
+        reader.onBroadcastStarted = { [weak self] in
+            Task { @MainActor in
+                startTimeoutTask?.cancel()
+                guard let self else { return }
+                guard self.broadcastFrameReader === reader else { return }
+                self.isScreenSharing = true
+                self.currentZoomFactor = 1
+                self.onZoomFactorChanged(1)
+                self.notifyCameraModeAndFlash()
+                self.localVideoTrack?.isEnabled = true
+                onComplete?(true)
+            }
+        }
+
+        reader.onBroadcastFinished = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.broadcastFrameReader === reader else { return }
+                _ = self.stopScreenShare()
+            }
+        }
+
+        reader.startListening()
+
+        // Timeout: if broadcast doesn't start within 30s, restore camera
+        startTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            guard self.broadcastFrameReader === reader, !self.isScreenSharing else { return }
+            self.broadcastFrameReader?.stopListening()
+            self.broadcastFrameReader = nil
+            _ = self.restartVideoCapturer(source: previousSource)
+            self.notifyCameraModeAndFlash()
+            onComplete?(false)
+        }
+
+        return true
+    #else
         let capturer = ReplayKitVideoCapturer(delegate: localVideoSource)
         replayKitCapturer = capturer
 
@@ -364,6 +414,7 @@ final class WebRtcEngine {
                 onComplete?(false)
             }
         }
+    #endif
 #else
         onComplete?(false)
         return false
@@ -371,9 +422,14 @@ final class WebRtcEngine {
     }
 
     func stopScreenShare() -> Bool {
-#if canImport(WebRTC) && canImport(ReplayKit)
+#if canImport(WebRTC)
+    #if BROADCAST_EXTENSION
+        broadcastFrameReader?.stopListening()
+        broadcastFrameReader = nil
+    #else
         replayKitCapturer?.stopCapture()
         replayKitCapturer = nil
+    #endif
 #endif
         if isScreenSharing {
             isScreenSharing = false
@@ -494,7 +550,10 @@ final class WebRtcEngine {
         localVideoCapturer = nil
         compositeVideoCapturer?.stopCapture()
         compositeVideoCapturer = nil
-        #if canImport(ReplayKit)
+        #if BROADCAST_EXTENSION
+        broadcastFrameReader?.stopListening()
+        broadcastFrameReader = nil
+        #else
         replayKitCapturer?.stopCapture()
         replayKitCapturer = nil
         #endif
@@ -1408,7 +1467,278 @@ private final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVid
     }
 }
 
-#if canImport(ReplayKit)
+#if BROADCAST_EXTENSION
+private final class BroadcastFrameReader: RTCVideoCapturer {
+    private enum Constants {
+        static let appGroupIdentifier = "group.app.serenada.ios"
+        static let sharedFileName = "broadcast_frame.dat"
+        static let headerSize = 64
+
+        static let darwinNotifyStarted = "app.serenada.ios.broadcast.started"
+        static let darwinNotifyFinished = "app.serenada.ios.broadcast.finished"
+        static let darwinNotifyRequestStop = "app.serenada.ios.broadcast.requestStop"
+
+        static let pollIntervalMs = 33 // ~30fps
+    }
+
+    var onBroadcastStarted: (() -> Void)?
+    var onBroadcastFinished: (() -> Void)?
+
+    private var mmapPtr: UnsafeMutableRawPointer?
+    private var mmapSize: Int = 0
+    private var fileDescriptor: Int32 = -1
+    private var lastSeqNo: UInt32 = 0
+
+    private var pollTimer: DispatchSourceTimer?
+    private var isListening = false
+
+    private static let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
+
+    func startListening() {
+        guard !isListening else { return }
+        isListening = true
+
+        let observer = Unmanaged.passUnretained(self).toOpaque()
+
+        CFNotificationCenterAddObserver(
+            Self.darwinCenter, observer,
+            { _, observer, name, _, _ in
+                guard let observer, let name else { return }
+                let reader = Unmanaged<BroadcastFrameReader>.fromOpaque(observer).takeUnretainedValue()
+                let nameStr = name.rawValue as String
+                if nameStr == Constants.darwinNotifyStarted {
+                    DispatchQueue.main.async { reader.handleBroadcastStarted() }
+                } else if nameStr == Constants.darwinNotifyFinished {
+                    DispatchQueue.main.async { reader.handleBroadcastFinished() }
+                }
+            },
+            Constants.darwinNotifyStarted as CFString,
+            nil, .deliverImmediately
+        )
+
+        CFNotificationCenterAddObserver(
+            Self.darwinCenter, observer,
+            { _, observer, name, _, _ in
+                guard let observer, let name else { return }
+                let reader = Unmanaged<BroadcastFrameReader>.fromOpaque(observer).takeUnretainedValue()
+                let nameStr = name.rawValue as String
+                if nameStr == Constants.darwinNotifyFinished {
+                    DispatchQueue.main.async { reader.handleBroadcastFinished() }
+                }
+            },
+            Constants.darwinNotifyFinished as CFString,
+            nil, .deliverImmediately
+        )
+    }
+
+    func stopListening() {
+        guard isListening else { return }
+        isListening = false
+
+        // Request the extension to stop
+        requestExtensionStop()
+
+        stopPolling()
+        closeSharedMemory()
+
+        let observer = Unmanaged.passUnretained(self).toOpaque()
+        CFNotificationCenterRemoveObserver(Self.darwinCenter, observer, nil, nil)
+
+        onBroadcastStarted = nil
+        onBroadcastFinished = nil
+    }
+
+    private func requestExtensionStop() {
+        CFNotificationCenterPostNotification(
+            Self.darwinCenter,
+            CFNotificationName(Constants.darwinNotifyRequestStop as CFString),
+            nil, nil, true
+        )
+    }
+
+    // MARK: - Darwin Notification Handlers
+
+    private func handleBroadcastStarted() {
+        guard isListening else { return }
+        guard openSharedMemory() else { return }
+        startPolling()
+        onBroadcastStarted?()
+    }
+
+    private func handleBroadcastFinished() {
+        guard isListening else { return }
+        stopPolling()
+        closeSharedMemory()
+        onBroadcastFinished?()
+    }
+
+    // MARK: - Polling
+
+    private func startPolling() {
+        stopPolling()
+        lastSeqNo = 0
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInteractive))
+        timer.schedule(
+            deadline: .now(),
+            repeating: .milliseconds(Constants.pollIntervalMs)
+        )
+        timer.setEventHandler { [weak self] in
+            self?.pollFrame()
+        }
+        pollTimer = timer
+        timer.resume()
+    }
+
+    private func stopPolling() {
+        pollTimer?.cancel()
+        pollTimer = nil
+    }
+
+    private func pollFrame() {
+        guard let ptr = mmapPtr else { return }
+
+        let seqNo = ptr.load(fromByteOffset: 0, as: UInt32.self)
+        guard seqNo != lastSeqNo else { return }
+        lastSeqNo = seqNo
+
+        let width = Int(ptr.load(fromByteOffset: 4, as: UInt32.self))
+        let height = Int(ptr.load(fromByteOffset: 8, as: UInt32.self))
+        let pixelFormat = ptr.load(fromByteOffset: 12, as: UInt32.self)
+        let planeCount = Int(ptr.load(fromByteOffset: 16, as: UInt32.self))
+        let plane0BytesPerRow = Int(ptr.load(fromByteOffset: 20, as: UInt32.self))
+        let plane0Height = Int(ptr.load(fromByteOffset: 24, as: UInt32.self))
+        let plane1BytesPerRow = Int(ptr.load(fromByteOffset: 28, as: UInt32.self))
+        let plane1Height = Int(ptr.load(fromByteOffset: 32, as: UInt32.self))
+        let timestampNs = ptr.load(fromByteOffset: 36, as: Int64.self)
+        let rotationRaw = ptr.load(fromByteOffset: 44, as: UInt32.self)
+
+        guard width > 0, height > 0 else { return }
+
+        let rotation: RTCVideoRotation
+        switch rotationRaw {
+        case 90: rotation = ._90
+        case 180: rotation = ._180
+        case 270: rotation = ._270
+        default: rotation = ._0
+        }
+
+        let dataStart = ptr.advanced(by: Constants.headerSize)
+
+        var pixelBuffer: CVPixelBuffer?
+
+        if planeCount > 1 {
+            // Multi-planar (NV12 / 420v / 420f)
+            let plane0Size = plane0BytesPerRow * plane0Height
+            let plane1Size = plane1BytesPerRow * plane1Height
+
+            let attrs: [String: Any] = [
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
+            ]
+            let status = CVPixelBufferCreate(
+                kCFAllocatorDefault,
+                width, height,
+                OSType(pixelFormat),
+                attrs as CFDictionary,
+                &pixelBuffer
+            )
+            guard status == kCVReturnSuccess, let pixelBuffer else { return }
+
+            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            if let dest0 = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) {
+                memcpy(dest0, dataStart, plane0Size)
+            }
+            if let dest1 = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) {
+                memcpy(dest1, dataStart.advanced(by: plane0Size), plane1Size)
+            }
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+
+            let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
+            let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
+            delegate?.capturer(self, didCapture: frame)
+        } else {
+            // Single-plane (BGRA)
+            let attrs: [String: Any] = [
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
+            ]
+            let status = CVPixelBufferCreate(
+                kCFAllocatorDefault,
+                width, height,
+                OSType(pixelFormat),
+                attrs as CFDictionary,
+                &pixelBuffer
+            )
+            guard status == kCVReturnSuccess, let pixelBuffer else { return }
+
+            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            if let dest = CVPixelBufferGetBaseAddress(pixelBuffer) {
+                let destBpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
+                if destBpr == plane0BytesPerRow {
+                    memcpy(dest, dataStart, plane0BytesPerRow * height)
+                } else {
+                    for row in 0 ..< height {
+                        memcpy(dest.advanced(by: row * destBpr), dataStart.advanced(by: row * plane0BytesPerRow), min(destBpr, plane0BytesPerRow))
+                    }
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+
+            let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
+            let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
+            delegate?.capturer(self, didCapture: frame)
+        }
+    }
+
+    // MARK: - Shared Memory
+
+    private func openSharedMemory() -> Bool {
+        guard mmapPtr == nil else { return true }
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: Constants.appGroupIdentifier
+        ) else { return false }
+
+        let fileURL = containerURL.appendingPathComponent(Constants.sharedFileName)
+        let path = fileURL.path
+
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+
+        fileDescriptor = open(path, O_RDONLY)
+        guard fileDescriptor >= 0 else { return false }
+
+        var stat = stat()
+        fstat(fileDescriptor, &stat)
+        let size = Int(stat.st_size)
+        guard size > Constants.headerSize else {
+            close(fileDescriptor)
+            fileDescriptor = -1
+            return false
+        }
+
+        guard let mapped = mmap(nil, size, PROT_READ, MAP_SHARED, fileDescriptor, 0),
+              mapped != MAP_FAILED
+        else {
+            close(fileDescriptor)
+            fileDescriptor = -1
+            return false
+        }
+
+        mmapPtr = mapped
+        mmapSize = size
+        return true
+    }
+
+    private func closeSharedMemory() {
+        if let ptr = mmapPtr {
+            munmap(ptr, mmapSize)
+            mmapPtr = nil
+        }
+        if fileDescriptor >= 0 {
+            close(fileDescriptor)
+            fileDescriptor = -1
+        }
+    }
+}
+#else
 private final class ReplayKitVideoCapturer: RTCVideoCapturer {
     private let recorder = RPScreenRecorder.shared()
     private var isRunning = false

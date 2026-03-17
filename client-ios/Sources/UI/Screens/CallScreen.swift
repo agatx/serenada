@@ -678,9 +678,31 @@ struct CallScreen: View {
                 onFlipCamera()
             }
 
+            #if BROADCAST_EXTENSION
+            if uiState.isScreenSharing {
+                iconButton(system: "rectangle.on.rectangle.slash", accessibilityLabel: L10n.callA11yScreenShareOn) {
+                    onToggleScreenShare()
+                }
+            } else {
+                // Overlay broadcast picker on top of the icon so the system picker triggers
+                ZStack {
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 48, height: 48)
+                        .background(Color.black.opacity(0.45))
+                        .clipShape(Circle())
+                        .foregroundStyle(.white)
+                    BroadcastPickerButton(onTap: onToggleScreenShare)
+                        .frame(width: 48, height: 48)
+                        .opacity(0.01)
+                }
+                .accessibilityLabel(L10n.callA11yScreenShareOff)
+            }
+            #else
             iconButton(system: uiState.isScreenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle", accessibilityLabel: uiState.isScreenSharing ? L10n.callA11yScreenShareOn : L10n.callA11yScreenShareOff) {
                 onToggleScreenShare()
             }
+            #endif
 
             Button {
                 UINotificationFeedbackGenerator().notificationOccurred(.warning)

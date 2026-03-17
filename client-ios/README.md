@@ -12,7 +12,7 @@ This native client mirrors Android/web call flow and signaling semantics:
 - In-call camera mode cycle semantics (`selfie -> world -> composite`), with automatic composite skip and a circular mirrored selfie overlay in composite mode that stays aligned across portrait and landscape
 - World/composite pinch zoom (capture-level zoom)
 - Local camera default capture profile targets 480p; enabling `HD Video (experimental)` switches to highest available mode
-- ReplayKit screen-share toggle for in-call sharing
+- Broadcast Upload Extension for background screen sharing (with ReplayKit in-app fallback)
 - Push subscription + encrypted join snapshots + waiting-room invite action
 - In-call realtime stats model + top-left double-tap debug panel
 - Diagnostics screen (permissions, media, connectivity, ICE gather probe, report export)
@@ -131,6 +131,10 @@ Useful options:
 # override signing team
 ./scripts/deploy_to_device.sh --team [TEAM_ID]
 ```
+
+## Broadcast Upload Extension (background screen sharing)
+
+See [broadcast-extension.md](broadcast-extension.md) for architecture details and setup instructions.
 
 ## Local-only signing override (do not commit)
 To keep your team ID in this local clone only, create a private xcconfig:
