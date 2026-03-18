@@ -36,7 +36,7 @@ Synthesized from six independent and cross-pollinated analyses (Claude v1/v2, Co
 │  │  │  Camera modes        Reconnection     Resilience    │  │ │
 │  │  │  URL parsing         Layout algo      Room creation │  │ │
 │  │  │  Lifecycle hooks     Permission preflight            │  │ │
-│  │  │  Diagnostics utility                               │  │ │
+│  │  │  Preflight diag      Live call stats               │  │ │
 │  │  └────────────────────────────────────────────────────┘  │ │
 │  └──────────────────────────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
@@ -106,24 +106,38 @@ session.onPermissionsRequired = async (permissions) => {
 
 `computeLayout` is a pure function with no UI dependency. It belongs in core so that both call-ui and core-only integrators can use it. Exported as an optional utility, not part of the session API.
 
-### 5. Diagnostics: headless utility in core
+### 5. Diagnostics: two separate data products in core
 
-Core includes a `SerenadaDiagnostics` utility that lets host apps build their own device-check / pre-call screen. This belongs in core because it depends on WebRTC internals (device enumeration, media capture probing, TURN connectivity checks) — and core bundles the WebRTC binary. Without this utility, core-only integrators would have no clean way to implement a device check.
+Core provides two distinct diagnostics surfaces. Both are headless — structured data, no UI.
 
-`SerenadaDiagnostics` is headless — it returns structured results, not UI. call-ui does not include a diagnostics screen (that's a product feature, not a call-flow concern). The Serenada app's existing diagnostics screen becomes a host-app screen that consumes this utility.
+**A. Preflight diagnostics (`SerenadaDiagnostics`)** — a one-shot pre-call device/network checker that host apps use to build their own "Device Check" screen. This belongs in core because it depends on WebRTC internals (device enumeration, TURN probing, signaling connectivity) that core bundles. Without this utility, core-only integrators would have no clean way to implement a device check.
+
+**B. Live call stats (`SerenadaSession.callStats`)** — real-time telemetry exposed as an observable on the session during an active call (bitrate, packet loss, jitter, codec, ICE candidate pair, etc.). call-ui's debug overlay consumes this. Host apps building custom in-call UIs can also observe it.
+
+These are separate products with separate models. Preflight diagnostics run before a call exists; live call stats require an active `SerenadaSession`. They share no types.
+
+**Preflight diagnostics contract: no prompts, no side effects.**
+
+`SerenadaDiagnostics` never triggers OS permission prompts or mutates any state. If camera or microphone permissions have not been granted, the check reports `.notAuthorized` — it does not attempt to request access. This preserves the headless-core boundary established for permissions.
+
+The result model distinguishes "check could not run" from "check ran and failed":
+- `.available` — device/service is reachable and usable
+- `.unavailable(reason)` — check ran, device/service is not usable
+- `.notAuthorized` — check could not run because OS permission is missing
+- `.skipped(reason)` — check could not run for another reason (e.g., no network)
 
 ```swift
-// Swift
+// Swift — preflight diagnostics
 let diagnostics = SerenadaDiagnostics(config: serenadaConfig)
 
 diagnostics.runAll { report in
-    report.camera         // .available | .unavailable(reason) | .permissionDenied
-    report.microphone     // .available | .unavailable(reason) | .permissionDenied
+    report.camera         // .available | .unavailable(reason) | .notAuthorized
+    report.microphone     // .available | .unavailable(reason) | .notAuthorized
     report.speaker        // .available | .unavailable(reason)
-    report.network        // .reachable | .unreachable
+    report.network        // .reachable | .unreachable(reason) | .skipped(reason)
     report.signaling      // .connected(transport: "ws"|"sse") | .failed(reason)
     report.turn           // .reachable(latencyMs: Int) | .unreachable(reason)
-    report.devices        // [DeviceInfo] — cameras, mics enumerated
+    report.devices        // [DeviceInfo] — cameras, mics enumerated (empty if notAuthorized)
 }
 
 // Or run individual checks
@@ -132,16 +146,29 @@ diagnostics.checkTurn { result in ... }
 ```
 
 ```kotlin
-// Kotlin
+// Kotlin — preflight diagnostics
 val diagnostics = SerenadaDiagnostics(config)
-val report = diagnostics.runAll()  // suspend function
+val report = diagnostics.runAll()  // suspend function, never prompts
 ```
 
 ```typescript
-// TypeScript
+// TypeScript — preflight diagnostics
 const diagnostics = createSerenadaDiagnostics(config)
-const report = await diagnostics.runAll()
+const report = await diagnostics.runAll()  // never prompts
 ```
+
+```swift
+// Swift — live call stats (during active call)
+session.callStats  // @Published CallStats — updated periodically while in-call
+```
+
+**Which diagnostic endpoints move into core vs stay in host:**
+
+The existing `APIClient` / `ApiClient` / `roomApi` on each platform touches several endpoints. The split:
+- **Core's call-only client**: TURN credential fetch, room creation, signaling connectivity probe — these are needed by `SerenadaSession` and `SerenadaDiagnostics`
+- **Host-only client**: push subscription/unsubscription endpoints, invite-link generation, snapshot upload, any app-analytics endpoints — these stay in the host app
+
+call-ui does not include a diagnostics screen (that's a product feature, not a call-flow concern). The Serenada app's existing diagnostics/device-check screens become host-app screens that consume `SerenadaDiagnostics`.
 
 ### 6. WebRTC binary: bundled
 
@@ -418,7 +445,8 @@ Any string not overridden falls back to the bundled English default.
 | Screen sharing engine | Yes | internal, exposed via session controls |
 | URL parsing / `DeepLinkParser` | Yes | public utility |
 | Permission preflight + blocked-state signaling | Yes | public — core checks on `join()`, then pauses |
-| `SerenadaDiagnostics` utility | Yes | public — headless device/network/TURN checks |
+| `SerenadaDiagnostics` (preflight) | Yes | public utility — headless device/network/TURN checks, no prompts |
+| `CallStats` (live telemetry) | Yes | public observable on `SerenadaSession` — bitrate, loss, jitter, codec |
 
 ### serenada-call-ui
 
@@ -428,7 +456,7 @@ Any string not overridden falls back to the bundled English default.
 | Video renderers / tiles | Platform-native rendering with layout engine |
 | Control bar | Mute, camera, hang up, flip, screen share |
 | Connection status overlay | "Connecting...", "Reconnecting..." |
-| Debug overlay (optional) | Toggle-able in-call stats panel |
+| Debug overlay (optional) | Toggle-able in-call stats panel — renders `session.callStats` from core |
 | Participant pinning | Multi-party layout with focus |
 | Join chime | Audio feedback on participant arrival |
 | Default English strings | Host provides additional locales via config |
@@ -474,8 +502,9 @@ Sources/Core/Call/CallAudioSessionController → SerenadaCore: internal
 Sources/Core/Signaling/*                     → SerenadaCore: internal
 Sources/Core/Models/*                        → SerenadaCore: public models
 Sources/Core/Networking/APIClient.swift      → split first:
-                                              call-only client (TURN + room creation) → SerenadaCore
-                                              push / diagnostic / invite endpoints → host app
+                                              call-only client (TURN + room creation +
+                                              signaling probe for diagnostics) → SerenadaCore
+                                              push / invite / snapshot / analytics endpoints → host app
 Sources/Core/Utils/DeepLinkParser.swift      → SerenadaCore: public
 Sources/Core/Layout/ComputeLayout.swift      → SerenadaCore: public utility
 
@@ -512,8 +541,9 @@ call/SignalingClient.kt             → core: internal
 call/CompositeCameraCapturer.kt     → core: internal
 call/PeerConnectionSlot.kt          → core: internal
 network/ApiClient.kt                → split first:
-                                      call-only client (TURN + room creation) → core
-                                      push / diagnostic / invite endpoints → :app
+                                      call-only client (TURN + room creation +
+                                      signaling probe for diagnostics) → core
+                                      push / invite / snapshot / analytics endpoints → :app
 layout/ComputeLayout.kt             → core: public utility
 i18n/*                              → call-ui: English strings only; host provides other locales
 
@@ -549,8 +579,9 @@ contexts/signaling/transports/*     → @serenada/core: internal
 contexts/localVideoRecovery.ts      → @serenada/core: internal
 layout/computeLayout.ts             → @serenada/core: public export
 constants/webrtcResilience.ts       → @serenada/core: internal
-utils/roomApi.ts                    → @serenada/core: room-creation helper only
-                                      create separate call-only REST client for TURN / call setup
+utils/roomApi.ts                    → @serenada/core: call-only client
+                                      (TURN + room creation + signaling probe for diagnostics)
+                                      push / invite / snapshot / analytics endpoints → host app
 
 pages/CallRoom.tsx                  → @serenada/react-ui: <SerenadaCallFlow>
                                       Break into: ParticipantGrid, ControlBar,
@@ -631,8 +662,8 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 - [ ] Move `Sources/Core/Signaling/*` → `SerenadaCore/Sources/` (mark `internal`)
 - [ ] Move only SDK-native models into `SerenadaCore/Sources/` (mark `public`) — do NOT publish current UI-flavored state objects as-is
 - [ ] Split `Sources/Core/Networking/APIClient.swift` into:
-  - [ ] call-only client (TURN + room creation) → `SerenadaCore/Sources/`
-  - [ ] host-only client (push / diagnostics / invite) → app target
+  - [ ] call-only client (TURN + room creation + signaling probe for diagnostics) → `SerenadaCore/Sources/`
+  - [ ] host-only client (push / invite / snapshot / analytics) → app target
 - [ ] Move `Sources/Core/Utils/DeepLinkParser.swift` → `SerenadaCore/Sources/` (mark `public`)
 - [ ] Move `Sources/Core/Layout/ComputeLayout.swift` → `SerenadaCore/Sources/` (mark `public`)
 - [ ] Fix all import paths in moved files
@@ -668,12 +699,19 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
   - [ ] `sessionDidChangeState` callback
   - [ ] `sessionDidEnd` callback
 - [ ] Implement permission preflight in `join()` — detect missing camera/mic, set `state.phase = .awaitingPermissions`, populate `requiredPermissions`, and invoke delegate if set
-- [ ] Create `SerenadaDiagnostics` utility:
+- [ ] Create `SerenadaDiagnostics` preflight utility:
   - [ ] Implement `runAll(completion:)` — runs all checks, returns `DiagnosticsReport`
   - [ ] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkSpeaker()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
   - [ ] Define `DiagnosticsReport` struct with structured results per check
-  - [ ] Define result enums: `.available`, `.unavailable(reason)`, `.permissionDenied`, `.reachable`, `.unreachable(reason)`
+  - [ ] Define result enums: `.available`, `.unavailable(reason)`, `.notAuthorized`, `.skipped(reason)`
   - [ ] Implement device enumeration (cameras, microphones) via WebRTC APIs
+  - [ ] Enforce no-prompts contract: camera/mic checks must return `.notAuthorized` if permission not granted, never trigger OS prompt
+  - [ ] Signaling probe uses core's call-only client (same endpoint used by `join()`)
+  - [ ] TURN probe uses core's TURN credential fetch
+- [ ] Add `callStats: CallStats` observable on `SerenadaSession`:
+  - [ ] Define `CallStats` struct: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
+  - [ ] Populate from WebRTC `getStats()` on a periodic interval during active call
+  - [ ] Expose as `@Published` for observation
 - [ ] Build — should compile
 
 #### Rewire iOS host app
@@ -707,18 +745,23 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 - [ ] Extract reconnection and resilience logic from `constants/webrtcResilience.ts` → `packages/core/src/media/`
 - [ ] Extract `localVideoRecovery.ts` → `packages/core/src/media/`
 - [ ] Move `layout/computeLayout.ts` → `packages/core/src/layout/`
-- [ ] Move `utils/roomApi.ts` → `packages/core/src/api/` as room-creation helper only
-- [ ] Create a separate call-only REST client in `packages/core/src/api/` for TURN / call setup concerns
+- [ ] Move call-relevant parts of `utils/roomApi.ts` → `packages/core/src/api/` (TURN + room creation + signaling probe for diagnostics)
+- [ ] Keep push / invite / snapshot / analytics endpoints in host app
 - [ ] Implement `SerenadaSession` with: `subscribe(callback)`, `join()`, `leave()`, `end()`, `toggleAudio()`, `toggleVideo()`, `flipCamera()`, media stream getters
 - [ ] Implement `createSerenadaCore()` factory with `SerenadaConfig`
 - [ ] Implement `createRoom()` convenience method
 - [ ] Implement `onPermissionsRequired` callback on `SerenadaSession`
 - [ ] Implement permission preflight in `join()` — detect missing camera/mic, set `phase = 'awaitingPermissions'`, expose `requiredPermissions`, and pause
 - [ ] Create `createSerenadaDiagnostics()` factory:
-  - [ ] Implement `runAll()` — async, returns `DiagnosticsReport`
+  - [ ] Implement `runAll()` — async, returns `DiagnosticsReport`, never prompts
   - [ ] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
   - [ ] Device enumeration via `navigator.mediaDevices.enumerateDevices()`
-- [ ] Export public types: `CallState`, `Participant`, `CallPhase`, `CallError`, `DiagnosticsReport`
+  - [ ] Camera/mic checks return `notAuthorized` if permission not granted — no `getUserMedia()` calls
+  - [ ] Signaling/TURN probes use core's call-only client
+- [ ] Add `callStats` observable on `SerenadaSession`:
+  - [ ] Define `CallStats` type: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
+  - [ ] Populate from `RTCPeerConnection.getStats()` periodically during active call
+- [ ] Export public types: `CallState`, `Participant`, `CallPhase`, `CallError`, `DiagnosticsReport`, `CallStats`
 - [ ] Build `@serenada/core` — should compile
 - [ ] Verify zero React/ReactDOM imports in `@serenada/core`
 
@@ -751,8 +794,8 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 - [ ] Move `call/CompositeCameraCapturer.kt` → `:serenada-core` (mark `internal`)
 - [ ] Move `call/PeerConnectionSlot.kt` → `:serenada-core` (mark `internal`)
 - [ ] Split `network/ApiClient.kt` into:
-  - [ ] call-only client (TURN + room creation) → `:serenada-core`
-  - [ ] host-only client (push / diagnostics / invite) → `:app`
+  - [ ] call-only client (TURN + room creation + signaling probe for diagnostics) → `:serenada-core`
+  - [ ] host-only client (push / invite / snapshot / analytics) → `:app`
 - [ ] Move `layout/ComputeLayout.kt` → `:serenada-core` (mark `public`)
 - [ ] Move signaling-related models → `:serenada-core` (mark `public` where needed)
 - [ ] Fix all import paths
@@ -787,10 +830,15 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
   - [ ] `onSessionStateChanged` callback
   - [ ] `onSessionEnded` callback
 - [ ] Implement permission preflight in `join()` — detect missing camera/mic, set `CallState.phase = AwaitingPermissions`, expose `requiredPermissions`, and pause
-- [ ] Create `SerenadaDiagnostics` utility:
-  - [ ] Implement `suspend fun runAll(): DiagnosticsReport`
+- [ ] Create `SerenadaDiagnostics` preflight utility:
+  - [ ] Implement `suspend fun runAll(): DiagnosticsReport` — never prompts
   - [ ] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkSpeaker()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
   - [ ] Device enumeration via WebRTC APIs
+  - [ ] Camera/mic checks return `NotAuthorized` if permission not granted — no runtime permission requests
+  - [ ] Signaling/TURN probes use core's call-only client
+- [ ] Add `callStats: StateFlow<CallStats>` on `SerenadaSession`:
+  - [ ] Define `CallStats` data class: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
+  - [ ] Populate from WebRTC `getStats()` periodically during active call
 - [ ] Build — should compile
 
 #### Rewire Android host app
