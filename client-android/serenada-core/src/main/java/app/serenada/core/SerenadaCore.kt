@@ -31,6 +31,7 @@ class SerenadaCore(
             config = config,
             context = context,
             delegate = { delegate },
+            okHttpClient = okHttpClient,
         )
         session.start()
         return session
@@ -47,6 +48,7 @@ class SerenadaCore(
             config = config,
             context = context,
             delegate = { delegate },
+            okHttpClient = okHttpClient,
         )
         session.start()
         return session
@@ -68,6 +70,7 @@ class SerenadaCore(
                         config = config,
                         context = context,
                         delegate = { delegate },
+                        okHttpClient = okHttpClient,
                     )
                     session.start()
                     callback(CreateRoomResult(roomId = roomId, session = session))

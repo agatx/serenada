@@ -48,13 +48,13 @@ class SerenadaSession internal constructor(
     private val config: SerenadaConfig,
     private val context: Context,
     private val delegate: (() -> SerenadaCoreDelegate?)?,
+    okHttpClient: OkHttpClient,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
     private val webRtcStatsExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "webrtc-stats")
     }
-    private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager

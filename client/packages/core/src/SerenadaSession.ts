@@ -1,4 +1,4 @@
-import type { CallState, CallStats, CameraMode, ConnectionStatus, MediaCapability, SerenadaConfig } from './types.js';
+import type { CallState, CallStats, CameraMode, ConnectionStatus, MediaCapability, SerenadaConfig, SerenadaSessionHandle } from './types.js';
 import { SignalingEngine } from './signaling/SignalingEngine.js';
 import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
@@ -14,7 +14,7 @@ function resolveUrls(serverHost: string): { wsUrl: string; httpBaseUrl: string }
     };
 }
 
-export class SerenadaSession {
+export class SerenadaSession implements SerenadaSessionHandle {
     private signaling: SignalingEngine;
     private media: MediaEngine;
     private statsCollector: CallStatsCollector;
