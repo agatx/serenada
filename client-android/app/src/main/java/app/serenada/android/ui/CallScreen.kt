@@ -405,6 +405,7 @@ fun CallScreen(
                 pinnedParticipantId = pinnedParticipantId,
                 onPinnedParticipantIdChanged = { pinnedParticipantId = it },
                 onTap = toggleControlsVisibility,
+                onLocalPinchZoom = onLocalPinchZoom,
             )
         } else if (isLocalLarge) {
             val ratio = localAspectRatio ?: 0f
@@ -1320,12 +1321,19 @@ private fun MultiPartyStage(
     pinnedParticipantId: String?,
     onPinnedParticipantIdChanged: (String?) -> Unit,
     onTap: () -> Unit,
+    onLocalPinchZoom: (Float) -> Unit,
 ) {
     val density = LocalDensity.current
     val gap = 12.dp
     val outerPadding = 16.dp
     val pipCornerRadius = 12.dp
     val tileCornerRadius = 16.dp
+
+    val localContentZoomState = rememberTransformableState { zoomChange, _, _ ->
+        if (zoomChange > 0f && abs(zoomChange - 1f) > 0.01f) {
+            onLocalPinchZoom(zoomChange)
+        }
+    }
 
     // Content source: local world/composite/screen share or remote content
     val hasLocalContent = isScreenSharing || localCameraMode.isContentMode
@@ -1365,7 +1373,8 @@ private fun MultiPartyStage(
 
                 val computedLayout = remember(
                     pinnedParticipantId, contentSource, remoteParticipants, remoteAspectRatios.toMap(),
-                    localCid, localVideoEnabled, fullWidthPx, fullHeightPx, remoteVideoFitCover
+                    localCid, localVideoEnabled, fullWidthPx, fullHeightPx, remoteVideoFitCover,
+                    bottomChromePx
                 ) {
                     val participants = remoteParticipants.map { p ->
                         SceneParticipant(
@@ -1416,6 +1425,7 @@ private fun MultiPartyStage(
                         val tileYDp = with(density) { tile.frame.y.toDp() }
                         val tileCornerRadiusDp = with(density) { tile.cornerRadius.toDp() }
 
+                        val isLocalContentZoomable = isLocalContent && localCameraMode.isContentMode
                         @OptIn(ExperimentalFoundationApi::class)
                         Box(
                             modifier = Modifier
@@ -1423,6 +1433,10 @@ private fun MultiPartyStage(
                                 .size(width = tileWidthDp, height = tileHeightDp)
                                 .clip(RoundedCornerShape(tileCornerRadiusDp))
                                 .background(Color(0xFF111111))
+                                .then(
+                                    if (isLocalContentZoomable) Modifier.transformable(state = localContentZoomState)
+                                    else Modifier
+                                )
                                 .combinedClickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
@@ -1536,12 +1550,12 @@ private fun MultiPartyStage(
                                     )
                                 }
                             }
-                            // Fit toggle on primary tile
+                            // Fit toggle on primary tile (bottom-end to avoid flashlight conflict)
                             if (tile.zOrder == 0) {
                                 IconButton(
                                     onClick = onToggleRemoteVideoFit,
                                     modifier = Modifier
-                                        .align(Alignment.TopEnd)
+                                        .align(Alignment.BottomEnd)
                                         .padding(8.dp)
                                         .size(44.dp)
                                         .background(Color.Black.copy(alpha = 0.4f), CircleShape)

@@ -820,6 +820,8 @@ private struct MultiPartyStage: View {
     @Binding var pinnedParticipantId: String?
     let onTapBackground: () -> Void
 
+    @State private var lastMagnificationValue: CGFloat = 1
+
     private let gap: CGFloat = 12
     private let outerPadding: CGFloat = 16
     private let tileCornerRadius: CGFloat = 16
@@ -952,9 +954,10 @@ private struct MultiPartyStage: View {
                                 }
                             }
 
-                            // Fit toggle on primary tile
+                            // Fit toggle on primary tile (bottom-end to avoid flashlight conflict)
                             if tile.zOrder == 0 {
                                 VStack {
+                                    Spacer()
                                     HStack {
                                         Spacer()
                                         Button {
@@ -973,7 +976,6 @@ private struct MultiPartyStage: View {
                                         }
                                         .padding(8)
                                     }
-                                    Spacer()
                                 }
                             }
                         }
@@ -993,6 +995,18 @@ private struct MultiPartyStage: View {
                                     if !isContentTile {
                                         pinnedParticipantId = tile.id == pinnedParticipantId ? nil : tile.id
                                     }
+                                }
+                        )
+                        .simultaneousGesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    guard isLocalContent && localCameraMode.isContentMode else { return }
+                                    let delta = value / max(lastMagnificationValue, 0.001)
+                                    lastMagnificationValue = value
+                                    callManager.adjustCameraZoom(scaleDelta: delta)
+                                }
+                                .onEnded { _ in
+                                    lastMagnificationValue = 1
                                 }
                         )
                     }
