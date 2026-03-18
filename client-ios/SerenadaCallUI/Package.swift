@@ -2,6 +2,10 @@
 
 import PackageDescription
 
+// For external distribution, replace the path-based SerenadaCore dependency
+// with a remote Git URL:
+//   .package(url: "https://github.com/AleGavrilov/serenada-ios-core.git", from: "0.1.0")
+
 let package = Package(
     name: "SerenadaCallUI",
     platforms: [

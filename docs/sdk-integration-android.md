@@ -1,0 +1,208 @@
+# Serenada SDK — Android Quick Start
+
+## Requirements
+
+- Android API 26+ (Android 8.0)
+- Kotlin 1.9+
+- Jetpack Compose (BOM 2024.10.00+)
+
+## Installation
+
+### Gradle (GitHub Packages)
+
+Add the repository and dependencies to your app module:
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = uri("https://maven.pkg.github.com/AleGavrilov/serenada-sdk")
+            credentials {
+                username = System.getenv("GITHUB_ACTOR") ?: ""
+                password = System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
+    }
+}
+
+// app/build.gradle.kts
+dependencies {
+    implementation("app.serenada:core:0.1.0")
+    implementation("app.serenada:call-ui:0.1.0")
+}
+```
+
+For local development within the Serenada monorepo, use project references:
+
+```kotlin
+// settings.gradle.kts
+include(":serenada-core")
+include(":serenada-call-ui")
+
+// app/build.gradle.kts
+dependencies {
+    implementation(project(":serenada-core"))
+    implementation(project(":serenada-call-ui"))
+}
+```
+
+## Quick Start — URL-First (Simplest)
+
+```kotlin
+import app.serenada.callui.SerenadaCallFlow
+
+@Composable
+fun CallScreen(url: String) {
+    SerenadaCallFlow(
+        url = url,
+        onDismiss = { navController.popBackStack() }
+    )
+}
+```
+
+That's it. `SerenadaCallFlow` handles permissions, joining, the in-call UI, and cleanup.
+
+## Session-First (Pre-Observation)
+
+Create a session before presenting UI to observe state early:
+
+```kotlin
+import app.serenada.core.SerenadaCore
+import app.serenada.core.SerenadaConfig
+import app.serenada.callui.SerenadaCallFlow
+
+val serenada = SerenadaCore(config = SerenadaConfig(serverHost = "serenada.app"))
+
+fun handleDeepLink(uri: Uri) {
+    val session = serenada.join(url = uri.toString())
+    // Observe session.state before showing UI if needed
+
+    // In your Composable:
+    SerenadaCallFlow(
+        session = session,
+        onDismiss = { navController.popBackStack() }
+    )
+}
+```
+
+## Create a Room
+
+```kotlin
+serenada.createRoom { result ->
+    result.onSuccess { room ->
+        val shareUrl = room.url  // send to the other party
+        // Navigate to call screen with room.session
+    }
+    result.onFailure { error ->
+        Log.e("Serenada", "Failed: $error")
+    }
+}
+```
+
+## Core-Only Integration (No UI)
+
+Use `SerenadaCore` directly for a fully custom UI:
+
+```kotlin
+val serenada = SerenadaCore(config = SerenadaConfig(serverHost = "serenada.app"))
+val session = serenada.join(url = url)
+
+// Observe state
+lifecycleScope.launch {
+    session.state.collect { state ->
+        when (state.phase) {
+            CallPhase.Idle -> { }
+            CallPhase.AwaitingPermissions -> {
+                // Prompt for permissions, then call session.resumeJoin()
+            }
+            CallPhase.Joining -> showSpinner()
+            CallPhase.Waiting -> showWaitingScreen()
+            CallPhase.InCall -> showCallScreen()
+            CallPhase.Ending -> showEndingScreen()
+            CallPhase.Error -> showError(state.error)
+        }
+    }
+}
+
+// Media controls
+session.toggleAudio()
+session.toggleVideo()
+session.flipCamera()
+
+// Video rendering
+session.attachLocalRenderer(localSurfaceView)
+session.attachRemoteRenderer(remoteSurfaceView, cid)
+
+// Leave or end
+session.leave()   // local exit, room stays open
+session.end()     // terminates room for all
+```
+
+## Permissions Handling
+
+In URL-first mode, `SerenadaCallFlow` automatically prompts for camera/microphone permissions.
+
+In session-first or core-only mode, handle the `AwaitingPermissions` phase:
+
+```kotlin
+session.state.collect { state ->
+    if (state.phase == CallPhase.AwaitingPermissions) {
+        SerenadaPermissions.request(activity, state.requiredPermissions.orEmpty()) { granted ->
+            if (granted) session.resumeJoin() else session.cancelJoin()
+        }
+    }
+}
+```
+
+## Preflight Diagnostics
+
+Run device and network checks before a call:
+
+```kotlin
+val diagnostics = SerenadaDiagnostics(config)
+val report = diagnostics.runAll()  // suspend function, never prompts
+
+report.camera       // Available | Unavailable(reason) | NotAuthorized
+report.microphone   // Available | Unavailable(reason) | NotAuthorized
+report.speaker      // Available | Unavailable(reason)
+report.network      // Reachable | Unreachable(reason) | Skipped(reason)
+report.signaling    // Connected(transport) | Failed(reason)
+report.turn         // Reachable(latencyMs) | Unreachable(reason)
+```
+
+Diagnostics never trigger permission prompts — if a permission is missing, the check returns `NotAuthorized`.
+
+## Foreground Service
+
+Wire your foreground service to session state:
+
+```kotlin
+session.state.collect { state ->
+    when (state.phase) {
+        CallPhase.InCall -> startForegroundService()
+        CallPhase.Idle -> stopForegroundService()
+        else -> {}
+    }
+}
+```
+
+The foreground service must be declared by the host app — the SDK does not include one.
+
+## Configuration
+
+```kotlin
+val config = SerenadaConfig(
+    serverHost = "serenada.app",      // required
+    defaultAudioEnabled = true,       // mic on at join (default)
+    defaultVideoEnabled = true,       // camera on at join (default)
+    transports = listOf("ws", "sse") // transport priority (default)
+)
+```
+
+## Next Steps
+
+- [Feature Toggles, String Overrides & Theming](sdk-customization.md)
+- [API Reference](#) — generate with `./gradlew dokkaHtml`

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "docs",
+  "name": "@serenada/react-ui",
+  "readme": "none",
+  "excludePrivate": true,
+  "excludeInternal": true
+}

@@ -2,6 +2,10 @@
 
 import PackageDescription
 
+// When consuming SerenadaCore from a remote Git URL, override the WebRTC
+// binary target path below with the appropriate remote URL or local checkout.
+// For local development inside the Serenada monorepo the relative path works.
+
 let package = Package(
     name: "SerenadaCore",
     platforms: [

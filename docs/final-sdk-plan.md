@@ -964,22 +964,22 @@ Final cleanup to prove the SDK boundary is real.
 
 ### Phase 6: Publish & Document
 
-- [ ] Package `SerenadaCore` for external distribution via SPM Git URL
-- [ ] Package `SerenadaCallUI` for external distribution via SPM Git URL
-- [ ] Package `app.serenada:core` for Maven Central or GitHub Packages
-- [ ] Package `app.serenada:call-ui` for Maven Central or GitHub Packages
-- [ ] Publish `@serenada/core` to npm registry
-- [ ] Publish `@serenada/react-ui` to npm registry
-- [ ] Write integration guide: iOS quick start
-- [ ] Write integration guide: Android quick start
-- [ ] Write integration guide: Web quick start
-- [ ] Document `SerenadaCallFlowConfig` feature toggles
-- [ ] Document string override mechanism with examples per platform
-- [ ] Document theming API per platform
-- [ ] Create sample iOS host app (bare-bones: receives URL, shows `SerenadaCallFlow`)
-- [ ] Create sample Android host app
-- [ ] Create sample Web host app
-- [ ] Generate API reference docs from source (Swift DocC / Dokka / TypeDoc)
+- [x] Package `SerenadaCore` for external distribution via SPM Git URL
+- [x] Package `SerenadaCallUI` for external distribution via SPM Git URL
+- [x] Package `app.serenada:core` for Maven Central or GitHub Packages
+- [x] Package `app.serenada:call-ui` for Maven Central or GitHub Packages
+- [x] Publish `@serenada/core` to npm registry
+- [x] Publish `@serenada/react-ui` to npm registry
+- [x] Write integration guide: iOS quick start
+- [x] Write integration guide: Android quick start
+- [x] Write integration guide: Web quick start
+- [x] Document `SerenadaCallFlowConfig` feature toggles
+- [x] Document string override mechanism with examples per platform
+- [x] Document theming API per platform
+- [x] Create sample iOS host app (bare-bones: receives URL, shows `SerenadaCallFlow`)
+- [x] Create sample Android host app
+- [x] Create sample Web host app
+- [x] Generate API reference docs from source (Swift DocC / Dokka / TypeDoc)
 
 ---
 
