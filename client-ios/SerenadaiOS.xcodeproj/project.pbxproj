@@ -56,6 +56,7 @@
 		9342C14683CA7530772F5F93 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE887624CBDA34B0B333C6A /* SettingsStore.swift */; };
 		93A2C3CCCD91E21ECCF5CCE0 /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */; };
 		9ABCF3D0278D7EA44D415962 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E1F379FD66B538614684A7 /* PushKeyStore.swift */; };
+		A166AEDB8228E8C0BB59B927 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */; };
 		A66F65640BA9AD6FA29BBC1F /* QRCodeImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F9BAB04B56A4D0D4D41A615 /* QRCodeImageView.swift */; };
 		A9394C5164C3DE80CA3C97F6 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6439AE14D068A9566D42DFB /* SignalingMessageTests.swift */; };
 		A943CC93EAF10E990017D277 /* SerenadaBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -86,6 +87,7 @@
 		FC70B7DC409BF413B381CCB0 /* PeerConnectionSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3894047379F7743BD0987F /* PeerConnectionSlot.swift */; };
 		FCCDFAB2D752D00E905BAAF6 /* SignalingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B55A3575079D0B073AB0D7C /* SignalingClient.swift */; };
 		FD3131471A3CB6A29EE341FA /* layout_conformance_v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 70D055EA10214AFAD5F76FFE /* layout_conformance_v1.json */; };
+		FEEA9BD167C38B0698BE668E /* SerenadaCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1BF429546EEA7FBEB5796155 /* SerenadaCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -160,6 +162,7 @@
 		1F9BAB04B56A4D0D4D41A615 /* QRCodeImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeImageView.swift; sourceTree = "<group>"; };
 		2486CC31E85D120A0B2C140D /* CaptureResolutionSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResolutionSelectionTests.swift; sourceTree = "<group>"; };
 		24F7583F27DCF7AADA1D7581 /* RemoteParticipant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteParticipant.swift; sourceTree = "<group>"; };
+		265E1C5C61144DD8395C627C /* SerenadaCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCore; path = SerenadaCore; sourceTree = SOURCE_ROOT; };
 		28CB4C0739C327F4BB42BF9B /* CallUiState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallUiState.swift; sourceTree = "<group>"; };
 		28D54CC01458DA4FCF58D271 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2D7AA70D76623801E762E2DB /* ErrorScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorScreen.swift; sourceTree = "<group>"; };
@@ -171,6 +174,7 @@
 		3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomStatusesTests.swift; sourceTree = "<group>"; };
 		43E2F0452DE65337073894BF /* RecentCallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCallStore.swift; sourceTree = "<group>"; };
 		48FB4B4943231481B509B421 /* DeepLinkParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkParser.swift; sourceTree = "<group>"; };
+		4D4E0E538F82CE87BE4FDB24 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = SerenadaCallUI; sourceTree = SOURCE_ROOT; };
 		4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStoreTests.swift; sourceTree = "<group>"; };
 		4ED070FA228FECAF62312895 /* SseSignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SseSignalingTransport.swift; sourceTree = "<group>"; };
 		53E3B13DA44022026D9F605D /* SavedRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStore.swift; sourceTree = "<group>"; };
@@ -240,6 +244,8 @@
 			files = (
 				35B2C3834A362F96B5B9FFDC /* WebRTC.xcframework in Frameworks */,
 				2DC84097620992B43C52D59E /* FirebaseMessaging in Frameworks */,
+				FEEA9BD167C38B0698BE668E /* SerenadaCore in Frameworks */,
+				A166AEDB8228E8C0BB59B927 /* SerenadaCallUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -307,6 +313,15 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
+		3DDC1D067C4415DBE46DAC91 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				4D4E0E538F82CE87BE4FDB24 /* SerenadaCallUI */,
+				265E1C5C61144DD8395C627C /* SerenadaCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
 		415AD043AF1AAD932CB6A417 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -330,6 +345,7 @@
 			children = (
 				F86221F53AB93BC5BEEE7E9F /* BroadcastUpload */,
 				961901030B63AB715A9ED19C /* NotificationService */,
+				3DDC1D067C4415DBE46DAC91 /* Packages */,
 				D67D9D9D6E20F61AB5A0BB84 /* Push */,
 				9DC24B91EF97AE50C603EEA7 /* Resources */,
 				3A393515C619541F21CCA735 /* Shared */,
@@ -543,6 +559,8 @@
 			name = SerenadaiOS;
 			packageProductDependencies = (
 				ECFBB844D3428C53592F5F7B /* FirebaseMessaging */,
+				1BF429546EEA7FBEB5796155 /* SerenadaCore */,
+				7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */,
 			);
 			productName = SerenadaiOS;
 			productReference = 6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */;
@@ -665,6 +683,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				B01E382DAF8A44F6B4B1BD0A /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				AAEB240FA7DACD0D49D37E32 /* XCLocalSwiftPackageReference "SerenadaCallUI" */,
+				43A2742C161A8E846B61ACFE /* XCLocalSwiftPackageReference "SerenadaCore" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 00A34D701D66DCAB54FE6E0E /* Products */;
@@ -1245,6 +1265,17 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		43A2742C161A8E846B61ACFE /* XCLocalSwiftPackageReference "SerenadaCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = SerenadaCore;
+		};
+		AAEB240FA7DACD0D49D37E32 /* XCLocalSwiftPackageReference "SerenadaCallUI" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = SerenadaCallUI;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		B01E382DAF8A44F6B4B1BD0A /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -1257,6 +1288,14 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		1BF429546EEA7FBEB5796155 /* SerenadaCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SerenadaCore;
+		};
+		7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SerenadaCallUI;
+		};
 		ECFBB844D3428C53592F5F7B /* FirebaseMessaging */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = B01E382DAF8A44F6B4B1BD0A /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;

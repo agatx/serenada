@@ -11,8 +11,13 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        flatDir {
+            dirs("app/libs")
+        }
     }
 }
 
 rootProject.name = "serenada-android"
 include(":app")
+include(":serenada-core")
+include(":serenada-call-ui")

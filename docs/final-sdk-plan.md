@@ -612,43 +612,43 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 
 #### CallManager Audit
 
-- [ ] Read `CallManager.swift` (iOS) — list every public method and property
-- [ ] Read `CallManager.kt` (Android) — list every public method and property
-- [ ] Read `SignalingContext.tsx` + `WebRTCContext.tsx` (Web) — list every exported function/hook
-- [ ] Classify each method as **SDK** (signaling, media, call state, TURN, reconnection, room creation) or **host** (push sync, saved rooms, recent calls, settings persistence, room-status watching, snapshot upload)
-- [ ] Document the classification in a shared spreadsheet or markdown table
-- [ ] Identify methods that straddle both categories and plan how to split them
+- [x] Read `CallManager.swift` (iOS) — list every public method and property
+- [x] Read `CallManager.kt` (Android) — list every public method and property
+- [x] Read `SignalingContext.tsx` + `WebRTCContext.tsx` (Web) — list every exported function/hook
+- [x] Classify each method as **SDK** (signaling, media, call state, TURN, reconnection, room creation) or **host** (push sync, saved rooms, recent calls, settings persistence, room-status watching, snapshot upload)
+- [x] Document the classification in a shared spreadsheet or markdown table
+- [x] Identify methods that straddle both categories and plan how to split them
 
 #### Module Scaffolding — iOS
 
-- [ ] Create a `SerenadaCore` Swift Package directory under `client-ios/`
-- [ ] Add `SerenadaCore` as a local package product in `project.yml`
-- [ ] Create a `SerenadaCallUI` Swift Package directory under `client-ios/`
-- [ ] Add `SerenadaCallUI` as a local package product in `project.yml` with dependency on `SerenadaCore`
-- [ ] Add `WebRTC.xcframework` as a binary target in the `SerenadaCore` package
-- [ ] Update the app target in `project.yml` to depend on both local packages
-- [ ] Run `xcodegen generate` and verify the project opens cleanly
-- [ ] Build the app — should compile with empty library modules
+- [x] Create a `SerenadaCore` Swift Package directory under `client-ios/`
+- [x] Add `SerenadaCore` as a local package product in `project.yml`
+- [x] Create a `SerenadaCallUI` Swift Package directory under `client-ios/`
+- [x] Add `SerenadaCallUI` as a local package product in `project.yml` with dependency on `SerenadaCore`
+- [x] Add `WebRTC.xcframework` as a binary target in the `SerenadaCore` package
+- [x] Update the app target in `project.yml` to depend on both local packages
+- [x] Run `xcodegen generate` and verify the project opens cleanly
+- [x] Build the app — should compile with empty library modules
 
 #### Module Scaffolding — Android
 
-- [ ] Create `:serenada-core` Android library module directory
-- [ ] Create `serenada-core/build.gradle.kts` with library plugin and WebRTC AAR dependency
-- [ ] Create `:serenada-call-ui` Android library module directory
-- [ ] Create `serenada-call-ui/build.gradle.kts` with library plugin and dependency on `:serenada-core`
-- [ ] Update `settings.gradle.kts` to include both new modules
-- [ ] Update `:app` module to depend on `:serenada-core` and `:serenada-call-ui`
-- [ ] Run `./gradlew assembleDebug` — should compile with empty library modules
+- [x] Create `:serenada-core` Android library module directory
+- [x] Create `serenada-core/build.gradle.kts` with library plugin and WebRTC AAR dependency
+- [x] Create `:serenada-call-ui` Android library module directory
+- [x] Create `serenada-call-ui/build.gradle.kts` with library plugin and dependency on `:serenada-core`
+- [x] Update `settings.gradle.kts` to include both new modules
+- [x] Update `:app` module to depend on `:serenada-core` and `:serenada-call-ui`
+- [x] Run `./gradlew assembleDebug` — should compile with empty library modules
 
 #### Module Scaffolding — Web
 
-- [ ] Create `client/packages/core/` directory with `package.json` and `tsconfig.json`
-- [ ] Create `client/packages/react-ui/` directory with `package.json` and `tsconfig.json`
-- [ ] Configure npm workspaces in the root `client/package.json`
-- [ ] Add `@serenada/core` as dependency of `@serenada/react-ui`
-- [ ] Add both as dependencies of the Serenada host app
-- [ ] Run `npm install` and `npm run build` — should succeed with empty packages
-- [ ] Run `npm run test` — existing tests should still pass
+- [x] Create `client/packages/core/` directory with `package.json` and `tsconfig.json`
+- [x] Create `client/packages/react-ui/` directory with `package.json` and `tsconfig.json`
+- [x] Configure npm workspaces in the root `client/package.json`
+- [x] Add `@serenada/core` as dependency of `@serenada/react-ui`
+- [x] Add both as dependencies of the Serenada host app
+- [x] Run `npm install` and `npm run build` — should succeed with empty packages
+- [x] Run `npm run test` — existing tests should still pass
 
 ### Phase 1: Extract Core — iOS
 

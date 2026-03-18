@@ -16,6 +16,10 @@ packages:
   Firebase:
     url: https://github.com/firebase/firebase-ios-sdk.git
     from: 11.11.0
+  SerenadaCore:
+    path: SerenadaCore
+  SerenadaCallUI:
+    path: SerenadaCallUI
 targets:
   SerenadaiOS:
     type: application
@@ -54,6 +58,10 @@ targets:
         codeSign: true
       - package: Firebase
         product: FirebaseMessaging
+      - package: SerenadaCore
+        product: SerenadaCore
+      - package: SerenadaCallUI
+        product: SerenadaCallUI
       - target: SerenadaNotificationService
         embed: true
       - target: SerenadaBroadcast

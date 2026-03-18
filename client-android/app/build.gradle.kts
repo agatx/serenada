@@ -198,6 +198,9 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
 }
 
 dependencies {
+    implementation(project(":serenada-core"))
+    implementation(project(":serenada-call-ui"))
+
     implementation(platform("androidx.compose:compose-bom:2024.10.00"))
     implementation(platform("com.google.firebase:firebase-bom:33.8.0"))
     implementation("androidx.activity:activity-compose:1.9.2")
@@ -209,11 +212,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    if (webrtcProvider == "local7559") {
-        implementation(files(localWebRtcAarFile))
-    } else {
-        implementation(webrtcDependency!!)
-    }
+    // WebRTC AAR is now provided transitively via :serenada-core
     implementation("com.google.firebase:firebase-messaging-ktx")
     implementation("com.google.zxing:core:3.5.3")
 
