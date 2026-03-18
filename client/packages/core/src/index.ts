@@ -5,9 +5,9 @@
 export const SERENADA_CORE_VERSION = '0.1.0';
 
 // Public API
-export { SerenadaCore, createSerenadaCore } from './SerenadaCore.js';
+export { SerenadaCore } from './SerenadaCore.js';
 export { SerenadaSession } from './SerenadaSession.js';
-export { SerenadaDiagnostics, createSerenadaDiagnostics } from './SerenadaDiagnostics.js';
+export { SerenadaDiagnostics } from './SerenadaDiagnostics.js';
 
 // Public types
 export type {

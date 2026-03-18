@@ -127,28 +127,22 @@ public final class SerenadaDiagnostics {
         return .available
     }
 
-    private func checkNetworkAsync() -> DiagnosticCheckResult {
+    private func checkNetworkAsync() async -> DiagnosticCheckResult {
         guard let url = apiClient.buildHTTPSURL(host: config.serverHost, path: "/api/room-id") else {
             return .unavailable(reason: "Invalid server host")
         }
-        // Simple connectivity check
-        let semaphore = DispatchSemaphore(value: 0)
-        var result: DiagnosticCheckResult = .unavailable(reason: "Timeout")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 5
-        URLSession.shared.dataTask(with: request) { _, response, error in
-            if let error {
-                result = .unavailable(reason: error.localizedDescription)
-            } else if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
-                result = .available
-            } else {
-                result = .unavailable(reason: "Server unreachable")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
+                return .available
             }
-            semaphore.signal()
-        }.resume()
-        _ = semaphore.wait(timeout: .now() + 6)
-        return result
+            return .unavailable(reason: "Server unreachable")
+        } catch {
+            return .unavailable(reason: error.localizedDescription)
+        }
     }
 
     private func checkSignalingAsync() async -> SignalingCheckResult {

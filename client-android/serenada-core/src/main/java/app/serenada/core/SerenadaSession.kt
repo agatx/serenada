@@ -1262,7 +1262,7 @@ class SerenadaSession internal constructor(
     private fun acquirePerformanceLocks() {
         val lock = cpuWakeLock ?: powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, CPU_WAKE_LOCK_TAG)
             .apply { setReferenceCounted(false) }.also { cpuWakeLock = it }
-        if (!lock.isHeld) runCatching { lock.acquire() }
+        if (!lock.isHeld) runCatching { lock.acquire(60 * 60 * 1000L) }
     }
 
     private fun releasePerformanceLocks() {

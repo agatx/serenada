@@ -120,6 +120,7 @@ export class SerenadaSession {
         this.statsCollector.stop();
         this._state = { ...this._state, phase: 'idle' };
         this.notifyListeners();
+        this.destroy();
     }
 
     end(): void {

@@ -131,7 +131,3 @@ export class SerenadaDiagnostics {
         }
     }
 }
-
-export function createSerenadaDiagnostics(config: SerenadaConfig): SerenadaDiagnostics {
-    return new SerenadaDiagnostics(config);
-}

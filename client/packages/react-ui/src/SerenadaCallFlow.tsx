@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SerenadaCore } from '@serenada/core';
-import type { SerenadaSession, CallState } from '@serenada/core';
+import type { SerenadaSession } from '@serenada/core';
 import { useCallState } from './hooks/useCallState.js';
 import { ControlBar } from './components/ControlBar.js';
 import { StatusOverlay } from './components/StatusOverlay.js';
@@ -10,21 +10,7 @@ import type { ParticipantInfo } from './components/ParticipantGrid.js';
 import { SerenadaPermissions } from './SerenadaPermissions.js';
 import type { CallFlowProps, SerenadaString } from './types.js';
 import { resolveString } from './types.js';
-
-// ---------------------------------------------------------------------------
-// IDLE state placeholder used when no session exists yet
-// ---------------------------------------------------------------------------
-const IDLE_STATE: CallState = {
-    phase: 'idle',
-    roomId: null,
-    roomUrl: null,
-    localParticipant: null,
-    remoteParticipants: [],
-    connectionStatus: 'connected',
-    activeTransport: null,
-    requiredPermissions: null,
-    error: null,
-};
+import { IDLE_STATE } from './hooks/constants.js';
 
 // ---------------------------------------------------------------------------
 // SerenadaCallFlow
@@ -40,6 +26,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     onDismiss,
     onStatsUpdate,
 }) => {
+    // --- Inject keyframes on mount -------------------------------------------
+    useEffect(() => { ensureKeyframes(); }, []);
+
     // --- Session management ---------------------------------------------------
     const internalSessionRef = useRef<SerenadaSession | null>(null);
     const [internalSession, setInternalSession] = useState<SerenadaSession | null>(null);
@@ -446,6 +435,16 @@ const copyButtonStyle: React.CSSProperties = {
     fontWeight: 500,
 };
 
+const KEYFRAMES_ID = 'serenada-callflow-keyframes';
+function ensureKeyframes(): void {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById(KEYFRAMES_ID)) return;
+    const style = document.createElement('style');
+    style.id = KEYFRAMES_ID;
+    style.textContent = `@keyframes serenada-spin { to { transform: rotate(360deg); } }`;
+    document.head.appendChild(style);
+}
+
 const spinnerStyle: React.CSSProperties = {
     width: 36,
     height: 36,
@@ -455,14 +454,3 @@ const spinnerStyle: React.CSSProperties = {
     animation: 'serenada-spin 0.8s linear infinite',
     marginBottom: 16,
 };
-
-// Inject keyframes once (idempotent)
-if (typeof document !== 'undefined') {
-    const KEYFRAMES_ID = 'serenada-callflow-keyframes';
-    if (!document.getElementById(KEYFRAMES_ID)) {
-        const style = document.createElement('style');
-        style.id = KEYFRAMES_ID;
-        style.textContent = `@keyframes serenada-spin { to { transform: rotate(360deg); } }`;
-        document.head.appendChild(style);
-    }
-}

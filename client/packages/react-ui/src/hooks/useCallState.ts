@@ -1,18 +1,7 @@
 import { useSyncExternalStore, useCallback } from 'react';
 import type { CallState } from '@serenada/core';
 import type { SerenadaSession } from '@serenada/core';
-
-const IDLE_STATE: CallState = {
-    phase: 'idle',
-    roomId: null,
-    roomUrl: null,
-    localParticipant: null,
-    remoteParticipants: [],
-    connectionStatus: 'connected',
-    activeTransport: null,
-    requiredPermissions: null,
-    error: null,
-};
+import { IDLE_STATE } from './constants.js';
 
 export function useCallState(session: SerenadaSession | null): CallState {
     const subscribe = useCallback(

@@ -65,15 +65,6 @@ struct PushSubscribeRequest: Encodable, Equatable {
     }
 }
 
-/// Local copy of TurnCredentials for the host app during the SDK transition.
-/// The canonical definition lives in SerenadaCore (internal).
-struct TurnCredentials: Codable, Equatable {
-    let username: String
-    let password: String
-    let uris: [String]
-    let ttl: Int
-}
-
 final class APIClient {
     private let session: URLSession
 

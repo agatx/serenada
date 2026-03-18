@@ -32,7 +32,7 @@ public struct SerenadaCallFlow: View {
     private let config: SerenadaCallFlowConfig
     private let strings: [SerenadaString: String]?
     private let onDismiss: (() -> Void)?
-    private let onCallEnded: ((EndReason) -> Void)?
+    private var onCallEnded: ((EndReason) -> Void)?
 
     @Environment(\.serenadaTheme) private var theme
 
@@ -185,7 +185,7 @@ public struct SerenadaCallFlow: View {
     /// Callback for when the call ends.
     public func onCallEnded(_ handler: @escaping (EndReason) -> Void) -> SerenadaCallFlow {
         var copy = self
-        // Return a modified copy with the handler set
+        copy.onCallEnded = handler
         return copy
     }
 }

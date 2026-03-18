@@ -226,7 +226,7 @@ export class CallStatsCollector {
 
             const audioJitterMs = media.audio.inboundJitterCount > 0 ? (media.audio.inboundJitterSumSeconds / media.audio.inboundJitterCount) * 1000 : null;
             const audioPlayoutDelayMs = media.audio.inboundJitterBufferEmittedCount > 0 ? (media.audio.inboundJitterBufferDelaySeconds / media.audio.inboundJitterBufferEmittedCount) * 1000 : null;
-            const audioConcealedPct = ratioPercent(media.audio.inboundConcealedSamples, media.audio.inboundConcealedSamples + media.audio.inboundTotalSamples);
+            const audioConcealedPct = ratioPercent(media.audio.inboundConcealedSamples, media.audio.inboundTotalSamples);
             const videoRetransmitPct = ratioPercent(media.video.outboundPacketsRetransmitted, media.video.outboundPacketsSent);
             const videoResolution = media.video.inboundFrameWidth > 0 && media.video.inboundFrameHeight > 0
                 ? `${media.video.inboundFrameWidth}x${media.video.inboundFrameHeight}` : null;

@@ -44,7 +44,3 @@ export class SerenadaCore {
         }
     }
 }
-
-export function createSerenadaCore(config: SerenadaConfig): SerenadaCore {
-    return new SerenadaCore(config);
-}

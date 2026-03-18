@@ -43,7 +43,7 @@ public final class SerenadaCore {
     }
 
     public func join(url: URL) -> SerenadaSession {
-        let roomId = DeepLinkParser.extractRoomId(from: url) ?? ""
+        let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,

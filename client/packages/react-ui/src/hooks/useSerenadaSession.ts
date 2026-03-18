@@ -1,6 +1,7 @@
-import { useEffect, useRef, useMemo, useSyncExternalStore, useCallback } from 'react';
+import { useEffect, useMemo, useSyncExternalStore, useCallback, useState } from 'react';
 import type { SerenadaConfig, CallState } from '@serenada/core';
 import { SerenadaSession, SerenadaCore } from '@serenada/core';
+import { IDLE_STATE } from './constants.js';
 
 export interface UseSerenadaSessionOptions {
     url?: string;
@@ -15,23 +16,11 @@ export interface UseSerenadaSessionResult {
     remoteStreams: Map<string, MediaStream>;
 }
 
-const IDLE_STATE: CallState = {
-    phase: 'idle',
-    roomId: null,
-    roomUrl: null,
-    localParticipant: null,
-    remoteParticipants: [],
-    connectionStatus: 'connected',
-    activeTransport: null,
-    requiredPermissions: null,
-    error: null,
-};
-
 const EMPTY_STREAMS = new Map<string, MediaStream>();
 
 export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSerenadaSessionResult {
     const { url, roomId, config } = options;
-    const sessionRef = useRef<SerenadaSession | null>(null);
+    const [session, setSession] = useState<SerenadaSession | null>(null);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const core = useMemo(() => new SerenadaCore(config), [config.serverHost]);
@@ -39,16 +28,14 @@ export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSeren
     useEffect(() => {
         if (!url && !roomId) return;
 
-        const session = url ? core.join(url) : core.join({ roomId: roomId! });
-        sessionRef.current = session;
+        const sess = url ? core.join(url) : core.join({ roomId: roomId! });
+        setSession(sess);
 
         return () => {
-            session.destroy();
-            sessionRef.current = null;
+            sess.destroy();
+            setSession(null);
         };
     }, [url, roomId, core]);
-
-    const session = sessionRef.current;
 
     const subscribe = useCallback(
         (onStoreChange: () => void) => {

@@ -60,6 +60,7 @@ export class MediaEngine {
     private onlineHandler: (() => void) | null = null;
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
+    private turnFetchController: AbortController | null = null;
     private serverHost: string;
 
     // Injected dependencies
@@ -101,8 +102,9 @@ export class MediaEngine {
     }
 
     updateTurnToken(token: string): void {
-        const controller = new AbortController();
-        void this.fetchIceServers(token, controller.signal);
+        this.turnFetchController?.abort();
+        this.turnFetchController = new AbortController();
+        void this.fetchIceServers(token, this.turnFetchController.signal);
     }
 
     processSignalingMessage(msg: SignalingMessage): void {
@@ -661,16 +663,15 @@ export class MediaEngine {
     }
 
     private async fetchIceServers(token: string, signal: AbortSignal): Promise<void> {
+        const fetchController = new AbortController();
+        const timeoutTimer = setTimeout(() => fetchController.abort(), TURN_FETCH_TIMEOUT_MS);
+        const onExternalAbort = () => fetchController.abort();
+        signal.addEventListener('abort', onExternalAbort);
         try {
             const protocol = this.serverHost.startsWith('localhost') || this.serverHost.startsWith('127.') ? 'http' : 'https';
             const apiUrl = `${protocol}://${this.serverHost}/api/turn-credentials?token=${encodeURIComponent(token)}`;
 
-            const timeoutId = setTimeout(() => { /* noop - signal will handle */ }, TURN_FETCH_TIMEOUT_MS);
-            const fetchController = new AbortController();
-            const timeoutTimer = setTimeout(() => fetchController.abort(), TURN_FETCH_TIMEOUT_MS);
             const res = await fetch(apiUrl, { signal: fetchController.signal });
-            clearTimeout(timeoutTimer);
-            clearTimeout(timeoutId);
 
             if (signal.aborted) return;
 
@@ -694,6 +695,9 @@ export class MediaEngine {
             }
         } catch (err) {
             if (!signal.aborted) console.error('[WebRTC] Error fetching ICE servers:', err);
+        } finally {
+            clearTimeout(timeoutTimer);
+            signal.removeEventListener('abort', onExternalAbort);
         }
     }
 

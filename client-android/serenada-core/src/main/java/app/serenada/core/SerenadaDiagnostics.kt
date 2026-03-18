@@ -105,11 +105,17 @@ class SerenadaDiagnostics(
         val forceSse = config.transports == listOf(SerenadaTransport.SSE)
         var diagClient: SignalingClient? = null
         var completed = false
+        val timeoutRunnable = Runnable {
+            if (completed) return@Runnable; completed = true
+            diagClient?.close()
+            completion(SignalingCheckResult.Failed("timeout"))
+        }
         diagClient = SignalingClient(
             okHttpClient, handler,
             object : SignalingClient.Listener {
                 override fun onOpen(activeTransport: String) {
                     if (completed) return; completed = true
+                    handler.removeCallbacks(timeoutRunnable)
                     diagClient?.close()
                     completion(SignalingCheckResult.Connected(activeTransport))
                 }
@@ -118,17 +124,14 @@ class SerenadaDiagnostics(
 
                 override fun onClosed(reason: String) {
                     if (completed) return; completed = true
+                    handler.removeCallbacks(timeoutRunnable)
                     completion(SignalingCheckResult.Failed(reason))
                 }
             },
             forceSse = forceSse,
         )
 
-        handler.postDelayed({
-            if (completed) return@postDelayed; completed = true
-            diagClient.close()
-            completion(SignalingCheckResult.Failed("timeout"))
-        }, 5000)
+        handler.postDelayed(timeoutRunnable, 5000)
 
         diagClient.connect(config.serverHost)
     }
