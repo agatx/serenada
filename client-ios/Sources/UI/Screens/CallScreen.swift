@@ -2,6 +2,8 @@ import SwiftUI
 import ReplayKit
 import os.log
 
+private let callScreenLog = OSLog(subsystem: "app.serenada.ios", category: "CallScreen")
+
 func shouldShowCallStatusLabel(
     phase: CallPhase,
     connectionStatus: ConnectionStatus
@@ -683,19 +685,19 @@ struct CallScreen: View {
             #if BROADCAST_EXTENSION
             if uiState.isScreenSharing {
                 iconButton(system: "rectangle.on.rectangle.slash", accessibilityLabel: L10n.callA11yScreenShareOn) {
-                    os_log("CallScreen: stop screen share button tapped", log: OSLog(subsystem: "app.serenada.ios", category: "CallScreen"), type: .info)
+                    os_log("CallScreen: stop screen share button tapped", log: callScreenLog, type: .info)
                     onToggleScreenShare()
                 }
             } else {
                 iconButton(system: "rectangle.on.rectangle", accessibilityLabel: L10n.callA11yScreenShareOff) {
-                    os_log("CallScreen: start screen share button tapped, calling onToggleScreenShare", log: OSLog(subsystem: "app.serenada.ios", category: "CallScreen"), type: .info)
+                    os_log("CallScreen: start screen share button tapped, calling onToggleScreenShare", log: callScreenLog, type: .info)
                     // Set up the BroadcastFrameReader to receive frames
                     onToggleScreenShare()
                     // Programmatically trigger the system broadcast picker on next run loop
                     DispatchQueue.main.async {
-                        os_log("CallScreen: presenting RPSystemBroadcastPickerView", log: OSLog(subsystem: "app.serenada.ios", category: "CallScreen"), type: .info)
+                        os_log("CallScreen: presenting RPSystemBroadcastPickerView", log: callScreenLog, type: .info)
                         let picker = RPSystemBroadcastPickerView()
-                        picker.preferredExtension = "app.serenada.ios.broadcast"
+                        picker.preferredExtension = BroadcastShared.extensionBundleId
                         picker.showsMicrophoneButton = false
                         if let button = picker.subviews.compactMap({ $0 as? UIButton }).first {
                             button.sendActions(for: .touchUpInside)

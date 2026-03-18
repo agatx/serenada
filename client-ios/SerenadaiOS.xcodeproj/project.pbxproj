@@ -26,6 +26,7 @@
 		44918B67779BBD217266CBC3 /* EndpointHostParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA94DD46C2CBF626ACAE2EDC /* EndpointHostParserTests.swift */; };
 		46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */; };
 		4A6F5FCA6B5464133906FD88 /* Backoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3F9BB7205561A9FC615B5C0 /* Backoff.swift */; };
+		4BEE4261F2471EA3DB0B1648 /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */; };
 		510630AC79A23A3493C00772 /* CameraModeFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEFD1574E642447D3E65BC68 /* CameraModeFlowTests.swift */; };
 		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		54C3E5B5BA9A787706DC771F /* CallScreenStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92E4A6AD9C0BE3B195A0F4E1 /* CallScreenStateTests.swift */; };
@@ -35,7 +36,6 @@
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
 		5CC7887AE80A9B6424553E65 /* ComputeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0085AD65AA56B17ABD380202 /* ComputeLayout.swift */; };
 		5EA0D8F3AC25ECC78C79E491 /* TurnCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF8E62B4D813B9D13ED9461F /* TurnCredentials.swift */; };
-		66EDB96180E7A8AE970286C6 /* BroadcastPickerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B92C99BAF04DD4222883DAF /* BroadcastPickerButton.swift */; };
 		691A7EA5E1AB4B402D91A90C /* CallScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17000DBF4640C9A33AA00C70 /* CallScreen.swift */; };
 		69CEC70224A4A74EF1814A2C /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D576F4E596F3BD8F5BAA7C /* ActivityView.swift */; };
 		6CE5A873898B1A2456DB4B90 /* RemoteParticipant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24F7583F27DCF7AADA1D7581 /* RemoteParticipant.swift */; };
@@ -54,6 +54,7 @@
 		86C8CE59C62B299C6454E5D4 /* RoomState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E1C7D4ECF5F1F059A4EF75 /* RoomState.swift */; };
 		89865919658F9327ADF61AED /* RecentCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DA4F257ABA1CF5875CA4B83 /* RecentCall.swift */; };
 		9342C14683CA7530772F5F93 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE887624CBDA34B0B333C6A /* SettingsStore.swift */; };
+		93A2C3CCCD91E21ECCF5CCE0 /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */; };
 		9ABCF3D0278D7EA44D415962 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E1F379FD66B538614684A7 /* PushKeyStore.swift */; };
 		A66F65640BA9AD6FA29BBC1F /* QRCodeImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F9BAB04B56A4D0D4D41A615 /* QRCodeImageView.swift */; };
 		A9394C5164C3DE80CA3C97F6 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6439AE14D068A9566D42DFB /* SignalingMessageTests.swift */; };
@@ -174,7 +175,6 @@
 		4ED070FA228FECAF62312895 /* SseSignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SseSignalingTransport.swift; sourceTree = "<group>"; };
 		53E3B13DA44022026D9F605D /* SavedRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStore.swift; sourceTree = "<group>"; };
 		55C7196F10921F7DCB998749 /* JoinSnapshotFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinSnapshotFeature.swift; sourceTree = "<group>"; };
-		5B92C99BAF04DD4222883DAF /* BroadcastPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastPickerButton.swift; sourceTree = "<group>"; };
 		6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinWithCodeScreen.swift; sourceTree = "<group>"; };
 		68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SerenadaBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -208,6 +208,7 @@
 		C9CA838043C3D3C9D89F8C00 /* JoinRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinRecoveryTests.swift; sourceTree = "<group>"; };
 		CA3894047379F7743BD0987F /* PeerConnectionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerConnectionSlot.swift; sourceTree = "<group>"; };
 		CAFF8170B38C84FF4B68CAAD /* WebRtcEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRtcEngine.swift; sourceTree = "<group>"; };
+		CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastShared.swift; sourceTree = "<group>"; };
 		CE5F241AA65BDF199921519B /* BackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackoffTests.swift; sourceTree = "<group>"; };
 		CF26E07FE9367694AE3E5E57 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		CF8E62B4D813B9D13ED9461F /* TurnCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnCredentials.swift; sourceTree = "<group>"; };
@@ -286,6 +287,14 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		3A393515C619541F21CCA735 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		3A3F344D2A123C67DD94ED5D /* Utils */ = {
 			isa = PBXGroup;
 			children = (
@@ -323,6 +332,7 @@
 				961901030B63AB715A9ED19C /* NotificationService */,
 				D67D9D9D6E20F61AB5A0BB84 /* Push */,
 				9DC24B91EF97AE50C603EEA7 /* Resources */,
+				3A393515C619541F21CCA735 /* Shared */,
 				45049EAECFD0C6702F960499 /* Sources */,
 				CF8ED7F99104C94EC09DEACA /* Tests */,
 				17DCEDBED1B30C52F980469C /* UITests */,
@@ -369,7 +379,6 @@
 			isa = PBXGroup;
 			children = (
 				12D576F4E596F3BD8F5BAA7C /* ActivityView.swift */,
-				5B92C99BAF04DD4222883DAF /* BroadcastPickerButton.swift */,
 				1F9BAB04B56A4D0D4D41A615 /* QRCodeImageView.swift */,
 				0A244DB0F6B199EF5BF486FF /* WebRTCVideoView.swift */,
 			);
@@ -725,7 +734,7 @@
 				332B4061CA3CF448DBF766D6 /* AppDelegate.swift in Sources */,
 				3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */,
 				4A6F5FCA6B5464133906FD88 /* Backoff.swift in Sources */,
-				66EDB96180E7A8AE970286C6 /* BroadcastPickerButton.swift in Sources */,
+				93A2C3CCCD91E21ECCF5CCE0 /* BroadcastShared.swift in Sources */,
 				76821994724F4E37F2773EBE /* CallAudioSessionController.swift in Sources */,
 				DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */,
 				B08BB9CB1E3E37F57FC3DE07 /* CallPhase.swift in Sources */,
@@ -806,6 +815,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4BEE4261F2471EA3DB0B1648 /* BroadcastShared.swift in Sources */,
 				3B240DC5B813D930328BDC99 /* SampleHandler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

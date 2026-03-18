@@ -86,12 +86,12 @@ final class CallScreenStateTests: XCTestCase {
         BroadcastSharedMemoryIO.storeInt64(
             timestamp,
             to: buffer,
-            byteOffset: BroadcastSharedMemoryIO.timestampOffset
+            byteOffset: BroadcastHeaderOffset.timestampNs
         )
 
         let decoded = BroadcastSharedMemoryIO.loadInt64(
             from: UnsafeRawPointer(buffer),
-            byteOffset: BroadcastSharedMemoryIO.timestampOffset
+            byteOffset: BroadcastHeaderOffset.timestampNs
         )
 
         XCTAssertEqual(decoded, timestamp)

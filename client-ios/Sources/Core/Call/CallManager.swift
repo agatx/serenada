@@ -31,6 +31,7 @@ func resolveJoinRecoveryState(
 
 @MainActor
 final class CallManager: ObservableObject {
+    private static let log = OSLog(subsystem: "app.serenada.ios", category: "CallManager")
     private let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
     private let connectionStatusRetryingDelayNs: UInt64 = 10_000_000_000
 
@@ -582,22 +583,21 @@ final class CallManager: ObservableObject {
     }
 
     func toggleScreenShare() {
-        let log = OSLog(subsystem: "app.serenada.ios", category: "CallManager")
         if uiState.isScreenSharing {
             debugTrace("ui stopScreenShare")
-            os_log("toggleScreenShare: stopping screen share", log: log, type: .info)
+            os_log("toggleScreenShare: stopping screen share", log: Self.log, type: .info)
             _ = webRtcEngine.stopScreenShare()
             return
         }
 
         debugTrace("ui startScreenShare")
-        os_log("toggleScreenShare: starting screen share", log: log, type: .info)
+        os_log("toggleScreenShare: starting screen share", log: Self.log, type: .info)
         _ = webRtcEngine.startScreenShare { [weak self] started in
             Task { @MainActor in
-                os_log("toggleScreenShare: onComplete started=%{public}d", log: log, type: .info, started)
+                os_log("toggleScreenShare: onComplete started=%{public}d", log: CallManager.log, type: .info, started)
                 guard let self else { return }
                 guard started else { return }
-                os_log("toggleScreenShare: updating state — isScreenSharing=true, localCameraMode=screenShare", log: log, type: .info)
+                os_log("toggleScreenShare: updating state — isScreenSharing=true, localCameraMode=screenShare", log: CallManager.log, type: .info)
                 self.updateState {
                     $0.isScreenSharing = true
                     $0.localCameraMode = .screenShare

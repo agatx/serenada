@@ -2,29 +2,6 @@ import CoreMedia
 import Foundation
 import ReplayKit
 
-private enum BroadcastConstants {
-    static let appGroupIdentifier = "group.app.serenada.ios"
-    static let sharedFileName = "broadcast_frame.dat"
-    static let headerSize = 64
-    static let maxFrameFileSize = 64 + 3840 * 2160 * 4 // header + 4K BGRA upper bound
-
-    static let darwinNotifyStarted = "app.serenada.ios.broadcast.started"
-    static let darwinNotifyFinished = "app.serenada.ios.broadcast.finished"
-    static let darwinNotifyRequestStop = "app.serenada.ios.broadcast.requestStop"
-}
-
-private enum BroadcastSharedMemoryIO {
-    static let timestampOffset = 36
-
-    static func storeInt64(_ value: Int64, to ptr: UnsafeMutableRawPointer, byteOffset: Int) {
-        var mutableValue = value
-        withUnsafeBytes(of: &mutableValue) { buffer in
-            guard let baseAddress = buffer.baseAddress else { return }
-            memcpy(ptr.advanced(by: byteOffset), baseAddress, buffer.count)
-        }
-    }
-}
-
 final class SampleHandler: RPBroadcastSampleHandler {
     private var mmapPtr: UnsafeMutableRawPointer?
     private var mmapSize: Int = 0
@@ -40,7 +17,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         }
 
         registerStopObserver()
-        postDarwinNotification(BroadcastConstants.darwinNotifyStarted)
+        postDarwinNotification(BroadcastShared.darwinNotifyStarted)
     }
 
     override func broadcastPaused() {
@@ -52,7 +29,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
 
     override func broadcastFinished() {
-        postDarwinNotification(BroadcastConstants.darwinNotifyFinished)
+        postDarwinNotification(BroadcastShared.darwinNotifyFinished)
         unregisterStopObserver()
         closeSharedMemory()
     }
@@ -92,11 +69,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
             totalDataSize = size
         }
 
-        let requiredSize = BroadcastConstants.headerSize + totalDataSize
+        let requiredSize = BroadcastShared.headerSize + totalDataSize
         guard requiredSize <= mmapSize else { return }
 
         // Write pixel data first (before updating header/seqNo)
-        var dataOffset = BroadcastConstants.headerSize
+        var dataOffset = BroadcastShared.headerSize
         if CVPixelBufferIsPlanar(pixelBuffer) {
             for plane in 0 ..< planeCount {
                 guard let baseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane) else { continue }
@@ -108,39 +85,39 @@ final class SampleHandler: RPBroadcastSampleHandler {
             memcpy(ptr.advanced(by: dataOffset), baseAddress, planeInfos[0].dataSize)
         }
 
-        // Write header fields (offsets 4..47)
-        ptr.storeBytes(of: UInt32(width), toByteOffset: 4, as: UInt32.self)
-        ptr.storeBytes(of: UInt32(height), toByteOffset: 8, as: UInt32.self)
-        ptr.storeBytes(of: pixelFormat, toByteOffset: 12, as: UInt32.self)
-        ptr.storeBytes(of: UInt32(planeCount), toByteOffset: 16, as: UInt32.self)
+        // Write header fields
+        ptr.storeBytes(of: UInt32(width), toByteOffset: BroadcastHeaderOffset.width, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(height), toByteOffset: BroadcastHeaderOffset.height, as: UInt32.self)
+        ptr.storeBytes(of: pixelFormat, toByteOffset: BroadcastHeaderOffset.pixelFormat, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(planeCount), toByteOffset: BroadcastHeaderOffset.planeCount, as: UInt32.self)
 
         let plane0 = planeInfos.indices.contains(0) ? planeInfos[0] : (bytesPerRow: 0, height: 0, dataSize: 0)
         let plane1 = planeInfos.indices.contains(1) ? planeInfos[1] : (bytesPerRow: 0, height: 0, dataSize: 0)
 
-        ptr.storeBytes(of: UInt32(plane0.bytesPerRow), toByteOffset: 20, as: UInt32.self)
-        ptr.storeBytes(of: UInt32(plane0.height), toByteOffset: 24, as: UInt32.self)
-        ptr.storeBytes(of: UInt32(plane1.bytesPerRow), toByteOffset: 28, as: UInt32.self)
-        ptr.storeBytes(of: UInt32(plane1.height), toByteOffset: 32, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(plane0.bytesPerRow), toByteOffset: BroadcastHeaderOffset.plane0BytesPerRow, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(plane0.height), toByteOffset: BroadcastHeaderOffset.plane0Height, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(plane1.bytesPerRow), toByteOffset: BroadcastHeaderOffset.plane1BytesPerRow, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(plane1.height), toByteOffset: BroadcastHeaderOffset.plane1Height, as: UInt32.self)
         BroadcastSharedMemoryIO.storeInt64(
             timestampNs,
             to: ptr,
-            byteOffset: BroadcastSharedMemoryIO.timestampOffset
+            byteOffset: BroadcastHeaderOffset.timestampNs
         )
-        ptr.storeBytes(of: UInt32(rotation), toByteOffset: 44, as: UInt32.self)
+        ptr.storeBytes(of: UInt32(rotation), toByteOffset: BroadcastHeaderOffset.rotation, as: UInt32.self)
 
-        // Increment seqNo last (atomic store acts as publish barrier)
-        let currentSeq = ptr.load(fromByteOffset: 0, as: UInt32.self)
-        ptr.storeBytes(of: currentSeq &+ 1, toByteOffset: 0, as: UInt32.self)
+        // Increment seqNo last (acts as publish barrier on ARM64 for naturally-aligned stores)
+        let currentSeq = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+        ptr.storeBytes(of: currentSeq &+ 1, toByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
     }
 
     // MARK: - Shared Memory
 
     private func openSharedMemory() -> Bool {
         guard let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: BroadcastConstants.appGroupIdentifier
+            forSecurityApplicationGroupIdentifier: BroadcastShared.appGroupIdentifier
         ) else { return false }
 
-        let fileURL = containerURL.appendingPathComponent(BroadcastConstants.sharedFileName)
+        let fileURL = containerURL.appendingPathComponent(BroadcastShared.sharedFileName)
         let path = fileURL.path
 
         // Create file if needed
@@ -151,7 +128,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         fileDescriptor = open(path, O_RDWR)
         guard fileDescriptor >= 0 else { return false }
 
-        let size = BroadcastConstants.maxFrameFileSize
+        let size = BroadcastShared.maxFrameFileSize
         // Ensure file is large enough
         ftruncate(fileDescriptor, off_t(size))
 
@@ -167,7 +144,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         mmapSize = size
 
         // Zero out the header
-        memset(mapped, 0, BroadcastConstants.headerSize)
+        memset(mapped, 0, BroadcastShared.headerSize)
         return true
     }
 
@@ -207,7 +184,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     NSLocalizedDescriptionKey: "Screen sharing stopped by app.",
                 ]))
             },
-            BroadcastConstants.darwinNotifyRequestStop as CFString,
+            BroadcastShared.darwinNotifyRequestStop as CFString,
             nil,
             .deliverImmediately
         )
@@ -219,7 +196,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         CFNotificationCenterRemoveObserver(
             Self.darwinCenter,
             Unmanaged.passUnretained(self).toOpaque(),
-            CFNotificationName(BroadcastConstants.darwinNotifyRequestStop as CFString),
+            CFNotificationName(BroadcastShared.darwinNotifyRequestStop as CFString),
             nil
         )
     }
