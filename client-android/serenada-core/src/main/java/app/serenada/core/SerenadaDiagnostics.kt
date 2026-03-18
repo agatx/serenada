@@ -1,6 +1,8 @@
 package app.serenada.core
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import app.serenada.core.call.SignalingClient
 import app.serenada.core.call.SignalingMessage
@@ -63,6 +65,12 @@ class SerenadaDiagnostics(
     }
 
     fun checkCamera(completion: (DiagnosticCheckResult) -> Unit) {
+        if (appContext.checkSelfPermission(Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            completion(DiagnosticCheckResult.NOT_AUTHORIZED)
+            return
+        }
         try {
             val enumerator = Camera2Enumerator(appContext)
             val names = enumerator.deviceNames
@@ -77,6 +85,12 @@ class SerenadaDiagnostics(
     }
 
     fun checkMicrophone(completion: (DiagnosticCheckResult) -> Unit) {
+        if (appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            completion(DiagnosticCheckResult.NOT_AUTHORIZED)
+            return
+        }
         val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         if (audioManager != null) {
             completion(DiagnosticCheckResult.AVAILABLE)

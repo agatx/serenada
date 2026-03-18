@@ -297,7 +297,7 @@ export class SignalingEngine {
                 break;
             case 'error':
                 if (msg.payload && msg.payload.message) {
-                    this.error = msg.payload.message;
+                    this.error = String(msg.payload.message);
                 }
                 break;
         }

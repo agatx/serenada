@@ -1235,6 +1235,7 @@ class SerenadaSession internal constructor(
         clearJoinRecovery()
         clearNonHostOfferFallback()
         clearTurnRefresh()
+        clearReconnect()
         callAudioSessionController.deactivate()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
@@ -1270,17 +1271,27 @@ class SerenadaSession internal constructor(
         cpuWakeLock?.let { if (it.isHeld) runCatching { it.release() } }
     }
 
+    private var reconnectRunnable: Runnable? = null
+
     private fun scheduleReconnect() {
         reconnectAttempts += 1
         val backoff = (WebRtcResilienceConstants.RECONNECT_BACKOFF_BASE_MS * (1 shl (reconnectAttempts - 1)))
             .coerceAtMost(WebRtcResilienceConstants.RECONNECT_BACKOFF_CAP_MS)
-        handler.postDelayed({
-            if (signalingClient.isConnected()) return@postDelayed
+        val runnable = Runnable {
+            reconnectRunnable = null
+            if (signalingClient.isConnected()) return@Runnable
             if (_state.value.phase != CallPhase.Idle) {
                 pendingJoinRoom = roomId
                 signalingClient.connect(serverHost)
             }
-        }, backoff)
+        }
+        reconnectRunnable = runnable
+        handler.postDelayed(runnable, backoff)
+    }
+
+    private fun clearReconnect() {
+        reconnectRunnable?.let { handler.removeCallbacks(it) }
+        reconnectRunnable = null
     }
 
     private fun registerConnectivityListener() {

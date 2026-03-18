@@ -27,6 +27,7 @@ export class SerenadaSession {
     private roomUrl: string | null;
     private _destroyed = false;
     private permissionCheckDone = false;
+    private permissionCheckInFlight = false;
 
     onPermissionsRequired: ((permissions: MediaCapability[]) => void) | null = null;
 
@@ -126,7 +127,7 @@ export class SerenadaSession {
 
     end(): void {
         this.signaling.endRoom();
-        this.statsCollector.stop();
+        this.leave();
     }
 
     toggleAudio(): void {
@@ -258,7 +259,8 @@ export class SerenadaSession {
     }
 
     private async checkPermissionsAndStartMedia(): Promise<void> {
-        if (this.permissionCheckDone) return;
+        if (this.permissionCheckDone || this.permissionCheckInFlight) return;
+        this.permissionCheckInFlight = true;
 
         // Try to detect permission status without prompting
         const permissionsNeeded: MediaCapability[] = [];
@@ -295,6 +297,7 @@ export class SerenadaSession {
 
         // Permissions are granted — start media
         this.permissionCheckDone = true;
+        this.permissionCheckInFlight = false;
         await this.media.startLocalMedia();
         this.rebuildState();
     }

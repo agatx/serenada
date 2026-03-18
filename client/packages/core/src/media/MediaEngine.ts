@@ -574,34 +574,46 @@ export class MediaEngine {
     }
 
     private async handleOfferFrom(fromCid: string, sdp: string): Promise<void> {
-        const peer = this.getOrCreatePeer(fromCid);
-        if (peer.nonHostFallbackTimer) { window.clearTimeout(peer.nonHostFallbackTimer); peer.nonHostFallbackTimer = null; }
-        await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-        if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
-        while (peer.iceBuffer.length > 0) {
-            const c = peer.iceBuffer.shift();
-            if (c) await peer.pc.addIceCandidate(c);
+        try {
+            const peer = this.getOrCreatePeer(fromCid);
+            if (peer.nonHostFallbackTimer) { window.clearTimeout(peer.nonHostFallbackTimer); peer.nonHostFallbackTimer = null; }
+            await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+            if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
+            while (peer.iceBuffer.length > 0) {
+                const c = peer.iceBuffer.shift();
+                if (c) await peer.pc.addIceCandidate(c);
+            }
+            const answer = await peer.pc.createAnswer();
+            await peer.pc.setLocalDescription(answer);
+            this.sendSignalingMessage('answer', { sdp: answer.sdp }, fromCid);
+        } catch (err) {
+            console.error(`[WebRTC][${fromCid}] Error handling offer:`, err);
         }
-        const answer = await peer.pc.createAnswer();
-        await peer.pc.setLocalDescription(answer);
-        this.sendSignalingMessage('answer', { sdp: answer.sdp }, fromCid);
     }
 
     private async handleAnswerFrom(fromCid: string, sdp: string): Promise<void> {
-        const peer = this.peers.get(fromCid);
-        if (!peer) return;
-        if (peer.nonHostFallbackTimer) { window.clearTimeout(peer.nonHostFallbackTimer); peer.nonHostFallbackTimer = null; }
-        await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
-        if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
+        try {
+            const peer = this.peers.get(fromCid);
+            if (!peer) return;
+            if (peer.nonHostFallbackTimer) { window.clearTimeout(peer.nonHostFallbackTimer); peer.nonHostFallbackTimer = null; }
+            await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+            if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
+        } catch (err) {
+            console.error(`[WebRTC][${fromCid}] Error handling answer:`, err);
+        }
     }
 
     private async handleIceFrom(fromCid: string, candidate: RTCIceCandidateInit): Promise<void> {
-        const peer = this.getOrCreatePeer(fromCid);
-        if (peer.pc.remoteDescription) {
-            await peer.pc.addIceCandidate(candidate);
-        } else {
-            if (peer.iceBuffer.length >= ICE_CANDIDATE_BUFFER_MAX) peer.iceBuffer.shift();
-            peer.iceBuffer.push(candidate);
+        try {
+            const peer = this.getOrCreatePeer(fromCid);
+            if (peer.pc.remoteDescription) {
+                await peer.pc.addIceCandidate(candidate);
+            } else {
+                if (peer.iceBuffer.length >= ICE_CANDIDATE_BUFFER_MAX) peer.iceBuffer.shift();
+                peer.iceBuffer.push(candidate);
+            }
+        } catch (err) {
+            console.error(`[WebRTC][${fromCid}] Error handling ICE candidate:`, err);
         }
     }
 

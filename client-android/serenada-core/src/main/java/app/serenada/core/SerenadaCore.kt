@@ -79,7 +79,12 @@ class SerenadaCore(
     private fun extractRoomIdFromUrl(url: String): String? {
         val trimmed = url.trim()
         if (!trimmed.contains("/")) return null
-        return trimmed.split("/").lastOrNull()?.takeIf { it.isNotBlank() }
+        return try {
+            val uri = android.net.Uri.parse(trimmed)
+            uri.lastPathSegment?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            trimmed.split("/").lastOrNull()?.takeIf { it.isNotBlank() }
+        }
     }
 
     companion object {
