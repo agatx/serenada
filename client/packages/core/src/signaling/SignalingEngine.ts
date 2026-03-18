@@ -385,7 +385,13 @@ export class SignalingEngine {
         });
 
         this.transport = transport;
-        transport.connect();
+        try {
+            transport.connect();
+        } catch (err) {
+            this.connecting = false;
+            console.error(`[Signaling] Transport connect() threw`, err);
+            this.scheduleReconnect();
+        }
     }
 
     private shouldFallback(kind: TransportKind, reason: string): boolean {

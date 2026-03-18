@@ -155,11 +155,27 @@ public final class SerenadaDiagnostics {
     }
 
     private func checkTurnAsync() async -> TurnCheckResult {
-        // TURN check requires a token which needs a room. For preflight, we validate
-        // the server is reachable and can serve TURN credentials.
+        // Probe the TURN credentials endpoint with a dummy token to verify reachability.
+        // A 401/403 response still confirms the endpoint is reachable.
+        guard let url = apiClient.buildHTTPSURL(host: config.serverHost, path: "/api/turn-credentials") else {
+            return .unreachable(reason: "Invalid server host")
+        }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "token", value: "probe")]
+        guard let probeUrl = components?.url else {
+            return .unreachable(reason: "Failed to build TURN probe URL")
+        }
+        var request = URLRequest(url: probeUrl)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        let start = CFAbsoluteTimeGetCurrent()
         do {
-            try await apiClient.validateServerHost(config.serverHost)
-            return .reachable(latencyMs: 0)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let latencyMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+            if let http = response as? HTTPURLResponse, (200...403).contains(http.statusCode) {
+                return .reachable(latencyMs: latencyMs)
+            }
+            return .unreachable(reason: "TURN endpoint returned unexpected status")
         } catch {
             return .unreachable(reason: error.localizedDescription)
         }

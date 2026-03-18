@@ -48,7 +48,8 @@ public final class SerenadaCore {
             roomId: roomId,
             roomUrl: url,
             serverHost: config.serverHost,
-            config: config
+            config: config,
+            delegateProvider: { [weak self] in self?.delegate }
         )
         return session
     }
@@ -65,7 +66,8 @@ public final class SerenadaCore {
             roomId: roomId,
             roomUrl: url,
             serverHost: config.serverHost,
-            config: config
+            config: config,
+            delegateProvider: { [weak self] in self?.delegate }
         )
         return session
     }
@@ -91,7 +93,8 @@ public final class SerenadaCore {
                     roomId: roomId,
                     roomUrl: url,
                     serverHost: serverHost,
-                    config: config
+                    config: config,
+                    delegateProvider: { [weak self] in self?.delegate }
                 )
                 completion(.success(CreateRoomResult(url: url, roomId: roomId, session: session)))
             } catch {

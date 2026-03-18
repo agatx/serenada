@@ -290,7 +290,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 }
             }
         } catch {
-            // Permissions API not available — just try to start media
+            // Permissions API not available — signal host/call-ui to handle permissions
+            this.permissionCheckInFlight = false;
+            const required: MediaCapability[] = ['camera', 'microphone'];
+            this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: required };
+            this.notifyListeners();
+            this.onPermissionsRequired?.(required);
+            return;
         }
 
         if (permissionsNeeded.length > 0) {

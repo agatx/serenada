@@ -203,7 +203,7 @@ private struct URLFirstCallFlow: View {
     let onCallEnded: ((EndReason) -> Void)?
 
     @State private var session: SerenadaSession?
-    @State private var permissionsGranted = false
+    @State private var core: SerenadaCore?
 
     var body: some View {
         Group {
@@ -222,8 +222,9 @@ private struct URLFirstCallFlow: View {
             }
         }
         .task {
-            let core = SerenadaCore(config: serenadaConfig)
-            let newSession = core.join(url: url)
+            let newCore = SerenadaCore(config: serenadaConfig)
+            core = newCore
+            let newSession = newCore.join(url: url)
             session = newSession
 
             // Auto-prompt for permissions in URL-first mode

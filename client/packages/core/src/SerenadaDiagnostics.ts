@@ -81,15 +81,15 @@ export class SerenadaDiagnostics {
         const baseUrl = `${protocol}://${this.config.serverHost}`;
 
         try {
-            // Probe the SSE endpoint (HEAD request to check server reachability)
+            // Probe server reachability without creating a room
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
             const res = await fetch(`${baseUrl}/api/room-id`, {
-                method: 'POST',
+                method: 'GET',
                 signal: controller.signal,
             });
             clearTimeout(timeout);
-            if (res.ok || res.status === 200) {
+            if (res.ok || res.status === 405) {
                 return { status: 'available', transport: 'ws' };
             }
             return { status: 'unavailable', reason: `Server returned ${res.status}` };

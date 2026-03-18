@@ -14,16 +14,19 @@ public final class SerenadaSession: ObservableObject {
     let callAudioSessionController: CallAudioSessionController
     let apiClient: CoreAPIClient
     public let serverHost: String
+    private let delegateProvider: (() -> SerenadaCoreDelegate?)?
 
     public init(
         roomId: String,
         roomUrl: URL? = nil,
         serverHost: String,
-        config: SerenadaConfig
+        config: SerenadaConfig,
+        delegateProvider: (() -> SerenadaCoreDelegate?)? = nil
     ) {
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.serverHost = serverHost
+        self.delegateProvider = delegateProvider
         self.signalingClient = SignalingClient(forceSseSignaling: !config.transports.contains(.ws))
         self.webRtcEngine = WebRtcEngine(
             onCameraFacingChanged: { _ in },

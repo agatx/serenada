@@ -1160,7 +1160,8 @@ class SerenadaSession internal constructor(
         val slots = peerSlots.values.toList()
         if (slots.isEmpty()) return
         webrtcStatsRequestInFlight = true
-        webRtcStatsExecutor.execute {
+        if (webRtcStatsExecutor.isShutdown) { webrtcStatsRequestInFlight = false; return }
+        try { webRtcStatsExecutor.execute {
             val summaries = mutableListOf<String>()
             val stats = mutableListOf<RealtimeCallStats>()
             var remaining = slots.size
@@ -1196,6 +1197,7 @@ class SerenadaSession internal constructor(
                 }
             }
         }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { webrtcStatsRequestInFlight = false }
     }
 
     private fun mergeRealtimeStats(stats: List<RealtimeCallStats>): RealtimeCallStats? {
