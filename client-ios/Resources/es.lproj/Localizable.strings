@@ -149,3 +149,10 @@
 "call_a11y_share_invite" = "Compartir enlace de invitación";
 "call_a11y_video_fit" = "Ajustar video";
 "call_a11y_video_fill" = "Llenar video";
+
+"call_permissions_required" = "Se requiere acceso a la cámara y al micrófono";
+"call_permissions_camera" = "Cámara";
+"call_permissions_microphone" = "Micrófono";
+"call_error_generic" = "Algo salió mal";
+"call_joining" = "Uniéndose...";
+"call_ended" = "Llamada finalizada";

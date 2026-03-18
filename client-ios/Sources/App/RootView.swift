@@ -91,6 +91,7 @@ struct RootView: View {
                             inviteControlsEnabled: true,
                             debugOverlayEnabled: true
                         ),
+                        strings: L10n.serenadaCallStrings,
                         onToggleAudio: { callManager.toggleAudio() },
                         onToggleVideo: { callManager.toggleVideo() },
                         onFlipCamera: { callManager.flipCamera() },

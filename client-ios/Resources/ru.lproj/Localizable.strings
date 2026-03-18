@@ -149,3 +149,10 @@
 "call_a11y_share_invite" = "Поделиться ссылкой";
 "call_a11y_video_fit" = "Вписать видео";
 "call_a11y_video_fill" = "Заполнить видео";
+
+"call_permissions_required" = "Требуется доступ к камере и микрофону";
+"call_permissions_camera" = "Камера";
+"call_permissions_microphone" = "Микрофон";
+"call_error_generic" = "Что-то пошло не так";
+"call_joining" = "Подключение...";
+"call_ended" = "Звонок завершён";

@@ -952,15 +952,15 @@ With core extracted and stable on all platforms, build the call-ui layer.
 
 Final cleanup to prove the SDK boundary is real.
 
-- [ ] Serenada iOS app uses `SerenadaCallFlow` for all call presentation
-- [ ] Serenada Android app uses `SerenadaCallFlow` for all call presentation
-- [ ] Serenada web app uses `<SerenadaCallFlow>` for all call presentation
-- [ ] Serenada apps pass their own locale strings via the strings config (ru, es, fr)
-- [ ] Serenada apps set feature toggles as appropriate (all enabled for first-party)
-- [ ] No host-app concerns remain in any SDK module
-- [ ] No SDK modules reference host-app code
-- [ ] All push, persistence, room management, and settings remain in host apps
-- [ ] All tests pass on all platforms
+- [x] Serenada iOS app uses `SerenadaCallFlow` for all call presentation
+- [x] Serenada Android app uses `SerenadaCallFlow` for all call presentation
+- [x] Serenada web app uses `<SerenadaCallFlow>` for all call presentation
+- [x] Serenada apps pass their own locale strings via the strings config (ru, es, fr)
+- [x] Serenada apps set feature toggles as appropriate (all enabled for first-party)
+- [x] No host-app concerns remain in any SDK module
+- [x] No SDK modules reference host-app code
+- [x] All push, persistence, room management, and settings remain in host apps
+- [x] All tests pass on all platforms
 
 ### Phase 6: Publish & Document
 

@@ -28,6 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import app.serenada.android.R
 import app.serenada.android.call.CallManager
+import app.serenada.android.i18n.buildSerenadaCallStrings
 import app.serenada.callui.SerenadaCallFlow
 import app.serenada.callui.SerenadaCallFlowConfig
 import app.serenada.core.call.CallPhase
@@ -344,6 +345,7 @@ fun SerenadaAppRoot(
                             inviteControlsEnabled = true,
                             debugOverlayEnabled = true
                         ),
+                        strings = buildSerenadaCallStrings(context),
                         onToggleAudio = { callManager.toggleAudio() },
                         onToggleVideo = { callManager.toggleVideo() },
                         onFlipCamera = { callManager.flipCamera() },

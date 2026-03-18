@@ -1,4 +1,5 @@
 import Foundation
+import SerenadaCallUI
 
 enum L10n {
     private static let languageKey = "language"
@@ -176,5 +177,48 @@ enum L10n {
     static var callA11yVideoFit: String { text("call_a11y_video_fit") }
     static var callA11yVideoFill: String { text("call_a11y_video_fill") }
 
+    static var callPermissionsRequired: String { text("call_permissions_required") }
+    static var callPermissionsCamera: String { text("call_permissions_camera") }
+    static var callPermissionsMicrophone: String { text("call_permissions_microphone") }
+    static var callErrorGeneric: String { text("call_error_generic") }
+    static var callJoining: String { text("call_joining") }
+    static var callEnded: String { text("call_ended") }
+
     static var commonBack: String { text("common_back") }
+
+    /// Builds a SerenadaString override dictionary from the app's current locale.
+    static var serenadaCallStrings: [SerenadaString: String] {
+        [
+            .callLocalCameraOff: text("call_local_camera_off"),
+            .callCameraOff: text("call_camera_off"),
+            .callVideoOff: text("call_video_off"),
+            .callReconnecting: text("call_reconnecting"),
+            .callTakingLongerThanUsual: text("call_taking_longer_than_usual"),
+            .callWaitingOverlay: text("call_waiting_overlay"),
+            .callInviteToRoom: text("call_invite_to_room"),
+            .callInviteSent: text("call_invite_sent"),
+            .callInviteFailed: text("call_invite_failed"),
+            .callShareInvitation: text("call_share_invitation"),
+            .callQrCode: text("call_qr_code"),
+            .callA11yMuteOn: text("call_a11y_mute_on"),
+            .callA11yMuteOff: text("call_a11y_mute_off"),
+            .callA11yVideoOn: text("call_a11y_video_on"),
+            .callA11yVideoOff: text("call_a11y_video_off"),
+            .callA11yFlipCamera: text("call_a11y_flip_camera"),
+            .callA11yScreenShareOn: text("call_a11y_screen_share_on"),
+            .callA11yScreenShareOff: text("call_a11y_screen_share_off"),
+            .callA11yEndCall: text("call_a11y_end_call"),
+            .callA11yFlashlightOn: text("call_a11y_flashlight_on"),
+            .callA11yFlashlightOff: text("call_a11y_flashlight_off"),
+            .callA11yShareInvite: text("call_a11y_share_invite"),
+            .callA11yVideoFit: text("call_a11y_video_fit"),
+            .callA11yVideoFill: text("call_a11y_video_fill"),
+            .callErrorGeneric: text("call_error_generic"),
+            .callJoining: text("call_joining"),
+            .callEnded: text("call_ended"),
+            .callPermissionsRequired: text("call_permissions_required"),
+            .callPermissionsCamera: text("call_permissions_camera"),
+            .callPermissionsMicrophone: text("call_permissions_microphone"),
+        ]
+    }
 }
