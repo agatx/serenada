@@ -1,0 +1,312 @@
+import type { CallState, CallStats, CameraMode, ConnectionStatus, MediaCapability, SerenadaConfig } from './types.js';
+import { SignalingEngine } from './signaling/SignalingEngine.js';
+import { MediaEngine } from './media/MediaEngine.js';
+import { CallStatsCollector } from './media/callStats.js';
+import type { TransportKind } from './signaling/transports/types.js';
+
+function resolveUrls(serverHost: string): { wsUrl: string; httpBaseUrl: string } {
+    const isLocal = serverHost.startsWith('localhost') || serverHost.startsWith('127.');
+    const protocol = isLocal ? 'http' : 'https';
+    const wsProtocol = isLocal ? 'ws' : 'wss';
+    return {
+        wsUrl: `${wsProtocol}://${serverHost}/ws`,
+        httpBaseUrl: `${protocol}://${serverHost}`,
+    };
+}
+
+export class SerenadaSession {
+    private signaling: SignalingEngine;
+    private media: MediaEngine;
+    private statsCollector: CallStatsCollector;
+    private _state: CallState;
+    private stateListeners: ((state: CallState) => void)[] = [];
+    private unsubSignalingMessages: (() => void) | null = null;
+    private unsubSignalingState: (() => void) | null = null;
+    private config: SerenadaConfig;
+    private roomId: string;
+    private roomUrl: string | null;
+    private _destroyed = false;
+    private permissionCheckDone = false;
+
+    onPermissionsRequired: ((permissions: MediaCapability[]) => void) | null = null;
+
+    constructor(config: SerenadaConfig, roomId: string, roomUrl: string | null) {
+        this.config = config;
+        this.roomId = roomId;
+        this.roomUrl = roomUrl;
+
+        const urls = resolveUrls(config.serverHost);
+
+        this._state = {
+            phase: 'joining',
+            roomId,
+            roomUrl,
+            localParticipant: null,
+            remoteParticipants: [],
+            connectionStatus: 'connected',
+            activeTransport: null,
+            requiredPermissions: null,
+            error: null,
+        };
+
+        this.signaling = new SignalingEngine({
+            wsUrl: urls.wsUrl,
+            httpBaseUrl: urls.httpBaseUrl,
+            transports: config.transports,
+        });
+
+        this.media = new MediaEngine(
+            { serverHost: config.serverHost },
+            (type, payload, to) => this.signaling.sendMessage(type, payload, to),
+        );
+
+        this.statsCollector = new CallStatsCollector();
+
+        // Wire signaling events to media engine
+        this.unsubSignalingMessages = this.signaling.subscribeToMessages((msg) => {
+            this.media.processSignalingMessage(msg);
+        });
+
+        this.unsubSignalingState = this.signaling.onStateChange(() => {
+            this.media.updateSignalingConnected(this.signaling.isConnected);
+
+            if (this.signaling.turnToken) {
+                this.media.updateTurnToken(this.signaling.turnToken);
+            }
+
+            this.media.updateRoomState(this.signaling.roomState, this.signaling.clientId);
+            this.rebuildState();
+        });
+
+        this.media.setOnChange(() => {
+            this.rebuildState();
+        });
+
+        // Start connection + join
+        this.signaling.connect();
+        this.signaling.joinRoom(roomId);
+    }
+
+    get state(): CallState { return this._state; }
+    get localStream(): MediaStream | null { return this.media.localStream; }
+    get remoteStreams(): Map<string, MediaStream> { return this.media.remoteStreams; }
+    get callStats(): CallStats | null { return this.statsCollector.stats; }
+
+    subscribe(callback: (state: CallState) => void): () => void {
+        this.stateListeners.push(callback);
+        return () => {
+            this.stateListeners = this.stateListeners.filter(l => l !== callback);
+        };
+    }
+
+    async resumeJoin(): Promise<void> {
+        this.permissionCheckDone = true;
+        const stream = await this.media.startLocalMedia();
+        if (stream) {
+            this.rebuildState();
+        }
+    }
+
+    cancelJoin(): void {
+        this.permissionCheckDone = true;
+        this._state = { ...this._state, phase: 'idle', requiredPermissions: null };
+        this.notifyListeners();
+        this.destroy();
+    }
+
+    leave(): void {
+        this.signaling.leaveRoom();
+        this.media.cleanupAllPeers();
+        this.statsCollector.stop();
+        this._state = { ...this._state, phase: 'idle' };
+        this.notifyListeners();
+    }
+
+    end(): void {
+        this.signaling.endRoom();
+        this.statsCollector.stop();
+    }
+
+    toggleAudio(): void {
+        const stream = this.media.localStream;
+        if (!stream) return;
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) audioTrack.enabled = !audioTrack.enabled;
+        this.rebuildState();
+    }
+
+    toggleVideo(): void {
+        const stream = this.media.localStream;
+        if (!stream) return;
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) videoTrack.enabled = !videoTrack.enabled;
+        this.rebuildState();
+    }
+
+    setAudioEnabled(enabled: boolean): void {
+        const stream = this.media.localStream;
+        if (!stream) return;
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) audioTrack.enabled = enabled;
+        this.rebuildState();
+    }
+
+    setVideoEnabled(enabled: boolean): void {
+        const stream = this.media.localStream;
+        if (!stream) return;
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) videoTrack.enabled = enabled;
+        this.rebuildState();
+    }
+
+    setCameraMode(_mode: CameraMode): void {
+        // Web only supports selfie/world via flipCamera; composite is not available
+        if (_mode === 'world' && this.media.facingMode === 'user') {
+            void this.flipCamera();
+        } else if (_mode === 'selfie' && this.media.facingMode === 'environment') {
+            void this.flipCamera();
+        }
+    }
+
+    async flipCamera(): Promise<void> {
+        await this.media.flipCamera();
+    }
+
+    async startScreenShare(): Promise<void> {
+        await this.media.startScreenShare();
+    }
+
+    async stopScreenShare(): Promise<void> {
+        await this.media.stopScreenShare();
+    }
+
+    destroy(): void {
+        if (this._destroyed) return;
+        this._destroyed = true;
+        this.statsCollector.stop();
+        this.unsubSignalingMessages?.();
+        this.unsubSignalingState?.();
+        this.media.destroy();
+        this.signaling.destroy();
+    }
+
+    // --- Private ---
+
+    private rebuildState(): void {
+        const signalingState = this.signaling.roomState;
+        const clientId = this.signaling.clientId;
+
+        let phase = this._state.phase;
+        const error = this.signaling.error;
+
+        if (error) {
+            phase = 'error';
+        } else if (!signalingState && phase !== 'idle') {
+            if (this.signaling.isConnected && this._state.phase === 'joining') {
+                phase = 'joining';
+            }
+        } else if (signalingState) {
+            const hasRemote = (signalingState.participants?.length ?? 0) > 1;
+            if (hasRemote) {
+                phase = 'inCall';
+                this.ensureStatsCollection();
+            } else {
+                phase = 'waiting';
+            }
+
+            // Permission check: after joining, try to start media if not done
+            if (!this.permissionCheckDone && !this.media.localStream) {
+                this.checkPermissionsAndStartMedia();
+            }
+        }
+
+        const audioTrack = this.media.localStream?.getAudioTracks()[0];
+        const videoTrack = this.media.localStream?.getVideoTracks()[0];
+
+        const localParticipant = clientId ? {
+            cid: clientId,
+            audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
+            videoEnabled: videoTrack?.enabled ?? (this.config.defaultVideoEnabled !== false),
+            cameraMode: (this.media.isScreenSharing ? 'screenShare' : this.media.facingMode === 'user' ? 'selfie' : 'world') as CameraMode,
+            isHost: signalingState?.hostCid === clientId,
+        } : null;
+
+        const remoteParticipants = (signalingState?.participants ?? [])
+            .filter(p => p.cid !== clientId)
+            .map(p => ({
+                cid: p.cid,
+                audioEnabled: true,
+                videoEnabled: true,
+                connectionState: this.media.connectionState,
+            }));
+
+        this._state = {
+            phase,
+            roomId: this.roomId,
+            roomUrl: this.roomUrl,
+            localParticipant,
+            remoteParticipants,
+            connectionStatus: this.media.connectionStatus as ConnectionStatus,
+            activeTransport: this.signaling.activeTransport as TransportKind | null,
+            requiredPermissions: this._state.requiredPermissions,
+            error: error ? { code: 'signaling_error', message: error } : null,
+        };
+
+        this.notifyListeners();
+    }
+
+    private async checkPermissionsAndStartMedia(): Promise<void> {
+        if (this.permissionCheckDone) return;
+
+        // Try to detect permission status without prompting
+        const permissionsNeeded: MediaCapability[] = [];
+        try {
+            if (navigator.permissions) {
+                const [cameraResult, micResult] = await Promise.all([
+                    navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
+                    navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
+                ]);
+                if (cameraResult?.state === 'denied') permissionsNeeded.push('camera');
+                if (micResult?.state === 'denied') permissionsNeeded.push('microphone');
+
+                if (cameraResult?.state === 'prompt' || micResult?.state === 'prompt') {
+                    // Permissions need prompting - signal to host/call-ui
+                    const required: MediaCapability[] = [];
+                    if (cameraResult?.state === 'prompt') required.push('camera');
+                    if (micResult?.state === 'prompt') required.push('microphone');
+                    this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: required };
+                    this.notifyListeners();
+                    this.onPermissionsRequired?.(required);
+                    return;
+                }
+            }
+        } catch {
+            // Permissions API not available — just try to start media
+        }
+
+        if (permissionsNeeded.length > 0) {
+            this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: permissionsNeeded };
+            this.notifyListeners();
+            this.onPermissionsRequired?.(permissionsNeeded);
+            return;
+        }
+
+        // Permissions are granted — start media
+        this.permissionCheckDone = true;
+        await this.media.startLocalMedia();
+        this.rebuildState();
+    }
+
+    private ensureStatsCollection(): void {
+        if (this.statsCollector.stats !== null) return;
+        this.statsCollector.start(
+            () => this.media.getPeerConnections(),
+            () => this.notifyListeners(),
+        );
+    }
+
+    private notifyListeners(): void {
+        const state = this._state;
+        [...this.stateListeners].forEach(cb => cb(state));
+    }
+}

@@ -737,53 +737,53 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 
 #### Create headless session engine
 
-- [ ] Create `packages/core/src/SerenadaSession.ts` class
-- [ ] Extract signaling transport logic from `SignalingContext.tsx` into `packages/core/src/signaling/` as vanilla TS classes
-- [ ] Extract WS transport from `contexts/signaling/transports/` → `packages/core/src/signaling/transports/`
-- [ ] Extract SSE transport → `packages/core/src/signaling/transports/`
-- [ ] Extract WebRTC peer connection logic from `WebRTCContext.tsx` into `packages/core/src/media/` as vanilla TS class
-- [ ] Extract reconnection and resilience logic from `constants/webrtcResilience.ts` → `packages/core/src/media/`
-- [ ] Extract `localVideoRecovery.ts` → `packages/core/src/media/`
-- [ ] Move `layout/computeLayout.ts` → `packages/core/src/layout/`
-- [ ] Move call-relevant parts of `utils/roomApi.ts` → `packages/core/src/api/` (TURN + room creation + signaling probe for diagnostics)
-- [ ] Keep push / invite / snapshot / analytics endpoints in host app
-- [ ] Implement `SerenadaSession` with: `subscribe(callback)`, `join()`, `leave()`, `end()`, `toggleAudio()`, `toggleVideo()`, `flipCamera()`, media stream getters
-- [ ] Implement `createSerenadaCore()` factory with `SerenadaConfig`
-- [ ] Implement `createRoom()` convenience method
-- [ ] Implement `onPermissionsRequired` callback on `SerenadaSession`
-- [ ] Implement permission preflight in `join()` — detect missing camera/mic, set `phase = 'awaitingPermissions'`, expose `requiredPermissions`, and pause
-- [ ] Create `createSerenadaDiagnostics()` factory:
-  - [ ] Implement `runAll()` — async, returns `DiagnosticsReport`, never prompts
-  - [ ] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
-  - [ ] Device enumeration via `navigator.mediaDevices.enumerateDevices()`
-  - [ ] Camera/mic checks return `notAuthorized` if permission not granted — no `getUserMedia()` calls
-  - [ ] Signaling/TURN probes use core's call-only client
-- [ ] Add `callStats` observable on `SerenadaSession`:
-  - [ ] Define `CallStats` type: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
-  - [ ] Populate from `RTCPeerConnection.getStats()` periodically during active call
-- [ ] Export public types: `CallState`, `Participant`, `CallPhase`, `CallError`, `DiagnosticsReport`, `CallStats`
-- [ ] Build `@serenada/core` — should compile
-- [ ] Verify zero React/ReactDOM imports in `@serenada/core`
+- [x] Create `packages/core/src/SerenadaSession.ts` class
+- [x] Extract signaling transport logic from `SignalingContext.tsx` into `packages/core/src/signaling/` as vanilla TS classes
+- [x] Extract WS transport from `contexts/signaling/transports/` → `packages/core/src/signaling/transports/`
+- [x] Extract SSE transport → `packages/core/src/signaling/transports/`
+- [x] Extract WebRTC peer connection logic from `WebRTCContext.tsx` into `packages/core/src/media/` as vanilla TS class
+- [x] Extract reconnection and resilience logic from `constants/webrtcResilience.ts` → `packages/core/src/media/`
+- [x] Extract `localVideoRecovery.ts` → `packages/core/src/media/`
+- [x] Move `layout/computeLayout.ts` → `packages/core/src/layout/`
+- [x] Move call-relevant parts of `utils/roomApi.ts` → `packages/core/src/api/` (TURN + room creation + signaling probe for diagnostics)
+- [x] Keep push / invite / snapshot / analytics endpoints in host app
+- [x] Implement `SerenadaSession` with: `subscribe(callback)`, `join()`, `leave()`, `end()`, `toggleAudio()`, `toggleVideo()`, `flipCamera()`, media stream getters
+- [x] Implement `createSerenadaCore()` factory with `SerenadaConfig`
+- [x] Implement `createRoom()` convenience method
+- [x] Implement `onPermissionsRequired` callback on `SerenadaSession`
+- [x] Implement permission preflight in `join()` — detect missing camera/mic, set `phase = 'awaitingPermissions'`, expose `requiredPermissions`, and pause
+- [x] Create `createSerenadaDiagnostics()` factory:
+  - [x] Implement `runAll()` — async, returns `DiagnosticsReport`, never prompts
+  - [x] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
+  - [x] Device enumeration via `navigator.mediaDevices.enumerateDevices()`
+  - [x] Camera/mic checks return `notAuthorized` if permission not granted — no `getUserMedia()` calls
+  - [x] Signaling/TURN probes use core's call-only client
+- [x] Add `callStats` observable on `SerenadaSession`:
+  - [x] Define `CallStats` type: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
+  - [x] Populate from `RTCPeerConnection.getStats()` periodically during active call
+- [x] Export public types: `CallState`, `Participant`, `CallPhase`, `CallError`, `DiagnosticsReport`, `CallStats`
+- [x] Build `@serenada/core` — should compile
+- [x] Verify zero React/ReactDOM imports in `@serenada/core`
 
 #### Create React bindings
 
-- [ ] Create `packages/react-ui/src/hooks/useSerenadaSession.ts` — wraps `SerenadaSession` for React state
-- [ ] Create `packages/react-ui/src/hooks/useCallState.ts` — subscribes to `CallState` changes
-- [ ] Verify hooks re-render correctly on state changes
+- [x] Create `packages/react-ui/src/hooks/useSerenadaSession.ts` — wraps `SerenadaSession` for React state
+- [x] Create `packages/react-ui/src/hooks/useCallState.ts` — subscribes to `CallState` changes
+- [x] Verify hooks re-render correctly on state changes
 
 #### Rewire web host app
 
-- [ ] Update `CallRoom.tsx` to use `useSerenadaSession()` + `useCallState()` instead of raw contexts
-- [ ] Keep push subscription, saved rooms, recent calls, room creation UX in the host app
-- [ ] Update `SignalingContext.tsx` and `WebRTCContext.tsx` to be thin wrappers around `@serenada/core` (or remove if fully replaced)
+- [x] Update `CallRoom.tsx` to use `useSerenadaSession()` + `useCallState()` instead of raw contexts
+- [x] Keep push subscription, saved rooms, recent calls, room creation UX in the host app
+- [x] Update `SignalingContext.tsx` and `WebRTCContext.tsx` to be thin wrappers around `@serenada/core` (or remove if fully replaced)
 
 #### Verify
 
-- [ ] Run `npm run build` — all packages compile
-- [ ] Run `npm run dev` — app works identically
-- [ ] Run `npm run test` — all Vitest tests pass
-- [ ] Run `npm run lint` — no new lint errors
-- [ ] Verify `packages/core/` has zero `react` or `react-dom` imports
+- [x] Run `npm run build` — all packages compile
+- [x] Run `npm run dev` — app works identically
+- [x] Run `npm run test` — all Vitest tests pass
+- [x] Run `npm run lint` — no new lint errors
+- [x] Verify `packages/core/` has zero `react` or `react-dom` imports
 
 ### Phase 3: Extract Core — Android
 

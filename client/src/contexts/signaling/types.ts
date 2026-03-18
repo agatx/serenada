@@ -1,15 +1,1 @@
-export type RoomState = {
-    hostCid: string | null;
-    participants: { cid: string; joinedAt?: number }[];
-    maxParticipants?: number;
-};
-
-export type SignalingMessage = {
-    v: number;
-    type: string;
-    rid?: string;
-    sid?: string;
-    cid?: string;
-    to?: string;
-    payload?: any;
-};
+export type { RoomState, SignalingMessage } from '@serenada/core';
