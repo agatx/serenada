@@ -447,10 +447,10 @@ class SerenadaSession internal constructor(
                     "capabilities",
                     JSONObject().apply {
                         put("trickleIce", true)
-                        put("maxParticipants", 4)
+                        put("maxParticipants", 2)
                     }
                 )
-                put("createMaxParticipants", 4)
+                put("createMaxParticipants", 2)
                 reconnectToken?.let { put("reconnectToken", it) }
             }
         }
@@ -1241,6 +1241,7 @@ class SerenadaSession internal constructor(
         signalingClient.close()
         clearOfferTimeout()
         clearIceRestartTimer()
+        peerSlots.values.forEach { it.closePeerConnection() }
         peerSlots.clear()
         webRtcEngine.release()
         unregisterConnectivityListener()

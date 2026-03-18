@@ -59,8 +59,7 @@ fun SerenadaAppRoot(
     val context = LocalContext.current
     val showActiveCallScreen =
         uiState.phase == CallPhase.Waiting ||
-                uiState.phase == CallPhase.InCall ||
-                uiState.connectionState == "CONNECTED"
+                uiState.phase == CallPhase.InCall
 
     var hostInput by rememberSaveable { mutableStateOf(serverHost) }
     var roomInput by rememberSaveable { mutableStateOf("") }

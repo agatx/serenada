@@ -9,6 +9,7 @@ import okhttp3.OkHttpClient
 import org.webrtc.Camera2Enumerator
 import android.os.Handler
 import android.os.Looper
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Pre-flight diagnostics utility. Checks device capabilities and server connectivity
@@ -32,22 +33,23 @@ class SerenadaDiagnostics(
         var turnResult: TurnCheckResult? = null
         var devices: List<DeviceInfo> = emptyList()
 
-        var remaining = 7
+        val remaining = AtomicInteger(7)
 
         fun tryComplete() {
-            remaining--
-            if (remaining <= 0) {
-                completion(
-                    DiagnosticsReport(
-                        camera = cameraResult ?: DiagnosticCheckResult.SKIPPED,
-                        microphone = micResult ?: DiagnosticCheckResult.SKIPPED,
-                        speaker = speakerResult ?: DiagnosticCheckResult.SKIPPED,
-                        network = networkResult ?: DiagnosticCheckResult.SKIPPED,
-                        signaling = signalingResult ?: SignalingCheckResult.Skipped("not checked"),
-                        turn = turnResult ?: TurnCheckResult.Skipped("not checked"),
-                        devices = devices,
+            if (remaining.decrementAndGet() <= 0) {
+                handler.post {
+                    completion(
+                        DiagnosticsReport(
+                            camera = cameraResult ?: DiagnosticCheckResult.SKIPPED,
+                            microphone = micResult ?: DiagnosticCheckResult.SKIPPED,
+                            speaker = speakerResult ?: DiagnosticCheckResult.SKIPPED,
+                            network = networkResult ?: DiagnosticCheckResult.SKIPPED,
+                            signaling = signalingResult ?: SignalingCheckResult.Skipped("not checked"),
+                            turn = turnResult ?: TurnCheckResult.Skipped("not checked"),
+                            devices = devices,
+                        )
                     )
-                )
+                }
             }
         }
 

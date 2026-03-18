@@ -98,7 +98,7 @@ export class SignalingEngine {
         }
     }
 
-    sendMessage(type: string, payload?: any, to?: string): void {
+    sendMessage(type: string, payload?: Record<string, unknown>, to?: string): void {
         if (this.transport && this.transport.isOpen()) {
             const msg: SignalingMessage = {
                 v: 1,
@@ -130,7 +130,7 @@ export class SignalingEngine {
         }
 
         if (this.transport && this.transport.isOpen()) {
-            const payload: any = {
+            const payload: Record<string, unknown> = {
                 capabilities: { trickleIce: true, maxParticipants: 4 },
                 createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 2,
             };

@@ -91,8 +91,9 @@ final class CoreAPIClient {
     func buildHTTPSURL(host: String, path: String, query: [String: String] = [:]) -> URL? {
         guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
 
+        let isLocal = parsedHost.host == "localhost" || parsedHost.host.hasPrefix("127.")
         var components = URLComponents()
-        components.scheme = "https"
+        components.scheme = isLocal ? "http" : "https"
         components.host = parsedHost.host
         components.port = parsedHost.port
         components.path = path

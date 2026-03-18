@@ -54,8 +54,9 @@ public final class SerenadaCore {
     }
 
     public func join(roomId: String) -> SerenadaSession {
+        let isLocal = config.serverHost == "localhost" || config.serverHost.hasPrefix("127.")
         var components = URLComponents()
-        components.scheme = "https"
+        components.scheme = isLocal ? "http" : "https"
         components.host = config.serverHost
         components.path = "/call/\(roomId)"
         let url = components.url
@@ -76,8 +77,9 @@ public final class SerenadaCore {
         Task {
             do {
                 let roomId = try await apiClient.createRoomId(host: serverHost)
+                let isLocal = serverHost == "localhost" || serverHost.hasPrefix("127.")
                 var components = URLComponents()
-                components.scheme = "https"
+                components.scheme = isLocal ? "http" : "https"
                 components.host = serverHost
                 components.path = "/call/\(roomId)"
                 guard let url = components.url else {

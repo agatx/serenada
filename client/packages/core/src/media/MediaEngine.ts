@@ -64,7 +64,7 @@ export class MediaEngine {
     private serverHost: string;
 
     // Injected dependencies
-    private sendSignalingMessage: (type: string, payload?: any, to?: string) => void;
+    private sendSignalingMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void;
     private roomState: RoomState | null = null;
     private clientId: string | null = null;
     private isSignalingConnected = false;
@@ -72,7 +72,7 @@ export class MediaEngine {
 
     constructor(
         config: MediaEngineConfig,
-        sendMessage: (type: string, payload?: any, to?: string) => void,
+        sendMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void,
     ) {
         this.serverHost = config.serverHost;
         this.sendSignalingMessage = sendMessage;
@@ -211,6 +211,7 @@ export class MediaEngine {
             const wasVideoEnabled = previousVideoTrack ? previousVideoTrack.enabled : true;
             displayTrack.enabled = wasVideoEnabled;
             if ('contentHint' in displayTrack) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- contentHint is a valid but untyped browser API
                 try { (displayTrack as any).contentHint = 'detail'; } catch { /* ignore */ }
             }
 
@@ -705,6 +706,7 @@ export class MediaEngine {
         const audioTrack = stream.getAudioTracks()[0];
         if (!audioTrack) return;
         if ('contentHint' in audioTrack) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- contentHint is a valid but untyped browser API
             try { (audioTrack as any).contentHint = 'speech'; } catch { /* ignore */ }
         }
     }
@@ -804,6 +806,7 @@ export class MediaEngine {
         this.networkChangeHandler = () => {
             for (const [cid] of this.peers) this.scheduleIceRestart(cid, 'network-change', 0);
         };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Network Information API is untyped
         const conn = (navigator as any).connection;
         conn?.addEventListener?.('change', this.networkChangeHandler);
 
@@ -851,6 +854,7 @@ export class MediaEngine {
 
     private removeEventListeners(): void {
         if (this.onlineHandler) window.removeEventListener('online', this.onlineHandler);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Network Information API is untyped
         const conn = (navigator as any).connection;
         if (this.networkChangeHandler) conn?.removeEventListener?.('change', this.networkChangeHandler);
         if (this.deviceChangeHandler) navigator.mediaDevices?.removeEventListener?.('devicechange', this.deviceChangeHandler);

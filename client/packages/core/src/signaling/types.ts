@@ -11,5 +11,5 @@ export type SignalingMessage = {
     sid?: string;
     cid?: string;
     to?: string;
-    payload?: any;
+    payload?: Record<string, unknown>;
 };

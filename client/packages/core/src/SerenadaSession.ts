@@ -115,6 +115,7 @@ export class SerenadaSession {
     }
 
     leave(): void {
+        if (this._destroyed) return;
         this.signaling.leaveRoom();
         this.media.cleanupAllPeers();
         this.statsCollector.stop();

@@ -68,7 +68,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     useEffect(() => {
         if (!session) return;
-        // eslint-disable-next-line functional/immutable-data
+        // eslint-disable-next-line react-hooks/immutability -- session is an SDK object with mutable callback properties
         session.onPermissionsRequired = (perms) => {
             void (async () => {
                 const granted = await SerenadaPermissions.request(perms);
@@ -80,7 +80,6 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             })();
         };
         return () => {
-            // eslint-disable-next-line functional/immutable-data
             session.onPermissionsRequired = null;
         };
     }, [session]);
