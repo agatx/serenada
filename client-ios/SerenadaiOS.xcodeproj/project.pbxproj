@@ -57,6 +57,7 @@
 		9ABCF3D0278D7EA44D415962 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E1F379FD66B538614684A7 /* PushKeyStore.swift */; };
 		A66F65640BA9AD6FA29BBC1F /* QRCodeImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F9BAB04B56A4D0D4D41A615 /* QRCodeImageView.swift */; };
 		A9394C5164C3DE80CA3C97F6 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6439AE14D068A9566D42DFB /* SignalingMessageTests.swift */; };
+		A943CC93EAF10E990017D277 /* SerenadaBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AD701F4DE41EA9DFCC2125CE /* JoinScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34F0B8DB451442FAB82D1D94 /* JoinScreen.swift */; };
 		ADC370E3926B02936B3FE5BE /* WebSocketSignalingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FAAF254BE1C5AEACE3C14F0 /* WebSocketSignalingTransport.swift */; };
 		AE0131D6BE35E90A8AC757A1 /* DeepLinkParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FB4B4943231481B509B421 /* DeepLinkParser.swift */; };
@@ -94,6 +95,13 @@
 			remoteGlobalIDString = 41F64433D4EA4277DDB75306;
 			remoteInfo = SerenadaiOS;
 		};
+		6983FE58DE357BC231E13508 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 30A70137979E602FE39C27FE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8983470B9AA32DF7F4E2428C;
+			remoteInfo = SerenadaBroadcast;
+		};
 		96B16B42295F6822AC02749E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 30A70137979E602FE39C27FE /* Project object */;
@@ -129,6 +137,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				FC3F9A13E5F2E25598BCB5CC /* SerenadaNotificationService.appex in Embed Foundation Extensions */,
+				A943CC93EAF10E990017D277 /* SerenadaBroadcast.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -520,6 +529,7 @@
 			);
 			dependencies = (
 				2DA0957C9F4A158089507ACD /* PBXTargetDependency */,
+				BBF5A3C46255636CBE0FF4F4 /* PBXTargetDependency */,
 			);
 			name = SerenadaiOS;
 			packageProductDependencies = (
@@ -822,6 +832,11 @@
 			target = 41F64433D4EA4277DDB75306 /* SerenadaiOS */;
 			targetProxy = 29AFD12EA4F60A65562E2FF0 /* PBXContainerItemProxy */;
 		};
+		BBF5A3C46255636CBE0FF4F4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8983470B9AA32DF7F4E2428C /* SerenadaBroadcast */;
+			targetProxy = 6983FE58DE357BC231E13508 /* PBXContainerItemProxy */;
+		};
 		C379FE17703C7C0B2C5ECF36 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 41F64433D4EA4277DDB75306 /* SerenadaiOS */;
@@ -861,6 +876,7 @@
 					"@executable_path/Frameworks",
 				);
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BROADCAST_EXTENSION";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -998,6 +1014,7 @@
 					"@executable_path/Frameworks",
 				);
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BROADCAST_EXTENSION";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;

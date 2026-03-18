@@ -55,13 +55,13 @@ targets:
         product: FirebaseMessaging
       - target: SerenadaNotificationService
         embed: true
-      # Uncomment when App Group entitlement is provisioned:
-      # - target: SerenadaBroadcast
-      #   embed: true
+      - target: SerenadaBroadcast
+        embed: true
     settings:
       base:
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Resources/SerenadaiOS.entitlements
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) BROADCAST_EXTENSION
   SerenadaNotificationService:
     type: app-extension
     platform: iOS
