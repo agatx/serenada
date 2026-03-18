@@ -28,6 +28,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import app.serenada.android.R
 import app.serenada.android.call.CallManager
+import app.serenada.callui.SerenadaCallFlow
+import app.serenada.callui.SerenadaCallFlowConfig
 import app.serenada.core.call.CallPhase
 
 private enum class RootScreen {
@@ -331,11 +333,17 @@ fun SerenadaAppRoot(
                     )
                 }
                 RootScreen.Call -> {
-                    CallScreen(
-                        roomId = uiState.roomId.orEmpty(),
+                    SerenadaCallFlow(
                         uiState = uiState,
+                        roomId = uiState.roomId.orEmpty(),
                         serverHost = serverHost,
                         eglContext = callManager.eglContext(),
+                        initialRemoteVideoFitCover = callManager.isRemoteVideoFitCover,
+                        config = SerenadaCallFlowConfig(
+                            screenSharingEnabled = true,
+                            inviteControlsEnabled = true,
+                            debugOverlayEnabled = true
+                        ),
                         onToggleAudio = { callManager.toggleAudio() },
                         onToggleVideo = { callManager.toggleVideo() },
                         onFlipCamera = { callManager.flipCamera() },
@@ -361,26 +369,29 @@ fun SerenadaAppRoot(
                                     }
                             }
                         },
+                        onRemoteVideoFitChanged = { isCover ->
+                            callManager.updateRemoteVideoFitCover(isCover)
+                        },
                         onStartScreenShare = { intent -> callManager.startScreenShare(intent) },
                         onStopScreenShare = { callManager.stopScreenShare() },
                         attachLocalRenderer = { renderer, events ->
                             callManager.attachLocalRenderer(renderer, events)
                         },
-                        detachLocalRenderer = { callManager.detachLocalRenderer(it) },
-                        attachLocalSink = { callManager.attachLocalSink(it) },
-                        detachLocalSink = { callManager.detachLocalSink(it) },
+                        detachLocalRenderer = { renderer -> callManager.detachLocalRenderer(renderer) },
+                        attachLocalSink = { sink -> callManager.attachLocalSink(sink) },
+                        detachLocalSink = { sink -> callManager.detachLocalSink(sink) },
                         attachRemoteRenderer = { renderer, events ->
                             callManager.attachRemoteRenderer(renderer, events)
                         },
-                        detachRemoteRenderer = { callManager.detachRemoteRenderer(it) },
+                        detachRemoteRenderer = { renderer -> callManager.detachRemoteRenderer(renderer) },
                         attachRemoteSinkForCid = { cid, sink ->
                             callManager.attachRemoteSinkForCid(cid, sink)
                         },
                         detachRemoteSinkForCid = { cid, sink ->
                             callManager.detachRemoteSinkForCid(cid, sink)
                         },
-                        attachRemoteSink = { callManager.attachRemoteSink(it) },
-                        detachRemoteSink = { callManager.detachRemoteSink(it) }
+                        attachRemoteSink = { sink -> callManager.attachRemoteSink(sink) },
+                        detachRemoteSink = { sink -> callManager.detachRemoteSink(sink) }
                     )
                 }
                 RootScreen.Error -> {

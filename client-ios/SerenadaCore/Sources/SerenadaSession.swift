@@ -13,7 +13,7 @@ public final class SerenadaSession: ObservableObject {
     let webRtcEngine: WebRtcEngine
     let callAudioSessionController: CallAudioSessionController
     let apiClient: CoreAPIClient
-    let serverHost: String
+    public let serverHost: String
 
     public init(
         roomId: String,

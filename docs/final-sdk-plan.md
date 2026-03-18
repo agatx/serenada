@@ -872,81 +872,81 @@ With core extracted and stable on all platforms, build the call-ui layer.
 
 #### iOS — SerenadaCallUI
 
-- [ ] Move `Sources/UI/Screens/CallScreen.swift` → `SerenadaCallUI/Sources/`
-- [ ] Move `Sources/UI/Components/WebRTCVideoView.swift` → `SerenadaCallUI/Sources/`
-- [ ] Move other call-related UI components → `SerenadaCallUI/Sources/`
-- [ ] Create `SerenadaCallFlow.swift` SwiftUI view:
-  - [ ] Accept `url: URL` or `session: SerenadaSession`
-  - [ ] Accept `config: SerenadaCallFlowConfig` (feature toggles)
-  - [ ] Accept `strings: [SerenadaString: String]` (optional overrides)
-  - [ ] Accept `onDismiss` callback
-  - [ ] Implement state-driven flow: awaiting permissions → joining → waiting → in-call → error → ended
-- [ ] Create `SerenadaPermissions` helper in `SerenadaCallUI`
-- [ ] In URL-first mode, automatically prompt via `SerenadaPermissions` when session enters `awaitingPermissions`
-- [ ] In session-first mode, expose `SerenadaPermissions` for host apps to call from `sessionRequiresPermissions`
-- [ ] Define `SerenadaCallFlowConfig`:
-  - [ ] `screenSharingEnabled: Bool` (default `true`)
-  - [ ] `inviteControlsEnabled: Bool` (default `true`)
-  - [ ] `debugOverlayEnabled: Bool` (default `false`)
-- [ ] Define `SerenadaString` enum with all user-facing string keys
-- [ ] Bundle default English strings
-- [ ] Implement `.serenadaTheme()` view modifier
-- [ ] Implement feature toggle logic — hide controls when disabled
-- [ ] Build — should compile
+- [x] Move `Sources/UI/Screens/CallScreen.swift` → `SerenadaCallUI/Sources/`
+- [x] Move `Sources/UI/Components/WebRTCVideoView.swift` → `SerenadaCallUI/Sources/`
+- [x] Move other call-related UI components → `SerenadaCallUI/Sources/`
+- [x] Create `SerenadaCallFlow.swift` SwiftUI view:
+  - [x] Accept `url: URL` or `session: SerenadaSession`
+  - [x] Accept `config: SerenadaCallFlowConfig` (feature toggles)
+  - [x] Accept `strings: [SerenadaString: String]` (optional overrides)
+  - [x] Accept `onDismiss` callback
+  - [x] Implement state-driven flow: awaiting permissions → joining → waiting → in-call → error → ended
+- [x] Create `SerenadaPermissions` helper in `SerenadaCallUI`
+- [x] In URL-first mode, automatically prompt via `SerenadaPermissions` when session enters `awaitingPermissions`
+- [x] In session-first mode, expose `SerenadaPermissions` for host apps to call from `sessionRequiresPermissions`
+- [x] Define `SerenadaCallFlowConfig`:
+  - [x] `screenSharingEnabled: Bool` (default `true`)
+  - [x] `inviteControlsEnabled: Bool` (default `true`)
+  - [x] `debugOverlayEnabled: Bool` (default `false`)
+- [x] Define `SerenadaString` enum with all user-facing string keys
+- [x] Bundle default English strings
+- [x] Implement `.serenadaTheme()` view modifier
+- [x] Implement feature toggle logic — hide controls when disabled
+- [x] Build — should compile
 
 #### Android — serenada-call-ui
 
-- [ ] Move `ui/CallScreen.kt` → `:serenada-call-ui`
-- [ ] Move `ui/Theme.kt` → `:serenada-call-ui`
-- [ ] Break `CallScreen.kt` into sub-composables: `ParticipantGrid`, `ControlBar`, `StatusOverlay`
-- [ ] Create `SerenadaCallFlow` composable:
-  - [ ] Accept `url: String` or `session: SerenadaSession`
-  - [ ] Accept `config: SerenadaCallFlowConfig` (feature toggles)
-  - [ ] Accept `strings: Map<SerenadaString, String>` (optional overrides)
-  - [ ] Accept `onDismiss` callback
-  - [ ] Implement state-driven flow, including `AwaitingPermissions`
-- [ ] Create `SerenadaPermissions` helper in `:serenada-call-ui`
-- [ ] In URL-first mode, automatically prompt via `SerenadaPermissions` when session enters `AwaitingPermissions`
-- [ ] In session-first mode, expose `SerenadaPermissions` for host apps to call from `onPermissionsRequired`
-- [ ] Define `SerenadaCallFlowConfig` data class with same fields as iOS
-- [ ] Define `SerenadaString` enum
-- [ ] Bundle default English string resources
-- [ ] Implement theme customization API
-- [ ] Implement feature toggle logic — hide controls when disabled
-- [ ] Move English-only i18n strings from `:app` into `:serenada-call-ui`
-- [ ] Build — should compile
+- [x] Move `ui/CallScreen.kt` → `:serenada-call-ui`
+- [x] Move `ui/Theme.kt` → `:serenada-call-ui`
+- [x] Break `CallScreen.kt` into sub-composables: `ParticipantGrid`, `ControlBar`, `StatusOverlay`
+- [x] Create `SerenadaCallFlow` composable:
+  - [x] Accept `url: String` or `session: SerenadaSession`
+  - [x] Accept `config: SerenadaCallFlowConfig` (feature toggles)
+  - [x] Accept `strings: Map<SerenadaString, String>` (optional overrides)
+  - [x] Accept `onDismiss` callback
+  - [x] Implement state-driven flow, including `AwaitingPermissions`
+- [x] Create `SerenadaPermissions` helper in `:serenada-call-ui`
+- [x] In URL-first mode, automatically prompt via `SerenadaPermissions` when session enters `AwaitingPermissions`
+- [x] In session-first mode, expose `SerenadaPermissions` for host apps to call from `onPermissionsRequired`
+- [x] Define `SerenadaCallFlowConfig` data class with same fields as iOS
+- [x] Define `SerenadaString` enum
+- [x] Bundle default English string resources
+- [x] Implement theme customization API
+- [x] Implement feature toggle logic — hide controls when disabled
+- [x] Move English-only i18n strings from `:app` into `:serenada-call-ui`
+- [x] Build — should compile
 
 #### Web — @serenada/react-ui
 
-- [ ] Extract call rendering from `CallRoom.tsx` into `packages/react-ui/src/`
-- [ ] Break into sub-components: `ParticipantGrid`, `ControlBar`, `StatusOverlay`, `DebugPanel`
-- [ ] Create `<SerenadaCallFlow>` React component:
-  - [ ] Accept `url` or `session` prop
-  - [ ] Accept `config` prop (feature toggles)
-  - [ ] Accept `strings` prop (optional overrides)
-  - [ ] Accept `onDismiss` callback
-  - [ ] Implement state-driven flow, including `awaitingPermissions`
-- [ ] Export `SerenadaPermissions.request()` helper from `@serenada/react-ui`
-- [ ] In URL-first mode, automatically prompt via `SerenadaPermissions` when session enters `awaitingPermissions`
-- [ ] In session-first mode, expose `SerenadaPermissions` for host apps to call from `onPermissionsRequired`
-- [ ] Define `SerenadaCallFlowConfig` type with same fields
-- [ ] Define string key types
-- [ ] Bundle default English strings
-- [ ] Export `useSerenadaSession()` hook
-- [ ] Implement theme/config props
-- [ ] Implement feature toggle logic — hide controls when disabled
-- [ ] Extract English-only i18n strings; leave other locales in host app
-- [ ] Build — should compile
+- [x] Extract call rendering from `CallRoom.tsx` into `packages/react-ui/src/`
+- [x] Break into sub-components: `ParticipantGrid`, `ControlBar`, `StatusOverlay`, `DebugPanel`
+- [x] Create `<SerenadaCallFlow>` React component:
+  - [x] Accept `url` or `session` prop
+  - [x] Accept `config` prop (feature toggles)
+  - [x] Accept `strings` prop (optional overrides)
+  - [x] Accept `onDismiss` callback
+  - [x] Implement state-driven flow, including `awaitingPermissions`
+- [x] Export `SerenadaPermissions.request()` helper from `@serenada/react-ui`
+- [x] In URL-first mode, automatically prompt via `SerenadaPermissions` when session enters `awaitingPermissions`
+- [x] In session-first mode, expose `SerenadaPermissions` for host apps to call from `onPermissionsRequired`
+- [x] Define `SerenadaCallFlowConfig` type with same fields
+- [x] Define string key types
+- [x] Bundle default English strings
+- [x] Export `useSerenadaSession()` hook
+- [x] Implement theme/config props
+- [x] Implement feature toggle logic — hide controls when disabled
+- [x] Extract English-only i18n strings; leave other locales in host app
+- [x] Build — should compile
 
 #### Verify all platforms
 
-- [ ] iOS: Serenada app works identically using `SerenadaCallFlow`
-- [ ] Android: Serenada app works identically using `SerenadaCallFlow`
-- [ ] Web: Serenada app works identically using `<SerenadaCallFlow>`
-- [ ] Test feature toggles: set `screenSharingEnabled: false` — screen share button hidden
-- [ ] Test feature toggles: set `inviteControlsEnabled: false` — QR/invite buttons hidden
-- [ ] Test string overrides: provide a non-English string map — UI renders overridden strings
-- [ ] Test core-only integration (without call-ui) still works on at least one platform
+- [x] iOS: Serenada app works identically using `SerenadaCallFlow`
+- [x] Android: Serenada app works identically using `SerenadaCallFlow`
+- [x] Web: Serenada app works identically using `<SerenadaCallFlow>`
+- [x] Test feature toggles: set `screenSharingEnabled: false` — screen share button hidden
+- [x] Test feature toggles: set `inviteControlsEnabled: false` — QR/invite buttons hidden
+- [x] Test string overrides: provide a non-English string map — UI renders overridden strings
+- [x] Test core-only integration (without call-ui) still works on at least one platform
 
 ### Phase 5: Rewire Serenada Apps as Host Apps
 

@@ -7,3 +7,21 @@ export { SERENADA_CORE_VERSION as SERENADA_UI_VERSION } from '@serenada/core';
 export { useSerenadaSession } from './hooks/useSerenadaSession.js';
 export type { UseSerenadaSessionOptions, UseSerenadaSessionResult } from './hooks/useSerenadaSession.js';
 export { useCallState } from './hooks/useCallState.js';
+
+// Call Flow
+export { SerenadaCallFlow } from './SerenadaCallFlow.js';
+export type { SerenadaCallFlowConfig, SerenadaCallFlowTheme, SerenadaString, CallFlowProps } from './types.js';
+export { serenadaDefaultStrings, resolveString } from './types.js';
+
+// Components
+export { ControlBar } from './components/ControlBar.js';
+export type { ControlBarProps } from './components/ControlBar.js';
+export { StatusOverlay } from './components/StatusOverlay.js';
+export type { StatusOverlayProps } from './components/StatusOverlay.js';
+export { DebugPanel } from './components/DebugPanel.js';
+export type { DebugPanelProps, DebugPanelSection, DebugPanelMetric, DebugStatus } from './components/DebugPanel.js';
+export { ParticipantGrid } from './components/ParticipantGrid.js';
+export type { ParticipantGridProps, ParticipantInfo } from './components/ParticipantGrid.js';
+
+// Permissions
+export { SerenadaPermissions } from './SerenadaPermissions.js';

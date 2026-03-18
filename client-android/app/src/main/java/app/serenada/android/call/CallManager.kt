@@ -53,7 +53,7 @@ import org.webrtc.SessionDescription
 import java.util.Locale
 import java.util.concurrent.Executors
 
-class CallManager(context: Context) {
+class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
     private val webRtcStatsExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -140,6 +140,9 @@ class CallManager(context: Context) {
 
     private val _roomStatuses = mutableStateOf<Map<String, RoomStatus>>(emptyMap())
     val roomStatuses: State<Map<String, RoomStatus>> = _roomStatuses
+
+    val isRemoteVideoFitCover: Boolean
+        get() = settingsStore.isRemoteVideoFitCover
 
     private var currentRoomId: String? = null
     private var activeCallHostOverride: String? = null
@@ -460,6 +463,10 @@ class CallManager(context: Context) {
     fun updateRoomInviteNotifications(enabled: Boolean) {
         settingsStore.areRoomInviteNotificationsEnabled = enabled
         _areRoomInviteNotificationsEnabled.value = enabled
+    }
+
+    fun updateRemoteVideoFitCover(isCover: Boolean) {
+        settingsStore.isRemoteVideoFitCover = isCover
     }
 
     fun inviteToCurrentRoom(onResult: (Result<Unit>) -> Unit) {
@@ -910,7 +917,7 @@ class CallManager(context: Context) {
         webRtcEngine.attachLocalRenderer(renderer, rendererEvents)
     }
 
-    fun detachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
+    override fun detachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
         webRtcEngine.detachLocalRenderer(renderer)
     }
 
@@ -927,7 +934,7 @@ class CallManager(context: Context) {
         attachRemoteRendererForCid(remoteCid, renderer, rendererEvents)
     }
 
-    fun detachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
+    override fun detachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
         peerSlots.values.forEach { slot ->
             slot.detachRemoteRenderer(renderer)
         }
@@ -982,6 +989,23 @@ class CallManager(context: Context) {
     }
 
     fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
+
+    // CallRendererProvider interface overrides
+    override fun attachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
+        attachLocalRenderer(renderer, null)
+    }
+
+    override fun attachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
+        attachRemoteRenderer(renderer, null)
+    }
+
+    override fun attachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer, cid: String) {
+        attachRemoteRendererForCid(cid, renderer)
+    }
+
+    override fun detachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer, cid: String) {
+        detachRemoteRendererForCid(cid, renderer)
+    }
 
     private fun ensureSignalingConnection() {
         hasJoinSignalStarted = true

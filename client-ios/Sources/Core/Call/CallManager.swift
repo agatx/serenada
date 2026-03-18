@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Network
 import os.log
+import SerenadaCallUI
 import SerenadaCore
 import UIKit
 
@@ -2569,3 +2570,7 @@ private extension CallManager {
     }
 }
 #endif
+
+// MARK: - CallRendererProvider conformance
+
+extension CallManager: CallRendererProvider {}

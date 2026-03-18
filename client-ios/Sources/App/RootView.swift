@@ -1,3 +1,4 @@
+import SerenadaCallUI
 import SerenadaCore
 import SwiftUI
 
@@ -78,10 +79,18 @@ struct RootView: View {
 
             case .call:
                 if let roomId = uiState.roomId {
-                    CallScreen(
-                        roomId: roomId,
+                    SerenadaCallFlow(
                         uiState: uiState,
+                        roomId: roomId,
                         serverHost: callManager.serverHost,
+                        roomName: callManager.savedRooms.first(where: { $0.roomId == roomId })?.name,
+                        rendererProvider: callManager,
+                        initialRemoteVideoFitCover: SettingsStore().isRemoteVideoFitCover,
+                        config: SerenadaCallFlowConfig(
+                            screenSharingEnabled: true,
+                            inviteControlsEnabled: true,
+                            debugOverlayEnabled: true
+                        ),
                         onToggleAudio: { callManager.toggleAudio() },
                         onToggleVideo: { callManager.toggleVideo() },
                         onFlipCamera: { callManager.flipCamera() },
@@ -93,7 +102,9 @@ struct RootView: View {
                         onToggleFlashlight: { _ = callManager.toggleFlashlight() },
                         onEndCall: { callManager.endCall() },
                         onInviteToRoom: { await callManager.inviteToCurrentRoom() },
-                        callManager: callManager
+                        onRemoteVideoFitChanged: { value in
+                            SettingsStore().isRemoteVideoFitCover = value
+                        }
                     )
                 }
 
