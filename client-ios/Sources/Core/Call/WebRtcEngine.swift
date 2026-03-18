@@ -1616,10 +1616,10 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
     private func pollFrame() {
         guard let ptr = mmapPtr else { return }
 
+        // Seqlock read: load seqNo, read header + data, re-check seqNo.
+        // If the writer changed seqNo mid-read, skip this frame to avoid torn data.
         let seqNo = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
         guard seqNo != lastSeqNo else { return }
-        lastSeqNo = seqNo
-        frameCount += 1
 
         let width = Int(ptr.load(fromByteOffset: BroadcastHeaderOffset.width, as: UInt32.self))
         let height = Int(ptr.load(fromByteOffset: BroadcastHeaderOffset.height, as: UInt32.self))
@@ -1635,12 +1635,6 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
         )
         let rotationRaw = ptr.load(fromByteOffset: BroadcastHeaderOffset.rotation, as: UInt32.self)
 
-        if frameCount == 1 {
-            os_log("pollFrame: first frame — seqNo=%u width=%d height=%d pixelFormat=0x%x planes=%d", log: Self.log, type: .info, seqNo, width, height, pixelFormat, planeCount)
-        } else if frameCount % 100 == 0 {
-            os_log("pollFrame: frame #%llu — seqNo=%u width=%d height=%d", log: Self.log, type: .info, frameCount, seqNo, width, height)
-        }
-
         guard width > 0, height > 0 else { return }
 
         let rotation: RTCVideoRotation
@@ -1652,6 +1646,9 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
         }
 
         let dataStart = ptr.advanced(by: BroadcastShared.headerSize)
+        let pixelBufferAttrs: [String: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
+        ]
 
         var pixelBuffer: CVPixelBuffer?
 
@@ -1660,43 +1657,45 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
             let plane0Size = plane0BytesPerRow * plane0Height
             let plane1Size = plane1BytesPerRow * plane1Height
 
-            let attrs: [String: Any] = [
-                kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
-            ]
             let status = CVPixelBufferCreate(
                 kCFAllocatorDefault,
                 width, height,
                 OSType(pixelFormat),
-                attrs as CFDictionary,
+                pixelBufferAttrs as CFDictionary,
                 &pixelBuffer
             )
             guard status == kCVReturnSuccess, let pixelBuffer else { return }
 
             CVPixelBufferLockBaseAddress(pixelBuffer, [])
             if let dest0 = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) {
-                memcpy(dest0, dataStart, plane0Size)
+                let destBpr0 = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+                if destBpr0 == plane0BytesPerRow {
+                    memcpy(dest0, dataStart, plane0Size)
+                } else {
+                    for row in 0 ..< plane0Height {
+                        memcpy(dest0.advanced(by: row * destBpr0), dataStart.advanced(by: row * plane0BytesPerRow), min(destBpr0, plane0BytesPerRow))
+                    }
+                }
             }
             if let dest1 = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) {
-                memcpy(dest1, dataStart.advanced(by: plane0Size), plane1Size)
+                let destBpr1 = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1)
+                let srcPlane1 = dataStart.advanced(by: plane0Size)
+                if destBpr1 == plane1BytesPerRow {
+                    memcpy(dest1, srcPlane1, plane1Size)
+                } else {
+                    for row in 0 ..< plane1Height {
+                        memcpy(dest1.advanced(by: row * destBpr1), srcPlane1.advanced(by: row * plane1BytesPerRow), min(destBpr1, plane1BytesPerRow))
+                    }
+                }
             }
             CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
-
-            let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
-            let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
-            if frameCount == 1 {
-                os_log("pollFrame: delivering multi-planar frame to delegate (delegate nil=%{public}d)", log: Self.log, type: .info, delegate == nil)
-            }
-            delegate?.capturer(self, didCapture: frame)
         } else {
             // Single-plane (BGRA)
-            let attrs: [String: Any] = [
-                kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
-            ]
             let status = CVPixelBufferCreate(
                 kCFAllocatorDefault,
                 width, height,
                 OSType(pixelFormat),
-                attrs as CFDictionary,
+                pixelBufferAttrs as CFDictionary,
                 &pixelBuffer
             )
             guard status == kCVReturnSuccess, let pixelBuffer else { return }
@@ -1713,14 +1712,26 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
                 }
             }
             CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
-
-            let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
-            let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
-            if frameCount == 1 {
-                os_log("pollFrame: delivering single-plane frame to delegate (delegate nil=%{public}d)", log: Self.log, type: .info, delegate == nil)
-            }
-            delegate?.capturer(self, didCapture: frame)
         }
+
+        // Seqlock validation: if the writer produced a new frame while we were reading,
+        // discard this frame to avoid delivering torn/mixed data.
+        let seqNoAfter = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+        guard seqNoAfter == seqNo else { return }
+
+        lastSeqNo = seqNo
+        frameCount += 1
+
+        if frameCount == 1 {
+            os_log("pollFrame: first frame — seqNo=%u width=%d height=%d pixelFormat=0x%x planes=%d", log: Self.log, type: .info, seqNo, width, height, pixelFormat, planeCount)
+        } else if frameCount % 100 == 0 {
+            os_log("pollFrame: frame #%llu — seqNo=%u width=%d height=%d", log: Self.log, type: .info, frameCount, seqNo, width, height)
+        }
+
+        guard let deliverBuffer = pixelBuffer else { return }
+        let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: deliverBuffer)
+        let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
+        delegate?.capturer(self, didCapture: frame)
     }
 
     // MARK: - Shared Memory

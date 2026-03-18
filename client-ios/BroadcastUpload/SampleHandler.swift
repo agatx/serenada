@@ -130,7 +130,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
         let size = BroadcastShared.maxFrameFileSize
         // Ensure file is large enough
-        ftruncate(fileDescriptor, off_t(size))
+        guard ftruncate(fileDescriptor, off_t(size)) == 0 else {
+            close(fileDescriptor)
+            fileDescriptor = -1
+            return false
+        }
 
         guard let mapped = mmap(nil, size, PROT_READ | PROT_WRITE, MAP_SHARED, fileDescriptor, 0),
               mapped != MAP_FAILED

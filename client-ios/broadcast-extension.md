@@ -4,17 +4,19 @@ Screen sharing has two modes controlled by the `BROADCAST_EXTENSION` compile fla
 
 | Mode | Flag | Behavior |
 |------|------|----------|
-| **ReplayKit in-app** (default) | flag absent | Uses `RPScreenRecorder.startCapture()`. Only captures while the app is in the foreground. iOS suspends capture when backgrounded. |
-| **Broadcast Upload Extension** | `BROADCAST_EXTENSION` | Uses a separate extension process (`SerenadaBroadcast`) that survives backgrounding. Captures the entire screen including other apps. Requires App Group provisioning. |
+| **Broadcast Upload Extension** (default) | `BROADCAST_EXTENSION` present | Uses a separate extension process (`SerenadaBroadcast`) that survives backgrounding. Captures the entire screen including other apps. Requires App Group provisioning. |
+| **ReplayKit in-app** (fallback) | flag absent | Uses `RPScreenRecorder.startCapture()`. Only captures while the app is in the foreground. iOS suspends capture when backgrounded. |
+
+The broadcast extension is **enabled by default** in `project.yml` (the `SerenadaBroadcast` target is embedded and `BROADCAST_EXTENSION` is set in `SWIFT_ACTIVE_COMPILATION_CONDITIONS`). To fall back to ReplayKit in-app mode, remove the `BROADCAST_EXTENSION` compilation condition and the `SerenadaBroadcast` dependency from `project.yml`.
 
 ## How it works
 
 The extension (`BroadcastUpload/SampleHandler.swift`) runs in its own process and writes video frames to a memory-mapped file in the shared App Group container. The main app (`BroadcastFrameReader` in `WebRtcEngine.swift`) polls that file at ~30fps and feeds frames into WebRTC.
 
 IPC uses Darwin notifications via `CFNotificationCenter`:
-- **`broadcastStarted`** — extension → app, signals capture has begun
-- **`broadcastFinished`** — extension → app, signals capture ended
-- **`requestStop`** — app → extension, asks extension to call `finishBroadcastWithError`
+- **`app.serenada.ios.broadcast.started`** — extension → app, signals capture has begun
+- **`app.serenada.ios.broadcast.finished`** — extension → app, signals capture ended
+- **`app.serenada.ios.broadcast.requestStop`** — app → extension, asks extension to call `finishBroadcastWithError`
 
 ### Shared memory layout
 
@@ -38,9 +40,9 @@ Offset 64: [plane 0 data] [plane 1 data]
 
 `timestampNs` stays at byte offset `36`, which is intentionally unaligned. Read and write it via byte copies (`memcpy`/buffer copy), not typed `UnsafeRawPointer.load` or `storeBytes` calls.
 
-## Enabling the Broadcast Extension
+## Provisioning (one-time setup)
 
-This requires one-time provisioning in the Apple Developer Portal.
+The broadcast extension is already enabled in the project. First-time builders need to set up App Group provisioning in the Apple Developer Portal.
 
 ### 1. Register the App Group
 
@@ -71,36 +73,7 @@ Add the App Group entitlement to `Resources/SerenadaiOS.entitlements`:
 </array>
 ```
 
-### 4. Uncomment the target dependency
-
-In `project.yml`, uncomment the `SerenadaBroadcast` dependency in the `SerenadaiOS` target:
-
-```yaml
-dependencies:
-  # ...
-  - target: SerenadaBroadcast
-    embed: true
-```
-
-### 5. Add the compiler flag
-
-Add `BROADCAST_EXTENSION` to `SWIFT_ACTIVE_COMPILATION_CONDITIONS` for the `SerenadaiOS` target. In `project.yml`:
-
-```yaml
-  SerenadaiOS:
-    settings:
-      base:
-        # existing settings...
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: BROADCAST_EXTENSION
-```
-
-Or in `LocalSigning.xcconfig`:
-
-```
-SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) BROADCAST_EXTENSION
-```
-
-### 6. Regenerate and build
+### 4. Regenerate and build
 
 ```bash
 cd client-ios
@@ -124,8 +97,8 @@ Broadcast extensions do not work in the iOS Simulator. Test on a physical device
 
 | File | Purpose |
 |------|---------|
+| `Shared/BroadcastShared.swift` | Shared constants, header layout, and memory I/O helpers (compiled into both targets) |
 | `BroadcastUpload/SampleHandler.swift` | Extension entry point — writes frames to shared memory |
 | `BroadcastUpload/BroadcastUpload.entitlements` | Extension App Group entitlement |
 | `BroadcastUpload/Info.plist` | Extension Info.plist |
-| `Sources/UI/Components/BroadcastPickerButton.swift` | `UIViewRepresentable` wrapping `RPSystemBroadcastPickerView` |
 | `Sources/Core/Call/WebRtcEngine.swift` | `BroadcastFrameReader` (reads shared memory) and `ReplayKitVideoCapturer` (fallback) |
