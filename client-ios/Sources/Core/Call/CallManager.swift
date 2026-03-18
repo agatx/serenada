@@ -132,6 +132,7 @@ final class CallManager: ObservableObject {
     private var connectionStatusRetryingTask: Task<Void, Never>?
     private var turnRefreshTask: Task<Void, Never>?
     private var remoteVideoPollTimer: Timer?
+    private var pushEndpointObserver: NSObjectProtocol?
 
     private var lastWebRtcStatsPollAtMs: Int64 = 0
     private var webrtcStatsRequestInFlight = false
@@ -200,6 +201,16 @@ final class CallManager: ObservableObject {
         )
 
         self.signalingClient.listener = self
+        self.pushEndpointObserver = NotificationCenter.default.addObserver(
+            forName: .serenadaPushEndpointDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let endpoint = notification.userInfo?[PushEndpointNotification.endpointUserInfoKey] as? String
+            Task { @MainActor [weak self] in
+                self?.syncPushSubscriptionsAfterEndpointChange(endpoint)
+            }
+        }
 
         startNetworkMonitoring()
         refreshRecentCalls()
@@ -215,6 +226,9 @@ final class CallManager: ObservableObject {
         connectionStatusRetryingTask?.cancel()
         turnRefreshTask?.cancel()
         remoteVideoPollTimer?.invalidate()
+        if let pushEndpointObserver {
+            NotificationCenter.default.removeObserver(pushEndpointObserver)
+        }
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
@@ -2190,6 +2204,16 @@ final class CallManager: ObservableObject {
         for room in rooms where isCurrentServerHost(room.host) {
             pushSubscriptionManager.subscribeRoom(roomId: room.roomId, host: host)
         }
+    }
+
+    private func syncPushSubscriptionsAfterEndpointChange(_ endpoint: String?) {
+        let cleanEndpoint = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        pushSubscriptionManager.updateCachedEndpoint(cleanEndpoint?.isEmpty == false ? cleanEndpoint : nil)
+
+        if let roomId = currentRoomId {
+            pushSubscriptionManager.subscribeRoom(roomId: roomId, host: currentSignalingHost())
+        }
+        syncSavedRoomPushSubscriptions(savedRooms)
     }
 
     private func refreshWatchedRooms() {

@@ -36,17 +36,20 @@ final class PushSubscriptionManager {
 
     func refreshPushEndpoint() async -> String? {
         if let cached = cachedEndpoint() {
+            log("Using cached push endpoint for room subscription")
             return cached
         }
 
         #if canImport(FirebaseMessaging)
         if FirebaseApp.app() != nil, let token = await fetchFirebaseToken() {
             settingsStore.pushEndpoint = token
+            log("Using Firebase Messaging token for push subscriptions")
             return token
         }
         #endif
 
-        return cachedEndpoint()
+        log("Push endpoint unavailable for room subscription")
+        return nil
     }
 
     func subscribeRoom(roomId: String, host: String) {
@@ -55,8 +58,14 @@ final class PushSubscriptionManager {
 
         Task { [weak self] in
             guard let self else { return }
-            guard let endpoint = await self.refreshPushEndpoint() else { return }
-            guard let encPublicKeyRaw = self.pushKeyStore.getPublicJwk() else { return }
+            guard let endpoint = await self.refreshPushEndpoint() else {
+                self.log("Skipping push subscription for room \(normalizedRoomId): missing push endpoint")
+                return
+            }
+            guard let encPublicKeyRaw = self.pushKeyStore.getPublicJwk() else {
+                self.log("Skipping push subscription for room \(normalizedRoomId): missing encryption public key")
+                return
+            }
             let encPublicKey = PushRecipientPublicKey(
                 kty: encPublicKeyRaw.kty,
                 crv: encPublicKeyRaw.crv,
@@ -64,6 +73,7 @@ final class PushSubscriptionManager {
                 y: encPublicKeyRaw.y
             )
 
+            self.log("Attempting push subscribe for room \(normalizedRoomId)")
             let request = PushSubscribeRequest(
                 transport: Self.pushTransport,
                 endpoint: endpoint,
@@ -75,9 +85,9 @@ final class PushSubscriptionManager {
 
             do {
                 try await self.apiClient.subscribePush(host: host, roomId: normalizedRoomId, request: request)
+                self.log("Subscribed room \(normalizedRoomId) for push")
             } catch {
-                // Keep this fire-and-forget, matching Android behavior.
-                _ = error
+                self.log("Push subscribe failed for room \(normalizedRoomId): \(error.localizedDescription)")
             }
         }
     }
@@ -85,13 +95,20 @@ final class PushSubscriptionManager {
     #if canImport(FirebaseMessaging)
     private func fetchFirebaseToken() async -> String? {
         await withCheckedContinuation { continuation in
-            Messaging.messaging().token { token, _ in
+            Messaging.messaging().token { token, error in
+                if let error {
+                    PushDiagnostics.append("Failed to fetch Firebase Messaging token: \(error.localizedDescription)")
+                }
                 let clean = token?.trimmingCharacters(in: .whitespacesAndNewlines)
                 continuation.resume(returning: (clean?.isEmpty == false) ? clean : nil)
             }
         }
     }
     #endif
+
+    private func log(_ message: String) {
+        PushDiagnostics.append(message)
+    }
 }
 
 private extension Locale {

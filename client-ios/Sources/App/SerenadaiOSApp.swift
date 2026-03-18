@@ -8,7 +8,9 @@ struct SerenadaiOSApp: App {
 
     init() {
         AppLaunchOverrides.applyIfNeeded()
-        _launchDeepLinkURL = State(initialValue: AppLaunchOverrides.pendingDeepLinkURL())
+        _launchDeepLinkURL = State(
+            initialValue: AppLaunchOverrides.pendingDeepLinkURL() ?? NotificationDeepLinkRouter.consumePendingURL()
+        )
     }
 
     var body: some Scene {
@@ -25,6 +27,10 @@ struct SerenadaiOSApp: App {
                 }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
                     guard let url = activity.webpageURL else { return }
+                    callManager.handleDeepLink(url)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .serenadaNotificationDeepLinkDidChange)) { _ in
+                    guard let url = NotificationDeepLinkRouter.consumePendingURL() else { return }
                     callManager.handleDeepLink(url)
                 }
         }

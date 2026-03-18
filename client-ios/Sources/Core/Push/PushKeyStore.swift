@@ -10,6 +10,7 @@ struct PushEncryptionPublicKey: Equatable {
 
 final class PushKeyStore {
     private enum Constants {
+        static let appGroupIdentifier = "group.app.serenada.ios"
         static let keyStorageKey = "serenada_push_ecdh_private_key_v1"
         static let hkdfInfo = "serenada-push-snapshot"
         static let aesKeyBytes = 32
@@ -20,13 +21,13 @@ final class PushKeyStore {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = PushKeyStore.defaultStore()) {
         self.defaults = defaults
     }
 
     func getPublicJwk() -> PushEncryptionPublicKey? {
         guard let privateKey = getOrCreatePrivateKey() else { return nil }
-        let raw = privateKey.publicKey.rawRepresentation
+        let raw = privateKey.publicKey.x963Representation
         guard raw.count == 65, raw.first == Constants.uncompressedEcPointPrefix else { return nil }
 
         let x = raw.subdata(in: 1..<33).base64URLEncodedStringNoPadding()
@@ -47,7 +48,7 @@ final class PushKeyStore {
         guard let wrappedKey = Data(base64Encoded: wrappedKeyB64) else { return nil }
         guard let wrappedIV = Data(base64Encoded: wrappedKeyIvB64), wrappedIV.count == Constants.ivBytes else { return nil }
 
-        guard let ephemeralKey = try? P256.KeyAgreement.PublicKey(rawRepresentation: ephemeralRaw) else {
+        guard let ephemeralKey = try? P256.KeyAgreement.PublicKey(x963Representation: ephemeralRaw) else {
             return nil
         }
 
@@ -103,16 +104,34 @@ final class PushKeyStore {
     }
 
     private func getOrCreatePrivateKey() -> P256.KeyAgreement.PrivateKey? {
-        if let existingRaw = defaults.string(forKey: Constants.keyStorageKey),
-           let existingData = Data(base64Encoded: existingRaw),
-           let existing = try? P256.KeyAgreement.PrivateKey(rawRepresentation: existingData) {
+        if let existing = loadPrivateKey(from: defaults) {
             return existing
+        }
+
+        if let migrated = loadPrivateKey(from: .standard) {
+            defaults.set(migrated.rawRepresentation.base64EncodedString(), forKey: Constants.keyStorageKey)
+            PushDiagnostics.append("Migrated push private key into shared defaults")
+            return migrated
         }
 
         let created = P256.KeyAgreement.PrivateKey()
         let raw = created.rawRepresentation.base64EncodedString()
         defaults.set(raw, forKey: Constants.keyStorageKey)
+        PushDiagnostics.append("Generated push private key")
         return created
+    }
+
+    private func loadPrivateKey(from defaults: UserDefaults) -> P256.KeyAgreement.PrivateKey? {
+        guard let existingRaw = defaults.string(forKey: Constants.keyStorageKey),
+              let existingData = Data(base64Encoded: existingRaw),
+              let existing = try? P256.KeyAgreement.PrivateKey(rawRepresentation: existingData) else {
+            return nil
+        }
+        return existing
+    }
+
+    private static func defaultStore() -> UserDefaults {
+        UserDefaults(suiteName: Constants.appGroupIdentifier) ?? .standard
     }
 }
 
@@ -122,5 +141,27 @@ private extension Data {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+enum PushDiagnostics {
+    private enum Constants {
+        static let appGroupIdentifier = "group.app.serenada.ios"
+        static let traceKey = "debug_push_trace"
+        static let maxEntries = 100
+    }
+
+    private static let defaults = UserDefaults(suiteName: Constants.appGroupIdentifier) ?? .standard
+
+    static func append(_ message: String) {
+        NSLog("[Push] %@", message)
+
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+        var entries = defaults.stringArray(forKey: Constants.traceKey) ?? []
+        entries.append("\(timestamp) \(message)")
+        if entries.count > Constants.maxEntries {
+            entries.removeFirst(entries.count - Constants.maxEntries)
+        }
+        defaults.set(entries, forKey: Constants.traceKey)
     }
 }

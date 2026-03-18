@@ -211,6 +211,7 @@ Invite payload example:
   - `FCM_SERVICE_ACCOUNT_JSON` (full service account JSON string)
   - `FCM_SERVICE_ACCOUNT_FILE` (path to a service account JSON file)
 - If unset, `fcm` subscriptions are accepted but native Android/iOS pushes are skipped server-side.
+- With the provided local Docker Compose setup and repo-mounted secret, set `FCM_SERVICE_ACCOUNT_FILE=/app/secrets/service-account.json`.
 - `STUN_HOST` (or `DOMAIN`, if set) is used as the push `host` hint so Android opens/fetches against the originating backend.
 - FCM requests include an APNs block (`apns-priority`, `apns-push-type`, and `aps.mutable-content`) so iOS Notification Service processing can run.
 
@@ -220,3 +221,4 @@ Invite payload example:
 - Push payload size must remain under service limits; wrapped key data stays small per recipient.
 - Android requires Firebase runtime config in `client-android` (`firebaseAppId`, `firebaseApiKey`, `firebaseProjectId`, `firebaseSenderId` Gradle properties).
 - iOS requires Firebase runtime config (`GoogleService-Info.plist`) in the app target for FCM token registration.
+- iOS also requires the APNs credentials uploaded to Firebase to match the build environment: development for Xcode debug builds, production for TestFlight/App Store builds.

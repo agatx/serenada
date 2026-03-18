@@ -18,6 +18,12 @@ docker compose up -d --build
 
 The app will be accessible at `http://localhost`. It uses `nginx/nginx.dev.conf` and `coturn/turnserver.dev.conf`.
 
+For local native Android or iOS push testing with the repo-mounted service account, set this in `.env` before starting the stack:
+
+```bash
+FCM_SERVICE_ACCOUNT_FILE=/app/secrets/service-account.json
+```
+
 ## Production Deployment
 
 ### 1. Configuration
@@ -39,7 +45,7 @@ Edit `.env.production` and set the following required variables:
 - `TURN_TOKEN_SECRET` *(optional, recommended)*: Separate secret for TURN tokens (falls back to `TURN_SECRET` if unset)
 - `ROOM_ID_SECRET`: Secure secret for Room IDs (generate with `openssl rand -hex 32`)
 - `PUSH_SUBSCRIBER_EMAIL` *(optional)*: Contact email for Web Push VAPID (`mailto:...`)
-- `FCM_SERVICE_ACCOUNT_FILE` or `FCM_SERVICE_ACCOUNT_JSON` *(optional, required for native Android push receive)*:
+- `FCM_SERVICE_ACCOUNT_FILE` or `FCM_SERVICE_ACCOUNT_JSON` *(optional, required for native Android and iOS push receive)*:
   - `FCM_SERVICE_ACCOUNT_FILE`: absolute path on VPS to Firebase service-account JSON
   - `FCM_SERVICE_ACCOUNT_JSON`: inline JSON string (alternative to file path)
 - `RATE_LIMIT_BYPASS_IPS` *(optional, test-only)*: Comma-separated exact IPs/CIDRs that bypass HTTP rate limits (e.g. `127.0.0.1,10.0.0.0/8`)
@@ -133,6 +139,10 @@ From the project root on your local machine:
 `deploy.sh` also publishes the Android APK to `https://<your-domain>/tools/serenada.apk` by copying `client-android/app/build/outputs/apk/release/serenada.apk` into the built web assets (`client/dist/tools/serenada.apk`) before sync. If the release APK is missing, the script will attempt `./gradlew :app:assembleRelease` in `client-android/`. If that build fails, deployment continues and prints a warning instead of failing.
 
 If `secrets/service-account.json` exists in the repo root, `deploy.sh` also syncs it to `${REMOTE_DIR}/secrets/service-account.json` and injects `FCM_SERVICE_ACCOUNT_FILE=${REMOTE_DIR}/secrets/service-account.json` into the deployed `.env` (overriding any existing `FCM_SERVICE_ACCOUNT_FILE` / `FCM_SERVICE_ACCOUNT_JSON` entries for that deployment).
+
+For iOS builds, APNs environment must match how the app is signed:
+- Xcode debug / development-signed builds require development APNs credentials in Firebase.
+- TestFlight / App Store / release-signed builds require production APNs credentials in Firebase.
 
 ### 5. Android and iOS Deep Link Association Files
 
