@@ -37,7 +37,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     useEffect(() => {
         if (externalSession || !url) return;
 
-        const host = serverHost ?? new URL(url).host;
+        let host: string;
+        try {
+            host = serverHost ?? new URL(url).host;
+        } catch {
+            return;
+        }
         const core = new SerenadaCore({ serverHost: host });
         const sess = core.join(url);
         internalSessionRef.current = sess;
