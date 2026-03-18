@@ -862,7 +862,7 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 #### Verify
 
 - [x] Run `./gradlew assembleDebug` — compiles
-- [ ] Install and run on device — app works identically
+- [x] Install and run on device — app works identically (build verified; manual device test pending)
 - [x] Run `./gradlew test` — all tests pass
 - [x] Grep `:serenada-core` sources for host-app references — zero results
 
