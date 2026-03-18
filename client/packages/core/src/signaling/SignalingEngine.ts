@@ -108,7 +108,6 @@ export class SignalingEngine {
                 to,
                 payload
             };
-            console.log('TX:', msg);
             this.transport.send(msg);
         } else {
             console.warn('Signaling transport not connected');
@@ -233,8 +232,6 @@ export class SignalingEngine {
     // --- Private methods ---
 
     private handleIncomingMessage(msg: SignalingMessage): void {
-        console.log('RX:', msg);
-
         switch (msg.type) {
             case 'joined':
                 this.clearJoinTimers();

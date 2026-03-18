@@ -1246,6 +1246,7 @@ class SerenadaSession internal constructor(
         peerSlots.values.forEach { it.closePeerConnection() }
         peerSlots.clear()
         webRtcEngine.release()
+        webRtcStatsExecutor.shutdown()
         unregisterConnectivityListener()
         clientId = null; hostCid = null; currentRoomState = null; callStartTimeMs = null
         pendingJoinRoom = null; pendingMessages.clear(); reconnectAttempts = 0
@@ -1276,7 +1277,7 @@ class SerenadaSession internal constructor(
 
     private fun scheduleReconnect() {
         reconnectAttempts += 1
-        val backoff = (WebRtcResilienceConstants.RECONNECT_BACKOFF_BASE_MS * (1 shl (reconnectAttempts - 1)))
+        val backoff = (WebRtcResilienceConstants.RECONNECT_BACKOFF_BASE_MS * (1L shl minOf(reconnectAttempts - 1, 13)))
             .coerceAtMost(WebRtcResilienceConstants.RECONNECT_BACKOFF_CAP_MS)
         val runnable = Runnable {
             reconnectRunnable = null

@@ -30,6 +30,7 @@ interface PeerState {
 
 export interface MediaEngineConfig {
     serverHost: string;
+    turnsOnly?: boolean;
 }
 
 export class MediaEngine {
@@ -62,6 +63,7 @@ export class MediaEngine {
     private deviceChangeHandler: (() => void) | null = null;
     private turnFetchController: AbortController | null = null;
     private serverHost: string;
+    private turnsOnly: boolean;
 
     // Injected dependencies
     private sendSignalingMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void;
@@ -75,6 +77,7 @@ export class MediaEngine {
         sendMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void,
     ) {
         this.serverHost = config.serverHost;
+        this.turnsOnly = config.turnsOnly ?? false;
         this.sendSignalingMessage = sendMessage;
         this.setupEventListeners();
     }
@@ -110,17 +113,17 @@ export class MediaEngine {
     processSignalingMessage(msg: SignalingMessage): void {
         const { type, payload } = msg;
         if (!payload) return;
-        const fromCid = payload.from;
+        const fromCid = payload.from as string | undefined;
         try {
             switch (type) {
                 case 'offer':
-                    if (fromCid && payload.sdp) void this.handleOfferFrom(fromCid, payload.sdp);
+                    if (fromCid && payload.sdp) void this.handleOfferFrom(fromCid, payload.sdp as string);
                     break;
                 case 'answer':
-                    if (fromCid && payload.sdp) void this.handleAnswerFrom(fromCid, payload.sdp);
+                    if (fromCid && payload.sdp) void this.handleAnswerFrom(fromCid, payload.sdp as string);
                     break;
                 case 'ice':
-                    if (fromCid && payload.candidate) void this.handleIceFrom(fromCid, payload.candidate);
+                    if (fromCid && payload.candidate) void this.handleIceFrom(fromCid, payload.candidate as RTCIceCandidateInit);
                     break;
             }
         } catch (err) {
@@ -690,8 +693,7 @@ export class MediaEngine {
 
             if (res.ok) {
                 const data = await res.json();
-                const params = new URLSearchParams(window.location.search);
-                const turnsOnly = params.get('turnsonly') === '1';
+                const turnsOnly = this.turnsOnly;
 
                 const servers: RTCIceServer[] = [];
                 if (data.uris) {

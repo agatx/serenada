@@ -45,6 +45,7 @@ export interface SerenadaConfig {
     defaultAudioEnabled?: boolean;
     defaultVideoEnabled?: boolean;
     transports?: TransportKind[];
+    turnsOnly?: boolean;
 }
 
 export interface CreateRoomResult {
@@ -65,7 +66,7 @@ export interface SerenadaSessionHandle {
     setCameraMode(mode: CameraMode): void;
     startScreenShare(): Promise<void>;
     stopScreenShare(): Promise<void>;
-    resumeJoin(): void;
+    resumeJoin(): Promise<void>;
     cancelJoin(): void;
     destroy(): void;
     readonly state: CallState;

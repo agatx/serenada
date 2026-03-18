@@ -57,7 +57,7 @@ export class SerenadaSession {
         });
 
         this.media = new MediaEngine(
-            { serverHost: config.serverHost },
+            { serverHost: config.serverHost, turnsOnly: config.turnsOnly },
             (type, payload, to) => this.signaling.sendMessage(type, payload, to),
         );
 
@@ -206,7 +206,10 @@ export class SerenadaSession {
         if (error) {
             phase = 'error';
         } else if (!signalingState && phase !== 'idle') {
-            if (this.signaling.isConnected && this._state.phase === 'joining') {
+            if (this._state.phase === 'inCall' || this._state.phase === 'waiting') {
+                // Room ended or left — transition to idle and clean up
+                phase = 'idle';
+            } else if (this.signaling.isConnected && this._state.phase === 'joining') {
                 phase = 'joining';
             }
         } else if (signalingState) {

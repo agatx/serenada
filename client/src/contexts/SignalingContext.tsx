@@ -215,18 +215,20 @@ export const SignalingProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 break;
             case 'room_statuses':
                 if (msg.payload) {
-                    setRoomStatuses(prev => mergeRoomStatusesPayload(prev, msg.payload));
+                    const p = msg.payload;
+                    setRoomStatuses(prev => mergeRoomStatusesPayload(prev, p));
                 }
                 break;
             case 'room_status_update':
                 if (msg.payload) {
-                    setRoomStatuses(prev => mergeRoomStatusUpdatePayload(prev, msg.payload));
+                    const p = msg.payload;
+                    setRoomStatuses(prev => mergeRoomStatusUpdatePayload(prev, p));
                 }
                 break;
             case 'error':
                 if (msg.payload && msg.payload.message) {
-                    setError(msg.payload.message);
-                    showToast('error', msg.payload.message);
+                    setError(String(msg.payload.message));
+                    showToast('error', String(msg.payload.message));
                 }
                 break;
         }
