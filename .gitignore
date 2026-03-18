@@ -34,4 +34,9 @@ client-ios/Resources/GoogleService-Info.plist
 
 # ralphex progress logs
 .ralphex/progress/
-/client-android/serenada-call-ui/build
+
+# Android build artifacts
+/client-android/serenada-core/build/
+/client-android/serenada-call-ui/build/
+/client-android/serenada-core/.gradle/
+/client-android/serenada-call-ui/.gradle/
