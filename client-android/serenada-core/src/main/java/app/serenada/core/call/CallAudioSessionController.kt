@@ -1,4 +1,4 @@
-package app.serenada.android.call
+package app.serenada.core.call
 
 import android.content.Context
 import android.hardware.Sensor
@@ -14,7 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.util.Log
 
-internal class CallAudioSessionController(
+class CallAudioSessionController(
     context: Context,
     private val handler: Handler,
     private val onProximityChanged: (Boolean) -> Unit,

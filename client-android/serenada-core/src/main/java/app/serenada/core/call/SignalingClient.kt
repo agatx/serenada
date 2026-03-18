@@ -1,14 +1,14 @@
-package app.serenada.android.call
+package app.serenada.core.call
 
 import android.os.Handler
 import android.util.Log
-import app.serenada.android.BuildConfig
 import okhttp3.OkHttpClient
 
 class SignalingClient(
     private val okHttpClient: OkHttpClient,
     private val handler: Handler,
-    private val listener: Listener
+    private val listener: Listener,
+    private val forceSse: Boolean = false
 ) {
     enum class TransportKind(val wireName: String) {
         WS("ws"),
@@ -21,7 +21,7 @@ class SignalingClient(
         fun onClosed(reason: String)
     }
 
-    private val transportOrder = if (BuildConfig.FORCE_SSE_SIGNALING) {
+    private val transportOrder = if (forceSse) {
         listOf(TransportKind.SSE)
     } else {
         listOf(TransportKind.WS, TransportKind.SSE)
@@ -56,7 +56,7 @@ class SignalingClient(
             handler.post { listener.onClosed("invalid_host") }
             return
         }
-        if (BuildConfig.FORCE_SSE_SIGNALING) {
+        if (forceSse) {
             Log.i(TAG, "FORCE_SSE_SIGNALING is enabled; using SSE only")
         }
         resetTransportState()

@@ -789,63 +789,63 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 
 #### Move files into :serenada-core
 
-- [ ] Move `call/WebRtcEngine.kt` → `:serenada-core` (mark `internal`)
-- [ ] Move `call/SignalingClient.kt` → `:serenada-core` (mark `internal`)
-- [ ] Move `call/CompositeCameraCapturer.kt` → `:serenada-core` (mark `internal`)
-- [ ] Move `call/PeerConnectionSlot.kt` → `:serenada-core` (mark `internal`)
-- [ ] Split `network/ApiClient.kt` into:
-  - [ ] call-only client (TURN + room creation + signaling probe for diagnostics) → `:serenada-core`
-  - [ ] host-only client (push / invite / snapshot / analytics) → `:app`
-- [ ] Move `layout/ComputeLayout.kt` → `:serenada-core` (mark `public`)
-- [ ] Move signaling-related models → `:serenada-core` (mark `public` where needed)
-- [ ] Fix all import paths
-- [ ] Build — should compile
+- [x] Move `call/WebRtcEngine.kt` → `:serenada-core` (mark `internal`)
+- [x] Move `call/SignalingClient.kt` → `:serenada-core` (mark `internal`)
+- [x] Move `call/CompositeCameraCapturer.kt` → `:serenada-core` (mark `internal`)
+- [x] Move `call/PeerConnectionSlot.kt` → `:serenada-core` (mark `internal`)
+- [x] Split `network/ApiClient.kt` into:
+  - [x] call-only client (TURN + room creation + signaling probe for diagnostics) → `:serenada-core`
+  - [x] host-only client (push / invite / snapshot / analytics) → `:app`
+- [x] Move `layout/ComputeLayout.kt` → `:serenada-core` (mark `public`)
+- [x] Move signaling-related models → `:serenada-core` (mark `public` where needed)
+- [x] Fix all import paths
+- [x] Build — should compile
 
 #### Split CallManager.kt
 
-- [ ] Create `SerenadaSession.kt` in `:serenada-core` as a public class
-- [ ] Define a new `CallState` data class with SDK-native fields only (do not reuse current app `CallUiState`)
-- [ ] Expose `StateFlow<CallState>` for observation
-- [ ] Move signaling, WebRTC orchestration, media control, and reconnection logic from `CallManager` into internal classes
-- [ ] Expose public methods: `leave()`, `end()`, `toggleAudio()`, `toggleVideo()`, `flipCamera()`, `setCameraMode()`, `startScreenShare()`, `stopScreenShare()`
-- [ ] Expose `resumeJoin()` and `cancelJoin()`
-- [ ] Expose renderer attachment: `attachLocalRenderer()`, `attachRemoteRenderer()`
-- [ ] Strip host-app concerns:
-  - [ ] Remove saved rooms logic → move to `:app`
-  - [ ] Remove recent calls logic → move to `:app`
-  - [ ] Remove settings persistence → move to `:app`
-  - [ ] Remove push subscription sync → move to `:app`
-  - [ ] Remove room-status watching → move to `:app`
-  - [ ] Remove snapshot upload → move to `:app`
-- [ ] Build — should compile
+- [x] Create `SerenadaSession.kt` in `:serenada-core` as a public class
+- [x] Define a new `CallState` data class with SDK-native fields only (do not reuse current app `CallUiState`)
+- [x] Expose `StateFlow<CallState>` for observation
+- [x] Move signaling, WebRTC orchestration, media control, and reconnection logic from `CallManager` into internal classes
+- [x] Expose public methods: `leave()`, `end()`, `toggleAudio()`, `toggleVideo()`, `flipCamera()`, `setCameraMode()`, `startScreenShare()`, `stopScreenShare()`
+- [x] Expose `resumeJoin()` and `cancelJoin()`
+- [x] Expose renderer attachment: `attachLocalRenderer()`, `attachRemoteRenderer()`
+- [x] Strip host-app concerns:
+  - [x] Remove saved rooms logic → move to `:app`
+  - [x] Remove recent calls logic → move to `:app`
+  - [x] Remove settings persistence → move to `:app`
+  - [x] Remove push subscription sync → move to `:app`
+  - [x] Remove room-status watching → move to `:app`
+  - [x] Remove snapshot upload → move to `:app`
+- [x] Build — should compile
 
 #### Create SerenadaCore entry point
 
-- [ ] Create `SerenadaCore.kt` with `SerenadaConfig` constructor
-- [ ] Implement `fun join(url: String): SerenadaSession`
-- [ ] Implement `fun join(roomId: String): SerenadaSession`
-- [ ] Implement `fun createRoom(callback: (CreateRoomResult) -> Unit)`
-- [ ] Define `SerenadaCoreDelegate` interface:
-  - [ ] `onPermissionsRequired` callback (optional — core pauses join until host or call-ui resumes)
-  - [ ] `onSessionStateChanged` callback
-  - [ ] `onSessionEnded` callback
-- [ ] Implement permission preflight in `join()` — detect missing camera/mic, set `CallState.phase = AwaitingPermissions`, expose `requiredPermissions`, and pause
-- [ ] Create `SerenadaDiagnostics` preflight utility:
-  - [ ] Implement `suspend fun runAll(): DiagnosticsReport` — never prompts
-  - [ ] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkSpeaker()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
-  - [ ] Device enumeration via WebRTC APIs
-  - [ ] Camera/mic checks return `NotAuthorized` if permission not granted — no runtime permission requests
-  - [ ] Signaling/TURN probes use core's call-only client
-- [ ] Add `callStats: StateFlow<CallStats>` on `SerenadaSession`:
-  - [ ] Define `CallStats` data class: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
-  - [ ] Populate from WebRTC `getStats()` periodically during active call
-- [ ] Build — should compile
+- [x] Create `SerenadaCore.kt` with `SerenadaConfig` constructor
+- [x] Implement `fun join(url: String): SerenadaSession`
+- [x] Implement `fun join(roomId: String): SerenadaSession`
+- [x] Implement `fun createRoom(callback: (CreateRoomResult) -> Unit)`
+- [x] Define `SerenadaCoreDelegate` interface:
+  - [x] `onPermissionsRequired` callback (optional — core pauses join until host or call-ui resumes)
+  - [x] `onSessionStateChanged` callback
+  - [x] `onSessionEnded` callback
+- [x] Implement permission preflight in `join()` — detect missing camera/mic, set `CallState.phase = AwaitingPermissions`, expose `requiredPermissions`, and pause
+- [x] Create `SerenadaDiagnostics` preflight utility:
+  - [x] Implement `suspend fun runAll(): DiagnosticsReport` — never prompts
+  - [x] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkSpeaker()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
+  - [x] Device enumeration via WebRTC APIs
+  - [x] Camera/mic checks return `NotAuthorized` if permission not granted — no runtime permission requests
+  - [x] Signaling/TURN probes use core's call-only client
+- [x] Add `callStats: StateFlow<CallStats>` on `SerenadaSession`:
+  - [x] Define `CallStats` data class: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
+  - [x] Populate from WebRTC `getStats()` periodically during active call
+- [x] Build — should compile
 
 #### Rewire Android host app
 
-- [ ] Update `:app` to import from `:serenada-core`
-- [ ] Replace direct `CallManager` usage with `SerenadaCore` / `SerenadaSession`
-- [ ] Wire foreground service to session state:
+- [x] Update `:app` to import from `:serenada-core`
+- [x] Replace direct `CallManager` usage with `SerenadaCore` / `SerenadaSession`
+- [x] Wire foreground service to session state:
   ```kotlin
   session.state.collect { state ->
       when (state.phase) {
@@ -855,16 +855,16 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
       }
   }
   ```
-- [ ] Move push subscription logic into `:app`
-- [ ] Move saved rooms / recent calls into `:app`
-- [ ] Move settings persistence into `:app`
+- [x] Move push subscription logic into `:app`
+- [x] Move saved rooms / recent calls into `:app`
+- [x] Move settings persistence into `:app`
 
 #### Verify
 
-- [ ] Run `./gradlew assembleDebug` — compiles
+- [x] Run `./gradlew assembleDebug` — compiles
 - [ ] Install and run on device — app works identically
-- [ ] Run `./gradlew test` — all tests pass
-- [ ] Grep `:serenada-core` sources for host-app references — zero results
+- [x] Run `./gradlew test` — all tests pass
+- [x] Grep `:serenada-core` sources for host-app references — zero results
 
 ### Phase 4: Build Call-UI Libraries
 

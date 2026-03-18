@@ -1,4 +1,4 @@
-package app.serenada.android.call
+package app.serenada.core.call
 
 import android.content.Context
 import android.content.Intent
@@ -21,7 +21,6 @@ import android.os.Looper
 import android.util.Range
 import android.util.DisplayMetrics
 import android.util.Log
-import app.serenada.android.BuildConfig
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -136,13 +135,13 @@ class WebRtcEngine(
         appContext.getSharedPreferences("serenada_webrtc", Context.MODE_PRIVATE)
     private var compositeDisabledAfterFailure: Boolean
         get() {
-            if (compositePrefs.getInt(KEY_COMPOSITE_DISABLED_VERSION, -1) != BuildConfig.VERSION_CODE) return false
+            if (compositePrefs.getInt(KEY_COMPOSITE_DISABLED_VERSION, -1) != 0) return false
             return compositePrefs.getBoolean(KEY_COMPOSITE_DISABLED, false)
         }
         set(value) {
             compositePrefs.edit()
                 .putBoolean(KEY_COMPOSITE_DISABLED, value)
-                .putInt(KEY_COMPOSITE_DISABLED_VERSION, BuildConfig.VERSION_CODE)
+                .putInt(KEY_COMPOSITE_DISABLED_VERSION, 0)
                 .apply()
         }
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -160,7 +159,7 @@ class WebRtcEngine(
             .createInitializationOptions()
         PeerConnectionFactory.initialize(initOptions)
         enableVerboseWebRtcLoggingIfDebug()
-        Log.i("WebRtcEngine", "Using WebRTC provider: ${BuildConfig.WEBRTC_PROVIDER}")
+        Log.i("WebRtcEngine", "WebRTC initialized")
 
         // Keep VP8 hardware support enabled, but disable H264 high profile to reduce encode latency
         // regressions seen on some Android devices with constrained hardware encoders.
@@ -174,7 +173,7 @@ class WebRtcEngine(
     }
 
     private fun enableVerboseWebRtcLoggingIfDebug() {
-        if (!BuildConfig.DEBUG) return
+        if (!false) return
         if (!WEBRTC_LOGGING_ENABLED.compareAndSet(false, true)) return
         runCatching {
             Logging.enableLogThreads()

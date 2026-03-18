@@ -1,6 +1,6 @@
-package app.serenada.android.layout
+package app.serenada.core.layout
 
-import app.serenada.android.call.ContentTypeWire
+import app.serenada.core.call.ContentTypeWire
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min

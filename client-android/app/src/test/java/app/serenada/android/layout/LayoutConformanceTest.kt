@@ -1,5 +1,6 @@
 package app.serenada.android.layout
 
+import app.serenada.core.layout.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull

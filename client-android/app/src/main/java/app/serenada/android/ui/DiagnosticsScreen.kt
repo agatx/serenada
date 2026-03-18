@@ -63,8 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import app.serenada.android.BuildConfig
 import app.serenada.android.R
-import app.serenada.android.network.ApiClient
-import app.serenada.android.network.TurnCredentials
+import app.serenada.core.network.CoreApiClient
+import app.serenada.core.network.TurnCredentials
 import java.time.Instant
 import java.util.Collections
 import java.util.UUID
@@ -691,16 +691,16 @@ private suspend fun runConnectivityChecks(host: String): ConnectivityReport = wi
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)
         .build()
-    val apiClient = ApiClient(client)
+    val coreApiClient = CoreApiClient(client)
 
     val roomIdResult = checkRoomIdEndpoint(client, host)
     val wsResult = checkWebSocket(client, host)
     val sseResult = checkSseEndpoint(client, host)
-    val diagnosticTokenResult = apiClient.awaitDiagnosticToken(host)
+    val diagnosticTokenResult = coreApiClient.awaitDiagnosticToken(host)
     val tokenResult = diagnosticTokenResult.toNetworkCheck("Token")
     val turnResult = diagnosticTokenResult.fold(
         onSuccess = { token ->
-            apiClient.awaitTurnCredentials(host, token).toNetworkCheck("TURN")
+            coreApiClient.awaitTurnCredentials(host, token).toNetworkCheck("TURN")
         },
         onFailure = { error ->
             CheckResult(CheckState.Fail, "Token failed: ${error.message ?: "error"}")
@@ -814,7 +814,7 @@ private suspend fun runIceCheck(
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(12, TimeUnit.SECONDS)
         .build()
-    val apiClient = ApiClient(okHttpClient)
+    val coreApiClient = CoreApiClient(okHttpClient)
     val logs = Collections.synchronizedList(mutableListOf<String>())
 
     fun log(msg: String) {
@@ -825,7 +825,7 @@ private suspend fun runIceCheck(
     log("Starting ICE test (turnsOnly=$turnsOnly)...")
     log("Requesting diagnostic token...")
 
-    val token = apiClient.awaitDiagnosticToken(host).getOrElse { error ->
+    val token = coreApiClient.awaitDiagnosticToken(host).getOrElse { error ->
         val message = error.message ?: "Diagnostic token failed"
         onLogLine("Token error: $message")
         return@withContext IceReport(
@@ -838,7 +838,7 @@ private suspend fun runIceCheck(
     }
     log("Diagnostic token received.")
 
-    val creds = apiClient.awaitTurnCredentials(host, token).getOrElse { error ->
+    val creds = coreApiClient.awaitTurnCredentials(host, token).getOrElse { error ->
         val message = error.message ?: "TURN credentials failed"
         onLogLine("TURN credentials error: $message")
         return@withContext IceReport(
@@ -1214,7 +1214,7 @@ private fun buildSseUrl(hostInput: String, sid: String): String? {
         .toString()
 }
 
-private suspend fun ApiClient.awaitDiagnosticToken(host: String): Result<String> {
+private suspend fun CoreApiClient.awaitDiagnosticToken(host: String): Result<String> {
     return suspendCancellableCoroutine { continuation ->
         fetchDiagnosticToken(host) { result ->
             if (continuation.isActive) {
@@ -1224,7 +1224,7 @@ private suspend fun ApiClient.awaitDiagnosticToken(host: String): Result<String>
     }
 }
 
-private suspend fun ApiClient.awaitTurnCredentials(host: String, token: String): Result<TurnCredentials> {
+private suspend fun CoreApiClient.awaitTurnCredentials(host: String, token: String): Result<TurnCredentials> {
     return suspendCancellableCoroutine { continuation ->
         fetchTurnCredentials(host, token) { result ->
             if (continuation.isActive) {

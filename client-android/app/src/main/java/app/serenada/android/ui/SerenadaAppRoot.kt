@@ -28,7 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import app.serenada.android.R
 import app.serenada.android.call.CallManager
-import app.serenada.android.call.CallPhase
+import app.serenada.core.call.CallPhase
 
 private enum class RootScreen {
     Join,

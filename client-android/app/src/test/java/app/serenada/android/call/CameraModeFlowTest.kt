@@ -1,5 +1,7 @@
 package app.serenada.android.call
 
+import app.serenada.core.call.LocalCameraMode
+import app.serenada.core.call.nextFlipCameraMode
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

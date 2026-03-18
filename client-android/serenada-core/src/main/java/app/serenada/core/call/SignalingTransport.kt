@@ -1,4 +1,4 @@
-package app.serenada.android.call
+package app.serenada.core.call
 
 internal interface SignalingTransport {
     val kind: SignalingClient.TransportKind

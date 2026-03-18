@@ -1,4 +1,4 @@
-package app.serenada.android.call
+package app.serenada.core.call
 
 import android.content.Context
 import android.util.Log
@@ -15,7 +15,7 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoFrame
 
-internal fun mirrorDisplayXInCrop(
+fun mirrorDisplayXInCrop(
     displayX: Float,
     cropLeft: Int,
     cropSize: Int

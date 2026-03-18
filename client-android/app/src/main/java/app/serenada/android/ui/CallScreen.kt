@@ -72,27 +72,28 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import app.serenada.android.R
-import app.serenada.android.layout.CallScene
-import app.serenada.android.layout.ContentType
-import app.serenada.android.layout.FitMode
-import app.serenada.android.layout.Insets
-import app.serenada.android.layout.OccupantType
-import app.serenada.android.layout.ParticipantRole
-import app.serenada.android.layout.SceneParticipant
-import app.serenada.android.layout.StageTileSpec
-import app.serenada.android.layout.StageRowLayout
-import app.serenada.android.layout.StageTileLayout
-import app.serenada.android.layout.UserLayoutPrefs
-import app.serenada.android.layout.clampStageTileAspectRatio
-import app.serenada.android.layout.computeLayout
-import app.serenada.android.layout.computeStageLayout
-import app.serenada.android.call.CallPhase
+import app.serenada.core.layout.CallScene
+import app.serenada.core.layout.ContentSource
+import app.serenada.core.layout.ContentType
+import app.serenada.core.layout.FitMode
+import app.serenada.core.layout.Insets
+import app.serenada.core.layout.OccupantType
+import app.serenada.core.layout.ParticipantRole
+import app.serenada.core.layout.SceneParticipant
+import app.serenada.core.layout.StageTileSpec
+import app.serenada.core.layout.StageRowLayout
+import app.serenada.core.layout.StageTileLayout
+import app.serenada.core.layout.UserLayoutPrefs
+import app.serenada.core.layout.clampStageTileAspectRatio
+import app.serenada.core.layout.computeLayout
+import app.serenada.core.layout.computeStageLayout
+import app.serenada.core.call.CallPhase
 import app.serenada.android.call.CallUiState
-import app.serenada.android.call.ConnectionStatus
-import app.serenada.android.call.ContentTypeWire
-import app.serenada.android.call.LocalCameraMode
-import app.serenada.android.call.RemoteParticipant
-import app.serenada.android.call.RealtimeCallStats
+import app.serenada.core.call.ConnectionStatus
+import app.serenada.core.call.ContentTypeWire
+import app.serenada.core.call.LocalCameraMode
+import app.serenada.core.call.RemoteParticipant
+import app.serenada.core.call.RealtimeCallStats
 import app.serenada.android.data.SettingsStore
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -961,10 +962,11 @@ private fun buildDebugPanelSections(
         }
     val reconnectingStatus = if (showReconnecting) DebugStatus.BAD else DebugStatus.GOOD
 
+    val currentTransportPath = realtimeStats?.transportPath
     val transportPathStatus =
         when {
-            realtimeStats?.transportPath == null -> DebugStatus.NA
-            realtimeStats.transportPath.startsWith("TURN relay") -> DebugStatus.WARN
+            currentTransportPath == null -> DebugStatus.NA
+            currentTransportPath.startsWith("TURN relay") -> DebugStatus.WARN
             else -> DebugStatus.GOOD
         }
     val rttStatus = lowerIsBetter(realtimeStats?.rttMs, 120.0, 250.0)
@@ -1357,14 +1359,14 @@ private fun MultiPartyStage(
                         localCameraMode == LocalCameraMode.WORLD -> ContentType.WORLD_CAMERA
                         else -> ContentType.COMPOSITE_CAMERA
                     }
-                    app.serenada.android.layout.ContentSource(
+                    ContentSource(
                         type = type,
                         ownerParticipantId = localCid,
                         aspectRatio = null,
                     )
                 } else if (remoteContentCid != null) {
                     val type = ContentType.fromWire(remoteContentType)
-                    app.serenada.android.layout.ContentSource(
+                    ContentSource(
                         type = type,
                         ownerParticipantId = remoteContentCid,
                         aspectRatio = null,

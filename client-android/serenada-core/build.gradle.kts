@@ -23,4 +23,6 @@ android {
 
 dependencies {
     api("", name = "libwebrtc-7559_173-arm64", ext = "aar")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }

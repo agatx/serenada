@@ -1,4 +1,4 @@
-package app.serenada.android.call
+package app.serenada.core.call
 
 /**
  * Canonical WebRTC resilience constants shared across all Serenada clients.

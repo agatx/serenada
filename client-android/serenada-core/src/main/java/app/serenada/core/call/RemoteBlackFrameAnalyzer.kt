@@ -1,4 +1,4 @@
-package app.serenada.android.call
+package app.serenada.core.call
 
 import android.os.SystemClock
 import org.webrtc.VideoFrame

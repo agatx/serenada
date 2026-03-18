@@ -25,8 +25,23 @@ import app.serenada.android.data.SavedRoom
 import app.serenada.android.data.SavedRoomStore
 import app.serenada.android.data.SettingsStore
 import app.serenada.android.i18n.AppLocaleManager
-import app.serenada.android.network.ApiClient
-import app.serenada.android.network.TurnCredentials
+import app.serenada.android.network.HostApiClient
+import app.serenada.core.network.CoreApiClient
+import app.serenada.core.network.TurnCredentials
+import app.serenada.core.call.CallPhase
+import app.serenada.core.call.ConnectionStatus
+import app.serenada.core.call.ContentTypeWire
+import app.serenada.core.call.LocalCameraMode
+import app.serenada.core.call.Participant
+import app.serenada.core.call.PeerConnectionSlot
+import app.serenada.core.call.RemoteParticipant
+import app.serenada.core.call.RealtimeCallStats
+import app.serenada.core.call.RoomState
+import app.serenada.core.call.SignalingClient
+import app.serenada.core.call.SignalingMessage
+import app.serenada.core.call.WebRtcEngine
+import app.serenada.core.call.WebRtcResilienceConstants
+import app.serenada.core.call.CallAudioSessionController
 import app.serenada.android.push.PushSubscriptionManager
 import app.serenada.android.service.CallService
 import okhttp3.OkHttpClient
@@ -45,7 +60,8 @@ class CallManager(context: Context) {
         Thread(runnable, "webrtc-stats")
     }
     private val okHttpClient = OkHttpClient.Builder().build()
-    private val apiClient = ApiClient(okHttpClient)
+    private val apiClient = HostApiClient(okHttpClient)
+    private val coreApiClient = CoreApiClient(okHttpClient)
     private val settingsStore = SettingsStore(appContext)
     private val recentCallStore = RecentCallStore(appContext)
     private val savedRoomStore = SavedRoomStore(appContext)
@@ -405,7 +421,7 @@ class CallManager(context: Context) {
 
     fun validateServerHost(host: String, onResult: (Result<String>) -> Unit) {
         val normalized = host.trim().ifBlank { SettingsStore.DEFAULT_HOST }
-        apiClient.validateServerHost(normalized) { result ->
+        coreApiClient.validateServerHost(normalized) { result ->
             handler.post {
                 onResult(result.map { normalized })
             }
@@ -522,7 +538,7 @@ class CallManager(context: Context) {
             }
             return
         }
-        apiClient.createRoomId(normalizedHost) { result ->
+        coreApiClient.createRoomId(normalizedHost) { result ->
             handler.post {
                 result
                     .onSuccess { roomId ->
@@ -683,7 +699,7 @@ class CallManager(context: Context) {
                 statusMessageResId = R.string.call_status_creating_room
             )
         )
-        apiClient.createRoomId(serverHost.value) { result ->
+        coreApiClient.createRoomId(serverHost.value) { result ->
             handler.post {
                 result
                     .onSuccess { roomId ->
@@ -1646,7 +1662,7 @@ class CallManager(context: Context) {
             applyDefaultIceServers()
         }
         handler.postDelayed(timeoutRunnable, WebRtcResilienceConstants.TURN_FETCH_TIMEOUT_MS)
-        apiClient.fetchTurnCredentials(currentSignalingHost(), token) { result ->
+        coreApiClient.fetchTurnCredentials(currentSignalingHost(), token) { result ->
             handler.post {
                 handler.removeCallbacks(timeoutRunnable)
                 if (resolved) return@post

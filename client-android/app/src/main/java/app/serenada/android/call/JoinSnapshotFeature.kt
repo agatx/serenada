@@ -10,10 +10,11 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.Log
-import app.serenada.android.network.ApiClient
+import app.serenada.android.network.HostApiClient
 import app.serenada.android.network.PushRecipient
 import app.serenada.android.network.PushSnapshotRecipient
 import app.serenada.android.network.PushSnapshotUploadRequest
+import app.serenada.core.call.WebRtcResilienceConstants
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.nio.ByteBuffer
@@ -37,7 +38,7 @@ import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 
 class JoinSnapshotFeature(
-    private val apiClient: ApiClient,
+    private val apiClient: HostApiClient,
     private val handler: Handler,
     private val attachLocalSink: (VideoSink) -> Unit,
     private val detachLocalSink: (VideoSink) -> Unit

@@ -3,14 +3,14 @@ package app.serenada.android.push
 import android.content.Context
 import android.util.Log
 import app.serenada.android.data.SettingsStore
-import app.serenada.android.network.ApiClient
+import app.serenada.android.network.HostApiClient
 import app.serenada.android.network.PushSubscribeRequest
 import com.google.firebase.messaging.FirebaseMessaging
 import java.util.Locale
 
 class PushSubscriptionManager(
     context: Context,
-    private val apiClient: ApiClient,
+    private val apiClient: HostApiClient,
     private val settingsStore: SettingsStore,
     private val pushKeyStore: PushKeyStore = PushKeyStore()
 ) {
