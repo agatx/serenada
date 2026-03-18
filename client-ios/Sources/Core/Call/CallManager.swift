@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Network
 import os.log
+import SerenadaCore
 import UIKit
 
 struct JoinRecoveryState: Equatable {

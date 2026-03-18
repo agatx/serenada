@@ -1,4 +1,5 @@
 import Foundation
+import SerenadaCore
 
 struct RoomStatus: Equatable {
     let count: Int

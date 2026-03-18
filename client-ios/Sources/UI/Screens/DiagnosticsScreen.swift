@@ -1,4 +1,5 @@
 import AVFoundation
+import SerenadaCore
 import SwiftUI
 import UserNotifications
 #if canImport(WebRTC)

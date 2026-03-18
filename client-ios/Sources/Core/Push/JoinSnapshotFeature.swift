@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SerenadaCore
 import UIKit
 #if canImport(WebRTC)
 import WebRTC

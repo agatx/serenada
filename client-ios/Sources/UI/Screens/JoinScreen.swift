@@ -1,3 +1,4 @@
+import SerenadaCore
 import SwiftUI
 
 struct JoinScreen: View {

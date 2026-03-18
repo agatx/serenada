@@ -1,3 +1,4 @@
+import SerenadaCore
 import XCTest
 @testable import SerenadaiOS
 

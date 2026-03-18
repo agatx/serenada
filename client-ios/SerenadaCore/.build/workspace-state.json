@@ -1,0 +1,31 @@
+{
+  "object" : {
+    "artifacts" : [
+      {
+        "kind" : {
+          "xcframework" : {
+
+          }
+        },
+        "packageRef" : {
+          "identity" : "serenadacore",
+          "kind" : "root",
+          "location" : "/Users/alexeygavrilov/Developer/src/connected/client-ios/SerenadaCore",
+          "name" : "SerenadaCore"
+        },
+        "path" : "/Users/alexeygavrilov/Developer/src/connected/client-ios/Vendor/WebRTC/WebRTC.xcframework",
+        "source" : {
+          "type" : "local"
+        },
+        "targetName" : "WebRTC"
+      }
+    ],
+    "dependencies" : [
+
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

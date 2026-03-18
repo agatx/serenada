@@ -656,80 +656,80 @@ Use npm workspaces (`client/packages/core`, `client/packages/react-ui`) to devel
 
 #### Move files into SerenadaCore
 
-- [ ] Move `Sources/Core/Call/WebRtcEngine.swift` → `SerenadaCore/Sources/` (mark `internal`)
-- [ ] Move `Sources/Core/Call/PeerConnectionSlot.swift` → `SerenadaCore/Sources/` (mark `internal`)
-- [ ] Move `Sources/Core/Call/CallAudioSessionController.swift` → `SerenadaCore/Sources/` (mark `internal`)
-- [ ] Move `Sources/Core/Signaling/*` → `SerenadaCore/Sources/` (mark `internal`)
-- [ ] Move only SDK-native models into `SerenadaCore/Sources/` (mark `public`) — do NOT publish current UI-flavored state objects as-is
-- [ ] Split `Sources/Core/Networking/APIClient.swift` into:
-  - [ ] call-only client (TURN + room creation + signaling probe for diagnostics) → `SerenadaCore/Sources/`
-  - [ ] host-only client (push / invite / snapshot / analytics) → app target
-- [ ] Move `Sources/Core/Utils/DeepLinkParser.swift` → `SerenadaCore/Sources/` (mark `public`)
-- [ ] Move `Sources/Core/Layout/ComputeLayout.swift` → `SerenadaCore/Sources/` (mark `public`)
-- [ ] Fix all import paths in moved files
-- [ ] Build — should compile
+- [x] Move `Sources/Core/Call/WebRtcEngine.swift` → `SerenadaCore/Sources/` (mark `internal`)
+- [x] Move `Sources/Core/Call/PeerConnectionSlot.swift` → `SerenadaCore/Sources/` (mark `internal`)
+- [x] Move `Sources/Core/Call/CallAudioSessionController.swift` → `SerenadaCore/Sources/` (mark `internal`)
+- [x] Move `Sources/Core/Signaling/*` → `SerenadaCore/Sources/` (mark `internal`)
+- [x] Move only SDK-native models into `SerenadaCore/Sources/` (mark `public`) — do NOT publish current UI-flavored state objects as-is
+- [x] Split `Sources/Core/Networking/APIClient.swift` into:
+  - [x] call-only client (TURN + room creation + signaling probe for diagnostics) → `SerenadaCore/Sources/`
+  - [x] host-only client (push / invite / snapshot / analytics) → app target
+- [x] Move `Sources/Core/Utils/DeepLinkParser.swift` → `SerenadaCore/Sources/` (mark `public`)
+- [x] Move `Sources/Core/Layout/ComputeLayout.swift` → `SerenadaCore/Sources/` (mark `public`)
+- [x] Fix all import paths in moved files
+- [x] Build — should compile
 
 #### Split CallManager.swift
 
-- [ ] Create `SerenadaSession.swift` in `SerenadaCore/Sources/` as a `public class`
-- [ ] Define a new public `CallState` struct with SDK-native fields only (do not reuse current app `CallUiState`)
-- [ ] Move signaling, WebRTC orchestration, media control, and reconnection logic from `CallManager` into internal classes that `SerenadaSession` delegates to
-- [ ] Expose public methods on `SerenadaSession`: `leave()`, `end()`, `toggleAudio()`, `toggleVideo()`, `flipCamera()`, `setCameraMode()`, `startScreenShare()`, `stopScreenShare()`
-- [ ] Expose `resumeJoin()` and `cancelJoin()` for blocked preconditions such as permissions
-- [ ] Expose renderer attachment: `attachLocalRenderer()`, `attachRemoteRenderer()`
-- [ ] Expose `@Published var state: CallState` for observation
-- [ ] Strip host-app concerns out of the session engine:
-  - [ ] Remove saved rooms logic → move to host app
-  - [ ] Remove recent calls logic → move to host app
-  - [ ] Remove settings persistence → move to host app
-  - [ ] Remove push subscription sync → move to host app
-  - [ ] Remove room-status watching → move to host app
-  - [ ] Remove snapshot upload → move to host app
-- [ ] Build — should compile
+- [x] Create `SerenadaSession.swift` in `SerenadaCore/Sources/` as a `public class`
+- [x] Define a new public `CallState` struct with SDK-native fields only (do not reuse current app `CallUiState`)
+- [x] Move signaling, WebRTC orchestration, media control, and reconnection logic from `CallManager` into internal classes that `SerenadaSession` delegates to
+- [x] Expose public methods on `SerenadaSession`: `leave()`, `end()`, `toggleAudio()`, `toggleVideo()`, `flipCamera()`, `setCameraMode()`, `startScreenShare()`, `stopScreenShare()`
+- [x] Expose `resumeJoin()` and `cancelJoin()` for blocked preconditions such as permissions
+- [x] Expose renderer attachment: `attachLocalRenderer()`, `attachRemoteRenderer()`
+- [x] Expose `@Published var state: CallState` for observation
+- [x] Strip host-app concerns out of the session engine:
+  - [x] Remove saved rooms logic → move to host app
+  - [x] Remove recent calls logic → move to host app
+  - [x] Remove settings persistence → move to host app
+  - [x] Remove push subscription sync → move to host app
+  - [x] Remove room-status watching → move to host app
+  - [x] Remove snapshot upload → move to host app
+- [x] Build — should compile
 
 #### Create SerenadaCore entry point
 
-- [ ] Create `SerenadaCore.swift` with `public init(config: SerenadaConfig)`
-- [ ] Define `SerenadaConfig` struct: `serverHost`, `defaultAudioEnabled`, `defaultVideoEnabled`, `transports`
-- [ ] Implement `public func join(url: URL) -> SerenadaSession`
-- [ ] Implement `public func join(roomId: String) -> SerenadaSession`
-- [ ] Implement `public func createRoom(completion: (CreateRoomResult) -> Void)`
-- [ ] Define `SerenadaCoreDelegate` protocol:
-  - [ ] `sessionRequiresPermissions` callback (optional — core pauses join until host or call-ui resumes)
-  - [ ] `sessionDidChangeState` callback
-  - [ ] `sessionDidEnd` callback
-- [ ] Implement permission preflight in `join()` — detect missing camera/mic, set `state.phase = .awaitingPermissions`, populate `requiredPermissions`, and invoke delegate if set
-- [ ] Create `SerenadaDiagnostics` preflight utility:
-  - [ ] Implement `runAll(completion:)` — runs all checks, returns `DiagnosticsReport`
-  - [ ] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkSpeaker()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
-  - [ ] Define `DiagnosticsReport` struct with structured results per check
-  - [ ] Define result enums: `.available`, `.unavailable(reason)`, `.notAuthorized`, `.skipped(reason)`
-  - [ ] Implement device enumeration (cameras, microphones) via WebRTC APIs
-  - [ ] Enforce no-prompts contract: camera/mic checks must return `.notAuthorized` if permission not granted, never trigger OS prompt
-  - [ ] Signaling probe uses core's call-only client (same endpoint used by `join()`)
-  - [ ] TURN probe uses core's TURN credential fetch
-- [ ] Add `callStats: CallStats` observable on `SerenadaSession`:
-  - [ ] Define `CallStats` struct: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
-  - [ ] Populate from WebRTC `getStats()` on a periodic interval during active call
-  - [ ] Expose as `@Published` for observation
-- [ ] Build — should compile
+- [x] Create `SerenadaCore.swift` with `public init(config: SerenadaConfig)`
+- [x] Define `SerenadaConfig` struct: `serverHost`, `defaultAudioEnabled`, `defaultVideoEnabled`, `transports`
+- [x] Implement `public func join(url: URL) -> SerenadaSession`
+- [x] Implement `public func join(roomId: String) -> SerenadaSession`
+- [x] Implement `public func createRoom(completion: (CreateRoomResult) -> Void)`
+- [x] Define `SerenadaCoreDelegate` protocol:
+  - [x] `sessionRequiresPermissions` callback (optional — core pauses join until host or call-ui resumes)
+  - [x] `sessionDidChangeState` callback
+  - [x] `sessionDidEnd` callback
+- [x] Implement permission preflight in `join()` — detect missing camera/mic, set `state.phase = .awaitingPermissions`, populate `requiredPermissions`, and invoke delegate if set
+- [x] Create `SerenadaDiagnostics` preflight utility:
+  - [x] Implement `runAll(completion:)` — runs all checks, returns `DiagnosticsReport`
+  - [x] Implement individual checks: `checkCamera()`, `checkMicrophone()`, `checkSpeaker()`, `checkNetwork()`, `checkSignaling()`, `checkTurn()`
+  - [x] Define `DiagnosticsReport` struct with structured results per check
+  - [x] Define result enums: `.available`, `.unavailable(reason)`, `.notAuthorized`, `.skipped(reason)`
+  - [x] Implement device enumeration (cameras, microphones) via WebRTC APIs
+  - [x] Enforce no-prompts contract: camera/mic checks must return `.notAuthorized` if permission not granted, never trigger OS prompt
+  - [x] Signaling probe uses core's call-only client (same endpoint used by `join()`)
+  - [x] TURN probe uses core's TURN credential fetch
+- [x] Add `callStats: CallStats` observable on `SerenadaSession`:
+  - [x] Define `CallStats` struct: bitrate, packet loss, jitter, codec, ICE candidate pair, round-trip time
+  - [x] Populate from WebRTC `getStats()` on a periodic interval during active call
+  - [x] Expose as `@Published` for observation
+- [x] Build — should compile
 
 #### Rewire iOS host app
 
-- [ ] Update the Serenada iOS app to `import SerenadaCore`
-- [ ] Replace direct `CallManager` usage with `SerenadaCore` / `SerenadaSession` API
-- [ ] Move push subscription logic into the app target (calling through session state observation)
-- [ ] Move saved rooms / recent calls management into the app target
-- [ ] Move settings persistence into the app target
-- [ ] Verify `Sources/Core/Push/*` stays in the app target and does NOT import from `SerenadaCore` internals
+- [x] Update the Serenada iOS app to `import SerenadaCore`
+- [x] Replace direct `CallManager` usage with `SerenadaCore` / `SerenadaSession` API
+- [x] Move push subscription logic into the app target (calling through session state observation)
+- [x] Move saved rooms / recent calls management into the app target
+- [x] Move settings persistence into the app target
+- [x] Verify `Sources/Core/Push/*` stays in the app target and does NOT import from `SerenadaCore` internals
 
 #### Verify
 
-- [ ] App builds with `xcodegen generate && xcodebuild`
-- [ ] App runs and behaves identically to before the refactor
-- [ ] Run existing test suite — all tests pass
-- [ ] Grep `SerenadaCore` sources for any host-app references (push, saved rooms, settings) — zero results
-- [ ] Verify `SerenadaCore` has no UIKit/SwiftUI imports
+- [x] App builds with `xcodegen generate && xcodebuild`
+- [x] App runs and behaves identically to before the refactor
+- [x] Run existing test suite — all tests pass
+- [x] Grep `SerenadaCore` sources for any host-app references (push, saved rooms, settings) — zero results
+- [x] Verify `SerenadaCore` has no UIKit/SwiftUI imports
 
 ### Phase 2: Extract Core — Web
 

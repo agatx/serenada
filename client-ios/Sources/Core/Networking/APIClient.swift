@@ -1,4 +1,5 @@
 import Foundation
+import SerenadaCore
 
 struct PushRecipientPublicKey: Codable, Equatable {
     let kty: String
@@ -62,6 +63,15 @@ struct PushSubscribeRequest: Encodable, Equatable {
             try container.encode(KeysPayload(auth: cleanAuth, p256dh: cleanP256dh), forKey: .keys)
         }
     }
+}
+
+/// Local copy of TurnCredentials for the host app during the SDK transition.
+/// The canonical definition lives in SerenadaCore (internal).
+struct TurnCredentials: Codable, Equatable {
+    let username: String
+    let password: String
+    let uris: [String]
+    let ttl: Int
 }
 
 final class APIClient {
@@ -285,13 +295,44 @@ final class APIClient {
         return decoded.roomId
     }
 
+    /// Builds an HTTPS URL from a raw host string (e.g. "example.com" or "example.com:8443").
+    /// Inlines the host-parsing logic so this file does not depend on EndpointHostParser
+    /// (which is internal to SerenadaCore).
     private func buildHTTPSURL(host: String, path: String, query: [String: String] = [:]) -> URL? {
-        guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
+        let trimmed = host
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return nil }
+
+        let lower = trimmed.lowercased()
+        let withScheme: String
+        if lower.hasPrefix("https://") || lower.hasPrefix("http://") ||
+            lower.hasPrefix("wss://") || lower.hasPrefix("ws://") {
+            withScheme = trimmed
+        } else {
+            withScheme = "https://\(trimmed)"
+        }
+
+        guard let parsed = URLComponents(string: withScheme) else { return nil }
+        guard parsed.user == nil else { return nil }
+        guard parsed.password == nil else { return nil }
+        guard parsed.query == nil else { return nil }
+        guard parsed.fragment == nil else { return nil }
+        guard parsed.path.isEmpty || parsed.path == "/" else { return nil }
+
+        guard let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !parsedHost.isEmpty else {
+            return nil
+        }
+
+        if let port = parsed.port {
+            guard (1...65535).contains(port) else { return nil }
+        }
 
         var components = URLComponents()
         components.scheme = "https"
-        components.host = parsedHost.host
-        components.port = parsedHost.port
+        components.host = parsedHost
+        components.port = parsed.port
         components.path = path
         if !query.isEmpty {
             components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -310,21 +351,4 @@ private struct DiagnosticTokenResponse: Codable {
 
 private struct PushSnapshotIDResponse: Codable {
     let id: String
-}
-
-enum APIError: Error, LocalizedError {
-    case invalidHost
-    case invalidResponse(String)
-    case http(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidHost:
-            return "Invalid host"
-        case .invalidResponse(let message):
-            return message
-        case .http(let message):
-            return message
-        }
-    }
 }
