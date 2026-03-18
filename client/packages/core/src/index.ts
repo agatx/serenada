@@ -9,6 +9,13 @@ export { SerenadaCore } from './SerenadaCore.js';
 export { SerenadaSession } from './SerenadaSession.js';
 export { SerenadaDiagnostics } from './SerenadaDiagnostics.js';
 
+// Factory functions (match documented API)
+import { SerenadaCore as _SerenadaCore } from './SerenadaCore.js';
+import { SerenadaDiagnostics as _SerenadaDiagnostics } from './SerenadaDiagnostics.js';
+import type { SerenadaConfig } from './types.js';
+export function createSerenadaCore(config: SerenadaConfig): _SerenadaCore { return new _SerenadaCore(config); }
+export function createSerenadaDiagnostics(config: SerenadaConfig): _SerenadaDiagnostics { return new _SerenadaDiagnostics(config); }
+
 // Public types
 export type {
     CallPhase,

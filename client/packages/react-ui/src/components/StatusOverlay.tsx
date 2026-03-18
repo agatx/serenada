@@ -1,7 +1,17 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import type { ConnectionStatus } from '@serenada/core';
 import type { SerenadaString } from '../types.js';
 import { resolveString } from '../types.js';
+
+const PULSE_KEYFRAMES_ID = 'serenada-pulse-keyframes';
+function ensurePulseKeyframes(): void {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById(PULSE_KEYFRAMES_ID)) return;
+    const style = document.createElement('style');
+    style.id = PULSE_KEYFRAMES_ID;
+    style.textContent = `@keyframes serenada-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`;
+    document.head.appendChild(style);
+}
 
 export interface StatusOverlayProps {
     connectionStatus: ConnectionStatus;
@@ -39,6 +49,8 @@ const dotStyle: React.CSSProperties = {
 };
 
 export const StatusOverlay: React.FC<StatusOverlayProps> = ({ connectionStatus, strings }) => {
+    useEffect(() => { ensurePulseKeyframes(); }, []);
+
     if (connectionStatus === 'connected') return null;
 
     return (
@@ -47,12 +59,6 @@ export const StatusOverlay: React.FC<StatusOverlayProps> = ({ connectionStatus, 
                 <span style={dotStyle} />
                 {resolveString('reconnecting', strings)}
             </div>
-            <style>{`
-                @keyframes serenada-pulse {
-                    0%, 100% { opacity: 1; }
-                    50% { opacity: 0.3; }
-                }
-            `}</style>
         </div>
     );
 };

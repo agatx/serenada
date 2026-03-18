@@ -89,6 +89,14 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         };
     }, [session]);
 
+    // --- Auto-dismiss after 'ending' phase -----------------------------------
+    useEffect(() => {
+        if (effectiveState.phase === 'ending') {
+            const timer = setTimeout(() => { onDismiss?.(); }, 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [effectiveState.phase, onDismiss]);
+
     // --- Callbacks ------------------------------------------------------------
     const handleEndCall = useCallback(() => {
         if (session) {

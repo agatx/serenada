@@ -187,11 +187,11 @@ class CoreApiClient(private val okHttpClient: OkHttpClient) {
 
     private fun buildHttpsUrl(hostInput: String, path: String, query: Map<String, String> = emptyMap()): String? {
         val raw = hostInput.trim()
-        val explicitHttp = raw.startsWith("http://")
-        val withScheme = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
+        val isLocal = raw.startsWith("localhost") || raw.startsWith("127.") || raw.startsWith("http://")
+        val withScheme = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else if (isLocal) "http://$raw" else "https://$raw"
         val base = withScheme.toHttpUrlOrNull() ?: return null
         val builder = base.newBuilder()
-            .scheme(if (explicitHttp) "http" else "https")
+            .scheme(if (isLocal) "http" else "https")
             .encodedPath(path)
 
         for ((key, value) in query) {

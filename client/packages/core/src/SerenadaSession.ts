@@ -205,10 +205,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
         if (error) {
             phase = 'error';
-        } else if (!signalingState && phase !== 'idle') {
+        } else if (!signalingState && phase !== 'idle' && phase !== 'ending') {
             if (this._state.phase === 'inCall' || this._state.phase === 'waiting') {
-                // Room ended or left — transition to idle and clean up
-                phase = 'idle';
+                // Room ended or left — show ending screen briefly
+                phase = 'ending';
+                setTimeout(() => {
+                    if (this._destroyed) return;
+                    this._state = { ...this._state, phase: 'idle' };
+                    this.notifyListeners();
+                }, 3000);
             } else if (this.signaling.isConnected && this._state.phase === 'joining') {
                 phase = 'joining';
             }
