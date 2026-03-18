@@ -148,7 +148,8 @@ public struct SerenadaCallFlow: View {
                 serenadaConfig: serenadaConfig,
                 config: config,
                 strings: strings,
-                onDismiss: onDismiss
+                onDismiss: onDismiss,
+                onCallEnded: onCallEnded
             )
 
         case .sessionFirst(let session):
@@ -156,7 +157,8 @@ public struct SerenadaCallFlow: View {
                 session: session,
                 config: config,
                 strings: strings,
-                onDismiss: onDismiss
+                onDismiss: onDismiss,
+                onCallEnded: onCallEnded
             )
 
         case .bridge(let params):
@@ -198,6 +200,7 @@ private struct URLFirstCallFlow: View {
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
     let onDismiss: (() -> Void)?
+    let onCallEnded: ((EndReason) -> Void)?
 
     @State private var session: SerenadaSession?
     @State private var permissionsGranted = false
@@ -209,7 +212,8 @@ private struct URLFirstCallFlow: View {
                     session: session,
                     config: config,
                     strings: strings,
-                    onDismiss: onDismiss
+                    onDismiss: onDismiss,
+                    onCallEnded: onCallEnded
                 )
             } else {
                 ProgressView()
@@ -240,6 +244,7 @@ private struct SessionFirstCallFlow: View {
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
     let onDismiss: (() -> Void)?
+    let onCallEnded: ((EndReason) -> Void)?
 
     var body: some View {
         let state = session.state
@@ -302,6 +307,7 @@ private struct SessionFirstCallFlow: View {
                     onToggleFlashlight: {},
                     onEndCall: {
                         session.end()
+                        onCallEnded?(.localLeft)
                         onDismiss?()
                     },
                     onInviteToRoom: { .failure(NSError(domain: "SerenadaCallUI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Not implemented"])) },

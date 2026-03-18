@@ -59,9 +59,11 @@ class SerenadaCore(
         apiClient.createRoomId(config.serverHost) { result ->
             result
                 .onSuccess { roomId ->
+                    val isLocal = config.serverHost.startsWith("localhost") || config.serverHost.startsWith("127.")
+                    val scheme = if (isLocal) "http" else "https"
                     val session = SerenadaSession(
                         roomId = roomId,
-                        roomUrl = "https://${config.serverHost}/call/$roomId",
+                        roomUrl = "$scheme://${config.serverHost}/call/$roomId",
                         serverHost = config.serverHost,
                         config = config,
                         context = context,

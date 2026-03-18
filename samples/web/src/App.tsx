@@ -1,8 +1,8 @@
 import { useState, useCallback } from 'react'
-import { createSerenadaCore } from '@serenada/core'
+import { SerenadaCore } from '@serenada/core'
 import { SerenadaCallFlow } from '@serenada/react-ui'
 
-const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
+const serenada = new SerenadaCore({ serverHost: 'serenada.app' })
 
 export default function App() {
     const [callUrl, setCallUrl] = useState<string | null>(null)

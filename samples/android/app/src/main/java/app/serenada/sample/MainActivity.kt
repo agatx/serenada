@@ -14,12 +14,14 @@ import app.serenada.core.SerenadaConfig
 import app.serenada.callui.SerenadaCallFlow
 
 class MainActivity : ComponentActivity() {
-    private val serenada = SerenadaCore(
-        config = SerenadaConfig(serverHost = "serenada.app")
-    )
+    private lateinit var serenada: SerenadaCore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        serenada = SerenadaCore(
+            config = SerenadaConfig(serverHost = "serenada.app"),
+            context = this,
+        )
         setContent {
             MaterialTheme {
                 SampleApp(serenada = serenada)
@@ -82,9 +84,10 @@ fun HomeScreen(onJoin: (String) -> Unit, serenada: SerenadaCore) {
         OutlinedButton(
             onClick = {
                 serenada.createRoom { result ->
-                    result.onSuccess { room ->
-                        // In a real app, share room.url with the other party
-                        onJoin(room.url)
+                    val roomId = result.roomId
+                    if (roomId != null) {
+                        // In a real app, share the room URL with the other party
+                        onJoin("https://serenada.app/call/$roomId")
                     }
                 }
             },

@@ -196,6 +196,7 @@ export class SerenadaSession {
     // --- Private ---
 
     private rebuildState(): void {
+        if (this._destroyed) return;
         const signalingState = this.signaling.roomState;
         const clientId = this.signaling.clientId;
 
@@ -278,6 +279,7 @@ export class SerenadaSession {
                     const required: MediaCapability[] = [];
                     if (cameraResult?.state === 'prompt') required.push('camera');
                     if (micResult?.state === 'prompt') required.push('microphone');
+                    this.permissionCheckInFlight = false;
                     this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: required };
                     this.notifyListeners();
                     this.onPermissionsRequired?.(required);
@@ -289,6 +291,7 @@ export class SerenadaSession {
         }
 
         if (permissionsNeeded.length > 0) {
+            this.permissionCheckInFlight = false;
             this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: permissionsNeeded };
             this.notifyListeners();
             this.onPermissionsRequired?.(permissionsNeeded);

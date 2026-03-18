@@ -172,6 +172,7 @@ class SerenadaSession internal constructor(
     }
 
     fun end() {
+        sendMessage("end_room", null)
         leave()
     }
 
