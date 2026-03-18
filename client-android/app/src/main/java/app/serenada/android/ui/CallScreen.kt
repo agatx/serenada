@@ -1738,10 +1738,13 @@ private fun RemoteParticipantStageTile(
                     val rotatedWidth = if (rotation % 180 == 0) widthPx else heightPx
                     val rotatedHeight = if (rotation % 180 == 0) heightPx else widthPx
                     if (rotatedWidth == 0 || rotatedHeight == 0) return
-                    val ratio = clampStageTileAspectRatio(rotatedWidth.toFloat() / rotatedHeight.toFloat())
+                    val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+                    val layoutRatio = clampStageTileAspectRatio(rawRatio)
                     mainHandler.post {
-                        videoAspectRatio = ratio
-                        onAspectRatioChanged(ratio)
+                        // Keep full frame aspect for rendering so tall screen-share streams
+                        // still fit correctly, but clamp the ratio used by stage layout.
+                        videoAspectRatio = rawRatio
+                        onAspectRatioChanged(layoutRatio)
                     }
                 }
             }
