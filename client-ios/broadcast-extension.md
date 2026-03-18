@@ -36,6 +36,8 @@ Offset 48: [16 bytes reserved]
 Offset 64: [plane 0 data] [plane 1 data]
 ```
 
+`timestampNs` stays at byte offset `36`, which is intentionally unaligned. Read and write it via byte copies (`memcpy`/buffer copy), not typed `UnsafeRawPointer.load` or `storeBytes` calls.
+
 ## Enabling the Broadcast Extension
 
 This requires one-time provisioning in the Apple Developer Portal.

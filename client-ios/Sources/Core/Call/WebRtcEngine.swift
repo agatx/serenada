@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreImage
 import Foundation
+import os.log
 #if !BROADCAST_EXTENSION && canImport(ReplayKit)
 import ReplayKit
 #endif
@@ -339,14 +340,10 @@ final class WebRtcEngine {
 
         let previousSource = localCameraSource
         preScreenShareCameraSource = previousSource
-        setTorchEnabled(false)
-        localVideoCapturer?.stopCapture()
-        localVideoCapturer = nil
-        compositeVideoCapturer?.stopCapture()
-        compositeVideoCapturer = nil
-        activeCaptureDevice = nil
 
     #if BROADCAST_EXTENSION
+        // Defer camera teardown until broadcast actually starts (user confirms picker)
+        os_log("startScreenShare: BROADCAST_EXTENSION path, creating BroadcastFrameReader", log: OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine"), type: .info)
         let reader = BroadcastFrameReader(delegate: localVideoSource)
         broadcastFrameReader = reader
 
@@ -354,20 +351,34 @@ final class WebRtcEngine {
 
         reader.onBroadcastStarted = { [weak self] in
             Task { @MainActor in
+                os_log("startScreenShare: onBroadcastStarted callback fired", log: OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine"), type: .info)
                 startTimeoutTask?.cancel()
                 guard let self else { return }
-                guard self.broadcastFrameReader === reader else { return }
+                guard self.broadcastFrameReader === reader else {
+                    os_log("startScreenShare: reader mismatch, ignoring", log: OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine"), type: .error)
+                    return
+                }
+                // Now tear down camera — broadcast is confirmed
+                os_log("startScreenShare: tearing down camera, setting isScreenSharing=true", log: OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine"), type: .info)
+                self.setTorchEnabled(false)
+                self.localVideoCapturer?.stopCapture()
+                self.localVideoCapturer = nil
+                self.compositeVideoCapturer?.stopCapture()
+                self.compositeVideoCapturer = nil
+                self.activeCaptureDevice = nil
                 self.isScreenSharing = true
                 self.currentZoomFactor = 1
                 self.onZoomFactorChanged(1)
                 self.notifyCameraModeAndFlash()
                 self.localVideoTrack?.isEnabled = true
+                os_log("startScreenShare: calling onComplete(true)", log: OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine"), type: .info)
                 onComplete?(true)
             }
         }
 
         reader.onBroadcastFinished = { [weak self] in
             Task { @MainActor in
+                os_log("startScreenShare: onBroadcastFinished callback fired", log: OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine"), type: .info)
                 guard let self else { return }
                 guard self.broadcastFrameReader === reader else { return }
                 _ = self.stopScreenShare()
@@ -391,6 +402,13 @@ final class WebRtcEngine {
 
         return true
     #else
+        setTorchEnabled(false)
+        localVideoCapturer?.stopCapture()
+        localVideoCapturer = nil
+        compositeVideoCapturer?.stopCapture()
+        compositeVideoCapturer = nil
+        activeCaptureDevice = nil
+
         let capturer = ReplayKitVideoCapturer(delegate: localVideoSource)
         replayKitCapturer = capturer
 
@@ -1468,7 +1486,30 @@ private final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVid
 }
 
 #if BROADCAST_EXTENSION
+enum BroadcastSharedMemoryIO {
+    static let timestampOffset = 36
+
+    static func loadInt64(from ptr: UnsafeRawPointer, byteOffset: Int) -> Int64 {
+        var value: Int64 = 0
+        withUnsafeMutableBytes(of: &value) { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            memcpy(baseAddress, ptr.advanced(by: byteOffset), buffer.count)
+        }
+        return value
+    }
+
+    static func storeInt64(_ value: Int64, to ptr: UnsafeMutableRawPointer, byteOffset: Int) {
+        var mutableValue = value
+        withUnsafeBytes(of: &mutableValue) { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            memcpy(ptr.advanced(by: byteOffset), baseAddress, buffer.count)
+        }
+    }
+}
+
 private final class BroadcastFrameReader: RTCVideoCapturer {
+    private static let log = OSLog(subsystem: "app.serenada.ios", category: "BroadcastFrameReader")
+
     private enum Constants {
         static let appGroupIdentifier = "group.app.serenada.ios"
         static let sharedFileName = "broadcast_frame.dat"
@@ -1488,6 +1529,7 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
     private var mmapSize: Int = 0
     private var fileDescriptor: Int32 = -1
     private var lastSeqNo: UInt32 = 0
+    private var frameCount: UInt64 = 0
 
     private var pollTimer: DispatchSourceTimer?
     private var isListening = false
@@ -1495,8 +1537,12 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
     private static let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
 
     func startListening() {
-        guard !isListening else { return }
+        guard !isListening else {
+            os_log("startListening: already listening, skipping", log: Self.log, type: .info)
+            return
+        }
         isListening = true
+        os_log("startListening: registered Darwin observers for broadcastStarted/Finished", log: Self.log, type: .info)
 
         let observer = Unmanaged.passUnretained(self).toOpaque()
 
@@ -1506,6 +1552,7 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
                 guard let observer, let name else { return }
                 let reader = Unmanaged<BroadcastFrameReader>.fromOpaque(observer).takeUnretainedValue()
                 let nameStr = name.rawValue as String
+                os_log("Darwin notification received: %{public}@", log: BroadcastFrameReader.log, type: .info, nameStr)
                 if nameStr == Constants.darwinNotifyStarted {
                     DispatchQueue.main.async { reader.handleBroadcastStarted() }
                 } else if nameStr == Constants.darwinNotifyFinished {
@@ -1522,6 +1569,7 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
                 guard let observer, let name else { return }
                 let reader = Unmanaged<BroadcastFrameReader>.fromOpaque(observer).takeUnretainedValue()
                 let nameStr = name.rawValue as String
+                os_log("Darwin notification received: %{public}@", log: BroadcastFrameReader.log, type: .info, nameStr)
                 if nameStr == Constants.darwinNotifyFinished {
                     DispatchQueue.main.async { reader.handleBroadcastFinished() }
                 }
@@ -1559,13 +1607,18 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
     // MARK: - Darwin Notification Handlers
 
     private func handleBroadcastStarted() {
+        os_log("handleBroadcastStarted: isListening=%{public}d", log: Self.log, type: .info, isListening)
         guard isListening else { return }
-        guard openSharedMemory() else { return }
+        let memOk = openSharedMemory()
+        os_log("handleBroadcastStarted: openSharedMemory=%{public}d", log: Self.log, type: .info, memOk)
+        guard memOk else { return }
         startPolling()
+        os_log("handleBroadcastStarted: calling onBroadcastStarted callback (nil=%{public}d)", log: Self.log, type: .info, onBroadcastStarted == nil)
         onBroadcastStarted?()
     }
 
     private func handleBroadcastFinished() {
+        os_log("handleBroadcastFinished: isListening=%{public}d", log: Self.log, type: .info, isListening)
         guard isListening else { return }
         stopPolling()
         closeSharedMemory()
@@ -1577,6 +1630,8 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
     private func startPolling() {
         stopPolling()
         lastSeqNo = 0
+        frameCount = 0
+        os_log("startPolling: beginning frame polling at %dms interval", log: Self.log, type: .info, Constants.pollIntervalMs)
 
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInteractive))
         timer.schedule(
@@ -1601,6 +1656,7 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
         let seqNo = ptr.load(fromByteOffset: 0, as: UInt32.self)
         guard seqNo != lastSeqNo else { return }
         lastSeqNo = seqNo
+        frameCount += 1
 
         let width = Int(ptr.load(fromByteOffset: 4, as: UInt32.self))
         let height = Int(ptr.load(fromByteOffset: 8, as: UInt32.self))
@@ -1610,8 +1666,17 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
         let plane0Height = Int(ptr.load(fromByteOffset: 24, as: UInt32.self))
         let plane1BytesPerRow = Int(ptr.load(fromByteOffset: 28, as: UInt32.self))
         let plane1Height = Int(ptr.load(fromByteOffset: 32, as: UInt32.self))
-        let timestampNs = ptr.load(fromByteOffset: 36, as: Int64.self)
+        let timestampNs = BroadcastSharedMemoryIO.loadInt64(
+            from: UnsafeRawPointer(ptr),
+            byteOffset: BroadcastSharedMemoryIO.timestampOffset
+        )
         let rotationRaw = ptr.load(fromByteOffset: 44, as: UInt32.self)
+
+        if frameCount == 1 {
+            os_log("pollFrame: first frame — seqNo=%u width=%d height=%d pixelFormat=0x%x planes=%d", log: Self.log, type: .info, seqNo, width, height, pixelFormat, planeCount)
+        } else if frameCount % 100 == 0 {
+            os_log("pollFrame: frame #%llu — seqNo=%u width=%d height=%d", log: Self.log, type: .info, frameCount, seqNo, width, height)
+        }
 
         guard width > 0, height > 0 else { return }
 
@@ -1655,6 +1720,9 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
 
             let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
             let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
+            if frameCount == 1 {
+                os_log("pollFrame: delivering multi-planar frame to delegate (delegate nil=%{public}d)", log: Self.log, type: .info, delegate == nil)
+            }
             delegate?.capturer(self, didCapture: frame)
         } else {
             // Single-plane (BGRA)
@@ -1685,6 +1753,9 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
 
             let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
             let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
+            if frameCount == 1 {
+                os_log("pollFrame: delivering single-plane frame to delegate (delegate nil=%{public}d)", log: Self.log, type: .info, delegate == nil)
+            }
             delegate?.capturer(self, didCapture: frame)
         }
     }
@@ -1692,23 +1763,35 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
     // MARK: - Shared Memory
 
     private func openSharedMemory() -> Bool {
-        guard mmapPtr == nil else { return true }
+        guard mmapPtr == nil else {
+            os_log("openSharedMemory: already mapped", log: Self.log, type: .info)
+            return true
+        }
         guard let containerURL = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: Constants.appGroupIdentifier
-        ) else { return false }
+        ) else {
+            os_log("openSharedMemory: containerURL is nil for group %{public}@", log: Self.log, type: .error, Constants.appGroupIdentifier)
+            return false
+        }
 
         let fileURL = containerURL.appendingPathComponent(Constants.sharedFileName)
         let path = fileURL.path
+        os_log("openSharedMemory: path=%{public}@", log: Self.log, type: .info, path)
 
-        guard FileManager.default.fileExists(atPath: path) else { return false }
+        let exists = FileManager.default.fileExists(atPath: path)
+        os_log("openSharedMemory: fileExists=%{public}d", log: Self.log, type: .info, exists)
+        guard exists else { return false }
 
         fileDescriptor = open(path, O_RDONLY)
+        os_log("openSharedMemory: fd=%d", log: Self.log, type: .info, fileDescriptor)
         guard fileDescriptor >= 0 else { return false }
 
         var stat = stat()
         fstat(fileDescriptor, &stat)
         let size = Int(stat.st_size)
+        os_log("openSharedMemory: fileSize=%d headerSize=%d", log: Self.log, type: .info, size, Constants.headerSize)
         guard size > Constants.headerSize else {
+            os_log("openSharedMemory: file too small", log: Self.log, type: .error)
             close(fileDescriptor)
             fileDescriptor = -1
             return false
@@ -1717,11 +1800,13 @@ private final class BroadcastFrameReader: RTCVideoCapturer {
         guard let mapped = mmap(nil, size, PROT_READ, MAP_SHARED, fileDescriptor, 0),
               mapped != MAP_FAILED
         else {
+            os_log("openSharedMemory: mmap failed, errno=%d", log: Self.log, type: .error, errno)
             close(fileDescriptor)
             fileDescriptor = -1
             return false
         }
 
+        os_log("openSharedMemory: mmap OK, size=%d", log: Self.log, type: .info, size)
         mmapPtr = mapped
         mmapSize = size
         return true

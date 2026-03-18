@@ -13,6 +13,18 @@ private enum BroadcastConstants {
     static let darwinNotifyRequestStop = "app.serenada.ios.broadcast.requestStop"
 }
 
+private enum BroadcastSharedMemoryIO {
+    static let timestampOffset = 36
+
+    static func storeInt64(_ value: Int64, to ptr: UnsafeMutableRawPointer, byteOffset: Int) {
+        var mutableValue = value
+        withUnsafeBytes(of: &mutableValue) { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            memcpy(ptr.advanced(by: byteOffset), baseAddress, buffer.count)
+        }
+    }
+}
+
 final class SampleHandler: RPBroadcastSampleHandler {
     private var mmapPtr: UnsafeMutableRawPointer?
     private var mmapSize: Int = 0
@@ -109,7 +121,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
         ptr.storeBytes(of: UInt32(plane0.height), toByteOffset: 24, as: UInt32.self)
         ptr.storeBytes(of: UInt32(plane1.bytesPerRow), toByteOffset: 28, as: UInt32.self)
         ptr.storeBytes(of: UInt32(plane1.height), toByteOffset: 32, as: UInt32.self)
-        ptr.storeBytes(of: timestampNs, toByteOffset: 36, as: Int64.self)
+        BroadcastSharedMemoryIO.storeInt64(
+            timestampNs,
+            to: ptr,
+            byteOffset: BroadcastSharedMemoryIO.timestampOffset
+        )
         ptr.storeBytes(of: UInt32(rotation), toByteOffset: 44, as: UInt32.self)
 
         // Increment seqNo last (atomic store acts as publish barrier)

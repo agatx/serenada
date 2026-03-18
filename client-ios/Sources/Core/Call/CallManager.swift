@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Network
+import os.log
 import UIKit
 
 struct JoinRecoveryState: Equatable {
@@ -581,17 +582,22 @@ final class CallManager: ObservableObject {
     }
 
     func toggleScreenShare() {
+        let log = OSLog(subsystem: "app.serenada.ios", category: "CallManager")
         if uiState.isScreenSharing {
             debugTrace("ui stopScreenShare")
+            os_log("toggleScreenShare: stopping screen share", log: log, type: .info)
             _ = webRtcEngine.stopScreenShare()
             return
         }
 
         debugTrace("ui startScreenShare")
+        os_log("toggleScreenShare: starting screen share", log: log, type: .info)
         _ = webRtcEngine.startScreenShare { [weak self] started in
             Task { @MainActor in
+                os_log("toggleScreenShare: onComplete started=%{public}d", log: log, type: .info, started)
                 guard let self else { return }
                 guard started else { return }
+                os_log("toggleScreenShare: updating state — isScreenSharing=true, localCameraMode=screenShare", log: log, type: .info)
                 self.updateState {
                     $0.isScreenSharing = true
                     $0.localCameraMode = .screenShare
