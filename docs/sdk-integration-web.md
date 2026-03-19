@@ -9,10 +9,12 @@
 ## Installation
 
 ```bash
-npm install @serenada/core @serenada/react-ui
+npm install @serenada/core @serenada/react-ui lucide-react
 ```
 
 `@serenada/core` is framework-agnostic vanilla TypeScript. `@serenada/react-ui` provides ready-made React components.
+
+`react`, `react-dom`, and `lucide-react` are peer dependencies of `@serenada/react-ui`.
 
 For local development within the Serenada monorepo, both packages are configured as npm workspaces under `client/packages/`.
 
@@ -34,7 +36,7 @@ function CallPage() {
 
 That's it. `SerenadaCallFlow` handles permissions, joining, the in-call UI, and cleanup.
 
-## Session-First (Pre-Observation)
+## Session-First (Host-Owned Setup)
 
 Create a session before rendering UI to observe state early:
 
@@ -47,7 +49,7 @@ const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 function CallPage() {
     const { roomId } = useParams()
     const [session] = useState(() =>
-        serenada.join({ url: `https://serenada.app/call/${roomId}` })
+        serenada.join(`https://serenada.app/call/${roomId}`)
     )
 
     return (
@@ -77,7 +79,7 @@ Use `@serenada/core` directly for a fully custom UI:
 import { createSerenadaCore } from '@serenada/core'
 
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
-const session = serenada.join({ url: callUrl })
+const session = serenada.join(callUrl)
 
 // Observe state
 session.subscribe((state) => {
@@ -116,7 +118,10 @@ For custom React UIs, use the provided hooks:
 import { useSerenadaSession, useCallState } from '@serenada/react-ui'
 
 function CustomCallUI({ url }: { url: string }) {
-    const { session } = useSerenadaSession({ url, serverHost: 'serenada.app' })
+    const { session } = useSerenadaSession({
+        url,
+        config: { serverHost: 'serenada.app' },
+    })
     const state = useCallState(session)
 
     if (state.phase === 'waiting') return <WaitingScreen />
@@ -129,14 +134,59 @@ function CustomCallUI({ url }: { url: string }) {
 
 In URL-first mode, `SerenadaCallFlow` automatically prompts for camera/microphone permissions.
 
-In session-first or core-only mode, handle the `awaitingPermissions` phase:
+In session-first or core-only mode, the host app owns the permission prompt. Set `session.onPermissionsRequired` before rendering:
 
 ```typescript
+import { SerenadaPermissions } from '@serenada/react-ui'
+
 session.onPermissionsRequired = async (permissions) => {
     const granted = await SerenadaPermissions.request(permissions)
     if (granted) session.resumeJoin()
     else session.cancelJoin()
 }
+```
+
+## Waiting-Screen Host Actions
+
+Use `waitingActions` to render host-app-specific actions below the built-in QR/share UI:
+
+```tsx
+<SerenadaCallFlow
+    session={session}
+    waitingActions={
+        <button type="button" onClick={notifyInvitees}>
+            Notify invitees
+        </button>
+    }
+    onDismiss={() => navigate('/')}
+/>
+```
+
+`inviteControlsEnabled` only affects the built-in invite UI. `waitingActions` still render when provided.
+
+## Watching Room Status
+
+For home screens or recent-room presence indicators, use the advanced signaling API:
+
+```typescript
+import { SignalingEngine, getRoomStatusState } from '@serenada/core'
+
+const signaling = new SignalingEngine({
+    wsUrl: 'wss://serenada.app/ws',
+    httpBaseUrl: 'https://serenada.app',
+})
+
+signaling.connect()
+signaling.watchRooms(['room-a', 'room-b'])
+
+const unsubscribe = signaling.onStateChange(() => {
+    const roomAState = getRoomStatusState(signaling.roomStatuses['room-a'])
+    console.log(roomAState) // 'hidden' | 'waiting' | 'full'
+})
+
+// later
+unsubscribe()
+signaling.destroy()
 ```
 
 ## Preflight Diagnostics
@@ -149,11 +199,15 @@ import { createSerenadaDiagnostics } from '@serenada/core'
 const diagnostics = createSerenadaDiagnostics({ serverHost: 'serenada.app' })
 const report = await diagnostics.runAll()  // never prompts
 
-report.camera       // 'available' | { unavailable: reason } | 'notAuthorized'
-report.microphone   // 'available' | { unavailable: reason } | 'notAuthorized'
-report.network      // 'reachable' | { unreachable: reason } | { skipped: reason }
-report.signaling    // { connected: transport } | { failed: reason }
-report.turn         // { reachable: latencyMs } | { unreachable: reason }
+report.camera.status       // 'available' | 'unavailable' | 'notAuthorized' | 'skipped'
+report.microphone.status   // same shape
+report.speaker.status      // same shape
+report.network.status      // same shape
+report.signaling.status    // same shape
+report.signaling.transport // optional, when signaling is reachable
+report.turn.status         // same shape
+report.turn.latencyMs      // optional, when TURN is reachable
+report.devices             // MediaDeviceInfo[]
 ```
 
 Diagnostics never call `getUserMedia()` — if a permission is missing, the check returns `notAuthorized`.
@@ -166,10 +220,11 @@ const serenada = createSerenadaCore({
     defaultAudioEnabled: true,     // mic on at join (default)
     defaultVideoEnabled: true,     // camera on at join (default)
     transports: ['ws', 'sse'],     // transport priority (default)
+    turnsOnly: false,              // optional; only use TURN relays when true
 })
 ```
 
 ## Next Steps
 
 - [Feature Toggles, String Overrides & Theming](sdk-customization.md)
-- [API Reference](#) — generate with `npx typedoc`
+- [API Reference Generation](sdk-api-reference.md)

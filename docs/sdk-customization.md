@@ -8,9 +8,9 @@
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
-| `screenSharingEnabled` | Bool | `true` | Show/hide screen share button in the control bar |
-| `inviteControlsEnabled` | Bool | `true` | Show/hide QR code and invite/share buttons |
-| `debugOverlayEnabled` | Bool | `false` | Show/hide the debug stats overlay toggle |
+| `screenSharingEnabled` | Bool | `true` | Show/hide the screen-share control when the current browser/device supports screen capture |
+| `inviteControlsEnabled` | Bool | `true` | Show/hide the built-in QR code and share-link UI in the waiting screen |
+| `debugOverlayEnabled` | Bool | `false` | Show/hide the in-call debug toggle and diagnostics panel |
 
 ### iOS
 
@@ -50,6 +50,24 @@ SerenadaCallFlow(
         inviteControlsEnabled: false,
         debugOverlayEnabled: true,
     }}
+    onDismiss={() => navigate('/')}
+/>
+```
+
+`inviteControlsEnabled` only hides the built-in invite UI. Any custom `waitingActions` still render.
+
+## Web Waiting Actions
+
+Use `waitingActions` for host-app-specific actions that should appear under the default waiting UI:
+
+```tsx
+<SerenadaCallFlow
+    url={url}
+    waitingActions={
+        <button type="button" onClick={notifyInvitees}>
+            Notify invitees
+        </button>
+    }
     onDismiss={() => navigate('/')}
 />
 ```
@@ -139,6 +157,8 @@ Available string keys:
 - `permissionPrompt`, `grantPermissions`, `cancel`
 - `debugPanel`, `you`, `remote`
 
+Only the exported `SerenadaString` keys are overridable. Other small utility labels in the current web debug/zoom UI are not yet part of the string override surface.
+
 ---
 
 ## Theming
@@ -200,7 +220,6 @@ Pass a `theme` prop:
 <SerenadaCallFlow
     url={url}
     theme={{
-        accentColor: '#9c27b0',
         backgroundColor: '#1a1a2e',
     }}
     onDismiss={() => navigate('/')}
@@ -211,7 +230,7 @@ Pass a `theme` prop:
 
 | Field | Type | Default |
 |---|---|---|
-| `accentColor` | `string` (CSS color) | platform default |
-| `backgroundColor` | `string` (CSS color) | platform default |
+| `accentColor` | `string` (CSS color) | reserved |
+| `backgroundColor` | `string` (CSS color) | `#000` |
 
-Theme values are applied as CSS custom properties throughout the call flow components.
+On web, `backgroundColor` is applied to the root call-flow container. `accentColor` is part of the public theme type for future parity but is not currently consumed by the default web call UI.
