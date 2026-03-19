@@ -14,10 +14,12 @@
     "build": "tsc",
     "build:publish": "tsc -p tsconfig.build.json",
     "lint": "eslint src/",
+    "test": "vitest run test",
     "prepublishOnly": "npm run build:publish"
   },
   "dependencies": {
-    "@serenada/core": "0.1.0"
+    "@serenada/core": "0.1.0",
+    "react-qr-code": "^2.0.17"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",

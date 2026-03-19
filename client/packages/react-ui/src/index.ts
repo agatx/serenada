@@ -13,15 +13,10 @@ export { SerenadaCallFlow } from './SerenadaCallFlow.js';
 export type { SerenadaCallFlowConfig, SerenadaCallFlowTheme, SerenadaString, CallFlowProps } from './types.js';
 export { serenadaDefaultStrings, resolveString } from './types.js';
 
-// Components
-export { ControlBar } from './components/ControlBar.js';
-export type { ControlBarProps } from './components/ControlBar.js';
 export { StatusOverlay } from './components/StatusOverlay.js';
 export type { StatusOverlayProps } from './components/StatusOverlay.js';
 export { DebugPanel } from './components/DebugPanel.js';
 export type { DebugPanelProps, DebugPanelSection, DebugPanelMetric, DebugStatus } from './components/DebugPanel.js';
-export { ParticipantGrid } from './components/ParticipantGrid.js';
-export type { ParticipantGridProps, ParticipantInfo } from './components/ParticipantGrid.js';
 
 // Permissions
 export { SerenadaPermissions } from './SerenadaPermissions.js';

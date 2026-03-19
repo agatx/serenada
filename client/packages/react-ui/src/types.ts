@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { SerenadaSession, CallStats } from '@serenada/core';
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,8 @@ export interface CallFlowProps {
     theme?: SerenadaCallFlowTheme;
     /** Localisation overrides. */
     strings?: Partial<Record<SerenadaString, string>>;
+    /** Optional host-app controls rendered in the waiting screen below default invite controls. */
+    waitingActions?: ReactNode;
     /** Called when the user dismisses the call UI (end/leave/cancel). */
     onDismiss?: () => void;
     /** Callback fired when call stats are updated (for legacy bridge mode). */

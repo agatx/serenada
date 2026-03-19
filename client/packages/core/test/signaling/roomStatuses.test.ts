@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRoomStatusState, mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './roomStatuses';
+import { getRoomStatusState, mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from '../../src/signaling/roomStatuses';
 
 describe('mergeRoomStatusesPayload', () => {
     it('merges valid room status payloads into existing state', () => {

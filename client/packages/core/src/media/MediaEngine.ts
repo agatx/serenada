@@ -24,6 +24,7 @@ interface PeerState {
     iceRestartTimer: number | null;
     lastIceRestartAt: number;
     pendingIceRestart: boolean;
+    pendingLocalTrackNegotiation: boolean;
     nonHostFallbackTimer: number | null;
     nonHostFallbackAttempts: number;
 }
@@ -62,6 +63,8 @@ export class MediaEngine {
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
     private turnFetchController: AbortController | null = null;
+    private turnTokenInFlight: string | null = null;
+    private appliedTurnToken: string | null = null;
     private serverHost: string;
     private turnsOnly: boolean;
 
@@ -100,14 +103,30 @@ export class MediaEngine {
                     peer.lastIceRestartAt = Date.now();
                     void this.createOfferTo(cid, { iceRestart: true });
                 }
+                if (peer.pendingLocalTrackNegotiation && peer.pc.remoteDescription && peer.pc.signalingState === 'stable') {
+                    peer.pendingLocalTrackNegotiation = false;
+                    void this.createOfferTo(cid);
+                }
             }
         }
     }
 
     updateTurnToken(token: string): void {
+        if (token === this.appliedTurnToken || token === this.turnTokenInFlight) {
+            return;
+        }
         this.turnFetchController?.abort();
         this.turnFetchController = new AbortController();
-        void this.fetchIceServers(token, this.turnFetchController.signal);
+        this.turnTokenInFlight = token;
+        void this.fetchIceServers(token, this.turnFetchController.signal).then((applied) => {
+            if (applied) {
+                this.appliedTurnToken = token;
+            }
+        }).finally(() => {
+            if (this.turnTokenInFlight === token) {
+                this.turnTokenInFlight = null;
+            }
+        });
     }
 
     processSignalingMessage(msg: SignalingMessage): void {
@@ -169,9 +188,16 @@ export class MediaEngine {
             await this.detectCameras();
             this.requestingMedia = false;
 
-            for (const [, peer] of this.peers) {
+            for (const [remoteCid, peer] of this.peers) {
                 stream.getTracks().forEach(track => peer.pc.addTrack(track, stream));
                 void this.applyAudioSenderParameters(peer.pc);
+                if (!this.shouldIOffer(remoteCid) && peer.pc.remoteDescription) {
+                    if (peer.pc.signalingState === 'stable') {
+                        void this.createOfferTo(remoteCid);
+                    } else {
+                        peer.pendingLocalTrackNegotiation = true;
+                    }
+                }
             }
             this.notifyChange();
             return stream;
@@ -312,6 +338,10 @@ export class MediaEngine {
         this.cleanupAllPeers();
         this.stopLocalMedia();
         this.removeEventListeners();
+        this.turnFetchController?.abort();
+        this.turnFetchController = null;
+        this.turnTokenInFlight = null;
+        this.appliedTurnToken = null;
         if (this.retryingTimer) { window.clearTimeout(this.retryingTimer); this.retryingTimer = null; }
     }
 
@@ -362,6 +392,7 @@ export class MediaEngine {
             pc, remoteStream: null, iceBuffer: [],
             isMakingOffer: false, offerTimeout: null, iceRestartTimer: null,
             lastIceRestartAt: 0, pendingIceRestart: false,
+            pendingLocalTrackNegotiation: false,
             nonHostFallbackTimer: null, nonHostFallbackAttempts: 0,
         };
 
@@ -420,6 +451,11 @@ export class MediaEngine {
             this.updateAggregateState();
             if (pc.signalingState === 'stable') {
                 if (peerState.offerTimeout) { window.clearTimeout(peerState.offerTimeout); peerState.offerTimeout = null; }
+            }
+            if (pc.signalingState === 'stable' && peerState.pendingLocalTrackNegotiation) {
+                if (!this.isSignalingConnected || !peerState.pc.remoteDescription) return;
+                peerState.pendingLocalTrackNegotiation = false;
+                void this.createOfferTo(remoteCid);
             }
             if (pc.signalingState === 'stable' && peerState.pendingIceRestart) {
                 if (peerState.offerTimeout) { window.clearTimeout(peerState.offerTimeout); peerState.offerTimeout = null; }
@@ -678,7 +714,7 @@ export class MediaEngine {
         }, 10_000);
     }
 
-    private async fetchIceServers(token: string, signal: AbortSignal): Promise<void> {
+    private async fetchIceServers(token: string, signal: AbortSignal): Promise<boolean> {
         const fetchController = new AbortController();
         const timeoutTimer = setTimeout(() => fetchController.abort(), TURN_FETCH_TIMEOUT_MS);
         const onExternalAbort = () => fetchController.abort();
@@ -689,7 +725,7 @@ export class MediaEngine {
 
             const res = await fetch(apiUrl, { signal: fetchController.signal });
 
-            if (signal.aborted) return;
+            if (signal.aborted) return false;
 
             if (res.ok) {
                 const data = await res.json();
@@ -707,6 +743,7 @@ export class MediaEngine {
                 };
                 if (turnsOnly) config.iceTransportPolicy = 'relay';
                 this.rtcConfig = config;
+                return true;
             }
         } catch (err) {
             if (!signal.aborted) console.error('[WebRTC] Error fetching ICE servers:', err);
@@ -714,6 +751,7 @@ export class MediaEngine {
             clearTimeout(timeoutTimer);
             signal.removeEventListener('abort', onExternalAbort);
         }
+        return false;
     }
 
     private applySpeechTrackHints(stream: MediaStream): void {
@@ -730,9 +768,17 @@ export class MediaEngine {
         if (!sender?.getParameters || !sender?.setParameters) return;
         try {
             const params = sender.getParameters();
-            if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-            if (params.encodings[0]) params.encodings[0].maxBitrate = 32000;
-            await sender.setParameters(params);
+            if (!params.encodings || params.encodings.length === 0) return;
+            const firstEncoding = params.encodings[0];
+            if (!firstEncoding || firstEncoding.maxBitrate === 32000) return;
+
+            const nextParams: RTCRtpSendParameters = {
+                ...params,
+                encodings: params.encodings.map((encoding, index) => (
+                    index === 0 ? { ...encoding, maxBitrate: 32000 } : encoding
+                )),
+            };
+            await sender.setParameters(nextParams);
         } catch (err) {
             console.warn('[WebRTC] Failed to apply audio sender parameters', err);
         }
@@ -770,9 +816,22 @@ export class MediaEngine {
             return;
         }
         await this.replaceVideoTrackOnAllPeers(nextTrack);
-        this.localStream = nextTrack
-            ? new MediaStream([nextTrack, ...this.localStream.getAudioTracks()])
-            : new MediaStream([...this.localStream.getAudioTracks()]);
+        const nextStream = new MediaStream();
+        let replacedVideo = false;
+        for (const track of this.localStream.getTracks()) {
+            if (track.kind !== 'video') {
+                nextStream.addTrack(track);
+                continue;
+            }
+            if (!replacedVideo && nextTrack) {
+                nextStream.addTrack(nextTrack);
+                replacedVideo = true;
+            }
+        }
+        if (nextTrack && !replacedVideo) {
+            nextStream.addTrack(nextTrack);
+        }
+        this.localStream = nextStream;
         if (previousTrack && previousTrack !== nextTrack) previousTrack.stop();
         this.notifyChange();
     }

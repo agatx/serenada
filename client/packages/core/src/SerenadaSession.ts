@@ -3,6 +3,7 @@ import { SignalingEngine } from './signaling/SignalingEngine.js';
 import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
 import type { TransportKind } from './signaling/transports/types.js';
+import type { SignalingMessage } from './signaling/types.js';
 
 function resolveUrls(serverHost: string): { wsUrl: string; httpBaseUrl: string } {
     const isLocal = serverHost.startsWith('localhost') || serverHost.startsWith('127.');
@@ -92,12 +93,22 @@ export class SerenadaSession implements SerenadaSessionHandle {
     get localStream(): MediaStream | null { return this.media.localStream; }
     get remoteStreams(): Map<string, MediaStream> { return this.media.remoteStreams; }
     get callStats(): CallStats | null { return this.statsCollector.stats; }
+    get hasMultipleCameras(): boolean { return this.media.hasMultipleCameras; }
+    get canScreenShare(): boolean { return this.media.canScreenShare; }
+    get isSignalingConnected(): boolean { return this.signaling.isConnected; }
+    get iceConnectionState(): RTCIceConnectionState { return this.media.iceConnectionState; }
+    get peerConnectionState(): RTCPeerConnectionState { return this.media.connectionState; }
+    get rtcSignalingState(): RTCSignalingState { return this.media.signalingState; }
 
     subscribe(callback: (state: CallState) => void): () => void {
         this.stateListeners.push(callback);
         return () => {
             this.stateListeners = this.stateListeners.filter(l => l !== callback);
         };
+    }
+
+    subscribeToMessages(callback: (message: SignalingMessage) => void): () => void {
+        return this.signaling.subscribeToMessages(callback);
     }
 
     async resumeJoin(): Promise<void> {

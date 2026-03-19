@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bookmark, MoreVertical, Edit2, Trash2, Share2 } from 'lucide-react';
+import { createRoomId, getRoomStatusState, type RoomStatuses } from '@serenada/core';
 import type { SaveRoomResult, SavedRoom } from '../utils/savedRooms';
 import { removeRoom, saveRoom } from '../utils/savedRooms';
 import { useTranslation } from 'react-i18next';
 import { SavedRoomDialog } from './SavedRoomDialog';
 import { useToast } from '../contexts/ToastContext';
-import { createRoomId } from '../utils/roomApi';
-import { getRoomStatusState, type RoomStatuses } from '../contexts/signaling/roomStatuses';
+import { getConfiguredServerHost } from '../utils/serverHost';
 
 interface SavedRoomsProps {
     rooms: SavedRoom[];
@@ -84,7 +84,7 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
         if (isCreatingRoom) return;
         setIsCreatingRoom(true);
         try {
-            const roomId = await createRoomId(import.meta.env.VITE_WS_URL);
+            const roomId = await createRoomId(getConfiguredServerHost());
             setSelectedRoom({
                 roomId,
                 name: '',

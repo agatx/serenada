@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getPersistedRemoteVideoFit, persistRemoteVideoFit } from './remoteVideoFit';
+import { getPersistedRemoteVideoFit, persistRemoteVideoFit } from '../../src/utils/remoteVideoFit';
 
 class LocalStorageMock {
     private store = new Map<string, string>();

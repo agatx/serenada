@@ -14,6 +14,7 @@
     "build": "tsc",
     "build:publish": "tsc -p tsconfig.build.json",
     "lint": "eslint src/",
+    "test": "vitest run test",
     "prepublishOnly": "npm run build:publish"
   },
   "repository": {

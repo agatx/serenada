@@ -1,4 +1,5 @@
 import type { TransportKind } from './signaling/transports/types.js';
+import type { SignalingMessage } from './signaling/types.js';
 
 export type CallPhase = 'idle' | 'awaitingPermissions' | 'joining' | 'waiting' | 'inCall' | 'ending' | 'error';
 
@@ -56,6 +57,7 @@ export interface CreateRoomResult {
 
 export interface SerenadaSessionHandle {
     subscribe(callback: (state: CallState) => void): () => void;
+    subscribeToMessages(callback: (message: SignalingMessage) => void): () => void;
     leave(): void;
     end(): void;
     toggleAudio(): void;
@@ -73,6 +75,12 @@ export interface SerenadaSessionHandle {
     readonly localStream: MediaStream | null;
     readonly remoteStreams: Map<string, MediaStream>;
     readonly callStats: CallStats | null;
+    readonly hasMultipleCameras: boolean;
+    readonly canScreenShare: boolean;
+    readonly isSignalingConnected: boolean;
+    readonly iceConnectionState: RTCIceConnectionState;
+    readonly peerConnectionState: RTCPeerConnectionState;
+    readonly rtcSignalingState: RTCSignalingState;
     onPermissionsRequired: ((permissions: MediaCapability[]) => void) | null;
 }
 

@@ -2,17 +2,11 @@ import ReactDOM from 'react-dom/client';
 import './i18n';
 import App from './App';
 import './index.css';
-import { SignalingProvider } from './contexts/SignalingContext';
-import { WebRTCProvider } from './contexts/WebRTCContext';
 import { ToastProvider } from './contexts/ToastContext';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <ToastProvider>
-    <SignalingProvider>
-      <WebRTCProvider>
-        <App />
-      </WebRTCProvider>
-    </SignalingProvider>
+    <App />
   </ToastProvider>
 );
 // Register Service Worker for PWA support

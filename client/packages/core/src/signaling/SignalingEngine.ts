@@ -131,7 +131,7 @@ export class SignalingEngine {
         if (this.transport && this.transport.isOpen()) {
             const payload: Record<string, unknown> = {
                 capabilities: { trickleIce: true, maxParticipants: 4 },
-                createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 2,
+                createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 4,
             };
             const reconnectCid = this.clientId || this.lastClientId;
             if (reconnectCid) {

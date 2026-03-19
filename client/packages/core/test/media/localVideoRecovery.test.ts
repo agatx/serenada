@@ -3,7 +3,7 @@ import {
     LOCAL_VIDEO_RESUME_GAP_MS,
     shouldForceLocalVideoRefresh,
     shouldRecoverLocalVideo,
-} from './localVideoRecovery';
+} from '../../src/index';
 
 describe('localVideoRecovery', () => {
     it('forces a refresh after a long hidden period', () => {

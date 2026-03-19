@@ -83,13 +83,6 @@ export { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './media/l
 // Room API
 export { createRoomId } from './api/roomApi.js';
 
-// Internal engines (exported for advanced/host-app usage)
+// Advanced host-app usage
 export { SignalingEngine } from './signaling/SignalingEngine.js';
 export type { SignalingEngineConfig } from './signaling/SignalingEngine.js';
-export { MediaEngine } from './media/MediaEngine.js';
-export type { MediaEngineConfig } from './media/MediaEngine.js';
-export { CallStatsCollector } from './media/callStats.js';
-
-// Transport factory and types
-export { createSignalingTransport } from './signaling/transports/index.js';
-export type { SignalingTransport, TransportHandlers, CreateTransportOptions } from './signaling/transports/index.js';

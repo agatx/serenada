@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { computeLayout, type CallScene, type LayoutResult, type Rect } from './computeLayout';
-import fixtureData from '../../../tests/layout/fixtures/layout_conformance_v1.json';
+import { computeLayout, type CallScene, type LayoutResult, type Rect } from '../../src/layout/computeLayout';
+import fixtureData from '../../../../../tests/layout/fixtures/layout_conformance_v1.json';
 
 const STRICT_TOLERANCE = 0.005;
 
@@ -24,7 +24,6 @@ function assertFrameClose(
     actual: NormalizedFrame,
     expected: NormalizedFrame,
     tolerance: number,
-    _label: string,
 ) {
     expect(Math.abs(actual.x - expected.x)).toBeLessThanOrEqual(tolerance);
     expect(Math.abs(actual.y - expected.y)).toBeLessThanOrEqual(tolerance);
@@ -60,14 +59,10 @@ describe('layout conformance', () => {
         it(testCase.id, () => {
             const result: LayoutResult = computeLayout(testCase.scene);
 
-            // Mode
             expect(result.mode).toBe(testCase.expected.mode);
-
-            // Tile count
             expect(result.tiles.length).toBe(testCase.expected.tileCount);
 
-            // Tile frames
-            for (let i = 0; i < testCase.expected.tiles.length; i++) {
+            for (let i = 0; i < testCase.expected.tiles.length; i += 1) {
                 const expectedTile = testCase.expected.tiles[i];
                 const actualTile = result.tiles[i];
                 expect(actualTile.id).toBe(expectedTile.id);
@@ -83,18 +78,14 @@ describe('layout conformance', () => {
                     actualNorm,
                     expectedTile.normalizedFrame,
                     STRICT_TOLERANCE,
-                    `${testCase.id} tile[${i}]`,
                 );
             }
 
-            // Local PIP
             if (testCase.expected.localPip === null) {
                 expect(result.localPip).toBeNull();
             } else {
                 expect(result.localPip).not.toBeNull();
-                expect(result.localPip!.participantId).toBe(
-                    testCase.expected.localPip.participantId,
-                );
+                expect(result.localPip!.participantId).toBe(testCase.expected.localPip.participantId);
                 expect(result.localPip!.anchor).toBe(testCase.expected.localPip.anchor);
 
                 const actualPipNorm = normalizeFrame(
@@ -106,7 +97,6 @@ describe('layout conformance', () => {
                     actualPipNorm,
                     testCase.expected.localPip.normalizedFrame,
                     STRICT_TOLERANCE,
-                    `${testCase.id} localPip`,
                 );
             }
         });
