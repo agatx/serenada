@@ -1,13 +1,13 @@
 import Foundation
 
-public struct RemoteParticipant: Identifiable, Equatable {
-    public let cid: String
-    public var videoEnabled: Bool
-    public var connectionState: String
+struct RemoteParticipant: Identifiable, Equatable {
+    let cid: String
+    var videoEnabled: Bool
+    var connectionState: String
 
-    public var id: String { cid }
+    var id: String { cid }
 
-    public init(cid: String, videoEnabled: Bool, connectionState: String) {
+    init(cid: String, videoEnabled: Bool, connectionState: String) {
         self.cid = cid
         self.videoEnabled = videoEnabled
         self.connectionState = connectionState

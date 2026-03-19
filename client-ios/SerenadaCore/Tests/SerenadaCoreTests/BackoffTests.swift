@@ -1,4 +1,4 @@
-import SerenadaCore
+@testable import SerenadaCore
 import XCTest
 
 final class BackoffTests: XCTestCase {

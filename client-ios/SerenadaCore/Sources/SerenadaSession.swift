@@ -1888,7 +1888,7 @@ public final class SerenadaSession: ObservableObject {
 }
 
 extension SerenadaSession: SignalingClientListener {
-    public func onOpen(activeTransport: String) {
+    func onOpen(activeTransport: String) {
         reconnectAttempts = 0
         updateLegacyUiState {
             $0.isSignalingConnected = true
@@ -1906,11 +1906,11 @@ extension SerenadaSession: SignalingClientListener {
         }
     }
 
-    public func onMessage(_ message: SignalingMessage) {
+    func onMessage(_ message: SignalingMessage) {
         handleSignalingMessage(message)
     }
 
-    public func onClosed(reason: String) {
+    func onClosed(reason: String) {
         _ = reason
         updateLegacyUiState {
             $0.isSignalingConnected = false

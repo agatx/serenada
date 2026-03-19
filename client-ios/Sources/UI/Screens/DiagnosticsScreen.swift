@@ -1,4 +1,5 @@
 import AVFoundation
+import SerenadaCallUI
 import SerenadaCore
 import SwiftUI
 import UserNotifications
@@ -56,8 +57,6 @@ struct DiagnosticsScreen: View {
 
     @State private var logLines: [String] = []
     @State private var shareText: String?
-
-    private let apiClient = APIClient()
 
     var body: some View {
         ScrollView {
@@ -379,8 +378,10 @@ struct DiagnosticsScreen: View {
             return
         }
 
+        let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalizedHost))
+
         connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivityRoomApi) {
-            _ = try await apiClient.createRoomId(host: normalizedHost)
+            _ = try await diag.createRoomId()
             return L10n.diagnosticsCheckPassed
         })
 
@@ -395,13 +396,13 @@ struct DiagnosticsScreen: View {
         })
 
         connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivityDiagnosticToken) {
-            _ = try await apiClient.fetchDiagnosticToken(host: normalizedHost)
+            _ = try await diag.fetchDiagnosticToken()
             return L10n.diagnosticsCheckPassed
         })
 
         connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivityTurnCredentials) {
-            let token = try await apiClient.fetchDiagnosticToken(host: normalizedHost)
-            _ = try await apiClient.fetchTurnCredentials(host: normalizedHost, token: token)
+            let token = try await diag.fetchDiagnosticToken()
+            _ = try await diag.fetchTurnCredentials(token: token)
             return L10n.diagnosticsCheckPassed
         })
     }
@@ -482,8 +483,9 @@ struct DiagnosticsScreen: View {
 
         do {
             appendLog(turnsOnly ? L10n.diagnosticsRunIceTurnsOnly : L10n.diagnosticsRunIceFull)
-            let token = try await apiClient.fetchDiagnosticToken(host: normalizedHost)
-            let credentials = try await apiClient.fetchTurnCredentials(host: normalizedHost, token: token)
+            let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalizedHost))
+            let token = try await diag.fetchDiagnosticToken()
+            let credentials = try await diag.fetchTurnCredentials(token: token)
             let urls = turnsOnly ? credentials.uris.filter { $0.lowercased().hasPrefix("turns:") } : credentials.uris
             let probe = await runIceProbe(
                 urls: urls,

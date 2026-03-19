@@ -1,15 +1,15 @@
 import Foundation
 
 @MainActor
-public protocol SignalingClientListener: AnyObject {
+protocol SignalingClientListener: AnyObject {
     func onOpen(activeTransport: String)
     func onMessage(_ message: SignalingMessage)
     func onClosed(reason: String)
 }
 
 @MainActor
-public final class SignalingClient {
-    public weak var listener: SignalingClientListener?
+final class SignalingClient {
+    weak var listener: SignalingClientListener?
 
     private let transportOrder: [TransportKind]
     private var transportConnectedOnce: [TransportKind: Bool] = [.ws: false, .sse: false]
@@ -34,13 +34,13 @@ public final class SignalingClient {
     private var lastPongAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
     private var missedPongs = 0
 
-    public init(forceSseSignaling: Bool = false) {
+    init(forceSseSignaling: Bool = false) {
         self.transportOrder = forceSseSignaling ? [.sse] : [.ws, .sse]
         self.wsTransport = WebSocketSignalingTransport()
         self.sseTransport = SseSignalingTransport()
     }
 
-    public func connect(host: String) {
+    func connect(host: String) {
         if connected || connecting { return }
 
         guard let normalized = normalizeHost(host) else {
@@ -58,16 +58,16 @@ public final class SignalingClient {
         connectWithTransport(index: transportIndex)
     }
 
-    public func isConnected() -> Bool {
+    func isConnected() -> Bool {
         connected
     }
 
-    public func send(_ message: SignalingMessage) {
+    func send(_ message: SignalingMessage) {
         guard connected else { return }
         activeTransportImpl?.send(message)
     }
 
-    public func close() {
+    func close() {
         closedByClient = true
         stopPing()
         clearConnectTimeout()
@@ -84,7 +84,7 @@ public final class SignalingClient {
         resetTransportSessions()
     }
 
-    public func recordPong() {
+    func recordPong() {
         lastPongAt = CFAbsoluteTimeGetCurrent()
         missedPongs = 0
     }

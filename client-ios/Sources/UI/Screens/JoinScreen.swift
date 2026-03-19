@@ -1,3 +1,4 @@
+import SerenadaCallUI
 import SerenadaCore
 import SwiftUI
 
@@ -7,7 +8,7 @@ struct JoinScreen: View {
     let recentCalls: [RecentCall]
     let savedRooms: [SavedRoom]
     let areSavedRoomsShownFirst: Bool
-    let roomStatuses: [String: RoomStatus]
+    let roomStatuses: [String: RoomOccupancy]
     let serverHost: String
     let onOpenJoinWithCode: () -> Void
     let onOpenSettings: () -> Void
@@ -207,7 +208,7 @@ struct JoinScreen: View {
 
 private struct RecentCallsSection: View {
     let calls: [RecentCall]
-    let roomStatuses: [String: RoomStatus]
+    let roomStatuses: [String: RoomOccupancy]
     let serverHost: String
     let savedRoomNameById: [String: String]
     let isBusy: Bool
@@ -328,7 +329,7 @@ private struct RecentCallsSection: View {
 
 private struct SavedRoomsSection: View {
     let rooms: [SavedRoom]
-    let roomStatuses: [String: RoomStatus]
+    let roomStatuses: [String: RoomOccupancy]
     let serverHost: String
     let isBusy: Bool
     let onCreate: () -> Void
@@ -584,7 +585,7 @@ private func buildSavedRoomShareLink(for room: SavedRoom) -> String {
 }
 
 private struct StatusDot: View {
-    let status: RoomStatus?
+    let status: RoomOccupancy?
 
     var body: some View {
         Group {

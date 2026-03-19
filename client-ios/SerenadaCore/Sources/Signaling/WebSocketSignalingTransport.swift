@@ -1,7 +1,7 @@
 import Foundation
 
-public final class WebSocketSignalingTransport: NSObject, SignalingTransport {
-    public let kind: TransportKind = .ws
+final class WebSocketSignalingTransport: NSObject, SignalingTransport {
+    let kind: TransportKind = .ws
 
     private var session: URLSession?
     private var webSocket: URLSessionWebSocketTask?

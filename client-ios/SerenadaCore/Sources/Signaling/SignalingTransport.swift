@@ -1,13 +1,13 @@
 import Foundation
 
-public enum TransportKind: String, CaseIterable {
+enum TransportKind: String, CaseIterable {
     case ws
     case sse
 
-    public var wireName: String { rawValue }
+    var wireName: String { rawValue }
 }
 
-public protocol SignalingTransport: AnyObject {
+protocol SignalingTransport: AnyObject {
     var kind: TransportKind { get }
 
     func connect(
@@ -23,5 +23,5 @@ public protocol SignalingTransport: AnyObject {
 }
 
 extension SignalingTransport {
-    public func resetSession() {}
+    func resetSession() {}
 }

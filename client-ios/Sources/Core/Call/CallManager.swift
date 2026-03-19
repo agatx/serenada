@@ -16,7 +16,7 @@ final class CallManager: ObservableObject {
     @Published private(set) var appVersion: String
     @Published private(set) var recentCalls: [RecentCall] = []
     @Published private(set) var savedRooms: [SavedRoom] = []
-    @Published private(set) var roomStatuses: [String: RoomStatus] = [:]
+    @Published private(set) var roomStatuses: [String: RoomOccupancy] = [:]
     @Published private(set) var activeSession: SerenadaSession?
 
     var locale: Locale {
@@ -27,11 +27,12 @@ final class CallManager: ObservableObject {
     }
 
     private let apiClient: APIClient
+    private let coreAPIClient: CoreAPIClient
     private let settingsStore: SettingsStore
     private let recentCallStore: RecentCallStore
     private let savedRoomStore: SavedRoomStore
     private let pushSubscriptionManager: PushSubscriptionManager
-    private let signalingClient: SignalingClient
+    private let roomWatcher: RoomWatcher
     private lazy var joinSnapshotFeature = JoinSnapshotFeature(
         apiClient: apiClient,
         attachLocalRenderer: { [weak self] renderer in
@@ -43,8 +44,6 @@ final class CallManager: ObservableObject {
     )
 
     private var watchedRoomIds: [String] = []
-    private var reconnectAttempts = 0
-    private var reconnectTask: Task<Void, Never>?
     private var pushEndpointObserver: NSObjectProtocol?
     private var activeSessionStateCancellable: AnyCancellable?
     private var activeSessionJoinCid: String?
@@ -53,12 +52,14 @@ final class CallManager: ObservableObject {
 
     init(
         apiClient: APIClient = APIClient(),
+        coreAPIClient: CoreAPIClient = CoreAPIClient(),
         settingsStore: SettingsStore = SettingsStore(),
         recentCallStore: RecentCallStore = RecentCallStore(),
         savedRoomStore: SavedRoomStore = SavedRoomStore(),
-        signalingClient: SignalingClient? = nil
+        roomWatcher: RoomWatcher? = nil
     ) {
         self.apiClient = apiClient
+        self.coreAPIClient = coreAPIClient
         self.settingsStore = settingsStore
         self.recentCallStore = recentCallStore
         self.savedRoomStore = savedRoomStore
@@ -66,7 +67,7 @@ final class CallManager: ObservableObject {
             apiClient: apiClient,
             settingsStore: settingsStore
         )
-        self.signalingClient = signalingClient ?? SignalingClient()
+        self.roomWatcher = roomWatcher ?? RoomWatcher()
 
         self.serverHost = settingsStore.host
         self.selectedLanguage = settingsStore.language
@@ -77,7 +78,7 @@ final class CallManager: ObservableObject {
         self.areRoomInviteNotificationsEnabled = settingsStore.areRoomInviteNotificationsEnabled
         self.appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-"
 
-        self.signalingClient.listener = self
+        self.roomWatcher.delegate = self
         self.pushEndpointObserver = NotificationCenter.default.addObserver(
             forName: .serenadaPushEndpointDidChange,
             object: nil,
@@ -94,7 +95,6 @@ final class CallManager: ObservableObject {
     }
 
     deinit {
-        reconnectTask?.cancel()
         activeSessionStateCancellable?.cancel()
         if let pushEndpointObserver {
             NotificationCenter.default.removeObserver(pushEndpointObserver)
@@ -109,8 +109,8 @@ final class CallManager: ObservableObject {
         settingsStore.host = normalized
         serverHost = normalized
 
-        if changed && !watchedRoomIds.isEmpty {
-            signalingClient.close()
+        if changed {
+            roomWatcher.stop()
             syncSavedRoomPushSubscriptions(savedRooms)
             refreshWatchedRooms()
         }
@@ -122,7 +122,7 @@ final class CallManager: ObservableObject {
             : host.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            try await apiClient.validateServerHost(normalized)
+            try await coreAPIClient.validateServerHost(normalized)
             return .success(normalized)
         } catch {
             return .failure(error)
@@ -360,7 +360,7 @@ final class CallManager: ObservableObject {
         }
 
         do {
-            let roomId = try await apiClient.createRoomId(host: normalizedHost)
+            let roomId = try await coreAPIClient.createRoomId(host: normalizedHost)
             saveRoom(roomId: roomId, name: normalizedName, host: normalizedHost)
             return .success(buildSavedRoomInviteLink(host: normalizedHost, roomId: roomId, roomName: normalizedName))
         } catch {
@@ -380,7 +380,6 @@ final class CallManager: ObservableObject {
 
     private func activateSession(_ session: SerenadaSession) {
         activeSessionStateCancellable?.cancel()
-        reconnectTask?.cancel()
 
         activeSession = session
         activeSessionJoinCid = nil
@@ -686,7 +685,7 @@ final class CallManager: ObservableObject {
         let watchedSet = Set(watchedRoomIds)
         roomStatuses = roomStatuses.filter { watchedSet.contains($0.key) }
 
-        watchRoomsIfNeeded()
+        roomWatcher.watchRooms(roomIds: watchedRoomIds, host: serverHost)
     }
 
     private func isCurrentServerHost(_ host: String?) -> Bool {
@@ -696,56 +695,6 @@ final class CallManager: ObservableObject {
 
     private func hostOverrideOrNull(_ host: String?) -> String? {
         DeepLinkParser.normalizeHostValue(host).flatMap { isCurrentServerHost($0) ? nil : $0 }
-    }
-
-    private func watchRoomsIfNeeded() {
-        reconnectTask?.cancel()
-        reconnectTask = nil
-
-        guard !watchedRoomIds.isEmpty else {
-            if signalingClient.isConnected() {
-                signalingClient.close()
-            }
-            return
-        }
-
-        if signalingClient.isConnected() {
-            sendWatchRoomsIfNeeded()
-        } else {
-            signalingClient.connect(host: serverHost)
-        }
-    }
-
-    private func sendWatchRoomsIfNeeded() {
-        guard !watchedRoomIds.isEmpty else { return }
-        guard signalingClient.isConnected() else { return }
-
-        signalingClient.send(
-            SignalingMessage(
-                type: "watch_rooms",
-                payload: .object([
-                    "rids": .array(watchedRoomIds.map { .string($0) })
-                ])
-            )
-        )
-    }
-
-    private func scheduleReconnect() {
-        guard !watchedRoomIds.isEmpty else { return }
-
-        reconnectAttempts += 1
-        let backoffMs = Backoff.reconnectDelayMs(attempt: reconnectAttempts)
-
-        reconnectTask?.cancel()
-        reconnectTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            guard !self.signalingClient.isConnected() else { return }
-            guard !self.watchedRoomIds.isEmpty else { return }
-
-            self.signalingClient.connect(host: self.serverHost)
-        }
     }
 
     private func buildSavedRoomInviteLink(host: String, roomId: String, roomName: String) -> String {
@@ -764,28 +713,8 @@ final class CallManager: ObservableObject {
     }
 }
 
-extension CallManager: SignalingClientListener {
-    func onOpen(activeTransport: String) {
-        _ = activeTransport
-        reconnectAttempts = 0
-        sendWatchRoomsIfNeeded()
-    }
-
-    func onMessage(_ message: SignalingMessage) {
-        switch message.type {
-        case "room_statuses":
-            roomStatuses = RoomStatuses.mergeStatusesPayload(previous: roomStatuses, payload: message.payload)
-        case "room_status_update":
-            roomStatuses = RoomStatuses.mergeStatusUpdatePayload(previous: roomStatuses, payload: message.payload)
-        case "pong":
-            signalingClient.recordPong()
-        default:
-            break
-        }
-    }
-
-    func onClosed(reason: String) {
-        _ = reason
-        scheduleReconnect()
+extension CallManager: RoomWatcherDelegate {
+    func roomWatcher(_ watcher: RoomWatcher, didUpdateStatuses statuses: [String: RoomOccupancy]) {
+        roomStatuses = statuses
     }
 }

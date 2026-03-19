@@ -1,13 +1,13 @@
 import Foundation
 
-final class CoreAPIClient {
+public final class CoreAPIClient {
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
+    public init(session: URLSession = .shared) {
         self.session = session
     }
 
-    func validateServerHost(_ host: String) async throws {
+    public func validateServerHost(_ host: String) async throws {
         guard let url = buildHTTPSURL(host: host, path: "/api/room-id") else {
             throw APIError.invalidHost
         }
@@ -21,7 +21,7 @@ final class CoreAPIClient {
         _ = try parseRoomIdResponse(data)
     }
 
-    func createRoomId(host: String) async throws -> String {
+    public func createRoomId(host: String) async throws -> String {
         guard let url = buildHTTPSURL(host: host, path: "/api/room-id") else {
             throw APIError.invalidHost
         }
@@ -37,7 +37,7 @@ final class CoreAPIClient {
         return try parseRoomIdResponse(data)
     }
 
-    func fetchTurnCredentials(host: String, token: String) async throws -> TurnCredentials {
+    public func fetchTurnCredentials(host: String, token: String) async throws -> TurnCredentials {
         guard let url = buildHTTPSURL(host: host, path: "/api/turn-credentials", query: ["token": token]) else {
             throw APIError.invalidHost
         }
@@ -57,7 +57,7 @@ final class CoreAPIClient {
         return decoded
     }
 
-    func fetchDiagnosticToken(host: String) async throws -> String {
+    public func fetchDiagnosticToken(host: String) async throws -> String {
         guard let url = buildHTTPSURL(host: host, path: "/api/diagnostic-token") else {
             throw APIError.invalidHost
         }
@@ -88,7 +88,7 @@ final class CoreAPIClient {
         return decoded.roomId
     }
 
-    func buildHTTPSURL(host: String, path: String, query: [String: String] = [:]) -> URL? {
+    public func buildHTTPSURL(host: String, path: String, query: [String: String] = [:]) -> URL? {
         guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
 
         let isLocal = parsedHost.host == "localhost" || parsedHost.host.hasPrefix("127.")

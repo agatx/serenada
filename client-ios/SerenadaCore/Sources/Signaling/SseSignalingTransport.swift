@@ -1,7 +1,7 @@
 import Foundation
 
-public final class SseSignalingTransport: SignalingTransport {
-    public let kind: TransportKind = .sse
+final class SseSignalingTransport: SignalingTransport {
+    let kind: TransportKind = .sse
 
     private var sid = SseSignalingTransport.createSid()
     private var streamTask: Task<Void, Never>?

@@ -1,15 +1,15 @@
 import Foundation
 
-public struct SignalingMessage: Codable, Equatable {
-    public var v: Int = 1
-    public let type: String
-    public let rid: String?
-    public let sid: String?
-    public let cid: String?
-    public let to: String?
-    public let payload: JSONValue?
+struct SignalingMessage: Codable, Equatable {
+    var v: Int = 1
+    let type: String
+    let rid: String?
+    let sid: String?
+    let cid: String?
+    let to: String?
+    let payload: JSONValue?
 
-    public init(
+    init(
         type: String,
         rid: String? = nil,
         sid: String? = nil,
@@ -25,12 +25,12 @@ public struct SignalingMessage: Codable, Equatable {
         self.payload = payload
     }
 
-    public static func decode(from raw: String) throws -> SignalingMessage {
+    static func decode(from raw: String) throws -> SignalingMessage {
         let data = Data(raw.utf8)
         return try JSONDecoder().decode(SignalingMessage.self, from: data)
     }
 
-    public func toJSONString() throws -> String {
+    func toJSONString() throws -> String {
         let encoder = JSONEncoder()
         let data = try encoder.encode(self)
         guard let json = String(data: data, encoding: .utf8) else {

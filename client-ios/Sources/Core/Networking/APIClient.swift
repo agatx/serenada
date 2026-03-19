@@ -67,86 +67,14 @@ struct PushSubscribeRequest: Encodable, Equatable {
 
 final class APIClient {
     private let session: URLSession
+    private let urlBuilder = CoreAPIClient()
 
     init(session: URLSession = .shared) {
         self.session = session
     }
 
-    func validateServerHost(_ host: String) async throws {
-        guard let url = buildHTTPSURL(host: host, path: "/api/room-id") else {
-            throw APIError.invalidHost
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw APIError.http("Host validation failed")
-        }
-        _ = try parseRoomIdResponse(data)
-    }
-
-    func createRoomId(host: String) async throws -> String {
-        guard let url = buildHTTPSURL(host: host, path: "/api/room-id") else {
-            throw APIError.invalidHost
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = Data()
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw APIError.http("Room ID request failed")
-        }
-        return try parseRoomIdResponse(data)
-    }
-
-    func fetchTurnCredentials(host: String, token: String) async throws -> TurnCredentials {
-        guard let url = buildHTTPSURL(host: host, path: "/api/turn-credentials", query: ["token": token]) else {
-            throw APIError.invalidHost
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw APIError.http("TURN credentials failed")
-        }
-
-        let decoded = try JSONDecoder().decode(TurnCredentials.self, from: data)
-        guard !decoded.username.isEmpty, !decoded.password.isEmpty, !decoded.uris.isEmpty else {
-            throw APIError.invalidResponse("Invalid TURN credentials")
-        }
-
-        return decoded
-    }
-
-    func fetchDiagnosticToken(host: String) async throws -> String {
-        guard let url = buildHTTPSURL(host: host, path: "/api/diagnostic-token") else {
-            throw APIError.invalidHost
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = Data()
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw APIError.http("Diagnostic token failed")
-        }
-
-        let decoded = try JSONDecoder().decode(DiagnosticTokenResponse.self, from: data)
-        let token = decoded.token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else {
-            throw APIError.invalidResponse("Diagnostic token missing")
-        }
-        return token
-    }
-
     func fetchPushRecipients(host: String, roomId: String) async throws -> [PushRecipient] {
-        guard let url = buildHTTPSURL(host: host, path: "/api/push/recipients", query: ["roomId": roomId]) else {
+        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/recipients", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 
@@ -169,7 +97,7 @@ final class APIClient {
     }
 
     func subscribePush(host: String, roomId: String, request payload: PushSubscribeRequest) async throws {
-        guard let url = buildHTTPSURL(host: host, path: "/api/push/subscribe", query: ["roomId": roomId]) else {
+        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/subscribe", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 
@@ -185,7 +113,7 @@ final class APIClient {
     }
 
     func uploadPushSnapshot(host: String, request payload: PushSnapshotUploadRequest) async throws -> String {
-        guard let url = buildHTTPSURL(host: host, path: "/api/push/snapshot") else {
+        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/snapshot") else {
             throw APIError.invalidHost
         }
 
@@ -208,7 +136,7 @@ final class APIClient {
     }
 
     func fetchPushSnapshotCiphertext(host: String, snapshotId: String) async throws -> Data {
-        guard let url = buildHTTPSURL(host: host, path: "/api/push/snapshot/\(snapshotId)") else {
+        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/snapshot/\(snapshotId)") else {
             throw APIError.invalidHost
         }
 
@@ -226,7 +154,7 @@ final class APIClient {
     }
 
     func sendPushInvite(host: String, roomId: String, endpoint: String?) async throws {
-        guard let url = buildHTTPSURL(host: host, path: "/api/push/invite", query: ["roomId": roomId]) else {
+        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/invite", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 
@@ -249,7 +177,7 @@ final class APIClient {
     }
 
     func notifyRoom(host: String, roomId: String, cid: String, snapshotId: String?, pushEndpoint: String?) async throws {
-        guard let url = buildHTTPSURL(host: host, path: "/api/push/notify", query: ["roomId": roomId]) else {
+        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/notify", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 
@@ -277,67 +205,6 @@ final class APIClient {
             throw APIError.http("Push notify failed")
         }
     }
-
-    private func parseRoomIdResponse(_ data: Data) throws -> String {
-        let decoded = try JSONDecoder().decode(RoomIdResponse.self, from: data)
-        guard !decoded.roomId.isEmpty else {
-            throw APIError.invalidResponse("Room ID missing")
-        }
-        return decoded.roomId
-    }
-
-    /// Builds an HTTPS URL from a raw host string (e.g. "example.com" or "example.com:8443").
-    /// Inlines the host-parsing logic so this file does not depend on EndpointHostParser
-    /// (which is internal to SerenadaCore).
-    private func buildHTTPSURL(host: String, path: String, query: [String: String] = [:]) -> URL? {
-        let trimmed = host
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard !trimmed.isEmpty else { return nil }
-
-        let lower = trimmed.lowercased()
-        let withScheme: String
-        if lower.hasPrefix("https://") || lower.hasPrefix("http://") ||
-            lower.hasPrefix("wss://") || lower.hasPrefix("ws://") {
-            withScheme = trimmed
-        } else {
-            withScheme = "https://\(trimmed)"
-        }
-
-        guard let parsed = URLComponents(string: withScheme) else { return nil }
-        guard parsed.user == nil else { return nil }
-        guard parsed.password == nil else { return nil }
-        guard parsed.query == nil else { return nil }
-        guard parsed.fragment == nil else { return nil }
-        guard parsed.path.isEmpty || parsed.path == "/" else { return nil }
-
-        guard let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !parsedHost.isEmpty else {
-            return nil
-        }
-
-        if let port = parsed.port {
-            guard (1...65535).contains(port) else { return nil }
-        }
-
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = parsedHost
-        components.port = parsed.port
-        components.path = path
-        if !query.isEmpty {
-            components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        }
-        return components.url
-    }
-}
-
-private struct RoomIdResponse: Codable {
-    let roomId: String
-}
-
-private struct DiagnosticTokenResponse: Codable {
-    let token: String
 }
 
 private struct PushSnapshotIDResponse: Codable {

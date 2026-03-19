@@ -92,6 +92,20 @@ public final class SerenadaDiagnostics {
         Task { completion(await checkTurnAsync()) }
     }
 
+    // MARK: - Connectivity helpers (used by host DiagnosticsScreen)
+
+    public func createRoomId() async throws -> String {
+        try await apiClient.createRoomId(host: config.serverHost)
+    }
+
+    public func fetchDiagnosticToken() async throws -> String {
+        try await apiClient.fetchDiagnosticToken(host: config.serverHost)
+    }
+
+    public func fetchTurnCredentials(token: String) async throws -> TurnCredentials {
+        try await apiClient.fetchTurnCredentials(host: config.serverHost, token: token)
+    }
+
     // MARK: - Private
 
     private func checkCameraSync() -> DiagnosticCheckResult {

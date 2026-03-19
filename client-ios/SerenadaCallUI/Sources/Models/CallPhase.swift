@@ -1,6 +1,6 @@
 import Foundation
 
-enum CallPhase: String, Equatable {
+public enum CallPhase: String, Equatable {
     case idle = "Idle"
     case creatingRoom = "CreatingRoom"
     case joining = "Joining"
