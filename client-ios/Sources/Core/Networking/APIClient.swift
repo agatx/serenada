@@ -67,14 +67,27 @@ struct PushSubscribeRequest: Encodable, Equatable {
 
 final class APIClient {
     private let session: URLSession
-    private let urlBuilder = CoreAPIClient()
 
     init(session: URLSession = .shared) {
         self.session = session
     }
 
+    private func buildURL(host: String, path: String, query: [String: String] = [:]) -> URL? {
+        guard let parsed = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
+        let isLocal = parsed.host == "localhost" || parsed.host.hasPrefix("127.")
+        var components = URLComponents()
+        components.scheme = isLocal ? "http" : "https"
+        components.host = parsed.host
+        components.port = parsed.port
+        components.path = path
+        if !query.isEmpty {
+            components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        return components.url
+    }
+
     func fetchPushRecipients(host: String, roomId: String) async throws -> [PushRecipient] {
-        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/recipients", query: ["roomId": roomId]) else {
+        guard let url = buildURL(host: host, path: "/api/push/recipients", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 
@@ -97,7 +110,7 @@ final class APIClient {
     }
 
     func subscribePush(host: String, roomId: String, request payload: PushSubscribeRequest) async throws {
-        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/subscribe", query: ["roomId": roomId]) else {
+        guard let url = buildURL(host: host, path: "/api/push/subscribe", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 
@@ -113,7 +126,7 @@ final class APIClient {
     }
 
     func uploadPushSnapshot(host: String, request payload: PushSnapshotUploadRequest) async throws -> String {
-        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/snapshot") else {
+        guard let url = buildURL(host: host, path: "/api/push/snapshot") else {
             throw APIError.invalidHost
         }
 
@@ -136,7 +149,7 @@ final class APIClient {
     }
 
     func fetchPushSnapshotCiphertext(host: String, snapshotId: String) async throws -> Data {
-        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/snapshot/\(snapshotId)") else {
+        guard let url = buildURL(host: host, path: "/api/push/snapshot/\(snapshotId)") else {
             throw APIError.invalidHost
         }
 
@@ -154,7 +167,7 @@ final class APIClient {
     }
 
     func sendPushInvite(host: String, roomId: String, endpoint: String?) async throws {
-        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/invite", query: ["roomId": roomId]) else {
+        guard let url = buildURL(host: host, path: "/api/push/invite", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 
@@ -177,7 +190,7 @@ final class APIClient {
     }
 
     func notifyRoom(host: String, roomId: String, cid: String, snapshotId: String?, pushEndpoint: String?) async throws {
-        guard let url = urlBuilder.buildHTTPSURL(host: host, path: "/api/push/notify", query: ["roomId": roomId]) else {
+        guard let url = buildURL(host: host, path: "/api/push/notify", query: ["roomId": roomId]) else {
             throw APIError.invalidHost
         }
 

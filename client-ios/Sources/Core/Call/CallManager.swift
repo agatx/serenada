@@ -27,7 +27,6 @@ final class CallManager: ObservableObject {
     }
 
     private let apiClient: APIClient
-    private let coreAPIClient: CoreAPIClient
     private let settingsStore: SettingsStore
     private let recentCallStore: RecentCallStore
     private let savedRoomStore: SavedRoomStore
@@ -52,14 +51,12 @@ final class CallManager: ObservableObject {
 
     init(
         apiClient: APIClient = APIClient(),
-        coreAPIClient: CoreAPIClient = CoreAPIClient(),
         settingsStore: SettingsStore = SettingsStore(),
         recentCallStore: RecentCallStore = RecentCallStore(),
         savedRoomStore: SavedRoomStore = SavedRoomStore(),
         roomWatcher: RoomWatcher? = nil
     ) {
         self.apiClient = apiClient
-        self.coreAPIClient = coreAPIClient
         self.settingsStore = settingsStore
         self.recentCallStore = recentCallStore
         self.savedRoomStore = savedRoomStore
@@ -122,7 +119,8 @@ final class CallManager: ObservableObject {
             : host.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            try await coreAPIClient.validateServerHost(normalized)
+            let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalized))
+            try await diag.validateServerHost()
             return .success(normalized)
         } catch {
             return .failure(error)
@@ -359,12 +357,21 @@ final class CallManager: ObservableObject {
             return .failure(NSError(domain: "CallManager", code: 2, userInfo: [NSLocalizedDescriptionKey: L10n.settingsErrorInvalidServerHost]))
         }
 
-        do {
-            let roomId = try await coreAPIClient.createRoomId(host: normalizedHost)
-            saveRoom(roomId: roomId, name: normalizedName, host: normalizedHost)
-            return .success(buildSavedRoomInviteLink(host: normalizedHost, roomId: roomId, roomName: normalizedName))
-        } catch {
-            return .failure(error)
+        let core = makeSerenadaCore(host: normalizedHost)
+        return await withCheckedContinuation { continuation in
+            core.createRoom { [weak self] result in
+                Task { @MainActor in
+                    switch result {
+                    case .success(let created):
+                        created.session.cancelJoin()
+                        self?.saveRoom(roomId: created.roomId, name: normalizedName, host: normalizedHost)
+                        let link = self?.buildSavedRoomInviteLink(host: normalizedHost, roomId: created.roomId, roomName: normalizedName) ?? ""
+                        continuation.resume(returning: .success(link))
+                    case .failure(let error):
+                        continuation.resume(returning: .failure(error))
+                    }
+                }
+            }
         }
     }
 

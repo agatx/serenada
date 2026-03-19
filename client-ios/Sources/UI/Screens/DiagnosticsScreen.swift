@@ -3,9 +3,6 @@ import SerenadaCallUI
 import SerenadaCore
 import SwiftUI
 import UserNotifications
-#if canImport(WebRTC)
-import WebRTC
-#endif
 
 private enum DiagnosticsCheckStatus {
     case idle
@@ -39,11 +36,6 @@ private struct DiagnosticsMediaReport {
     var ioBufferMs: Double?
 }
 
-private struct DiagnosticsIceReport {
-    var stunPassed = false
-    var turnPassed = false
-}
-
 struct DiagnosticsScreen: View {
     let host: String
 
@@ -52,7 +44,7 @@ struct DiagnosticsScreen: View {
     @State private var connectivityChecks: [DiagnosticsCheckResult] = []
     @State private var isRunningConnectivity = false
 
-    @State private var iceReport = DiagnosticsIceReport()
+    @State private var iceReport = IceProbeReport(stunPassed: false, turnPassed: false, logs: [])
     @State private var isRunningIce = false
 
     @State private var logLines: [String] = []
@@ -243,6 +235,8 @@ struct DiagnosticsScreen: View {
         }
     }
 
+    // MARK: - Helpers
+
     private func checkRow(title: String, passed: Bool) -> some View {
         HStack(spacing: 10) {
             Circle()
@@ -288,6 +282,8 @@ struct DiagnosticsScreen: View {
             return Color(UIColor.systemRed)
         }
     }
+
+    // MARK: - Permissions & media (local iOS APIs only)
 
     private func refreshMedia() {
         let devices = AVCaptureDevice.DiscoverySession(
@@ -361,6 +357,8 @@ struct DiagnosticsScreen: View {
         }
     }
 
+    // MARK: - Connectivity (delegates to SerenadaDiagnostics)
+
     private func runConnectivityChecks() async {
         guard !isRunningConnectivity else { return }
         isRunningConnectivity = true
@@ -379,95 +377,34 @@ struct DiagnosticsScreen: View {
         }
 
         let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalizedHost))
+        let report = await diag.runConnectivityChecks()
 
-        connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivityRoomApi) {
-            _ = try await diag.createRoomId()
-            return L10n.diagnosticsCheckPassed
-        })
+        let titles = [
+            L10n.diagnosticsConnectivityRoomApi,
+            L10n.diagnosticsConnectivityWebSocket,
+            L10n.diagnosticsConnectivitySse,
+            L10n.diagnosticsConnectivityDiagnosticToken,
+            L10n.diagnosticsConnectivityTurnCredentials
+        ]
+        let outcomes = [report.roomApi, report.webSocket, report.sse, report.diagnosticToken, report.turnCredentials]
 
-        connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivityWebSocket) {
-            try await testWebSocket(host: normalizedHost)
-            return L10n.diagnosticsCheckPassed
-        })
-
-        connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivitySse) {
-            try await testSse(host: normalizedHost)
-            return L10n.diagnosticsCheckPassed
-        })
-
-        connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivityDiagnosticToken) {
-            _ = try await diag.fetchDiagnosticToken()
-            return L10n.diagnosticsCheckPassed
-        })
-
-        connectivityChecks.append(await runConnectivityCheck(title: L10n.diagnosticsConnectivityTurnCredentials) {
-            let token = try await diag.fetchDiagnosticToken()
-            _ = try await diag.fetchTurnCredentials(token: token)
-            return L10n.diagnosticsCheckPassed
-        })
-    }
-
-    private func runConnectivityCheck(
-        title: String,
-        run: @escaping () async throws -> String
-    ) async -> DiagnosticsCheckResult {
-        let start = Date()
-        do {
-            let detail = try await run()
-            let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
-            appendLog("\(title): OK (\(latencyMs) ms)")
-            return DiagnosticsCheckResult(title: title, status: .pass, detail: detail, latencyMs: latencyMs)
-        } catch {
-            appendLog("\(title): \(error.localizedDescription)")
-            return DiagnosticsCheckResult(title: title, status: .fail, detail: error.localizedDescription, latencyMs: nil)
+        for (title, outcome) in zip(titles, outcomes) {
+            let result: DiagnosticsCheckResult
+            switch outcome {
+            case .notRun:
+                result = DiagnosticsCheckResult(title: title, status: .idle, detail: "-", latencyMs: nil)
+            case .passed(let latencyMs):
+                appendLog("\(title): OK (\(latencyMs) ms)")
+                result = DiagnosticsCheckResult(title: title, status: .pass, detail: L10n.diagnosticsCheckPassed, latencyMs: latencyMs)
+            case .failed(let error):
+                appendLog("\(title): \(error)")
+                result = DiagnosticsCheckResult(title: title, status: .fail, detail: error, latencyMs: nil)
+            }
+            connectivityChecks.append(result)
         }
     }
 
-    private func testWebSocket(host: String) async throws {
-        var components = URLComponents()
-        components.scheme = "wss"
-        components.host = host
-        components.path = "/ws"
-        guard let url = components.url else { throw APIError.invalidHost }
-
-        let task = URLSession.shared.webSocketTask(with: url)
-        task.resume()
-        try await Task.sleep(nanoseconds: 600_000_000)
-        task.cancel(with: .goingAway, reason: nil)
-    }
-
-    private func testSse(host: String) async throws {
-        let sid = "diag-\(UUID().uuidString)"
-
-        var getComponents = URLComponents()
-        getComponents.scheme = "https"
-        getComponents.host = host
-        getComponents.path = "/sse"
-        getComponents.queryItems = [URLQueryItem(name: "sid", value: sid)]
-        guard let getURL = getComponents.url else { throw APIError.invalidHost }
-
-        let (bytes, response) = try await URLSession.shared.bytes(from: getURL)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw APIError.http("SSE open failed")
-        }
-        _ = try await bytes.lines.first(where: { _ in true })
-
-        var postComponents = URLComponents()
-        postComponents.scheme = "https"
-        postComponents.host = host
-        postComponents.path = "/sse"
-        postComponents.queryItems = [URLQueryItem(name: "sid", value: sid)]
-        guard let postURL = postComponents.url else { throw APIError.invalidHost }
-
-        var request = URLRequest(url: postURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Data("{\"v\":1,\"type\":\"ping\",\"payload\":{\"ts\":\(Int(Date().timeIntervalSince1970 * 1000))}}".utf8)
-        let (_, postResponse) = try await URLSession.shared.data(for: request)
-        guard let postHTTP = postResponse as? HTTPURLResponse, (200...299).contains(postHTTP.statusCode) else {
-            throw APIError.http("SSE ping failed")
-        }
-    }
+    // MARK: - ICE (delegates to SerenadaDiagnostics)
 
     private func runIceCheck(turnsOnly: Bool) async {
         guard !isRunningIce else { return }
@@ -476,32 +413,21 @@ struct DiagnosticsScreen: View {
 
         let normalizedHost = DeepLinkParser.normalizeHostValue(host) ?? host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedHost.isEmpty else {
-            iceReport = DiagnosticsIceReport(stunPassed: false, turnPassed: false)
+            iceReport = IceProbeReport(stunPassed: false, turnPassed: false, logs: [])
             appendLog(L10n.settingsErrorInvalidServerHost)
             return
         }
 
-        do {
-            appendLog(turnsOnly ? L10n.diagnosticsRunIceTurnsOnly : L10n.diagnosticsRunIceFull)
-            let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalizedHost))
-            let token = try await diag.fetchDiagnosticToken()
-            let credentials = try await diag.fetchTurnCredentials(token: token)
-            let urls = turnsOnly ? credentials.uris.filter { $0.lowercased().hasPrefix("turns:") } : credentials.uris
-            let probe = await runIceProbe(
-                urls: urls,
-                username: credentials.username,
-                credential: credentials.password,
-                onCandidateLog: { candidate in
-                    appendLog("ICE: \(candidate)")
-                }
-            )
-            iceReport = DiagnosticsIceReport(stunPassed: probe.stunPassed, turnPassed: probe.turnPassed)
-            appendLog("ICE done: STUN=\(probe.stunPassed) TURN=\(probe.turnPassed)")
-        } catch {
-            iceReport = DiagnosticsIceReport(stunPassed: false, turnPassed: false)
-            appendLog("ICE: \(error.localizedDescription)")
+        appendLog(turnsOnly ? L10n.diagnosticsRunIceTurnsOnly : L10n.diagnosticsRunIceFull)
+        let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalizedHost))
+        let report = await diag.runIceProbe(turnsOnly: turnsOnly) { candidate in
+            appendLog("ICE: \(candidate)")
         }
+        iceReport = report
+        appendLog("ICE done: STUN=\(report.stunPassed) TURN=\(report.turnPassed)")
     }
+
+    // MARK: - Logging
 
     private func appendLog(_ line: String) {
         let formatter = DateFormatter()
@@ -550,126 +476,6 @@ struct DiagnosticsScreen: View {
         """
     }
 }
-
-private struct IceProbeResult {
-    let stunPassed: Bool
-    let turnPassed: Bool
-    let logs: [String]
-}
-
-private extension DiagnosticsScreen {
-    @MainActor
-    func runIceProbe(urls: [String], username: String, credential: String, onCandidateLog: @escaping (String) -> Void) async -> IceProbeResult {
-#if canImport(WebRTC)
-        guard !urls.isEmpty else {
-            return IceProbeResult(stunPassed: false, turnPassed: false, logs: [L10n.diagnosticsIceNoServers])
-        }
-        let probe = IceGatheringProbe()
-        return await probe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
-#else
-        return IceProbeResult(stunPassed: false, turnPassed: false, logs: [L10n.errorSomethingWentWrong])
-#endif
-    }
-}
-
-#if canImport(WebRTC)
-@MainActor
-private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
-    private var continuation: CheckedContinuation<IceProbeResult, Never>?
-    private var peerConnection: RTCPeerConnection?
-    private var hasSrflx = false
-    private var hasRelay = false
-    private var logs: [String] = []
-    private var finished = false
-    private var onCandidateLog: ((String) -> Void)?
-
-    func run(urls: [String], username: String, credential: String, onCandidateLog: @escaping (String) -> Void) async -> IceProbeResult {
-        self.onCandidateLog = onCandidateLog
-        return await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            self.start(urls: urls, username: username, credential: credential)
-            Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
-                await self?.finish()
-            }
-        }
-    }
-
-    private func start(urls: [String], username: String, credential: String) {
-        let encoderFactory = RTCDefaultVideoEncoderFactory()
-        let decoderFactory = RTCDefaultVideoDecoderFactory()
-        let factory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
-
-        let config = RTCConfiguration()
-        config.iceServers = [RTCIceServer(urlStrings: urls, username: username, credential: credential)]
-        config.sdpSemantics = .unifiedPlan
-
-        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-        guard let connection = factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
-            logs.append("peerConnection creation failed")
-            finish()
-            return
-        }
-
-        peerConnection = connection
-        _ = connection.dataChannel(forLabel: "diag", configuration: RTCDataChannelConfiguration())
-
-        connection.offer(for: constraints) { [weak self] description, error in
-            guard let self else { return }
-            if let error {
-                self.logs.append("offer failed: \(error.localizedDescription)")
-                self.finish()
-                return
-            }
-            guard let description else {
-                self.logs.append("offer missing")
-                self.finish()
-                return
-            }
-            connection.setLocalDescription(description) { [weak self] setError in
-                if let setError {
-                    self?.logs.append("setLocalDescription failed: \(setError.localizedDescription)")
-                    self?.finish()
-                }
-            }
-        }
-    }
-
-    private func finish() {
-        guard !finished else { return }
-        finished = true
-        peerConnection?.close()
-        continuation?.resume(returning: IceProbeResult(stunPassed: hasSrflx, turnPassed: hasRelay, logs: logs))
-        continuation = nil
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        let sdp = candidate.sdp.lowercased()
-        if sdp.contains(" typ srflx") { hasSrflx = true }
-        if sdp.contains(" typ relay") { hasRelay = true }
-        logs.append(candidate.sdp)
-        onCandidateLog?(candidate.sdp)
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
-        if newState == .complete {
-            finish()
-        }
-    }
-
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
-    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
-}
-#endif
 
 private extension View {
     func cardStyle() -> some View {

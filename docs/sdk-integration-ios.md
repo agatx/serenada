@@ -160,7 +160,52 @@ diagnostics.runAll { report in
 }
 ```
 
+### Connectivity Checks
+
+Test individual server endpoints (Room API, WebSocket, SSE, diagnostic token, TURN credentials):
+
+```swift
+let report = await diagnostics.runConnectivityChecks()
+// report.roomApi, .webSocket, .sse, .diagnosticToken, .turnCredentials
+// Each is a CheckOutcome: .notRun | .passed(latencyMs:) | .failed(error:)
+```
+
+### ICE Probing
+
+Verify STUN/TURN connectivity with a real WebRTC ICE gathering probe:
+
+```swift
+let iceReport = await diagnostics.runIceProbe(turnsOnly: false) { candidate in
+    print("ICE candidate: \(candidate)")
+}
+// iceReport.stunPassed, .turnPassed, .logs
+```
+
+### Server Validation
+
+Validate that a host is a reachable Serenada server:
+
+```swift
+try await diagnostics.validateServerHost()
+```
+
 Diagnostics never trigger OS permission prompts — if a permission is missing, the check returns `.notAuthorized`.
+
+## Room Watching
+
+Monitor occupancy of saved/recent rooms without joining:
+
+```swift
+let watcher = RoomWatcher()
+watcher.delegate = self
+watcher.watchRooms(roomIds: ["room1", "room2"], host: "serenada.app")
+// watcher.currentStatuses → [String: RoomOccupancy]
+
+// RoomWatcherDelegate
+func roomWatcher(_ watcher: RoomWatcher, didUpdateStatuses statuses: [String: RoomOccupancy]) {
+    // statuses["room1"]?.count, .maxParticipants
+}
+```
 
 ## Configuration
 
