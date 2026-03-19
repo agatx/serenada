@@ -26,6 +26,11 @@ let package = Package(
             name: "SerenadaCore",
             dependencies: ["WebRTC"],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "SerenadaCoreTests",
+            dependencies: ["SerenadaCore"],
+            path: "Tests/SerenadaCoreTests"
         )
     ]
 )

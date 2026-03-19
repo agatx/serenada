@@ -4,8 +4,8 @@ import UIKit
 
 @MainActor
 public final class CallAudioSessionController {
-    private let onProximityChanged: (Bool) -> Void
-    private let onAudioEnvironmentChanged: () -> Void
+    private var onProximityChanged: (Bool) -> Void
+    private var onAudioEnvironmentChanged: () -> Void
 
     private let audioSession = AVAudioSession.sharedInstance()
 
@@ -19,6 +19,14 @@ public final class CallAudioSessionController {
     ) {
         self.onProximityChanged = onProximityChanged
         self.onAudioEnvironmentChanged = onAudioEnvironmentChanged
+    }
+
+    public func setOnProximityChanged(_ handler: @escaping (Bool) -> Void) {
+        onProximityChanged = handler
+    }
+
+    public func setOnAudioEnvironmentChanged(_ handler: @escaping () -> Void) {
+        onAudioEnvironmentChanged = handler
     }
 
     public func activate() {

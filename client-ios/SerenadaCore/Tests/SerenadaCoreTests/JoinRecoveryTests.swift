@@ -1,5 +1,5 @@
+@testable import SerenadaCore
 import XCTest
-@testable import SerenadaiOS
 
 final class JoinRecoveryTests: XCTestCase {
     func testResolveJoinRecoveryReturnsNilOutsideJoiningPhases() {
@@ -19,7 +19,7 @@ final class JoinRecoveryTests: XCTestCase {
     }
 
     func testResolveJoinRecoveryPrefersInCallForLivePeerTraffic() {
-        let recovered = resolveJoinRecoveryState(currentPhase: .creatingRoom, participantHint: 1, preferInCall: true)
+        let recovered = resolveJoinRecoveryState(currentPhase: .joining, participantHint: 1, preferInCall: true)
         XCTAssertEqual(recovered, JoinRecoveryState(phase: .inCall, participantCount: 2))
     }
 }

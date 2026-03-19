@@ -122,6 +122,8 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: Tests
+      - path: SerenadaCore/Tests/SerenadaCoreTests
+      - path: SerenadaCallUI/Tests/SerenadaCallUITests
     dependencies:
       - target: SerenadaiOS
     settings:

@@ -1,8 +1,13 @@
+@testable import SerenadaCallUI
 import SerenadaCore
 import XCTest
-@testable import SerenadaiOS
 
 final class CallScreenStateTests: XCTestCase {
+    func testOnlyHostTerminatesRoomOnEndTap() {
+        XCTAssertTrue(shouldTerminateRoomOnEndTap(isHost: true))
+        XCTAssertFalse(shouldTerminateRoomOnEndTap(isHost: false))
+    }
+
     func testPrimaryLocalVideoContentModeUsesFitForWorldAndComposite() {
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .world), .scaleAspectFit)
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .composite), .scaleAspectFit)
@@ -76,25 +81,5 @@ final class CallScreenStateTests: XCTestCase {
         XCTAssertEqual(pipBottomPadding(isLandscape: true, areControlsVisible: false), 24)
         XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: true), 170)
         XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: false), 52)
-    }
-
-    func testBroadcastSharedMemoryTimestampRoundTripsAtUnalignedOffset() {
-        let buffer = UnsafeMutableRawPointer.allocate(byteCount: 64, alignment: 8)
-        defer { buffer.deallocate() }
-        buffer.initializeMemory(as: UInt8.self, repeating: 0, count: 64)
-
-        let timestamp = Int64(0x0102_0304_0506_0708)
-        BroadcastSharedMemoryIO.storeInt64(
-            timestamp,
-            to: buffer,
-            byteOffset: BroadcastHeaderOffset.timestampNs
-        )
-
-        let decoded = BroadcastSharedMemoryIO.loadInt64(
-            from: UnsafeRawPointer(buffer),
-            byteOffset: BroadcastHeaderOffset.timestampNs
-        )
-
-        XCTAssertEqual(decoded, timestamp)
     }
 }

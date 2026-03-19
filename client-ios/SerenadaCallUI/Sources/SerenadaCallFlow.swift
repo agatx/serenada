@@ -1,6 +1,10 @@
 import SerenadaCore
 import SwiftUI
 
+func shouldTerminateRoomOnEndTap(isHost: Bool) -> Bool {
+    isHost
+}
+
 /// The main entry point for the Serenada call UI flow.
 /// Handles the entire visual sequence from joining through call end.
 ///
@@ -14,19 +18,6 @@ import SwiftUI
 /// let session = serenada.join(url: url)
 /// SerenadaCallFlow(session: session, onDismiss: { dismiss() })
 /// ```
-///
-/// With the host app's existing CallManager (bridge mode):
-/// ```swift
-/// SerenadaCallFlow(
-///     uiState: callManager.uiState,
-///     roomId: roomId,
-///     serverHost: serverHost,
-///     rendererProvider: callManager,
-///     onToggleAudio: { callManager.toggleAudio() },
-///     ...
-///     onDismiss: { dismiss() }
-/// )
-/// ```
 public struct SerenadaCallFlow: View {
     private let mode: Mode
     private let config: SerenadaCallFlowConfig
@@ -38,26 +29,14 @@ public struct SerenadaCallFlow: View {
 
     private enum Mode {
         case urlFirst(url: URL, serenadaConfig: SerenadaConfig)
-        case sessionFirst(session: SerenadaSession)
-        case bridge(BridgeParams)
+        case sessionFirst(SessionParams)
     }
 
-    struct BridgeParams {
-        let uiState: CallUiState
-        let roomId: String
-        let serverHost: String
+    struct SessionParams {
+        let session: SerenadaSession
         let roomName: String?
-        let rendererProvider: CallRendererProvider
         let initialRemoteVideoFitCover: Bool
-        let onToggleAudio: () -> Void
-        let onToggleVideo: () -> Void
-        let onFlipCamera: () -> Void
-        let onToggleScreenShare: () -> Void
-        let onAdjustCameraZoom: (CGFloat) -> Void
-        let onResetCameraZoom: () -> Void
-        let onToggleFlashlight: () -> Void
-        let onEndCall: () -> Void
-        let onInviteToRoom: () async -> Result<Void, Error>
+        let onInviteToRoom: (() async -> Result<Void, Error>)?
         let onRemoteVideoFitChanged: ((Bool) -> Void)?
     }
 
@@ -81,63 +60,25 @@ public struct SerenadaCallFlow: View {
 
     public init(
         session: SerenadaSession,
-        config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
-        strings: [SerenadaString: String]? = nil,
-        onDismiss: (() -> Void)? = nil
-    ) {
-        self.mode = .sessionFirst(session: session)
-        self.config = config
-        self.strings = strings
-        self.onDismiss = onDismiss
-        self.onCallEnded = nil
-    }
-
-    // MARK: - Bridge init (for host apps using their own CallManager)
-
-    public init(
-        uiState: CallUiState,
-        roomId: String,
-        serverHost: String,
         roomName: String? = nil,
-        rendererProvider: CallRendererProvider,
         initialRemoteVideoFitCover: Bool = true,
         config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
         strings: [SerenadaString: String]? = nil,
-        onToggleAudio: @escaping () -> Void,
-        onToggleVideo: @escaping () -> Void,
-        onFlipCamera: @escaping () -> Void,
-        onToggleScreenShare: @escaping () -> Void,
-        onAdjustCameraZoom: @escaping (CGFloat) -> Void,
-        onResetCameraZoom: @escaping () -> Void,
-        onToggleFlashlight: @escaping () -> Void,
-        onEndCall: @escaping () -> Void,
-        onInviteToRoom: @escaping () async -> Result<Void, Error>,
+        onInviteToRoom: (() async -> Result<Void, Error>)? = nil,
         onRemoteVideoFitChanged: ((Bool) -> Void)? = nil,
-        onDismiss: (() -> Void)? = nil,
-        onCallEnded: ((EndReason) -> Void)? = nil
+        onDismiss: (() -> Void)? = nil
     ) {
-        self.mode = .bridge(BridgeParams(
-            uiState: uiState,
-            roomId: roomId,
-            serverHost: serverHost,
+        self.mode = .sessionFirst(SessionParams(
+            session: session,
             roomName: roomName,
-            rendererProvider: rendererProvider,
             initialRemoteVideoFitCover: initialRemoteVideoFitCover,
-            onToggleAudio: onToggleAudio,
-            onToggleVideo: onToggleVideo,
-            onFlipCamera: onFlipCamera,
-            onToggleScreenShare: onToggleScreenShare,
-            onAdjustCameraZoom: onAdjustCameraZoom,
-            onResetCameraZoom: onResetCameraZoom,
-            onToggleFlashlight: onToggleFlashlight,
-            onEndCall: onEndCall,
             onInviteToRoom: onInviteToRoom,
             onRemoteVideoFitChanged: onRemoteVideoFitChanged
         ))
         self.config = config
         self.strings = strings
         self.onDismiss = onDismiss
-        self.onCallEnded = onCallEnded
+        self.onCallEnded = nil
     }
 
     public var body: some View {
@@ -152,34 +93,13 @@ public struct SerenadaCallFlow: View {
                 onCallEnded: onCallEnded
             )
 
-        case .sessionFirst(let session):
+        case .sessionFirst(let params):
             SessionFirstCallFlow(
-                session: session,
+                params: params,
                 config: config,
                 strings: strings,
                 onDismiss: onDismiss,
                 onCallEnded: onCallEnded
-            )
-
-        case .bridge(let params):
-            CallScreenView(
-                roomId: params.roomId,
-                uiState: params.uiState,
-                serverHost: params.serverHost,
-                roomName: params.roomName,
-                config: config,
-                strings: strings,
-                onToggleAudio: params.onToggleAudio,
-                onToggleVideo: params.onToggleVideo,
-                onFlipCamera: params.onFlipCamera,
-                onToggleScreenShare: params.onToggleScreenShare,
-                onAdjustCameraZoom: params.onAdjustCameraZoom,
-                onResetCameraZoom: params.onResetCameraZoom,
-                onToggleFlashlight: params.onToggleFlashlight,
-                onEndCall: params.onEndCall,
-                onInviteToRoom: params.onInviteToRoom,
-                rendererProvider: params.rendererProvider,
-                initialRemoteVideoFitCover: params.initialRemoteVideoFitCover
             )
         }
     }
@@ -209,7 +129,13 @@ private struct URLFirstCallFlow: View {
         Group {
             if let session {
                 SessionFirstCallFlow(
-                    session: session,
+                    params: SerenadaCallFlow.SessionParams(
+                        session: session,
+                        roomName: nil,
+                        initialRemoteVideoFitCover: true,
+                        onInviteToRoom: nil,
+                        onRemoteVideoFitChanged: nil
+                    ),
                     config: config,
                     strings: strings,
                     onDismiss: onDismiss,
@@ -225,15 +151,18 @@ private struct URLFirstCallFlow: View {
             let newCore = SerenadaCore(config: serenadaConfig)
             core = newCore
             let newSession = newCore.join(url: url)
-            session = newSession
-
-            // Auto-prompt for permissions in URL-first mode
-            let granted = await SerenadaPermissions.request([.camera, .microphone])
-            if granted {
-                newSession.resumeJoin()
-            } else {
-                newSession.cancelJoin()
+            newSession.onPermissionsRequired = { permissions in
+                Task {
+                    let granted = await SerenadaPermissions.request(permissions)
+                    if granted {
+                        newSession.resumeJoin()
+                    } else {
+                        newSession.cancelJoin()
+                        onDismiss?()
+                    }
+                }
             }
+            session = newSession
         }
     }
 }
@@ -241,11 +170,28 @@ private struct URLFirstCallFlow: View {
 // MARK: - Session-first flow
 
 private struct SessionFirstCallFlow: View {
-    @ObservedObject var session: SerenadaSession
+    let params: SerenadaCallFlow.SessionParams
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
     let onDismiss: (() -> Void)?
     let onCallEnded: ((EndReason) -> Void)?
+
+    @ObservedObject private var session: SerenadaSession
+
+    init(
+        params: SerenadaCallFlow.SessionParams,
+        config: SerenadaCallFlowConfig,
+        strings: [SerenadaString: String]?,
+        onDismiss: (() -> Void)?,
+        onCallEnded: ((EndReason) -> Void)?
+    ) {
+        self.params = params
+        self.config = config
+        self.strings = strings
+        self.onDismiss = onDismiss
+        self.onCallEnded = onCallEnded
+        _session = ObservedObject(wrappedValue: params.session)
+    }
 
     var body: some View {
         let state = session.state
@@ -291,6 +237,7 @@ private struct SessionFirstCallFlow: View {
                     roomId: session.roomId,
                     uiState: mapSessionToUiState(session),
                     serverHost: session.serverHost,
+                    roomName: params.roomName,
                     config: config,
                     strings: strings,
                     onToggleAudio: { session.toggleAudio() },
@@ -303,16 +250,24 @@ private struct SessionFirstCallFlow: View {
                             session.startScreenShare()
                         }
                     },
-                    onAdjustCameraZoom: { _ in },
-                    onResetCameraZoom: {},
-                    onToggleFlashlight: {},
+                    onAdjustCameraZoom: { _ = session.adjustCameraZoom(by: $0) },
+                    onResetCameraZoom: { _ = session.resetCameraZoom() },
+                    onToggleFlashlight: { _ = session.toggleFlashlight() },
                     onEndCall: {
-                        session.end()
+                        if shouldTerminateRoomOnEndTap(isHost: session.state.localParticipant.isHost) {
+                            session.end()
+                        } else {
+                            session.leave()
+                        }
                         onCallEnded?(.localLeft)
                         onDismiss?()
                     },
-                    onInviteToRoom: { .failure(NSError(domain: "SerenadaCallUI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Not implemented"])) },
-                    rendererProvider: SessionRendererAdapter(session: session)
+                    onInviteToRoom: params.onInviteToRoom ?? {
+                        .failure(NSError(domain: "SerenadaCallUI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Not implemented"]))
+                    },
+                    rendererProvider: session,
+                    initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
+                    onRemoteVideoFitChanged: params.onRemoteVideoFitChanged
                 )
 
             case .ending:
@@ -355,6 +310,18 @@ private struct SessionFirstCallFlow: View {
         uiState.localCameraMode = state.localParticipant.cameraMode
         uiState.connectionStatus = mapConnectionStatus(state.connectionStatus)
         uiState.activeTransport = state.activeTransport
+        uiState.isSignalingConnected = session.isSignalingConnected
+        uiState.iceConnectionState = session.iceConnectionState
+        uiState.connectionState = session.peerConnectionState
+        uiState.signalingState = session.rtcSignalingState
+        uiState.realtimeStats = session.realtimeStats
+        uiState.isFrontCamera = session.isFrontCamera
+        uiState.isScreenSharing = session.isScreenSharing
+        uiState.cameraZoomFactor = session.cameraZoomFactor
+        uiState.isFlashAvailable = session.isFlashAvailable
+        uiState.isFlashEnabled = session.isFlashEnabled
+        uiState.remoteContentCid = session.remoteContentParticipantId
+        uiState.remoteContentType = session.remoteContentType
         uiState.remoteParticipants = state.remoteParticipants.map { rp in
             RemoteParticipant(
                 cid: rp.cid,
@@ -387,39 +354,12 @@ private struct SessionFirstCallFlow: View {
     }
 }
 
-// MARK: - Session Renderer Adapter
-
-@MainActor
-private final class SessionRendererAdapter: CallRendererProvider {
-    private let session: SerenadaSession
-
-    init(session: SerenadaSession) {
-        self.session = session
+extension SerenadaSession: CallRendererProvider {
+    public func attachRemoteRenderer(_ renderer: AnyObject, forCid cid: String) {
+        attachRemoteRenderer(renderer, forParticipant: cid)
     }
 
-    func attachLocalRenderer(_ renderer: AnyObject) {
-        session.attachLocalRenderer(renderer)
-    }
-
-    func detachLocalRenderer(_ renderer: AnyObject) {
-        session.detachLocalRenderer(renderer)
-    }
-
-    func attachRemoteRenderer(_ renderer: AnyObject) {
-        if let firstCid = session.state.remoteParticipants.first?.cid {
-            session.attachRemoteRenderer(renderer, forParticipant: firstCid)
-        }
-    }
-
-    func detachRemoteRenderer(_ renderer: AnyObject) {
-        // Detach from first remote participant
-    }
-
-    func attachRemoteRenderer(_ renderer: AnyObject, forCid cid: String) {
-        session.attachRemoteRenderer(renderer, forParticipant: cid)
-    }
-
-    func detachRemoteRenderer(_ renderer: AnyObject, forCid cid: String) {
-        // Detach from specific remote participant
+    public func detachRemoteRenderer(_ renderer: AnyObject, forCid cid: String) {
+        detachRemoteRenderer(renderer, forParticipant: cid)
     }
 }

@@ -27,6 +27,14 @@ let package = Package(
                 .product(name: "SerenadaCore", package: "SerenadaCore")
             ],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "SerenadaCallUITests",
+            dependencies: [
+                "SerenadaCallUI",
+                .product(name: "SerenadaCore", package: "SerenadaCore")
+            ],
+            path: "Tests/SerenadaCallUITests"
         )
     ]
 )

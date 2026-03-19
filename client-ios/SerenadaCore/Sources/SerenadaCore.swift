@@ -44,10 +44,14 @@ public final class SerenadaCore {
 
     public func join(url: URL) -> SerenadaSession {
         let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
+        let target = DeepLinkParser.parseTarget(from: url)
+        let serverHost = target?.host
+            ?? DeepLinkParser.normalizeHostValue(authorityHost(from: url))
+            ?? config.serverHost
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
-            serverHost: config.serverHost,
+            serverHost: serverHost,
             config: config,
             delegateProvider: { [weak self] in self?.delegate }
         )
@@ -55,12 +59,7 @@ public final class SerenadaCore {
     }
 
     public func join(roomId: String) -> SerenadaSession {
-        let isLocal = config.serverHost == "localhost" || config.serverHost.hasPrefix("127.")
-        var components = URLComponents()
-        components.scheme = isLocal ? "http" : "https"
-        components.host = config.serverHost
-        components.path = "/call/\(roomId)"
-        let url = components.url
+        let url = buildRoomURL(host: config.serverHost, roomId: roomId)
 
         let session = SerenadaSession(
             roomId: roomId,
@@ -79,12 +78,7 @@ public final class SerenadaCore {
         Task {
             do {
                 let roomId = try await apiClient.createRoomId(host: serverHost)
-                let isLocal = serverHost == "localhost" || serverHost.hasPrefix("127.")
-                var components = URLComponents()
-                components.scheme = isLocal ? "http" : "https"
-                components.host = serverHost
-                components.path = "/call/\(roomId)"
-                guard let url = components.url else {
+                guard let url = buildRoomURL(host: serverHost, roomId: roomId) else {
                     completion(.failure(APIError.invalidResponse("Failed to build room URL")))
                     return
                 }
@@ -101,5 +95,25 @@ public final class SerenadaCore {
                 completion(.failure(error))
             }
         }
+    }
+
+    private func buildRoomURL(host: String, roomId: String) -> URL? {
+        guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
+
+        let isLocal = parsedHost.host == "localhost" || parsedHost.host.hasPrefix("127.")
+        var components = URLComponents()
+        components.scheme = isLocal ? "http" : "https"
+        components.host = parsedHost.host
+        components.port = parsedHost.port
+        components.path = "/call/\(roomId)"
+        return components.url
+    }
+
+    private func authorityHost(from url: URL) -> String? {
+        guard let host = url.host else { return nil }
+        if let port = url.port {
+            return "\(host):\(port)"
+        }
+        return host
     }
 }

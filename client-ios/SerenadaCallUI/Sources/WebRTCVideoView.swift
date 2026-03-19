@@ -80,8 +80,8 @@ final class MirroredRTCMTLVideoView: UIView, RTCVideoRenderer {
 }
 #endif
 
-public struct WebRTCVideoView: UIViewRepresentable {
-    public enum Kind {
+struct WebRTCVideoView: UIViewRepresentable {
+    enum Kind {
         case local
         case remote
         case remoteForCid(String)
@@ -100,7 +100,7 @@ public struct WebRTCVideoView: UIViewRepresentable {
     let isMirrored: Bool
     let onVideoSizeChanged: ((CGSize) -> Void)?
 
-    public init(
+    init(
         kind: Kind,
         rendererProvider: CallRendererProvider,
         videoContentMode: UIView.ContentMode = .scaleAspectFill,
@@ -114,11 +114,11 @@ public struct WebRTCVideoView: UIViewRepresentable {
         self.onVideoSizeChanged = onVideoSizeChanged
     }
 
-    public func makeCoordinator() -> Coordinator {
+    func makeCoordinator() -> Coordinator {
         Coordinator(kind: kind, rendererProvider: rendererProvider, onVideoSizeChanged: onVideoSizeChanged)
     }
 
-    public func makeUIView(context: Context) -> UIView {
+    func makeUIView(context: Context) -> UIView {
 #if canImport(WebRTC)
         switch kind {
         case .local:
@@ -182,7 +182,7 @@ public struct WebRTCVideoView: UIViewRepresentable {
 #endif
     }
 
-    public func updateUIView(_ uiView: UIView, context: Context) {
+    func updateUIView(_ uiView: UIView, context: Context) {
 #if canImport(WebRTC)
         if let renderer = uiView as? MirroredRTCMTLVideoView {
             let mirrorChanged = context.coordinator.isMirrored != isMirrored

@@ -1,9 +1,7 @@
 import SerenadaCore
 import XCTest
-@testable import SerenadaiOS
 
 final class LayoutConformanceTests: XCTestCase {
-
     private let strictTolerance: CGFloat = 0.005
 
     func testAllCases() throws {
@@ -15,29 +13,28 @@ final class LayoutConformanceTests: XCTestCase {
             let expected = testCase.expected
             let result = computeLayout(scene: scene)
 
-            // Mode
             XCTAssertEqual(
-                result.mode.rawValue, expected.mode,
+                result.mode.rawValue,
+                expected.mode,
                 "\(testCase.id): mode mismatch"
             )
 
-            // Tile count
             XCTAssertEqual(
-                result.tiles.count, expected.tileCount,
+                result.tiles.count,
+                expected.tileCount,
                 "\(testCase.id): tile count mismatch"
             )
 
-            // Tile frames
-            for (i, expectedTile) in expected.tiles.enumerated() {
-                guard i < result.tiles.count else {
-                    XCTFail("\(testCase.id): missing tile[\(i)]")
+            for (index, expectedTile) in expected.tiles.enumerated() {
+                guard index < result.tiles.count else {
+                    XCTFail("\(testCase.id): missing tile[\(index)]")
                     continue
                 }
-                let actualTile = result.tiles[i]
 
-                XCTAssertEqual(actualTile.id, expectedTile.id, "\(testCase.id) tile[\(i)] id")
-                XCTAssertEqual(actualTile.type.rawValue, expectedTile.type, "\(testCase.id) tile[\(i)] type")
-                XCTAssertEqual(actualTile.fit.rawValue, expectedTile.fit, "\(testCase.id) tile[\(i)] fit")
+                let actualTile = result.tiles[index]
+                XCTAssertEqual(actualTile.id, expectedTile.id, "\(testCase.id) tile[\(index)] id")
+                XCTAssertEqual(actualTile.type.rawValue, expectedTile.type, "\(testCase.id) tile[\(index)] type")
+                XCTAssertEqual(actualTile.fit.rawValue, expectedTile.fit, "\(testCase.id) tile[\(index)] fit")
 
                 let actualNorm = normalizeFrame(
                     actualTile.frame,
@@ -45,13 +42,13 @@ final class LayoutConformanceTests: XCTestCase {
                     viewportHeight: scene.viewportHeight
                 )
                 assertFrameClose(
-                    actualNorm, expectedTile.normalizedFrame,
+                    actualNorm,
+                    expectedTile.normalizedFrame,
                     tolerance: strictTolerance,
-                    label: "\(testCase.id) tile[\(i)]"
+                    label: "\(testCase.id) tile[\(index)]"
                 )
             }
 
-            // Local PIP
             if expected.localPip == nil {
                 XCTAssertNil(result.localPip, "\(testCase.id): localPip should be nil")
             } else {
@@ -66,7 +63,8 @@ final class LayoutConformanceTests: XCTestCase {
                         viewportHeight: scene.viewportHeight
                     )
                     assertFrameClose(
-                        actualPipNorm, expectedPip.normalizedFrame,
+                        actualPipNorm,
+                        expectedPip.normalizedFrame,
                         tolerance: strictTolerance,
                         label: "\(testCase.id) pip"
                     )
@@ -74,8 +72,6 @@ final class LayoutConformanceTests: XCTestCase {
             }
         }
     }
-
-    // MARK: - Helpers
 
     private struct NormalizedFrame {
         let x: CGFloat
@@ -113,8 +109,6 @@ final class LayoutConformanceTests: XCTestCase {
         case .bottomRight: return "bottomRight"
         }
     }
-
-    // MARK: - Fixture loading
 
     private struct FixtureRoot: Decodable {
         let cases: [FixtureCase]
@@ -155,17 +149,14 @@ final class LayoutConformanceTests: XCTestCase {
     }
 
     private static func loadFixtures() throws -> [FixtureCase] {
-        let bundle = Bundle(for: LayoutConformanceTests.self)
-        guard let url = bundle.url(forResource: "layout_conformance_v1", withExtension: "json", subdirectory: "Fixtures") else {
-            // Try direct path for test environments where bundle structure differs
-            let directPath = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .appendingPathComponent("Fixtures")
-                .appendingPathComponent("layout_conformance_v1.json")
-            let data = try Data(contentsOf: directPath)
-            return try JSONDecoder().decode(FixtureRoot.self, from: data).cases
-        }
-        let data = try Data(contentsOf: url)
+        let fixturePath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/layout/fixtures/layout_conformance_v1.json")
+        let data = try Data(contentsOf: fixturePath)
         return try JSONDecoder().decode(FixtureRoot.self, from: data).cases
     }
 }

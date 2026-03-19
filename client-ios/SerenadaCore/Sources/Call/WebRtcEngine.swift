@@ -118,12 +118,12 @@ public final class WebRtcEngine {
         case composite
     }
 
-    private let onCameraFacingChanged: (Bool) -> Void
-    private let onCameraModeChanged: (LocalCameraMode) -> Void
-    private let onFlashlightStateChanged: (Bool, Bool) -> Void
-    private let onScreenShareStopped: () -> Void
-    private let onZoomFactorChanged: (Double) -> Void
-    private let onDebugTrace: ((String) -> Void)?
+    private var onCameraFacingChanged: (Bool) -> Void
+    private var onCameraModeChanged: (LocalCameraMode) -> Void
+    private var onFlashlightStateChanged: (Bool, Bool) -> Void
+    private var onScreenShareStopped: () -> Void
+    private var onZoomFactorChanged: (Double) -> Void
+    private var onDebugTrace: ((String) -> Void)?
 
     private var isHdVideoExperimentalEnabled: Bool
 
@@ -189,6 +189,30 @@ public final class WebRtcEngine {
 #endif
 
         notifyCameraModeAndFlash()
+    }
+
+    public func setOnCameraFacingChanged(_ handler: @escaping (Bool) -> Void) {
+        onCameraFacingChanged = handler
+    }
+
+    public func setOnCameraModeChanged(_ handler: @escaping (LocalCameraMode) -> Void) {
+        onCameraModeChanged = handler
+    }
+
+    public func setOnFlashlightStateChanged(_ handler: @escaping (Bool, Bool) -> Void) {
+        onFlashlightStateChanged = handler
+    }
+
+    public func setOnScreenShareStopped(_ handler: @escaping () -> Void) {
+        onScreenShareStopped = handler
+    }
+
+    public func setOnZoomFactorChanged(_ handler: @escaping (Double) -> Void) {
+        onZoomFactorChanged = handler
+    }
+
+    public func setOnDebugTrace(_ handler: ((String) -> Void)?) {
+        onDebugTrace = handler
     }
 
     public func startLocalMedia(preferVideo: Bool = true) {

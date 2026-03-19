@@ -1,6 +1,5 @@
 import SerenadaCore
 import XCTest
-@testable import SerenadaiOS
 
 final class DeepLinkParserTests: XCTestCase {
     func testExtractRoomIdFromCallPath() {

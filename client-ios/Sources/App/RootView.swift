@@ -8,8 +8,20 @@ private enum RootScreen {
     case error
 }
 
-func shouldShowActiveCallScreen(for uiState: CallUiState) -> Bool {
-    uiState.phase == .waiting || uiState.phase == .inCall
+func shouldShowActiveCallScreen(
+    sessionPhase: SerenadaCallPhase?,
+    fallbackUiState: CallUiState
+) -> Bool {
+    if let sessionPhase {
+        switch sessionPhase {
+        case .awaitingPermissions, .waiting, .inCall, .ending:
+            return true
+        case .idle, .joining, .error:
+            return false
+        }
+    }
+
+    return fallbackUiState.phase == .waiting || fallbackUiState.phase == .inCall
 }
 
 struct RootView: View {
@@ -26,7 +38,12 @@ struct RootView: View {
 
     var body: some View {
         let uiState = callManager.uiState
-        let showActiveCallScreen = shouldShowActiveCallScreen(for: uiState)
+        let activeSession = callManager.activeSession
+        let sessionPhase = activeSession?.state.phase
+        let showActiveCallScreen = shouldShowActiveCallScreen(
+            sessionPhase: sessionPhase,
+            fallbackUiState: uiState
+        )
 
         let currentScreen: RootScreen = {
             if showActiveCallScreen { return .call }
@@ -78,13 +95,10 @@ struct RootView: View {
                 )
 
             case .call:
-                if let roomId = uiState.roomId {
+                if let session = activeSession {
                     SerenadaCallFlow(
-                        uiState: uiState,
-                        roomId: roomId,
-                        serverHost: callManager.serverHost,
-                        roomName: callManager.savedRooms.first(where: { $0.roomId == roomId })?.name,
-                        rendererProvider: callManager,
+                        session: session,
+                        roomName: callManager.savedRooms.first(where: { $0.roomId == session.roomId })?.name,
                         initialRemoteVideoFitCover: SettingsStore().isRemoteVideoFitCover,
                         config: SerenadaCallFlowConfig(
                             screenSharingEnabled: true,
@@ -92,20 +106,11 @@ struct RootView: View {
                             debugOverlayEnabled: true
                         ),
                         strings: L10n.serenadaCallStrings,
-                        onToggleAudio: { callManager.toggleAudio() },
-                        onToggleVideo: { callManager.toggleVideo() },
-                        onFlipCamera: { callManager.flipCamera() },
-                        onToggleScreenShare: { callManager.toggleScreenShare() },
-                        onAdjustCameraZoom: { delta in
-                            callManager.adjustCameraZoom(scaleDelta: delta)
-                        },
-                        onResetCameraZoom: { callManager.resetCameraZoom() },
-                        onToggleFlashlight: { _ = callManager.toggleFlashlight() },
-                        onEndCall: { callManager.endCall() },
                         onInviteToRoom: { await callManager.inviteToCurrentRoom() },
                         onRemoteVideoFitChanged: { value in
                             SettingsStore().isRemoteVideoFitCover = value
-                        }
+                        },
+                        onDismiss: { callManager.dismissActiveCall() }
                     )
                 }
 

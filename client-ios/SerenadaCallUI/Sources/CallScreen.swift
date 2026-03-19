@@ -241,6 +241,7 @@ struct CallScreenView: View {
     let onInviteToRoom: () async -> Result<Void, Error>
     let rendererProvider: CallRendererProvider
     let initialRemoteVideoFitCover: Bool
+    let onRemoteVideoFitChanged: ((Bool) -> Void)?
 
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var areControlsVisible = true
@@ -274,7 +275,8 @@ struct CallScreenView: View {
         onEndCall: @escaping () -> Void,
         onInviteToRoom: @escaping () async -> Result<Void, Error>,
         rendererProvider: CallRendererProvider,
-        initialRemoteVideoFitCover: Bool = true
+        initialRemoteVideoFitCover: Bool = true,
+        onRemoteVideoFitChanged: ((Bool) -> Void)? = nil
     ) {
         self.roomId = roomId
         self.uiState = uiState
@@ -293,6 +295,7 @@ struct CallScreenView: View {
         self.onInviteToRoom = onInviteToRoom
         self.rendererProvider = rendererProvider
         self.initialRemoteVideoFitCover = initialRemoteVideoFitCover
+        self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
         _remoteVideoFitCover = State(initialValue: initialRemoteVideoFitCover)
     }
 
@@ -402,6 +405,9 @@ struct CallScreenView: View {
             if status != .recovering {
                 showRecoveringBadge = false
             }
+        }
+        .onChange(of: remoteVideoFitCover) { value in
+            onRemoteVideoFitChanged?(value)
         }
         .task(id: uiState.connectionStatus == .recovering && uiState.phase == .inCall) {
             guard uiState.connectionStatus == .recovering, uiState.phase == .inCall else { return }

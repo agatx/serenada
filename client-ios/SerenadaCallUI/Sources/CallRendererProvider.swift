@@ -1,9 +1,7 @@
 import Foundation
 
-/// Protocol abstracting video renderer attachment.
-/// Both SerenadaSession and the host app's CallManager can conform to this.
 @MainActor
-public protocol CallRendererProvider: AnyObject {
+protocol CallRendererProvider: AnyObject {
     func attachLocalRenderer(_ renderer: AnyObject)
     func detachLocalRenderer(_ renderer: AnyObject)
     func attachRemoteRenderer(_ renderer: AnyObject)
