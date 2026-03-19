@@ -9,6 +9,7 @@ import {
     TURN_FETCH_TIMEOUT_MS,
     LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
 } from '../constants.js';
+import { buildApiUrl } from '../serverUrls.js';
 import { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './localVideoRecovery.js';
 
 const DEFAULT_RTC_CONFIG: RTCConfiguration = {
@@ -720,8 +721,7 @@ export class MediaEngine {
         const onExternalAbort = () => fetchController.abort();
         signal.addEventListener('abort', onExternalAbort);
         try {
-            const protocol = this.serverHost.startsWith('localhost') || this.serverHost.startsWith('127.') ? 'http' : 'https';
-            const apiUrl = `${protocol}://${this.serverHost}/api/turn-credentials?token=${encodeURIComponent(token)}`;
+            const apiUrl = buildApiUrl(this.serverHost, `/api/turn-credentials?token=${encodeURIComponent(token)}`);
 
             const res = await fetch(apiUrl, { signal: fetchController.signal });
 

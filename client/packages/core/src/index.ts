@@ -82,6 +82,7 @@ export { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './media/l
 
 // Room API
 export { createRoomId } from './api/roomApi.js';
+export { buildApiUrl, buildRoomUrl, resolveServerBaseUrl, resolveServerUrls } from './serverUrls.js';
 
 // Advanced host-app usage
 export { SignalingEngine } from './signaling/SignalingEngine.js';

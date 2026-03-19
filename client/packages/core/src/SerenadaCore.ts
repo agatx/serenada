@@ -1,6 +1,7 @@
 import type { SerenadaConfig, CreateRoomResult } from './types.js';
 import { SerenadaSession } from './SerenadaSession.js';
 import { createRoomId } from './api/roomApi.js';
+import { buildRoomUrl } from './serverUrls.js';
 
 export class SerenadaCore {
     private config: SerenadaConfig;
@@ -16,15 +17,13 @@ export class SerenadaCore {
             const roomId = this.parseRoomIdFromUrl(urlOrOptions);
             return new SerenadaSession(this.config, roomId, urlOrOptions);
         }
-        const protocol = this.config.serverHost.startsWith('localhost') || this.config.serverHost.startsWith('127.') ? 'http' : 'https';
-        const roomUrl = `${protocol}://${this.config.serverHost}/call/${urlOrOptions.roomId}`;
+        const roomUrl = buildRoomUrl(this.config.serverHost, urlOrOptions.roomId);
         return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl);
     }
 
     async createRoom(): Promise<CreateRoomResult> {
         const roomId = await createRoomId(this.config.serverHost);
-        const protocol = this.config.serverHost.startsWith('localhost') || this.config.serverHost.startsWith('127.') ? 'http' : 'https';
-        const url = `${protocol}://${this.config.serverHost}/call/${roomId}`;
+        const url = buildRoomUrl(this.config.serverHost, roomId);
         const session = new SerenadaSession(this.config, roomId, url);
         return { url, roomId, session };
     }

@@ -5,6 +5,10 @@
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@serenada/core": ["../core/src/index.ts"]
+    },
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,

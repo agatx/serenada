@@ -4,16 +4,7 @@ import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
 import type { TransportKind } from './signaling/transports/types.js';
 import type { SignalingMessage } from './signaling/types.js';
-
-function resolveUrls(serverHost: string): { wsUrl: string; httpBaseUrl: string } {
-    const isLocal = serverHost.startsWith('localhost') || serverHost.startsWith('127.');
-    const protocol = isLocal ? 'http' : 'https';
-    const wsProtocol = isLocal ? 'ws' : 'wss';
-    return {
-        wsUrl: `${wsProtocol}://${serverHost}/ws`,
-        httpBaseUrl: `${protocol}://${serverHost}`,
-    };
-}
+import { resolveServerUrls } from './serverUrls.js';
 
 export class SerenadaSession implements SerenadaSessionHandle {
     private signaling: SignalingEngine;
@@ -37,7 +28,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.roomId = roomId;
         this.roomUrl = roomUrl;
 
-        const urls = resolveUrls(config.serverHost);
+        const urls = resolveServerUrls(config.serverHost);
 
         this._state = {
             phase: 'joining',

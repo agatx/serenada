@@ -1,3 +1,4 @@
+import { resolve as pathResolve } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import legacy from '@vitejs/plugin-legacy'
@@ -27,5 +28,11 @@ export default defineConfig({
         changeOrigin: true,
       }
     }
+  },
+  resolve: {
+    alias: {
+      '@serenada/core': pathResolve(__dirname, 'packages/core/src/index.ts'),
+      '@serenada/react-ui': pathResolve(__dirname, 'packages/react-ui/src/index.ts'),
+    },
   }
 })

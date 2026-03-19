@@ -89,7 +89,7 @@ export interface CallFlowProps {
     url?: string;
     /** Provide an existing session — triggers session-first mode. */
     session?: SerenadaSession;
-    /** Server host, required when using url-first mode without an existing session. */
+    /** Server host or origin, required when using url-first mode without an existing session. */
     serverHost?: string;
     /** Feature toggles. */
     config?: SerenadaCallFlowConfig;

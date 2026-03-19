@@ -252,8 +252,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [onStatsUpdate, session]);
 
     useEffect(() => {
-        if (!usesInternalSession || !internalSessionRef.current) return;
-        const internalSession = internalSessionRef.current;
+        if (!usesInternalSession || !internalSession) return;
         internalSession.onPermissionsRequired = (permissions) => {
             void (async () => {
                 const granted = await SerenadaPermissions.request(permissions);
@@ -268,7 +267,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         return () => {
             internalSession.onPermissionsRequired = null;
         };
-    }, [usesInternalSession]);
+    }, [internalSession, usesInternalSession]);
 
     useEffect(() => {
         if (localParticipant?.cameraMode !== lastCameraModeRef.current) {

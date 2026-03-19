@@ -21,9 +21,21 @@ const EMPTY_STREAMS = new Map<string, MediaStream>();
 export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSerenadaSessionResult {
     const { url, roomId, config } = options;
     const [session, setSession] = useState<SerenadaSession | null>(null);
+    const transportsKey = config.transports?.join('|') ?? '';
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    const core = useMemo(() => new SerenadaCore(config), [config.serverHost]);
+    const core = useMemo(
+        () => new SerenadaCore({
+            ...config,
+            transports: config.transports ? [...config.transports] : undefined,
+        }),
+        [
+            config.serverHost,
+            config.defaultAudioEnabled,
+            config.defaultVideoEnabled,
+            transportsKey,
+            config.turnsOnly,
+        ],
+    );
 
     useEffect(() => {
         if (!url && !roomId) return;

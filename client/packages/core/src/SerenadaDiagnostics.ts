@@ -1,4 +1,5 @@
 import type { SerenadaConfig, DiagnosticsReport, DiagnosticCheckResult } from './types.js';
+import { buildApiUrl } from './serverUrls.js';
 
 export class SerenadaDiagnostics {
     private config: SerenadaConfig;
@@ -77,14 +78,11 @@ export class SerenadaDiagnostics {
     }
 
     async checkSignaling(): Promise<DiagnosticCheckResult & { transport?: string }> {
-        const protocol = this.config.serverHost.startsWith('localhost') || this.config.serverHost.startsWith('127.') ? 'http' : 'https';
-        const baseUrl = `${protocol}://${this.config.serverHost}`;
-
         try {
             // Probe server reachability without creating a room
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
-            const res = await fetch(`${baseUrl}/api/room-id`, {
+            const res = await fetch(buildApiUrl(this.config.serverHost, '/api/room-id'), {
                 method: 'GET',
                 signal: controller.signal,
             });
@@ -99,12 +97,11 @@ export class SerenadaDiagnostics {
     }
 
     async checkTurn(): Promise<DiagnosticCheckResult & { latencyMs?: number }> {
-        const protocol = this.config.serverHost.startsWith('localhost') || this.config.serverHost.startsWith('127.') ? 'http' : 'https';
         try {
             const start = Date.now();
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
-            const res = await fetch(`${protocol}://${this.config.serverHost}/api/turn-credentials?token=probe`, {
+            const res = await fetch(buildApiUrl(this.config.serverHost, '/api/turn-credentials?token=probe'), {
                 signal: controller.signal,
             });
             clearTimeout(timeout);

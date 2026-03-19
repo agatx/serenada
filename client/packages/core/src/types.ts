@@ -42,6 +42,7 @@ export interface CallState {
 }
 
 export interface SerenadaConfig {
+    /** Bare host or full origin, e.g. `serenada.app` or `http://qa-box:8080`. */
     serverHost: string;
     defaultAudioEnabled?: boolean;
     defaultVideoEnabled?: boolean;
