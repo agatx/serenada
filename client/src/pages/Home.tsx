@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Video, Zap, Shield, Lock, Smartphone, Code } from 'lucide-react';
 import RecentCalls from '../components/RecentCalls';
@@ -8,10 +8,11 @@ import type { RecentCall } from '../utils/callHistory';
 import SavedRooms from '../components/SavedRooms';
 import { getSavedRooms } from '../utils/savedRooms';
 import type { SavedRoom } from '../utils/savedRooms';
-import { useSignaling } from '../contexts/SignalingContext';
+import { createRoomId } from '@serenada/core';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../contexts/ToastContext';
-import { createRoomId } from '../utils/roomApi';
+import { useRoomStatusWatcher } from '../hooks/useRoomStatusWatcher';
+import { getConfiguredServerHost } from '../utils/serverHost';
 
 const Home: React.FC = () => {
     const { t } = useTranslation();
@@ -20,31 +21,29 @@ const Home: React.FC = () => {
     const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
     const [savedRooms, setSavedRooms] = useState<SavedRoom[]>([]);
     const [isCreating, setIsCreating] = useState(false);
-    const { watchRooms, roomStatuses, isConnected } = useSignaling();
 
     const loadData = useCallback(() => {
         const calls = getRecentCalls();
         const rooms = getSavedRooms();
         setRecentCalls(calls);
         setSavedRooms(rooms);
-
-        if (isConnected) {
-            const rids = [...new Set([...calls.map(c => c.roomId), ...rooms.map(r => r.roomId)])];
-            if (rids.length > 0) {
-                watchRooms(rids);
-            }
-        }
-    }, [isConnected, watchRooms]);
+    }, []);
 
     useEffect(() => {
         loadData();
     }, [loadData]);
 
+    const watchedRoomIds = useMemo(
+        () => [...new Set([...recentCalls.map(call => call.roomId), ...savedRooms.map(room => room.roomId)])],
+        [recentCalls, savedRooms],
+    );
+    const { roomStatuses } = useRoomStatusWatcher(watchedRoomIds);
+
     const startCall = async () => {
         if (isCreating) return;
         setIsCreating(true);
         try {
-            const roomId = await createRoomId(import.meta.env.VITE_WS_URL);
+            const roomId = await createRoomId(getConfiguredServerHost());
             navigate(`/call/${roomId}`);
         } catch (err) {
             console.error('Failed to create room', err);

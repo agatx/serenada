@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { SavedRoomDialog } from './SavedRoomDialog';
 import { useToast } from '../contexts/ToastContext';
 import { saveRoom } from '../utils/savedRooms';
-import { getRoomStatusState, type RoomStatuses } from '../contexts/signaling/roomStatuses';
+import { getRoomStatusState, type RoomStatuses } from '@serenada/core';
 
 interface RecentCallsProps {
     calls: RecentCall[];
