@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useSyncExternalStore, useCallback, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { SerenadaConfig, CallState } from '@serenada/core';
 import { SerenadaSession, SerenadaCore } from '@serenada/core';
-import { IDLE_STATE } from './constants.js';
+import { useCallState } from './useCallState.js';
+import { IDLE_STATE, EMPTY_STREAMS } from './constants.js';
 
 export interface UseSerenadaSessionOptions {
     url?: string;
@@ -15,8 +16,6 @@ export interface UseSerenadaSessionResult {
     localStream: MediaStream | null;
     remoteStreams: Map<string, MediaStream>;
 }
-
-const EMPTY_STREAMS = new Map<string, MediaStream>();
 
 export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSerenadaSessionResult {
     const { url, roomId, config } = options;
@@ -49,20 +48,7 @@ export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSeren
         };
     }, [url, roomId, core]);
 
-    const subscribe = useCallback(
-        (onStoreChange: () => void) => {
-            if (!session) return () => {};
-            return session.subscribe(onStoreChange);
-        },
-        [session],
-    );
-
-    const getSnapshot = useCallback(
-        () => session?.state ?? IDLE_STATE,
-        [session],
-    );
-
-    const state = useSyncExternalStore(subscribe, getSnapshot);
+    const state = useCallState(session);
 
     return {
         session,

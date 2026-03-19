@@ -269,7 +269,9 @@ export class SignalingEngine {
             case 'pong':
                 this.lastPongAt = Date.now();
                 this.missedPongs = 0;
-                break;
+                // Pong is internal bookkeeping — skip notifyStateChange to avoid unnecessary rebuilds
+                [...this.messageListeners].forEach(listener => listener(msg));
+                return;
             case 'room_state':
                 if (msg.payload) {
                     this.roomState = msg.payload as RoomState;

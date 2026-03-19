@@ -31,7 +31,7 @@ import { useCallState } from './hooks/useCallState.js';
 import { SerenadaPermissions } from './SerenadaPermissions.js';
 import type { CallFlowProps } from './types.js';
 import { resolveString } from './types.js';
-import { IDLE_STATE } from './hooks/constants.js';
+import { IDLE_STATE, EMPTY_STREAMS } from './hooks/constants.js';
 import { ensureCallFlowStyles } from './callFlowStyles.js';
 import { playJoinChime } from './utils/audio.js';
 import {
@@ -46,7 +46,6 @@ interface RemoteStageTile {
     aspectRatio: number;
 }
 
-const EMPTY_STREAMS = new Map<string, MediaStream>();
 const MOBILE_BROWSER_RE = /Mobi|Android|iPhone|iPad|iPod/i;
 
 function getStreamAspectRatio(stream: MediaStream): number | null {
