@@ -43,6 +43,8 @@ import { SerenadaCallFlow } from '@serenada/react-ui'
 // 1. Initialize core
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 
+// Prefer SerenadaSessionHandle in app-facing code and component props.
+
 // 2a. Join an existing invite link by URL
 <SerenadaCallFlow url={callUrl} onDismiss={() => navigate('/')} />
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { SerenadaConfig, CallState } from '@serenada/core';
-import { SerenadaSession, SerenadaCore } from '@serenada/core';
+import type { SerenadaConfig, CallState, SerenadaSessionHandle } from '@serenada/core';
+import { SerenadaCore } from '@serenada/core';
 import { useCallState } from './useCallState.js';
 import { EMPTY_STREAMS } from './constants.js';
 
@@ -11,7 +11,7 @@ export interface UseSerenadaSessionOptions {
 }
 
 export interface UseSerenadaSessionResult {
-    session: SerenadaSession | null;
+    session: SerenadaSessionHandle | null;
     state: CallState;
     localStream: MediaStream | null;
     remoteStreams: Map<string, MediaStream>;
@@ -19,7 +19,7 @@ export interface UseSerenadaSessionResult {
 
 export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSerenadaSessionResult {
     const { url, roomId, config } = options;
-    const [session, setSession] = useState<SerenadaSession | null>(null);
+    const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
     const transportsKey = config.transports?.join('|') ?? '';
 
     const core = useMemo(

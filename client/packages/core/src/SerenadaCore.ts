@@ -1,4 +1,4 @@
-import type { SerenadaConfig, CreateRoomResult } from './types.js';
+import type { SerenadaConfig, CreateRoomResult, SerenadaSessionHandle } from './types.js';
 import { SerenadaSession } from './SerenadaSession.js';
 import { createRoomId } from './api/roomApi.js';
 import { buildRoomUrl } from './serverUrls.js';
@@ -10,9 +10,9 @@ export class SerenadaCore {
         this.config = config;
     }
 
-    join(url: string): SerenadaSession;
-    join(options: { roomId: string }): SerenadaSession;
-    join(urlOrOptions: string | { roomId: string }): SerenadaSession {
+    join(url: string): SerenadaSessionHandle;
+    join(options: { roomId: string }): SerenadaSessionHandle;
+    join(urlOrOptions: string | { roomId: string }): SerenadaSessionHandle {
         if (typeof urlOrOptions === 'string') {
             const roomId = this.parseRoomIdFromUrl(urlOrOptions);
             return new SerenadaSession(this.config, roomId, urlOrOptions);

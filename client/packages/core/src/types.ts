@@ -53,6 +53,7 @@ export interface SerenadaConfig {
 export interface CreateRoomResult {
     url: string;
     roomId: string;
+    /** Public app-facing session contract. Prefer this over the concrete class in host-app code. */
     session: SerenadaSessionHandle;
 }
 

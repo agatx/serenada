@@ -87,7 +87,7 @@ export function resolveString(
 export interface CallFlowProps {
     /** Full call URL — triggers URL-first mode (creates session internally). */
     url?: string;
-    /** Provide an existing session — triggers session-first mode. */
+    /** Provide an existing session handle — triggers session-first mode. */
     session?: SerenadaSessionHandle;
     /** Server host or origin, required when using url-first mode without an existing session. */
     serverHost?: string;

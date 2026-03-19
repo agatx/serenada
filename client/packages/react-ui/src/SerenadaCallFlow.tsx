@@ -23,7 +23,6 @@ import {
     type CallScene,
     type ContentSource,
     type LayoutResult,
-    type SerenadaSession,
     type SerenadaSessionHandle,
 } from '@serenada/core';
 import { DebugPanel } from './components/DebugPanel.js';
@@ -172,8 +171,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 }) => {
     useEffect(() => { ensureCallFlowStyles(); }, []);
 
-    const internalSessionRef = useRef<SerenadaSession | null>(null);
-    const [internalSession, setInternalSession] = useState<SerenadaSession | null>(null);
+    const internalSessionRef = useRef<SerenadaSessionHandle | null>(null);
+    const [internalSession, setInternalSession] = useState<SerenadaSessionHandle | null>(null);
     const usesInternalSession = !externalSession;
 
     useEffect(() => {
