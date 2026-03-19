@@ -31,6 +31,12 @@ func shouldRenderLocalAsPrimarySurface(phase: CallPhase, isLocalLarge: Bool) -> 
     phase == .inCall && isLocalLarge
 }
 
+func shouldUseBroadcastPicker(isScreenSharing: Bool, screenShareExtensionBundleId: String?) -> Bool {
+    guard !isScreenSharing else { return false }
+    guard let screenShareExtensionBundleId else { return false }
+    return !screenShareExtensionBundleId.isEmpty
+}
+
 func primaryLocalVideoContentMode(localCameraMode: LocalCameraMode) -> UIView.ContentMode {
     switch localCameraMode {
     case .world, .composite:
@@ -227,6 +233,7 @@ struct CallScreenView: View {
     let roomId: String
     let uiState: CallUiState
     let serverHost: String
+    let screenShareExtensionBundleId: String?
     let roomName: String?
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
@@ -262,6 +269,7 @@ struct CallScreenView: View {
         roomId: String,
         uiState: CallUiState,
         serverHost: String,
+        screenShareExtensionBundleId: String? = nil,
         roomName: String? = nil,
         config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
         strings: [SerenadaString: String]? = nil,
@@ -281,6 +289,7 @@ struct CallScreenView: View {
         self.roomId = roomId
         self.uiState = uiState
         self.serverHost = serverHost
+        self.screenShareExtensionBundleId = screenShareExtensionBundleId
         self.roomName = roomName
         self.config = config
         self.strings = strings
@@ -704,8 +713,20 @@ struct CallScreenView: View {
             }
 
             if config.screenSharingEnabled {
-                iconButton(system: uiState.isScreenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle", accessibilityLabel: uiState.isScreenSharing ? str(.callA11yScreenShareOn) : str(.callA11yScreenShareOff)) {
-                    onToggleScreenShare()
+                if shouldUseBroadcastPicker(
+                    isScreenSharing: uiState.isScreenSharing,
+                    screenShareExtensionBundleId: screenShareExtensionBundleId
+                ), let screenShareExtensionBundleId {
+                    BroadcastPickerButton(
+                        preferredExtension: screenShareExtensionBundleId,
+                        systemImage: "rectangle.on.rectangle",
+                        accessibilityLabel: str(.callA11yScreenShareOff),
+                        onPrepareStart: onToggleScreenShare
+                    )
+                } else {
+                    iconButton(system: uiState.isScreenSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle", accessibilityLabel: uiState.isScreenSharing ? str(.callA11yScreenShareOn) : str(.callA11yScreenShareOff)) {
+                        onToggleScreenShare()
+                    }
                 }
             }
 

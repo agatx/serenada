@@ -27,7 +27,6 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: Sources
-      - path: Shared
       - path: Resources
         excludes:
           - Info.plist
@@ -100,7 +99,7 @@ targets:
       - path: BroadcastUpload
         excludes:
           - Info.plist
-      - path: Shared
+      - path: SerenadaCore/Sources/BroadcastShared.swift
     info:
       path: BroadcastUpload/Info.plist
       properties:

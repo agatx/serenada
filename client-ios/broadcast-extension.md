@@ -7,11 +7,15 @@ Screen sharing has two modes controlled by the `BROADCAST_EXTENSION` compile fla
 | **Broadcast Upload Extension** (default) | `BROADCAST_EXTENSION` present | Uses a separate extension process (`SerenadaBroadcast`) that survives backgrounding. Captures the entire screen including other apps. Requires App Group provisioning. |
 | **ReplayKit in-app** (fallback) | flag absent | Uses `RPScreenRecorder.startCapture()`. Only captures while the app is in the foreground. iOS suspends capture when backgrounded. |
 
-The broadcast extension is **enabled by default** in `project.yml` (the `SerenadaBroadcast` target is embedded and `BROADCAST_EXTENSION` is set in `SWIFT_ACTIVE_COMPILATION_CONDITIONS`). To fall back to ReplayKit in-app mode, remove the `BROADCAST_EXTENSION` compilation condition and the `SerenadaBroadcast` dependency from `project.yml`.
+The broadcast extension is **enabled by default** in this repo by two pieces of wiring:
+- `SerenadaCore/Package.swift` defines `BROADCAST_EXTENSION` for the SDK target, which enables `BroadcastFrameReader`.
+- `project.yml` embeds the `SerenadaBroadcast` extension target into the app.
+
+To fall back to ReplayKit in-app mode, remove the `BROADCAST_EXTENSION` define from `SerenadaCore/Package.swift` and stop embedding `SerenadaBroadcast` from `project.yml`.
 
 ## How it works
 
-The extension (`BroadcastUpload/SampleHandler.swift`) runs in its own process and writes video frames to a memory-mapped file in the shared App Group container. The main app (`BroadcastFrameReader` in `WebRtcEngine.swift`) polls that file at ~30fps and feeds frames into WebRTC.
+The call UI arms screen sharing first, then opens `RPSystemBroadcastPickerView` so the user selects `Serenada Broadcast`. The extension (`BroadcastUpload/SampleHandler.swift`) runs in its own process and writes video frames to a memory-mapped file in the shared App Group container. The main app SDK (`BroadcastFrameReader` in `WebRtcEngine.swift`) polls that file at ~30fps and feeds frames into WebRTC.
 
 IPC uses Darwin notifications via `CFNotificationCenter`:
 - **`app.serenada.ios.broadcast.started`** — extension → app, signals capture has begun
@@ -97,8 +101,9 @@ Broadcast extensions do not work in the iOS Simulator. Test on a physical device
 
 | File | Purpose |
 |------|---------|
-| `Shared/BroadcastShared.swift` | Shared constants, header layout, and memory I/O helpers (compiled into both targets) |
+| `SerenadaCore/Sources/BroadcastShared.swift` | Shared constants, header layout, and memory I/O helpers (compiled into both the SDK and broadcast extension) |
 | `BroadcastUpload/SampleHandler.swift` | Extension entry point — writes frames to shared memory |
 | `BroadcastUpload/BroadcastUpload.entitlements` | Extension App Group entitlement |
 | `BroadcastUpload/Info.plist` | Extension Info.plist |
-| `Sources/Core/Call/WebRtcEngine.swift` | `BroadcastFrameReader` (reads shared memory) and `ReplayKitVideoCapturer` (fallback) |
+| `SerenadaCore/Sources/Call/WebRtcEngine.swift` | `BroadcastFrameReader` (reads shared memory) and `ReplayKitVideoCapturer` (fallback) |
+| `SerenadaCallUI/Sources/BroadcastPickerButton.swift` | System broadcast picker bridge used by the in-call screen-share button |

@@ -1,7 +1,7 @@
 import Foundation
 
-/// Constants and utilities shared between the main app and the SerenadaBroadcast extension.
-/// This file is compiled into both targets — keep it free of main-app-only imports.
+/// Constants and utilities shared between the main app SDK and the broadcast extension.
+/// Keep this file free of app-only imports so it can be compiled into both targets.
 enum BroadcastShared {
     static let appGroupIdentifier = "group.app.serenada.ios"
     static let extensionBundleId = "app.serenada.ios.broadcast"

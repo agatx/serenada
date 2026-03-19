@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0A2C0A7E3C1A621804CC59C9 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = EA93F28D0C87ABED6B756036 /* Localizable.strings */; };
+		169DFB9313A225EBD1962BFE /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C9C837439E676ED7F04801 /* BroadcastShared.swift */; };
 		16ED701C50FCF1CF741D04F1 /* JoinRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54D58A452D7949DF145435E /* JoinRecoveryTests.swift */; };
 		22E7581EA45084E89DE3B268 /* SavedRoomStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53E3B13DA44022026D9F605D /* SavedRoomStore.swift */; };
 		252529C96E5D4B8966096E25 /* JoinWithCodeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */; };
@@ -21,7 +22,6 @@
 		3B240DC5B813D930328BDC99 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56B39E2A60D65FD1477B020 /* SampleHandler.swift */; };
 		3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */; };
 		46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */; };
-		4BEE4261F2471EA3DB0B1648 /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */; };
 		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5665C71CE00145A0B91CBBB3 /* JoinSnapshotFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C7196F10921F7DCB998749 /* JoinSnapshotFeature.swift */; };
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
@@ -39,7 +39,6 @@
 		89865919658F9327ADF61AED /* RecentCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DA4F257ABA1CF5875CA4B83 /* RecentCall.swift */; };
 		932FE0F4C5B2A808073B537A /* BackoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC9E71EE9415390DBBFC4A7 /* BackoffTests.swift */; };
 		9342C14683CA7530772F5F93 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE887624CBDA34B0B333C6A /* SettingsStore.swift */; };
-		93A2C3CCCD91E21ECCF5CCE0 /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */; };
 		9ABCF3D0278D7EA44D415962 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E1F379FD66B538614684A7 /* PushKeyStore.swift */; };
 		9ADDE9F64E5B64AB5128AF50 /* CameraModeFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F052EA0D1D083D292B3CF0E /* CameraModeFlowTests.swift */; };
 		A166AEDB8228E8C0BB59B927 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */; };
@@ -165,7 +164,7 @@
 		B8648687C9C97AD05ABC9AEB /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B8DC46B13DBF27F02DA8B2D2 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
 		C03DA37A007DFCE3DA069244 /* CallScreenStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallScreenStateTests.swift; sourceTree = "<group>"; };
-		CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastShared.swift; sourceTree = "<group>"; };
+		C1C9C837439E676ED7F04801 /* BroadcastShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastShared.swift; sourceTree = "<group>"; };
 		D0BE7FF0C166694E0F58114A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D5DEACDD78A7F800281C0FC6 /* CaptureResolutionSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResolutionSelectionTests.swift; sourceTree = "<group>"; };
 		D9036C71CC2E91FAD8FB5170 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
@@ -233,14 +232,6 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
-		3A393515C619541F21CCA735 /* Shared */ = {
-			isa = PBXGroup;
-			children = (
-				CDC9B18CF58E27C5E948B29D /* BroadcastShared.swift */,
-			);
-			path = Shared;
-			sourceTree = "<group>";
-		};
 		3A3F344D2A123C67DD94ED5D /* Utils */ = {
 			isa = PBXGroup;
 			children = (
@@ -287,8 +278,8 @@
 				9DC24B91EF97AE50C603EEA7 /* Resources */,
 				B6985F8378BC1C8179F89F34 /* SerenadaCallUITests */,
 				A2D3D0A29FF7773DB01D20A5 /* SerenadaCoreTests */,
-				3A393515C619541F21CCA735 /* Shared */,
 				45049EAECFD0C6702F960499 /* Sources */,
+				764ED29F41F93A0EE47FB208 /* Sources */,
 				CF8ED7F99104C94EC09DEACA /* Tests */,
 				17DCEDBED1B30C52F980469C /* UITests */,
 				415AD043AF1AAD932CB6A417 /* Frameworks */,
@@ -307,6 +298,15 @@
 				3A3F344D2A123C67DD94ED5D /* Utils */,
 			);
 			path = Core;
+			sourceTree = "<group>";
+		};
+		764ED29F41F93A0EE47FB208 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				C1C9C837439E676ED7F04801 /* BroadcastShared.swift */,
+			);
+			name = Sources;
+			path = SerenadaCore/Sources;
 			sourceTree = "<group>";
 		};
 		7EAAB204F172A0E5B35978B2 /* Networking */ = {
@@ -680,7 +680,6 @@
 				3A954265ACD7FADB9138DC1B /* AppConstants.swift in Sources */,
 				332B4061CA3CF448DBF766D6 /* AppDelegate.swift in Sources */,
 				3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */,
-				93A2C3CCCD91E21ECCF5CCE0 /* BroadcastShared.swift in Sources */,
 				DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */,
 				46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */,
 				CAD139965FF8325D89A8113A /* ErrorScreen.swift in Sources */,
@@ -737,7 +736,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4BEE4261F2471EA3DB0B1648 /* BroadcastShared.swift in Sources */,
+				169DFB9313A225EBD1962BFE /* BroadcastShared.swift in Sources */,
 				3B240DC5B813D930328BDC99 /* SampleHandler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

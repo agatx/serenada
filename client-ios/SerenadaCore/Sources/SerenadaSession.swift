@@ -50,6 +50,13 @@ public final class SerenadaSession: ObservableObject {
     public let roomId: String
     public let roomUrl: URL?
     public let serverHost: String
+    public var screenShareExtensionBundleId: String? {
+        #if BROADCAST_EXTENSION
+        BroadcastShared.extensionBundleId
+        #else
+        nil
+        #endif
+    }
 
     public var onPermissionsRequired: (([MediaCapability]) -> Void)?
 

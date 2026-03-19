@@ -25,7 +25,10 @@ let package = Package(
         .target(
             name: "SerenadaCore",
             dependencies: ["WebRTC"],
-            path: "Sources"
+            path: "Sources",
+            swiftSettings: [
+                .define("BROADCAST_EXTENSION")
+            ]
         ),
         .testTarget(
             name: "SerenadaCoreTests",

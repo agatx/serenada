@@ -82,4 +82,31 @@ final class CallScreenStateTests: XCTestCase {
         XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: true), 170)
         XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: false), 52)
     }
+
+    func testBroadcastPickerShownOnlyWhenExtensionShareCanStart() {
+        XCTAssertTrue(
+            shouldUseBroadcastPicker(
+                isScreenSharing: false,
+                screenShareExtensionBundleId: "app.serenada.ios.broadcast"
+            )
+        )
+        XCTAssertFalse(
+            shouldUseBroadcastPicker(
+                isScreenSharing: true,
+                screenShareExtensionBundleId: "app.serenada.ios.broadcast"
+            )
+        )
+        XCTAssertFalse(
+            shouldUseBroadcastPicker(
+                isScreenSharing: false,
+                screenShareExtensionBundleId: nil
+            )
+        )
+        XCTAssertFalse(
+            shouldUseBroadcastPicker(
+                isScreenSharing: false,
+                screenShareExtensionBundleId: ""
+            )
+        )
+    }
 }

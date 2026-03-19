@@ -237,6 +237,7 @@ private struct SessionFirstCallFlow: View {
                     roomId: session.roomId,
                     uiState: mapSessionToUiState(session),
                     serverHost: session.serverHost,
+                    screenShareExtensionBundleId: session.screenShareExtensionBundleId,
                     roomName: params.roomName,
                     config: config,
                     strings: strings,
