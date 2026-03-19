@@ -6,12 +6,32 @@ Minimal web host app demonstrating Serenada SDK integration with React.
 
 - Accepts a call URL and renders `<SerenadaCallFlow>`
 - Creates a new room via `createSerenadaCore().createRoom()`
-- Total integration: ~30 lines of React
+- Runs as a standalone Vite app inside this repository
+- Resolves `@serenada/core` and `@serenada/react-ui` directly from local source in `client/packages/`
 
-## Setup
+## Run in this repo
 
 ```bash
-npm install @serenada/core @serenada/react-ui react react-dom
+cd samples/web
+npm install
+npm run dev
+```
+
+Then open the local Vite URL, usually `http://localhost:5173`.
+
+To verify a production build:
+
+```bash
+cd samples/web
+npm run build
+```
+
+## Standalone setup outside this repo
+
+If you want to copy the sample into another project instead of using the repo-local package:
+
+```bash
+npm install @serenada/core @serenada/react-ui lucide-react react react-dom react-qr-code
 ```
 
 ## Integration pattern
@@ -23,6 +43,11 @@ import { SerenadaCallFlow } from '@serenada/react-ui'
 // 1. Initialize core
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 
-// 2. Show call UI when you have a URL
+// 2a. Join an existing invite link by URL
 <SerenadaCallFlow url={callUrl} onDismiss={() => navigate('/')} />
+
+// 2b. When you create a room, reuse the returned session.
+// createRoom() already joins once, so passing only room.url would join twice.
+const room = await serenada.createRoom()
+<SerenadaCallFlow url={room.url} session={room.session} onDismiss={() => navigate('/')} />
 ```

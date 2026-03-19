@@ -24,6 +24,7 @@ import {
     type ContentSource,
     type LayoutResult,
     type SerenadaSession,
+    type SerenadaSessionHandle,
 } from '@serenada/core';
 import { DebugPanel } from './components/DebugPanel.js';
 import { StatusOverlay } from './components/StatusOverlay.js';
@@ -198,7 +199,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         };
     }, [externalSession, serverHost, url]);
 
-    const session = externalSession ?? internalSession;
+    const session: SerenadaSessionHandle | null = externalSession ?? internalSession;
     const state = useCallState(session ?? null);
     const effectiveState = session ? state : IDLE_STATE;
     const localParticipant = effectiveState.localParticipant;

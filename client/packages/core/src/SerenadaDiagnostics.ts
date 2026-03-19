@@ -15,20 +15,20 @@ export class SerenadaDiagnostics {
             this.checkSignaling(),
             this.checkTurn(),
         ]);
-        const camera = this.checkMediaCapability(devices, 'camera', 'videoinput', 'No camera found');
-        const microphone = this.checkMediaCapability(devices, 'microphone', 'audioinput', 'No microphone found');
+        const camera = this.checkMediaCapability(devices, 'videoinput', 'No camera found');
+        const microphone = this.checkMediaCapability(devices, 'audioinput', 'No microphone found');
         const speaker = this.checkDeviceAvailability(devices, 'audiooutput', 'No speaker found');
         return { camera, microphone, speaker, network, signaling, turn, devices };
     }
 
     async checkCamera(): Promise<DiagnosticCheckResult> {
         const devices = await this.enumerateDevices();
-        return this.checkMediaCapability(devices, 'camera', 'videoinput', 'No camera found');
+        return this.checkMediaCapability(devices, 'videoinput', 'No camera found');
     }
 
     async checkMicrophone(): Promise<DiagnosticCheckResult> {
         const devices = await this.enumerateDevices();
-        return this.checkMediaCapability(devices, 'microphone', 'audioinput', 'No microphone found');
+        return this.checkMediaCapability(devices, 'audioinput', 'No microphone found');
     }
 
     async checkSpeaker(): Promise<DiagnosticCheckResult> {
@@ -88,7 +88,6 @@ export class SerenadaDiagnostics {
 
     private checkMediaCapability(
         devices: MediaDeviceInfo[],
-        permissionName: string,
         deviceKind: MediaDeviceKind,
         notFoundMsg: string,
     ): DiagnosticCheckResult {

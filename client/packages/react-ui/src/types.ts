@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { SerenadaSession, CallStats } from '@serenada/core';
+import type { SerenadaSessionHandle, CallStats } from '@serenada/core';
 
 // ---------------------------------------------------------------------------
 // Feature configuration
@@ -88,7 +88,7 @@ export interface CallFlowProps {
     /** Full call URL — triggers URL-first mode (creates session internally). */
     url?: string;
     /** Provide an existing session — triggers session-first mode. */
-    session?: SerenadaSession;
+    session?: SerenadaSessionHandle;
     /** Server host or origin, required when using url-first mode without an existing session. */
     serverHost?: string;
     /** Feature toggles. */

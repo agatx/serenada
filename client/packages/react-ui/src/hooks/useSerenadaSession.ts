@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SerenadaConfig, CallState } from '@serenada/core';
 import { SerenadaSession, SerenadaCore } from '@serenada/core';
 import { useCallState } from './useCallState.js';
-import { IDLE_STATE, EMPTY_STREAMS } from './constants.js';
+import { EMPTY_STREAMS } from './constants.js';
 
 export interface UseSerenadaSessionOptions {
     url?: string;
