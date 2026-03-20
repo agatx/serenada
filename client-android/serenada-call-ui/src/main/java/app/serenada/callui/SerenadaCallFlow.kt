@@ -29,7 +29,12 @@ fun SerenadaCallFlow(
     url: String? = null,
     session: SerenadaSession? = null,
     config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
+    roomName: String? = null,
+    initialRemoteVideoFitCover: Boolean = true,
     strings: Map<SerenadaString, String>? = null,
+    onShareLink: (() -> Unit)? = null,
+    onInviteToRoom: (() -> Unit)? = null,
+    onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
     onDismiss: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -115,7 +120,7 @@ fun SerenadaCallFlow(
     val roomId = state.roomId ?: activeSession.roomId
     val serverHost = activeSession.host
     val internalConfig =
-        if (config.inviteControlsEnabled) {
+        if (config.inviteControlsEnabled && onInviteToRoom == null) {
             config.copy(inviteControlsEnabled = false)
         } else {
             config
@@ -126,13 +131,19 @@ fun SerenadaCallFlow(
         roomId = roomId,
         serverHost = serverHost,
         eglContext = activeSession.eglContext(),
+        roomName = roomName,
+        initialRemoteVideoFitCover = initialRemoteVideoFitCover,
         config = internalConfig,
         strings = strings,
         onToggleAudio = { activeSession.toggleAudio() },
         onToggleVideo = { activeSession.toggleVideo() },
         onFlipCamera = { activeSession.flipCamera() },
+        onToggleFlashlight = { activeSession.toggleFlashlight() },
+        onLocalPinchZoom = { scaleFactor -> activeSession.adjustLocalCameraZoom(scaleFactor) },
         onEndCall = { activeSession.leave() },
-        onInviteToRoom = {},
+        onShareLink = onShareLink,
+        onInviteToRoom = { onInviteToRoom?.invoke() },
+        onRemoteVideoFitChanged = onRemoteVideoFitChanged,
         onStartScreenShare = { intent -> activeSession.startScreenShare(intent) },
         onStopScreenShare = { activeSession.stopScreenShare() },
         attachLocalRenderer = { renderer, events -> activeSession.attachLocalRenderer(renderer, events) },

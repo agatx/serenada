@@ -1,2 +1,1 @@
-# Keep WebRTC classes
--keep class org.webrtc.** { *; }
+# App-specific ProGuard rules go here.

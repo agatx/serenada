@@ -12,7 +12,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         flatDir {
-            dirs("app/libs")
+            dirs("serenada-core/libs")
         }
     }
 }

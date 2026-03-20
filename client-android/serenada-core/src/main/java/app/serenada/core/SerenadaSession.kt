@@ -15,6 +15,7 @@ import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.ContentTypeWire
 import app.serenada.core.call.LocalCameraMode
+import app.serenada.core.call.LocalFrameSnapshotCapture
 import app.serenada.core.call.Participant
 import app.serenada.core.call.PeerConnectionSlot
 import app.serenada.core.call.RemoteParticipant
@@ -226,6 +227,14 @@ class SerenadaSession internal constructor(
         updateState(_state.value.copy(isScreenSharing = false))
         broadcastContentState(false)
         applyLocalVideoPreference()
+    }
+
+    fun captureLocalSnapshot(onResult: (ByteArray?) -> Unit) {
+        LocalFrameSnapshotCapture(
+            handler = handler,
+            attachLocalSink = { sink -> webRtcEngine.attachLocalSink(sink) },
+            detachLocalSink = { sink -> webRtcEngine.detachLocalSink(sink) },
+        ).capture(onResult)
     }
 
     fun resumeJoin() {

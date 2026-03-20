@@ -7,10 +7,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioManager
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.AutomaticGainControl
-import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -61,17 +57,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import app.serenada.android.BuildConfig
 import app.serenada.android.R
+import app.serenada.core.diagnostics.DiagnosticsCheckResult as CheckResult
+import app.serenada.core.diagnostics.DiagnosticsCheckState as CheckState
+import app.serenada.core.diagnostics.DiagnosticsIceReport as IceReport
+import app.serenada.core.diagnostics.DiagnosticsMediaReport as MediaReport
+import app.serenada.core.diagnostics.buildDiagnosticsMediaReport
+import app.serenada.core.diagnostics.runDiagnosticsIceCheck
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.TurnCredentials
 import java.time.Instant
-import java.util.Collections
 import java.util.UUID
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -85,31 +82,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import org.webrtc.Camera2Enumerator
-import org.webrtc.CandidatePairChangeEvent
-import org.webrtc.DataChannel
-import org.webrtc.IceCandidate
-import org.webrtc.IceCandidateErrorEvent
-import org.webrtc.Logging
-import org.webrtc.MediaConstraints
-import org.webrtc.PeerConnection
-import org.webrtc.PeerConnectionFactory
-import org.webrtc.RtpReceiver
-import org.webrtc.SdpObserver
-import org.webrtc.SessionDescription
-
-private enum class CheckState {
-    Pass,
-    Warn,
-    Fail,
-    Running,
-    Idle
-}
-
-private data class CheckResult(
-    val state: CheckState,
-    val detail: String
-)
 
 private data class ConnectivityReport(
     val roomIdEndpoint: CheckResult,
@@ -117,27 +89,6 @@ private data class ConnectivityReport(
     val sse: CheckResult,
     val diagnosticToken: CheckResult,
     val turnCredentials: CheckResult
-)
-
-private data class MediaReport(
-    val cameraHardware: CheckResult,
-    val frontCamera: CheckResult,
-    val backCamera: CheckResult,
-    val compositeModePrerequisite: CheckResult,
-    val microphoneFeature: CheckResult,
-    val echoCancellation: CheckResult,
-    val noiseSuppression: CheckResult,
-    val autoGainControl: CheckResult,
-    val audioSampleRate: String,
-    val audioFramesPerBuffer: String
-)
-
-private data class IceReport(
-    val turnsOnly: Boolean,
-    val stun: CheckResult,
-    val turn: CheckResult,
-    val iceServersSummary: String,
-    val logs: List<String>
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -620,69 +571,7 @@ private fun permissionLabel(context: Context, permission: String): String {
 }
 
 private fun buildMediaReport(context: Context): MediaReport {
-    val packageManager = context.packageManager
-    val hasCameraHardware = packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
-    val hasMicrophone = packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
-    val enumerator = Camera2Enumerator(context)
-    val names = enumerator.deviceNames.toList()
-    val front = names.firstOrNull { enumerator.isFrontFacing(it) }
-    val back = names.firstOrNull { enumerator.isBackFacing(it) }
-    fun cameraSummary(name: String): String {
-        val formats = enumerator.getSupportedFormats(name).orEmpty()
-        val best = formats.maxByOrNull { it.width * it.height }
-        val maxFps = formats.maxOfOrNull { format -> normalizeFps(format.framerate.max) } ?: 0
-        val size = if (best == null) "n/a" else "${best.width}x${best.height}"
-        return "$name ($size @${maxFps}fps)"
-    }
-
-    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    val sampleRate = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE) ?: "Unknown"
-    val framesPerBuffer = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER) ?: "Unknown"
-
-    return MediaReport(
-        cameraHardware = if (hasCameraHardware) {
-            CheckResult(CheckState.Pass, "Available")
-        } else {
-            CheckResult(CheckState.Fail, "Not available")
-        },
-        frontCamera = if (front != null) {
-            CheckResult(CheckState.Pass, cameraSummary(front))
-        } else {
-            CheckResult(CheckState.Fail, "Missing")
-        },
-        backCamera = if (back != null) {
-            CheckResult(CheckState.Pass, cameraSummary(back))
-        } else {
-            CheckResult(CheckState.Warn, "Missing")
-        },
-        compositeModePrerequisite = if (front != null && back != null) {
-            CheckResult(CheckState.Pass, "Front + back detected")
-        } else {
-            CheckResult(CheckState.Warn, "Requires both front and back")
-        },
-        microphoneFeature = if (hasMicrophone) {
-            CheckResult(CheckState.Pass, "Available")
-        } else {
-            CheckResult(CheckState.Fail, "Not available")
-        },
-        echoCancellation = effectAvailability(AcousticEchoCanceler.isAvailable()),
-        noiseSuppression = effectAvailability(NoiseSuppressor.isAvailable()),
-        autoGainControl = effectAvailability(AutomaticGainControl.isAvailable()),
-        audioSampleRate = sampleRate,
-        audioFramesPerBuffer = framesPerBuffer
-    )
-}
-
-private fun effectAvailability(isAvailable: Boolean): CheckResult {
-    return if (isAvailable) {
-        CheckResult(CheckState.Pass, "Available")
-    } else {
-        CheckResult(CheckState.Warn, "Unavailable")
-    }
-}
-
-private fun normalizeFps(rawFps: Int): Int {
-    return if (rawFps > 1000) rawFps / 1000 else rawFps
+    return buildDiagnosticsMediaReport(context)
 }
 
 private suspend fun runConnectivityChecks(host: String): ConnectivityReport = withContext(Dispatchers.IO) {
@@ -808,383 +697,14 @@ private suspend fun runIceCheck(
     turnsOnly: Boolean,
     onIceServersSummary: (String) -> Unit = {},
     onLogLine: (String) -> Unit = {}
-): IceReport = withContext(Dispatchers.IO) {
-    val okHttpClient = OkHttpClient.Builder()
-        .callTimeout(12, TimeUnit.SECONDS)
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
-        .build()
-    val coreApiClient = CoreApiClient(okHttpClient)
-    val logs = Collections.synchronizedList(mutableListOf<String>())
-
-    fun log(msg: String) {
-        val line = "[${System.currentTimeMillis() / 1000}] $msg"
-        logs.add(line)
-        onLogLine(line)
-    }
-    log("Starting ICE test (turnsOnly=$turnsOnly)...")
-    log("Requesting diagnostic token...")
-
-    val token = coreApiClient.awaitDiagnosticToken(host).getOrElse { error ->
-        val message = error.message ?: "Diagnostic token failed"
-        onLogLine("Token error: $message")
-        return@withContext IceReport(
-            turnsOnly = turnsOnly,
-            stun = CheckResult(CheckState.Fail, message),
-            turn = CheckResult(CheckState.Fail, message),
-            iceServersSummary = "n/a",
-            logs = listOf("Token error: $message")
-        )
-    }
-    log("Diagnostic token received.")
-
-    val creds = coreApiClient.awaitTurnCredentials(host, token).getOrElse { error ->
-        val message = error.message ?: "TURN credentials failed"
-        onLogLine("TURN credentials error: $message")
-        return@withContext IceReport(
-            turnsOnly = turnsOnly,
-            stun = CheckResult(CheckState.Fail, message),
-            turn = CheckResult(CheckState.Fail, message),
-            iceServersSummary = "n/a",
-            logs = listOf("TURN credentials error: $message")
-        )
-    }
-    log(
-        "TURN credentials: ttl=${creds.ttl}s, usernameTs=${creds.username.substringBefore(':', "n/a")}, uris=${creds.uris.size}"
-    )
-    creds.uris.forEachIndexed { index, uri ->
-        log("ICE URI[$index]: ${describeIceServerUri(uri)}")
-    }
-
-    val filteredUris = if (turnsOnly) {
-        creds.uris.filter { it.startsWith("turns:", ignoreCase = true) }
-    } else {
-        creds.uris
-    }
-    if (filteredUris.isEmpty()) {
-        onIceServersSummary("n/a")
-        return@withContext IceReport(
-            turnsOnly = turnsOnly,
-            stun = if (turnsOnly) {
-                CheckResult(CheckState.Warn, "Skipped (TURNS only)")
-            } else {
-                CheckResult(CheckState.Fail, "No ICE servers")
-            },
-            turn = CheckResult(CheckState.Fail, "No compatible ICE servers"),
-            iceServersSummary = "n/a",
-            logs = listOf("No compatible ICE servers for this mode.")
-        )
-    }
-
-    val servers = filteredUris.map { uri ->
-        val builder = PeerConnection.IceServer.builder(uri)
-        if (!uri.startsWith("stun:", ignoreCase = true)) {
-            builder.setUsername(creds.username)
-            builder.setPassword(creds.password)
-        }
-        builder.createIceServer()
-    }
-
-    if (turnsOnly) {
-        log("Filtered for TURNS only: ${filteredUris.size}/${creds.uris.size} servers")
-    }
-    val iceServersSummary = filteredUris.joinToString()
-    onIceServersSummary(iceServersSummary)
-    log("ICE servers: $iceServersSummary")
-    val gather = runIceGathering(context, servers, turnsOnly, ::log)
-    IceReport(
+): IceReport {
+    return runDiagnosticsIceCheck(
+        context = context,
+        host = host,
         turnsOnly = turnsOnly,
-        stun = gather.first,
-        turn = gather.second,
-        iceServersSummary = iceServersSummary,
-        logs = logs.toList()
+        onIceServersSummary = onIceServersSummary,
+        onLogLine = onLogLine,
     )
-}
-
-private fun runIceGathering(
-    context: Context,
-    servers: List<PeerConnection.IceServer>,
-    turnsOnly: Boolean,
-    log: (String) -> Unit
-): Pair<CheckResult, CheckResult> {
-    val appContext = context.applicationContext
-    enableVerboseWebRtcLoggingForDiagnostics()
-    PeerConnectionFactory.initialize(
-        PeerConnectionFactory.InitializationOptions.builder(appContext)
-            .setEnableInternalTracer(false)
-            .createInitializationOptions()
-    )
-    val factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
-    val stunFound = AtomicBoolean(false)
-    val turnFound = AtomicBoolean(false)
-    val candidateSeq = AtomicInteger(0)
-    val hostCount = AtomicInteger(0)
-    val srflxCount = AtomicInteger(0)
-    val relayCount = AtomicInteger(0)
-    val prflxCount = AtomicInteger(0)
-    val otherCount = AtomicInteger(0)
-    val candidateErrorCount = AtomicInteger(0)
-    val gatherDone = CountDownLatch(1)
-    val failed = AtomicBoolean(false)
-    var failureReason = "Unknown ICE error"
-
-    val config = PeerConnection.RTCConfiguration(servers).apply {
-        sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-    }
-    log(
-        "RTC config: policy=${config.iceTransportsType}, semantics=${config.sdpSemantics}, servers=${servers.size}"
-    )
-
-    val peerConnection = factory.createPeerConnection(config, object : PeerConnection.Observer {
-        override fun onIceCandidate(candidate: IceCandidate) {
-            val type = extractCandidateType(candidate.sdp)
-            when (type) {
-                "host" -> hostCount.incrementAndGet()
-                "srflx" -> {
-                    srflxCount.incrementAndGet()
-                    stunFound.set(true)
-                }
-                "relay" -> {
-                    relayCount.incrementAndGet()
-                    turnFound.set(true)
-                }
-                "prflx" -> prflxCount.incrementAndGet()
-                else -> otherCount.incrementAndGet()
-            }
-            val seq = candidateSeq.incrementAndGet()
-            log(formatIceCandidateLog(candidate, seq))
-        }
-
-        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-            log("pc state: $newState")
-        }
-
-        override fun onSignalingChange(newState: PeerConnection.SignalingState) {
-            log("signaling: $newState")
-        }
-
-        override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
-            log("ice state: $newState")
-        }
-
-        override fun onIceConnectionReceivingChange(receiving: Boolean) {
-        }
-
-        override fun onIceCandidateError(event: IceCandidateErrorEvent) {
-            val count = candidateErrorCount.incrementAndGet()
-            val category = classifyIceError(event.errorCode)
-            log(
-                "ICE candidate error#$count: code=${event.errorCode}($category), text=${event.errorText}, url=${event.url}, address=${event.address}, port=${event.port}"
-            )
-        }
-
-        override fun onSelectedCandidatePairChanged(event: CandidatePairChangeEvent) {
-            val local = formatCandidateBrief(event.local)
-            val remote = formatCandidateBrief(event.remote)
-            log(
-                "Selected pair: local={$local} remote={$remote} reason=${event.reason} lastDataMs=${event.lastDataReceivedMs} estDisconnectedMs=${event.estimatedDisconnectedTimeMs}"
-            )
-        }
-
-        override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {
-            log("ICE gathering state: $newState")
-            if (newState == PeerConnection.IceGatheringState.COMPLETE) {
-                gatherDone.countDown()
-            }
-        }
-
-        override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {
-        }
-
-        override fun onAddStream(stream: org.webrtc.MediaStream) {
-        }
-
-        override fun onRemoveStream(stream: org.webrtc.MediaStream) {
-        }
-
-        override fun onDataChannel(dc: DataChannel) {
-        }
-
-        override fun onRenegotiationNeeded() {
-        }
-
-        override fun onTrack(transceiver: org.webrtc.RtpTransceiver?) {
-        }
-
-        override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out org.webrtc.MediaStream>?) {
-        }
-    })
-
-    if (peerConnection == null) {
-        factory.dispose()
-        return Pair(
-            CheckResult(CheckState.Fail, "PeerConnection creation failed"),
-            CheckResult(CheckState.Fail, "PeerConnection creation failed")
-        )
-    }
-
-    peerConnection.createDataChannel("diagnostics", DataChannel.Init())
-    peerConnection.createOffer(object : SdpObserver {
-        override fun onCreateSuccess(desc: SessionDescription?) {
-            if (desc == null) {
-                failed.set(true)
-                failureReason = "Empty offer"
-                gatherDone.countDown()
-                return
-            }
-            peerConnection.setLocalDescription(object : SdpObserver {
-                override fun onCreateSuccess(desc: SessionDescription?) {
-                }
-
-                override fun onSetSuccess() {
-                    log("Local description set.")
-                }
-
-                override fun onCreateFailure(error: String?) {
-                }
-
-                override fun onSetFailure(error: String?) {
-                    failed.set(true)
-                    failureReason = error ?: "setLocalDescription failed"
-                    gatherDone.countDown()
-                }
-            }, desc)
-        }
-
-        override fun onSetSuccess() {
-        }
-
-        override fun onCreateFailure(error: String?) {
-            failed.set(true)
-            failureReason = error ?: "createOffer failed"
-            gatherDone.countDown()
-        }
-
-        override fun onSetFailure(error: String?) {
-        }
-    }, MediaConstraints())
-
-    val completed = gatherDone.await(15, TimeUnit.SECONDS)
-    if (!completed) {
-        log("ICE gathering timed out after 15s.")
-    } else {
-        log("ICE gathering reached COMPLETE.")
-    }
-    if (failed.get()) {
-        log("ICE setup failed: $failureReason")
-    }
-    log(
-        "ICE candidate summary: total=${candidateSeq.get()}, host=${hostCount.get()}, srflx=${srflxCount.get()}, relay=${relayCount.get()}, prflx=${prflxCount.get()}, other=${otherCount.get()}, errors=${candidateErrorCount.get()}"
-    )
-    if (turnsOnly && !turnFound.get()) {
-        if (candidateErrorCount.get() > 0) {
-            log("TURNS-only result: relay missing and candidate errors were reported (see error lines above).")
-        } else {
-            log("TURNS-only result: relay missing with no candidate errors reported by libwebrtc.")
-        }
-    }
-
-    runCatching { peerConnection.close() }
-    runCatching { peerConnection.dispose() }
-    factory.dispose()
-
-    val stunResult = when {
-        turnsOnly -> CheckResult(CheckState.Warn, "Skipped (TURNS only)")
-        failed.get() -> CheckResult(CheckState.Fail, failureReason)
-        stunFound.get() -> CheckResult(CheckState.Pass, "Detected")
-        else -> CheckResult(CheckState.Fail, "No server-reflexive candidate")
-    }
-    val turnResult = when {
-        failed.get() -> CheckResult(CheckState.Fail, failureReason)
-        turnFound.get() -> CheckResult(CheckState.Pass, "Detected")
-        else -> CheckResult(CheckState.Fail, "No relay candidate")
-    }
-    return Pair(stunResult, turnResult)
-}
-
-private val diagnosticsWebRtcLoggingEnabled = AtomicBoolean(false)
-
-private fun enableVerboseWebRtcLoggingForDiagnostics() {
-    if (!BuildConfig.DEBUG) return
-    if (!diagnosticsWebRtcLoggingEnabled.compareAndSet(false, true)) return
-    runCatching {
-        Logging.enableLogThreads()
-        Logging.enableLogTimeStamps()
-        Logging.enableLogToDebugOutput(Logging.Severity.LS_VERBOSE)
-        Log.i("Diagnostics", "Verbose native WebRTC logging enabled")
-    }.onFailure { error ->
-        Log.w("Diagnostics", "Failed to enable WebRTC verbose logging", error)
-    }
-}
-
-private fun extractCandidateType(candidateSdp: String): String? {
-    val marker = " typ "
-    val index = candidateSdp.indexOf(marker)
-    if (index < 0) return null
-    val start = index + marker.length
-    if (start >= candidateSdp.length) return null
-    val end = candidateSdp.indexOf(' ', start).takeIf { it >= 0 } ?: candidateSdp.length
-    return candidateSdp.substring(start, end).trim().ifBlank { null }
-}
-
-private fun formatIceCandidateLog(candidate: IceCandidate): String {
-    return formatIceCandidateLog(candidate, null)
-}
-
-private fun formatCandidateBrief(candidate: IceCandidate): String {
-    val raw = candidate.sdp
-    val parts = raw.split(' ')
-    val ip = parts.getOrNull(4) ?: "unknown"
-    val port = parts.getOrNull(5) ?: "unknown"
-    val type = extractCandidateType(raw) ?: "unknown"
-    val transport = parts.getOrNull(2)?.lowercase() ?: "unknown"
-    return "${candidate.sdpMid}:${candidate.sdpMLineIndex} type=$type proto=$transport addr=$ip:$port"
-}
-
-private fun formatIceCandidateLog(candidate: IceCandidate, sequence: Int?): String {
-    val raw = candidate.sdp
-    val parts = raw.split(' ')
-    val ip = parts.getOrNull(4) ?: "unknown"
-    val port = parts.getOrNull(5) ?: "unknown"
-    val transport = parts.getOrNull(2)?.lowercase() ?: "unknown"
-    val type = extractCandidateType(raw) ?: "unknown"
-    val base = if (sequence != null) {
-        "Candidate#$sequence: $type ($transport) -> $ip:$port"
-    } else {
-        "Candidate: $type ($transport) -> $ip:$port"
-    }
-    return if (type == "relay") {
-        "$base [$transport] | raw=$raw"
-    } else {
-        "$base | raw=$raw"
-    }
-}
-
-private fun classifyIceError(errorCode: Int): String {
-    return when (errorCode) {
-        401 -> "UNAUTHORIZED"
-        403 -> "FORBIDDEN"
-        437 -> "ALLOCATION_MISMATCH"
-        438 -> "STALE_NONCE"
-        486 -> "ALLOCATION_QUOTA_REACHED"
-        500 -> "SERVER_ERROR"
-        701 -> "SERVER_UNREACHABLE"
-        else -> "UNKNOWN"
-    }
-}
-
-private fun describeIceServerUri(uri: String): String {
-    val schemeEnd = uri.indexOf(':')
-    if (schemeEnd <= 0) return "raw=$uri"
-    val scheme = uri.substring(0, schemeEnd).lowercase()
-    val rest = uri.substring(schemeEnd + 1)
-    val endpoint = rest.substringBefore('?')
-    val query = rest.substringAfter('?', "")
-    val transport = query.split('&')
-        .firstOrNull { it.startsWith("transport=", ignoreCase = true) }
-        ?.substringAfter('=')
-        ?.lowercase() ?: "default"
-    return "scheme=$scheme, endpoint=$endpoint, transport=$transport, raw=$uri"
 }
 
 private fun buildHttpsUrl(hostInput: String, path: String): String? {
