@@ -179,6 +179,18 @@ Detailed request/timing sequence:
 - **Media**: WebRTC with STUN/TURN support via Coturn
 - **Deployment**: Docker Compose with Nginx reverse proxy
 
+### SDK Pattern (Headless SDK + Optional UI)
+
+All three native SDKs follow a **headless core + optional UI** pattern:
+
+- **`SerenadaCore`** — Entry point. `createRoom()` is async (`async throws` on iOS, `suspend` on Android). `join()` returns a `SerenadaSession`.
+- **`SerenadaSession`** — The active call session. Exposes two observable snapshots:
+  - **`state`** (`CallState`) — App-facing call state: phase, local/remote participants, connection status, errors.
+  - **`diagnostics`** (`CallDiagnostics`) — Low-level transport info: ICE/peer/signaling states, realtime stats, camera/flash state, feature degradations.
+- **`SerenadaCallFlow`** — Pre-built UI component (SwiftUI / Jetpack Compose / React) that consumes a session and renders the full call flow. Optional — you can build your own UI from `state` and `diagnostics`.
+
+Android enforces main-thread access on all public SDK entrypoints with fail-fast preconditions.
+
 ## Documentation
 
 - [Deployment Guide](DEPLOY.md) – Self-hosting instructions

@@ -78,13 +78,44 @@ class PeerConnectionSlot(
     )
 
     var sentOffer: Boolean = false
+        private set
     var isMakingOffer: Boolean = false
+        private set
     var pendingIceRestart: Boolean = false
+        private set
     var lastIceRestartAt: Long = 0L
+        private set
     var offerTimeoutTask: Runnable? = null
+        private set
     var iceRestartTask: Runnable? = null
+        private set
     var nonHostFallbackTask: Runnable? = null
+        private set
     var nonHostFallbackAttempts: Int = 0
+        private set
+
+    // Offer lifecycle
+    fun beginOffer() { isMakingOffer = true }
+    fun completeOffer() { isMakingOffer = false }
+    fun markOfferSent() { sentOffer = true }
+
+    // ICE restart lifecycle
+    fun markPendingIceRestart() { pendingIceRestart = true }
+    fun clearPendingIceRestart() { pendingIceRestart = false }
+    fun recordIceRestart() {
+        lastIceRestartAt = System.currentTimeMillis()
+        pendingIceRestart = false
+    }
+
+    // Task management
+    fun setOfferTimeoutTask(task: Runnable) { offerTimeoutTask = task }
+    fun cancelOfferTimeout() { offerTimeoutTask = null }
+    fun setIceRestartTask(task: Runnable) { iceRestartTask = task }
+    fun cancelIceRestartTask() { iceRestartTask = null }
+    fun setNonHostFallbackTask(task: Runnable) { nonHostFallbackTask = task }
+    fun cancelNonHostFallbackTask() { nonHostFallbackTask = null }
+    fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
+    fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
     private var peerConnection: PeerConnection? = null
     private var remoteVideoTrack: VideoTrack? = null

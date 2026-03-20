@@ -58,7 +58,8 @@ public final class SerenadaSession: ObservableObject {
     private let pathMonitor = NWPathMonitor()
     private let pathMonitorQueue = DispatchQueue(label: "SerenadaSession.PathMonitor")
 
-    private var legacyUiState = CallUiState()
+    private var internalPhase: CallPhase = .joining
+    private var participantCount = 0
     private var currentRequiredPermissions: [MediaCapability]?
     private var currentError: CallError?
 
@@ -129,14 +130,11 @@ public final class SerenadaSession: ObservableObject {
         signalingClient.listener = self
         configureRuntimeBridges()
 
-        legacyUiState.phase = .joining
-        legacyUiState.roomId = roomId
-        legacyUiState.localAudioEnabled = config.defaultAudioEnabled
-        legacyUiState.localVideoEnabled = config.defaultVideoEnabled
-
-        state.roomId = roomId
-        state.roomUrl = roomUrl
-        syncPublishedSnapshot()
+        internalPhase = .joining
+        commitSnapshot { s, _ in
+            s.localParticipant.audioEnabled = config.defaultAudioEnabled
+            s.localParticipant.videoEnabled = config.defaultVideoEnabled
+        }
         startNetworkMonitoring()
 
         Task { @MainActor [weak self] in
@@ -170,35 +168,35 @@ public final class SerenadaSession: ObservableObject {
     }
 
     public func toggleAudio() {
-        let enabled = !legacyUiState.localAudioEnabled
+        let enabled = !state.localParticipant.audioEnabled
         webRtcEngine.toggleAudio(enabled)
-        updateLegacyUiState { $0.localAudioEnabled = enabled }
+        commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
     }
 
     public func toggleVideo() {
-        userPreferredVideoEnabled = !legacyUiState.localVideoEnabled
+        userPreferredVideoEnabled = !state.localParticipant.videoEnabled
         applyLocalVideoPreference()
     }
 
     public func flipCamera() {
-        guard !legacyUiState.isScreenSharing else { return }
-        if legacyUiState.localCameraMode.isContentMode {
+        guard !diagnostics.isScreenSharing else { return }
+        if state.localParticipant.cameraMode.isContentMode {
             broadcastContentState(active: false)
         }
         webRtcEngine.flipCamera()
     }
 
     public func setCameraMode(_ mode: LocalCameraMode) {
-        guard mode != legacyUiState.localCameraMode else { return }
+        guard mode != state.localParticipant.cameraMode else { return }
         let attempts = 4
-        for _ in 0..<attempts where legacyUiState.localCameraMode != mode {
+        for _ in 0..<attempts where state.localParticipant.cameraMode != mode {
             flipCamera()
         }
     }
 
     public func setAudioEnabled(_ enabled: Bool) {
         webRtcEngine.toggleAudio(enabled)
-        updateLegacyUiState { $0.localAudioEnabled = enabled }
+        commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
     }
 
     public func setVideoEnabled(_ enabled: Bool) {
@@ -207,14 +205,14 @@ public final class SerenadaSession: ObservableObject {
     }
 
     public func startScreenShare() {
-        guard !legacyUiState.isScreenSharing else { return }
+        guard !diagnostics.isScreenSharing else { return }
         _ = webRtcEngine.startScreenShare { [weak self] started in
             Task { @MainActor in
                 guard let self, started else { return }
-                self.updateLegacyUiState {
-                    $0.isScreenSharing = true
-                    $0.localCameraMode = .screenShare
-                    $0.cameraZoomFactor = 1
+                self.commitSnapshot { s, d in
+                    d.isScreenSharing = true
+                    s.localParticipant.cameraMode = .screenShare
+                    d.cameraZoomFactor = 1
                 }
                 self.broadcastContentState(active: true, contentType: ContentTypeWire.screenShare)
                 self.applyLocalVideoPreference()
@@ -237,8 +235,8 @@ public final class SerenadaSession: ObservableObject {
 
     @discardableResult
     public func adjustCameraZoom(by scaleDelta: CGFloat) -> Double? {
-        guard legacyUiState.phase == .inCall else { return nil }
-        guard legacyUiState.localCameraMode.isContentMode else { return nil }
+        guard internalPhase == .inCall else { return nil }
+        guard state.localParticipant.cameraMode.isContentMode else { return nil }
         return webRtcEngine.adjustCaptureZoom(by: scaleDelta)
     }
 
@@ -250,7 +248,8 @@ public final class SerenadaSession: ObservableObject {
     public func resumeJoin() {
         currentRequiredPermissions = nil
         currentError = nil
-        updateLegacyUiState { $0.phase = .joining }
+        internalPhase = .joining
+        commitSnapshot()
         Task { @MainActor [weak self] in
             await self?.prepareMediaAndConnect(
                 roomId: self?.roomId ?? "",
@@ -265,7 +264,8 @@ public final class SerenadaSession: ObservableObject {
     public func cancelJoin() {
         currentRequiredPermissions = nil
         resetResources()
-        updateLegacyUiState { $0.phase = .idle }
+        internalPhase = .idle
+        commitSnapshot()
     }
 
     public func attachLocalRenderer(_ renderer: AnyObject) {
@@ -306,34 +306,35 @@ public final class SerenadaSession: ObservableObject {
         currentError = nil
         currentRequiredPermissions = nil
         userPreferredVideoEnabled = config.defaultVideoEnabled
-        updateLegacyUiState {
-            $0.phase = .joining
-            $0.roomId = roomId
-            $0.localAudioEnabled = config.defaultAudioEnabled
-            $0.localVideoEnabled = config.defaultVideoEnabled
-            $0.remoteParticipants = []
-            $0.connectionStatus = .connected
-            $0.activeTransport = nil
-            $0.isSignalingConnected = false
-            $0.iceConnectionState = "NEW"
-            $0.connectionState = "NEW"
-            $0.signalingState = "STABLE"
-            $0.localCameraMode = .selfie
-            $0.cameraZoomFactor = 1
-            $0.isFlashAvailable = false
-            $0.isFlashEnabled = false
-            $0.remoteContentCid = nil
-            $0.remoteContentType = nil
-            $0.realtimeStats = .empty
+        internalPhase = .joining
+        participantCount = 0
+        commitSnapshot { s, d in
+            s.localParticipant = LocalParticipant(
+                cid: nil,
+                audioEnabled: self.config.defaultAudioEnabled,
+                videoEnabled: self.config.defaultVideoEnabled,
+                cameraMode: .selfie
+            )
+            s.remoteParticipants = []
+            s.connectionStatus = .connected
+            d.activeTransport = nil
+            d.isSignalingConnected = false
+            d.iceConnectionState = .new
+            d.peerConnectionState = .new
+            d.rtcSignalingState = .stable
+            d.cameraZoomFactor = 1
+            d.isFlashAvailable = false
+            d.isFlashEnabled = false
+            d.remoteContentParticipantId = nil
+            d.remoteContentType = nil
+            d.realtimeStats = .empty
         }
 
         let required = missingPermissions()
         if !required.isEmpty {
             currentRequiredPermissions = required
-            updateLegacyUiState { $0.phase = .idle }
-            state.phase = .awaitingPermissions
-            state.requiredPermissions = required
-            syncPublishedSnapshot()
+            internalPhase = .idle
+            commitSnapshot()
             onPermissionsRequired?(required)
             delegateProvider?()?.sessionRequiresPermissions(self, permissions: required)
             return
@@ -371,14 +372,14 @@ public final class SerenadaSession: ObservableObject {
 
         webRtcEngine.setOnCameraFacingChanged { [weak self] isFront in
             Task { @MainActor in
-                self?.updateLegacyUiState { $0.isFrontCamera = isFront }
+                self?.commitSnapshot { _, d in d.isFrontCamera = isFront }
             }
         }
         webRtcEngine.setOnCameraModeChanged { [weak self] mode in
             Task { @MainActor in
                 guard let self else { return }
-                let previousMode = self.legacyUiState.localCameraMode
-                self.updateLegacyUiState { $0.localCameraMode = mode }
+                let previousMode = self.state.localParticipant.cameraMode
+                self.commitSnapshot { s, _ in s.localParticipant.cameraMode = mode }
                 let isContent = mode.isContentMode
                 let wasContent = previousMode.isContentMode
                 if isContent {
@@ -391,18 +392,18 @@ public final class SerenadaSession: ObservableObject {
         }
         webRtcEngine.setOnFlashlightStateChanged { [weak self] available, enabled in
             Task { @MainActor in
-                self?.updateLegacyUiState {
-                    $0.isFlashAvailable = available
-                    $0.isFlashEnabled = enabled
+                self?.commitSnapshot { _, d in
+                    d.isFlashAvailable = available
+                    d.isFlashEnabled = enabled
                 }
             }
         }
         webRtcEngine.setOnScreenShareStopped { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                self.updateLegacyUiState {
-                    $0.isScreenSharing = false
-                    $0.cameraZoomFactor = 1
+                self.commitSnapshot { _, d in
+                    d.isScreenSharing = false
+                    d.cameraZoomFactor = 1
                 }
                 self.broadcastContentState(active: false)
                 self.applyLocalVideoPreference()
@@ -410,7 +411,7 @@ public final class SerenadaSession: ObservableObject {
         }
         webRtcEngine.setOnZoomFactorChanged { [weak self] zoomFactor in
             Task { @MainActor in
-                self?.updateLegacyUiState { $0.cameraZoomFactor = zoomFactor }
+                self?.commitSnapshot { _, d in d.cameraZoomFactor = zoomFactor }
             }
         }
         webRtcEngine.setOnFeatureDegradation { [weak self] degradation in
@@ -513,7 +514,7 @@ public final class SerenadaSession: ObservableObject {
             reconnectCid = cid
         }
 
-        updateLegacyUiState { $0.localCid = clientId }
+        commitSnapshot { s, _ in s.localParticipant.cid = self.clientId }
 
         if let token = message.payload?.objectValue?["reconnectToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty {
@@ -590,7 +591,8 @@ public final class SerenadaSession: ObservableObject {
         clearJoinConnectKickstart()
         clearJoinRecovery()
         resetResources()
-        updateLegacyUiState { $0.phase = .error }
+        internalPhase = .error
+        commitSnapshot()
     }
 
     private func handleContentState(_ message: SignalingMessage) {
@@ -598,9 +600,9 @@ public final class SerenadaSession: ObservableObject {
               !fromCid.isEmpty else { return }
         let active = message.payload?.objectValue?["active"]?.boolValue == true
         let contentType = active ? message.payload?.objectValue?["contentType"]?.stringValue : nil
-        updateLegacyUiState {
-            $0.remoteContentCid = active ? fromCid : nil
-            $0.remoteContentType = contentType
+        commitSnapshot { _, d in
+            d.remoteContentParticipantId = active ? fromCid : nil
+            d.remoteContentType = contentType
         }
     }
 
@@ -664,7 +666,7 @@ public final class SerenadaSession: ObservableObject {
                     switch state {
                     case "CONNECTED":
                         self.clearIceRestartTimer(remoteCid: cid)
-                        self.peerSlots[cid]?.pendingIceRestart = false
+                        self.peerSlots[cid]?.clearPendingIceRestart()
                     case "DISCONNECTED":
                         self.scheduleIceRestart(remoteCid: cid, reason: "conn-disconnected", delayMs: 2000)
                     case "FAILED":
@@ -683,7 +685,7 @@ public final class SerenadaSession: ObservableObject {
                     switch state {
                     case "CONNECTED", "COMPLETED":
                         self.clearIceRestartTimer(remoteCid: cid)
-                        self.peerSlots[cid]?.pendingIceRestart = false
+                        self.peerSlots[cid]?.clearPendingIceRestart()
                     case "DISCONNECTED":
                         self.scheduleIceRestart(remoteCid: cid, reason: "ice-disconnected", delayMs: 2000)
                     case "FAILED":
@@ -702,7 +704,7 @@ public final class SerenadaSession: ObservableObject {
                     if state == "STABLE" {
                         self.clearOfferTimeout(remoteCid: cid)
                         if self.peerSlots[cid]?.pendingIceRestart == true {
-                            self.peerSlots[cid]?.pendingIceRestart = false
+                            self.peerSlots[cid]?.clearPendingIceRestart()
                             self.triggerIceRestart(remoteCid: cid, reason: "pending-retry")
                         }
                     }
@@ -757,10 +759,10 @@ public final class SerenadaSession: ObservableObject {
             clearNonHostOfferFallback()
         }
 
-        updateLegacyUiState {
-            $0.phase = phase
-            $0.isHost = isHostNow
-            $0.participantCount = count
+        internalPhase = phase
+        participantCount = count
+        commitSnapshot { s, _ in
+            s.localParticipant.isHost = isHostNow
         }
 
         if count > 1 {
@@ -835,7 +837,7 @@ public final class SerenadaSession: ObservableObject {
                 guard let self else { return }
                 if success {
                     self.clearOfferTimeout(remoteCid: fromCid)
-                    self.peerSlots[fromCid]?.pendingIceRestart = false
+                    self.peerSlots[fromCid]?.clearPendingIceRestart()
                     self.updateAggregatePeerState()
                     self.updateConnectionStatusFromSignals()
                 } else if self.shouldIOffer(remoteCid: fromCid) {
@@ -901,10 +903,10 @@ public final class SerenadaSession: ObservableObject {
             }
         }
 
-        updateLegacyUiState {
-            $0.iceConnectionState = nextIceState
-            $0.connectionState = nextConnectionState
-            $0.signalingState = nextSignalingState
+        commitSnapshot { _, d in
+            d.iceConnectionState = IceConnectionState(rawValueOrUnknown: nextIceState)
+            d.peerConnectionState = PeerConnectionState(rawValueOrUnknown: nextConnectionState)
+            d.rtcSignalingState = SignalingState(rawValueOrUnknown: nextSignalingState)
         }
     }
 
@@ -917,7 +919,7 @@ public final class SerenadaSession: ObservableObject {
     private func maybeSendOffer(slot: PeerConnectionSlot, force: Bool = false, iceRestart: Bool = false) {
         if slot.isMakingOffer {
             if iceRestart {
-                slot.pendingIceRestart = true
+                slot.markPendingIceRestart()
             }
             return
         }
@@ -932,12 +934,12 @@ public final class SerenadaSession: ObservableObject {
 
         if slot.getSignalingState() != "STABLE" {
             if iceRestart {
-                slot.pendingIceRestart = true
+                slot.markPendingIceRestart()
             }
             return
         }
 
-        slot.isMakingOffer = true
+        slot.beginOffer()
         let started = slot.createOffer(
             iceRestart: iceRestart,
             onSdp: { [weak self] sdp in
@@ -951,7 +953,7 @@ public final class SerenadaSession: ObservableObject {
             onComplete: { [weak self] success in
                 Task { @MainActor in
                     guard let self else { return }
-                    slot.isMakingOffer = false
+                    slot.completeOffer()
                     if !success {
                         if iceRestart {
                             self.scheduleIceRestart(remoteCid: slot.remoteCid, reason: "offer-failed", delayMs: 500)
@@ -964,20 +966,20 @@ public final class SerenadaSession: ObservableObject {
         )
 
         if !started {
-            slot.isMakingOffer = false
+            slot.completeOffer()
             if iceRestart {
-                slot.pendingIceRestart = true
+                slot.markPendingIceRestart()
             }
             return
         }
 
         if !force {
-            slot.sentOffer = true
+            slot.markOfferSent()
         }
     }
 
     private func canOffer(slot: PeerConnectionSlot) -> Bool {
-        guard legacyUiState.participantCount > 1 else { return false }
+        guard participantCount > 1 else { return false }
         guard signalingClient.isConnected() else { return false }
         guard shouldIOffer(remoteCid: slot.remoteCid) else { return false }
         return slot.isReady() || slot.ensurePeerConnection()
@@ -991,14 +993,14 @@ public final class SerenadaSession: ObservableObject {
         clearOfferTimeout(remoteCid: remoteCid)
         guard let slot = peerSlots[remoteCid] else { return }
 
-        slot.offerTimeoutTask = Task { [weak self] in
+        slot.setOfferTimeoutTask(Task { [weak self] in
             try? await Task.sleep(nanoseconds: WebRtcResilience.offerTimeoutNs)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, let slot = self.peerSlots[remoteCid] else { return }
                 guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else { return }
                 if triggerIceRestart {
-                    slot.pendingIceRestart = true
+                    slot.markPendingIceRestart()
                 }
                 slot.rollbackLocalDescription { _ in
                     Task { @MainActor in
@@ -1014,19 +1016,17 @@ public final class SerenadaSession: ObservableObject {
                     }
                 }
             }
-        }
+        })
     }
 
     private func clearOfferTimeout(remoteCid: String? = nil) {
         if let remoteCid {
-            peerSlots[remoteCid]?.offerTimeoutTask?.cancel()
-            peerSlots[remoteCid]?.offerTimeoutTask = nil
+            peerSlots[remoteCid]?.cancelOfferTimeout()
             return
         }
 
         for slot in peerSlots.values {
-            slot.offerTimeoutTask?.cancel()
-            slot.offerTimeoutTask = nil
+            slot.cancelOfferTimeout()
         }
     }
 
@@ -1038,7 +1038,7 @@ public final class SerenadaSession: ObservableObject {
 
     private func maybeScheduleNonHostOfferFallback(remoteCid: String, reason: String) {
         guard let slot = peerSlots[remoteCid] else { return }
-        guard legacyUiState.participantCount > 1 else {
+        guard participantCount > 1 else {
             clearNonHostOfferFallback(remoteCid: remoteCid)
             return
         }
@@ -1050,34 +1050,32 @@ public final class SerenadaSession: ObservableObject {
         guard slot.nonHostFallbackTask == nil else { return }
         guard slot.nonHostFallbackAttempts < WebRtcResilience.nonHostFallbackMaxAttempts else { return }
 
-        slot.nonHostFallbackTask = Task { [weak self] in
+        slot.setNonHostFallbackTask(Task { [weak self] in
             try? await Task.sleep(nanoseconds: WebRtcResilience.nonHostFallbackDelayNs)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, let slot = self.peerSlots[remoteCid] else { return }
-                slot.nonHostFallbackTask = nil
-                slot.nonHostFallbackAttempts += 1
+                slot.clearNonHostFallbackTask()
+                slot.incrementNonHostFallbackAttempts()
                 self.maybeSendNonHostFallbackOffer(remoteCid: remoteCid)
             }
-        }
+        })
     }
 
     private func clearNonHostOfferFallback(remoteCid: String? = nil) {
         if let remoteCid {
-            peerSlots[remoteCid]?.nonHostFallbackTask?.cancel()
-            peerSlots[remoteCid]?.nonHostFallbackTask = nil
+            peerSlots[remoteCid]?.cancelNonHostFallbackTask()
             return
         }
 
         for slot in peerSlots.values {
-            slot.nonHostFallbackTask?.cancel()
-            slot.nonHostFallbackTask = nil
+            slot.cancelNonHostFallbackTask()
         }
     }
 
     private func maybeSendNonHostFallbackOffer(remoteCid: String) {
         guard let slot = peerSlots[remoteCid] else { return }
-        guard legacyUiState.participantCount > 1 else { return }
+        guard participantCount > 1 else { return }
         guard !shouldIOffer(remoteCid: remoteCid) else { return }
         guard signalingClient.isConnected() else { return }
         guard slot.isReady() || slot.ensurePeerConnection() else { return }
@@ -1091,7 +1089,7 @@ public final class SerenadaSession: ObservableObject {
             return
         }
 
-        slot.isMakingOffer = true
+        slot.beginOffer()
         let started = slot.createOffer(
             onSdp: { [weak self] sdp in
                 self?.sendMessage(
@@ -1110,7 +1108,7 @@ public final class SerenadaSession: ObservableObject {
             onComplete: { [weak self] success in
                 Task { @MainActor in
                     guard let self else { return }
-                    slot.isMakingOffer = false
+                    slot.completeOffer()
                     if !success {
                         self.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-failed")
                     }
@@ -1119,7 +1117,7 @@ public final class SerenadaSession: ObservableObject {
         )
 
         if !started {
-            slot.isMakingOffer = false
+            slot.completeOffer()
             maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-not-started")
         }
     }
@@ -1131,7 +1129,7 @@ public final class SerenadaSession: ObservableObject {
             try? await Task.sleep(nanoseconds: WebRtcResilience.joinHardTimeoutNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
-            guard self.legacyUiState.phase == .joining else { return }
+            guard self.internalPhase == .joining else { return }
             guard self.roomId == roomId else { return }
             guard self.joinAttemptSerial == joinAttempt else { return }
             self.failJoinWithError(.connectionFailed)
@@ -1150,7 +1148,7 @@ public final class SerenadaSession: ObservableObject {
             try? await Task.sleep(nanoseconds: WebRtcResilience.joinConnectKickstartNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
-            guard self.legacyUiState.phase == .joining else { return }
+            guard self.internalPhase == .joining else { return }
             guard self.roomId == roomId else { return }
             guard self.joinAttemptSerial == joinAttempt else { return }
             guard !self.hasJoinSignalStartedForAttempt else { return }
@@ -1169,7 +1167,8 @@ public final class SerenadaSession: ObservableObject {
         clearNonHostOfferFallback()
         currentError = error
         resetResources()
-        updateLegacyUiState { $0.phase = .error }
+        internalPhase = .error
+        commitSnapshot()
     }
 
     private func scheduleIceRestart(reason: String, delayMs: Int) {
@@ -1181,7 +1180,7 @@ public final class SerenadaSession: ObservableObject {
     private func scheduleIceRestart(remoteCid: String, reason: String, delayMs: Int) {
         guard let slot = peerSlots[remoteCid] else { return }
         if !canOffer(slot: slot) {
-            slot.pendingIceRestart = true
+            slot.markPendingIceRestart()
             return
         }
 
@@ -1190,7 +1189,7 @@ public final class SerenadaSession: ObservableObject {
         let now = Date().timeIntervalSince1970 * 1000
         guard now - slot.lastIceRestartAt >= Double(WebRtcResilience.iceRestartCooldownMs) else { return }
 
-        slot.iceRestartTask = Task { [weak self] in
+        slot.setIceRestartTask(Task { [weak self] in
             if delayMs > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             }
@@ -1198,19 +1197,17 @@ public final class SerenadaSession: ObservableObject {
             await MainActor.run {
                 self?.triggerIceRestart(remoteCid: remoteCid, reason: reason)
             }
-        }
+        })
     }
 
     private func clearIceRestartTimer(remoteCid: String? = nil) {
         if let remoteCid {
-            peerSlots[remoteCid]?.iceRestartTask?.cancel()
-            peerSlots[remoteCid]?.iceRestartTask = nil
+            peerSlots[remoteCid]?.cancelIceRestartTask()
             return
         }
 
         for slot in peerSlots.values {
-            slot.iceRestartTask?.cancel()
-            slot.iceRestartTask = nil
+            slot.cancelIceRestartTask()
         }
     }
 
@@ -1222,21 +1219,19 @@ public final class SerenadaSession: ObservableObject {
 
     private func triggerIceRestart(remoteCid: String, reason: String) {
         guard let slot = peerSlots[remoteCid] else { return }
-        slot.iceRestartTask?.cancel()
-        slot.iceRestartTask = nil
+        slot.cancelIceRestartTask()
 
         guard canOffer(slot: slot) else {
-            slot.pendingIceRestart = true
+            slot.markPendingIceRestart()
             return
         }
 
         if slot.isMakingOffer {
-            slot.pendingIceRestart = true
+            slot.markPendingIceRestart()
             return
         }
 
-        slot.lastIceRestartAt = Date().timeIntervalSince1970 * 1000
-        slot.pendingIceRestart = false
+        slot.recordIceRestart()
         maybeSendOffer(slot: slot, force: true, iceRestart: true)
     }
 
@@ -1368,7 +1363,7 @@ public final class SerenadaSession: ObservableObject {
 
     private func refreshRemoteParticipants() {
         guard let roomState = currentRoomState else {
-            updateLegacyUiState { $0.remoteParticipants = [] }
+            commitSnapshot { s, _ in s.remoteParticipants = [] }
             return
         }
 
@@ -1376,21 +1371,22 @@ public final class SerenadaSession: ObservableObject {
             .filter { $0.cid != clientId }
             .map { participant in
                 let slot = peerSlots[participant.cid]
-                return RemoteParticipant(
+                return SerenadaRemoteParticipant(
                     cid: participant.cid,
+                    audioEnabled: true,
                     videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
                     connectionState: slot?.getConnectionState() ?? "NEW"
                 )
             }
 
         let activeCids = Set(participants.map(\.cid))
-        let clearContent = legacyUiState.remoteContentCid != nil && !activeCids.contains(legacyUiState.remoteContentCid!)
+        let clearContent = diagnostics.remoteContentParticipantId != nil && !activeCids.contains(diagnostics.remoteContentParticipantId!)
 
-        updateLegacyUiState {
-            $0.remoteParticipants = participants
+        commitSnapshot { s, d in
+            s.remoteParticipants = participants
             if clearContent {
-                $0.remoteContentCid = nil
-                $0.remoteContentType = nil
+                d.remoteContentParticipantId = nil
+                d.remoteContentType = nil
             }
         }
     }
@@ -1415,7 +1411,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func pollWebRtcStats() {
-        if legacyUiState.phase != .inCall && legacyUiState.phase != .waiting && legacyUiState.phase != .joining {
+        if internalPhase != .inCall && internalPhase != .waiting && internalPhase != .joining {
             return
         }
 
@@ -1429,7 +1425,7 @@ public final class SerenadaSession: ObservableObject {
         guard !slots.isEmpty else {
             webrtcStatsRequestInFlight = false
             lastWebRtcStatsPollAtMs = now
-            updateLegacyUiState { $0.realtimeStats = .empty }
+            commitSnapshot { _, d in d.realtimeStats = .empty }
             return
         }
 
@@ -1451,8 +1447,8 @@ public final class SerenadaSession: ObservableObject {
             guard let self else { return }
             self.webrtcStatsRequestInFlight = false
             self.lastWebRtcStatsPollAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-            self.updateLegacyUiState {
-                $0.realtimeStats = self.mergeRealtimeStats(stats)
+            self.commitSnapshot { _, d in
+                d.realtimeStats = self.mergeRealtimeStats(stats)
             }
         }
     }
@@ -1498,10 +1494,10 @@ public final class SerenadaSession: ObservableObject {
 
     private func cleanupCall(reason: EndReason, transitionToEnding: Bool) {
         if transitionToEnding {
-            updateLegacyUiState {
-                $0.phase = .ending
-                $0.localVideoEnabled = false
-                $0.remoteParticipants = []
+            internalPhase = .ending
+            commitSnapshot { s, _ in
+                s.localParticipant.videoEnabled = false
+                s.remoteParticipants = []
             }
         }
 
@@ -1513,10 +1509,12 @@ public final class SerenadaSession: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 guard let self else { return }
                 guard self.state.phase == .ending else { return }
-                self.updateLegacyUiState { $0.phase = .idle }
+                self.internalPhase = .idle
+                self.commitSnapshot()
             }
         } else {
-            updateLegacyUiState { $0.phase = .idle }
+            internalPhase = .idle
+            commitSnapshot()
             delegateProvider?()?.sessionDidEnd(self, reason: reason)
         }
     }
@@ -1556,34 +1554,30 @@ public final class SerenadaSession: ObservableObject {
         reconnectToken = nil
         turnTokenTTLMs = nil
 
-        updateLegacyUiState {
-            $0.localCid = nil
-            $0.isHost = false
-            $0.participantCount = 0
-            $0.remoteParticipants = []
-            $0.connectionStatus = .connected
-            $0.isSignalingConnected = false
-            $0.activeTransport = nil
-            $0.iceConnectionState = "NEW"
-            $0.connectionState = "NEW"
-            $0.signalingState = "STABLE"
-            $0.isScreenSharing = false
-            $0.localCameraMode = .selfie
-            $0.cameraZoomFactor = 1
-            $0.isFlashAvailable = false
-            $0.isFlashEnabled = false
-            $0.remoteContentCid = nil
-            $0.remoteContentType = nil
-            $0.realtimeStats = .empty
-        }
-        if !diagnostics.featureDegradations.isEmpty {
-            diagnostics.featureDegradations = []
+        participantCount = 0
+        commitSnapshot { s, d in
+            s.localParticipant = LocalParticipant(cid: nil, cameraMode: .selfie)
+            s.remoteParticipants = []
+            s.connectionStatus = .connected
+            d.isSignalingConnected = false
+            d.activeTransport = nil
+            d.iceConnectionState = .new
+            d.peerConnectionState = .new
+            d.rtcSignalingState = .stable
+            d.isScreenSharing = false
+            d.cameraZoomFactor = 1
+            d.isFlashAvailable = false
+            d.isFlashEnabled = false
+            d.remoteContentParticipantId = nil
+            d.remoteContentType = nil
+            d.realtimeStats = .empty
+            d.featureDegradations = []
         }
     }
 
     private func applyLocalVideoPreference() {
         let shouldPauseForProximity = callAudioSessionController.shouldPauseVideoForProximity(
-            isScreenSharing: legacyUiState.isScreenSharing
+            isScreenSharing: diagnostics.isScreenSharing
         )
 
         if shouldPauseForProximity != isVideoPausedByProximity {
@@ -1592,7 +1586,7 @@ public final class SerenadaSession: ObservableObject {
 
         let preferredEnabled = userPreferredVideoEnabled && !shouldPauseForProximity
         let effectiveEnabled = webRtcEngine.toggleVideo(preferredEnabled)
-        updateLegacyUiState { $0.localVideoEnabled = effectiveEnabled }
+        commitSnapshot { s, _ in s.localParticipant.videoEnabled = effectiveEnabled }
     }
 
     private func prepareMediaAndConnect(
@@ -1604,16 +1598,16 @@ public final class SerenadaSession: ObservableObject {
     ) async {
         guard joinAttempt == joinAttemptSerial else { return }
         guard self.roomId == roomId else { return }
-        guard state.phase == .joining || state.phase == .awaitingPermissions || legacyUiState.phase == .joining else { return }
+        guard state.phase == .joining || state.phase == .awaitingPermissions || internalPhase == .joining else { return }
 
         let hasMicPermission = permissions.microphoneGranted
         let hasCameraPermission = permissions.cameraGranted
         let shouldEnableAudio = defaultAudioEnabled && hasMicPermission
         let shouldEnableVideo = defaultVideoEnabled && hasCameraPermission
 
-        updateLegacyUiState {
-            $0.localAudioEnabled = shouldEnableAudio
-            $0.localVideoEnabled = shouldEnableVideo
+        commitSnapshot { s, _ in
+            s.localParticipant.audioEnabled = shouldEnableAudio
+            s.localParticipant.videoEnabled = shouldEnableVideo
         }
 
         activateAudioSession()
@@ -1649,9 +1643,9 @@ public final class SerenadaSession: ObservableObject {
             guard !Task.isCancelled else { return }
             guard let self else { return }
             guard self.roomId == roomId else { return }
-            guard self.legacyUiState.isSignalingConnected else { return }
+            guard self.diagnostics.isSignalingConnected else { return }
             guard self.hasJoinAcknowledgedCurrentAttempt else {
-                if self.legacyUiState.phase == .joining {
+                if self.internalPhase == .joining {
                     self.pendingJoinRoom = roomId
                     self.ensureSignalingConnection()
                 }
@@ -1674,16 +1668,15 @@ public final class SerenadaSession: ObservableObject {
 
     private func recoverFromJoiningIfNeeded(participantHint: Int?, preferInCall: Bool = false) {
         guard let recovered = resolveJoinRecoveryState(
-            currentPhase: legacyUiState.phase,
-            participantHint: participantHint ?? legacyUiState.participantCount,
+            currentPhase: internalPhase,
+            participantHint: participantHint ?? participantCount,
             preferInCall: preferInCall
         ) else { return }
 
         clearJoinTimeout()
-        updateLegacyUiState {
-            $0.phase = recovered.phase
-            $0.participantCount = recovered.participantCount
-        }
+        internalPhase = recovered.phase
+        participantCount = recovered.participantCount
+        commitSnapshot()
         updateConnectionStatusFromSignals()
     }
 
@@ -1716,9 +1709,9 @@ public final class SerenadaSession: ObservableObject {
         connectionStatusRetryingTask = nil
     }
 
-    private func setConnectionStatus(_ status: ConnectionStatus) {
-        guard legacyUiState.connectionStatus != status else { return }
-        updateLegacyUiState { $0.connectionStatus = status }
+    private func setConnectionStatus(_ status: SerenadaConnectionStatus) {
+        guard state.connectionStatus != status else { return }
+        commitSnapshot { s, _ in s.connectionStatus = status }
     }
 
     private func resetConnectionStatusMachine() {
@@ -1733,23 +1726,23 @@ public final class SerenadaSession: ObservableObject {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: self.connectionStatusRetryingDelayNs)
             guard !Task.isCancelled else { return }
-            guard self.legacyUiState.phase == .inCall else {
+            guard self.internalPhase == .inCall else {
                 self.resetConnectionStatusMachine()
                 return
             }
-            guard self.legacyUiState.connectionStatus == .recovering else { return }
+            guard self.state.connectionStatus == .recovering else { return }
             self.connectionStatusRetryingTask = nil
             self.setConnectionStatus(.retrying)
         }
     }
 
     private func markConnectionDegraded() {
-        guard legacyUiState.phase == .inCall else {
+        guard internalPhase == .inCall else {
             resetConnectionStatusMachine()
             return
         }
 
-        switch legacyUiState.connectionStatus {
+        switch state.connectionStatus {
         case .connected:
             setConnectionStatus(.recovering)
             scheduleConnectionStatusRetryingTimer()
@@ -1761,12 +1754,12 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func updateConnectionStatusFromSignals() {
-        guard legacyUiState.phase == .inCall else {
+        guard internalPhase == .inCall else {
             resetConnectionStatusMachine()
             return
         }
 
-        if isConnectionDegraded(legacyUiState) {
+        if isConnectionDegraded() {
             markConnectionDegraded()
             return
         }
@@ -1774,73 +1767,35 @@ public final class SerenadaSession: ObservableObject {
         resetConnectionStatusMachine()
     }
 
-    private func isConnectionDegraded(_ state: CallUiState) -> Bool {
-        !state.isSignalingConnected ||
-        state.iceConnectionState == "DISCONNECTED" ||
-        state.iceConnectionState == "FAILED" ||
-        state.connectionState == "DISCONNECTED" ||
-        state.connectionState == "FAILED"
+    private func isConnectionDegraded() -> Bool {
+        !diagnostics.isSignalingConnected ||
+        diagnostics.iceConnectionState == .disconnected ||
+        diagnostics.iceConnectionState == .failed ||
+        diagnostics.peerConnectionState == .disconnected ||
+        diagnostics.peerConnectionState == .failed
     }
 
-    private func updateLegacyUiState(_ mutate: (inout CallUiState) -> Void) {
-        var next = legacyUiState
-        mutate(&next)
-        legacyUiState = next
-        syncPublishedSnapshot()
-        syncIdleTimerPolicy(for: next.phase)
-    }
+    // MARK: - Snapshot Management
 
-    private func syncPublishedSnapshot() {
-        var nextState = CallState()
-        if currentRequiredPermissions != nil {
-            nextState.phase = .awaitingPermissions
-        } else {
-            nextState.phase = mapPhase(legacyUiState.phase)
-        }
+    private func commitSnapshot(
+        _ mutate: (_ state: inout CallState, _ diagnostics: inout CallDiagnostics) -> Void = { _, _ in }
+    ) {
+        var nextState = state
+        var nextDiag = diagnostics
+        mutate(&nextState, &nextDiag)
+
+        nextState.phase = currentRequiredPermissions != nil ? .awaitingPermissions : mapPhase(internalPhase)
         nextState.roomId = roomId
         nextState.roomUrl = roomUrl
-        nextState.localParticipant = LocalParticipant(
-            cid: legacyUiState.localCid,
-            audioEnabled: legacyUiState.localAudioEnabled,
-            videoEnabled: legacyUiState.localVideoEnabled,
-            cameraMode: legacyUiState.localCameraMode,
-            isHost: legacyUiState.isHost
-        )
-        nextState.remoteParticipants = legacyUiState.remoteParticipants.map {
-            SerenadaRemoteParticipant(
-                cid: $0.cid,
-                audioEnabled: true,
-                videoEnabled: $0.videoEnabled,
-                connectionState: $0.connectionState
-            )
-        }
-        nextState.connectionStatus = mapConnectionStatus(legacyUiState.connectionStatus)
-        nextState.requiredPermissions = currentRequiredPermissions
         nextState.error = currentError
-        if nextState != state {
-            state = nextState
-        }
+        nextState.requiredPermissions = currentRequiredPermissions
+        nextDiag.callStats = CallStats(from: nextDiag.realtimeStats)
 
-        var nextDiagnostics = diagnostics
-        nextDiagnostics.isSignalingConnected = legacyUiState.isSignalingConnected
-        nextDiagnostics.iceConnectionState = IceConnectionState(rawValueOrUnknown: legacyUiState.iceConnectionState)
-        nextDiagnostics.peerConnectionState = PeerConnectionState(rawValueOrUnknown: legacyUiState.connectionState)
-        nextDiagnostics.rtcSignalingState = SignalingState(rawValueOrUnknown: legacyUiState.signalingState)
-        nextDiagnostics.activeTransport = legacyUiState.activeTransport
-        nextDiagnostics.realtimeStats = legacyUiState.realtimeStats
-        nextDiagnostics.callStats = CallStats(from: legacyUiState.realtimeStats)
-        nextDiagnostics.isFrontCamera = legacyUiState.isFrontCamera
-        nextDiagnostics.isScreenSharing = legacyUiState.isScreenSharing
-        nextDiagnostics.cameraZoomFactor = legacyUiState.cameraZoomFactor
-        nextDiagnostics.isFlashAvailable = legacyUiState.isFlashAvailable
-        nextDiagnostics.isFlashEnabled = legacyUiState.isFlashEnabled
-        nextDiagnostics.remoteContentParticipantId = legacyUiState.remoteContentCid
-        nextDiagnostics.remoteContentType = legacyUiState.remoteContentType
-        if nextDiagnostics != diagnostics {
-            diagnostics = nextDiagnostics
-        }
+        if nextState != state { state = nextState }
+        if nextDiag != diagnostics { diagnostics = nextDiag }
 
-        delegateProvider?()?.sessionDidChangeState(self, state: nextState)
+        syncIdleTimerPolicy(for: internalPhase)
+        delegateProvider?()?.sessionDidChangeState(self, state: state)
     }
 
     private func setFeatureDegradation(_ degradation: FeatureDegradationState) {
@@ -1866,14 +1821,6 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    private func mapConnectionStatus(_ status: ConnectionStatus) -> SerenadaConnectionStatus {
-        switch status {
-        case .connected: return .connected
-        case .recovering: return .recovering
-        case .retrying: return .retrying
-        }
-    }
-
     private func syncIdleTimerPolicy(for phase: CallPhase) {
         switch phase {
         case .creatingRoom, .joining, .waiting, .inCall:
@@ -1887,9 +1834,9 @@ public final class SerenadaSession: ObservableObject {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             Task { @MainActor in
-                guard self.legacyUiState.phase == .inCall else { return }
+                guard self.internalPhase == .inCall else { return }
 
-                if self.isConnectionDegraded(self.legacyUiState) {
+                if self.isConnectionDegraded() {
                     self.markConnectionDegraded()
                 }
 
@@ -1905,9 +1852,9 @@ public final class SerenadaSession: ObservableObject {
 extension SerenadaSession: SignalingClientListener {
     func onOpen(activeTransport: String) {
         reconnectAttempts = 0
-        updateLegacyUiState {
-            $0.isSignalingConnected = true
-            $0.activeTransport = activeTransport
+        commitSnapshot { _, d in
+            d.isSignalingConnected = true
+            d.activeTransport = activeTransport
         }
         updateConnectionStatusFromSignals()
 
@@ -1916,7 +1863,7 @@ extension SerenadaSession: SignalingClientListener {
             sendJoin(roomId: join)
         }
 
-        if legacyUiState.phase == .inCall {
+        if internalPhase == .inCall {
             triggerIceRestart(reason: "signaling-reconnect")
         }
     }
@@ -1927,9 +1874,9 @@ extension SerenadaSession: SignalingClientListener {
 
     func onClosed(reason: String) {
         _ = reason
-        updateLegacyUiState {
-            $0.isSignalingConnected = false
-            $0.activeTransport = nil
+        commitSnapshot { _, d in
+            d.isSignalingConnected = false
+            d.activeTransport = nil
         }
         updateConnectionStatusFromSignals()
 

@@ -685,7 +685,7 @@ class SerenadaSession internal constructor(
                         when (connState) {
                             PeerConnection.PeerConnectionState.CONNECTED -> {
                                 clearIceRestartTimer(cid)
-                                peerSlots[cid]?.pendingIceRestart = false
+                                peerSlots[cid]?.clearPendingIceRestart()
                             }
                             PeerConnection.PeerConnectionState.DISCONNECTED ->
                                 scheduleIceRestart(cid, "conn-disconnected", 2000)
@@ -704,7 +704,7 @@ class SerenadaSession internal constructor(
                             PeerConnection.IceConnectionState.CONNECTED,
                             PeerConnection.IceConnectionState.COMPLETED -> {
                                 clearIceRestartTimer(cid)
-                                peerSlots[cid]?.pendingIceRestart = false
+                                peerSlots[cid]?.clearPendingIceRestart()
                             }
                             PeerConnection.IceConnectionState.DISCONNECTED ->
                                 scheduleIceRestart(cid, "ice-disconnected", 2000)
@@ -722,7 +722,7 @@ class SerenadaSession internal constructor(
                         if (sigState == PeerConnection.SignalingState.STABLE) {
                             clearOfferTimeout(cid)
                             if (peerSlots[cid]?.pendingIceRestart == true) {
-                                peerSlots[cid]?.pendingIceRestart = false
+                                peerSlots[cid]?.clearPendingIceRestart()
                                 triggerIceRestart(cid, "pending-retry")
                             }
                         }
@@ -771,7 +771,7 @@ class SerenadaSession internal constructor(
                 val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
                 slot.setRemoteDescription(SessionDescription.Type.ANSWER, sdp) {
                     clearOfferTimeout(fromCid)
-                    slot.pendingIceRestart = false
+                    slot.clearPendingIceRestart()
                     updateAggregatePeerState()
                     updateConnectionStatusFromSignals()
                 }
@@ -869,11 +869,11 @@ class SerenadaSession internal constructor(
     }
 
     private fun maybeSendOffer(slot: PeerConnectionSlot, force: Boolean = false, iceRestart: Boolean = false) {
-        if (slot.isMakingOffer) { if (iceRestart) slot.pendingIceRestart = true; return }
+        if (slot.isMakingOffer) { if (iceRestart) slot.markPendingIceRestart(); return }
         if (!force && slot.sentOffer) return
         if (!canOffer(slot)) return
-        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) { if (iceRestart) slot.pendingIceRestart = true; return }
-        slot.isMakingOffer = true
+        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) { if (iceRestart) slot.markPendingIceRestart(); return }
+        slot.beginOffer()
         val started = slot.createOffer(
             iceRestart = iceRestart,
             onSdp = { sdp ->
@@ -883,13 +883,13 @@ class SerenadaSession internal constructor(
             },
             onComplete = { success ->
                 handler.post {
-                    slot.isMakingOffer = false
+                    slot.completeOffer()
                     if (!success && iceRestart) scheduleIceRestart(slot.remoteCid, "offer-failed", 500)
                 }
             }
         )
-        if (!started) { slot.isMakingOffer = false; if (iceRestart) slot.pendingIceRestart = true; return }
-        if (!force) slot.sentOffer = true
+        if (!started) { slot.completeOffer(); if (iceRestart) slot.markPendingIceRestart(); return }
+        if (!force) slot.markOfferSent()
     }
 
     private fun canOffer(slot: PeerConnectionSlot): Boolean {
@@ -906,9 +906,9 @@ class SerenadaSession internal constructor(
         val slot = peerSlots[remoteCid] ?: return
         clearOfferTimeout(remoteCid)
         val runnable = Runnable {
-            slot.offerTimeoutTask = null
+            slot.cancelOfferTimeout()
             if (slot.getSignalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
-                slot.pendingIceRestart = true
+                slot.markPendingIceRestart()
                 slot.rollbackLocalDescription {
                     handler.post {
                         if (shouldIOffer(remoteCid)) scheduleIceRestart(remoteCid, "offer-timeout", 0)
@@ -920,16 +920,15 @@ class SerenadaSession internal constructor(
                 else maybeScheduleNonHostOfferFallback(remoteCid, "offer-timeout-stale")
             }
         }
-        slot.offerTimeoutTask = runnable
+        slot.setOfferTimeoutTask(runnable)
         handler.postDelayed(runnable, WebRtcResilienceConstants.OFFER_TIMEOUT_MS)
     }
 
     private fun clearOfferTimeout(remoteCid: String? = null) {
         if (remoteCid != null) {
-            peerSlots[remoteCid]?.offerTimeoutTask?.let { handler.removeCallbacks(it) }
-            peerSlots[remoteCid]?.offerTimeoutTask = null
+            peerSlots[remoteCid]?.let { slot -> slot.offerTimeoutTask?.let { handler.removeCallbacks(it) }; slot.cancelOfferTimeout() }
         } else {
-            peerSlots.values.forEach { it.offerTimeoutTask?.let { r -> handler.removeCallbacks(r) }; it.offerTimeoutTask = null }
+            peerSlots.values.forEach { slot -> slot.offerTimeoutTask?.let { r -> handler.removeCallbacks(r) }; slot.cancelOfferTimeout() }
         }
     }
 
@@ -939,29 +938,28 @@ class SerenadaSession internal constructor(
 
     private fun scheduleIceRestart(remoteCid: String, reason: String, delayMs: Long) {
         val slot = peerSlots[remoteCid] ?: return
-        if (!canOffer(slot)) { slot.pendingIceRestart = true; return }
+        if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
         if (slot.iceRestartTask != null) return
         if (System.currentTimeMillis() - slot.lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
-        val runnable = Runnable { slot.iceRestartTask = null; triggerIceRestart(remoteCid, reason) }
-        slot.iceRestartTask = runnable
+        val runnable = Runnable { slot.cancelIceRestartTask(); triggerIceRestart(remoteCid, reason) }
+        slot.setIceRestartTask(runnable)
         handler.postDelayed(runnable, delayMs)
     }
 
     private fun clearIceRestartTimer(remoteCid: String? = null) {
         if (remoteCid != null) {
-            peerSlots[remoteCid]?.iceRestartTask?.let { handler.removeCallbacks(it) }; peerSlots[remoteCid]?.iceRestartTask = null
+            peerSlots[remoteCid]?.let { slot -> slot.iceRestartTask?.let { handler.removeCallbacks(it) }; slot.cancelIceRestartTask() }
         } else {
-            peerSlots.values.forEach { it.iceRestartTask?.let { r -> handler.removeCallbacks(r) }; it.iceRestartTask = null }
+            peerSlots.values.forEach { slot -> slot.iceRestartTask?.let { r -> handler.removeCallbacks(r) }; slot.cancelIceRestartTask() }
         }
     }
 
     private fun triggerIceRestart(remoteCid: String, reason: String) {
         val slot = peerSlots[remoteCid] ?: return
-        if (!canOffer(slot)) { slot.pendingIceRestart = true; return }
-        if (slot.isMakingOffer) { slot.pendingIceRestart = true; return }
+        if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
+        if (slot.isMakingOffer) { slot.markPendingIceRestart(); return }
         Log.w(TAG, "ICE restart triggered for $remoteCid ($reason)")
-        slot.lastIceRestartAt = System.currentTimeMillis()
-        slot.pendingIceRestart = false
+        slot.recordIceRestart()
         maybeSendOffer(slot, force = true, iceRestart = true)
     }
 
@@ -972,20 +970,20 @@ class SerenadaSession internal constructor(
         if (slot.nonHostFallbackTask != null) return
         if (slot.nonHostFallbackAttempts >= WebRtcResilienceConstants.NON_HOST_FALLBACK_MAX_ATTEMPTS) return
         val runnable = Runnable {
-            slot.nonHostFallbackTask = null
-            slot.nonHostFallbackAttempts++
+            slot.clearNonHostFallbackTask()
+            slot.incrementNonHostFallbackAttempts()
             Log.w(TAG, "Non-host offer fallback for $remoteCid ($reason)")
             maybeSendNonHostFallbackOffer(remoteCid)
         }
-        slot.nonHostFallbackTask = runnable
+        slot.setNonHostFallbackTask(runnable)
         handler.postDelayed(runnable, WebRtcResilienceConstants.NON_HOST_FALLBACK_DELAY_MS)
     }
 
     private fun clearNonHostOfferFallback(remoteCid: String? = null) {
         if (remoteCid != null) {
-            peerSlots[remoteCid]?.nonHostFallbackTask?.let { handler.removeCallbacks(it) }; peerSlots[remoteCid]?.nonHostFallbackTask = null
+            peerSlots[remoteCid]?.let { slot -> slot.nonHostFallbackTask?.let { handler.removeCallbacks(it) }; slot.cancelNonHostFallbackTask() }
         } else {
-            peerSlots.values.forEach { it.nonHostFallbackTask?.let { r -> handler.removeCallbacks(r) }; it.nonHostFallbackTask = null }
+            peerSlots.values.forEach { slot -> slot.nonHostFallbackTask?.let { r -> handler.removeCallbacks(r) }; slot.cancelNonHostFallbackTask() }
         }
     }
 
@@ -997,17 +995,17 @@ class SerenadaSession internal constructor(
         if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) return
         if (slot.hasRemoteDescription()) return
         if (slot.isMakingOffer) return
-        slot.isMakingOffer = true
+        slot.beginOffer()
         val started = slot.createOffer(
             onSdp = { sdp ->
                 sendMessage("offer", JSONObject().apply { put("sdp", sdp) }, to = remoteCid)
                 scheduleOfferTimeout(remoteCid)
             },
             onComplete = { success ->
-                handler.post { slot.isMakingOffer = false; if (!success) maybeScheduleNonHostOfferFallback(remoteCid, "offer-failed") }
+                handler.post { slot.completeOffer(); if (!success) maybeScheduleNonHostOfferFallback(remoteCid, "offer-failed") }
             }
         )
-        if (!started) { slot.isMakingOffer = false; maybeScheduleNonHostOfferFallback(remoteCid, "offer-not-started") }
+        if (!started) { slot.completeOffer(); maybeScheduleNonHostOfferFallback(remoteCid, "offer-not-started") }
     }
 
     private fun scheduleJoinTimeout(roomId: String, joinAttemptId: Long) {

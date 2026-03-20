@@ -7,14 +7,70 @@ import WebRTC
 public final class PeerConnectionSlot {
     public let remoteCid: String
 
-    public var sentOffer = false
-    public var isMakingOffer = false
-    public var pendingIceRestart = false
-    public var lastIceRestartAt: TimeInterval = 0
-    public var offerTimeoutTask: Task<Void, Never>?
-    public var iceRestartTask: Task<Void, Never>?
-    public var nonHostFallbackTask: Task<Void, Never>?
-    public var nonHostFallbackAttempts = 0
+    public private(set) var sentOffer = false
+    public private(set) var isMakingOffer = false
+    public private(set) var pendingIceRestart = false
+    public private(set) var lastIceRestartAt: TimeInterval = 0
+    public private(set) var offerTimeoutTask: Task<Void, Never>?
+    public private(set) var iceRestartTask: Task<Void, Never>?
+    public private(set) var nonHostFallbackTask: Task<Void, Never>?
+    public private(set) var nonHostFallbackAttempts = 0
+
+    // MARK: - Offer Lifecycle
+
+    public func beginOffer() { isMakingOffer = true }
+    public func completeOffer() { isMakingOffer = false }
+    public func markOfferSent() { sentOffer = true }
+
+    // MARK: - ICE Restart Lifecycle
+
+    public func markPendingIceRestart() { pendingIceRestart = true }
+    public func clearPendingIceRestart() { pendingIceRestart = false }
+
+    public func recordIceRestart() {
+        lastIceRestartAt = Date().timeIntervalSince1970 * 1000
+        pendingIceRestart = false
+    }
+
+    // MARK: - Task Management
+
+    public func setOfferTimeoutTask(_ task: Task<Void, Never>) {
+        offerTimeoutTask?.cancel()
+        offerTimeoutTask = task
+    }
+
+    public func cancelOfferTimeout() {
+        offerTimeoutTask?.cancel()
+        offerTimeoutTask = nil
+    }
+
+    public func setIceRestartTask(_ task: Task<Void, Never>) {
+        iceRestartTask?.cancel()
+        iceRestartTask = task
+    }
+
+    public func cancelIceRestartTask() {
+        iceRestartTask?.cancel()
+        iceRestartTask = nil
+    }
+
+    public func setNonHostFallbackTask(_ task: Task<Void, Never>) {
+        nonHostFallbackTask?.cancel()
+        nonHostFallbackTask = task
+    }
+
+    public func cancelNonHostFallbackTask() {
+        nonHostFallbackTask?.cancel()
+        nonHostFallbackTask = nil
+    }
+
+    public func clearNonHostFallbackTask() {
+        nonHostFallbackTask = nil
+    }
+
+    public func incrementNonHostFallbackAttempts() {
+        nonHostFallbackAttempts += 1
+    }
 
 #if canImport(WebRTC)
     private struct RealtimeStatsSample {
@@ -239,12 +295,9 @@ public final class PeerConnectionSlot {
     }
 
     public func closePeerConnection() {
-        offerTimeoutTask?.cancel()
-        offerTimeoutTask = nil
-        iceRestartTask?.cancel()
-        iceRestartTask = nil
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = nil
+        cancelOfferTimeout()
+        cancelIceRestartTask()
+        cancelNonHostFallbackTask()
 
 #if canImport(WebRTC)
         detachRemoteTrackFromRegisteredRenderers()

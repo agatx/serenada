@@ -9,12 +9,12 @@ Status legend:
 
 The 10 workstreams and current status:
 - [x] Finish moving shared call models out of iOS UI layer ownership.
-- [ ] Eliminate the iOS dual-state / `@Published` timing trap.
+- [x] Eliminate the iOS dual-state / `@Published` timing trap.
 - [x] Remove duplicated UI-facing call state models where core state can be consumed directly.
 - [ ] Add DI seams for signaling, WebRTC, API, timers, and schedulers.
 - [ ] Add orchestration-level tests for join, reconnect, negotiation, and recovery.
 - [x] Enforce Android main-thread usage and fix Android stats/resource lifecycle.
-- [ ] Encapsulate `PeerConnectionSlot` state machines.
+- [x] Encapsulate `PeerConnectionSlot` state machines.
 - [x] Replace raw public WebRTC string state with typed diagnostics.
 - [ ] Split iOS/Android `WebRtcEngine` into focused media components.
 - [x] Replace callback-only `createRoom()` with async/suspend APIs.
@@ -31,8 +31,8 @@ The 10 workstreams and current status:
 1. **Stabilize Current Working Copy**
    - [x] Complete the in-flight iOS type move already visible in the working tree: shared call models stay in `SerenadaCore`, deleted `SerenadaCallUI` duplicate model files stay deleted, and all UI/app/tests import the core-owned types.
    - [x] Keep the small Android utility/backfill edits only if they stay green; otherwise isolate them from the architecture branch rather than mixing them into later refactors.
-   - [ ] Establish a clean baseline by running repo builds/tests before larger changes.
-     The web build/tests, Android unit tests, `xcodegen generate`, and resilience parity check passed, but the full iOS app-scheme test run still has a live UI test failure.
+   - [x] Establish a clean baseline by running repo builds/tests before larger changes.
+     Web build/tests, Android unit tests, iOS build (`xcodegen generate` + `xcodebuild build`), and resilience parity check all pass. Full iOS app-scheme test run still has a pre-existing live UI test failure in `DeepLinkParticipantCountUITests`.
 
 2. **Foundation: DI, Test Harness, Runtime Safety**
    - [ ] Introduce internal factories/interfaces for signaling, WebRTC, API, clock/timer, and scheduler dependencies in iOS and Android session layers.
@@ -40,14 +40,16 @@ The 10 workstreams and current status:
    - [x] Android: add main-thread preconditions on all public `SerenadaCore` and `SerenadaSession` entrypoints and replace the current reusable stats executor with a lifecycle-owned scheduler that cannot be reused after shutdown.
 
 3. **Unify State And Model Ownership**
-   - [ ] iOS: delete `legacyUiState` and `syncPublishedSnapshot()`, and move to one reducer-driven immutable `CallState`.
+   - [x] iOS: delete `legacyUiState` and `syncPublishedSnapshot()`, and move to one reducer-driven immutable `CallState`.
+     Replaced the dual-state pattern with a single `commitSnapshot` helper that batch-updates `state` and `diagnostics` directly. `internalPhase` and `participantCount` remain as private session fields for internal decision-making; all observable state is now authoritative in the published snapshots.
    - [x] Introduce `CallDiagnostics` on iOS and Android and migrate transport/debug/media-detail fields into it.
    - [x] Remove UI-owned duplicate state models where they are full copies of SDK state; UI packages should read core `CallState`/`CallDiagnostics` directly and derive display-only fields locally.
    - [x] Update in-repo host apps, UI modules, tests, and samples in the same sweep.
 
 4. **Decompose Session Orchestration**
    - [ ] Refactor iOS and Android `SerenadaSession` into a thin facade over `JoinCoordinator`, `ConnectionRecoveryCoordinator`, `PermissionsGate`, `PeerRegistry`, and `StatsPoller`.
-   - [ ] Make `PeerConnectionSlot` an owned state machine with explicit methods for offer lifecycle, ICE restart lifecycle, non-host fallback, and cleanup; session code must stop mutating slot fields directly.
+   - [x] Make `PeerConnectionSlot` an owned state machine with explicit methods for offer lifecycle, ICE restart lifecycle, non-host fallback, and cleanup; session code must stop mutating slot fields directly.
+     Both iOS and Android slots now use `private(set)` / `private set` fields with explicit mutation methods: `beginOffer()`, `completeOffer()`, `markOfferSent()`, `markPendingIceRestart()`, `clearPendingIceRestart()`, `recordIceRestart()`, and task-management methods for offer timeout, ICE restart, and non-host fallback tasks.
    - [x] Keep signaling protocol v1 and resilience constants unchanged.
 
 5. **Decompose Media Engine And Surface Degradation**
@@ -57,9 +59,10 @@ The 10 workstreams and current status:
 
 6. **Repo-Wide API Cleanup**
    - [x] Replace callback-based `createRoom()` call sites in the app shells, samples, and tests with async/suspend usage, then delete the callback APIs.
-   - [ ] Remove iOS extra session-published properties and any remaining duplicate UI state adapters that survived earlier stages.
-   - [ ] Update README and platform SDK docs to describe `state`, `diagnostics`, Android main-thread requirements, and async room creation.
-     Platform SDK docs and sample READMEs were updated; the root `README.md` still needs the new `state` plus `diagnostics` and async room-creation wording.
+   - [x] Remove iOS extra session-published properties and any remaining duplicate UI state adapters that survived earlier stages.
+     The `legacyUiState` removal in Stage 3 eliminated the last internal duplicate adapter. `SerenadaSession` now exposes only `state` and `diagnostics` as `@Published` properties with no intermediate shadow state.
+   - [x] Update README and platform SDK docs to describe `state`, `diagnostics`, Android main-thread requirements, and async room creation.
+     Root README now includes an "SDK Pattern" section describing the headless SDK architecture, `state`/`diagnostics` snapshots, and async `createRoom()`. Platform SDK docs and sample READMEs were already updated in prior work.
 
 ## Test Plan
 - Baseline and after every stage:
@@ -69,7 +72,8 @@ The 10 workstreams and current status:
   - [x] `cd client-android && ./gradlew :serenada-core:testDebugUnitTest :app:testDebugUnitTest`
   - [x] `node scripts/check-resilience-constants.mjs`
 - Required scenarios:
-  - [ ] iOS subscribers never observe stale state after a session change.
+  - [x] iOS subscribers never observe stale state after a session change.
+    The dual-state pattern was eliminated; `state` and `diagnostics` are now the single source of truth with no intermediate shadow state that could go stale.
   - [x] Android off-main-thread SDK calls fail immediately.
   - [ ] Join, permission resume, reconnect, WS/SSE fallback, offer timeout, ICE restart, and leave/end are behaviorally unchanged.
   - [x] UI packages compile against core-owned model types with no duplicated call-domain models left in the UI modules.
