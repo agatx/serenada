@@ -79,12 +79,12 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.serenada.android.R
-import app.serenada.android.call.RoomStatus
 import app.serenada.android.call.RoomStatusIndicatorState
 import app.serenada.android.call.RoomStatuses
 import app.serenada.android.data.RecentCall
 import app.serenada.android.data.SavedRoom
 import app.serenada.android.data.SettingsStore
+import app.serenada.core.RoomOccupancy
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -103,7 +103,7 @@ fun JoinScreen(
     recentCalls: List<RecentCall>,
     savedRooms: List<SavedRoom>,
     areSavedRoomsShownFirst: Boolean,
-    roomStatuses: Map<String, RoomStatus>,
+    roomStatuses: Map<String, RoomOccupancy>,
     serverHost: String,
     onOpenJoinWithCode: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -421,7 +421,7 @@ fun JoinScreen(
 @Composable
 private fun RecentCallsSection(
     calls: List<RecentCall>,
-    roomStatuses: Map<String, RoomStatus>,
+    roomStatuses: Map<String, RoomOccupancy>,
     serverHost: String,
     savedRoomNameById: Map<String, String>,
     removingRoomIds: Set<String>,
@@ -491,7 +491,7 @@ private fun RecentCallsSection(
 @Composable
 private fun SavedRoomsSection(
     rooms: List<SavedRoom>,
-    roomStatuses: Map<String, RoomStatus>,
+    roomStatuses: Map<String, RoomOccupancy>,
     serverHost: String,
     removingRoomIds: Set<String>,
     isBusy: Boolean,
@@ -578,7 +578,7 @@ private fun SavedRoomsSection(
 @Composable
 private fun RecentCallRow(
     call: RecentCall,
-    status: RoomStatus?,
+    status: RoomOccupancy?,
     enabled: Boolean,
     atText: String,
     savedRoomName: String?,
@@ -703,7 +703,7 @@ private fun SavedRoomRow(
     room: SavedRoom,
     detailsText: String,
     hostLabel: String?,
-    status: RoomStatus?,
+    status: RoomOccupancy?,
     enabled: Boolean,
     onClick: () -> Unit,
     onRename: () -> Unit,
@@ -953,7 +953,7 @@ private fun CreateRoomDialog(
 }
 
 @Composable
-private fun StatusDot(status: RoomStatus?) {
+private fun StatusDot(status: RoomOccupancy?) {
     val color =
         when (RoomStatuses.indicatorState(status)) {
             RoomStatusIndicatorState.Hidden -> return

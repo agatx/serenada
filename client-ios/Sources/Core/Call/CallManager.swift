@@ -490,7 +490,6 @@ final class CallManager: ObservableObject {
         let roomId = session.roomId
         let host = session.serverHost
         let endpoint = pushSubscriptionManager.cachedEndpoint()
-
         joinSnapshotFeature.prepareSnapshotId(
             host: host,
             roomId: roomId,
@@ -501,7 +500,7 @@ final class CallManager: ObservableObject {
                 guard let self, let session else { return false }
                 guard self.activeSession === session else { return false }
                 let phase = session.state.phase
-                return phase == .waiting || phase == .inCall
+                return phase != .idle && phase != .ending && phase != .error
             },
             onReady: { [weak self] snapshotId in
                 guard let self else { return }

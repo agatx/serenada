@@ -175,6 +175,30 @@ report.turn         // Reachable(latencyMs) | Unreachable(reason)
 
 Diagnostics never trigger permission prompts — if a permission is missing, the check returns `NotAuthorized`.
 
+## Room Watching
+
+Monitor occupancy of saved/recent rooms without joining:
+
+```kotlin
+class RoomsViewModel : RoomWatcherDelegate {
+    private val watcher = RoomWatcher()
+
+    init {
+        watcher.delegate = this
+        watcher.watchRooms(roomIds = listOf("room1", "room2"), host = "serenada.app")
+    }
+
+    override fun roomWatcher(
+        watcher: RoomWatcher,
+        didUpdateStatuses: Map<String, RoomOccupancy>
+    ) {
+        // didUpdateStatuses["room1"]?.count, ?.maxParticipants
+    }
+}
+
+// watcher.currentStatuses -> Map<String, RoomOccupancy>
+```
+
 ## Foreground Service
 
 Wire your foreground service to session state:

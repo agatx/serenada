@@ -20,13 +20,14 @@ import app.serenada.android.network.HostApiClient
 import app.serenada.android.push.PushSubscriptionManager
 import app.serenada.android.service.CallService
 import app.serenada.core.CallState
+import app.serenada.core.RoomOccupancy
+import app.serenada.core.RoomWatcher
+import app.serenada.core.RoomWatcherDelegate
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaCore
 import app.serenada.core.SerenadaSession
 import app.serenada.core.SerenadaTransport
 import app.serenada.core.call.CallPhase
-import app.serenada.core.call.SignalingClient
-import app.serenada.core.call.SignalingMessage
 import app.serenada.core.network.CoreApiClient
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
@@ -36,10 +37,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
-import org.json.JSONArray
-import org.json.JSONObject
 
-class CallManager(context: Context) {
+class CallManager(context: Context) : RoomWatcherDelegate {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -82,8 +81,8 @@ class CallManager(context: Context) {
         mutableStateOf(settingsStore.areRoomInviteNotificationsEnabled)
     val areRoomInviteNotificationsEnabled: State<Boolean> = _areRoomInviteNotificationsEnabled
 
-    private val _roomStatuses = mutableStateOf<Map<String, RoomStatus>>(emptyMap())
-    val roomStatuses: State<Map<String, RoomStatus>> = _roomStatuses
+    private val _roomStatuses = mutableStateOf<Map<String, RoomOccupancy>>(emptyMap())
+    val roomStatuses: State<Map<String, RoomOccupancy>> = _roomStatuses
 
     private val _session = mutableStateOf<SerenadaSession?>(null)
     val sessionState: State<SerenadaSession?> = _session
@@ -102,10 +101,7 @@ class CallManager(context: Context) {
     private var currentRoomId: String? = null
     private var activeCallHostOverride: String? = null
     private var callStartTimeMs: Long? = null
-    private var watchedRoomIds: List<String> = emptyList()
     private var hasNotifiedPushForJoin = false
-    private var reconnectAttempts = 0
-    private var reconnectRunnable: Runnable? = null
 
     private val pushSubscriptionManager = PushSubscriptionManager(
         context = appContext,
@@ -119,30 +115,13 @@ class CallManager(context: Context) {
             activeSession?.captureLocalSnapshot(onResult) ?: onResult(null)
         },
     )
-
-    private val signalingClient = SignalingClient(
-        okHttpClient,
-        handler,
-        object : SignalingClient.Listener {
-            override fun onOpen(activeTransport: String) {
-                reconnectAttempts = 0
-                clearReconnect()
-                sendWatchRoomsIfNeeded()
-            }
-
-            override fun onMessage(message: SignalingMessage) {
-                handleWatchMessage(message)
-            }
-
-            override fun onClosed(reason: String) {
-                if (shouldReconnectSignaling()) {
-                    scheduleReconnect()
-                }
-            }
-        },
+    private val roomWatcher = RoomWatcher(
+        okHttpClient = okHttpClient,
+        handler = handler,
     )
 
     init {
+        roomWatcher.delegate = this
         refreshRecentCalls()
         refreshSavedRooms()
     }
@@ -173,7 +152,6 @@ class CallManager(context: Context) {
         currentRoomId = session.roomId
         callStartTimeMs = System.currentTimeMillis()
         hasNotifiedPushForJoin = false
-        clearReconnect()
         watchRecentRoomsIfNeeded()
 
         activeSessionStateJob =
@@ -318,23 +296,13 @@ class CallManager(context: Context) {
         activeSessionStatsJob = null
     }
 
-    private fun shouldReconnectSignaling(): Boolean {
-        return watchedRoomIds.isNotEmpty() && activeSession == null
-    }
-
-    private fun clearReconnect() {
-        reconnectRunnable?.let { handler.removeCallbacks(it) }
-        reconnectRunnable = null
-    }
-
     fun updateServerHost(host: String) {
         val trimmed = host.trim().ifBlank { SettingsStore.DEFAULT_HOST }
         val changed = trimmed != _serverHost.value
         settingsStore.host = trimmed
         _serverHost.value = trimmed
-        if (changed && activeSession == null) {
-            signalingClient.close()
-            clearReconnect()
+        if (changed) {
+            roomWatcher.stop()
             syncSavedRoomPushSubscriptions(_savedRooms.value)
             refreshWatchedRooms()
         }
@@ -752,72 +720,8 @@ class CallManager(context: Context) {
         )
     }
 
-    private fun sendWatchRoomsIfNeeded() {
-        if (watchedRoomIds.isEmpty()) return
-        if (!signalingClient.isConnected()) return
-        val payload = JSONObject().apply {
-            put("rids", JSONArray(watchedRoomIds))
-        }
-        signalingClient.send(
-            SignalingMessage(
-                type = "watch_rooms",
-                rid = null,
-                sid = null,
-                cid = null,
-                to = null,
-                payload = payload,
-            ),
-        )
-    }
-
-    private fun handleWatchMessage(message: SignalingMessage) {
-        when (message.type) {
-            "room_statuses" -> handleRoomStatuses(message)
-            "room_status_update" -> handleRoomStatusUpdate(message)
-            "pong" -> signalingClient.recordPong()
-        }
-    }
-
-    private fun handleRoomStatuses(message: SignalingMessage) {
-        val payload = message.payload ?: return
-        val watched = watchedRoomIds.toSet()
-        if (watched.isEmpty()) {
-            _roomStatuses.value = emptyMap()
-            return
-        }
-
-        _roomStatuses.value = RoomStatuses
-            .mergeStatusesPayload(previous = _roomStatuses.value, payload = payload)
-            .filterKeys { watched.contains(it) }
-    }
-
-    private fun handleRoomStatusUpdate(message: SignalingMessage) {
-        val payload = message.payload ?: return
-        val rid = payload.optString("rid").orEmpty()
-        if (!watchedRoomIds.contains(rid)) return
-        _roomStatuses.value =
-            RoomStatuses.mergeStatusUpdatePayload(previous = _roomStatuses.value, payload = payload)
-    }
-
     private fun updateState(state: CallUiState) {
         _uiState.value = state
-    }
-
-    private fun scheduleReconnect() {
-        if (!shouldReconnectSignaling()) return
-        if (reconnectRunnable != null) return
-        reconnectAttempts += 1
-        val backoff =
-            (500L * (1L shl minOf(reconnectAttempts - 1, 13))).coerceAtMost(5_000L)
-        val runnable = Runnable {
-            reconnectRunnable = null
-            if (!shouldReconnectSignaling()) return@Runnable
-            if (!signalingClient.isConnected()) {
-                signalingClient.connect(serverHost.value)
-            }
-        }
-        reconnectRunnable = runnable
-        handler.postDelayed(runnable, backoff)
     }
 
     private fun refreshRecentCalls() {
@@ -882,25 +786,14 @@ class CallManager(context: Context) {
         _recentCalls.value
             .filter { isCurrentServerHost(it.host) }
             .forEach { mergedRoomIds.add(it.roomId) }
-        watchedRoomIds = mergedRoomIds.toList()
+        val watchedRoomIds = mergedRoomIds.toList()
         val watched = watchedRoomIds.toSet()
         _roomStatuses.value = _roomStatuses.value.filterKeys { watched.contains(it) }
-        watchRecentRoomsIfNeeded()
+        roomWatcher.watchRooms(roomIds = watchedRoomIds, host = serverHost.value)
     }
 
     private fun watchRecentRoomsIfNeeded() {
-        clearReconnect()
-        if (activeSession != null || watchedRoomIds.isEmpty()) {
-            if (signalingClient.isConnected()) {
-                signalingClient.close()
-            }
-            return
-        }
-        if (signalingClient.isConnected()) {
-            sendWatchRoomsIfNeeded()
-        } else {
-            signalingClient.connect(serverHost.value)
-        }
+        refreshWatchedRooms()
     }
 
     private fun saveCurrentCallToHistoryIfNeeded() {
@@ -941,5 +834,12 @@ class CallManager(context: Context) {
     private companion object {
         const val MAX_SAVED_ROOM_NAME_LENGTH = 120
         val ROOM_ID_REGEX = Regex("^[A-Za-z0-9_-]{27}$")
+    }
+
+    override fun roomWatcher(
+        watcher: RoomWatcher,
+        didUpdateStatuses: Map<String, RoomOccupancy>,
+    ) {
+        _roomStatuses.value = didUpdateStatuses
     }
 }
