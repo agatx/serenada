@@ -4,16 +4,7 @@ import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
 import type { TransportKind } from './signaling/transports/types.js';
 import type { SignalingMessage } from './signaling/types.js';
-
-function resolveUrls(serverHost: string): { wsUrl: string; httpBaseUrl: string } {
-    const isLocal = serverHost.startsWith('localhost') || serverHost.startsWith('127.');
-    const protocol = isLocal ? 'http' : 'https';
-    const wsProtocol = isLocal ? 'ws' : 'wss';
-    return {
-        wsUrl: `${wsProtocol}://${serverHost}/ws`,
-        httpBaseUrl: `${protocol}://${serverHost}`,
-    };
-}
+import { resolveServerUrls } from './serverUrls.js';
 
 export class SerenadaSession implements SerenadaSessionHandle {
     private signaling: SignalingEngine;
@@ -29,6 +20,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private _destroyed = false;
     private permissionCheckDone = false;
     private permissionCheckInFlight = false;
+    private endingTimer: number | null = null;
 
     onPermissionsRequired: ((permissions: MediaCapability[]) => void) | null = null;
 
@@ -37,7 +29,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.roomId = roomId;
         this.roomUrl = roomUrl;
 
-        const urls = resolveUrls(config.serverHost);
+        const urls = resolveServerUrls(config.serverHost);
 
         this._state = {
             phase: 'joining',
@@ -141,37 +133,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.leave();
     }
 
-    toggleAudio(): void {
-        const stream = this.media.localStream;
-        if (!stream) return;
-        const audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack) audioTrack.enabled = !audioTrack.enabled;
-        this.rebuildState();
-    }
+    toggleAudio(): void { this.setTrackEnabled('audio'); }
+    toggleVideo(): void { this.setTrackEnabled('video'); }
 
-    toggleVideo(): void {
-        const stream = this.media.localStream;
-        if (!stream) return;
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) videoTrack.enabled = !videoTrack.enabled;
-        this.rebuildState();
-    }
-
-    setAudioEnabled(enabled: boolean): void {
-        const stream = this.media.localStream;
-        if (!stream) return;
-        const audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack) audioTrack.enabled = enabled;
-        this.rebuildState();
-    }
-
-    setVideoEnabled(enabled: boolean): void {
-        const stream = this.media.localStream;
-        if (!stream) return;
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) videoTrack.enabled = enabled;
-        this.rebuildState();
-    }
+    setAudioEnabled(enabled: boolean): void { this.setTrackEnabled('audio', enabled); }
+    setVideoEnabled(enabled: boolean): void { this.setTrackEnabled('video', enabled); }
 
     setCameraMode(_mode: CameraMode): void {
         // Web only supports selfie/world via flipCamera; composite is not available
@@ -197,6 +163,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     destroy(): void {
         if (this._destroyed) return;
         this._destroyed = true;
+        if (this.endingTimer !== null) { window.clearTimeout(this.endingTimer); this.endingTimer = null; }
         this.statsCollector.stop();
         this.unsubSignalingMessages?.();
         this.unsubSignalingState?.();
@@ -205,6 +172,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     // --- Private ---
+
+    private setTrackEnabled(kind: 'audio' | 'video', enabled?: boolean): void {
+        const stream = this.media.localStream;
+        if (!stream) return;
+        const track = kind === 'audio' ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
+        if (track) track.enabled = enabled ?? !track.enabled;
+        this.rebuildState();
+    }
 
     private rebuildState(): void {
         if (this._destroyed) return;
@@ -220,7 +195,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
             if (this._state.phase === 'inCall' || this._state.phase === 'waiting') {
                 // Room ended or left — show ending screen briefly
                 phase = 'ending';
-                setTimeout(() => {
+                if (this.endingTimer !== null) window.clearTimeout(this.endingTimer);
+                this.endingTimer = window.setTimeout(() => {
+                    this.endingTimer = null;
                     if (this._destroyed) return;
                     this._state = { ...this._state, phase: 'idle' };
                     this.notifyListeners();

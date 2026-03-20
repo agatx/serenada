@@ -3,8 +3,14 @@
   "version": "0.1.0",
   "description": "Pre-built React call UI components for Serenada video calls",
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "files": [
     "dist",
     "src",
@@ -39,8 +45,6 @@
   ],
   "license": "MIT",
   "publishConfig": {
-    "access": "public",
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts"
+    "access": "public"
   }
 }

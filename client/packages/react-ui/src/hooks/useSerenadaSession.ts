@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useSyncExternalStore, useCallback, useState } from 'react';
-import type { SerenadaConfig, CallState } from '@serenada/core';
-import { SerenadaSession, SerenadaCore } from '@serenada/core';
-import { IDLE_STATE } from './constants.js';
+import { useEffect, useMemo, useState } from 'react';
+import type { SerenadaConfig, CallState, SerenadaSessionHandle } from '@serenada/core';
+import { SerenadaCore } from '@serenada/core';
+import { useCallState } from './useCallState.js';
+import { EMPTY_STREAMS } from './constants.js';
 
 export interface UseSerenadaSessionOptions {
     url?: string;
@@ -10,20 +11,30 @@ export interface UseSerenadaSessionOptions {
 }
 
 export interface UseSerenadaSessionResult {
-    session: SerenadaSession | null;
+    session: SerenadaSessionHandle | null;
     state: CallState;
     localStream: MediaStream | null;
     remoteStreams: Map<string, MediaStream>;
 }
 
-const EMPTY_STREAMS = new Map<string, MediaStream>();
-
 export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSerenadaSessionResult {
     const { url, roomId, config } = options;
-    const [session, setSession] = useState<SerenadaSession | null>(null);
+    const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
+    const transportsKey = config.transports?.join('|') ?? '';
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    const core = useMemo(() => new SerenadaCore(config), [config.serverHost]);
+    const core = useMemo(
+        () => new SerenadaCore({
+            ...config,
+            transports: config.transports ? [...config.transports] : undefined,
+        }),
+        [
+            config.serverHost,
+            config.defaultAudioEnabled,
+            config.defaultVideoEnabled,
+            transportsKey,
+            config.turnsOnly,
+        ],
+    );
 
     useEffect(() => {
         if (!url && !roomId) return;
@@ -37,20 +48,7 @@ export function useSerenadaSession(options: UseSerenadaSessionOptions): UseSeren
         };
     }, [url, roomId, core]);
 
-    const subscribe = useCallback(
-        (onStoreChange: () => void) => {
-            if (!session) return () => {};
-            return session.subscribe(onStoreChange);
-        },
-        [session],
-    );
-
-    const getSnapshot = useCallback(
-        () => session?.state ?? IDLE_STATE,
-        [session],
-    );
-
-    const state = useSyncExternalStore(subscribe, getSnapshot);
+    const state = useCallState(session);
 
     return {
         session,

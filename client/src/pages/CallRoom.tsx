@@ -5,7 +5,7 @@ import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
 import { SerenadaCallFlow } from '@serenada/react-ui';
 import type { SerenadaString } from '@serenada/react-ui';
 import { SerenadaCore, SNAPSHOT_PREPARE_TIMEOUT_MS } from '@serenada/core';
-import type { CallState, SerenadaSession } from '@serenada/core';
+import type { CallState, SerenadaSessionHandle } from '@serenada/core';
 import { useToast } from '../contexts/ToastContext';
 import { saveCall } from '../utils/callHistory';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
@@ -213,7 +213,7 @@ const CallRoom: React.FC = () => {
     const sharedName = urlParams.get('name');
 
     const [shouldJoin, setShouldJoin] = useState(false);
-    const [session, setSession] = useState<SerenadaSession | null>(null);
+    const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
     const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
     const [isSubscribed, setIsSubscribed] = useState(false);
     const [pushSupported, setPushSupported] = useState(false);

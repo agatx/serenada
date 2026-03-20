@@ -74,6 +74,7 @@ export {
     ICE_CANDIDATE_BUFFER_MAX,
     TURN_FETCH_TIMEOUT_MS, TURN_REFRESH_TRIGGER_RATIO,
     SNAPSHOT_PREPARE_TIMEOUT_MS,
+    CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_RESUME_GAP_MS, LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
 } from './constants.js';
 
@@ -82,6 +83,7 @@ export { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './media/l
 
 // Room API
 export { createRoomId } from './api/roomApi.js';
+export { buildApiUrl, buildRoomUrl, resolveServerBaseUrl, resolveServerUrls } from './serverUrls.js';
 
 // Advanced host-app usage
 export { SignalingEngine } from './signaling/SignalingEngine.js';

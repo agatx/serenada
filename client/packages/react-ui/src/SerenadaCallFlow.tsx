@@ -23,7 +23,7 @@ import {
     type CallScene,
     type ContentSource,
     type LayoutResult,
-    type SerenadaSession,
+    type SerenadaSessionHandle,
 } from '@serenada/core';
 import { DebugPanel } from './components/DebugPanel.js';
 import { StatusOverlay } from './components/StatusOverlay.js';
@@ -31,7 +31,7 @@ import { useCallState } from './hooks/useCallState.js';
 import { SerenadaPermissions } from './SerenadaPermissions.js';
 import type { CallFlowProps } from './types.js';
 import { resolveString } from './types.js';
-import { IDLE_STATE } from './hooks/constants.js';
+import { IDLE_STATE, EMPTY_STREAMS } from './hooks/constants.js';
 import { ensureCallFlowStyles } from './callFlowStyles.js';
 import { playJoinChime } from './utils/audio.js';
 import {
@@ -46,7 +46,6 @@ interface RemoteStageTile {
     aspectRatio: number;
 }
 
-const EMPTY_STREAMS = new Map<string, MediaStream>();
 const MOBILE_BROWSER_RE = /Mobi|Android|iPhone|iPad|iPod/i;
 
 function getStreamAspectRatio(stream: MediaStream): number | null {
@@ -172,8 +171,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 }) => {
     useEffect(() => { ensureCallFlowStyles(); }, []);
 
-    const internalSessionRef = useRef<SerenadaSession | null>(null);
-    const [internalSession, setInternalSession] = useState<SerenadaSession | null>(null);
+    const internalSessionRef = useRef<SerenadaSessionHandle | null>(null);
+    const [internalSession, setInternalSession] = useState<SerenadaSessionHandle | null>(null);
     const usesInternalSession = !externalSession;
 
     useEffect(() => {
@@ -199,7 +198,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         };
     }, [externalSession, serverHost, url]);
 
-    const session = externalSession ?? internalSession;
+    const session: SerenadaSessionHandle | null = externalSession ?? internalSession;
     const state = useCallState(session ?? null);
     const effectiveState = session ? state : IDLE_STATE;
     const localParticipant = effectiveState.localParticipant;
@@ -252,8 +251,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [onStatsUpdate, session]);
 
     useEffect(() => {
-        if (!usesInternalSession || !internalSessionRef.current) return;
-        const internalSession = internalSessionRef.current;
+        if (!usesInternalSession || !internalSession) return;
         internalSession.onPermissionsRequired = (permissions) => {
             void (async () => {
                 const granted = await SerenadaPermissions.request(permissions);
@@ -268,7 +266,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         return () => {
             internalSession.onPermissionsRequired = null;
         };
-    }, [usesInternalSession]);
+    }, [internalSession, usesInternalSession]);
 
     useEffect(() => {
         if (localParticipant?.cameraMode !== lastCameraModeRef.current) {

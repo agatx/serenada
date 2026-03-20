@@ -11,3 +11,5 @@ export const IDLE_STATE: CallState = {
     requiredPermissions: null,
     error: null,
 };
+
+export const EMPTY_STREAMS = new Map<string, MediaStream>();

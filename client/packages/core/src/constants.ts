@@ -29,6 +29,9 @@ export const TURN_REFRESH_TRIGGER_RATIO = 0.8;
 // Snapshot
 export const SNAPSHOT_PREPARE_TIMEOUT_MS = 2000;
 
+// Connection Status
+export const CONNECTION_RETRYING_DELAY_MS = 10_000;
+
 // Local Video Recovery
 export const LOCAL_VIDEO_RESUME_GAP_MS = 15_000;
 export const LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS = 5_000;

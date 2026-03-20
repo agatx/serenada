@@ -42,6 +42,7 @@ export interface CallState {
 }
 
 export interface SerenadaConfig {
+    /** Bare host or full origin, e.g. `serenada.app` or `http://qa-box:8080`. */
     serverHost: string;
     defaultAudioEnabled?: boolean;
     defaultVideoEnabled?: boolean;
@@ -52,6 +53,7 @@ export interface SerenadaConfig {
 export interface CreateRoomResult {
     url: string;
     roomId: string;
+    /** Public app-facing session contract. Prefer this over the concrete class in host-app code. */
     session: SerenadaSessionHandle;
 }
 

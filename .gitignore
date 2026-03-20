@@ -41,3 +41,4 @@ client-ios/Resources/GoogleService-Info.plist
 /client-android/serenada-core/.gradle/
 /client-android/serenada-call-ui/.gradle/
 /client-ios/SerenadaCallUI/.build
+/client-ios/SerenadaCore/.build

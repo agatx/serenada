@@ -1,32 +1,38 @@
 import { useState, useCallback } from 'react'
-import { SerenadaCore } from '@serenada/core'
+import { createSerenadaCore, type SerenadaSessionHandle } from '@serenada/core'
 import { SerenadaCallFlow } from '@serenada/react-ui'
 
-const serenada = new SerenadaCore({ serverHost: 'serenada.app' })
+const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
+
+interface ActiveCall {
+    url: string
+    session?: SerenadaSessionHandle
+}
 
 export default function App() {
-    const [callUrl, setCallUrl] = useState<string | null>(null)
+    const [activeCall, setActiveCall] = useState<ActiveCall | null>(null)
 
-    if (callUrl) {
+    if (activeCall) {
         return (
             <SerenadaCallFlow
-                url={callUrl}
-                onDismiss={() => setCallUrl(null)}
+                url={activeCall.url}
+                session={activeCall.session}
+                onDismiss={() => setActiveCall(null)}
             />
         )
     }
 
-    return <HomeScreen onJoin={setCallUrl} />
+    return <HomeScreen onJoin={setActiveCall} />
 }
 
-function HomeScreen({ onJoin }: { onJoin: (url: string) => void }) {
+function HomeScreen({ onJoin }: { onJoin: (call: ActiveCall) => void }) {
     const [urlText, setUrlText] = useState('')
 
     const handleCreateRoom = useCallback(async () => {
         const room = await serenada.createRoom()
         // In a real app, share room.url with the other party
         console.log('Share this URL:', room.url)
-        onJoin(room.url)
+        onJoin({ url: room.url, session: room.session })
     }, [onJoin])
 
     return (
@@ -43,7 +49,7 @@ function HomeScreen({ onJoin }: { onJoin: (url: string) => void }) {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <button
-                    onClick={() => onJoin(urlText)}
+                    onClick={() => onJoin({ url: urlText })}
                     disabled={!urlText}
                 >
                     Join Call

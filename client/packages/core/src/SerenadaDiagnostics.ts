@@ -1,4 +1,5 @@
 import type { SerenadaConfig, DiagnosticsReport, DiagnosticCheckResult } from './types.js';
+import { buildApiUrl } from './serverUrls.js';
 
 export class SerenadaDiagnostics {
     private config: SerenadaConfig;
@@ -8,63 +9,31 @@ export class SerenadaDiagnostics {
     }
 
     async runAll(): Promise<DiagnosticsReport> {
-        const [camera, microphone, speaker, network, signaling, turn, devices] = await Promise.all([
-            this.checkCamera(),
-            this.checkMicrophone(),
-            this.checkSpeaker(),
+        const [devices, network, signaling, turn] = await Promise.all([
+            this.enumerateDevices(),
             this.checkNetwork(),
             this.checkSignaling(),
             this.checkTurn(),
-            this.enumerateDevices(),
         ]);
+        const camera = this.checkMediaCapability(devices, 'videoinput', 'No camera found');
+        const microphone = this.checkMediaCapability(devices, 'audioinput', 'No microphone found');
+        const speaker = this.checkDeviceAvailability(devices, 'audiooutput', 'No speaker found');
         return { camera, microphone, speaker, network, signaling, turn, devices };
     }
 
     async checkCamera(): Promise<DiagnosticCheckResult> {
-        try {
-            if (!navigator.permissions) {
-                return { status: 'skipped', reason: 'Permissions API not available' };
-            }
-            const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
-            if (result.state === 'denied') return { status: 'notAuthorized' };
-            if (result.state === 'prompt') return { status: 'notAuthorized' };
-
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const cameras = devices.filter(d => d.kind === 'videoinput');
-            if (cameras.length === 0) return { status: 'unavailable', reason: 'No camera found' };
-            return { status: 'available' };
-        } catch (err) {
-            return { status: 'skipped', reason: String(err) };
-        }
+        const devices = await this.enumerateDevices();
+        return this.checkMediaCapability(devices, 'videoinput', 'No camera found');
     }
 
     async checkMicrophone(): Promise<DiagnosticCheckResult> {
-        try {
-            if (!navigator.permissions) {
-                return { status: 'skipped', reason: 'Permissions API not available' };
-            }
-            const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-            if (result.state === 'denied') return { status: 'notAuthorized' };
-            if (result.state === 'prompt') return { status: 'notAuthorized' };
-
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const mics = devices.filter(d => d.kind === 'audioinput');
-            if (mics.length === 0) return { status: 'unavailable', reason: 'No microphone found' };
-            return { status: 'available' };
-        } catch (err) {
-            return { status: 'skipped', reason: String(err) };
-        }
+        const devices = await this.enumerateDevices();
+        return this.checkMediaCapability(devices, 'audioinput', 'No microphone found');
     }
 
     async checkSpeaker(): Promise<DiagnosticCheckResult> {
-        try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const speakers = devices.filter(d => d.kind === 'audiooutput');
-            if (speakers.length === 0) return { status: 'unavailable', reason: 'No speaker found' };
-            return { status: 'available' };
-        } catch (err) {
-            return { status: 'skipped', reason: String(err) };
-        }
+        const devices = await this.enumerateDevices();
+        return this.checkDeviceAvailability(devices, 'audiooutput', 'No speaker found');
     }
 
     async checkNetwork(): Promise<DiagnosticCheckResult> {
@@ -77,14 +46,10 @@ export class SerenadaDiagnostics {
     }
 
     async checkSignaling(): Promise<DiagnosticCheckResult & { transport?: string }> {
-        const protocol = this.config.serverHost.startsWith('localhost') || this.config.serverHost.startsWith('127.') ? 'http' : 'https';
-        const baseUrl = `${protocol}://${this.config.serverHost}`;
-
         try {
-            // Probe server reachability without creating a room
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
-            const res = await fetch(`${baseUrl}/api/room-id`, {
+            const res = await fetch(buildApiUrl(this.config.serverHost, '/api/room-id'), {
                 method: 'GET',
                 signal: controller.signal,
             });
@@ -99,12 +64,11 @@ export class SerenadaDiagnostics {
     }
 
     async checkTurn(): Promise<DiagnosticCheckResult & { latencyMs?: number }> {
-        const protocol = this.config.serverHost.startsWith('localhost') || this.config.serverHost.startsWith('127.') ? 'http' : 'https';
         try {
             const start = Date.now();
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
-            const res = await fetch(`${protocol}://${this.config.serverHost}/api/turn-credentials?token=probe`, {
+            const res = await fetch(buildApiUrl(this.config.serverHost, '/api/turn-credentials?token=probe'), {
                 signal: controller.signal,
             });
             clearTimeout(timeout);
@@ -120,6 +84,30 @@ export class SerenadaDiagnostics {
         } catch (err) {
             return { status: 'unavailable', reason: String(err) };
         }
+    }
+
+    private checkMediaCapability(
+        devices: MediaDeviceInfo[],
+        deviceKind: MediaDeviceKind,
+        notFoundMsg: string,
+    ): DiagnosticCheckResult {
+        const matching = devices.filter(d => d.kind === deviceKind);
+        // If labels are empty, permissions haven't been granted yet
+        if (matching.length > 0 && matching.every(d => !d.label)) {
+            return { status: 'notAuthorized' };
+        }
+        if (matching.length === 0) return { status: 'unavailable', reason: notFoundMsg };
+        return { status: 'available' };
+    }
+
+    private checkDeviceAvailability(
+        devices: MediaDeviceInfo[],
+        deviceKind: MediaDeviceKind,
+        notFoundMsg: string,
+    ): DiagnosticCheckResult {
+        const matching = devices.filter(d => d.kind === deviceKind);
+        if (matching.length === 0) return { status: 'unavailable', reason: notFoundMsg };
+        return { status: 'available' };
     }
 
     private async enumerateDevices(): Promise<MediaDeviceInfo[]> {

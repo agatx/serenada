@@ -216,13 +216,15 @@ Diagnostics never call `getUserMedia()` — if a permission is missing, the chec
 
 ```typescript
 const serenada = createSerenadaCore({
-    serverHost: 'serenada.app',    // required
+    serverHost: 'serenada.app',    // required; bare host or full origin
     defaultAudioEnabled: true,     // mic on at join (default)
     defaultVideoEnabled: true,     // camera on at join (default)
     transports: ['ws', 'sse'],     // transport priority (default)
     turnsOnly: false,              // optional; only use TURN relays when true
 })
 ```
+
+`serverHost` accepts either a bare host like `serenada.app` or a full origin like `http://qa-box:8080`.
 
 ## Next Steps
 

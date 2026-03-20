@@ -7,13 +7,19 @@ import {
     NON_HOST_FALLBACK_MAX_ATTEMPTS,
     ICE_CANDIDATE_BUFFER_MAX,
     TURN_FETCH_TIMEOUT_MS,
+    CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
 } from '../constants.js';
+import { buildApiUrl } from '../serverUrls.js';
 import { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './localVideoRecovery.js';
 
 const DEFAULT_RTC_CONFIG: RTCConfiguration = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
+
+const ICE_STATE_PRIORITY: RTCIceConnectionState[] = ['failed', 'disconnected', 'checking', 'new', 'connected', 'completed', 'closed'];
+const CONN_STATE_PRIORITY: RTCPeerConnectionState[] = ['failed', 'disconnected', 'connecting', 'new', 'connected', 'closed'];
+const SIG_STATE_PRIORITY: RTCSignalingState[] = ['closed', 'have-local-offer', 'have-remote-offer', 'have-local-pranswer', 'have-remote-pranswer', 'stable'];
 
 interface PeerState {
     pc: RTCPeerConnection;
@@ -277,12 +283,10 @@ export class MediaEngine {
         try {
             const cameraTrack = await this.acquireCameraTrack(this.facingMode, wasVideoEnabled);
             await this.swapLocalVideoTrack(cameraTrack, previousVideoTrack);
-            this.isScreenSharing = false;
-            this.sendSignalingMessage('content_state', { active: false });
-            this.notifyChange();
         } catch (err) {
             console.error('[WebRTC] Failed to stop screen share and restore camera', err);
             await this.swapLocalVideoTrack(null, previousVideoTrack);
+        } finally {
             this.isScreenSharing = false;
             this.sendSignalingMessage('content_state', { active: false });
             this.notifyChange();
@@ -663,17 +667,13 @@ export class MediaEngine {
         let worstSig: RTCSignalingState = peers.size === 0 ? 'stable' : 'stable';
 
         if (peers.size > 0) {
-            const iceOrder: RTCIceConnectionState[] = ['failed', 'disconnected', 'checking', 'new', 'connected', 'completed', 'closed'];
-            const connOrder: RTCPeerConnectionState[] = ['failed', 'disconnected', 'connecting', 'new', 'connected', 'closed'];
-            const sigOrder: RTCSignalingState[] = ['closed', 'have-local-offer', 'have-remote-offer', 'have-local-pranswer', 'have-remote-pranswer', 'stable'];
-
             for (const [, peer] of peers) {
                 const ice = peer.pc.iceConnectionState;
                 const conn = peer.pc.connectionState;
                 const sig = peer.pc.signalingState;
-                if (iceOrder.indexOf(ice) < iceOrder.indexOf(worstIce)) worstIce = ice;
-                if (connOrder.indexOf(conn) < connOrder.indexOf(worstConn)) worstConn = conn;
-                if (sigOrder.indexOf(sig) < sigOrder.indexOf(worstSig)) worstSig = sig;
+                if (ICE_STATE_PRIORITY.indexOf(ice) < ICE_STATE_PRIORITY.indexOf(worstIce)) worstIce = ice;
+                if (CONN_STATE_PRIORITY.indexOf(conn) < CONN_STATE_PRIORITY.indexOf(worstConn)) worstConn = conn;
+                if (SIG_STATE_PRIORITY.indexOf(sig) < SIG_STATE_PRIORITY.indexOf(worstSig)) worstSig = sig;
             }
         }
 
@@ -711,7 +711,7 @@ export class MediaEngine {
             this.retryingTimer = null;
             if (this.connectionStatus === 'recovering') this.connectionStatus = 'retrying';
             this.notifyChange();
-        }, 10_000);
+        }, CONNECTION_RETRYING_DELAY_MS);
     }
 
     private async fetchIceServers(token: string, signal: AbortSignal): Promise<boolean> {
@@ -720,8 +720,7 @@ export class MediaEngine {
         const onExternalAbort = () => fetchController.abort();
         signal.addEventListener('abort', onExternalAbort);
         try {
-            const protocol = this.serverHost.startsWith('localhost') || this.serverHost.startsWith('127.') ? 'http' : 'https';
-            const apiUrl = `${protocol}://${this.serverHost}/api/turn-credentials?token=${encodeURIComponent(token)}`;
+            const apiUrl = buildApiUrl(this.serverHost, `/api/turn-credentials?token=${encodeURIComponent(token)}`);
 
             const res = await fetch(apiUrl, { signal: fetchController.signal });
 
@@ -801,13 +800,15 @@ export class MediaEngine {
     }
 
     private async replaceVideoTrackOnAllPeers(newTrack: MediaStreamTrack | null): Promise<void> {
-        for (const [, peer] of this.peers) {
-            const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
-            if (sender) {
-                try { await sender.replaceTrack(newTrack); }
-                catch (err) { console.warn('[WebRTC] Failed to replace track on peer', err); }
-            }
-        }
+        await Promise.all(
+            Array.from(this.peers.values()).map(async (peer) => {
+                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                if (sender) {
+                    try { await sender.replaceTrack(newTrack); }
+                    catch (err) { console.warn('[WebRTC] Failed to replace track on peer', err); }
+                }
+            })
+        );
     }
 
     private async swapLocalVideoTrack(nextTrack: MediaStreamTrack | null, previousTrack: MediaStreamTrack | null): Promise<void> {
