@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.SystemClock
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -58,30 +57,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import app.serenada.android.R
+import app.serenada.core.CheckOutcome
+import app.serenada.core.SerenadaConfig
+import app.serenada.core.SerenadaDiagnostics
 import app.serenada.core.diagnostics.DiagnosticsCheckResult as CheckResult
 import app.serenada.core.diagnostics.DiagnosticsCheckState as CheckState
 import app.serenada.core.diagnostics.DiagnosticsIceReport as IceReport
 import app.serenada.core.diagnostics.DiagnosticsMediaReport as MediaReport
 import app.serenada.core.diagnostics.buildDiagnosticsMediaReport
-import app.serenada.core.diagnostics.runDiagnosticsIceCheck
-import app.serenada.core.network.CoreApiClient
-import app.serenada.core.network.TurnCredentials
 import java.time.Instant
-import java.util.UUID
-import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 
 private data class ConnectivityReport(
     val roomIdEndpoint: CheckResult,
@@ -99,6 +85,12 @@ fun DiagnosticsScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val diagnostics = remember(host) {
+        SerenadaDiagnostics(
+            config = SerenadaConfig(serverHost = host),
+            context = context.applicationContext,
+        )
+    }
     val requiredPermissions = remember {
         buildList {
             add(Manifest.permission.CAMERA)
@@ -289,7 +281,7 @@ fun DiagnosticsScreen(
                     onClick = {
                         connectivityInProgress = true
                         scope.launch {
-                            connectivityReport = runConnectivityChecks(host)
+                            connectivityReport = runConnectivityChecks(diagnostics)
                             connectivityInProgress = false
                         }
                     },
@@ -364,14 +356,8 @@ fun DiagnosticsScreen(
                             iceLiveLogs.clear()
                             scope.launch {
                                 iceReport = runIceCheck(
-                                    context = context,
-                                    host = host,
+                                    diagnostics = diagnostics,
                                     turnsOnly = false,
-                                    onIceServersSummary = { summary ->
-                                        scope.launch {
-                                            iceLiveServersSummary = summary
-                                        }
-                                    },
                                     onLogLine = { line ->
                                         scope.launch {
                                             iceLiveLogs.add(line)
@@ -397,14 +383,8 @@ fun DiagnosticsScreen(
                             iceLiveLogs.clear()
                             scope.launch {
                                 iceReport = runIceCheck(
-                                    context = context,
-                                    host = host,
+                                    diagnostics = diagnostics,
                                     turnsOnly = true,
-                                    onIceServersSummary = { summary ->
-                                        scope.launch {
-                                            iceLiveServersSummary = summary
-                                        }
-                                    },
                                     onLogLine = { line ->
                                         scope.launch {
                                             iceLiveLogs.add(line)
@@ -574,195 +554,56 @@ private fun buildMediaReport(context: Context): MediaReport {
     return buildDiagnosticsMediaReport(context)
 }
 
-private suspend fun runConnectivityChecks(host: String): ConnectivityReport = withContext(Dispatchers.IO) {
-    val client = OkHttpClient.Builder()
-        .callTimeout(6, TimeUnit.SECONDS)
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
-        .build()
-    val coreApiClient = CoreApiClient(client)
-
-    val roomIdResult = checkRoomIdEndpoint(client, host)
-    val wsResult = checkWebSocket(client, host)
-    val sseResult = checkSseEndpoint(client, host)
-    val diagnosticTokenResult = coreApiClient.awaitDiagnosticToken(host)
-    val tokenResult = diagnosticTokenResult.toNetworkCheck("Token")
-    val turnResult = diagnosticTokenResult.fold(
-        onSuccess = { token ->
-            coreApiClient.awaitTurnCredentials(host, token).toNetworkCheck("TURN")
-        },
-        onFailure = { error ->
-            CheckResult(CheckState.Fail, "Token failed: ${error.message ?: "error"}")
-        }
-    )
-
-    ConnectivityReport(
-        roomIdEndpoint = roomIdResult,
-        webSocket = wsResult,
-        sse = sseResult,
-        diagnosticToken = tokenResult,
-        turnCredentials = turnResult
-    )
-}
-
-private fun checkRoomIdEndpoint(client: OkHttpClient, host: String): CheckResult {
-    val url = buildHttpsUrl(host, "/api/room-id")
-        ?: return CheckResult(CheckState.Fail, "Invalid host")
-    val start = SystemClock.elapsedRealtime()
-    return runCatching {
-        client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
-            val elapsed = SystemClock.elapsedRealtime() - start
-            if (!response.isSuccessful) {
-                CheckResult(CheckState.Fail, "HTTP ${response.code}")
-            } else {
-                CheckResult(CheckState.Pass, "${elapsed}ms")
-            }
-        }
-    }.getOrElse { error ->
-        CheckResult(CheckState.Fail, error.message ?: "Connection failed")
-    }
-}
-
-private suspend fun checkWebSocket(client: OkHttpClient, host: String): CheckResult {
-    val url = buildWssUrl(host) ?: return CheckResult(CheckState.Fail, "Invalid host")
-    return suspendCancellableCoroutine { continuation ->
-        val start = SystemClock.elapsedRealtime()
-        var closed = false
-        val request = Request.Builder().url(url).build()
-        val ws = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (closed) return
-                closed = true
-                webSocket.close(1000, "diagnostics")
-                val elapsed = SystemClock.elapsedRealtime() - start
-                continuation.resume(CheckResult(CheckState.Pass, "${elapsed}ms"))
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (closed) return
-                closed = true
-                continuation.resume(CheckResult(CheckState.Fail, t.message ?: "WebSocket failed"))
-            }
-        })
-        continuation.invokeOnCancellation {
-            ws.cancel()
-        }
-    }
-}
-
-private fun checkSseEndpoint(client: OkHttpClient, host: String): CheckResult {
-    val sid = "S-diag-${UUID.randomUUID().toString().replace("-", "").take(16)}"
-    val url = buildSseUrl(host, sid) ?: return CheckResult(CheckState.Fail, "Invalid host")
-    val start = SystemClock.elapsedRealtime()
-    val getRequest = Request.Builder()
-        .url(url)
-        .header("Accept", "text/event-stream")
-        .get()
-        .build()
-
-    return runCatching {
-        client.newCall(getRequest).execute().use { streamResponse ->
-            if (!streamResponse.isSuccessful) {
-                return@use CheckResult(CheckState.Fail, "GET HTTP ${streamResponse.code}")
-            }
-            val contentType = streamResponse.header("Content-Type").orEmpty().lowercase()
-            if (!contentType.contains("text/event-stream")) {
-                return@use CheckResult(CheckState.Fail, "Unexpected content-type")
-            }
-
-            val postBody = """{"v":1,"type":"ping","payload":{"ts":${System.currentTimeMillis()}}}"""
-                .toRequestBody(JSON_MEDIA_TYPE)
-            val postRequest = Request.Builder()
-                .url(url)
-                .post(postBody)
-                .header("Content-Type", "application/json")
-                .build()
-            client.newCall(postRequest).execute().use { postResponse ->
-                val elapsed = SystemClock.elapsedRealtime() - start
-                if (!postResponse.isSuccessful) {
-                    CheckResult(CheckState.Fail, "POST HTTP ${postResponse.code}")
-                } else {
-                    CheckResult(CheckState.Pass, "${elapsed}ms")
-                }
-            }
-        }
-    }.getOrElse { error ->
-        CheckResult(CheckState.Fail, error.message ?: "SSE failed")
-    }
+private suspend fun runConnectivityChecks(diagnostics: SerenadaDiagnostics): ConnectivityReport {
+    return diagnostics.runConnectivityChecks().toUiConnectivityReport()
 }
 
 private suspend fun runIceCheck(
-    context: Context,
-    host: String,
+    diagnostics: SerenadaDiagnostics,
     turnsOnly: Boolean,
-    onIceServersSummary: (String) -> Unit = {},
     onLogLine: (String) -> Unit = {}
 ): IceReport {
-    return runDiagnosticsIceCheck(
-        context = context,
-        host = host,
+    val report = diagnostics.runIceProbe(
         turnsOnly = turnsOnly,
-        onIceServersSummary = onIceServersSummary,
-        onLogLine = onLogLine,
+        onCandidateLog = onLogLine,
+    )
+    return report.toUiIceReport(turnsOnly)
+}
+
+private fun app.serenada.core.ConnectivityReport.toUiConnectivityReport(): ConnectivityReport {
+    return ConnectivityReport(
+        roomIdEndpoint = roomApi.toUiCheckResult(),
+        webSocket = webSocket.toUiCheckResult(),
+        sse = sse.toUiCheckResult(),
+        diagnosticToken = diagnosticToken.toUiCheckResult(),
+        turnCredentials = turnCredentials.toUiCheckResult(),
     )
 }
 
-private fun buildHttpsUrl(hostInput: String, path: String): String? {
-    val raw = hostInput.trim()
-    val withScheme =
-        if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw"
-    val base = withScheme.toHttpUrlOrNull() ?: return null
-    return base.newBuilder()
-        .scheme("https")
-        .encodedPath(path)
-        .build()
-        .toString()
-}
-
-private fun buildWssUrl(hostInput: String): String? {
-    val host = hostInput.trim().removePrefix("https://").removePrefix("http://").trimEnd('/')
-    if (host.isBlank()) return null
-    return "wss://$host/ws"
-}
-
-private fun buildSseUrl(hostInput: String, sid: String): String? {
-    if (sid.isBlank()) return null
-    val base = buildHttpsUrl(hostInput, "/sse")?.toHttpUrlOrNull() ?: return null
-    return base.newBuilder()
-        .addQueryParameter("sid", sid)
-        .build()
-        .toString()
-}
-
-private suspend fun CoreApiClient.awaitDiagnosticToken(host: String): Result<String> {
-    return suspendCancellableCoroutine { continuation ->
-        fetchDiagnosticToken(host) { result ->
-            if (continuation.isActive) {
-                continuation.resume(result)
-            }
-        }
-    }
-}
-
-private suspend fun CoreApiClient.awaitTurnCredentials(host: String, token: String): Result<TurnCredentials> {
-    return suspendCancellableCoroutine { continuation ->
-        fetchTurnCredentials(host, token) { result ->
-            if (continuation.isActive) {
-                continuation.resume(result)
-            }
-        }
-    }
-}
-
-private fun <T> Result<T>.toNetworkCheck(label: String): CheckResult {
-    return fold(
-        onSuccess = { CheckResult(CheckState.Pass, "OK") },
-        onFailure = { error ->
-            val message = error.message ?: "$label failed"
-            Log.w("Diagnostics", "$label check failed", error)
-            CheckResult(CheckState.Fail, message)
-        }
+private fun app.serenada.core.IceProbeReport.toUiIceReport(turnsOnly: Boolean): IceReport {
+    return IceReport(
+        turnsOnly = turnsOnly,
+        stun = when {
+            turnsOnly -> CheckResult(CheckState.Warn, "Skipped (TURNS only)")
+            stunPassed -> CheckResult(CheckState.Pass, "Gathered server-reflexive candidate")
+            else -> CheckResult(CheckState.Fail, "No server-reflexive candidate")
+        },
+        turn = if (turnPassed) {
+            CheckResult(CheckState.Pass, "Gathered relay candidate")
+        } else {
+            CheckResult(CheckState.Fail, "No relay candidate")
+        },
+        iceServersSummary = iceServersSummary,
+        logs = logs,
     )
+}
+
+private fun CheckOutcome.toUiCheckResult(): CheckResult {
+    return when (this) {
+        CheckOutcome.NotRun -> CheckResult(CheckState.Idle, "Not run")
+        is CheckOutcome.Passed -> CheckResult(CheckState.Pass, "${latencyMs}ms")
+        is CheckOutcome.Failed -> CheckResult(CheckState.Fail, error)
+    }
 }
 
 private fun buildDiagnosticsReport(

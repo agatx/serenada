@@ -230,7 +230,7 @@ Pass a `theme` prop:
 
 | Field | Type | Default |
 |---|---|---|
-| `accentColor` | `string` (CSS color) | reserved |
+| `accentColor` | `string` (CSS color) | `#3b82f6` |
 | `backgroundColor` | `string` (CSS color) | `#000` |
 
-On web, `backgroundColor` is applied to the root call-flow container. `accentColor` is part of the public theme type for future parity but is not currently consumed by the default web call UI.
+On web, `backgroundColor` is applied to the root call-flow container. `accentColor` styles primary action accents such as loading spinners, primary buttons, and invite/zoom affordances while preserving the default Serenada in-call control chrome.

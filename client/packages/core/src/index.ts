@@ -8,6 +8,7 @@ export const SERENADA_CORE_VERSION = '0.1.0';
 export { SerenadaCore } from './SerenadaCore.js';
 export { SerenadaSession } from './SerenadaSession.js';
 export { SerenadaDiagnostics } from './SerenadaDiagnostics.js';
+export { RoomWatcher } from './RoomWatcher.js';
 
 // Factory functions (match documented API)
 import { SerenadaCore as _SerenadaCore } from './SerenadaCore.js';
@@ -32,6 +33,11 @@ export type {
     CallStats,
     DiagnosticCheckResult,
     DiagnosticsReport,
+    CheckOutcome,
+    ConnectivityReport,
+    IceProbeReport,
+    RoomOccupancy,
+    RoomWatcherState,
 } from './types.js';
 
 // Public utilities

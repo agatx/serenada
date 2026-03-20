@@ -191,6 +191,33 @@ diagnostics.runAll { report ->
 
 Diagnostics never trigger permission prompts — if a permission is missing, the check returns `NotAuthorized`.
 
+### Connectivity Checks
+
+Test Room API, WebSocket, SSE, diagnostic token, and TURN credentials separately:
+
+```kotlin
+val diagnostics = SerenadaDiagnostics(config, applicationContext)
+val report = diagnostics.runConnectivityChecks()
+
+// report.roomApi, .webSocket, .sse, .diagnosticToken, .turnCredentials
+// Each is CheckOutcome.NotRun | CheckOutcome.Passed(latencyMs) | CheckOutcome.Failed(error)
+```
+
+### ICE Probing
+
+Verify STUN/TURN reachability with a real ICE gather:
+
+```kotlin
+val diagnostics = SerenadaDiagnostics(config, applicationContext)
+val report = diagnostics.runIceProbe(turnsOnly = false) { line ->
+    Log.d("Diagnostics", line)
+}
+
+report.stunPassed
+report.turnPassed
+report.logs
+```
+
 ### Server Validation
 
 Validate that a host is a reachable Serenada server:

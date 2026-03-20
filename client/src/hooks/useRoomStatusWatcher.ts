@@ -1,57 +1,43 @@
 import { useEffect, useMemo, useState } from 'react';
-import { SignalingEngine, parseTransportOrder, type RoomStatuses, type TransportKind } from '@serenada/core';
-import { getConfiguredServerHost, resolveServerUrls } from '../utils/serverHost';
+import { RoomWatcher, parseTransportOrder, type RoomWatcherState } from '@serenada/core';
+import { getConfiguredServerHost } from '../utils/serverHost';
 
-interface RoomStatusWatcherState {
-    isConnected: boolean;
-    activeTransport: TransportKind | null;
-    roomStatuses: RoomStatuses;
-}
-
-const readWatcherState = (engine: SignalingEngine): RoomStatusWatcherState => ({
-    isConnected: engine.isConnected,
-    activeTransport: engine.activeTransport,
-    roomStatuses: engine.roomStatuses,
+const readWatcherState = (watcher: RoomWatcher): RoomWatcherState => ({
+    isConnected: watcher.isConnected,
+    activeTransport: watcher.activeTransport,
+    roomStatuses: watcher.currentStatuses,
 });
 
-export function useRoomStatusWatcher(roomIds: string[]): RoomStatusWatcherState {
+export function useRoomStatusWatcher(roomIds: string[]): RoomWatcherState {
     const uniqueRoomIds = useMemo(
         () => Array.from(new Set(roomIds.filter((roomId): roomId is string => typeof roomId === 'string' && roomId.length > 0))),
         [roomIds],
     );
-    const roomIdsKey = uniqueRoomIds.join('|');
 
     const watcher = useMemo(() => {
         const serverHost = getConfiguredServerHost();
-        const urls = resolveServerUrls(serverHost);
         const rawTransports = import.meta.env.TRANSPORTS || import.meta.env.VITE_TRANSPORTS;
 
-        return new SignalingEngine({
-            wsUrl: urls.wsUrl,
-            httpBaseUrl: urls.httpBaseUrl,
+        return new RoomWatcher({
+            serverHost,
             transports: parseTransportOrder(rawTransports),
         });
     }, []);
 
-    const [state, setState] = useState<RoomStatusWatcherState>(() => readWatcherState(watcher));
+    const [state, setState] = useState<RoomWatcherState>(() => readWatcherState(watcher));
 
     useEffect(() => {
-        const unsubscribe = watcher.onStateChange(() => {
-            setState(readWatcherState(watcher));
-        });
-
-        watcher.connect();
+        const unsubscribe = watcher.subscribe(setState);
 
         return () => {
             unsubscribe();
-            watcher.destroy();
+            watcher.stop();
         };
     }, [watcher]);
 
     useEffect(() => {
-        if (!state.isConnected || uniqueRoomIds.length === 0) return;
         watcher.watchRooms(uniqueRoomIds);
-    }, [roomIdsKey, state.isConnected, uniqueRoomIds, watcher]);
+    }, [uniqueRoomIds, watcher]);
 
     return state;
 }

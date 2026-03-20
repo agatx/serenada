@@ -628,7 +628,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     const rootStyle = useMemo<React.CSSProperties>(() => ({
         background: theme?.backgroundColor ?? '#000',
-    }), [theme?.backgroundColor]);
+        '--serenada-accent': theme?.accentColor ?? '#3b82f6',
+    } as React.CSSProperties), [theme?.accentColor, theme?.backgroundColor]);
 
     if (effectiveState.phase === 'idle' || effectiveState.phase === 'joining') {
         return (
@@ -1032,7 +1033,7 @@ const primaryButtonStyle: React.CSSProperties = {
     padding: '10px 24px',
     border: 'none',
     borderRadius: 8,
-    background: '#3b82f6',
+    background: 'var(--serenada-accent)',
     color: '#fff',
     fontSize: 14,
     fontWeight: 600,
@@ -1055,7 +1056,7 @@ const spinnerStyle: React.CSSProperties = {
     height: 36,
     marginBottom: 16,
     border: '3px solid rgba(255,255,255,0.15)',
-    borderTopColor: '#3b82f6',
+    borderTopColor: 'var(--serenada-accent)',
     borderRadius: '50%',
     animation: 'serenada-spin 0.8s linear infinite',
 };

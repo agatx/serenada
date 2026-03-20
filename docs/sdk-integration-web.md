@@ -166,29 +166,26 @@ Use `waitingActions` to render host-app-specific actions below the built-in QR/s
 
 ## Watching Room Status
 
-Web room watching currently uses the advanced `SignalingEngine` surface rather than a first-class `RoomWatcher` wrapper like iOS and Android.
-
-For home screens or recent-room presence indicators, use the advanced signaling API:
+For home screens or recent-room presence indicators, use `RoomWatcher`:
 
 ```typescript
-import { SignalingEngine, getRoomStatusState } from '@serenada/core'
+import { RoomWatcher, getRoomStatusState } from '@serenada/core'
 
-const signaling = new SignalingEngine({
-    wsUrl: 'wss://serenada.app/ws',
-    httpBaseUrl: 'https://serenada.app',
+const watcher = new RoomWatcher({
+    serverHost: 'serenada.app',
+    transports: ['ws', 'sse'],
 })
 
-signaling.connect()
-signaling.watchRooms(['room-a', 'room-b'])
-
-const unsubscribe = signaling.onStateChange(() => {
-    const roomAState = getRoomStatusState(signaling.roomStatuses['room-a'])
+const unsubscribe = watcher.subscribe(({ roomStatuses }) => {
+    const roomAState = getRoomStatusState(roomStatuses['room-a'])
     console.log(roomAState) // 'hidden' | 'waiting' | 'full'
 })
 
+watcher.watchRooms(['room-a', 'room-b'])
+
 // later
 unsubscribe()
-signaling.destroy()
+watcher.stop()
 ```
 
 ## Preflight Diagnostics
@@ -213,6 +210,42 @@ report.devices             // MediaDeviceInfo[]
 ```
 
 Diagnostics never call `getUserMedia()` — if a permission is missing, the check returns `notAuthorized`.
+
+### Connectivity Checks
+
+Test the core server endpoints individually:
+
+```typescript
+const connectivity = await diagnostics.runConnectivityChecks()
+
+connectivity.roomApi.status          // 'passed' | 'failed'
+connectivity.webSocket.status        // 'passed' | 'failed'
+connectivity.sse.status              // 'passed' | 'failed'
+connectivity.diagnosticToken.status  // 'passed' | 'failed'
+connectivity.turnCredentials.status  // 'passed' | 'failed'
+```
+
+### ICE Probing
+
+Verify STUN/TURN reachability with a real browser ICE gather:
+
+```typescript
+const iceReport = await diagnostics.runIceProbe(false, (line) => {
+    console.log(line)
+})
+
+iceReport.stunPassed
+iceReport.turnPassed
+iceReport.logs
+```
+
+### Server Validation
+
+Validate that a host is a reachable Serenada server:
+
+```typescript
+await diagnostics.validateServerHost()
+```
 
 ## Configuration
 
