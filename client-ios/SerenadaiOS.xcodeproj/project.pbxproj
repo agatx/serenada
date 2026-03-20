@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		03021554EADCBAE157B71297 /* PushSubscriptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5849DCA4B2F1D0DD0411242 /* PushSubscriptionManager.swift */; };
 		0A2C0A7E3C1A621804CC59C9 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = EA93F28D0C87ABED6B756036 /* Localizable.strings */; };
 		169DFB9313A225EBD1962BFE /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C9C837439E676ED7F04801 /* BroadcastShared.swift */; };
 		16ED701C50FCF1CF741D04F1 /* JoinRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54D58A452D7949DF145435E /* JoinRecoveryTests.swift */; };
@@ -23,7 +24,6 @@
 		3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */; };
 		46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */; };
 		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		5665C71CE00145A0B91CBBB3 /* JoinSnapshotFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55C7196F10921F7DCB998749 /* JoinSnapshotFeature.swift */; };
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
 		60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */; };
 		6E92E404B6B3E0A636F21C56 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3529A15EA2C43DB2F91F46FC /* RootView.swift */; };
@@ -38,12 +38,13 @@
 		89865919658F9327ADF61AED /* RecentCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DA4F257ABA1CF5875CA4B83 /* RecentCall.swift */; };
 		932FE0F4C5B2A808073B537A /* BackoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC9E71EE9415390DBBFC4A7 /* BackoffTests.swift */; };
 		9342C14683CA7530772F5F93 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE887624CBDA34B0B333C6A /* SettingsStore.swift */; };
-		9ABCF3D0278D7EA44D415962 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E1F379FD66B538614684A7 /* PushKeyStore.swift */; };
 		9ADDE9F64E5B64AB5128AF50 /* CameraModeFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F052EA0D1D083D292B3CF0E /* CameraModeFlowTests.swift */; };
 		A166AEDB8228E8C0BB59B927 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */; };
 		A281E4C5D7AE35EEF75A87A8 /* SerenadaSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7830FA5A71601737755C721D /* SerenadaSessionTests.swift */; };
+		A3E593BBB26536974F9B5152 /* JoinSnapshotFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0824DD6CEC2DF4431D724B4D /* JoinSnapshotFeature.swift */; };
 		A943CC93EAF10E990017D277 /* SerenadaBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AD701F4DE41EA9DFCC2125CE /* JoinScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34F0B8DB451442FAB82D1D94 /* JoinScreen.swift */; };
+		B402B3581D8D647DC2D139A7 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
 		BC3AE1438258D205BFE66CD2 /* SerenadaiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */; };
 		BD10E73D0A99AF24A662C4F6 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */; };
 		C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9816C392666DC51C1838319 /* RecentCallStoreTests.swift */; };
@@ -51,8 +52,7 @@
 		CAD139965FF8325D89A8113A /* ErrorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D7AA70D76623801E762E2DB /* ErrorScreen.swift */; };
 		CEEA0CFAF57BC2B4A48F8441 /* DeepLinkParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5BC48440A4DD113050C3E29 /* DeepLinkParserTests.swift */; };
 		DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A48285CB0CBEE51504B0674B /* CallManager.swift */; };
-		DC27A010075A188C0436837E /* PushSubscriptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FB1F707A2EB44614A04629B /* PushSubscriptionManager.swift */; };
-		E78EBC10E86725F32B412288 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E1F379FD66B538614684A7 /* PushKeyStore.swift */; };
+		E023D6932A1411B953694012 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
 		EE8328B7F79EEA681164E7ED /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 018403014C9AEDF89B039618 /* SettingsScreen.swift */; };
 		F237C6E7ED0C17810C58C49F /* SavedRoomStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */; };
 		F6138648F1A35A494AF6330E /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9036C71CC2E91FAD8FB5170 /* APIClient.swift */; };
@@ -122,6 +122,7 @@
 
 /* Begin PBXFileReference section */
 		018403014C9AEDF89B039618 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
+		0824DD6CEC2DF4431D724B4D /* JoinSnapshotFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinSnapshotFeature.swift; sourceTree = "<group>"; };
 		08BED6C2775E7E4CB2896F08 /* DeepLinkRejoinFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkRejoinFlowUITests.swift; sourceTree = "<group>"; };
 		0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLaunchOverrides.swift; sourceTree = "<group>"; };
 		18568C3FC4A75A087A876FB4 /* SerenadaiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SerenadaiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -139,10 +140,10 @@
 		4D4E0E538F82CE87BE4FDB24 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = SerenadaCallUI; sourceTree = SOURCE_ROOT; };
 		4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStoreTests.swift; sourceTree = "<group>"; };
 		53E3B13DA44022026D9F605D /* SavedRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStore.swift; sourceTree = "<group>"; };
-		55C7196F10921F7DCB998749 /* JoinSnapshotFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinSnapshotFeature.swift; sourceTree = "<group>"; };
 		6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinWithCodeScreen.swift; sourceTree = "<group>"; };
 		68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SerenadaBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushKeyStore.swift; sourceTree = "<group>"; };
 		70D055EA10214AFAD5F76FFE /* layout_conformance_v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = layout_conformance_v1.json; sourceTree = "<group>"; };
 		7830FA5A71601737755C721D /* SerenadaSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaSessionTests.swift; sourceTree = "<group>"; };
 		7C5B216BB8A302914AB1CA5B /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
@@ -154,7 +155,6 @@
 		9BD7296B4488661AE49A34BA /* RootViewRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootViewRoutingTests.swift; sourceTree = "<group>"; };
 		9DA4F257ABA1CF5875CA4B83 /* RecentCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCall.swift; sourceTree = "<group>"; };
 		9F052EA0D1D083D292B3CF0E /* CameraModeFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraModeFlowTests.swift; sourceTree = "<group>"; };
-		9FB1F707A2EB44614A04629B /* PushSubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionManager.swift; sourceTree = "<group>"; };
 		9FC9E71EE9415390DBBFC4A7 /* BackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackoffTests.swift; sourceTree = "<group>"; };
 		A48285CB0CBEE51504B0674B /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
 		B2B27D4928922728BD684878 /* SavedRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoom.swift; sourceTree = "<group>"; };
@@ -163,6 +163,7 @@
 		B8DC46B13DBF27F02DA8B2D2 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
 		C03DA37A007DFCE3DA069244 /* CallScreenStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallScreenStateTests.swift; sourceTree = "<group>"; };
 		C1C9C837439E676ED7F04801 /* BroadcastShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastShared.swift; sourceTree = "<group>"; };
+		C5849DCA4B2F1D0DD0411242 /* PushSubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionManager.swift; sourceTree = "<group>"; };
 		D0BE7FF0C166694E0F58114A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D5DEACDD78A7F800281C0FC6 /* CaptureResolutionSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResolutionSelectionTests.swift; sourceTree = "<group>"; };
 		D9036C71CC2E91FAD8FB5170 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
@@ -170,7 +171,6 @@
 		E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		E194DC9F376B307952F4AD8E /* LayoutConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutConformanceTests.swift; sourceTree = "<group>"; };
 		E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaiOSApp.swift; sourceTree = "<group>"; };
-		E4E1F379FD66B538614684A7 /* PushKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushKeyStore.swift; sourceTree = "<group>"; };
 		E5D3CF250B070B90F00B3B1D /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		E77A32857F53D8DEADAF2B04 /* SerenadaiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SerenadaiOS.entitlements; sourceTree = "<group>"; };
 		E9CFF87F710AB38BB7519AFB /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -230,6 +230,14 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		3A393515C619541F21CCA735 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
 		3A3F344D2A123C67DD94ED5D /* Utils */ = {
 			isa = PBXGroup;
 			children = (
@@ -272,10 +280,10 @@
 				F86221F53AB93BC5BEEE7E9F /* BroadcastUpload */,
 				961901030B63AB715A9ED19C /* NotificationService */,
 				3DDC1D067C4415DBE46DAC91 /* Packages */,
-				D67D9D9D6E20F61AB5A0BB84 /* Push */,
 				9DC24B91EF97AE50C603EEA7 /* Resources */,
 				B6985F8378BC1C8179F89F34 /* SerenadaCallUITests */,
 				A2D3D0A29FF7773DB01D20A5 /* SerenadaCoreTests */,
+				3A393515C619541F21CCA735 /* Shared */,
 				45049EAECFD0C6702F960499 /* Sources */,
 				764ED29F41F93A0EE47FB208 /* Sources */,
 				CF8ED7F99104C94EC09DEACA /* Tests */,
@@ -291,7 +299,7 @@
 				DC182EC6B44E4E8A699BAA74 /* Call */,
 				22483D3AB8F5BFA5D8F6B3BE /* Models */,
 				7EAAB204F172A0E5B35978B2 /* Networking */,
-				D67D9D9D6E20F61AB5A0BB84 /* Push */,
+				B4087F0F9CD077C7575DE64E /* Push */,
 				A90B5CD3C9F90FECC9869E86 /* Stores */,
 				3A3F344D2A123C67DD94ED5D /* Utils */,
 			);
@@ -375,6 +383,15 @@
 			path = Screens;
 			sourceTree = "<group>";
 		};
+		B4087F0F9CD077C7575DE64E /* Push */ = {
+			isa = PBXGroup;
+			children = (
+				0824DD6CEC2DF4431D724B4D /* JoinSnapshotFeature.swift */,
+				C5849DCA4B2F1D0DD0411242 /* PushSubscriptionManager.swift */,
+			);
+			path = Push;
+			sourceTree = "<group>";
+		};
 		B6985F8378BC1C8179F89F34 /* SerenadaCallUITests */ = {
 			isa = PBXGroup;
 			children = (
@@ -414,17 +431,6 @@
 				CA4C6C0A828720547ED2F42A /* Fixtures */,
 			);
 			path = Tests;
-			sourceTree = "<group>";
-		};
-		D67D9D9D6E20F61AB5A0BB84 /* Push */ = {
-			isa = PBXGroup;
-			children = (
-				55C7196F10921F7DCB998749 /* JoinSnapshotFeature.swift */,
-				E4E1F379FD66B538614684A7 /* PushKeyStore.swift */,
-				9FB1F707A2EB44614A04629B /* PushSubscriptionManager.swift */,
-			);
-			name = Push;
-			path = Sources/Core/Push;
 			sourceTree = "<group>";
 		};
 		DC182EC6B44E4E8A699BAA74 /* Call */ = {
@@ -672,11 +678,11 @@
 				46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */,
 				CAD139965FF8325D89A8113A /* ErrorScreen.swift in Sources */,
 				AD701F4DE41EA9DFCC2125CE /* JoinScreen.swift in Sources */,
-				5665C71CE00145A0B91CBBB3 /* JoinSnapshotFeature.swift in Sources */,
+				A3E593BBB26536974F9B5152 /* JoinSnapshotFeature.swift in Sources */,
 				252529C96E5D4B8966096E25 /* JoinWithCodeScreen.swift in Sources */,
 				83811A536303E5E2F05D3859 /* L10n.swift in Sources */,
-				9ABCF3D0278D7EA44D415962 /* PushKeyStore.swift in Sources */,
-				DC27A010075A188C0436837E /* PushSubscriptionManager.swift in Sources */,
+				E023D6932A1411B953694012 /* PushKeyStore.swift in Sources */,
+				03021554EADCBAE157B71297 /* PushSubscriptionManager.swift in Sources */,
 				89865919658F9327ADF61AED /* RecentCall.swift in Sources */,
 				F9CC8286BAD9F8D26CDEEF33 /* RecentCallStore.swift in Sources */,
 				C8363EE39A1335203566D71B /* RoomStatuses.swift in Sources */,
@@ -734,7 +740,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2B3986D47A857C11365A6D68 /* NotificationService.swift in Sources */,
-				E78EBC10E86725F32B412288 /* PushKeyStore.swift in Sources */,
+				B402B3581D8D647DC2D139A7 /* PushKeyStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

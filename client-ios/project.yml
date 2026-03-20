@@ -27,6 +27,7 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: Sources
+      - path: Shared
       - path: Resources
         excludes:
           - Info.plist
@@ -76,7 +77,7 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: NotificationService
-      - path: Sources/Core/Push/PushKeyStore.swift
+      - path: Shared
     info:
       path: NotificationService/Info.plist
       properties:
