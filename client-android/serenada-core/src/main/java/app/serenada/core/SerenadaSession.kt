@@ -2,6 +2,7 @@ package app.serenada.core
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
@@ -115,6 +116,11 @@ class SerenadaSession internal constructor(
     private var webRtcEngine = buildWebRtcEngine()
     private var awaitingPermissions = false
 
+    var onPermissionsRequired: ((List<MediaCapability>) -> Unit)? = null
+
+    val host: String
+        get() = serverHost
+
     private val callAudioSessionController = CallAudioSessionController(
         context = appContext,
         handler = handler,
@@ -224,8 +230,17 @@ class SerenadaSession internal constructor(
 
     fun resumeJoin() {
         if (!awaitingPermissions) return
+        if (!hasRequiredPermissions()) {
+            startWithPermissionCheck()
+            return
+        }
         awaitingPermissions = false
-        updateState(_state.value.copy(requiredPermissions = emptyList()))
+        updateState(
+            _state.value.copy(
+                phase = CallPhase.Joining,
+                requiredPermissions = emptyList()
+            )
+        )
         startJoinInternal()
     }
 
@@ -320,6 +335,14 @@ class SerenadaSession internal constructor(
     // --- Internal: Start ---
 
     internal fun start() {
+        if (!hasRequiredPermissions()) {
+            startWithPermissionCheck()
+            return
+        }
+        startJoinInternal()
+    }
+
+    private fun startJoinInternal() {
         val joinAttemptId = ++joinAttemptSerial
         callStartTimeMs = System.currentTimeMillis()
         pendingMessages.clear()
@@ -361,18 +384,18 @@ class SerenadaSession internal constructor(
 
     internal fun startWithPermissionCheck() {
         awaitingPermissions = true
+        val permissions = listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE)
         updateState(
             _state.value.copy(
-                phase = CallPhase.Joining,
+                phase = CallPhase.AwaitingPermissions,
                 roomId = roomId,
-                requiredPermissions = listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE),
+                requiredPermissions = permissions,
             )
         )
-        delegate?.invoke()?.onPermissionsRequired(this, listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE))
-    }
-
-    private fun startJoinInternal() {
-        start()
+        handler.post {
+            onPermissionsRequired?.invoke(permissions)
+                ?: delegate?.invoke()?.onPermissionsRequired(this, permissions)
+        }
     }
 
     // --- Internal: WebRTC Engine ---
@@ -418,7 +441,7 @@ class SerenadaSession internal constructor(
                     applyLocalVideoPreference()
                 }
             },
-            isHdVideoExperimentalEnabled = false
+            isHdVideoExperimentalEnabled = config.isHdVideoExperimentalEnabled
         )
     }
 
@@ -448,10 +471,10 @@ class SerenadaSession internal constructor(
                     "capabilities",
                     JSONObject().apply {
                         put("trickleIce", true)
-                        put("maxParticipants", 2)
+                        put("maxParticipants", 4)
                     }
                 )
-                put("createMaxParticipants", 2)
+                put("createMaxParticipants", 4)
                 reconnectToken?.let { put("reconnectToken", it) }
             }
         }
@@ -1188,6 +1211,7 @@ class SerenadaSession internal constructor(
                                         videoFps = merged.videoFps,
                                         videoResolution = merged.videoResolution,
                                         iceCandidatePair = merged.transportPath,
+                                        realtimeStats = merged,
                                         updatedAtMs = merged.updatedAtMs,
                                     )
                                 }
@@ -1306,10 +1330,20 @@ class SerenadaSession internal constructor(
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
     }
 
+    private fun hasRequiredPermissions(): Boolean {
+        return REQUIRED_ANDROID_PERMISSIONS.all { permission ->
+            appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     private companion object {
         const val TAG = "SerenadaSession"
         const val WEBRTC_STATS_POLL_INTERVAL_MS = 2000L
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
+        val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
+        )
         val ICE_PRIORITY = mapOf(
             PeerConnection.IceConnectionState.FAILED to 0, PeerConnection.IceConnectionState.DISCONNECTED to 1,
             PeerConnection.IceConnectionState.CHECKING to 2, PeerConnection.IceConnectionState.NEW to 3,

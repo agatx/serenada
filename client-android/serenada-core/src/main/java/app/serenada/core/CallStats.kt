@@ -1,5 +1,7 @@
 package app.serenada.core
 
+import app.serenada.core.call.RealtimeCallStats
+
 /**
  * Aggregated call statistics exposed to SDK consumers.
  * Populated from WebRTC getStats() periodically during an active call.
@@ -17,5 +19,6 @@ data class CallStats(
     val videoTxKbps: Double? = null,
     val videoFps: Double? = null,
     val videoResolution: String? = null,
+    val realtimeStats: RealtimeCallStats? = null,
     val updatedAtMs: Long = 0L,
 )

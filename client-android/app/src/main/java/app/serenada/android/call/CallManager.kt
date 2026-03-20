@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import app.serenada.android.BuildConfig
 import app.serenada.android.R
 import app.serenada.android.data.RecentCall
 import app.serenada.android.data.RecentCallStore
@@ -26,6 +27,11 @@ import app.serenada.android.data.SavedRoomStore
 import app.serenada.android.data.SettingsStore
 import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.HostApiClient
+import app.serenada.core.CallState
+import app.serenada.core.SerenadaConfig
+import app.serenada.core.SerenadaCore
+import app.serenada.core.SerenadaSession
+import app.serenada.core.SerenadaTransport
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.TurnCredentials
 import app.serenada.core.call.CallPhase
@@ -52,10 +58,18 @@ import org.webrtc.PeerConnection
 import org.webrtc.SessionDescription
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val webRtcStatsExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "webrtc-stats")
     }
@@ -80,6 +94,7 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             handler.post {
+                if (activeSession != null) return@post
                 if (_uiState.value.phase == CallPhase.InCall) {
                     val state = _uiState.value
                     if (isConnectionDegraded(state)) {
@@ -95,6 +110,7 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
 
         override fun onLost(network: Network) {
             handler.post {
+                if (activeSession != null) return@post
                 if (_uiState.value.phase == CallPhase.InCall) {
                     val state = _uiState.value
                     val hasAnyActiveNetwork = connectivityManager.activeNetwork != null
@@ -144,8 +160,12 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     val isRemoteVideoFitCover: Boolean
         get() = settingsStore.isRemoteVideoFitCover
 
+    private var activeSession: SerenadaSession? = null
+    private var activeSessionStateJob: Job? = null
+    private var activeSessionStatsJob: Job? = null
     private var currentRoomId: String? = null
     private var activeCallHostOverride: String? = null
+    private var activeCallRoomUrl: String? = null
     private var clientId: String? = null
     private var hostCid: String? = null
     private var currentRoomState: RoomState? = null
@@ -194,23 +214,25 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     private val joinSnapshotFeature = JoinSnapshotFeature(
         apiClient = apiClient,
         handler = handler,
-        attachLocalSink = { sink -> webRtcEngine.attachLocalSink(sink) },
-        detachLocalSink = { sink -> webRtcEngine.detachLocalSink(sink) }
+        attachLocalSink = { sink -> activeSession?.attachLocalSink(sink) },
+        detachLocalSink = { sink -> activeSession?.detachLocalSink(sink) }
     )
 
     private val signalingClient = SignalingClient(okHttpClient, handler, object : SignalingClient.Listener {
         override fun onOpen(activeTransport: String) {
             reconnectAttempts = 0
-            updateState(
-                _uiState.value.copy(
-                    isSignalingConnected = true,
-                    activeTransport = activeTransport
+            if (activeSession == null) {
+                updateState(
+                    _uiState.value.copy(
+                        isSignalingConnected = true,
+                        activeTransport = activeTransport
+                    )
                 )
-            )
-            updateConnectionStatusFromSignals()
-            pendingJoinRoom?.let { join ->
-                pendingJoinRoom = null
-                sendJoin(join)
+                updateConnectionStatusFromSignals()
+                pendingJoinRoom?.let { join ->
+                    pendingJoinRoom = null
+                    sendJoin(join)
+                }
             }
             sendWatchRoomsIfNeeded()
         }
@@ -221,11 +243,13 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
 
         override fun onClosed(reason: String) {
             val shouldReconnect = shouldReconnectSignaling()
-            updateState(_uiState.value.copy(
-                isSignalingConnected = false,
-                activeTransport = null
-            ))
-            updateConnectionStatusFromSignals()
+            if (activeSession == null) {
+                updateState(_uiState.value.copy(
+                    isSignalingConnected = false,
+                    activeTransport = null
+                ))
+                updateConnectionStatusFromSignals()
+            }
             if (shouldReconnect) {
                 scheduleReconnect()
             }
@@ -236,6 +260,192 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
         registerConnectivityListener()
         refreshRecentCalls()
         refreshSavedRooms()
+    }
+
+    private fun createSdkCore(host: String): SerenadaCore {
+        val transports =
+            if (BuildConfig.FORCE_SSE_SIGNALING) {
+                listOf(SerenadaTransport.SSE)
+            } else {
+                listOf(SerenadaTransport.WS, SerenadaTransport.SSE)
+            }
+        return SerenadaCore(
+            config = SerenadaConfig(
+                serverHost = host,
+                defaultAudioEnabled = settingsStore.isDefaultMicrophoneEnabled,
+                defaultVideoEnabled = settingsStore.isDefaultCameraEnabled,
+                isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
+                transports = transports
+            ),
+            context = appContext
+        )
+    }
+
+    private fun beginSdkSession(session: SerenadaSession, hostOverride: String? = null) {
+        clearActiveSessionObservers()
+        activeSession = session
+        activeCallHostOverride = normalizeHostValue(hostOverride)
+        activeCallRoomUrl = session.roomUrl
+        currentRoomId = session.roomId
+        clientId = null
+        hostCid = null
+        currentRoomState = null
+        callStartTimeMs = System.currentTimeMillis()
+        hasNotifiedPushForJoin = false
+        userPreferredVideoEnabled = settingsStore.isDefaultCameraEnabled
+        isVideoPausedByProximity = false
+
+        activeSessionStateJob =
+            scope.launch {
+                session.state.collectLatest { state ->
+                    if (activeSession !== session) return@collectLatest
+                    handler.post {
+                        handleSdkSessionState(session, state)
+                    }
+                }
+            }
+        activeSessionStatsJob =
+            scope.launch {
+                session.callStats.collectLatest { stats ->
+                    if (activeSession !== session) return@collectLatest
+                    handler.post {
+                        updateState(
+                            _uiState.value.copy(
+                                realtimeCallStats = stats.realtimeStats
+                            )
+                        )
+                    }
+                }
+            }
+
+        applySdkStateToUi(session.state.value)
+        CallService.start(appContext, session.roomId, roomName = savedRoomNameForNotification(session.roomId))
+    }
+
+    private fun handleSdkSessionState(session: SerenadaSession, state: CallState) {
+        currentRoomId = state.roomId ?: session.roomId
+        clientId = state.localCid
+        if (state.isHost && state.localCid != null) {
+            hostCid = state.localCid
+        }
+        activeCallRoomUrl = session.roomUrl
+        applySdkStateToUi(state)
+
+        val roomId = currentRoomId
+        if (!hasNotifiedPushForJoin && roomId != null && state.localCid != null) {
+            hasNotifiedPushForJoin = true
+            pushSubscriptionManager.subscribeRoom(roomId, session.host)
+            val notifyCid = state.localCid
+            if (notifyCid != null) {
+                joinSnapshotFeature.prepareSnapshotId(
+                    host = session.host,
+                    roomId = roomId,
+                    isVideoEnabled = { activeSession?.state?.value?.localVideoEnabled == true },
+                    isJoinAttemptActive = {
+                        activeSession === session &&
+                            currentRoomId == roomId &&
+                            activeSession?.state?.value?.phase != CallPhase.Idle
+                    }
+                ) { snapshotId ->
+                    val endpoint = pushSubscriptionManager.cachedEndpoint()
+                    apiClient.notifyRoom(session.host, roomId, notifyCid, snapshotId, endpoint) { result ->
+                        result.onFailure { error ->
+                            Log.w("CallManager", "Post-join push notify failed", error)
+                        }
+                    }
+                }
+            }
+        }
+
+        when (state.phase) {
+            CallPhase.Idle -> {
+                finishSdkSession(session, saveHistory = true)
+            }
+            CallPhase.Error -> {
+                CallService.stop(appContext)
+            }
+            else -> {
+                roomId?.let { rid ->
+                    CallService.start(appContext, rid, roomName = savedRoomNameForNotification(rid))
+                }
+            }
+        }
+    }
+
+    private fun applySdkStateToUi(state: CallState) {
+        val previous = _uiState.value
+        val statusMessageResId =
+            when (state.phase) {
+                CallPhase.CreatingRoom -> R.string.call_status_creating_room
+                CallPhase.AwaitingPermissions,
+                CallPhase.Joining -> R.string.call_status_joining_room
+                CallPhase.Waiting -> R.string.call_status_waiting_for_join
+                CallPhase.InCall -> R.string.call_status_in_call
+                CallPhase.Ending -> previous.statusMessageResId
+                CallPhase.Error,
+                CallPhase.Idle -> null
+            }
+
+        updateState(
+            previous.copy(
+                phase = state.phase,
+                roomId = state.roomId ?: currentRoomId,
+                localCid = state.localCid,
+                statusMessageResId = statusMessageResId,
+                errorMessageResId = if (state.phase == CallPhase.Error && state.errorMessage.isNullOrBlank()) {
+                    R.string.error_unknown
+                } else {
+                    null
+                },
+                errorMessageText = if (state.phase == CallPhase.Error) state.errorMessage else null,
+                isHost = state.isHost,
+                participantCount = state.participantCount,
+                localAudioEnabled = state.localAudioEnabled,
+                localVideoEnabled = state.localVideoEnabled,
+                remoteParticipants = state.remoteParticipants,
+                connectionStatus = state.connectionStatus,
+                isSignalingConnected = state.isSignalingConnected,
+                iceConnectionState = state.iceConnectionState,
+                connectionState = state.connectionState,
+                signalingState = state.signalingState,
+                activeTransport = state.activeTransport,
+                isFrontCamera = state.isFrontCamera,
+                isScreenSharing = state.isScreenSharing,
+                localCameraMode = state.localCameraMode,
+                isFlashAvailable = state.isFlashAvailable,
+                isFlashEnabled = state.isFlashEnabled,
+                remoteContentCid = state.remoteContentCid,
+                remoteContentType = state.remoteContentType,
+            )
+        )
+    }
+
+    private fun finishSdkSession(session: SerenadaSession, saveHistory: Boolean) {
+        if (activeSession !== session) return
+        if (saveHistory) {
+            saveCurrentCallToHistoryIfNeeded()
+        }
+        clearActiveSessionObservers()
+        activeSession = null
+        CallService.stop(appContext)
+        currentRoomId = null
+        activeCallHostOverride = null
+        activeCallRoomUrl = null
+        clientId = null
+        hostCid = null
+        currentRoomState = null
+        callStartTimeMs = null
+        hasNotifiedPushForJoin = false
+        updateState(CallUiState())
+        refreshRecentCalls()
+        refreshSavedRooms()
+    }
+
+    private fun clearActiveSessionObservers() {
+        activeSessionStateJob?.cancel()
+        activeSessionStateJob = null
+        activeSessionStatsJob?.cancel()
+        activeSessionStatsJob = null
     }
 
     private fun buildWebRtcEngine(): WebRtcEngine {
@@ -298,7 +508,7 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     }
 
     private fun shouldReconnectSignaling(): Boolean {
-        return currentRoomId != null || watchedRoomIds.isNotEmpty()
+        return watchedRoomIds.isNotEmpty()
     }
 
     private fun clearConnectionStatusRetryingTimer() {
@@ -452,7 +662,6 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     fun updateHdVideoExperimental(enabled: Boolean) {
         settingsStore.isHdVideoExperimentalEnabled = enabled
         _isHdVideoExperimentalEnabled.value = enabled
-        webRtcEngine.setHdVideoExperimentalEnabled(enabled)
     }
 
     fun updateSavedRoomsShownFirst(enabled: Boolean) {
@@ -699,30 +908,30 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     private fun isValidRoomId(roomId: String): Boolean = ROOM_ID_REGEX.matches(roomId)
 
     fun startNewCall() {
-        if (_uiState.value.phase != CallPhase.Idle) return
+        if (_uiState.value.phase != CallPhase.Idle || activeSession != null) return
         updateState(
             _uiState.value.copy(
                 phase = CallPhase.CreatingRoom,
                 statusMessageResId = R.string.call_status_creating_room
             )
         )
-        coreApiClient.createRoomId(serverHost.value) { result ->
+        createSdkCore(serverHost.value).createRoom { result ->
             handler.post {
-                result
-                    .onSuccess { roomId ->
-                        joinRoom(roomId)
-                    }
-                    .onFailure { err ->
-                        val fallback = appContext.getString(R.string.error_failed_create_room)
-                        val message = err.message?.ifBlank { null } ?: fallback
-                        updateState(
-                            _uiState.value.copy(
-                                phase = CallPhase.Error,
-                                errorMessageResId = if (message == fallback) R.string.error_failed_create_room else null,
-                                errorMessageText = if (message == fallback) null else message
-                            )
+                val session = result.session
+                if (result.error == null && session != null) {
+                    beginSdkSession(session)
+                } else {
+                    val err = result.error
+                    val fallback = appContext.getString(R.string.error_failed_create_room)
+                    val message = err?.message?.ifBlank { null } ?: fallback
+                    updateState(
+                        _uiState.value.copy(
+                            phase = CallPhase.Error,
+                            errorMessageResId = if (message == fallback) R.string.error_failed_create_room else null,
+                            errorMessageText = if (message == fallback) null else message
                         )
-                    }
+                    )
+                }
             }
         }
     }
@@ -741,68 +950,22 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
         if (savedRoomStore.markRoomJoined(roomId)) {
             refreshSavedRooms()
         }
-        activeCallHostOverride = normalizeHostValue(oneOffHost)
-        if (activeCallHostOverride != null && signalingClient.isConnected()) {
-            signalingClient.close()
-        }
-        currentRoomId = roomId
-        val joinAttemptId = ++joinAttemptSerial
-        callStartTimeMs = System.currentTimeMillis()
-        pendingMessages.clear()
-        peerSlots.clear()
-        currentRoomState = null
-        hasJoinSignalStarted = false
-        hasJoinAcknowledged = false
-        hasNotifiedPushForJoin = false
-
-        recreateWebRtcEngineForNewCall()
-
-        val defaultAudio = settingsStore.isDefaultMicrophoneEnabled
-        val defaultVideo = settingsStore.isDefaultCameraEnabled
-        userPreferredVideoEnabled = defaultVideo
-
-        updateState(
-            _uiState.value.copy(
-                phase = CallPhase.Joining,
-                roomId = roomId,
-                statusMessageResId = R.string.call_status_joining_room,
-                errorMessageResId = null,
-                errorMessageText = null,
-                localAudioEnabled = defaultAudio,
-                localVideoEnabled = defaultVideo,
-                remoteParticipants = emptyList(),
-                localCameraMode = LocalCameraMode.SELFIE,
-                connectionStatus = ConnectionStatus.Connected,
-                webrtcStatsSummary = "",
-                realtimeCallStats = null,
-                isFlashAvailable = false,
-                isFlashEnabled = false
-            )
-        )
-        scheduleJoinTimeout(roomId, joinAttemptId)
-        scheduleJoinKickstart(roomId, joinAttemptId)
-
-        acquirePerformanceLocks()
-        activateAudioSession()
-        webRtcEngine.startLocalMedia()
-
-        // Apply defaults immediately after starting media
-        if (!defaultAudio) webRtcEngine.toggleAudio(false)
-        applyLocalVideoPreference()
-
-        startRemoteVideoStatePolling()
-        ensureSignalingConnection()
-        CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
+        val resolvedHost = normalizeHostValue(oneOffHost) ?: serverHost.value
+        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost)
+        beginSdkSession(session, hostOverride = oneOffHost)
     }
 
     fun leaveCall() {
-        if (_uiState.value.phase == CallPhase.Idle) return
-        sendMessage("leave", null)
-        cleanupCall(R.string.call_status_left_room)
+        activeSession?.leave() ?: run {
+            if (_uiState.value.phase != CallPhase.Idle) {
+                updateState(CallUiState())
+            }
+        }
     }
 
     fun dismissError() {
         if (_uiState.value.phase == CallPhase.Error) {
+            activeSession?.let { finishSdkSession(it, saveHistory = false) }
             updateState(CallUiState())
             refreshRecentCalls()
             refreshSavedRooms()
@@ -819,38 +982,23 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     }
 
     fun toggleAudio() {
-        val enabled = !_uiState.value.localAudioEnabled
-        webRtcEngine.toggleAudio(enabled)
-        updateState(_uiState.value.copy(localAudioEnabled = enabled))
+        activeSession?.toggleAudio()
     }
 
     fun toggleVideo() {
-        // Toggle from the effective state so UI semantics remain intuitive even when proximity
-        // temporarily pauses local video.
-        userPreferredVideoEnabled = !_uiState.value.localVideoEnabled
-        applyLocalVideoPreference()
+        activeSession?.toggleVideo()
     }
 
     fun toggleFlashlight() {
-        webRtcEngine.toggleFlashlight()
+        activeSession?.toggleFlashlight()
     }
 
     fun flipCamera() {
-        // Can only flip if not screen sharing
-        if (!_uiState.value.isScreenSharing) {
-            // If currently in content mode (world/composite), broadcast deactivation
-            // before the flip. The onCameraModeChanged callback will broadcast
-            // activation if the new mode is also a content mode.
-            val currentMode = _uiState.value.localCameraMode
-            if (currentMode.isContentMode) {
-                broadcastContentState(false)
-            }
-            webRtcEngine.flipCamera()
-        }
+        activeSession?.flipCamera()
     }
 
     fun adjustLocalCameraZoom(scaleFactor: Float) {
-        webRtcEngine.adjustWorldCameraZoom(scaleFactor)
+        activeSession?.adjustLocalCameraZoom(scaleFactor)
     }
 
     fun startScreenShare(intent: Intent) {
@@ -871,16 +1019,10 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
 
     fun stopScreenShare() {
         if (!_uiState.value.isScreenSharing) return
-        if (!webRtcEngine.stopScreenShare()) {
-            Log.w("CallManager", "Failed to stop screen sharing")
-            return
-        }
+        activeSession?.stopScreenShare()
         currentRoomId?.let { roomId ->
             CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
         }
-        updateState(_uiState.value.copy(isScreenSharing = false))
-        broadcastContentState(false)
-        applyLocalVideoPreference()
     }
 
     private fun startScreenShareWhenForegroundReady(
@@ -889,14 +1031,7 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
         attemptsRemaining: Int
     ) {
         if (CallService.isMediaProjectionForegroundActive()) {
-            if (!webRtcEngine.startScreenShare(intent)) {
-                CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
-                Log.w("CallManager", "Failed to start screen sharing")
-                return
-            }
-            updateState(_uiState.value.copy(isScreenSharing = true))
-            broadcastContentState(true, ContentTypeWire.SCREEN_SHARE)
-            applyLocalVideoPreference()
+            activeSession?.startScreenShare(intent)
             return
         }
         if (attemptsRemaining <= 0) {
@@ -914,54 +1049,38 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null
     ) {
-        webRtcEngine.attachLocalRenderer(renderer, rendererEvents)
+        activeSession?.attachLocalRenderer(renderer, rendererEvents)
     }
 
     override fun detachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
-        webRtcEngine.detachLocalRenderer(renderer)
+        activeSession?.detachLocalRenderer(renderer)
     }
 
     fun attachRemoteRenderer(
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null
     ) {
-        val remoteCid = currentRoomState
-            ?.participants
-            ?.firstOrNull { it.cid != clientId }
-            ?.cid
-            ?: peerSlots.keys.firstOrNull()
-            ?: return
-        attachRemoteRendererForCid(remoteCid, renderer, rendererEvents)
+        activeSession?.attachRemoteRenderer(renderer, rendererEvents)
     }
 
     override fun detachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
-        peerSlots.values.forEach { slot ->
-            slot.detachRemoteRenderer(renderer)
-        }
+        activeSession?.detachRemoteRenderer(renderer)
     }
 
     fun attachLocalSink(sink: org.webrtc.VideoSink) {
-        webRtcEngine.attachLocalSink(sink)
+        activeSession?.attachLocalSink(sink)
     }
 
     fun detachLocalSink(sink: org.webrtc.VideoSink) {
-        webRtcEngine.detachLocalSink(sink)
+        activeSession?.detachLocalSink(sink)
     }
 
     fun attachRemoteSink(sink: org.webrtc.VideoSink) {
-        val remoteCid = currentRoomState
-            ?.participants
-            ?.firstOrNull { it.cid != clientId }
-            ?.cid
-            ?: peerSlots.keys.firstOrNull()
-            ?: return
-        peerSlots[remoteCid]?.attachRemoteSink(sink)
+        activeSession?.attachRemoteSink(sink)
     }
 
     fun detachRemoteSink(sink: org.webrtc.VideoSink) {
-        peerSlots.values.forEach { slot ->
-            slot.detachRemoteSink(sink)
-        }
+        activeSession?.detachRemoteSink(sink)
     }
 
     fun attachRemoteRendererForCid(
@@ -969,26 +1088,25 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null,
     ) {
-        webRtcEngine.initRenderer(renderer, rendererEvents)
-        peerSlots[cid]?.attachRemoteRenderer(renderer)
+        activeSession?.attachRemoteRendererForCid(cid, renderer, rendererEvents)
     }
 
     fun detachRemoteRendererForCid(
         cid: String,
         renderer: org.webrtc.SurfaceViewRenderer,
     ) {
-        peerSlots[cid]?.detachRemoteRenderer(renderer)
+        activeSession?.detachRemoteRendererForCid(cid, renderer)
     }
 
     fun attachRemoteSinkForCid(cid: String, sink: org.webrtc.VideoSink) {
-        peerSlots[cid]?.attachRemoteSink(sink)
+        activeSession?.attachRemoteSinkForCid(cid, sink)
     }
 
     fun detachRemoteSinkForCid(cid: String, sink: org.webrtc.VideoSink) {
-        peerSlots[cid]?.detachRemoteSink(sink)
+        activeSession?.detachRemoteSinkForCid(cid, sink)
     }
 
-    fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
+    fun eglContext(): org.webrtc.EglBase.Context = activeSession?.eglContext() ?: webRtcEngine.getEglContext()
 
     // CallRendererProvider interface overrides
     override fun attachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
@@ -2313,11 +2431,7 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
     }
 
     private fun currentSignalingHost(): String {
-        return if (currentRoomId != null) {
-            activeCallHostOverride ?: serverHost.value
-        } else {
-            serverHost.value
-        }
+        return activeSession?.host ?: activeCallHostOverride ?: serverHost.value
     }
 
     private fun refreshWatchedRooms() {
@@ -2336,7 +2450,7 @@ class CallManager(context: Context) : app.serenada.callui.CallRendererProvider {
 
     private fun watchRecentRoomsIfNeeded() {
         if (watchedRoomIds.isEmpty()) {
-            if (currentRoomId == null && signalingClient.isConnected()) {
+            if (activeSession == null && signalingClient.isConnected()) {
                 signalingClient.close()
             }
             return

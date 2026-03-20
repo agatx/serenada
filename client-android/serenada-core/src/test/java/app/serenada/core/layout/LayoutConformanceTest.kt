@@ -1,6 +1,6 @@
-package app.serenada.android.layout
+package app.serenada.core.layout
 
-import app.serenada.core.layout.*
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -11,12 +11,6 @@ import org.junit.runners.Parameterized
 
 private const val STRICT_TOLERANCE = 0.005
 
-/**
- * Cross-platform layout conformance test. Reads the shared fixture file and validates
- * that the Kotlin layout engine produces the same results as the TypeScript reference.
- *
- * Uses manual JSON parsing to avoid Android's org.json which is not available in local unit tests.
- */
 @RunWith(Parameterized::class)
 class LayoutConformanceTest(
     private val caseId: String,
@@ -26,24 +20,28 @@ class LayoutConformanceTest(
         @JvmStatic
         @Parameterized.Parameters(name = "{0}")
         fun cases(): List<Array<Any>> {
-            val text = LayoutConformanceTest::class.java
-                .getResourceAsStream("/fixtures/layout_conformance_v1.json")
-                ?.bufferedReader()?.readText()
-                ?: error("Fixture file not found")
-
-            // Simple extraction of case objects from the JSON array
+            val text = loadFixtureText()
             val casesStart = text.indexOf("\"cases\"") + "\"cases\"".length
             val arrayStart = text.indexOf('[', casesStart)
             val arrayEnd = text.lastIndexOf(']')
             val casesArrayContent = text.substring(arrayStart + 1, arrayEnd)
-
-            // Split by top-level objects in the array
             val caseStrings = splitTopLevelObjects(casesArrayContent)
 
             return caseStrings.map { caseStr ->
                 val id = extractString(caseStr, "id")
                 arrayOf(id, caseStr)
             }
+        }
+
+        private fun loadFixtureText(): String {
+            val fixtureRelativePath = "tests/layout/fixtures/layout_conformance_v1.json"
+            val baseDir = File(System.getProperty("user.dir") ?: ".")
+            val fixtureFile =
+                generateSequence(baseDir) { current -> current.parentFile }
+                    .map { File(it, fixtureRelativePath) }
+                    .firstOrNull { it.isFile }
+                    ?: error("Fixture file not found at $fixtureRelativePath")
+            return fixtureFile.readText()
         }
 
         private fun splitTopLevelObjects(content: String): List<String> {
@@ -85,15 +83,12 @@ class LayoutConformanceTest(
         val expected = extractObject(caseJson, "expected")
         val result = computeLayout(scene)
 
-        // Mode
         val expectedMode = extractString(expected, "mode")
         assertEquals("mode mismatch for $caseId", expectedMode, result.mode.name.lowercase())
 
-        // Tile count
         val expectedTileCount = extractInt(expected, "tileCount")
         assertEquals("tile count mismatch for $caseId", expectedTileCount, result.tiles.size)
 
-        // Tile frames
         val expectedTiles = extractArray(expected, "tiles")
         for (i in expectedTiles.indices) {
             val et = expectedTiles[i]
@@ -112,7 +107,6 @@ class LayoutConformanceTest(
             assertFrameClose(actualFrame, expectedFrame, STRICT_TOLERANCE, "$caseId tile[$i]")
         }
 
-        // Local PIP
         val localPipJson = extractObjectOrNull(expected, "localPip")
         if (localPipJson == null) {
             assertNull("localPip should be null for $caseId", result.localPip)
@@ -120,18 +114,22 @@ class LayoutConformanceTest(
             assertNotNull("localPip should not be null for $caseId", result.localPip)
             val pip = result.localPip!!
 
-            assertEquals("pip participantId for $caseId",
-                extractString(localPipJson, "participantId"), pip.participantId)
-            assertEquals("pip anchor for $caseId",
-                extractString(localPipJson, "anchor"), anchorToString(pip.anchor))
+            assertEquals(
+                "pip participantId for $caseId",
+                extractString(localPipJson, "participantId"),
+                pip.participantId
+            )
+            assertEquals(
+                "pip anchor for $caseId",
+                extractString(localPipJson, "anchor"),
+                anchorToString(pip.anchor)
+            )
 
             val expectedPipFrame = extractObject(localPipJson, "normalizedFrame")
             val actualPipFrame = normalizeFrame(pip.frame, scene.viewportWidth, scene.viewportHeight)
             assertFrameClose(actualPipFrame, expectedPipFrame, STRICT_TOLERANCE, "$caseId pip")
         }
     }
-
-    // --- Parsing helpers ---
 
     private fun parseScene(json: String): CallScene {
         val participantsArray = extractArray(json, "participants")
@@ -146,7 +144,6 @@ class LayoutConformanceTest(
 
         val insetsJson = extractObject(json, "safeAreaInsets")
         val userPrefsJson = extractObjectOrNull(json, "userPrefs")
-
         val contentSourceJson = extractObjectOrNull(json, "contentSource")
         val contentSource = contentSourceJson?.let { cs ->
             ContentSource(
@@ -206,8 +203,6 @@ class LayoutConformanceTest(
         Anchor.BOTTOM_RIGHT -> "bottomRight"
     }
 
-    // --- Minimal JSON extraction (no Android JSON dependency) ---
-
     private fun extractObject(json: String, key: String): String {
         val keyPattern = "\"$key\""
         var searchFrom = 0
@@ -258,66 +253,65 @@ class LayoutConformanceTest(
         var escaped = false
         for (i in start until json.length) {
             val c = json[i]
-            if (escaped) { escaped = false; continue }
-            if (c == '\\') { escaped = true; continue }
-            if (c == '"') { inString = !inString; continue }
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (c == '\\') {
+                escaped = true
+                continue
+            }
+            if (c == '"') {
+                inString = !inString
+                continue
+            }
             if (inString) continue
             if (c == open) depth++
             if (c == close) depth--
             if (depth == 0) return json.substring(start, i + 1)
         }
-        error("Unbalanced $open/$close from position $start")
+        error("Unbalanced JSON segment starting at $start")
     }
 
-    private fun extractFloat(json: String, key: String): Float {
-        val raw = extractRawValue(json, key)
-        return raw.toFloat()
-    }
+    private fun extractInt(json: String, key: String): Int = extractNumber(json, key).toInt()
+
+    private fun extractFloat(json: String, key: String): Float = extractNumber(json, key).toFloat()
 
     private fun extractFloatOrNull(json: String, key: String): Float? {
-        val raw = extractRawValue(json, key)
-        if (raw == "null") return null
-        return raw.toFloatOrNull()
+        val value = extractRawValueOrNull(json, key) ?: return null
+        if (value == "null") return null
+        return value.toFloat()
     }
 
-    private fun extractInt(json: String, key: String): Int {
-        return extractRawValue(json, key).toInt()
-    }
-
-    private fun extractBoolean(json: String, key: String): Boolean {
-        return extractRawValue(json, key).toBoolean()
-    }
+    private fun extractBoolean(json: String, key: String): Boolean = extractRawValue(json, key).toBoolean()
 
     private fun extractStringOrNull(json: String, key: String): String? {
-        val raw = extractRawValue(json, key)
-        if (raw == "null") return null
-        return raw.removeSurrounding("\"")
+        val value = extractRawValueOrNull(json, key) ?: return null
+        if (value == "null") return null
+        return extractString(json, key)
     }
 
-    private fun extractRawValue(json: String, key: String): String {
+    private fun extractNumber(json: String, key: String): String = extractRawValue(json, key)
+
+    private fun extractRawValue(json: String, key: String): String =
+        extractRawValueOrNull(json, key) ?: error("Key '$key' not found")
+
+    private fun extractRawValueOrNull(json: String, key: String): String? {
         val keyPattern = "\"$key\""
-        var searchFrom = 0
-        while (true) {
-            val keyIdx = json.indexOf(keyPattern, searchFrom)
-            if (keyIdx < 0) error("Key '$key' not found in JSON fragment")
-            // Verify this key is at an object property level (preceded by { , or newline)
-            val colonIdx = json.indexOf(':', keyIdx + keyPattern.length)
-            if (colonIdx < 0) { searchFrom = keyIdx + 1; continue }
-            val valStart = colonIdx + 1
-            val trimmed = json.substring(valStart).trimStart()
-            // Determine value end
-            val valueStr = when {
-                trimmed.startsWith("\"") -> {
-                    val closeQuote = trimmed.indexOf('"', 1)
-                    trimmed.substring(0, closeQuote + 1)
-                }
-                trimmed.startsWith("{") || trimmed.startsWith("[") -> return trimmed // complex object
-                else -> {
-                    val end = trimmed.indexOfFirst { it == ',' || it == '}' || it == ']' || it == '\n' }
-                    if (end < 0) trimmed.trim() else trimmed.substring(0, end).trim()
-                }
-            }
-            return valueStr
+        val keyIdx = json.indexOf(keyPattern)
+        if (keyIdx < 0) return null
+        val colonIdx = json.indexOf(':', keyIdx + keyPattern.length)
+        var i = colonIdx + 1
+        while (i < json.length && json[i].isWhitespace()) i++
+        if (i >= json.length) return null
+        if (json[i] == '"') {
+            val end = json.indexOf('"', i + 1)
+            return json.substring(i, end + 1)
         }
+        val end = generateSequence(i) { it + 1 }
+            .takeWhile { it < json.length && json[it] !in charArrayOf(',', '}', ']') }
+            .lastOrNull()
+            ?: return null
+        return json.substring(i, end + 1).trim()
     }
 }

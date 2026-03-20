@@ -23,11 +23,12 @@ class SerenadaCore(
      * Join a call using a full URL (e.g., "https://serenada.app/call/ABC123").
      */
     fun join(url: String): SerenadaSession {
-        val roomId = extractRoomIdFromUrl(url) ?: url
+        val resolved = resolveRoomUrl(url)
+        val roomId = resolved?.roomId ?: url
         val session = SerenadaSession(
             roomId = roomId,
-            roomUrl = url,
-            serverHost = config.serverHost,
+            roomUrl = resolved?.roomUrl ?: url,
+            serverHost = resolved?.serverHost ?: config.serverHost,
             config = config,
             context = context,
             delegate = { delegate },
@@ -41,9 +42,10 @@ class SerenadaCore(
      * Join a call using a room ID.
      */
     fun join(roomId: String, serverHost: String = config.serverHost): SerenadaSession {
+        val roomUrl = buildRoomUrl(serverHost, roomId)
         val session = SerenadaSession(
             roomId = roomId,
-            roomUrl = null,
+            roomUrl = roomUrl,
             serverHost = serverHost,
             config = config,
             context = context,
@@ -61,11 +63,10 @@ class SerenadaCore(
         apiClient.createRoomId(config.serverHost) { result ->
             result
                 .onSuccess { roomId ->
-                    val isLocal = config.serverHost.startsWith("localhost") || config.serverHost.startsWith("127.")
-                    val scheme = if (isLocal) "http" else "https"
+                    val roomUrl = buildRoomUrl(config.serverHost, roomId)
                     val session = SerenadaSession(
                         roomId = roomId,
-                        roomUrl = "$scheme://${config.serverHost}/call/$roomId",
+                        roomUrl = roomUrl,
                         serverHost = config.serverHost,
                         config = config,
                         context = context,
@@ -73,24 +74,55 @@ class SerenadaCore(
                         okHttpClient = okHttpClient,
                     )
                     session.start()
-                    callback(CreateRoomResult(roomId = roomId, session = session))
+                    callback(CreateRoomResult(roomId = roomId, roomUrl = roomUrl, session = session))
                 }
                 .onFailure { error ->
-                    callback(CreateRoomResult(roomId = null, session = null, error = error))
+                    callback(CreateRoomResult(roomId = null, roomUrl = null, session = null, error = error))
                 }
         }
     }
 
-    private fun extractRoomIdFromUrl(url: String): String? {
+    private fun resolveRoomUrl(url: String): ResolvedRoomUrl? {
         val trimmed = url.trim()
         if (!trimmed.contains("/")) return null
         return try {
             val uri = android.net.Uri.parse(trimmed)
-            uri.lastPathSegment?.takeIf { it.isNotBlank() }
+            val roomId = uri.lastPathSegment?.takeIf { it.isNotBlank() } ?: return null
+            val authority = uri.authority?.takeIf { it.isNotBlank() } ?: return null
+            val scheme = uri.scheme?.takeIf { it.isNotBlank() }
+                ?: if (isLocalHost(authority)) "http" else "https"
+            ResolvedRoomUrl(
+                roomId = roomId,
+                serverHost = authority,
+                roomUrl = "$scheme://$authority/call/$roomId"
+            )
         } catch (_: Exception) {
-            trimmed.split("/").lastOrNull()?.takeIf { it.isNotBlank() }
+            val roomId = trimmed.split("/").lastOrNull()?.takeIf { it.isNotBlank() } ?: return null
+            ResolvedRoomUrl(
+                roomId = roomId,
+                serverHost = config.serverHost,
+                roomUrl = buildRoomUrl(config.serverHost, roomId)
+            )
         }
     }
+
+    private fun buildRoomUrl(serverHost: String, roomId: String): String {
+        val scheme = if (isLocalHost(serverHost)) "http" else "https"
+        return "$scheme://$serverHost/call/$roomId"
+    }
+
+    private fun isLocalHost(serverHost: String): Boolean {
+        val normalized = serverHost.trim().lowercase()
+        return normalized.startsWith("localhost") ||
+            normalized.startsWith("127.") ||
+            normalized.startsWith("10.0.2.2")
+    }
+
+    private data class ResolvedRoomUrl(
+        val roomId: String,
+        val serverHost: String,
+        val roomUrl: String,
+    )
 
     companion object {
         const val VERSION = "0.1.0"
@@ -99,6 +131,7 @@ class SerenadaCore(
 
 data class CreateRoomResult(
     val roomId: String?,
+    val roomUrl: String?,
     val session: SerenadaSession?,
     val error: Throwable? = null,
 )
