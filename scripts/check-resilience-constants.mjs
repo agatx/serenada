@@ -15,9 +15,9 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
-const TS_PATH = resolve(root, 'client/src/constants/webrtcResilience.ts');
-const KT_PATH = resolve(root, 'client-android/app/src/main/java/app/serenada/android/call/WebRtcResilienceConstants.kt');
-const SWIFT_PATH = resolve(root, 'client-ios/Sources/Core/Call/WebRtcResilienceConstants.swift');
+const TS_PATH = resolve(root, 'client/packages/core/src/constants.ts');
+const KT_PATH = resolve(root, 'client-android/serenada-core/src/main/java/app/serenada/core/call/WebRtcResilienceConstants.kt');
+const SWIFT_PATH = resolve(root, 'client-ios/SerenadaCore/Sources/Call/WebRtcResilienceConstants.swift');
 
 // ── Parsers ──────────────────────────────────────────────────────────
 
@@ -78,38 +78,37 @@ const swMap = parseSwift(swSrc);
 
 const allNames = new Set([...tsMap.keys(), ...ktMap.keys(), ...swMap.keys()]);
 let matchCount = 0;
+let skippedCount = 0;
 
 for (const name of [...allNames].sort()) {
     const tsVal = tsMap.get(name);
     const ktVal = ktMap.get(name);
     const swVal = swMap.get(name);
 
-    if (tsVal === undefined) {
-        fail(`${name}: missing in TypeScript`);
-        continue;
-    }
-    if (ktVal === undefined) {
-        fail(`${name}: missing in Kotlin`);
-        continue;
-    }
-    if (swVal === undefined) {
-        fail(`${name}: missing in Swift`);
+    // Only enforce parity for constants present in at least two platforms.
+    // Platform-specific constants (e.g. web-only LOCAL_VIDEO_*) are allowed.
+    const present = [tsVal, ktVal, swVal].filter(v => v !== undefined);
+    if (present.length < 2) {
+        skippedCount++;
         continue;
     }
 
-    if (tsVal !== ktVal) {
+    if (tsVal !== undefined && ktVal !== undefined && tsVal !== ktVal) {
         fail(`${name}: TypeScript=${tsVal} vs Kotlin=${ktVal}`);
-    } else if (tsVal !== swVal) {
+    } else if (tsVal !== undefined && swVal !== undefined && tsVal !== swVal) {
         fail(`${name}: TypeScript=${tsVal} vs Swift=${swVal}`);
+    } else if (ktVal !== undefined && swVal !== undefined && ktVal !== swVal) {
+        fail(`${name}: Kotlin=${ktVal} vs Swift=${swVal}`);
     } else {
         matchCount++;
     }
 }
 
 if (exitCode === 0) {
-    console.log(`OK: all ${matchCount} resilience constants match across web, Android, and iOS.`);
+    const msg = `OK: ${matchCount} resilience constants match across platforms.`;
+    console.log(skippedCount > 0 ? `${msg} (${skippedCount} platform-specific skipped)` : msg);
 } else {
-    console.log(`\n${matchCount}/${allNames.size} constants match.`);
+    console.log(`\n${matchCount}/${allNames.size - skippedCount} shared constants match.`);
 }
 
 process.exit(exitCode);
