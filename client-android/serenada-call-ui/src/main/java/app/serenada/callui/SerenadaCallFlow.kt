@@ -29,6 +29,7 @@ fun SerenadaCallFlow(
     url: String? = null,
     session: SerenadaSession? = null,
     config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
+    theme: SerenadaCallFlowTheme = SerenadaCallFlowTheme(),
     roomName: String? = null,
     initialRemoteVideoFitCover: Boolean = true,
     strings: Map<SerenadaString, String>? = null,
@@ -134,6 +135,7 @@ fun SerenadaCallFlow(
         roomName = roomName,
         initialRemoteVideoFitCover = initialRemoteVideoFitCover,
         config = internalConfig,
+        theme = theme,
         strings = strings,
         onToggleAudio = { activeSession.toggleAudio() },
         onToggleVideo = { activeSession.toggleVideo() },
@@ -161,6 +163,7 @@ fun SerenadaCallFlow(
 }
 
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun SerenadaCallFlow(
     uiState: CallUiState,
     roomId: String,
@@ -170,6 +173,7 @@ fun SerenadaCallFlow(
     rendererProvider: CallRendererProvider? = null,
     initialRemoteVideoFitCover: Boolean = true,
     config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
+    theme: SerenadaCallFlowTheme = SerenadaCallFlowTheme(),
     strings: Map<SerenadaString, String>? = null,
     onToggleAudio: () -> Unit,
     onToggleVideo: () -> Unit,
@@ -199,10 +203,9 @@ fun SerenadaCallFlow(
         uiState = uiState,
         serverHost = serverHost,
         eglContext = eglContext,
-        roomName = roomName,
-        rendererProvider = rendererProvider,
         initialRemoteVideoFitCover = initialRemoteVideoFitCover,
         config = config,
+        theme = theme,
         strings = strings,
         onToggleAudio = onToggleAudio,
         onToggleVideo = onToggleVideo,

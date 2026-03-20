@@ -166,6 +166,8 @@ Use `waitingActions` to render host-app-specific actions below the built-in QR/s
 
 ## Watching Room Status
 
+Web room watching currently uses the advanced `SignalingEngine` surface rather than a first-class `RoomWatcher` wrapper like iOS and Android.
+
 For home screens or recent-room presence indicators, use the advanced signaling API:
 
 ```typescript

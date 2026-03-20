@@ -74,7 +74,10 @@ import app.serenada.core.SerenadaCore
 import app.serenada.core.SerenadaConfig
 import app.serenada.callui.SerenadaCallFlow
 
-val serenada = SerenadaCore(config = SerenadaConfig(serverHost = "serenada.app"))
+val serenada = SerenadaCore(
+    config = SerenadaConfig(serverHost = "serenada.app"),
+    context = applicationContext,
+)
 
 fun handleDeepLink(uri: Uri) {
     val session = serenada.join(url = uri.toString())
@@ -92,12 +95,12 @@ fun handleDeepLink(uri: Uri) {
 
 ```kotlin
 serenada.createRoom { result ->
-    result.onSuccess { room ->
-        val shareUrl = room.url  // send to the other party
-        // Navigate to call screen with room.session
-    }
-    result.onFailure { error ->
-        Log.e("Serenada", "Failed: $error")
+    if (result.error == null && result.session != null && result.roomUrl != null) {
+        val shareUrl = result.roomUrl  // send to the other party
+        val session = result.session   // already joining
+        // Navigate to call screen with session
+    } else {
+        Log.e("Serenada", "Failed: ${result.error}")
     }
 }
 ```
@@ -107,7 +110,10 @@ serenada.createRoom { result ->
 Use `SerenadaCore` directly for a fully custom UI:
 
 ```kotlin
-val serenada = SerenadaCore(config = SerenadaConfig(serverHost = "serenada.app"))
+val serenada = SerenadaCore(
+    config = SerenadaConfig(serverHost = "serenada.app"),
+    context = applicationContext,
+)
 val session = serenada.join(url = url)
 
 // Observe state
@@ -134,7 +140,8 @@ session.flipCamera()
 
 // Video rendering
 session.attachLocalRenderer(localSurfaceView)
-session.attachRemoteRenderer(remoteSurfaceView, cid)
+session.attachRemoteRenderer(remoteSurfaceView)          // primary remote in 1:1
+session.attachRemoteRendererForCid(cid, remoteSurfaceView) // specific remote in group calls
 
 // Leave or end
 session.leave()   // local exit, room stays open
@@ -162,7 +169,7 @@ session.state.collect { state ->
 Run device and network checks before a call:
 
 ```kotlin
-val diagnostics = SerenadaDiagnostics(config)
+val diagnostics = SerenadaDiagnostics(config, applicationContext)
 val report = diagnostics.runAll()  // suspend function, never prompts
 
 report.camera       // Available | Unavailable(reason) | NotAuthorized
@@ -173,7 +180,25 @@ report.signaling    // Connected(transport) | Failed(reason)
 report.turn         // Reachable(latencyMs) | Unreachable(reason)
 ```
 
+Callback-based usage is also available:
+
+```kotlin
+val diagnostics = SerenadaDiagnostics(config, applicationContext)
+diagnostics.runAll { report ->
+    // inspect report
+}
+```
+
 Diagnostics never trigger permission prompts — if a permission is missing, the check returns `NotAuthorized`.
+
+### Server Validation
+
+Validate that a host is a reachable Serenada server:
+
+```kotlin
+val diagnostics = SerenadaDiagnostics(config, applicationContext)
+diagnostics.validateServerHost()
+```
 
 ## Room Watching
 
@@ -222,7 +247,7 @@ val config = SerenadaConfig(
     serverHost = "serenada.app",      // required
     defaultAudioEnabled = true,       // mic on at join (default)
     defaultVideoEnabled = true,       // camera on at join (default)
-    transports = listOf("ws", "sse") // transport priority (default)
+    transports = listOf(SerenadaTransport.WS, SerenadaTransport.SSE) // transport priority (default)
 )
 ```
 

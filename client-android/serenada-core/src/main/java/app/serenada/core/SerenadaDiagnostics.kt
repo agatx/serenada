@@ -12,6 +12,9 @@ import org.webrtc.Camera2Enumerator
 import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * Pre-flight diagnostics utility. Checks device capabilities and server connectivity
@@ -25,6 +28,14 @@ class SerenadaDiagnostics(
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
     private val handler = Handler(Looper.getMainLooper())
+
+    suspend fun runAll(): DiagnosticsReport = suspendCancellableCoroutine { continuation ->
+        runAll { report ->
+            if (continuation.isActive) {
+                continuation.resume(report)
+            }
+        }
+    }
 
     fun runAll(completion: (DiagnosticsReport) -> Unit) {
         var cameraResult: DiagnosticCheckResult? = null
@@ -167,6 +178,18 @@ class SerenadaDiagnostics(
                     }
                 }
                 .onFailure { completion(TurnCheckResult.Unreachable(it.message ?: "unknown")) }
+        }
+    }
+
+    suspend fun validateServerHost(host: String = config.serverHost) {
+        suspendCancellableCoroutine<Unit> { continuation ->
+            apiClient.validateServerHost(host) { result ->
+                if (continuation.isActive) {
+                    result
+                        .onSuccess { continuation.resume(Unit) }
+                        .onFailure { continuation.resumeWithException(it) }
+                }
+            }
         }
     }
 

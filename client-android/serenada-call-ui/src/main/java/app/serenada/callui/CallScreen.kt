@@ -115,10 +115,9 @@ internal fun CallScreen(
     uiState: CallUiState,
     serverHost: String,
     eglContext: EglBase.Context,
-    roomName: String? = null,
-    rendererProvider: CallRendererProvider? = null,
     initialRemoteVideoFitCover: Boolean = true,
     config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
+    theme: SerenadaCallFlowTheme = SerenadaCallFlowTheme(),
     strings: Map<SerenadaString, String>? = null,
     onToggleAudio: () -> Unit,
     onToggleVideo: () -> Unit,
@@ -302,15 +301,16 @@ internal fun CallScreen(
         }
     }
 
-    BoxWithConstraints(
-        modifier =
-            Modifier.fillMaxSize().background(Color.Black)
-                .testTag("call.screen")
-                .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { toggleControlsVisibility() }
-    ) {
+    SerenadaTheme(theme) {
+        BoxWithConstraints(
+            modifier =
+                Modifier.fillMaxSize().background(theme.backgroundColor)
+                    .testTag("call.screen")
+                    .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { toggleControlsVisibility() }
+        ) {
         Box(
             modifier = Modifier
                 .size(1.dp)
@@ -790,6 +790,7 @@ internal fun CallScreen(
                     )
                 }
             }
+        }
         }
     }
 }

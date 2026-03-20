@@ -101,6 +101,6 @@ export interface CallFlowProps {
     waitingActions?: ReactNode;
     /** Called when the user dismisses the call UI (end/leave/cancel). */
     onDismiss?: () => void;
-    /** Callback fired when call stats are updated (for legacy bridge mode). */
+    /** Callback fired when call stats are updated for host-owned diagnostics or bridge code. */
     onStatsUpdate?: (stats: CallStats | null) => void;
 }
