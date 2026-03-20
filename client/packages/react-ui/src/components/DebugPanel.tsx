@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import type { CallStats } from '@serenada/core';
 import type { SerenadaString } from '../types.js';
 import { resolveString } from '../types.js';
@@ -36,6 +36,7 @@ export interface DebugPanelProps {
     /** Pre-built sections override. When provided, stats are ignored. */
     sections?: DebugPanelSection[];
     strings?: Partial<Record<SerenadaString, string>>;
+    onClose?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,27 +150,27 @@ function buildSections(
             title: 'Latency',
             metrics: [
                 { label: 'RTT', value: fmtMs(stats.rttMs), status: lowerIsBetter(stats.rttMs, 120, 250) },
-                { label: 'Path', value: stats.transportPath ?? 'n/a', status: stats.transportPath ? (stats.transportPath.startsWith('TURN') ? 'warn' : 'good') : 'na' },
+                { label: '', value: stats.transportPath ?? 'n/a', status: stats.transportPath ? (stats.transportPath.startsWith('TURN relay') ? 'warn' : 'good') : 'na' },
                 { label: 'Outgoing headroom', value: fmtKbps(stats.availableOutgoingKbps), status: higherIsBetter(stats.availableOutgoingKbps, 1500, 600) },
                 { label: 'Updated', value: fmtTime(stats.updatedAtMs), status: 'na' },
             ],
         },
         {
-            title: 'Audio',
+            title: 'Audio Quality',
             metrics: [
-                { label: 'Loss RX/TX', value: `${fmtPct(stats.audioRxPacketLossPct)} / ${fmtPct(stats.audioTxPacketLossPct)}`, status: worst(lowerIsBetter(stats.audioRxPacketLossPct, 1, 3), lowerIsBetter(stats.audioTxPacketLossPct, 1, 3)) },
+                { label: 'Packet loss ⇵', value: `${fmtPct(stats.audioRxPacketLossPct)} / ${fmtPct(stats.audioTxPacketLossPct)}`, status: worst(lowerIsBetter(stats.audioRxPacketLossPct, 1, 3), lowerIsBetter(stats.audioTxPacketLossPct, 1, 3)) },
                 { label: 'Jitter', value: fmtMs(stats.audioJitterMs), status: lowerIsBetter(stats.audioJitterMs, 20, 40) },
                 { label: 'Playout delay', value: fmtMs(stats.audioPlayoutDelayMs), status: lowerIsBetter(stats.audioPlayoutDelayMs, 80, 180) },
-                { label: 'Concealed', value: fmtPct(stats.audioConcealedPct), status: lowerIsBetter(stats.audioConcealedPct, 2, 8) },
-                { label: 'Bitrate RX/TX', value: `${fmtKbps(stats.audioRxKbps)} / ${fmtKbps(stats.audioTxKbps)}`, status: worst(higherIsBetter(stats.audioRxKbps, 20, 12), higherIsBetter(stats.audioTxKbps, 20, 12)) },
+                { label: 'Concealed audio', value: fmtPct(stats.audioConcealedPct), status: lowerIsBetter(stats.audioConcealedPct, 2, 8) },
+                { label: 'Bitrate ⇵', value: `${fmtKbps(stats.audioRxKbps)} / ${fmtKbps(stats.audioTxKbps)}`, status: worst(higherIsBetter(stats.audioRxKbps, 20, 12), higherIsBetter(stats.audioTxKbps, 20, 12)) },
             ],
         },
         {
-            title: 'Video',
+            title: 'Video Quality',
             metrics: [
-                { label: 'Loss RX/TX', value: `${fmtPct(stats.videoRxPacketLossPct)} / ${fmtPct(stats.videoTxPacketLossPct)}`, status: worst(lowerIsBetter(stats.videoRxPacketLossPct, 1, 3), lowerIsBetter(stats.videoTxPacketLossPct, 1, 3)) },
-                { label: 'Bitrate RX/TX', value: `${fmtKbps(stats.videoRxKbps)} / ${fmtKbps(stats.videoTxKbps)}`, status: worst(higherIsBetter(stats.videoRxKbps, 900, 350), higherIsBetter(stats.videoTxKbps, 900, 350)) },
-                { label: 'FPS', value: fmtFps(stats.videoFps), status: higherIsBetter(stats.videoFps, 24, 15) },
+                { label: 'Packet loss ⇵', value: `${fmtPct(stats.videoRxPacketLossPct)} / ${fmtPct(stats.videoTxPacketLossPct)}`, status: worst(lowerIsBetter(stats.videoRxPacketLossPct, 1, 3), lowerIsBetter(stats.videoTxPacketLossPct, 1, 3)) },
+                { label: 'Bitrate ⇵', value: `${fmtKbps(stats.videoRxKbps)} / ${fmtKbps(stats.videoTxKbps)}`, status: worst(higherIsBetter(stats.videoRxKbps, 900, 350), higherIsBetter(stats.videoTxKbps, 900, 350)) },
+                { label: 'Render FPS', value: fmtFps(stats.videoFps), status: higherIsBetter(stats.videoFps, 24, 15) },
                 { label: 'Resolution', value: stats.videoResolution ?? 'n/a', status: stats.videoResolution ? 'good' : 'na' },
                 {
                     label: 'Freezes (last 60s)',
@@ -190,17 +191,17 @@ function buildSections(
 // ---------------------------------------------------------------------------
 
 const STATUS_COLORS: Record<DebugStatus, string> = {
-    good: '#22c55e',
-    warn: '#eab308',
-    bad: '#ef4444',
-    na: '#94a3b8',
+    good: '#2ecc71',
+    warn: '#f1c40f',
+    bad: '#e74c3c',
+    na: '#95a5a6',
 };
 
 const panelStyle: React.CSSProperties = {
     position: 'absolute',
     top: 16,
     left: 16,
-    zIndex: 60,
+    zIndex: 40,
     width: 'min(92vw, 430px)',
     maxHeight: 'calc(100vh - 140px)',
     overflowY: 'auto',
@@ -213,6 +214,8 @@ const panelStyle: React.CSSProperties = {
     border: '1px solid rgba(255, 255, 255, 0.12)',
     backdropFilter: 'blur(6px)',
     WebkitBackdropFilter: 'blur(6px)',
+    WebkitUserSelect: 'none',
+    userSelect: 'none',
 };
 
 const panelGridStyle: React.CSSProperties = {
@@ -272,49 +275,26 @@ const dotStyle: React.CSSProperties = {
     flex: '0 0 auto',
 };
 
-const toggleBtnStyle: React.CSSProperties = {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    zIndex: 60,
-    padding: '4px 10px',
-    borderRadius: 6,
-    border: 'none',
-    background: 'rgba(0,0,0,0.5)',
-    color: '#94a3b8',
-    fontSize: 11,
-    cursor: 'pointer',
-    fontFamily: 'monospace',
-};
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export const DebugPanel: React.FC<DebugPanelProps> = ({ stats, connectionInfo, sections: sectionsProp, strings }) => {
-    const [open, setOpen] = useState(false);
-
+export const DebugPanel: React.FC<DebugPanelProps> = ({ stats, connectionInfo, sections: sectionsProp, strings, onClose }) => {
     const sections = sectionsProp ?? buildSections(stats, connectionInfo);
-
-    if (!open) {
-        return (
-            <button type="button" style={toggleBtnStyle} onClick={() => setOpen(true)}>
-                {resolveString('debugPanel', strings)}
-            </button>
-        );
-    }
 
     return (
         <div style={panelStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ fontWeight: 700, fontSize: 13 }}>{resolveString('debugPanel', strings)}</span>
-                <button
-                    type="button"
-                    onClick={() => setOpen(false)}
-                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
-                >
-                    &times;
-                </button>
+                {onClose && (
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}
+                    >
+                        &times;
+                    </button>
+                )}
             </div>
             <div style={panelGridStyle}>
                 {sections.map(section => (

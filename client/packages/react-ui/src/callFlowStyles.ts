@@ -325,6 +325,18 @@ const CALL_FLOW_CSS = `
   pointer-events: none;
 }
 
+.serenada-callflow .debug-toggle-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 72px;
+  height: 72px;
+  z-index: 41;
+  pointer-events: auto;
+  touch-action: manipulation;
+  user-select: none;
+}
+
 .serenada-callflow .waiting-message {
   position: absolute;
   top: 50%;

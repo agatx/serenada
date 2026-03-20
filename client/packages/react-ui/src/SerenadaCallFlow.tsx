@@ -21,6 +21,7 @@ import {
     computeStageLayout,
     STAGE_TILE_GAP_PX,
     type CallScene,
+    type CallStats,
     type ContentSource,
     type LayoutResult,
     type SerenadaSessionHandle,
@@ -225,6 +226,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const [showRecoveringBadge, setShowRecoveringBadge] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
     const [showDebug, setShowDebug] = useState(false);
+    const [debugStats, setDebugStats] = useState<CallStats | null>(null);
     const [remoteVideoFit, setRemoteVideoFit] = useState<RemoteVideoFit>(() => getPersistedRemoteVideoFit());
     const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
     const [remoteContentState, setRemoteContentState] = useState<{ cid: string; contentType: ContentSource['type'] } | null>(null);
@@ -241,6 +243,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const waitingTimerRef = useRef<number | null>(null);
     const prevParticipantCountRef = useRef(0);
     const stageViewportRef = useRef<HTMLDivElement | null>(null);
+    const debugTapRef = useRef(0);
+    const debugTapTimeoutRef = useRef<number | null>(null);
 
     useEffect(() => {
         if (!onStatsUpdate || !session) return;
@@ -249,6 +253,28 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         }, 1000);
         return () => window.clearInterval(interval);
     }, [onStatsUpdate, session]);
+
+    useEffect(() => {
+        if (!showDebug || !session) {
+            setDebugStats(null);
+            return;
+        }
+
+        const refreshStats = () => {
+            setDebugStats(session.callStats ? { ...session.callStats } : null);
+        };
+
+        refreshStats();
+        const interval = window.setInterval(refreshStats, 1000);
+        return () => window.clearInterval(interval);
+    }, [session, showDebug]);
+
+    useEffect(() => () => {
+        if (debugTapTimeoutRef.current) {
+            window.clearTimeout(debugTapTimeoutRef.current);
+            debugTapTimeoutRef.current = null;
+        }
+    }, []);
 
     useEffect(() => {
         if (!usesInternalSession || !internalSession) return;
@@ -695,9 +721,41 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const overlayContent = (
         <>
             <StatusOverlay connectionStatus={effectiveState.connectionStatus} strings={strings} />
+            {config?.debugOverlayEnabled && (
+                <div
+                    className="debug-toggle-zone"
+                    onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const now = Date.now();
+                        if (debugTapTimeoutRef.current) {
+                            window.clearTimeout(debugTapTimeoutRef.current);
+                            debugTapTimeoutRef.current = null;
+                        }
+                        if (now - debugTapRef.current < 450) {
+                            debugTapRef.current = 0;
+                            setShowDebug((prev) => !prev);
+                            return;
+                        }
+                        debugTapRef.current = now;
+                        debugTapTimeoutRef.current = window.setTimeout(() => {
+                            debugTapRef.current = 0;
+                            debugTapTimeoutRef.current = null;
+                        }, 500);
+                    }}
+                    onPointerUp={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }}
+                    onPointerCancel={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }}
+                />
+            )}
             {config?.debugOverlayEnabled && showDebug && (
                 <DebugPanel
-                    stats={session?.callStats ?? null}
+                    stats={debugStats}
                     connectionInfo={session ? {
                         isSignalingConnected: session.isSignalingConnected,
                         activeTransport: effectiveState.activeTransport,
@@ -709,19 +767,6 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                     } : undefined}
                     strings={strings}
                 />
-            )}
-            {config?.debugOverlayEnabled && (
-                <button
-                    type="button"
-                    style={debugToggleStyle}
-                    onPointerUp={(event) => {
-                        event.stopPropagation();
-                        handleControlsInteraction();
-                        setShowDebug((prev) => !prev);
-                    }}
-                >
-                    {resolveString('debugPanel', strings)}
-                </button>
             )}
         </>
     );
@@ -1059,21 +1104,6 @@ const spinnerStyle: React.CSSProperties = {
     borderTopColor: 'var(--serenada-accent)',
     borderRadius: '50%',
     animation: 'serenada-spin 0.8s linear infinite',
-};
-
-const debugToggleStyle: React.CSSProperties = {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    zIndex: 45,
-    padding: '4px 10px',
-    border: 'none',
-    borderRadius: 6,
-    background: 'rgba(0,0,0,0.5)',
-    color: '#94a3b8',
-    fontSize: 11,
-    cursor: 'pointer',
-    fontFamily: 'monospace',
 };
 
 const callProbeStyle: React.CSSProperties = {
