@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Serenada is a privacy-focused 1:1 WebRTC video calling application. No accounts, no tracking — just instant peer-to-peer video calls. The project has four codebases: a React web client, a Go signaling server, a Kotlin/Compose Android client, and a SwiftUI iOS client.
+Serenada is a privacy-focused 1:1 WebRTC video calling application. No accounts, no tracking — just instant peer-to-peer video calls. The architecture follows a **headless SDK + optional UI** pattern across all platforms:
+
+- **Web**: `@serenada/core` (vanilla TS) + `@serenada/react-ui` (React components) + thin app shell
+- **Android**: `serenada-core` (Kotlin library) + `serenada-call-ui` (Compose) + sample app
+- **iOS**: `SerenadaCore` (SPM package) + `SerenadaCallUI` (SPM/SwiftUI) + host app
+- **Server**: Go signaling server
 
 ## Repository Rules (from AGENTS.md)
 
@@ -133,42 +138,101 @@ Core types: `Hub` (central event router), `Room` (call session, max 2 participan
 Dependencies: gorilla/websocket, webpush-go, godotenv, modernc.org/sqlite.
 
 ### Web Client (`client/`)
-React 19 + TypeScript + Vite SPA. Key structure:
-- `src/contexts/SignalingContext.tsx` — signaling state management
-- `src/contexts/WebRTCContext.tsx` — media streams, peer connection (~987 LOC)
-- `src/contexts/signaling/transports/` — pluggable WS and SSE transports
+Monorepo with headless SDK + React UI layer + thin app shell. Built with React 19 + TypeScript + Vite.
+
+**Headless SDK** (`packages/core/`):
+- `src/SerenadaCore.ts` — entry point (join/createRoom)
+- `src/SerenadaSession.ts` — session state machine, pub/sub state distribution
+- `src/signaling/SignalingEngine.ts` — dual-transport signaling (WS + SSE)
+- `src/media/MediaEngine.ts` — WebRTC peer connections, local media, ICE management
+- `src/constants.ts` — shared resilience constants (cross-platform verified)
+- `src/types.ts` — public type definitions (CallState, CallPhase, etc.)
+
+**React UI** (`packages/react-ui/`):
+- `src/SerenadaCallFlow.tsx` — pre-built call UI component (URL-first or session-first)
+- `src/hooks/` — `useCallState` (useSyncExternalStore), `useSerenadaSession`
+- `src/components/` — DebugPanel, StatusOverlay
+
+**App shell** (`src/`):
 - `src/pages/Home.tsx` — room creation/selection
-- `src/pages/CallRoom.tsx` — main video call UI (~991 LOC)
+- `src/pages/CallRoom.tsx` — call page with push snapshot support
 - `src/i18n.ts` — internationalization (en, ru, es, fr)
 - `src/utils/pushCrypto.ts` — push notification encryption
 
 Routing: `/` → Home, `/call/:roomId` → CallRoom.
 
 ### Android Client (`client-android/`)
-Kotlin + Jetpack Compose + Material3. Key classes:
-- `call/CallManager.kt` — call orchestrator
+Kotlin + Jetpack Compose + Material3. Three-module Gradle project.
+
+**Headless SDK** (`serenada-core/`):
+- `SerenadaCore.kt` — entry point (join/createRoom)
+- `SerenadaSession.kt` — session state machine, StateFlow-based state
+- `SerenadaConfig.kt` / `SerenadaCoreDelegate.kt` — configuration and callbacks
+- `CallState.kt` / `CallStats.kt` — public state models
 - `call/WebRtcEngine.kt` — WebRTC integration
-- `call/SignalingClient.kt` — protocol v1 signaling
+- `call/SignalingClient.kt` — protocol v1 signaling with dual transport
+- `call/PeerConnectionSlot.kt` — per-peer connection management
 - `call/CompositeCameraCapturer.kt` — 3-mode camera (selfie → world → composite)
-- `ui/` — Compose screens (CallScreen, JoinScreen, SettingsScreen, DiagnosticsScreen)
+- `call/WebRtcResilienceConstants.kt` — shared resilience constants
+- `network/CoreApiClient.kt` — HTTP API client
+- `diagnostics/` — connectivity and TURN probes
+
+**Compose UI** (`serenada-call-ui/`):
+- Pre-built Jetpack Compose call flow UI (depends on serenada-core)
+
+**Host app** (`app/`):
+- `call/CallManager.kt` — app-level call orchestrator (integrates SDK)
+- `ui/` — Compose screens (JoinScreen, SettingsScreen, DiagnosticsScreen)
 - `push/` — Firebase Cloud Messaging integration
+- `service/` — foreground call service
 
 WebRTC: custom-built AAR from branch-heads/7559_173 in `app/libs/`, verified with SHA-256 checksum.
 
 ### iOS Client (`client-ios/`)
-SwiftUI + Swift 5.10, project generated via XcodeGen (`project.yml`). Key classes:
-- `Sources/Core/Call/CallManager.swift` — call orchestrator
-- `Sources/Core/Call/WebRtcEngine.swift` — WebRTC integration
-- `Sources/Core/Signaling/` — protocol v1 signaling
-- `Sources/UI/Screens/` — SwiftUI screens (mirrors Android screen parity)
-- `Sources/Core/Push/` — Firebase Messaging
-- `NotificationService/` — push notification app extension
+SwiftUI + Swift 5.10, project generated via XcodeGen (`project.yml`). Two SPM packages + host app.
+
+**Headless SDK** (`SerenadaCore/` — SPM package):
+- `Sources/SerenadaCore.swift` — entry point (join/createRoom)
+- `Sources/SerenadaSession.swift` — session state machine, @Published state
+- `Sources/SerenadaConfig.swift` — configuration
+- `Sources/Models/` — CallState, CallStats, CallPhase, RemoteParticipant, etc.
+- `Sources/Call/WebRtcEngine.swift` — WebRTC integration
+- `Sources/Call/PeerConnectionSlot.swift` — per-peer connection management
+- `Sources/Call/WebRtcResilienceConstants.swift` — shared resilience constants
+- `Sources/Signaling/` — SignalingClient + WS/SSE transports
+- `Sources/Networking/CoreAPIClient.swift` — HTTP API client
+- `Sources/RoomWatcher.swift` — room occupancy monitoring
+
+**SwiftUI Call UI** (`SerenadaCallUI/` — SPM package):
+- `Sources/SerenadaCallFlow.swift` — pre-built call flow (URL-first or session-first)
+- `Sources/CallScreen.swift` — in-call UI
+- `Sources/SerenadaCallFlowConfig.swift` / `SerenadaCallFlowTheme.swift` — customization
+
+**Host app** (`Sources/`):
+- `Core/Call/CallManager.swift` — app-level call orchestrator (integrates SDK)
+- `Core/Push/` — push notifications (JoinSnapshotFeature, PushSubscriptionManager)
+- `Core/Stores/` — settings, saved rooms, recent calls
+- `UI/Screens/` — SwiftUI screens (JoinScreen, SettingsScreen, DiagnosticsScreen)
+- `Shared/PushKeyStore.swift` — push encryption keys (shared with NotificationService extension)
+- `NotificationService/` — push notification app extension (decrypts snapshot images)
+- `BroadcastUpload/` — screen sharing broadcast extension
 
 WebRTC: custom-built XCFramework from branch-heads/7559_173 in `Vendor/WebRTC/`.
+
+**Sample apps** (`samples/ios/`, `samples/android/`, `samples/web/`):
+- Minimal integration examples showing SDK usage for third-party developers.
 
 ## Signaling Protocol (v1)
 
 JSON message envelope with fields: `v` (version), `type`, `rid` (room ID), `sid` (session ID), `cid` (client ID), `to` (target), `ts` (timestamp). Dual transport: WebSocket primary, SSE fallback. Message types include: join, joined, leave, offer, answer, ice-candidate, end_room, error.
+
+## Cross-Platform Resilience Constants
+
+WebRTC resilience timing constants (reconnect backoff, join timeout, ICE restart cooldown, etc.) are shared across all three clients. Verify parity with:
+```bash
+node scripts/check-resilience-constants.mjs
+```
+Source files: `client/packages/core/src/constants.ts`, `client-android/serenada-core/.../call/WebRtcResilienceConstants.kt`, `client-ios/SerenadaCore/Sources/Call/WebRtcResilienceConstants.swift`.
 
 ## Platform-Specific Rules
 
