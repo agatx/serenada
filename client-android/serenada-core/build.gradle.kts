@@ -48,7 +48,7 @@ afterEvaluate {
                 pom {
                     name.set("Serenada Core")
                     description.set("Headless WebRTC call engine for 1:1 video calls")
-                    url.set("https://github.com/AleGavrilov/serenada-sdk")
+                    url.set("https://github.com/agatx/serenada")
 
                     licenses {
                         license {
@@ -63,7 +63,7 @@ afterEvaluate {
         repositories {
             maven {
                 name = "GitHubPackages"
-                url = uri("https://maven.pkg.github.com/AleGavrilov/serenada-sdk")
+                url = uri("https://maven.pkg.github.com/agatx/serenada")
                 credentials {
                     username = System.getenv("GITHUB_ACTOR") ?: ""
                     password = System.getenv("GITHUB_TOKEN") ?: ""

@@ -63,7 +63,7 @@ afterEvaluate {
                 pom {
                     name.set("Serenada Call UI")
                     description.set("Pre-built Jetpack Compose call UI for Serenada video calls")
-                    url.set("https://github.com/AleGavrilov/serenada-sdk")
+                    url.set("https://github.com/agatx/serenada")
 
                     licenses {
                         license {
@@ -78,7 +78,7 @@ afterEvaluate {
         repositories {
             maven {
                 name = "GitHubPackages"
-                url = uri("https://maven.pkg.github.com/AleGavrilov/serenada-sdk")
+                url = uri("https://maven.pkg.github.com/agatx/serenada")
                 credentials {
                     username = System.getenv("GITHUB_ACTOR") ?: ""
                     password = System.getenv("GITHUB_TOKEN") ?: ""

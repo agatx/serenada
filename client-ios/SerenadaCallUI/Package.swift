@@ -3,8 +3,8 @@
 import PackageDescription
 
 // For external distribution, replace the path-based SerenadaCore dependency
-// with a remote Git URL:
-//   .package(url: "https://github.com/AleGavrilov/serenada-ios-core.git", from: "0.1.0")
+// with the location where you publish the SerenadaCore package. There is no
+// standalone public SerenadaCore package repo configured in this monorepo yet.
 
 let package = Package(
     name: "SerenadaCallUI",

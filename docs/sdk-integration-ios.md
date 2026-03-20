@@ -10,16 +10,16 @@
 
 ### Swift Package Manager
 
-Add both packages to your Xcode project or `Package.swift`:
+Today the iOS SDK packages are consumed from a local checkout of the Serenada monorepo:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/AleGavrilov/serenada-ios-core.git", from: "0.1.0"),
-    .package(url: "https://github.com/AleGavrilov/serenada-ios-callui.git", from: "0.1.0"),
+    .package(path: "../serenada/client-ios/SerenadaCore"),
+    .package(path: "../serenada/client-ios/SerenadaCallUI"),
 ]
 ```
 
-Or in Xcode: File → Add Package Dependencies → paste the repository URL.
+If you are starting from scratch, first vendor or clone [agatx/serenada](https://github.com/agatx/serenada), then point Xcode or `Package.swift` at `client-ios/SerenadaCore` and `client-ios/SerenadaCallUI`.
 
 For local development within the Serenada monorepo, use path references:
 
@@ -27,9 +27,9 @@ For local development within the Serenada monorepo, use path references:
 # project.yml (XcodeGen)
 packages:
   SerenadaCore:
-    path: SerenadaCore
+    path: client-ios/SerenadaCore
   SerenadaCallUI:
-    path: SerenadaCallUI
+    path: client-ios/SerenadaCallUI
 ```
 
 ## Quick Start — URL-First (Simplest)

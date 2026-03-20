@@ -1,0 +1,355 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		6CF3476877DA3857617F7F09 /* SampleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFE5658C05C260B3C738673F /* SampleApp.swift */; };
+		88754D97CAA579CA6F653BE9 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 2BE6A6A228FF7E4499A7B690 /* SerenadaCallUI */; };
+		EE9FBC1A7FDDB675541C4C24 /* SerenadaCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2F9E0DD7A17C19C01D95052B /* SerenadaCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2BB4034EF08B89D7C79F0650 /* SerenadaiOSSample.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOSSample.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6C3B2CD2AC43B90853AD6422 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = "../../client-ios/SerenadaCallUI"; sourceTree = SOURCE_ROOT; };
+		95A490328968D50CBBB2BCFF /* SerenadaCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCore; path = "../../client-ios/SerenadaCore"; sourceTree = SOURCE_ROOT; };
+		EFE5658C05C260B3C738673F /* SampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		168390D39D224A43C7BAFF40 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE9FBC1A7FDDB675541C4C24 /* SerenadaCore in Frameworks */,
+				88754D97CAA579CA6F653BE9 /* SerenadaCallUI in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		49F4281E8C3E547DB2A0CBEF /* SampleApp */ = {
+			isa = PBXGroup;
+			children = (
+				EFE5658C05C260B3C738673F /* SampleApp.swift */,
+			);
+			path = SampleApp;
+			sourceTree = "<group>";
+		};
+		56F64D7119747C4022CF3554 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				6C3B2CD2AC43B90853AD6422 /* SerenadaCallUI */,
+				95A490328968D50CBBB2BCFF /* SerenadaCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		57D9A570F9F409A7D9B73509 = {
+			isa = PBXGroup;
+			children = (
+				56F64D7119747C4022CF3554 /* Packages */,
+				B798E28A61677C50A13911E4 /* Resources */,
+				49F4281E8C3E547DB2A0CBEF /* SampleApp */,
+				F299546FAB8DBA81CD8B0ACF /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B798E28A61677C50A13911E4 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		F299546FAB8DBA81CD8B0ACF /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				2BB4034EF08B89D7C79F0650 /* SerenadaiOSSample.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9311C4F75386480BCAD9B016 /* SerenadaiOSSample */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 76E9279D28D7F02A97A0D16F /* Build configuration list for PBXNativeTarget "SerenadaiOSSample" */;
+			buildPhases = (
+				A94AEA760221E52FBDECB177 /* Sources */,
+				168390D39D224A43C7BAFF40 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SerenadaiOSSample;
+			packageProductDependencies = (
+				2F9E0DD7A17C19C01D95052B /* SerenadaCore */,
+				2BE6A6A228FF7E4499A7B690 /* SerenadaCallUI */,
+			);
+			productName = SerenadaiOSSample;
+			productReference = 2BB4034EF08B89D7C79F0650 /* SerenadaiOSSample.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9D338CCCF319F30650403FDE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					9311C4F75386480BCAD9B016 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 9301676A39AC04C6F9833106 /* Build configuration list for PBXProject "SerenadaiOSSample" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 57D9A570F9F409A7D9B73509;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AD3BABEF5E9A4F9008CEB2A9 /* XCLocalSwiftPackageReference "../../client-ios/SerenadaCallUI" */,
+				48B3BE0D131C9F024F3D61C2 /* XCLocalSwiftPackageReference "../../client-ios/SerenadaCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = F299546FAB8DBA81CD8B0ACF /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				9311C4F75386480BCAD9B016 /* SerenadaiOSSample */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A94AEA760221E52FBDECB177 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6CF3476877DA3857617F7F09 /* SampleApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		8B0A9005AC7462F0700DFC46 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B3F09FEC98405ECEDDB9A956 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = app.serenada.sample.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.1;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E3603AEA99C9B4D6B55BB561 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E938581A37D2605F731C8B75 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = app.serenada.sample.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.1;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		76E9279D28D7F02A97A0D16F /* Build configuration list for PBXNativeTarget "SerenadaiOSSample" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E3603AEA99C9B4D6B55BB561 /* Debug */,
+				8B0A9005AC7462F0700DFC46 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9301676A39AC04C6F9833106 /* Build configuration list for PBXProject "SerenadaiOSSample" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B3F09FEC98405ECEDDB9A956 /* Debug */,
+				E938581A37D2605F731C8B75 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		48B3BE0D131C9F024F3D61C2 /* XCLocalSwiftPackageReference "../../client-ios/SerenadaCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../client-ios/SerenadaCore";
+		};
+		AD3BABEF5E9A4F9008CEB2A9 /* XCLocalSwiftPackageReference "../../client-ios/SerenadaCallUI" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../client-ios/SerenadaCallUI";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2BE6A6A228FF7E4499A7B690 /* SerenadaCallUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SerenadaCallUI;
+		};
+		2F9E0DD7A17C19C01D95052B /* SerenadaCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SerenadaCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 9D338CCCF319F30650403FDE /* Project object */;
+}
