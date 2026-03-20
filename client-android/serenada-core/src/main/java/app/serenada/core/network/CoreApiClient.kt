@@ -11,6 +11,22 @@ import okhttp3.Response
 import org.json.JSONObject
 import java.io.IOException
 
+internal fun buildHttpsUrl(hostInput: String, path: String, query: Map<String, String> = emptyMap()): String? {
+    val raw = hostInput.trim()
+    val isLocal = raw.startsWith("localhost") || raw.startsWith("127.") || raw.startsWith("http://")
+    val withScheme = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else if (isLocal) "http://$raw" else "https://$raw"
+    val base = withScheme.toHttpUrlOrNull() ?: return null
+    val builder = base.newBuilder()
+        .scheme(if (isLocal) "http" else "https")
+        .encodedPath(path)
+
+    for ((key, value) in query) {
+        builder.addQueryParameter(key, value)
+    }
+
+    return builder.build().toString()
+}
+
 class CoreApiClient(private val okHttpClient: OkHttpClient) {
     fun validateServerHost(host: String, onResult: (Result<Unit>) -> Unit) {
         val url = buildHttpsUrl(host, "/api/room-id")
@@ -185,21 +201,6 @@ class CoreApiClient(private val okHttpClient: OkHttpClient) {
         }
     }
 
-    private fun buildHttpsUrl(hostInput: String, path: String, query: Map<String, String> = emptyMap()): String? {
-        val raw = hostInput.trim()
-        val isLocal = raw.startsWith("localhost") || raw.startsWith("127.") || raw.startsWith("http://")
-        val withScheme = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else if (isLocal) "http://$raw" else "https://$raw"
-        val base = withScheme.toHttpUrlOrNull() ?: return null
-        val builder = base.newBuilder()
-            .scheme(if (isLocal) "http" else "https")
-            .encodedPath(path)
-
-        for ((key, value) in query) {
-            builder.addQueryParameter(key, value)
-        }
-
-        return builder.build().toString()
-    }
 }
 
 data class TurnCredentials(

@@ -2,7 +2,6 @@ package app.serenada.core.call
 
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.graphics.Rect
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
@@ -21,6 +20,8 @@ import android.os.Looper
 import android.util.Range
 import android.util.DisplayMetrics
 import android.util.Log
+import app.serenada.core.FeatureDegradation
+import app.serenada.core.FeatureDegradationState
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -60,6 +61,7 @@ class WebRtcEngine(
     private val onCameraModeChanged: (LocalCameraMode) -> Unit,
     private val onFlashlightStateChanged: (Boolean, Boolean) -> Unit,
     private val onScreenShareStopped: () -> Unit,
+    private val onFeatureDegradation: (FeatureDegradationState) -> Unit = {},
     private var isHdVideoExperimentalEnabled: Boolean = false,
     private var isRemoteBlackFrameAnalysisEnabled: Boolean = true
 ) {
@@ -131,19 +133,7 @@ class WebRtcEngine(
     private var desiredCameraZoomRatio = 1f
     private var appliedCameraZoomRatio = 1f
     private var compositeSupportCache: Pair<Pair<String, String>, Boolean>? = null
-    private val compositePrefs: SharedPreferences =
-        appContext.getSharedPreferences("serenada_webrtc", Context.MODE_PRIVATE)
-    private var compositeDisabledAfterFailure: Boolean
-        get() {
-            if (compositePrefs.getInt(KEY_COMPOSITE_DISABLED_VERSION, -1) != 0) return false
-            return compositePrefs.getBoolean(KEY_COMPOSITE_DISABLED, false)
-        }
-        set(value) {
-            compositePrefs.edit()
-                .putBoolean(KEY_COMPOSITE_DISABLED, value)
-                .putInt(KEY_COMPOSITE_DISABLED_VERSION, 0)
-                .apply()
-        }
+    private var compositeDisabledAfterFailure = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val localSinks = LinkedHashSet<VideoSink>()
@@ -352,6 +342,7 @@ class WebRtcEngine(
         Log.w("WebRtcEngine", "Failed to switch camera source to $target")
         val fallback = if (targetMode == LocalCameraMode.COMPOSITE) {
             compositeDisabledAfterFailure = true
+            reportCompositeCameraUnavailable("Composite camera switch failed")
             LocalCameraSource.SELFIE
         } else {
             currentCameraSource
@@ -984,6 +975,7 @@ class WebRtcEngine(
             if (videoCapturer !is CompositeCameraCapturer) return@post
             compositeDisabledAfterFailure = true
             Log.w("WebRtcEngine", "Composite source failed; disabling composite and falling back to selfie")
+            reportCompositeCameraUnavailable("Composite source failed to start")
             if (restartVideoCapturer(LocalCameraSource.SELFIE)) {
                 Log.w("WebRtcEngine", "Camera source fallback applied: ${LocalCameraSource.SELFIE}")
             }
@@ -1478,12 +1470,18 @@ class WebRtcEngine(
         onFlashlightStateChanged(flashAvailable, flashAvailable && isTorchEnabled)
     }
 
+    private fun reportCompositeCameraUnavailable(reason: String) {
+        onFeatureDegradation(
+            FeatureDegradationState(
+                kind = FeatureDegradation.COMPOSITE_CAMERA_UNAVAILABLE,
+                reason = reason,
+            ),
+        )
+    }
+
 
     private companion object {
         val WEBRTC_LOGGING_ENABLED = AtomicBoolean(false)
-
-        const val KEY_COMPOSITE_DISABLED = "composite_disabled_after_failure"
-        const val KEY_COMPOSITE_DISABLED_VERSION = "composite_disabled_version"
 
         const val LEGACY_CAMERA_WIDTH = 640
         const val LEGACY_CAMERA_HEIGHT = 480

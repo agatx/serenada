@@ -33,19 +33,7 @@ func resolveJoinRecoveryState(
 @MainActor
 public final class SerenadaSession: ObservableObject {
     @Published public private(set) var state = CallState()
-    @Published public private(set) var callStats = CallStats()
-    @Published public private(set) var realtimeStats = RealtimeCallStats.empty
-    @Published public private(set) var isSignalingConnected = false
-    @Published public private(set) var iceConnectionState = "NEW"
-    @Published public private(set) var peerConnectionState = "NEW"
-    @Published public private(set) var rtcSignalingState = "STABLE"
-    @Published public private(set) var isFrontCamera = true
-    @Published public private(set) var isScreenSharing = false
-    @Published public private(set) var cameraZoomFactor: Double = 1
-    @Published public private(set) var isFlashAvailable = false
-    @Published public private(set) var isFlashEnabled = false
-    @Published public private(set) var remoteContentParticipantId: String?
-    @Published public private(set) var remoteContentType: String?
+    @Published public private(set) var diagnostics = CallDiagnostics()
 
     public let roomId: String
     public let roomUrl: URL?
@@ -133,6 +121,7 @@ public final class SerenadaSession: ObservableObject {
             onFlashlightStateChanged: { _, _ in },
             onScreenShareStopped: {},
             onZoomFactorChanged: { _ in },
+            onFeatureDegradation: { _ in },
             onDebugTrace: nil,
             isHdVideoExperimentalEnabled: false
         )
@@ -422,6 +411,11 @@ public final class SerenadaSession: ObservableObject {
         webRtcEngine.setOnZoomFactorChanged { [weak self] zoomFactor in
             Task { @MainActor in
                 self?.updateLegacyUiState { $0.cameraZoomFactor = zoomFactor }
+            }
+        }
+        webRtcEngine.setOnFeatureDegradation { [weak self] degradation in
+            Task { @MainActor in
+                self?.setFeatureDegradation(degradation)
             }
         }
     }
@@ -869,17 +863,17 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    private func updateAggregatePeerState() {
-        let icePriority: [String: Int] = [
-            "FAILED": 0, "DISCONNECTED": 1, "CHECKING": 2, "NEW": 3, "CONNECTED": 4, "COMPLETED": 5, "CLOSED": 6, "COUNT": 7, "UNKNOWN": 8,
-        ]
-        let connectionPriority: [String: Int] = [
-            "FAILED": 0, "DISCONNECTED": 1, "CONNECTING": 2, "NEW": 3, "CONNECTED": 4, "CLOSED": 5, "UNKNOWN": 6,
-        ]
-        let signalingPriority: [String: Int] = [
-            "HAVE_LOCAL_OFFER": 0, "HAVE_REMOTE_OFFER": 1, "HAVE_LOCAL_PRANSWER": 2, "HAVE_REMOTE_PRANSWER": 3, "STABLE": 4, "CLOSED": 5, "UNKNOWN": 6,
-        ]
+    private static let icePriority: [String: Int] = [
+        "FAILED": 0, "DISCONNECTED": 1, "CHECKING": 2, "NEW": 3, "CONNECTED": 4, "COMPLETED": 5, "CLOSED": 6, "COUNT": 7, "UNKNOWN": 8,
+    ]
+    private static let connectionPriority: [String: Int] = [
+        "FAILED": 0, "DISCONNECTED": 1, "CONNECTING": 2, "NEW": 3, "CONNECTED": 4, "CLOSED": 5, "UNKNOWN": 6,
+    ]
+    private static let signalingPriority: [String: Int] = [
+        "HAVE_LOCAL_OFFER": 0, "HAVE_REMOTE_OFFER": 1, "HAVE_LOCAL_PRANSWER": 2, "HAVE_REMOTE_PRANSWER": 3, "STABLE": 4, "CLOSED": 5, "UNKNOWN": 6,
+    ]
 
+    private func updateAggregatePeerState() {
         var bestIcePri = Int.max
         var nextIceState = "NEW"
         var bestConnPri = Int.max
@@ -888,19 +882,19 @@ public final class SerenadaSession: ObservableObject {
         var nextSignalingState = "STABLE"
 
         for slot in peerSlots.values {
-            let icePri = icePriority[slot.getIceConnectionState()] ?? .max
+            let icePri = Self.icePriority[slot.getIceConnectionState()] ?? .max
             if icePri < bestIcePri {
                 bestIcePri = icePri
                 nextIceState = slot.getIceConnectionState()
             }
 
-            let connPri = connectionPriority[slot.getConnectionState()] ?? .max
+            let connPri = Self.connectionPriority[slot.getConnectionState()] ?? .max
             if connPri < bestConnPri {
                 bestConnPri = connPri
                 nextConnectionState = slot.getConnectionState()
             }
 
-            let sigPri = signalingPriority[slot.getSignalingState()] ?? .max
+            let sigPri = Self.signalingPriority[slot.getSignalingState()] ?? .max
             if sigPri < bestSigPri {
                 bestSigPri = sigPri
                 nextSignalingState = slot.getSignalingState()
@@ -1582,6 +1576,9 @@ public final class SerenadaSession: ObservableObject {
             $0.remoteContentType = nil
             $0.realtimeStats = .empty
         }
+        if !diagnostics.featureDegradations.isEmpty {
+            diagnostics.featureDegradations = []
+        }
     }
 
     private func applyLocalVideoPreference() {
@@ -1794,7 +1791,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func syncPublishedSnapshot() {
-        var nextState = state
+        var nextState = CallState()
         if currentRequiredPermissions != nil {
             nextState.phase = .awaitingPermissions
         } else {
@@ -1818,26 +1815,44 @@ public final class SerenadaSession: ObservableObject {
             )
         }
         nextState.connectionStatus = mapConnectionStatus(legacyUiState.connectionStatus)
-        nextState.activeTransport = legacyUiState.activeTransport
         nextState.requiredPermissions = currentRequiredPermissions
         nextState.error = currentError
-        state = nextState
+        if nextState != state {
+            state = nextState
+        }
 
-        realtimeStats = legacyUiState.realtimeStats
-        callStats = CallStats(from: legacyUiState.realtimeStats)
-        isSignalingConnected = legacyUiState.isSignalingConnected
-        iceConnectionState = legacyUiState.iceConnectionState
-        peerConnectionState = legacyUiState.connectionState
-        rtcSignalingState = legacyUiState.signalingState
-        isFrontCamera = legacyUiState.isFrontCamera
-        isScreenSharing = legacyUiState.isScreenSharing
-        cameraZoomFactor = legacyUiState.cameraZoomFactor
-        isFlashAvailable = legacyUiState.isFlashAvailable
-        isFlashEnabled = legacyUiState.isFlashEnabled
-        remoteContentParticipantId = legacyUiState.remoteContentCid
-        remoteContentType = legacyUiState.remoteContentType
+        var nextDiagnostics = diagnostics
+        nextDiagnostics.isSignalingConnected = legacyUiState.isSignalingConnected
+        nextDiagnostics.iceConnectionState = IceConnectionState(rawValueOrUnknown: legacyUiState.iceConnectionState)
+        nextDiagnostics.peerConnectionState = PeerConnectionState(rawValueOrUnknown: legacyUiState.connectionState)
+        nextDiagnostics.rtcSignalingState = SignalingState(rawValueOrUnknown: legacyUiState.signalingState)
+        nextDiagnostics.activeTransport = legacyUiState.activeTransport
+        nextDiagnostics.realtimeStats = legacyUiState.realtimeStats
+        nextDiagnostics.callStats = CallStats(from: legacyUiState.realtimeStats)
+        nextDiagnostics.isFrontCamera = legacyUiState.isFrontCamera
+        nextDiagnostics.isScreenSharing = legacyUiState.isScreenSharing
+        nextDiagnostics.cameraZoomFactor = legacyUiState.cameraZoomFactor
+        nextDiagnostics.isFlashAvailable = legacyUiState.isFlashAvailable
+        nextDiagnostics.isFlashEnabled = legacyUiState.isFlashEnabled
+        nextDiagnostics.remoteContentParticipantId = legacyUiState.remoteContentCid
+        nextDiagnostics.remoteContentType = legacyUiState.remoteContentType
+        if nextDiagnostics != diagnostics {
+            diagnostics = nextDiagnostics
+        }
 
         delegateProvider?()?.sessionDidChangeState(self, state: nextState)
+    }
+
+    private func setFeatureDegradation(_ degradation: FeatureDegradationState) {
+        var nextDiagnostics = diagnostics
+        if let index = nextDiagnostics.featureDegradations.firstIndex(where: { $0.kind == degradation.kind }) {
+            nextDiagnostics.featureDegradations[index] = degradation
+        } else {
+            nextDiagnostics.featureDegradations.append(degradation)
+        }
+        if nextDiagnostics != diagnostics {
+            diagnostics = nextDiagnostics
+        }
     }
 
     private func mapPhase(_ phase: CallPhase) -> SerenadaCallPhase {

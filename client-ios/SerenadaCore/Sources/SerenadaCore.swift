@@ -71,30 +71,23 @@ public final class SerenadaCore {
         return session
     }
 
-    public func createRoom(completion: @escaping (Result<CreateRoomResult, Error>) -> Void) {
+    public func createRoom() async throws -> CreateRoomResult {
         let apiClient = CoreAPIClient()
         let serverHost = config.serverHost
         let config = self.config
-        Task {
-            do {
-                let roomId = try await apiClient.createRoomId(host: serverHost)
-                guard let url = buildRoomURL(host: serverHost, roomId: roomId) else {
-                    completion(.failure(APIError.invalidResponse("Failed to build room URL")))
-                    return
-                }
-
-                let session = SerenadaSession(
-                    roomId: roomId,
-                    roomUrl: url,
-                    serverHost: serverHost,
-                    config: config,
-                    delegateProvider: { [weak self] in self?.delegate }
-                )
-                completion(.success(CreateRoomResult(url: url, roomId: roomId, session: session)))
-            } catch {
-                completion(.failure(error))
-            }
+        let roomId = try await apiClient.createRoomId(host: serverHost)
+        guard let url = buildRoomURL(host: serverHost, roomId: roomId) else {
+            throw APIError.invalidResponse("Failed to build room URL")
         }
+
+        let session = SerenadaSession(
+            roomId: roomId,
+            roomUrl: url,
+            serverHost: serverHost,
+            config: config,
+            delegateProvider: { [weak self] in self?.delegate }
+        )
+        return CreateRoomResult(url: url, roomId: roomId, session: session)
     }
 
     private func buildRoomURL(host: String, roomId: String) -> URL? {

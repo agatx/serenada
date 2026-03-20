@@ -1,0 +1,83 @@
+# SDK Architecture Execution Plan
+
+## Summary
+Because SDK interface compatibility is not required and every client lives in this repo, the fastest path is a repo-wide sweep with no shims, no deprecation window, and no duplicate model surfaces kept alive for compatibility. The current working copy already contains partial iOS model-ownership cleanup and some unrelated Android utility changes; start by stabilizing that baseline, then do the architectural work in 6 stages.
+
+Status legend:
+- `[x]` implemented in the current working tree
+- `[ ]` not done yet
+
+The 10 workstreams and current status:
+- [x] Finish moving shared call models out of iOS UI layer ownership.
+- [ ] Eliminate the iOS dual-state / `@Published` timing trap.
+- [x] Remove duplicated UI-facing call state models where core state can be consumed directly.
+- [ ] Add DI seams for signaling, WebRTC, API, timers, and schedulers.
+- [ ] Add orchestration-level tests for join, reconnect, negotiation, and recovery.
+- [x] Enforce Android main-thread usage and fix Android stats/resource lifecycle.
+- [ ] Encapsulate `PeerConnectionSlot` state machines.
+- [x] Replace raw public WebRTC string state with typed diagnostics.
+- [ ] Split iOS/Android `WebRtcEngine` into focused media components.
+- [x] Replace callback-only `createRoom()` with async/suspend APIs.
+
+## Public API And Type Changes
+- [x] Core packages own call-domain models. iOS `SerenadaCallUI` and Android `serenada-call-ui` consume core `CallState`, `CallDiagnostics`, participant, and phase types; presentation mapping stays in the host app/UI layer.
+- [x] `SerenadaSession` exposes one app-facing snapshot `state` plus one low-level snapshot `diagnostics`. Android low-level transport/debug fields were removed from `CallState`, and iOS extra published fields were collapsed into `diagnostics`.
+- [x] Add `CallDiagnostics` with typed ICE/peer/signaling states, signaling connectivity, active transport, stats, remote-content metadata, local media capability state, and `featureDegradations`.
+- [x] Add `FeatureDegradation`, including at minimum `compositeCameraUnavailable`.
+- [x] iOS `createRoom()` becomes `async throws -> CreateRoomResult`; Android `createRoom()` becomes `suspend fun createRoom(): CreateRoomResult`. Delete callback variants once all in-repo callers are migrated.
+- [x] Android main-thread access becomes a hard SDK contract enforced with fail-fast preconditions.
+
+## Stages
+1. **Stabilize Current Working Copy**
+   - [x] Complete the in-flight iOS type move already visible in the working tree: shared call models stay in `SerenadaCore`, deleted `SerenadaCallUI` duplicate model files stay deleted, and all UI/app/tests import the core-owned types.
+   - [x] Keep the small Android utility/backfill edits only if they stay green; otherwise isolate them from the architecture branch rather than mixing them into later refactors.
+   - [ ] Establish a clean baseline by running repo builds/tests before larger changes.
+     The web build/tests, Android unit tests, `xcodegen generate`, and resilience parity check passed, but the full iOS app-scheme test run still has a live UI test failure.
+
+2. **Foundation: DI, Test Harness, Runtime Safety**
+   - [ ] Introduce internal factories/interfaces for signaling, WebRTC, API, clock/timer, and scheduler dependencies in iOS and Android session layers.
+   - [ ] Build a hermetic session harness with fake signaling/media/timers and add contract tests for permission gating, join ack timeout, join recovery, reconnect backoff, WS-to-SSE failover, offer timeout, ICE restart, turn refresh, leave, and end.
+   - [x] Android: add main-thread preconditions on all public `SerenadaCore` and `SerenadaSession` entrypoints and replace the current reusable stats executor with a lifecycle-owned scheduler that cannot be reused after shutdown.
+
+3. **Unify State And Model Ownership**
+   - [ ] iOS: delete `legacyUiState` and `syncPublishedSnapshot()`, and move to one reducer-driven immutable `CallState`.
+   - [x] Introduce `CallDiagnostics` on iOS and Android and migrate transport/debug/media-detail fields into it.
+   - [x] Remove UI-owned duplicate state models where they are full copies of SDK state; UI packages should read core `CallState`/`CallDiagnostics` directly and derive display-only fields locally.
+   - [x] Update in-repo host apps, UI modules, tests, and samples in the same sweep.
+
+4. **Decompose Session Orchestration**
+   - [ ] Refactor iOS and Android `SerenadaSession` into a thin facade over `JoinCoordinator`, `ConnectionRecoveryCoordinator`, `PermissionsGate`, `PeerRegistry`, and `StatsPoller`.
+   - [ ] Make `PeerConnectionSlot` an owned state machine with explicit methods for offer lifecycle, ICE restart lifecycle, non-host fallback, and cleanup; session code must stop mutating slot fields directly.
+   - [x] Keep signaling protocol v1 and resilience constants unchanged.
+
+5. **Decompose Media Engine And Surface Degradation**
+   - [ ] Split iOS and Android `WebRtcEngine` into camera capture/control, screen-share control, composite-camera control, renderer registry, and stats/media bridge components.
+   - [x] Remove silent composite-camera failure handling. Composite failures must set `FeatureDegradation.compositeCameraUnavailable`, carry a reason in diagnostics, and disable composite only for the current session unless explicitly retried.
+   - [x] Android: remove persistent composite failure disablement from `SharedPreferences`; capability detection caching may remain, failure persistence may not.
+
+6. **Repo-Wide API Cleanup**
+   - [x] Replace callback-based `createRoom()` call sites in the app shells, samples, and tests with async/suspend usage, then delete the callback APIs.
+   - [ ] Remove iOS extra session-published properties and any remaining duplicate UI state adapters that survived earlier stages.
+   - [ ] Update README and platform SDK docs to describe `state`, `diagnostics`, Android main-thread requirements, and async room creation.
+     Platform SDK docs and sample READMEs were updated; the root `README.md` still needs the new `state` plus `diagnostics` and async room-creation wording.
+
+## Test Plan
+- Baseline and after every stage:
+  - [x] `cd client && npm test && npm run build`
+  - [ ] `cd client-ios && xcodegen generate && xcodebuild -project SerenadaiOS.xcodeproj -scheme SerenadaiOS -destination 'platform=iOS Simulator,name=iPhone 16' test`
+    `xcodegen generate` passed, but the full iOS test command is still blocked by a live UI test failure in `DeepLinkParticipantCountUITests`.
+  - [x] `cd client-android && ./gradlew :serenada-core:testDebugUnitTest :app:testDebugUnitTest`
+  - [x] `node scripts/check-resilience-constants.mjs`
+- Required scenarios:
+  - [ ] iOS subscribers never observe stale state after a session change.
+  - [x] Android off-main-thread SDK calls fail immediately.
+  - [ ] Join, permission resume, reconnect, WS/SSE fallback, offer timeout, ICE restart, and leave/end are behaviorally unchanged.
+  - [x] UI packages compile against core-owned model types with no duplicated call-domain models left in the UI modules.
+  - [x] Composite-camera failure is visible in diagnostics and does not persist across sessions.
+  - [ ] All host apps and samples compile after the async `createRoom()` migration.
+
+## Assumptions
+- Save this revised plan as `SDK_ARCHITECTURE_EXECUTION_PLAN.md` at the repo root when edits are allowed.
+- Public SDK compatibility is intentionally out of scope; all in-repo callers are migrated in the same changes that break old interfaces.
+- No signaling protocol change, no resilience constant change, and no new third-party dependency is part of this plan.
+- Existing Claude working-copy changes should be preserved only where they align with the target architecture and stay green under the baseline build/test pass.

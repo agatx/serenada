@@ -73,14 +73,14 @@ func handleDeepLink(_ url: URL) {
 ## Create a Room
 
 ```swift
-serenada.createRoom { result in
-    switch result {
-    case .success(let room):
-        let shareURL = room.url  // send to the other party
+Task {
+    do {
+        let room = try await serenada.createRoom()
+        let shareURL = room.roomUrl  // send to the other party
         presentFullScreen {
             SerenadaCallFlow(session: room.session, onDismiss: { dismiss() })
         }
-    case .failure(let error):
+    } catch {
         print("Failed: \(error)")
     }
 }
@@ -109,6 +109,11 @@ session.$state.sink { state in
     }
 }
 
+session.$diagnostics.sink { diagnostics in
+    print("Transport:", diagnostics.activeTransport ?? "n/a")
+    print("ICE:", diagnostics.iceConnectionState.rawValue)
+}
+
 // Media controls
 session.toggleAudio()
 session.toggleVideo()
@@ -122,6 +127,10 @@ session.attachRemoteRenderer(remoteVideoView, forParticipant: cid)
 session.leave()   // local exit, room stays open
 session.end()     // terminates room for all
 ```
+
+`SerenadaSession` exposes two observable snapshots:
+- `state` for app-facing lifecycle, participants, permissions, and errors
+- `diagnostics` for transport state, low-level WebRTC state, stats, and feature degradation details
 
 ## Permissions Handling
 

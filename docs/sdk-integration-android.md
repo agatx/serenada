@@ -94,16 +94,20 @@ fun handleDeepLink(uri: Uri) {
 ## Create a Room
 
 ```kotlin
-serenada.createRoom { result ->
-    if (result.error == null && result.session != null && result.roomUrl != null) {
-        val shareUrl = result.roomUrl  // send to the other party
-        val session = result.session   // already joining
-        // Navigate to call screen with session
-    } else {
-        Log.e("Serenada", "Failed: ${result.error}")
-    }
+scope.launch {
+    runCatching { serenada.createRoom() }
+        .onSuccess { room ->
+            val shareUrl = room.roomUrl  // send to the other party
+            val session = room.session   // already joining
+            // Navigate to call screen with session
+        }
+        .onFailure { error ->
+            Log.e("Serenada", "Failed", error)
+        }
 }
 ```
+
+`SerenadaCore` and `SerenadaSession` must be used from the Android main thread. The SDK now fails fast if these entry points are invoked from a background thread.
 
 ## Core-Only Integration (No UI)
 
@@ -116,7 +120,7 @@ val serenada = SerenadaCore(
 )
 val session = serenada.join(url = url)
 
-// Observe state
+// Observe app-facing state
 lifecycleScope.launch {
     session.state.collect { state ->
         when (state.phase) {
@@ -130,6 +134,13 @@ lifecycleScope.launch {
             CallPhase.Ending -> showEndingScreen()
             CallPhase.Error -> showError(state.error)
         }
+    }
+}
+
+// Observe low-level diagnostics separately
+lifecycleScope.launch {
+    session.diagnostics.collect { diagnostics ->
+        Log.d("Serenada", "Transport=${diagnostics.activeTransport} ICE=${diagnostics.iceConnectionState}")
     }
 }
 
@@ -147,6 +158,10 @@ session.attachRemoteRendererForCid(cid, remoteSurfaceView) // specific remote in
 session.leave()   // local exit, room stays open
 session.end()     // terminates room for all
 ```
+
+`SerenadaSession` exposes two flows:
+- `state` for lifecycle, participants, permissions, and errors
+- `diagnostics` for transport state, low-level WebRTC state, stats, and feature degradation details
 
 ## Permissions Handling
 

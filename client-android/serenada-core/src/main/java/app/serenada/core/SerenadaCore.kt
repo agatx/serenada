@@ -1,7 +1,11 @@
 package app.serenada.core
 
 import android.content.Context
+import android.os.Looper
 import app.serenada.core.network.CoreApiClient
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
 
 /**
@@ -19,10 +23,17 @@ class SerenadaCore(
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
 
+    private fun assertMainThread() {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "SerenadaCore APIs must be called on the main thread"
+        }
+    }
+
     /**
      * Join a call using a full URL (e.g., "https://serenada.app/call/ABC123").
      */
     fun join(url: String): SerenadaSession {
+        assertMainThread()
         val resolved = resolveRoomUrl(url)
         val roomId = resolved?.roomId ?: url
         val session = SerenadaSession(
@@ -42,6 +53,7 @@ class SerenadaCore(
      * Join a call using a room ID.
      */
     fun join(roomId: String, serverHost: String = config.serverHost): SerenadaSession {
+        assertMainThread()
         val roomUrl = buildRoomUrl(serverHost, roomId)
         val session = SerenadaSession(
             roomId = roomId,
@@ -59,27 +71,32 @@ class SerenadaCore(
     /**
      * Create a new room and immediately join it.
      */
-    fun createRoom(callback: (CreateRoomResult) -> Unit) {
-        apiClient.createRoomId(config.serverHost) { result ->
-            result
-                .onSuccess { roomId ->
-                    val roomUrl = buildRoomUrl(config.serverHost, roomId)
-                    val session = SerenadaSession(
-                        roomId = roomId,
-                        roomUrl = roomUrl,
-                        serverHost = config.serverHost,
-                        config = config,
-                        context = context,
-                        delegate = { delegate },
-                        okHttpClient = okHttpClient,
-                    )
-                    session.start()
-                    callback(CreateRoomResult(roomId = roomId, roomUrl = roomUrl, session = session))
-                }
-                .onFailure { error ->
-                    callback(CreateRoomResult(roomId = null, roomUrl = null, session = null, error = error))
-                }
+    suspend fun createRoom(): CreateRoomResult {
+        assertMainThread()
+        val roomId = suspendCancellableCoroutine<String> { continuation ->
+            apiClient.createRoomId(config.serverHost) { result ->
+                result
+                    .onSuccess { resolvedRoomId ->
+                        continuation.resume(resolvedRoomId)
+                    }
+                    .onFailure { error ->
+                        continuation.resumeWithException(error)
+                    }
+            }
         }
+
+        val roomUrl = buildRoomUrl(config.serverHost, roomId)
+        val session = SerenadaSession(
+            roomId = roomId,
+            roomUrl = roomUrl,
+            serverHost = config.serverHost,
+            config = config,
+            context = context,
+            delegate = { delegate },
+            okHttpClient = okHttpClient,
+        )
+        session.start()
+        return CreateRoomResult(roomId = roomId, roomUrl = roomUrl, session = session)
     }
 
     private fun resolveRoomUrl(url: String): ResolvedRoomUrl? {
@@ -130,8 +147,7 @@ class SerenadaCore(
 }
 
 data class CreateRoomResult(
-    val roomId: String?,
-    val roomUrl: String?,
-    val session: SerenadaSession?,
-    val error: Throwable? = null,
+    val roomId: String,
+    val roomUrl: String,
+    val session: SerenadaSession,
 )

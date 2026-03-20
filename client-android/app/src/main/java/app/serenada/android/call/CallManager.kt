@@ -19,6 +19,7 @@ import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.HostApiClient
 import app.serenada.android.push.PushSubscriptionManager
 import app.serenada.android.service.CallService
+import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallState
 import app.serenada.core.RoomOccupancy
 import app.serenada.core.RoomWatcher
@@ -165,19 +166,15 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             }
         activeSessionStatsJob =
             scope.launch {
-                session.callStats.collectLatest { stats ->
+                session.diagnostics.collectLatest { diagnostics ->
                     if (activeSession !== session) return@collectLatest
                     handler.post {
-                        updateState(
-                            _uiState.value.copy(
-                                realtimeCallStats = stats.realtimeStats,
-                            ),
-                        )
+                        applySdkStateToUi(session.state.value, diagnostics)
                     }
                 }
             }
 
-        applySdkStateToUi(session.state.value)
+        applySdkStateToUi(session.state.value, session.diagnostics.value)
         CallService.start(
             appContext,
             session.roomId,
@@ -187,7 +184,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun handleSdkSessionState(session: SerenadaSession, state: CallState) {
         currentRoomId = state.roomId ?: session.roomId
-        applySdkStateToUi(state)
+        applySdkStateToUi(state, session.diagnostics.value)
 
         val roomId = currentRoomId
         val localCid = state.localCid
@@ -224,7 +221,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         }
     }
 
-    private fun applySdkStateToUi(state: CallState) {
+    private fun applySdkStateToUi(state: CallState, diagnostics: CallDiagnostics) {
         val previous = _uiState.value
         val statusMessageResId =
             when (state.phase) {
@@ -256,18 +253,19 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 localVideoEnabled = state.localVideoEnabled,
                 remoteParticipants = state.remoteParticipants,
                 connectionStatus = state.connectionStatus,
-                isSignalingConnected = state.isSignalingConnected,
-                iceConnectionState = state.iceConnectionState,
-                connectionState = state.connectionState,
-                signalingState = state.signalingState,
-                activeTransport = state.activeTransport,
-                isFrontCamera = state.isFrontCamera,
-                isScreenSharing = state.isScreenSharing,
+                isSignalingConnected = diagnostics.isSignalingConnected,
+                iceConnectionState = diagnostics.iceConnectionState.name,
+                connectionState = diagnostics.peerConnectionState.name,
+                signalingState = diagnostics.rtcSignalingState.name,
+                activeTransport = diagnostics.activeTransport,
+                realtimeCallStats = diagnostics.realtimeStats,
+                isFrontCamera = diagnostics.isFrontCamera,
+                isScreenSharing = diagnostics.isScreenSharing,
                 localCameraMode = state.localCameraMode,
-                isFlashAvailable = state.isFlashAvailable,
-                isFlashEnabled = state.isFlashEnabled,
-                remoteContentCid = state.remoteContentCid,
-                remoteContentType = state.remoteContentType,
+                isFlashAvailable = diagnostics.isFlashAvailable,
+                isFlashEnabled = diagnostics.isFlashEnabled,
+                remoteContentCid = diagnostics.remoteContentCid,
+                remoteContentType = diagnostics.remoteContentType,
             ),
         )
     }
@@ -594,23 +592,20 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 statusMessageResId = R.string.call_status_creating_room,
             ),
         )
-        createSdkCore(serverHost.value).createRoom { result ->
-            handler.post {
-                val session = result.session
-                if (result.error == null && session != null) {
-                    beginSdkSession(session)
-                } else {
-                    val error = result.error
-                    val fallback = appContext.getString(R.string.error_failed_create_room)
-                    val message = error?.message?.ifBlank { null } ?: fallback
-                    updateState(
-                        _uiState.value.copy(
-                            phase = CallPhase.Error,
-                            errorMessageResId = if (message == fallback) R.string.error_failed_create_room else null,
-                            errorMessageText = if (message == fallback) null else message,
-                        ),
-                    )
-                }
+        scope.launch {
+            try {
+                val created = createSdkCore(serverHost.value).createRoom()
+                beginSdkSession(created.session)
+            } catch (error: Throwable) {
+                val fallback = appContext.getString(R.string.error_failed_create_room)
+                val message = error.message?.ifBlank { null } ?: fallback
+                updateState(
+                    _uiState.value.copy(
+                        phase = CallPhase.Error,
+                        errorMessageResId = if (message == fallback) R.string.error_failed_create_room else null,
+                        errorMessageText = if (message == fallback) null else message,
+                    ),
+                )
             }
         }
     }
@@ -729,7 +724,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         if (calls.any { it.host == null }) {
             val host = serverHost.value
             val patched = calls.map { if (it.host == null) it.copy(host = host) else it }
-            patched.forEach { recentCallStore.saveCall(it) }
+            calls.forEachIndexed { i, call -> if (call.host == null) recentCallStore.saveCall(patched[i]) }
             _recentCalls.value = patched
         } else {
             _recentCalls.value = calls
@@ -741,10 +736,9 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         val rooms = savedRoomStore.getSavedRooms()
         if (rooms.any { it.host == null }) {
             val host = serverHost.value
-            rooms.filter { it.host == null }.forEach {
-                savedRoomStore.saveRoom(it.copy(host = host))
-            }
-            _savedRooms.value = savedRoomStore.getSavedRooms()
+            val patched = rooms.map { if (it.host == null) it.copy(host = host) else it }
+            rooms.forEachIndexed { i, room -> if (room.host == null) savedRoomStore.saveRoom(patched[i]) }
+            _savedRooms.value = patched
         } else {
             _savedRooms.value = rooms
         }

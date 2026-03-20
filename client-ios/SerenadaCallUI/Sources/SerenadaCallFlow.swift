@@ -301,6 +301,7 @@ private struct SessionFirstCallFlow: View {
 
     private func mapSessionToUiState(_ session: SerenadaSession) -> CallUiState {
         let state = session.state
+        let diagnostics = session.diagnostics
         var uiState = CallUiState()
         uiState.phase = mapPhase(state.phase)
         uiState.roomId = state.roomId
@@ -310,19 +311,19 @@ private struct SessionFirstCallFlow: View {
         uiState.localVideoEnabled = state.localParticipant.videoEnabled
         uiState.localCameraMode = state.localParticipant.cameraMode
         uiState.connectionStatus = mapConnectionStatus(state.connectionStatus)
-        uiState.activeTransport = state.activeTransport
-        uiState.isSignalingConnected = session.isSignalingConnected
-        uiState.iceConnectionState = session.iceConnectionState
-        uiState.connectionState = session.peerConnectionState
-        uiState.signalingState = session.rtcSignalingState
-        uiState.realtimeStats = session.realtimeStats
-        uiState.isFrontCamera = session.isFrontCamera
-        uiState.isScreenSharing = session.isScreenSharing
-        uiState.cameraZoomFactor = session.cameraZoomFactor
-        uiState.isFlashAvailable = session.isFlashAvailable
-        uiState.isFlashEnabled = session.isFlashEnabled
-        uiState.remoteContentCid = session.remoteContentParticipantId
-        uiState.remoteContentType = session.remoteContentType
+        uiState.activeTransport = diagnostics.activeTransport
+        uiState.isSignalingConnected = diagnostics.isSignalingConnected
+        uiState.iceConnectionState = diagnostics.iceConnectionState.rawValue
+        uiState.connectionState = diagnostics.peerConnectionState.rawValue
+        uiState.signalingState = diagnostics.rtcSignalingState.rawValue
+        uiState.realtimeStats = diagnostics.realtimeStats
+        uiState.isFrontCamera = diagnostics.isFrontCamera
+        uiState.isScreenSharing = diagnostics.isScreenSharing
+        uiState.cameraZoomFactor = diagnostics.cameraZoomFactor
+        uiState.isFlashAvailable = diagnostics.isFlashAvailable
+        uiState.isFlashEnabled = diagnostics.isFlashEnabled
+        uiState.remoteContentCid = diagnostics.remoteContentParticipantId
+        uiState.remoteContentType = diagnostics.remoteContentType
         uiState.remoteParticipants = state.remoteParticipants.map { rp in
             RemoteParticipant(
                 cid: rp.cid,

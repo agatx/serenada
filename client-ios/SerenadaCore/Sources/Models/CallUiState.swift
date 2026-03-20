@@ -1,46 +1,46 @@
 import Foundation
 
-enum ConnectionStatus: String, Equatable {
+public enum ConnectionStatus: String, Equatable {
     case connected
     case recovering
     case retrying
 }
 
-struct CallUiState: Equatable {
-    var phase: CallPhase = .idle
-    var roomId: String?
-    var localCid: String?
-    var statusMessage: String?
-    var errorMessage: String?
-    var isHost: Bool = false
-    var participantCount: Int = 0
-    var localAudioEnabled: Bool = true
-    var localVideoEnabled: Bool = true
-    var remoteParticipants: [RemoteParticipant] = []
-    var connectionStatus: ConnectionStatus = .connected
-    var isSignalingConnected: Bool = false
-    var iceConnectionState: String = "NEW"
-    var connectionState: String = "NEW"
-    var signalingState: String = "STABLE"
-    var activeTransport: String?
-    var webrtcStatsSummary: String = ""
-    var realtimeStats: RealtimeCallStats = .empty
-    var isFrontCamera: Bool = true
-    var isScreenSharing: Bool = false
-    var localCameraMode: LocalCameraMode = .selfie
-    var cameraZoomFactor: Double = 1
-    var isFlashAvailable: Bool = false
-    var isFlashEnabled: Bool = false
-    var remoteContentCid: String?
-    var remoteContentType: String?
+public struct CallUiState: Equatable {
+    public var phase: CallPhase = .idle
+    public var roomId: String?
+    public var localCid: String?
+    public var statusMessage: String?
+    public var errorMessage: String?
+    public var isHost: Bool = false
+    public var participantCount: Int = 0
+    public var localAudioEnabled: Bool = true
+    public var localVideoEnabled: Bool = true
+    public var remoteParticipants: [RemoteParticipant] = []
+    public var connectionStatus: ConnectionStatus = .connected
+    public var isSignalingConnected: Bool = false
+    public var iceConnectionState: String = "NEW"
+    public var connectionState: String = "NEW"
+    public var signalingState: String = "STABLE"
+    public var activeTransport: String?
+    public var webrtcStatsSummary: String = ""
+    public var realtimeStats: RealtimeCallStats = .empty
+    public var isFrontCamera: Bool = true
+    public var isScreenSharing: Bool = false
+    public var localCameraMode: LocalCameraMode = .selfie
+    public var cameraZoomFactor: Double = 1
+    public var isFlashAvailable: Bool = false
+    public var isFlashEnabled: Bool = false
+    public var remoteContentCid: String?
+    public var remoteContentType: String?
 
-    var remoteVideoEnabled: Bool {
+    public var remoteVideoEnabled: Bool {
         remoteParticipants.first?.videoEnabled ?? false
     }
 
-    init() {}
+    public init() {}
 
-    init(phase: CallPhase = .idle, roomId: String? = nil, errorMessage: String? = nil) {
+    public init(phase: CallPhase = .idle, roomId: String? = nil, errorMessage: String? = nil) {
         self.phase = phase
         self.roomId = roomId
         self.errorMessage = errorMessage

@@ -9,6 +9,7 @@ import app.serenada.core.call.SignalingClient
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.diagnostics.runDiagnosticsIceCheck
 import app.serenada.core.network.CoreApiClient
+import app.serenada.core.network.buildHttpsUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.MediaType.Companion.toMediaType
@@ -349,26 +350,6 @@ class SerenadaDiagnostics(
                 }
             }
         }
-    }
-
-    private fun buildHttpsUrl(hostInput: String, path: String): String? {
-        val raw = hostInput.trim()
-        val isLocal =
-            raw.startsWith("localhost") ||
-                raw.startsWith("127.") ||
-                raw.startsWith("http://")
-        val withScheme =
-            when {
-                raw.startsWith("http://") || raw.startsWith("https://") -> raw
-                isLocal -> "http://$raw"
-                else -> "https://$raw"
-            }
-        val base = withScheme.toHttpUrlOrNull() ?: return null
-        return base.newBuilder()
-            .scheme(if (isLocal) "http" else "https")
-            .encodedPath(path)
-            .build()
-            .toString()
     }
 
     private fun buildWssUrl(hostInput: String): String? {

@@ -164,18 +164,15 @@ private struct HomeView: View {
         errorMessage = nil
         isCreatingRoom = true
 
-        serenada.createRoom { result in
-            Task { @MainActor in
+        Task { @MainActor in
+            do {
+                let room = try await serenada.createRoom()
                 isCreatingRoom = false
-
-                switch result {
-                case .success(let room):
-                    lastCreatedRoomURL = room.url
-                    onStartCall(.createdRoom(room))
-
-                case .failure(let error):
-                    errorMessage = error.localizedDescription
-                }
+                lastCreatedRoomURL = room.url
+                onStartCall(.createdRoom(room))
+            } catch {
+                isCreatingRoom = false
+                errorMessage = error.localizedDescription
             }
         }
     }

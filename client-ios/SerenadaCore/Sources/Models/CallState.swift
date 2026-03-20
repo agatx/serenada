@@ -70,7 +70,6 @@ public struct CallState: Equatable {
     public var localParticipant = LocalParticipant()
     public var remoteParticipants: [SerenadaRemoteParticipant] = []
     public var connectionStatus: SerenadaConnectionStatus = .connected
-    public var activeTransport: String?
     public var requiredPermissions: [MediaCapability]?
     public var error: CallError?
 

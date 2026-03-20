@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import app.serenada.core.SerenadaCore
 import app.serenada.core.SerenadaConfig
 import app.serenada.callui.SerenadaCallFlow
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var serenada: SerenadaCore
@@ -50,6 +51,7 @@ fun SampleApp(serenada: SerenadaCore) {
 @Composable
 fun HomeScreen(onJoin: (String) -> Unit, serenada: SerenadaCore) {
     var urlText by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -83,12 +85,12 @@ fun HomeScreen(onJoin: (String) -> Unit, serenada: SerenadaCore) {
 
         OutlinedButton(
             onClick = {
-                serenada.createRoom { result ->
-                    val roomId = result.roomId
-                    if (roomId != null) {
-                        // In a real app, share the room URL with the other party
-                        onJoin("https://serenada.app/call/$roomId")
-                    }
+                scope.launch {
+                    runCatching { serenada.createRoom() }
+                        .onSuccess { result ->
+                            // In a real app, share the room URL with the other party
+                            onJoin("https://serenada.app/call/${result.roomId}")
+                        }
                 }
             },
             modifier = Modifier.fillMaxWidth()

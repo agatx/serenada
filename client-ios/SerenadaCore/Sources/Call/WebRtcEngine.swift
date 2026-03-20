@@ -123,6 +123,7 @@ public final class WebRtcEngine {
     private var onFlashlightStateChanged: (Bool, Bool) -> Void
     private var onScreenShareStopped: () -> Void
     private var onZoomFactorChanged: (Double) -> Void
+    private var onFeatureDegradation: (FeatureDegradationState) -> Void
     private var onDebugTrace: ((String) -> Void)?
 
     private var isHdVideoExperimentalEnabled: Bool
@@ -170,6 +171,7 @@ public final class WebRtcEngine {
         onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
         onScreenShareStopped: @escaping () -> Void,
         onZoomFactorChanged: @escaping (Double) -> Void,
+        onFeatureDegradation: @escaping (FeatureDegradationState) -> Void = { _ in },
         onDebugTrace: ((String) -> Void)? = nil,
         isHdVideoExperimentalEnabled: Bool
     ) {
@@ -178,6 +180,7 @@ public final class WebRtcEngine {
         self.onFlashlightStateChanged = onFlashlightStateChanged
         self.onScreenShareStopped = onScreenShareStopped
         self.onZoomFactorChanged = onZoomFactorChanged
+        self.onFeatureDegradation = onFeatureDegradation
         self.onDebugTrace = onDebugTrace
         self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
 
@@ -209,6 +212,10 @@ public final class WebRtcEngine {
 
     public func setOnZoomFactorChanged(_ handler: @escaping (Double) -> Void) {
         onZoomFactorChanged = handler
+    }
+
+    public func setOnFeatureDegradation(_ handler: @escaping (FeatureDegradationState) -> Void) {
+        onFeatureDegradation = handler
     }
 
     public func setOnDebugTrace(_ handler: ((String) -> Void)?) {
@@ -631,7 +638,7 @@ public final class WebRtcEngine {
             )
             guard compositeCapturer.startCapture() else {
                 compositeDisabledAfterFailure = true
-                debugTrace("webrtc composite startCapture failed; disabling composite")
+                reportCompositeCameraUnavailable(reason: "Composite startCapture failed")
                 return false
             }
 
@@ -648,12 +655,14 @@ public final class WebRtcEngine {
         guard let camera = selectCameraDevice(for: source) else {
             if source == .composite {
                 compositeDisabledAfterFailure = true
+                reportCompositeCameraUnavailable(reason: "Composite camera device unavailable")
             }
             return false
         }
         guard let format = selectCaptureFormat(for: camera) else {
             if source == .composite {
                 compositeDisabledAfterFailure = true
+                reportCompositeCameraUnavailable(reason: "Composite capture format unavailable")
             }
             return false
         }
@@ -881,6 +890,16 @@ public final class WebRtcEngine {
 #if DEBUG
         onDebugTrace?(message)
 #endif
+    }
+
+    private func reportCompositeCameraUnavailable(reason: String) {
+        debugTrace("webrtc composite unavailable: \(reason)")
+        onFeatureDegradation(
+            FeatureDegradationState(
+                kind: .compositeCameraUnavailable,
+                reason: reason
+            )
+        )
     }
 
     private func compositeSupportSnapshot() -> (hasMultiCam: Bool, hasFrontCamera: Bool, hasBackCamera: Bool, supported: Bool) {

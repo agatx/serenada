@@ -35,12 +35,13 @@ import org.json.JSONObject
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
 import org.webrtc.SessionDescription
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
  * Represents an active call session. Created via [SerenadaCore.join] or [SerenadaCore.createRoom].
  *
- * Observe [state] for call state changes and [callStats] for real-time statistics.
+ * Observe [state] for app-facing call state changes and [diagnostics] for low-level transport/media details.
  * Control the call via [leave], [end], [toggleAudio], [toggleVideo], etc.
  */
 class SerenadaSession internal constructor(
@@ -54,9 +55,7 @@ class SerenadaSession internal constructor(
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
-    private val webRtcStatsExecutor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "webrtc-stats")
-    }
+    private var webRtcStatsExecutor: ExecutorService? = newWebRtcStatsExecutor()
     private val apiClient = CoreApiClient(okHttpClient)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -65,14 +64,14 @@ class SerenadaSession internal constructor(
     private val _state = MutableStateFlow(CallState())
     val state: StateFlow<CallState> = _state.asStateFlow()
 
-    private val _callStats = MutableStateFlow(CallStats())
-    val callStats: StateFlow<CallStats> = _callStats.asStateFlow()
+    private val _diagnostics = MutableStateFlow(CallDiagnostics())
+    val diagnostics: StateFlow<CallDiagnostics> = _diagnostics.asStateFlow()
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             handler.post {
                 if (_state.value.phase == CallPhase.InCall) {
-                    if (isConnectionDegraded(_state.value)) markConnectionDegraded()
+                    if (isConnectionDegraded()) markConnectionDegraded()
                     scheduleIceRestart("network-online", 0)
                 }
             }
@@ -82,7 +81,7 @@ class SerenadaSession internal constructor(
             handler.post {
                 if (_state.value.phase == CallPhase.InCall) {
                     val hasAnyActiveNetwork = connectivityManager.activeNetwork != null
-                    if (!hasAnyActiveNetwork || isConnectionDegraded(_state.value)) {
+                    if (!hasAnyActiveNetwork || isConnectionDegraded()) {
                         markConnectionDegraded()
                     }
                 }
@@ -122,6 +121,12 @@ class SerenadaSession internal constructor(
     val host: String
         get() = serverHost
 
+    private fun assertMainThread() {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "SerenadaSession APIs must be called on the main thread"
+        }
+    }
+
     private val callAudioSessionController = CallAudioSessionController(
         context = appContext,
         handler = handler,
@@ -133,15 +138,20 @@ class SerenadaSession internal constructor(
 
     private val forceSse = config.transports == listOf(SerenadaTransport.SSE)
 
+    private fun newWebRtcStatsExecutor(): ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "webrtc-stats")
+        }
+
     private val signalingClient = SignalingClient(
         okHttpClient, handler,
         object : SignalingClient.Listener {
             override fun onOpen(activeTransport: String) {
                 reconnectAttempts = 0
-                updateState(
-                    _state.value.copy(
+                updateDiagnostics(
+                    _diagnostics.value.copy(
                         isSignalingConnected = true,
-                        activeTransport = activeTransport
+                        activeTransport = activeTransport,
                     )
                 )
                 updateConnectionStatusFromSignals()
@@ -157,10 +167,10 @@ class SerenadaSession internal constructor(
 
             override fun onClosed(reason: String) {
                 val shouldReconnect = _state.value.phase != CallPhase.Idle
-                updateState(
-                    _state.value.copy(
+                updateDiagnostics(
+                    _diagnostics.value.copy(
                         isSignalingConnected = false,
-                        activeTransport = null
+                        activeTransport = null,
                     )
                 )
                 updateConnectionStatusFromSignals()
@@ -173,29 +183,34 @@ class SerenadaSession internal constructor(
     // --- Public API ---
 
     fun leave() {
+        assertMainThread()
         if (_state.value.phase == CallPhase.Idle) return
         sendMessage("leave", null)
         cleanupCall(EndReason.LOCAL_LEFT)
     }
 
     fun end() {
+        assertMainThread()
         sendMessage("end_room", null)
         leave()
     }
 
     fun toggleAudio() {
+        assertMainThread()
         val enabled = !_state.value.localAudioEnabled
         webRtcEngine.toggleAudio(enabled)
         updateState(_state.value.copy(localAudioEnabled = enabled))
     }
 
     fun toggleVideo() {
+        assertMainThread()
         userPreferredVideoEnabled = !_state.value.localVideoEnabled
         applyLocalVideoPreference()
     }
 
     fun flipCamera() {
-        if (!_state.value.isScreenSharing) {
+        assertMainThread()
+        if (!_diagnostics.value.isScreenSharing) {
             val currentMode = _state.value.localCameraMode
             if (currentMode.isContentMode) broadcastContentState(false)
             webRtcEngine.flipCamera()
@@ -203,33 +218,37 @@ class SerenadaSession internal constructor(
     }
 
     fun setCameraMode(@Suppress("UNUSED_PARAMETER") mode: LocalCameraMode) {
+        assertMainThread()
         // Camera mode is driven by flipCamera() internally
         flipCamera()
     }
 
     fun startScreenShare(intent: Intent) {
-        if (_state.value.isScreenSharing) return
+        assertMainThread()
+        if (_diagnostics.value.isScreenSharing) return
         if (!webRtcEngine.startScreenShare(intent)) {
             Log.w(TAG, "Failed to start screen sharing")
             return
         }
-        updateState(_state.value.copy(isScreenSharing = true))
+        updateDiagnostics(_diagnostics.value.copy(isScreenSharing = true))
         broadcastContentState(true, ContentTypeWire.SCREEN_SHARE)
         applyLocalVideoPreference()
     }
 
     fun stopScreenShare() {
-        if (!_state.value.isScreenSharing) return
+        assertMainThread()
+        if (!_diagnostics.value.isScreenSharing) return
         if (!webRtcEngine.stopScreenShare()) {
             Log.w(TAG, "Failed to stop screen sharing")
             return
         }
-        updateState(_state.value.copy(isScreenSharing = false))
+        updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
         broadcastContentState(false)
         applyLocalVideoPreference()
     }
 
     fun captureLocalSnapshot(onResult: (ByteArray?) -> Unit) {
+        assertMainThread()
         LocalFrameSnapshotCapture(
             handler = handler,
             attachLocalSink = { sink -> webRtcEngine.attachLocalSink(sink) },
@@ -238,6 +257,7 @@ class SerenadaSession internal constructor(
     }
 
     fun resumeJoin() {
+        assertMainThread()
         if (!awaitingPermissions) return
         if (!hasRequiredPermissions()) {
             startWithPermissionCheck()
@@ -254,6 +274,7 @@ class SerenadaSession internal constructor(
     }
 
     fun cancelJoin() {
+        assertMainThread()
         if (awaitingPermissions) {
             awaitingPermissions = false
             cleanupCall(EndReason.LOCAL_LEFT)
@@ -264,10 +285,12 @@ class SerenadaSession internal constructor(
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null,
     ) {
+        assertMainThread()
         webRtcEngine.attachLocalRenderer(renderer, rendererEvents)
     }
 
     fun detachLocalRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
+        assertMainThread()
         webRtcEngine.detachLocalRenderer(renderer)
     }
 
@@ -275,6 +298,7 @@ class SerenadaSession internal constructor(
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null,
     ) {
+        assertMainThread()
         val remoteCid = currentRoomState
             ?.participants
             ?.firstOrNull { it.cid != clientId }
@@ -285,6 +309,7 @@ class SerenadaSession internal constructor(
     }
 
     fun detachRemoteRenderer(renderer: org.webrtc.SurfaceViewRenderer) {
+        assertMainThread()
         peerSlots.values.forEach { it.detachRemoteRenderer(renderer) }
     }
 
@@ -293,23 +318,28 @@ class SerenadaSession internal constructor(
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null,
     ) {
+        assertMainThread()
         webRtcEngine.initRenderer(renderer, rendererEvents)
         peerSlots[cid]?.attachRemoteRenderer(renderer)
     }
 
     fun detachRemoteRendererForCid(cid: String, renderer: org.webrtc.SurfaceViewRenderer) {
+        assertMainThread()
         peerSlots[cid]?.detachRemoteRenderer(renderer)
     }
 
     fun attachLocalSink(sink: org.webrtc.VideoSink) {
+        assertMainThread()
         webRtcEngine.attachLocalSink(sink)
     }
 
     fun detachLocalSink(sink: org.webrtc.VideoSink) {
+        assertMainThread()
         webRtcEngine.detachLocalSink(sink)
     }
 
     fun attachRemoteSink(sink: org.webrtc.VideoSink) {
+        assertMainThread()
         val remoteCid = currentRoomState
             ?.participants
             ?.firstOrNull { it.cid != clientId }
@@ -320,30 +350,39 @@ class SerenadaSession internal constructor(
     }
 
     fun detachRemoteSink(sink: org.webrtc.VideoSink) {
+        assertMainThread()
         peerSlots.values.forEach { it.detachRemoteSink(sink) }
     }
 
     fun attachRemoteSinkForCid(cid: String, sink: org.webrtc.VideoSink) {
+        assertMainThread()
         peerSlots[cid]?.attachRemoteSink(sink)
     }
 
     fun detachRemoteSinkForCid(cid: String, sink: org.webrtc.VideoSink) {
+        assertMainThread()
         peerSlots[cid]?.detachRemoteSink(sink)
     }
 
-    fun eglContext(): org.webrtc.EglBase.Context = webRtcEngine.getEglContext()
+    fun eglContext(): org.webrtc.EglBase.Context {
+        assertMainThread()
+        return webRtcEngine.getEglContext()
+    }
 
     fun adjustLocalCameraZoom(scaleFactor: Float) {
+        assertMainThread()
         webRtcEngine.adjustWorldCameraZoom(scaleFactor)
     }
 
     fun toggleFlashlight() {
+        assertMainThread()
         webRtcEngine.toggleFlashlight()
     }
 
     // --- Internal: Start ---
 
     internal fun start() {
+        assertMainThread()
         if (!hasRequiredPermissions()) {
             startWithPermissionCheck()
             return
@@ -359,6 +398,9 @@ class SerenadaSession internal constructor(
         currentRoomState = null
         hasJoinSignalStarted = false
         hasJoinAcknowledged = false
+        if (webRtcStatsExecutor == null) {
+            webRtcStatsExecutor = newWebRtcStatsExecutor()
+        }
 
         recreateWebRtcEngineForNewCall()
         registerConnectivityListener()
@@ -373,12 +415,11 @@ class SerenadaSession internal constructor(
                 remoteParticipants = emptyList(),
                 localCameraMode = LocalCameraMode.SELFIE,
                 connectionStatus = ConnectionStatus.Connected,
-                isFlashAvailable = false,
-                isFlashEnabled = false,
             )
         )
+        updateDiagnostics(CallDiagnostics())
         scheduleJoinTimeout(roomId, joinAttemptId)
-        scheduleJoinKickstart(roomId, joinAttemptId)
+        scheduleJoinKickstart(joinAttemptId)
 
         acquirePerformanceLocks()
         callAudioSessionController.activate()
@@ -392,6 +433,7 @@ class SerenadaSession internal constructor(
     }
 
     internal fun startWithPermissionCheck() {
+        assertMainThread()
         awaitingPermissions = true
         val permissions = listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE)
         updateState(
@@ -414,13 +456,14 @@ class SerenadaSession internal constructor(
             context = appContext,
             onCameraFacingChanged = { isFront ->
                 handler.post {
-                    updateState(_state.value.copy(isFrontCamera = isFront))
+                    updateDiagnostics(_diagnostics.value.copy(isFrontCamera = isFront))
                 }
             },
             onCameraModeChanged = { mode ->
                 handler.post {
                     val previousMode = _state.value.localCameraMode
                     updateState(_state.value.copy(localCameraMode = mode))
+                    updateDiagnostics(_diagnostics.value.copy(isScreenSharing = mode == LocalCameraMode.SCREEN_SHARE))
                     val isContent = mode.isContentMode
                     val wasContent = previousMode.isContentMode
                     if (isContent) {
@@ -433,21 +476,26 @@ class SerenadaSession internal constructor(
             },
             onFlashlightStateChanged = { available, enabled ->
                 handler.post {
-                    updateState(
-                        _state.value.copy(
+                    updateDiagnostics(
+                        _diagnostics.value.copy(
                             isFlashAvailable = available,
-                            isFlashEnabled = enabled
+                            isFlashEnabled = enabled,
                         )
                     )
                 }
             },
             onScreenShareStopped = {
                 handler.post {
-                    if (_state.value.isScreenSharing) {
-                        updateState(_state.value.copy(isScreenSharing = false))
+                    if (_diagnostics.value.isScreenSharing) {
+                        updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
                         broadcastContentState(false)
                     }
                     applyLocalVideoPreference()
+                }
+            },
+            onFeatureDegradation = { degradation ->
+                handler.post {
+                    setFeatureDegradation(degradation)
                 }
             },
             isHdVideoExperimentalEnabled = config.isHdVideoExperimentalEnabled
@@ -571,11 +619,13 @@ class SerenadaSession internal constructor(
     }
 
     private fun handleContentState(msg: SignalingMessage) {
-        val fromCid = msg.payload?.optString("from") ?: return
-        val active = msg.payload?.optBoolean("active") == true
-        val contentType = if (active) msg.payload?.optString("contentType") else null
-        updateState(
-            _state.value.copy(
+        val payload = msg.payload ?: return
+        val fromCid = payload.optString("from")
+        if (fromCid.isBlank()) return
+        val active = payload.optBoolean("active")
+        val contentType = if (active) payload.optString("contentType") else null
+        updateDiagnostics(
+            _diagnostics.value.copy(
                 remoteContentCid = if (active) fromCid else null,
                 remoteContentType = contentType,
             )
@@ -787,17 +837,19 @@ class SerenadaSession internal constructor(
             RemoteParticipant(cid = cid, videoEnabled = slot.isRemoteVideoTrackEnabled(), connectionState = slot.getConnectionState().name)
         }
         val currentState = _state.value
+        val currentDiagnostics = _diagnostics.value
         val activeCids = remoteParticipants.map { it.cid }.toSet()
-        val clearContent = currentState.remoteContentCid != null && currentState.remoteContentCid !in activeCids
+        val clearContent = currentDiagnostics.remoteContentCid != null && currentDiagnostics.remoteContentCid !in activeCids
         if (currentState.remoteParticipants == remoteParticipants) {
-            if (clearContent) updateState(currentState.copy(remoteContentCid = null, remoteContentType = null))
+            if (clearContent) {
+                updateDiagnostics(currentDiagnostics.copy(remoteContentCid = null, remoteContentType = null))
+            }
             return
         }
-        updateState(currentState.copy(
-            remoteParticipants = remoteParticipants,
-            remoteContentCid = if (clearContent) null else currentState.remoteContentCid,
-            remoteContentType = if (clearContent) null else currentState.remoteContentType,
-        ))
+        updateState(currentState.copy(remoteParticipants = remoteParticipants))
+        if (clearContent) {
+            updateDiagnostics(currentDiagnostics.copy(remoteContentCid = null, remoteContentType = null))
+        }
     }
 
     // --- Internal: Offer / ICE ---
@@ -922,6 +974,7 @@ class SerenadaSession internal constructor(
         val runnable = Runnable {
             slot.nonHostFallbackTask = null
             slot.nonHostFallbackAttempts++
+            Log.w(TAG, "Non-host offer fallback for $remoteCid ($reason)")
             maybeSendNonHostFallbackOffer(remoteCid)
         }
         slot.nonHostFallbackTask = runnable
@@ -974,7 +1027,7 @@ class SerenadaSession internal constructor(
 
     private fun clearJoinTimeout() { joinTimeoutRunnable?.let { handler.removeCallbacks(it) }; joinTimeoutRunnable = null }
 
-    private fun scheduleJoinKickstart(roomId: String, joinAttemptId: Long) {
+    private fun scheduleJoinKickstart(joinAttemptId: Long) {
         clearJoinKickstart()
         val runnable = Runnable {
             joinKickstartRunnable = null
@@ -1085,9 +1138,15 @@ class SerenadaSession internal constructor(
             val sp = SIG_PRIORITY[slot.getSignalingState()] ?: Int.MAX_VALUE
             if (sp < bestSigPri) { bestSigPri = sp; bestSig = slot.getSignalingState().name }
         }
-        val s = _state.value
-        if (s.iceConnectionState == bestIce && s.connectionState == bestConn && s.signalingState == bestSig) return
-        updateState(s.copy(iceConnectionState = bestIce, connectionState = bestConn, signalingState = bestSig))
+        val current = _diagnostics.value
+        val next = current.copy(
+            iceConnectionState = IceConnectionState.from(bestIce),
+            peerConnectionState = PeerConnectionState.from(bestConn),
+            rtcSignalingState = RtcSignalingState.from(bestSig),
+        )
+        if (next != current) {
+            updateDiagnostics(next)
+        }
     }
 
     private fun parseRoomState(payload: JSONObject?): RoomState? {
@@ -1116,11 +1175,25 @@ class SerenadaSession internal constructor(
         delegate?.invoke()?.onSessionStateChanged(this, newState)
     }
 
+    private fun updateDiagnostics(newDiagnostics: CallDiagnostics) {
+        _diagnostics.value = newDiagnostics
+    }
+
+    private fun setFeatureDegradation(degradation: FeatureDegradationState) {
+        val current = _diagnostics.value
+        val nextDegradations = current.featureDegradations
+            .filterNot { it.kind == degradation.kind } + degradation
+        updateDiagnostics(current.copy(featureDegradations = nextDegradations))
+    }
+
     // --- Internal: Connection Status ---
 
-    private fun isConnectionDegraded(state: CallState): Boolean {
-        return !state.isSignalingConnected || state.iceConnectionState == "DISCONNECTED" || state.iceConnectionState == "FAILED" ||
-            state.connectionState == "DISCONNECTED" || state.connectionState == "FAILED"
+    private fun isConnectionDegraded(diagnostics: CallDiagnostics = _diagnostics.value): Boolean {
+        return !diagnostics.isSignalingConnected ||
+            diagnostics.iceConnectionState == IceConnectionState.DISCONNECTED ||
+            diagnostics.iceConnectionState == IceConnectionState.FAILED ||
+            diagnostics.peerConnectionState == PeerConnectionState.DISCONNECTED ||
+            diagnostics.peerConnectionState == PeerConnectionState.FAILED
     }
 
     private fun setConnectionStatus(status: ConnectionStatus) {
@@ -1144,7 +1217,7 @@ class SerenadaSession internal constructor(
 
     private fun updateConnectionStatusFromSignals() {
         if (_state.value.phase != CallPhase.InCall) { resetConnectionStatusMachine(); return }
-        if (isConnectionDegraded(_state.value)) { markConnectionDegraded(); return }
+        if (isConnectionDegraded(_diagnostics.value)) { markConnectionDegraded(); return }
         resetConnectionStatusMachine()
     }
 
@@ -1192,14 +1265,14 @@ class SerenadaSession internal constructor(
         val slots = peerSlots.values.toList()
         if (slots.isEmpty()) return
         webrtcStatsRequestInFlight = true
-        if (webRtcStatsExecutor.isShutdown) { webrtcStatsRequestInFlight = false; return }
-        try { webRtcStatsExecutor.execute {
-            val summaries = mutableListOf<String>()
+        val executor = webRtcStatsExecutor?.takeIf { !it.isShutdown }
+        if (executor == null) { webrtcStatsRequestInFlight = false; return }
+        try { executor.execute {
             val stats = mutableListOf<RealtimeCallStats>()
             var remaining = slots.size
             slots.forEach { slot ->
                 slot.collectWebRtcStats { _, realtimeStats ->
-                    synchronized(summaries) {
+                    synchronized(stats) {
                         realtimeStats?.let(stats::add)
                         remaining -= 1
                         if (remaining == 0) {
@@ -1208,7 +1281,7 @@ class SerenadaSession internal constructor(
                                 webrtcStatsRequestInFlight = false
                                 lastWebRtcStatsPollAtMs = System.currentTimeMillis()
                                 if (merged != null) {
-                                    _callStats.value = CallStats(
+                                    val nextCallStats = CallStats(
                                         bitrate = merged.availableOutgoingKbps,
                                         packetLoss = merged.videoRxPacketLossPct,
                                         jitter = merged.audioJitterMs,
@@ -1222,6 +1295,12 @@ class SerenadaSession internal constructor(
                                         iceCandidatePair = merged.transportPath,
                                         realtimeStats = merged,
                                         updatedAtMs = merged.updatedAtMs,
+                                    )
+                                    updateDiagnostics(
+                                        _diagnostics.value.copy(
+                                            callStats = nextCallStats,
+                                            realtimeStats = merged,
+                                        )
                                     )
                                 }
                             }
@@ -1259,7 +1338,7 @@ class SerenadaSession internal constructor(
 
     private fun cleanupCall(reason: EndReason) {
         updateState(_state.value.copy(phase = CallPhase.Ending))
-        if (_state.value.isScreenSharing) webRtcEngine.stopScreenShare()
+        if (_diagnostics.value.isScreenSharing) webRtcEngine.stopScreenShare()
         resetResources()
         updateState(CallState(phase = CallPhase.Idle))
         delegate?.invoke()?.onSessionEnded(this, reason)
@@ -1281,17 +1360,19 @@ class SerenadaSession internal constructor(
         peerSlots.values.forEach { it.closePeerConnection() }
         peerSlots.clear()
         webRtcEngine.release()
-        webRtcStatsExecutor.shutdown()
+        webRtcStatsExecutor?.shutdown()
+        webRtcStatsExecutor = null
         unregisterConnectivityListener()
         clientId = null; hostCid = null; currentRoomState = null; callStartTimeMs = null
         pendingJoinRoom = null; pendingMessages.clear(); reconnectAttempts = 0
         clearConnectionStatusRetryingTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; turnTokenTTLMs = null; hasJoinSignalStarted = false; hasJoinAcknowledged = false
+        updateDiagnostics(CallDiagnostics())
     }
 
     private fun applyLocalVideoPreference() {
-        val shouldPause = callAudioSessionController.shouldPauseVideoForProximity(_state.value.isScreenSharing)
+        val shouldPause = callAudioSessionController.shouldPauseVideoForProximity(_diagnostics.value.isScreenSharing)
         isVideoPausedByProximity = shouldPause
         val enabled = userPreferredVideoEnabled && !shouldPause
         webRtcEngine.toggleVideo(enabled)

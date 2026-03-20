@@ -89,6 +89,9 @@ final class CallManager: ObservableObject {
 
         refreshRecentCalls()
         refreshSavedRooms()
+        // Both refresh methods above call refreshWatchedRooms individually;
+        // since they run back-to-back at init, the first call is a no-op
+        // superseded by the second. This is harmless but noted for clarity.
     }
 
     deinit {
@@ -249,18 +252,16 @@ final class CallManager: ObservableObject {
         uiState.statusMessage = L10n.callStatusCreatingRoom
 
         let core = makeSerenadaCore(host: serverHost)
-        core.createRoom { [weak self] result in
-            Task { @MainActor in
-                guard let self else { return }
-                switch result {
-                case .success(let created):
-                    self.activateSession(created.session)
-                case .failure(let error):
-                    self.uiState = CallUiState(
-                        phase: .error,
-                        errorMessage: error.localizedDescription.isEmpty ? L10n.errorFailedCreateRoom : error.localizedDescription
-                    )
-                }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let created = try await core.createRoom()
+                self.activateSession(created.session)
+            } catch {
+                self.uiState = CallUiState(
+                    phase: .error,
+                    errorMessage: error.localizedDescription.isEmpty ? L10n.errorFailedCreateRoom : error.localizedDescription
+                )
             }
         }
     }
@@ -358,20 +359,14 @@ final class CallManager: ObservableObject {
         }
 
         let core = makeSerenadaCore(host: normalizedHost)
-        return await withCheckedContinuation { continuation in
-            core.createRoom { [weak self] result in
-                Task { @MainActor in
-                    switch result {
-                    case .success(let created):
-                        created.session.cancelJoin()
-                        self?.saveRoom(roomId: created.roomId, name: normalizedName, host: normalizedHost)
-                        let link = self?.buildSavedRoomInviteLink(host: normalizedHost, roomId: created.roomId, roomName: normalizedName) ?? ""
-                        continuation.resume(returning: .success(link))
-                    case .failure(let error):
-                        continuation.resume(returning: .failure(error))
-                    }
-                }
-            }
+        do {
+            let created = try await core.createRoom()
+            created.session.cancelJoin()
+            saveRoom(roomId: created.roomId, name: normalizedName, host: normalizedHost)
+            let link = buildSavedRoomInviteLink(host: normalizedHost, roomId: created.roomId, roomName: normalizedName)
+            return .success(link)
+        } catch {
+            return .failure(error)
         }
     }
 
@@ -414,15 +409,16 @@ final class CallManager: ObservableObject {
         }
 
         activeSessionStateCancellable = session.$state
-            .sink { [weak self, weak session] state in
+            .combineLatest(session.$diagnostics)
+            .sink { [weak self, weak session] state, diagnostics in
                 guard let self, let session else { return }
-                self.handleActiveSessionStateChange(session: session, state: state)
+                self.handleActiveSessionStateChange(session: session, state: state, diagnostics: diagnostics)
             }
 
-        handleActiveSessionStateChange(session: session, state: session.state)
+        handleActiveSessionStateChange(session: session, state: session.state, diagnostics: session.diagnostics)
     }
 
-    private func handleActiveSessionStateChange(session: SerenadaSession, state: CallState) {
+    private func handleActiveSessionStateChange(session: SerenadaSession, state: CallState, diagnostics: CallDiagnostics) {
         guard activeSession === session else { return }
 
         let cid = state.localParticipant.cid?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -450,20 +446,20 @@ final class CallManager: ObservableObject {
             )
         }
         next.connectionStatus = mapSessionConnectionStatus(state.connectionStatus)
-        next.isSignalingConnected = session.isSignalingConnected
-        next.iceConnectionState = session.iceConnectionState
-        next.connectionState = session.peerConnectionState
-        next.signalingState = session.rtcSignalingState
-        next.activeTransport = state.activeTransport
-        next.realtimeStats = session.realtimeStats
-        next.isFrontCamera = session.isFrontCamera
-        next.isScreenSharing = session.isScreenSharing
+        next.isSignalingConnected = diagnostics.isSignalingConnected
+        next.iceConnectionState = diagnostics.iceConnectionState.rawValue
+        next.connectionState = diagnostics.peerConnectionState.rawValue
+        next.signalingState = diagnostics.rtcSignalingState.rawValue
+        next.activeTransport = diagnostics.activeTransport
+        next.realtimeStats = diagnostics.realtimeStats
+        next.isFrontCamera = diagnostics.isFrontCamera
+        next.isScreenSharing = diagnostics.isScreenSharing
         next.localCameraMode = state.localParticipant.cameraMode
-        next.cameraZoomFactor = session.cameraZoomFactor
-        next.isFlashAvailable = session.isFlashAvailable
-        next.isFlashEnabled = session.isFlashEnabled
-        next.remoteContentCid = session.remoteContentParticipantId
-        next.remoteContentType = session.remoteContentType
+        next.cameraZoomFactor = diagnostics.cameraZoomFactor
+        next.isFlashAvailable = diagnostics.isFlashAvailable
+        next.isFlashEnabled = diagnostics.isFlashEnabled
+        next.remoteContentCid = diagnostics.remoteContentParticipantId
+        next.remoteContentType = diagnostics.remoteContentType
         uiState = next
 
         if state.phase == .error {
@@ -623,7 +619,9 @@ final class CallManager: ObservableObject {
                     ? RecentCall(roomId: call.roomId, startTime: call.startTime, durationSeconds: call.durationSeconds, host: host)
                     : call
             }
-            patched.forEach { recentCallStore.saveCall($0) }
+            for call in patched where calls.first(where: { $0.roomId == call.roomId })?.host == nil {
+                recentCallStore.saveCall(call)
+            }
             recentCalls = patched
         } else {
             recentCalls = calls
@@ -635,18 +633,15 @@ final class CallManager: ObservableObject {
         let rooms = savedRoomStore.getSavedRooms()
         if rooms.contains(where: { $0.host == nil }) {
             let host = serverHost
-            for room in rooms where room.host == nil {
-                savedRoomStore.saveRoom(
-                    SavedRoom(
-                        roomId: room.roomId,
-                        name: room.name,
-                        createdAt: room.createdAt,
-                        host: host,
-                        lastJoinedAt: room.lastJoinedAt
-                    )
-                )
+            let patched = rooms.map { room in
+                room.host == nil
+                    ? SavedRoom(roomId: room.roomId, name: room.name, createdAt: room.createdAt, host: host, lastJoinedAt: room.lastJoinedAt)
+                    : room
             }
-            savedRooms = savedRoomStore.getSavedRooms()
+            for room in patched where rooms.first(where: { $0.roomId == room.roomId })?.host == nil {
+                savedRoomStore.saveRoom(room)
+            }
+            savedRooms = patched
         } else {
             savedRooms = rooms
         }

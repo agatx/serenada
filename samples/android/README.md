@@ -21,4 +21,11 @@ val serenada = SerenadaCore(config = SerenadaConfig(serverHost = "serenada.app")
 
 // 2. Show call UI when you have a URL
 SerenadaCallFlow(url = callUrl, onDismiss = { /* navigate back */ })
+
+// 3. Create a room from a coroutine and reuse the returned room/session.
+scope.launch {
+    val room = serenada.createRoom()
+    val roomId = room.roomId
+    // Share "https://serenada.app/call/$roomId" with the other participant.
+}
 ```

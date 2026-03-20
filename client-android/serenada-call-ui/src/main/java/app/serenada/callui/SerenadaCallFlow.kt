@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallState
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaCore
@@ -57,7 +58,7 @@ fun SerenadaCallFlow(
 
     val activeSession = ownedSession ?: return
     val state by activeSession.state.collectAsState()
-    val callStats by activeSession.callStats.collectAsState()
+    val diagnostics by activeSession.diagnostics.collectAsState()
     var pendingPermissions by remember(activeSession) { mutableStateOf<List<app.serenada.core.MediaCapability>?>(null) }
     var hasStarted by remember(activeSession) { mutableStateOf(false) }
 
@@ -117,7 +118,7 @@ fun SerenadaCallFlow(
         }
     }
 
-    val uiState = rememberCallUiState(state, callStats)
+    val uiState = rememberCallUiState(state, diagnostics)
     val roomId = state.roomId ?: activeSession.roomId
     val serverHost = activeSession.host
     val internalConfig =
@@ -234,9 +235,9 @@ fun SerenadaCallFlow(
 @Composable
 private fun rememberCallUiState(
     state: CallState,
-    callStats: app.serenada.core.CallStats,
+    diagnostics: CallDiagnostics,
 ): CallUiState {
-    return remember(state, callStats) {
+    return remember(state, diagnostics) {
         CallUiState(
             phase = state.phase,
             roomId = state.roomId,
@@ -248,19 +249,19 @@ private fun rememberCallUiState(
             localVideoEnabled = state.localVideoEnabled,
             remoteParticipants = state.remoteParticipants,
             connectionStatus = state.connectionStatus,
-            isSignalingConnected = state.isSignalingConnected,
-            iceConnectionState = state.iceConnectionState,
-            connectionState = state.connectionState,
-            signalingState = state.signalingState,
-            activeTransport = state.activeTransport,
-            realtimeCallStats = callStats.realtimeStats,
-            isFrontCamera = state.isFrontCamera,
-            isScreenSharing = state.isScreenSharing,
+            isSignalingConnected = diagnostics.isSignalingConnected,
+            iceConnectionState = diagnostics.iceConnectionState.name,
+            connectionState = diagnostics.peerConnectionState.name,
+            signalingState = diagnostics.rtcSignalingState.name,
+            activeTransport = diagnostics.activeTransport,
+            realtimeCallStats = diagnostics.realtimeStats,
+            isFrontCamera = diagnostics.isFrontCamera,
+            isScreenSharing = diagnostics.isScreenSharing,
             localCameraMode = state.localCameraMode,
-            isFlashAvailable = state.isFlashAvailable,
-            isFlashEnabled = state.isFlashEnabled,
-            remoteContentCid = state.remoteContentCid,
-            remoteContentType = state.remoteContentType,
+            isFlashAvailable = diagnostics.isFlashAvailable,
+            isFlashEnabled = diagnostics.isFlashEnabled,
+            remoteContentCid = diagnostics.remoteContentCid,
+            remoteContentType = diagnostics.remoteContentType,
         )
     }
 }

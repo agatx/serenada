@@ -65,9 +65,8 @@ let serenada = SerenadaCore(config: .init(serverHost: "serenada.app"))
 SerenadaCallFlow(url: callURL, config: .init(screenSharingEnabled: false, inviteControlsEnabled: false))
 
 // 2. When you create a room, reuse the returned session.
-serenada.createRoom { result in
-    if case let .success(room) = result {
-        SerenadaCallFlow(session: room.session, config: .init(screenSharingEnabled: false, inviteControlsEnabled: false))
-    }
+Task {
+    let room = try await serenada.createRoom()
+    SerenadaCallFlow(session: room.session, config: .init(screenSharingEnabled: false, inviteControlsEnabled: false))
 }
 ```
