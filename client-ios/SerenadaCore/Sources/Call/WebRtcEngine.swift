@@ -104,7 +104,7 @@ public enum SessionDescriptionType {
 }
 
 @MainActor
-public final class WebRtcEngine {
+public final class WebRtcEngine: SessionMediaEngine {
     private static let log = OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine")
 
     private enum Constants {

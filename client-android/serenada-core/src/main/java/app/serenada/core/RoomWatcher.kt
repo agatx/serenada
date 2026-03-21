@@ -35,7 +35,7 @@ class RoomWatcher @JvmOverloads constructor(
         signalingClient = SignalingClient(
             okHttpClient = okHttpClient,
             handler = handler,
-            listener = object : SignalingClient.Listener {
+            initialListener = object : SignalingClient.Listener {
                 override fun onOpen(activeTransport: String) {
                     reconnectAttempts = 0
                     clearReconnect()

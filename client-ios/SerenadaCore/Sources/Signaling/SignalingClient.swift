@@ -8,7 +8,7 @@ protocol SignalingClientListener: AnyObject {
 }
 
 @MainActor
-final class SignalingClient {
+final class SignalingClient: SessionSignaling {
     weak var listener: SignalingClientListener?
 
     private let transportOrder: [TransportKind]

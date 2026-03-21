@@ -21,11 +21,15 @@ import app.serenada.core.call.PeerConnectionSlot
 import app.serenada.core.call.RemoteParticipant
 import app.serenada.core.call.RealtimeCallStats
 import app.serenada.core.call.RoomState
+import app.serenada.core.call.SessionAudioController
+import app.serenada.core.call.SessionMediaEngine
+import app.serenada.core.call.SessionSignaling
 import app.serenada.core.call.SignalingClient
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcEngine
 import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.network.CoreApiClient
+import app.serenada.core.network.SessionAPIClient
 import app.serenada.core.network.TurnCredentials
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,11 +56,15 @@ class SerenadaSession internal constructor(
     private val context: Context,
     private val delegate: (() -> SerenadaCoreDelegate?)?,
     okHttpClient: OkHttpClient,
+    signaling: SessionSignaling? = null,
+    apiClient: SessionAPIClient? = null,
+    audioController: SessionAudioController? = null,
+    mediaEngine: SessionMediaEngine? = null,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
     private var webRtcStatsExecutor: ExecutorService? = newWebRtcStatsExecutor()
-    private val apiClient = CoreApiClient(okHttpClient)
+    private val apiClient: SessionAPIClient = apiClient ?: CoreApiClient(okHttpClient)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -113,7 +121,7 @@ class SerenadaSession internal constructor(
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var userPreferredVideoEnabled = config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
-    private var webRtcEngine = buildWebRtcEngine()
+    private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
 
     var onPermissionsRequired: ((List<MediaCapability>) -> Unit)? = null
@@ -127,7 +135,7 @@ class SerenadaSession internal constructor(
         }
     }
 
-    private val callAudioSessionController = CallAudioSessionController(
+    private val callAudioSessionController: SessionAudioController = audioController ?: CallAudioSessionController(
         context = appContext,
         handler = handler,
         onProximityChanged = { near ->
@@ -143,42 +151,42 @@ class SerenadaSession internal constructor(
             Thread(runnable, "webrtc-stats")
         }
 
-    private val signalingClient = SignalingClient(
-        okHttpClient, handler,
-        object : SignalingClient.Listener {
-            override fun onOpen(activeTransport: String) {
-                reconnectAttempts = 0
-                updateDiagnostics(
-                    _diagnostics.value.copy(
-                        isSignalingConnected = true,
-                        activeTransport = activeTransport,
-                    )
+    private val signalingListener = object : SessionSignaling.Listener {
+        override fun onOpen(activeTransport: String) {
+            reconnectAttempts = 0
+            updateDiagnostics(
+                _diagnostics.value.copy(
+                    isSignalingConnected = true,
+                    activeTransport = activeTransport,
                 )
-                updateConnectionStatusFromSignals()
-                pendingJoinRoom?.let { join ->
-                    pendingJoinRoom = null
-                    sendJoin(join)
-                }
+            )
+            updateConnectionStatusFromSignals()
+            pendingJoinRoom?.let { join ->
+                pendingJoinRoom = null
+                sendJoin(join)
             }
+        }
 
-            override fun onMessage(message: SignalingMessage) {
-                handleSignalingMessage(message)
-            }
+        override fun onMessage(message: SignalingMessage) {
+            handleSignalingMessage(message)
+        }
 
-            override fun onClosed(reason: String) {
-                val shouldReconnect = _state.value.phase != CallPhase.Idle
-                updateDiagnostics(
-                    _diagnostics.value.copy(
-                        isSignalingConnected = false,
-                        activeTransport = null,
-                    )
+        override fun onClosed(reason: String) {
+            val shouldReconnect = _state.value.phase != CallPhase.Idle
+            updateDiagnostics(
+                _diagnostics.value.copy(
+                    isSignalingConnected = false,
+                    activeTransport = null,
                 )
-                updateConnectionStatusFromSignals()
-                if (shouldReconnect) scheduleReconnect()
-            }
-        },
-        forceSse = forceSse,
-    )
+            )
+            updateConnectionStatusFromSignals()
+            if (shouldReconnect) scheduleReconnect()
+        }
+    }
+
+    private val signalingClient: SessionSignaling = (signaling ?: SignalingClient(
+        okHttpClient, handler, signalingListener, forceSse = forceSse,
+    )).also { it.listener = signalingListener }
 
     // --- Public API ---
 

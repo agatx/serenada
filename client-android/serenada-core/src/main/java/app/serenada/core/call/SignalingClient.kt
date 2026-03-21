@@ -7,19 +7,17 @@ import okhttp3.OkHttpClient
 class SignalingClient(
     private val okHttpClient: OkHttpClient,
     private val handler: Handler,
-    private val listener: Listener,
+    initialListener: SessionSignaling.Listener? = null,
     private val forceSse: Boolean = false
-) {
+) : SessionSignaling {
     enum class TransportKind(val wireName: String) {
         WS("ws"),
         SSE("sse")
     }
 
-    interface Listener {
-        fun onOpen(activeTransport: String)
-        fun onMessage(message: SignalingMessage)
-        fun onClosed(reason: String)
-    }
+    interface Listener : SessionSignaling.Listener
+
+    override var listener: SessionSignaling.Listener? = initialListener
 
     private val transportOrder = if (forceSse) {
         listOf(TransportKind.SSE)
@@ -50,10 +48,10 @@ class SignalingClient(
     private var normalizedHost: String? = null
     private var closedByClient = false
 
-    fun connect(host: String) {
+    override fun connect(host: String) {
         if (connected || connecting) return
         val normalized = normalizeHost(host) ?: run {
-            handler.post { listener.onClosed("invalid_host") }
+            handler.post { listener?.onClosed("invalid_host") }
             return
         }
         if (forceSse) {
@@ -68,14 +66,14 @@ class SignalingClient(
         connectWithTransport(transportIndex)
     }
 
-    fun isConnected(): Boolean = connected
+    override fun isConnected(): Boolean = connected
 
-    fun send(message: SignalingMessage) {
+    override fun send(message: SignalingMessage) {
         if (!connected) return
         activeTransportImpl?.send(message)
     }
 
-    fun close() {
+    override fun close() {
         closedByClient = true
         stopPing()
         clearConnectTimeout()
@@ -170,7 +168,7 @@ class SignalingClient(
             onMessage = { msg ->
                 handler.post {
                     if (!isAttemptActive(attemptId, kind)) return@post
-                    listener.onMessage(msg)
+                    listener?.onMessage(msg)
                 }
             },
             onClosed = { reason ->
@@ -190,7 +188,7 @@ class SignalingClient(
         lastPongAt = System.currentTimeMillis()
         missedPongs = 0
         Log.i(TAG, "Signaling connected via ${kind.wireName}")
-        handler.post { listener.onOpen(kind.wireName) }
+        handler.post { listener?.onOpen(kind.wireName) }
         startPing()
     }
 
@@ -214,7 +212,7 @@ class SignalingClient(
             return
         }
 
-        handler.post { listener.onClosed(reason) }
+        handler.post { listener?.onClosed(reason) }
     }
 
     private fun shouldFallback(kind: TransportKind, reason: String): Boolean {
@@ -270,7 +268,7 @@ class SignalingClient(
         }
     }
 
-    fun recordPong() {
+    override fun recordPong() {
         lastPongAt = System.currentTimeMillis()
         missedPongs = 0
     }

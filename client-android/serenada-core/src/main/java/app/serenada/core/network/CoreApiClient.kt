@@ -27,7 +27,7 @@ internal fun buildHttpsUrl(hostInput: String, path: String, query: Map<String, S
     return builder.build().toString()
 }
 
-class CoreApiClient(private val okHttpClient: OkHttpClient) {
+class CoreApiClient(private val okHttpClient: OkHttpClient) : SessionAPIClient {
     fun validateServerHost(host: String, onResult: (Result<Unit>) -> Unit) {
         val url = buildHttpsUrl(host, "/api/room-id")
         if (url == null) {
@@ -88,7 +88,7 @@ class CoreApiClient(private val okHttpClient: OkHttpClient) {
         })
     }
 
-    fun fetchTurnCredentials(host: String, token: String, onResult: (Result<TurnCredentials>) -> Unit) {
+    override fun fetchTurnCredentials(host: String, token: String, onResult: (Result<TurnCredentials>) -> Unit) {
         val url = buildHttpsUrl(host, "/api/turn-credentials", mapOf("token" to token))
         if (url == null) {
             onResult(Result.failure(IllegalArgumentException("Invalid host")))

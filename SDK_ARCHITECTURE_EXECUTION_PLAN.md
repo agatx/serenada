@@ -11,7 +11,7 @@ The 10 workstreams and current status:
 - [x] Finish moving shared call models out of iOS UI layer ownership.
 - [x] Eliminate the iOS dual-state / `@Published` timing trap.
 - [x] Remove duplicated UI-facing call state models where core state can be consumed directly.
-- [ ] Add DI seams for signaling, WebRTC, API, timers, and schedulers.
+- [x] Add DI seams for signaling, WebRTC, API, and audio (timers/schedulers deferred).
 - [ ] Add orchestration-level tests for join, reconnect, negotiation, and recovery.
 - [x] Enforce Android main-thread usage and fix Android stats/resource lifecycle.
 - [x] Encapsulate `PeerConnectionSlot` state machines.
@@ -35,7 +35,8 @@ The 10 workstreams and current status:
      Web build/tests, Android unit tests, iOS build (`xcodegen generate` + `xcodebuild build`), and resilience parity check all pass. Full iOS app-scheme test run still has a pre-existing live UI test failure in `DeepLinkParticipantCountUITests`.
 
 2. **Foundation: DI, Test Harness, Runtime Safety**
-   - [ ] Introduce internal factories/interfaces for signaling, WebRTC, API, clock/timer, and scheduler dependencies in iOS and Android session layers.
+   - [x] Introduce internal factories/interfaces for signaling, WebRTC, API, and audio dependencies in iOS and Android session layers.
+     Protocols (iOS) and interfaces (Android) created for `SessionSignaling`, `SessionAPIClient`, `SessionAudioController`, and `SessionMediaEngine`. Concrete classes conform to these abstractions. `SerenadaSession` on both platforms accepts optional DI params with production defaults. Clock/timer/scheduler abstractions deferred to a follow-up.
    - [ ] Build a hermetic session harness with fake signaling/media/timers and add contract tests for permission gating, join ack timeout, join recovery, reconnect backoff, WS-to-SSE failover, offer timeout, ICE restart, turn refresh, leave, and end.
    - [x] Android: add main-thread preconditions on all public `SerenadaCore` and `SerenadaSession` entrypoints and replace the current reusable stats executor with a lifecycle-owned scheduler that cannot be reused after shutdown.
 

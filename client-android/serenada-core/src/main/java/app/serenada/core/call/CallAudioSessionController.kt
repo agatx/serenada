@@ -19,7 +19,7 @@ class CallAudioSessionController(
     private val handler: Handler,
     private val onProximityChanged: (Boolean) -> Unit,
     private val onAudioEnvironmentChanged: () -> Unit
-) {
+) : SessionAudioController {
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
@@ -65,7 +65,7 @@ class CallAudioSessionController(
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
     }
 
-    fun activate() {
+    override fun activate() {
         if (audioSessionActive) return
         audioSessionActive = true
         previousAudioMode = audioManager.mode
@@ -89,7 +89,7 @@ class CallAudioSessionController(
         }
     }
 
-    fun deactivate() {
+    override fun deactivate() {
         if (!audioSessionActive) {
             abandonAudioFocus()
             return
@@ -113,7 +113,7 @@ class CallAudioSessionController(
         abandonAudioFocus()
     }
 
-    fun shouldPauseVideoForProximity(isScreenSharing: Boolean): Boolean {
+    override fun shouldPauseVideoForProximity(isScreenSharing: Boolean): Boolean {
         return proximityMonitoringActive &&
             isProximityNear &&
             !isScreenSharing &&

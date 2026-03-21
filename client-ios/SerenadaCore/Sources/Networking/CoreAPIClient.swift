@@ -1,6 +1,6 @@
 import Foundation
 
-final class CoreAPIClient {
+final class CoreAPIClient: SessionAPIClient {
     private let session: URLSession
 
     init(session: URLSession = .shared) {

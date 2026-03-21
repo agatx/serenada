@@ -48,10 +48,10 @@ public final class SerenadaSession: ObservableObject {
 
     public var onPermissionsRequired: (([MediaCapability]) -> Void)?
 
-    let signalingClient: SignalingClient
-    let webRtcEngine: WebRtcEngine
-    let callAudioSessionController: CallAudioSessionController
-    let apiClient: CoreAPIClient
+    let signalingClient: SessionSignaling
+    let webRtcEngine: SessionMediaEngine
+    let callAudioSessionController: SessionAudioController
+    let apiClient: SessionAPIClient
 
     private let config: SerenadaConfig
     private let delegateProvider: (() -> SerenadaCoreDelegate?)?
@@ -98,25 +98,49 @@ public final class SerenadaSession: ObservableObject {
     private let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
     private let connectionStatusRetryingDelayNs: UInt64 = 10_000_000_000
 
-    public init(
+    public convenience init(
         roomId: String,
         roomUrl: URL? = nil,
         serverHost: String,
         config: SerenadaConfig,
         delegateProvider: (() -> SerenadaCoreDelegate?)? = nil
     ) {
+        self.init(
+            roomId: roomId,
+            roomUrl: roomUrl,
+            serverHost: serverHost,
+            config: config,
+            delegateProvider: delegateProvider,
+            signaling: nil,
+            apiClient: nil,
+            audioController: nil,
+            mediaEngine: nil
+        )
+    }
+
+    init(
+        roomId: String,
+        roomUrl: URL? = nil,
+        serverHost: String,
+        config: SerenadaConfig,
+        delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
+        signaling: SessionSignaling? = nil,
+        apiClient: SessionAPIClient? = nil,
+        audioController: SessionAudioController? = nil,
+        mediaEngine: SessionMediaEngine? = nil
+    ) {
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.serverHost = serverHost
         self.config = config
         self.delegateProvider = delegateProvider
-        self.signalingClient = SignalingClient(forceSseSignaling: !config.transports.contains(.ws))
-        self.apiClient = CoreAPIClient()
-        self.callAudioSessionController = CallAudioSessionController(
+        self.signalingClient = signaling ?? SignalingClient(forceSseSignaling: !config.transports.contains(.ws))
+        self.apiClient = apiClient ?? CoreAPIClient()
+        self.callAudioSessionController = audioController ?? CallAudioSessionController(
             onProximityChanged: { _ in },
             onAudioEnvironmentChanged: {}
         )
-        self.webRtcEngine = WebRtcEngine(
+        self.webRtcEngine = mediaEngine ?? WebRtcEngine(
             onCameraFacingChanged: { _ in },
             onCameraModeChanged: { _ in },
             onFlashlightStateChanged: { _, _ in },

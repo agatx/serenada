@@ -64,7 +64,7 @@ class WebRtcEngine(
     private val onFeatureDegradation: (FeatureDegradationState) -> Unit = {},
     private var isHdVideoExperimentalEnabled: Boolean = false,
     private var isRemoteBlackFrameAnalysisEnabled: Boolean = true
-) {
+) : SessionMediaEngine {
     private enum class LocalCameraSource {
         SELFIE,
         WORLD,
@@ -235,9 +235,9 @@ class WebRtcEngine(
             )
     }
 
-    fun getEglContext(): EglBase.Context = eglBase.eglBaseContext
+    override fun getEglContext(): EglBase.Context = eglBase.eglBaseContext
 
-    fun startLocalMedia() {
+    override fun startLocalMedia() {
         if (released) return
         if (localAudioTrack != null || localVideoTrack != null) return
         cancelTorchRetry()
@@ -299,7 +299,7 @@ class WebRtcEngine(
         localAudioTrack = null
     }
 
-    fun release() {
+    override fun release() {
         if (released) return
         released = true
         stopLocalMedia()
@@ -313,7 +313,7 @@ class WebRtcEngine(
         runCatching { eglBase.release() }
     }
 
-    fun setIceServers(servers: List<PeerConnection.IceServer>) {
+    override fun setIceServers(servers: List<PeerConnection.IceServer>) {
         if (released) return
         Log.d("WebRtcEngine", "ICE servers set: ${servers.size}")
         iceServers = servers
@@ -322,9 +322,9 @@ class WebRtcEngine(
         }
     }
 
-    fun hasIceServers(): Boolean = !iceServers.isNullOrEmpty()
+    override fun hasIceServers(): Boolean = !iceServers.isNullOrEmpty()
 
-    fun flipCamera() {
+    override fun flipCamera() {
         if (isScreenSharing) return
         if (videoSource == null) return
         val compositeAvailable = canUseCompositeSource()
@@ -352,7 +352,7 @@ class WebRtcEngine(
         }
     }
 
-    fun adjustWorldCameraZoom(scaleFactor: Float): Boolean {
+    override fun adjustWorldCameraZoom(scaleFactor: Float): Boolean {
         if (!scaleFactor.isFinite() || scaleFactor <= 0f) return false
         if (!isZoomAvailableForCurrentMode()) return false
         val capabilities = activeZoomCapabilities ?: return false
@@ -368,11 +368,11 @@ class WebRtcEngine(
         return applyZoomForCurrentMode()
     }
 
-    fun toggleAudio(enabled: Boolean) {
+    override fun toggleAudio(enabled: Boolean) {
         localAudioTrack?.setEnabled(enabled)
     }
 
-    fun toggleVideo(enabled: Boolean) {
+    override fun toggleVideo(enabled: Boolean) {
         localVideoTrack?.setEnabled(enabled)
     }
 
@@ -387,7 +387,7 @@ class WebRtcEngine(
         applyVideoSenderParameters()
     }
 
-    fun toggleFlashlight(): Boolean {
+    override fun toggleFlashlight(): Boolean {
         if (!isTorchAvailableForCurrentMode()) return false
         isTorchPreferenceEnabled = !isTorchPreferenceEnabled
         Log.d(
@@ -405,7 +405,7 @@ class WebRtcEngine(
         return false
     }
 
-    fun startScreenShare(intent: Intent): Boolean {
+    override fun startScreenShare(intent: Intent): Boolean {
         if (isScreenSharing) return true
         val observer = videoSource?.capturerObserver ?: return false
         val previousSource = currentCameraSource
@@ -455,7 +455,7 @@ class WebRtcEngine(
         }
     }
 
-    fun stopScreenShare(): Boolean {
+    override fun stopScreenShare(): Boolean {
         if (!isScreenSharing) return true
         val sourceToRestore = cameraSourceBeforeScreenShare ?: currentCameraSource
         isScreenSharing = false
@@ -471,7 +471,7 @@ class WebRtcEngine(
         isRemoteBlackFrameAnalysisEnabled = enabled
     }
 
-    fun createSlot(
+    override fun createSlot(
         remoteCid: String,
         onLocalIceCandidate: (String, IceCandidate) -> Unit,
         onRemoteVideoTrack: (String, VideoTrack?) -> Unit,
@@ -503,33 +503,33 @@ class WebRtcEngine(
         return slot
     }
 
-    fun removeSlot(slot: PeerConnectionSlot) {
+    override fun removeSlot(slot: PeerConnectionSlot) {
         peerSlots.remove(slot)
     }
 
-    fun attachLocalRenderer(
+    override fun attachLocalRenderer(
         renderer: SurfaceViewRenderer,
-        rendererEvents: RendererCommon.RendererEvents? = null
+        rendererEvents: RendererCommon.RendererEvents?
     ) {
         initRenderer(renderer, rendererEvents)
         attachLocalSink(renderer)
     }
 
-    fun detachLocalRenderer(renderer: SurfaceViewRenderer) {
+    override fun detachLocalRenderer(renderer: SurfaceViewRenderer) {
         detachLocalSink(renderer)
     }
 
-    fun attachLocalSink(sink: VideoSink) {
+    override fun attachLocalSink(sink: VideoSink) {
         if (!localSinks.add(sink)) return
         localVideoTrack?.addSink(sink)
     }
 
-    fun detachLocalSink(sink: VideoSink) {
+    override fun detachLocalSink(sink: VideoSink) {
         localVideoTrack?.removeSink(sink)
         localSinks.remove(sink)
     }
 
-    fun initRenderer(
+    override fun initRenderer(
         renderer: SurfaceViewRenderer,
         rendererEvents: RendererCommon.RendererEvents?
     ) {
