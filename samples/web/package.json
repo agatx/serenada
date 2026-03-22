@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@serenada/core": "file:../../client/packages/core",
+    "@serenada/react-ui": "file:../../client/packages/react-ui",
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
