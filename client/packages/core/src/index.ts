@@ -23,6 +23,7 @@ export type {
     ConnectionStatus,
     CameraMode,
     MediaCapability,
+    PeerConnectionState,
     Participant,
     LocalParticipant,
     CallError,

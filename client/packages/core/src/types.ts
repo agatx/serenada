@@ -10,11 +10,13 @@ export type CameraMode = 'selfie' | 'world' | 'composite' | 'screenShare';
 
 export type MediaCapability = 'camera' | 'microphone';
 
+export type PeerConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
+
 export interface Participant {
     cid: string;
     audioEnabled: boolean;
     videoEnabled: boolean;
-    connectionState: string;
+    connectionState: PeerConnectionState;
 }
 
 export interface LocalParticipant {
