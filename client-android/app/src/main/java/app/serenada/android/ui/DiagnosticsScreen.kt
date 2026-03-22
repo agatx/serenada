@@ -281,8 +281,11 @@ fun DiagnosticsScreen(
                     onClick = {
                         connectivityInProgress = true
                         scope.launch {
-                            connectivityReport = runConnectivityChecks(diagnostics)
-                            connectivityInProgress = false
+                            try {
+                                connectivityReport = runConnectivityChecks(diagnostics)
+                            } finally {
+                                connectivityInProgress = false
+                            }
                         }
                     },
                     enabled = !connectivityInProgress && !iceInProgress,
@@ -355,19 +358,20 @@ fun DiagnosticsScreen(
                             iceLiveServersSummary = null
                             iceLiveLogs.clear()
                             scope.launch {
-                                iceReport = runIceCheck(
-                                    diagnostics = diagnostics,
-                                    turnsOnly = false,
-                                    onLogLine = { line ->
-                                        scope.launch {
-                                            iceLiveLogs.add(line)
+                                try {
+                                    iceReport = runIceCheck(
+                                        diagnostics = diagnostics,
+                                        turnsOnly = false,
+                                        onLogLine = { line ->
+                                            scope.launch {
+                                                iceLiveLogs.add(line)
+                                            }
                                         }
-                                    }
-                                )
-                                iceLiveLogs.clear()
-                                iceLiveLogs.addAll(iceReport?.logs.orEmpty())
-                                iceLiveServersSummary = iceReport?.iceServersSummary
-                                iceInProgress = false
+                                    )
+                                    iceLiveServersSummary = iceReport?.iceServersSummary
+                                } finally {
+                                    iceInProgress = false
+                                }
                             }
                         },
                         enabled = !iceInProgress && !connectivityInProgress,
@@ -382,19 +386,20 @@ fun DiagnosticsScreen(
                             iceLiveServersSummary = null
                             iceLiveLogs.clear()
                             scope.launch {
-                                iceReport = runIceCheck(
-                                    diagnostics = diagnostics,
-                                    turnsOnly = true,
-                                    onLogLine = { line ->
-                                        scope.launch {
-                                            iceLiveLogs.add(line)
+                                try {
+                                    iceReport = runIceCheck(
+                                        diagnostics = diagnostics,
+                                        turnsOnly = true,
+                                        onLogLine = { line ->
+                                            scope.launch {
+                                                iceLiveLogs.add(line)
+                                            }
                                         }
-                                    }
-                                )
-                                iceLiveLogs.clear()
-                                iceLiveLogs.addAll(iceReport?.logs.orEmpty())
-                                iceLiveServersSummary = iceReport?.iceServersSummary
-                                iceInProgress = false
+                                    )
+                                    iceLiveServersSummary = iceReport?.iceServersSummary
+                                } finally {
+                                    iceInProgress = false
+                                }
                             }
                         },
                         enabled = !iceInProgress && !connectivityInProgress,

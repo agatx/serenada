@@ -28,6 +28,7 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 /**
  * Pre-flight diagnostics utility. Checks device capabilities and server connectivity
@@ -299,7 +300,8 @@ class SerenadaDiagnostics(
     }
 
     private suspend fun testWebSocket(host: String) {
-        val url = buildWssUrl(host) ?: throw IllegalArgumentException("Invalid host")
+        val url = buildWssUrl(host)
+        withTimeout(10_000) {
         suspendCancellableCoroutine<Unit> { continuation ->
             var closed = false
             val request = Request.Builder().url(url).build()
@@ -325,9 +327,10 @@ class SerenadaDiagnostics(
                 webSocket.cancel()
             }
         }
+        }
     }
 
-    private suspend fun testSse(host: String) {
+    private suspend fun testSse(host: String) = withTimeout(10_000) {
         val sid = "S-diag-${UUID.randomUUID().toString().replace("-", "").take(16)}"
         val url = buildSseUrl(host, sid) ?: throw IllegalArgumentException("Invalid host")
         val request = Request.Builder()
@@ -359,12 +362,12 @@ class SerenadaDiagnostics(
         }
     }
 
-    private fun buildWssUrl(hostInput: String): String? {
-        val base = buildHttpsUrl(hostInput, "/ws")?.toHttpUrlOrNull() ?: return null
-        return base.newBuilder()
-            .scheme(if (base.scheme == "http") "ws" else "wss")
-            .build()
-            .toString()
+    private fun buildWssUrl(hostInput: String): String {
+        val raw = hostInput.trim()
+        val isLocal = raw.startsWith("localhost") || raw.startsWith("127.")
+        val scheme = if (isLocal) "ws" else "wss"
+        val hostPart = raw.removePrefix("https://").removePrefix("http://")
+        return "$scheme://$hostPart/ws"
     }
 
     private fun buildSseUrl(hostInput: String, sid: String): String? {
