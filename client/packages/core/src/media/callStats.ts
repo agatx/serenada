@@ -1,4 +1,4 @@
-import type { CallStats } from '../types.js';
+import type { CallStats, SerenadaLogger } from '../types.js';
 
 interface MediaTotals {
     inboundPacketsReceived: number;
@@ -84,6 +84,11 @@ export class CallStatsCollector {
     private timer: number | null = null;
     private _stats: CallStats | null = null;
     private onChange: (() => void) | null = null;
+    private logger?: SerenadaLogger;
+
+    constructor(logger?: SerenadaLogger) {
+        this.logger = logger;
+    }
 
     get stats(): CallStats | null { return this._stats; }
 
@@ -249,7 +254,7 @@ export class CallStatsCollector {
 
             this.onChange?.();
         } catch (err) {
-            console.warn('[CallStats] Failed to collect realtime stats', err);
+            this.logger?.log('warning', 'Stats', `Failed to collect realtime stats: ${err}`);
         }
     }
 }

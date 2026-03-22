@@ -15,6 +15,8 @@ import android.util.Log
 import android.util.Range
 import app.serenada.core.FeatureDegradation
 import app.serenada.core.FeatureDegradationState
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -38,6 +40,7 @@ internal class CameraCaptureController(
     private val onFlashlightStateChanged: (Boolean, Boolean) -> Unit,
     private val onFeatureDegradation: (FeatureDegradationState) -> Unit,
     private val onVideoSenderParametersChanged: () -> Unit,
+    private val logger: SerenadaLogger? = null,
 ) {
     internal enum class LocalCameraSource {
         SELFIE,
@@ -113,7 +116,7 @@ internal class CameraCaptureController(
                 selection.captureProfile.fps
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to start capture for $source", e)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to start capture for $source: ${e.message}")
             runCatching { selection.capturer.dispose() }
             runCatching { textureHelper.dispose() }
             return false
@@ -134,8 +137,9 @@ internal class CameraCaptureController(
             applyZoomForCurrentMode()
         }
         onVideoSenderParametersChanged()
-        Log.d(
-            TAG,
+        logger?.log(
+            SerenadaLogLevel.DEBUG,
+            "Camera",
             "Camera source active: $source (${selection.captureProfile.width}x${selection.captureProfile.height}@${selection.captureProfile.fps}fps)"
         )
         return true
@@ -145,7 +149,7 @@ internal class CameraCaptureController(
         try {
             videoCapturer?.stopCapture()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to stop capture", e)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to stop capture: ${e.message}")
         }
         runCatching { videoCapturer?.dispose() }
         videoCapturer = null
@@ -163,12 +167,12 @@ internal class CameraCaptureController(
         )
         val target = cameraSourceFromMode(targetMode)
         if (!compositeAvailable && targetMode == LocalCameraMode.SELFIE && currentCameraSource == LocalCameraSource.WORLD) {
-            Log.w(TAG, "Transitioning from WORLD to SELFIE (COMPOSITE unavailable)")
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Transitioning from WORLD to SELFIE (COMPOSITE unavailable)")
         }
         if (restartVideoCapturer(target, videoSource)) {
             return
         }
-        Log.w(TAG, "Failed to switch camera source to $target")
+        logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to switch camera source to $target")
         val fallback = if (targetMode == LocalCameraMode.COMPOSITE) {
             compositeDisabledAfterFailure = true
             reportCompositeCameraUnavailable("Composite camera switch failed")
@@ -177,7 +181,7 @@ internal class CameraCaptureController(
             currentCameraSource
         }
         if (fallback != target && restartVideoCapturer(fallback, videoSource)) {
-            Log.w(TAG, "Camera source fallback applied: $fallback")
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Camera source fallback applied: $fallback")
         }
     }
 
@@ -200,8 +204,9 @@ internal class CameraCaptureController(
     fun toggleFlashlight(): Boolean {
         if (!isTorchAvailableForCurrentMode()) return false
         isTorchPreferenceEnabled = !isTorchPreferenceEnabled
-        Log.d(
-            TAG,
+        logger?.log(
+            SerenadaLogLevel.DEBUG,
+            "Camera",
             "Flash toggle requested: preference=$isTorchPreferenceEnabled mode=${activeVideoModeLabel()} torchCamera=$activeTorchCameraId"
         )
         if (applyTorchForCurrentMode()) {
@@ -220,7 +225,7 @@ internal class CameraCaptureController(
         isHdVideoExperimentalEnabled = enabled
         if (!isScreenSharing && localVideoTrack != null && videoSource != null) {
             if (!restartVideoCapturer(currentCameraSource, videoSource)) {
-                Log.w(TAG, "Failed to apply HD video setting by restarting capturer")
+                logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to apply HD video setting by restarting capturer")
             }
         }
         onVideoSenderParametersChanged()
@@ -451,7 +456,8 @@ internal class CameraCaptureController(
                                 eglContext = eglBase.eglBaseContext,
                                 mainCapturer = mainCapturer,
                                 overlayCapturer = overlayCapturer,
-                                onStartFailure = { onCompositeStartFailure() }
+                                onStartFailure = { onCompositeStartFailure() },
+                                logger = logger,
                             ),
                             isFrontFacing = false,
                             captureProfile = profile,
@@ -530,10 +536,10 @@ internal class CameraCaptureController(
             if (currentCameraSource != LocalCameraSource.COMPOSITE) return@post
             if (videoCapturer !is CompositeCameraCapturer) return@post
             compositeDisabledAfterFailure = true
-            Log.w(TAG, "Composite source failed; disabling composite and falling back to selfie")
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Composite source failed; disabling composite and falling back to selfie")
             reportCompositeCameraUnavailable("Composite source failed to start")
             if (restartVideoCapturer(LocalCameraSource.SELFIE, videoSourceProvider())) {
-                Log.w(TAG, "Camera source fallback applied: ${LocalCameraSource.SELFIE}")
+                logger?.log(SerenadaLogLevel.WARNING, "Camera", "Camera source fallback applied: ${LocalCameraSource.SELFIE}")
             }
         }
     }
@@ -564,7 +570,7 @@ internal class CameraCaptureController(
                     .get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
             }.getOrNull()
             if (frontLevel !in capable || backLevel !in capable) {
-                Log.d(TAG,
+                logger?.log(SerenadaLogLevel.DEBUG, "Camera",
                     "Composite source skipped on API <30: hardware level insufficient (front=$frontLevel back=$backLevel)")
                 return false
             }
@@ -584,8 +590,9 @@ internal class CameraCaptureController(
         }.getOrDefault(false)
         compositeSupportCache = Pair(cacheKey, supported)
         if (!supported) {
-            Log.w(
-                TAG,
+            logger?.log(
+                SerenadaLogLevel.WARNING,
+                "Camera",
                 "Composite source unsupported by concurrent camera constraints. front=$frontDevice back=$backDevice"
             )
         }
@@ -602,7 +609,7 @@ internal class CameraCaptureController(
                 hasFlash && lensFacing == CameraCharacteristics.LENS_FACING_BACK
             }
         }.onFailure { error ->
-            Log.w(TAG, "Failed to query torch camera id", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to query torch camera id: ${error.message}")
         }.getOrNull()
     }
 
@@ -612,7 +619,7 @@ internal class CameraCaptureController(
             manager.getCameraCharacteristics(cameraId)
                 .get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
         }.onFailure { error ->
-            Log.w(TAG, "Failed to query flash availability for camera=$cameraId", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to query flash availability for camera=$cameraId: ${error.message}")
         }.getOrDefault(false)
     }
 
@@ -668,7 +675,7 @@ internal class CameraCaptureController(
                 )
             }
         }.onFailure { error ->
-            Log.w(TAG, "Failed to query zoom capabilities for camera=$activeCameraId", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to query zoom capabilities for camera=$activeCameraId: ${error.message}")
         }.getOrNull()
     }
 
@@ -707,7 +714,7 @@ internal class CameraCaptureController(
                     appliedCameraZoomRatio = targetZoomRatio
                 }
             }.onFailure { error ->
-                Log.w(TAG, "Failed to apply zoom via capture request", error)
+                logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to apply zoom via capture request: ${error.message}")
             }
         }
         return true
@@ -727,8 +734,9 @@ internal class CameraCaptureController(
         if (applyTorchViaCaptureRequest(enabled, requestedZoomRatioForCurrentMode())) {
             isTorchEnabled = enabled
             torchSyncRequired = false
-            Log.d(
-                TAG,
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "Camera",
                 "Torch mode set via capture request: enabled=$enabled mode=${activeVideoModeLabel()} camera=$activeTorchCameraId"
             )
             if (notify) {
@@ -757,20 +765,20 @@ internal class CameraCaptureController(
                 }
                 return true
             }
-            Log.w(TAG, "Torch unavailable. managerPresent=${manager != null} cameraId=$cameraId")
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Torch unavailable. managerPresent=${manager != null} cameraId=$cameraId")
             return false
         }
         return try {
             manager.setTorchMode(cameraId, enabled)
             isTorchEnabled = enabled
             torchSyncRequired = false
-            Log.d(TAG, "Torch mode set: enabled=$enabled cameraId=$cameraId")
+            logger?.log(SerenadaLogLevel.DEBUG, "Camera", "Torch mode set: enabled=$enabled cameraId=$cameraId")
             if (notify) {
                 notifyCameraModeAndFlash()
             }
             true
         } catch (error: CameraAccessException) {
-            Log.w(TAG, "Failed to set torch mode", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to set torch mode: ${error.message}")
             if (!enabled) {
                 isTorchEnabled = false
                 torchSyncRequired = false
@@ -780,7 +788,7 @@ internal class CameraCaptureController(
             }
             false
         } catch (error: SecurityException) {
-            Log.w(TAG, "Torch permission denied", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Torch permission denied: ${error.message}")
             if (!enabled) {
                 isTorchEnabled = false
                 torchSyncRequired = false
@@ -790,7 +798,7 @@ internal class CameraCaptureController(
             }
             false
         } catch (error: IllegalArgumentException) {
-            Log.w(TAG, "Torch camera id invalid", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Torch camera id invalid: ${error.message}")
             if (!enabled) {
                 isTorchEnabled = false
                 torchSyncRequired = false
@@ -857,13 +865,13 @@ internal class CameraCaptureController(
                 )
             }
                 .onFailure { error ->
-                    Log.w(TAG, "Failed to apply torch via capture request", error)
+                    logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to apply torch via capture request: ${error.message}")
                 }
                 .getOrDefault(false)
             latch.countDown()
         }
         if (!latch.await(750, TimeUnit.MILLISECONDS)) {
-            Log.w(TAG, "Timed out waiting for torch capture request")
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Timed out waiting for torch capture request")
             return false
         }
         if (applied && isZoomAvailableForCurrentMode()) {
@@ -915,10 +923,10 @@ internal class CameraCaptureController(
                 builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, clampedZoom)
                 true
             }.onFailure { error ->
-                Log.w(
-                    TAG,
-                    "Failed to apply CONTROL_ZOOM_RATIO; falling back to SCALER_CROP_REGION",
-                    error
+                logger?.log(
+                    SerenadaLogLevel.WARNING,
+                    "Camera",
+                    "Failed to apply CONTROL_ZOOM_RATIO; falling back to SCALER_CROP_REGION: ${error.message}"
                 )
             }.getOrDefault(false)
             if (appliedViaRatio) {

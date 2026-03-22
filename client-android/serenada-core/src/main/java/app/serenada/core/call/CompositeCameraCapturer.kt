@@ -2,6 +2,8 @@ package app.serenada.core.call
 
 import android.content.Context
 import android.util.Log
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -26,7 +28,8 @@ class CompositeCameraCapturer(
     private val eglContext: EglBase.Context,
     private val mainCapturer: CameraVideoCapturer,
     private val overlayCapturer: CameraVideoCapturer,
-    private val onStartFailure: (() -> Unit)? = null
+    private val onStartFailure: (() -> Unit)? = null,
+    private val logger: SerenadaLogger? = null,
 ) : VideoCapturer {
     private enum class ChildCapturer {
         MAIN,
@@ -145,7 +148,7 @@ class CompositeCameraCapturer(
     override fun dispose() {
         runCatching { stopCapture() }
         if (childStopTimedOut) {
-            Log.w("CompositeCameraCapturer", "Skipping synchronous child dispose after stop timeout")
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Skipping synchronous child dispose after stop timeout")
         } else {
             mainCapturer.dispose()
             overlayCapturer.dispose()
@@ -223,7 +226,7 @@ class CompositeCameraCapturer(
             mainThread.interrupt()
             runCatching { overlayThread.join(STOP_INTERRUPT_GRACE_MS) }
             runCatching { mainThread.join(STOP_INTERRUPT_GRACE_MS) }
-            Log.w("CompositeCameraCapturer", "Timed out waiting for child capturers to stop")
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Timed out waiting for child capturers to stop")
         }
         return stopped
     }

@@ -1,6 +1,8 @@
 package app.serenada.core.call
 
 import android.util.Log
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -9,7 +11,8 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 
 internal class WebSocketSignalingTransport(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val logger: SerenadaLogger? = null,
 ) : SignalingTransport {
     override val kind: SignalingClient.TransportKind = SignalingClient.TransportKind.WS
 
@@ -34,7 +37,7 @@ internal class WebSocketSignalingTransport(
                     val msg = try {
                         SignalingMessage.fromJson(text)
                     } catch (e: RuntimeException) {
-                        Log.w(TAG, "Failed to parse signaling message from WebSocket", e)
+                        logger?.log(SerenadaLogLevel.WARNING, "Transport", "Failed to parse signaling message from WebSocket: ${e.message}")
                         null
                     } ?: return
                     onMessage(msg)

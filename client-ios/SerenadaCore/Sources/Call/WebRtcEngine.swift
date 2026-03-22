@@ -1,7 +1,6 @@
 import AVFoundation
 import CoreImage
 import Foundation
-import os.log
 import UIKit
 #if canImport(WebRTC)
 import WebRTC
@@ -102,9 +101,7 @@ public enum SessionDescriptionType {
 
 @MainActor
 public final class WebRtcEngine: SessionMediaEngine {
-    private static let log = OSLog(subsystem: "app.serenada.ios", category: "WebRtcEngine")
-
-    private var onDebugTrace: ((String) -> Void)?
+    private let logger: SerenadaLogger?
 
     private let cameraController: CameraCaptureController
     private var screenShareController: ScreenShareController!
@@ -135,10 +132,10 @@ public final class WebRtcEngine: SessionMediaEngine {
         onScreenShareStopped: @escaping () -> Void,
         onZoomFactorChanged: @escaping (Double) -> Void,
         onFeatureDegradation: @escaping (FeatureDegradationState) -> Void = { _ in },
-        onDebugTrace: ((String) -> Void)? = nil,
+        logger: SerenadaLogger? = nil,
         isHdVideoExperimentalEnabled: Bool
     ) {
-        self.onDebugTrace = onDebugTrace
+        self.logger = logger
 
 #if canImport(WebRTC)
         self.cameraController = CameraCaptureController(
@@ -149,7 +146,7 @@ public final class WebRtcEngine: SessionMediaEngine {
             onFlashlightStateChanged: onFlashlightStateChanged,
             onZoomFactorChanged: onZoomFactorChanged,
             onFeatureDegradation: onFeatureDegradation,
-            onDebugTrace: onDebugTrace
+            logger: logger
         )
 #else
         self.cameraController = CameraCaptureController(
@@ -159,7 +156,7 @@ public final class WebRtcEngine: SessionMediaEngine {
             onFlashlightStateChanged: onFlashlightStateChanged,
             onZoomFactorChanged: onZoomFactorChanged,
             onFeatureDegradation: onFeatureDegradation,
-            onDebugTrace: onDebugTrace
+            logger: logger
         )
 #endif
 
@@ -177,14 +174,16 @@ public final class WebRtcEngine: SessionMediaEngine {
             isLocalVideoTrackEnabled: { [weak self] in self?.localVideoTrack?.isEnabled == true },
             setLocalVideoTrackEnabled: { [weak self] enabled in self?.localVideoTrack?.isEnabled = enabled },
             onScreenShareStopped: onScreenShareStopped,
-            onStateChanged: { _ in }
+            onStateChanged: { _ in },
+            logger: logger
         )
 #else
         self.screenShareController = ScreenShareController(
             cameraController: cameraController,
             setLocalVideoTrackEnabled: { _ in },
             onScreenShareStopped: onScreenShareStopped,
-            onStateChanged: { _ in }
+            onStateChanged: { _ in },
+            logger: logger
         )
 #endif
 
@@ -220,8 +219,7 @@ public final class WebRtcEngine: SessionMediaEngine {
     }
 
     public func setOnDebugTrace(_ handler: ((String) -> Void)?) {
-        onDebugTrace = handler
-        cameraController.setOnDebugTrace(handler)
+        // Legacy no-op; logging is now done via SerenadaLogger.
     }
 
     public func startLocalMedia(preferVideo: Bool = true) {

@@ -1,14 +1,12 @@
 import AVFoundation
 import CoreImage
 import Foundation
-import os.log
 #if canImport(WebRTC)
 import WebRTC
 #endif
 
 @MainActor
 final class CameraCaptureController {
-    private static let log = OSLog(subsystem: "app.serenada.ios", category: "CameraCaptureController")
 
     private enum Constants {
         static let maxCaptureZoom: CGFloat = 4
@@ -56,7 +54,7 @@ final class CameraCaptureController {
     private var onFlashlightStateChanged: (Bool, Bool) -> Void
     private var onZoomFactorChanged: (Double) -> Void
     private var onFeatureDegradation: (FeatureDegradationState) -> Void
-    private var onDebugTrace: ((String) -> Void)?
+    private let logger: SerenadaLogger?
 
     /// Called by switchVideoCapturer's async completion to verify the video track
     /// is still alive before restarting the capturer. Provided by WebRtcEngine.
@@ -73,7 +71,7 @@ final class CameraCaptureController {
         onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
         onZoomFactorChanged: @escaping (Double) -> Void,
         onFeatureDegradation: @escaping (FeatureDegradationState) -> Void,
-        onDebugTrace: ((String) -> Void)?
+        logger: SerenadaLogger? = nil
     ) {
         self.localVideoSource = localVideoSource
         self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
@@ -82,7 +80,7 @@ final class CameraCaptureController {
         self.onFlashlightStateChanged = onFlashlightStateChanged
         self.onZoomFactorChanged = onZoomFactorChanged
         self.onFeatureDegradation = onFeatureDegradation
-        self.onDebugTrace = onDebugTrace
+        self.logger = logger
     }
 #else
     init(
@@ -92,7 +90,7 @@ final class CameraCaptureController {
         onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
         onZoomFactorChanged: @escaping (Double) -> Void,
         onFeatureDegradation: @escaping (FeatureDegradationState) -> Void,
-        onDebugTrace: ((String) -> Void)?
+        logger: SerenadaLogger? = nil
     ) {
         self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
         self.onCameraFacingChanged = onCameraFacingChanged
@@ -100,7 +98,7 @@ final class CameraCaptureController {
         self.onFlashlightStateChanged = onFlashlightStateChanged
         self.onZoomFactorChanged = onZoomFactorChanged
         self.onFeatureDegradation = onFeatureDegradation
-        self.onDebugTrace = onDebugTrace
+        self.logger = logger
     }
 #endif
 
@@ -127,7 +125,7 @@ final class CameraCaptureController {
     }
 
     func setOnDebugTrace(_ handler: ((String) -> Void)?) {
-        onDebugTrace = handler
+        // Legacy no-op; logging is now done via SerenadaLogger.
     }
 
 #if canImport(WebRTC)
@@ -279,11 +277,7 @@ final class CameraCaptureController {
         if source == .composite {
             let compositeCapturer = CompositeCameraVideoCapturer(
                 delegate: localVideoSource,
-                onDebugTrace: { [weak self] message in
-                    Task { @MainActor in
-                        self?.debugTrace(message)
-                    }
-                }
+                logger: logger
             )
             guard compositeCapturer.startCapture() else {
                 compositeDisabledAfterFailure = true
@@ -495,9 +489,7 @@ final class CameraCaptureController {
     }
 
     private func debugTrace(_ message: String) {
-#if DEBUG
-        onDebugTrace?(message)
-#endif
+        logger?.log(.debug, tag: "Camera", message)
     }
 
     private func reportCompositeCameraUnavailable(reason: String) {

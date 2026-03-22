@@ -6,6 +6,7 @@ import UIKit
 public final class CallAudioSessionController: SessionAudioController {
     private var onProximityChanged: (Bool) -> Void
     private var onAudioEnvironmentChanged: () -> Void
+    private let logger: SerenadaLogger?
 
     private let audioSession = AVAudioSession.sharedInstance()
 
@@ -15,10 +16,12 @@ public final class CallAudioSessionController: SessionAudioController {
 
     public init(
         onProximityChanged: @escaping (Bool) -> Void,
-        onAudioEnvironmentChanged: @escaping () -> Void
+        onAudioEnvironmentChanged: @escaping () -> Void,
+        logger: SerenadaLogger? = nil
     ) {
         self.onProximityChanged = onProximityChanged
         self.onAudioEnvironmentChanged = onAudioEnvironmentChanged
+        self.logger = logger
     }
 
     public func setOnProximityChanged(_ handler: @escaping (Bool) -> Void) {
@@ -41,7 +44,7 @@ public final class CallAudioSessionController: SessionAudioController {
             )
             try audioSession.setActive(true)
         } catch {
-            print("[CallAudioSessionController] failed to activate audio session: \(error)")
+            logger?.log(.error, tag: "Audio", "failed to activate audio session: \(error)")
         }
 
         startMonitoring()
@@ -61,7 +64,7 @@ public final class CallAudioSessionController: SessionAudioController {
         do {
             try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
-            print("[CallAudioSessionController] failed to deactivate audio session: \(error)")
+            logger?.log(.error, tag: "Audio", "failed to deactivate audio session: \(error)")
         }
     }
 
@@ -124,7 +127,7 @@ public final class CallAudioSessionController: SessionAudioController {
             do {
                 try audioSession.overrideOutputAudioPort(.none)
             } catch {
-                print("[CallAudioSessionController] bluetooth route apply failed: \(error)")
+                logger?.log(.error, tag: "Audio", "bluetooth route apply failed: \(error)")
             }
             return
         }
@@ -133,7 +136,7 @@ public final class CallAudioSessionController: SessionAudioController {
             do {
                 try audioSession.overrideOutputAudioPort(.none)
             } catch {
-                print("[CallAudioSessionController] earpiece route apply failed: \(error)")
+                logger?.log(.error, tag: "Audio", "earpiece route apply failed: \(error)")
             }
             return
         }
@@ -141,7 +144,7 @@ public final class CallAudioSessionController: SessionAudioController {
         do {
             try audioSession.overrideOutputAudioPort(.speaker)
         } catch {
-            print("[CallAudioSessionController] speaker route apply failed: \(error)")
+            logger?.log(.error, tag: "Audio", "speaker route apply failed: \(error)")
         }
     }
 
