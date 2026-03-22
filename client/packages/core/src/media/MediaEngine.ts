@@ -1,5 +1,6 @@
 import type { RoomState, SignalingMessage } from '../signaling/types.js';
 import type { ConnectionStatus, SerenadaLogger } from '../types.js';
+import { parseOfferPayload, parseAnswerPayload, parseIceCandidatePayload } from '../signaling/payloads.js';
 import { formatError } from '../formatError.js';
 import {
     OFFER_TIMEOUT_MS,
@@ -142,18 +143,23 @@ export class MediaEngine {
     processSignalingMessage(msg: SignalingMessage): void {
         const { type, payload } = msg;
         if (!payload) return;
-        const fromCid = payload.from as string | undefined;
         try {
             switch (type) {
-                case 'offer':
-                    if (fromCid && payload.sdp) void this.handleOfferFrom(fromCid, payload.sdp as string);
+                case 'offer': {
+                    const offer = parseOfferPayload(payload);
+                    if (offer) void this.handleOfferFrom(offer.from, offer.sdp);
                     break;
-                case 'answer':
-                    if (fromCid && payload.sdp) void this.handleAnswerFrom(fromCid, payload.sdp as string);
+                }
+                case 'answer': {
+                    const answer = parseAnswerPayload(payload);
+                    if (answer) void this.handleAnswerFrom(answer.from, answer.sdp);
                     break;
-                case 'ice':
-                    if (fromCid && payload.candidate) void this.handleIceFrom(fromCid, payload.candidate as RTCIceCandidateInit);
+                }
+                case 'ice': {
+                    const ice = parseIceCandidatePayload(payload);
+                    if (ice) void this.handleIceFrom(ice.from, ice.candidate);
                     break;
+                }
             }
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `Error processing message ${type}: ${formatError(err)}`);

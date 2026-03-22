@@ -71,6 +71,23 @@ export type {
 // Signaling types re-exported for advanced usage
 export type { TransportKind } from './signaling/transports/types.js';
 export type { RoomState, SignalingMessage } from './signaling/types.js';
+export type {
+    JoinedPayload,
+    ErrorPayload,
+    TurnRefreshedPayload,
+    OfferPayload,
+    AnswerPayload,
+    IceCandidatePayload,
+} from './signaling/payloads.js';
+export {
+    parseJoinedPayload,
+    parseRoomStatePayload,
+    parseErrorPayload,
+    parseTurnRefreshedPayload,
+    parseOfferPayload,
+    parseAnswerPayload,
+    parseIceCandidatePayload,
+} from './signaling/payloads.js';
 export type { RoomStatus, RoomStatuses } from './signaling/roomStatuses.js';
 export { getRoomStatusState, mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './signaling/roomStatuses.js';
 export { parseTransportOrder } from './signaling/transportConfig.js';

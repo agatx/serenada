@@ -13,3 +13,12 @@ export type SignalingMessage = {
     to?: string;
     payload?: Record<string, unknown>;
 };
+
+export type {
+    JoinedPayload,
+    ErrorPayload,
+    TurnRefreshedPayload,
+    OfferPayload,
+    AnswerPayload,
+    IceCandidatePayload,
+} from './payloads.js';

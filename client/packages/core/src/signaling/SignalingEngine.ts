@@ -4,6 +4,7 @@ import type { SignalingTransport, TransportKind } from './transports/types.js';
 import type { SerenadaLogger } from '../types.js';
 import { createSignalingTransport } from './transports/index.js';
 import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './roomStatuses.js';
+import { parseJoinedPayload, parseRoomStatePayload, parseErrorPayload, parseTurnRefreshedPayload } from './payloads.js';
 import { formatError } from '../formatError.js';
 import {
     RECONNECT_BACKOFF_BASE_MS,
@@ -240,50 +241,58 @@ export class SignalingEngine {
 
     private handleIncomingMessage(msg: SignalingMessage): void {
         switch (msg.type) {
-            case 'joined':
+            case 'joined': {
                 this.clearJoinTimers();
                 this.joinAcked = true;
                 if (msg.cid) this.clientId = msg.cid;
-                if (msg.payload) {
-                    this.roomState = msg.payload as RoomState;
-                    if (msg.payload.turnToken) {
-                        this.turnToken = msg.payload.turnToken as string;
+                const joined = parseJoinedPayload(msg.payload);
+                if (joined) {
+                    this.roomState = {
+                        hostCid: joined.hostCid,
+                        participants: joined.participants,
+                        maxParticipants: joined.maxParticipants,
+                    };
+                    if (joined.turnToken) {
+                        this.turnToken = joined.turnToken;
                     }
-                    if (msg.payload.turnTokenTTLMs) {
-                        this.turnTokenTTLMs = msg.payload.turnTokenTTLMs as number;
+                    if (joined.turnTokenTTLMs) {
+                        this.turnTokenTTLMs = joined.turnTokenTTLMs;
                         this.scheduleTurnRefresh();
                     }
-                    if (msg.payload.reconnectToken) {
-                        this.reconnectToken = msg.payload.reconnectToken as string;
+                    if (joined.reconnectToken) {
+                        this.reconnectToken = joined.reconnectToken;
                         this.reconnectTokenRoomId = msg.rid || this.currentRoomId;
                         this.persistReconnectStorage();
                     }
                 }
                 this.persistClientId();
                 break;
-            case 'turn-refreshed':
-                if (msg.payload) {
-                    if (msg.payload.turnToken) {
-                        this.turnToken = msg.payload.turnToken as string;
-                    }
-                    if (msg.payload.turnTokenTTLMs) {
-                        this.turnTokenTTLMs = msg.payload.turnTokenTTLMs as number;
+            }
+            case 'turn-refreshed': {
+                const turnRefreshed = parseTurnRefreshedPayload(msg.payload);
+                if (turnRefreshed) {
+                    this.turnToken = turnRefreshed.turnToken;
+                    if (turnRefreshed.turnTokenTTLMs) {
+                        this.turnTokenTTLMs = turnRefreshed.turnTokenTTLMs;
                         this.scheduleTurnRefresh();
                     }
                     this.logger?.log('debug', 'Signaling', 'TURN credentials refreshed');
                 }
                 break;
+            }
             case 'pong':
                 this.lastPongAt = Date.now();
                 this.missedPongs = 0;
                 // Pong is internal bookkeeping — skip notifyStateChange to avoid unnecessary rebuilds
                 [...this.messageListeners].forEach(listener => listener(msg));
                 return;
-            case 'room_state':
-                if (msg.payload) {
-                    this.roomState = msg.payload as RoomState;
+            case 'room_state': {
+                const roomState = parseRoomStatePayload(msg.payload);
+                if (roomState) {
+                    this.roomState = roomState;
                 }
                 break;
+            }
             case 'room_ended':
                 this.clearJoinTimers();
                 this.roomState = null;
@@ -301,14 +310,13 @@ export class SignalingEngine {
                     this.roomStatuses = mergeRoomStatusUpdatePayload(this.roomStatuses, msg.payload);
                 }
                 break;
-            case 'error':
-                if (msg.payload && msg.payload.message) {
-                    this.error = {
-                        code: (msg.payload.code as string) ?? 'UNKNOWN',
-                        message: String(msg.payload.message),
-                    };
+            case 'error': {
+                const errorPayload = parseErrorPayload(msg.payload);
+                if (errorPayload) {
+                    this.error = errorPayload;
                 }
                 break;
+            }
         }
 
         this.notifyStateChange();
