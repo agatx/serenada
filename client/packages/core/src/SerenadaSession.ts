@@ -24,12 +24,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     onPermissionsRequired: ((permissions: MediaCapability[]) => void) | null = null;
 
-    constructor(config: SerenadaConfig, roomId: string, roomUrl: string | null) {
+    constructor(
+        config: SerenadaConfig,
+        roomId: string,
+        roomUrl: string | null,
+        deps?: { signaling?: SignalingEngine; media?: MediaEngine; statsCollector?: CallStatsCollector },
+    ) {
         this.config = config;
         this.roomId = roomId;
         this.roomUrl = roomUrl;
-
-        const urls = resolveServerUrls(config.serverHost);
 
         this._state = {
             phase: 'joining',
@@ -43,19 +46,28 @@ export class SerenadaSession implements SerenadaSessionHandle {
             error: null,
         };
 
-        this.signaling = new SignalingEngine({
-            wsUrl: urls.wsUrl,
-            httpBaseUrl: urls.httpBaseUrl,
-            transports: config.transports,
-            logger: config.logger,
-        });
+        if (deps?.signaling) {
+            this.signaling = deps.signaling;
+        } else {
+            const urls = resolveServerUrls(config.serverHost);
+            this.signaling = new SignalingEngine({
+                wsUrl: urls.wsUrl,
+                httpBaseUrl: urls.httpBaseUrl,
+                transports: config.transports,
+                logger: config.logger,
+            });
+        }
 
-        this.media = new MediaEngine(
-            { serverHost: config.serverHost, turnsOnly: config.turnsOnly, logger: config.logger },
-            (type, payload, to) => this.signaling.sendMessage(type, payload, to),
-        );
+        if (deps?.media) {
+            this.media = deps.media;
+        } else {
+            this.media = new MediaEngine(
+                { serverHost: config.serverHost, turnsOnly: config.turnsOnly, logger: config.logger },
+                (type, payload, to) => this.signaling.sendMessage(type, payload, to),
+            );
+        }
 
-        this.statsCollector = new CallStatsCollector(config.logger);
+        this.statsCollector = deps?.statsCollector ?? new CallStatsCollector(config.logger);
 
         // Wire signaling events to media engine
         this.unsubSignalingMessages = this.signaling.subscribeToMessages((msg) => {
@@ -77,9 +89,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.rebuildState();
         });
 
-        // Start connection + join
-        this.signaling.connect();
-        this.signaling.joinRoom(roomId);
+        // Start connection + join (skip when deps injected — test harness drives these)
+        if (!deps) {
+            this.signaling.connect();
+            this.signaling.joinRoom(roomId);
+        }
     }
 
     get state(): CallState { return this._state; }
