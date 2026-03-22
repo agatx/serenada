@@ -16,7 +16,7 @@ The 10 workstreams and current status:
 - [x] Enforce Android main-thread usage and fix Android stats/resource lifecycle.
 - [x] Encapsulate `PeerConnectionSlot` state machines.
 - [x] Replace raw public WebRTC string state with typed diagnostics.
-- [ ] Split iOS/Android `WebRtcEngine` into focused media components.
+- [x] Split iOS/Android `WebRtcEngine` into focused media components.
 - [x] Replace callback-only `createRoom()` with async/suspend APIs.
 
 ## Public API And Type Changes
@@ -56,7 +56,7 @@ The 10 workstreams and current status:
    - [x] Keep signaling protocol v1 and resilience constants unchanged.
 
 5. **Decompose Media Engine And Surface Degradation**
-   - [ ] Split iOS and Android `WebRtcEngine` into camera capture/control, screen-share control, composite-camera control, renderer registry, and stats/media bridge components.
+   - [x] Split iOS and Android `WebRtcEngine` into focused media components: `CameraCaptureController` (camera device mgmt, mode switching, torch, zoom), `ScreenShareController` (screen share orchestration), and extracted nested classes (`CompositeCameraVideoCapturer`, `ScreenShareCapturers` on iOS). Renderer registry (~40 LOC) and stats/media bridge were not extracted as separate components since they are too small and tightly coupled; renderer tracking stays in the facade and stats are already in `StatsPoller`/`PeerConnectionSlot`. iOS `WebRtcEngine` reduced from 1903 to 457 LOC; Android from 1518 to 440 LOC.
    - [x] Remove silent composite-camera failure handling. Composite failures must set `FeatureDegradation.compositeCameraUnavailable`, carry a reason in diagnostics, and disable composite only for the current session unless explicitly retried.
    - [x] Android: remove persistent composite failure disablement from `SharedPreferences`; capability detection caching may remain, failure persistence may not.
 
