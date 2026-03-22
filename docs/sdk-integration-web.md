@@ -247,6 +247,39 @@ Validate that a host is a reachable Serenada server:
 await diagnostics.validateServerHost()
 ```
 
+## Logging
+
+By default, the SDK is silent — no log output. To enable logging, pass a `logger` in the config:
+
+```typescript
+import { createSerenadaCore, ConsoleSerenadaLogger } from '@serenada/core'
+
+const serenada = createSerenadaCore({
+    serverHost: 'serenada.app',
+    logger: new ConsoleSerenadaLogger(),  // routes to console.debug/info/warn/error
+})
+```
+
+`ConsoleSerenadaLogger` is a built-in convenience logger. For production apps, implement the `SerenadaLogger` interface to route SDK logs to your own system:
+
+```typescript
+import type { SerenadaLogLevel, SerenadaLogger } from '@serenada/core'
+
+const logger: SerenadaLogger = {
+    log(level: SerenadaLogLevel, tag: string, message: string) {
+        // Route to your logging backend
+        // level: 'debug' | 'info' | 'warning' | 'error'
+        // tag: 'Session', 'Signaling', 'Transport', 'WebRTC',
+        //       'PeerConnection', 'Negotiation', 'Audio', 'Camera',
+        //       'ScreenShare', 'Stats'
+    }
+}
+
+const serenada = createSerenadaCore({ serverHost: 'serenada.app', logger })
+```
+
+The logger is passed to all internal SDK components (signaling, media engine, transports). All sessions created from this core instance inherit the logger.
+
 ## Configuration
 
 ```typescript

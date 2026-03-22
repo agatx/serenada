@@ -216,6 +216,33 @@ func roomWatcher(_ watcher: RoomWatcher, didUpdateStatuses statuses: [String: Ro
 }
 ```
 
+## Logging
+
+By default, the SDK is silent — no log output. To enable logging, set a `SerenadaLogger` on the core instance before creating sessions:
+
+```swift
+let serenada = SerenadaCore(config: .init(serverHost: "serenada.app"))
+serenada.logger = PrintSerenadaLogger()  // logs to stdout via print()
+```
+
+`PrintSerenadaLogger` is a built-in convenience logger. For production apps, implement the `SerenadaLogger` protocol to route SDK logs to your own logging system:
+
+```swift
+final class MyLogger: SerenadaLogger {
+    func log(_ level: SerenadaLogLevel, tag: String, _ message: String) {
+        // Route to your logging backend
+        // level: .debug, .info, .warning, .error
+        // tag: "Session", "Signaling", "Transport", "WebRTC",
+        //       "PeerConnection", "Negotiation", "Audio", "Camera",
+        //       "ScreenShare", "Stats"
+    }
+}
+
+serenada.logger = MyLogger()
+```
+
+The logger is passed to all internal SDK components (signaling, WebRTC, audio, camera). Set it once on `SerenadaCore` before calling `join()` or `createRoom()`.
+
 ## Configuration
 
 ```swift

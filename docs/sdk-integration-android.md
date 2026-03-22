@@ -282,6 +282,36 @@ session.state.collect { state ->
 
 The foreground service must be declared by the host app — the SDK does not include one.
 
+## Logging
+
+By default, the SDK is silent — no log output. To enable logging, set a `SerenadaLogger` on the core instance before creating sessions:
+
+```kotlin
+val serenada = SerenadaCore(
+    config = SerenadaConfig(serverHost = "serenada.app"),
+    context = applicationContext,
+)
+serenada.logger = AndroidSerenadaLogger()  // routes to android.util.Log
+```
+
+`AndroidSerenadaLogger` is a built-in convenience logger that maps to `Log.d`/`Log.i`/`Log.w`/`Log.e`. For production apps, implement the `SerenadaLogger` interface to route SDK logs to your own system:
+
+```kotlin
+class MyLogger : SerenadaLogger {
+    override fun log(level: SerenadaLogLevel, tag: String, message: String) {
+        // Route to your logging backend
+        // level: DEBUG, INFO, WARNING, ERROR
+        // tag: "Session", "Signaling", "Transport", "WebRTC",
+        //       "PeerConnection", "Negotiation", "Audio", "Camera",
+        //       "ScreenShare", "Stats"
+    }
+}
+
+serenada.logger = MyLogger()
+```
+
+The logger is passed to all internal SDK components (signaling, WebRTC, audio, camera). Set it once on `SerenadaCore` before calling `join()` or `createRoom()`.
+
 ## Configuration
 
 ```kotlin

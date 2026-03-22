@@ -74,6 +74,55 @@ Use `waitingActions` for host-app-specific actions that should appear under the 
 
 ---
 
+## Logging
+
+The SDK ships silent by default. Enable logging by providing a `SerenadaLogger` implementation. Built-in convenience loggers are provided for each platform:
+
+| Platform | Built-in Logger | Output |
+|----------|----------------|--------|
+| iOS | `PrintSerenadaLogger` | `print()` to stdout |
+| Android | `AndroidSerenadaLogger` | `android.util.Log` |
+| Web | `ConsoleSerenadaLogger` | `console.debug/info/warn/error` |
+
+### Custom Logger
+
+Implement `SerenadaLogger` to route SDK logs to your own system (Crashlytics, os_log, Timber, Sentry, etc.):
+
+| iOS | `SerenadaLogger` protocol — `func log(_ level: SerenadaLogLevel, tag: String, _ message: String)` |
+|---|---|
+| **Android** | `SerenadaLogger` interface — `fun log(level: SerenadaLogLevel, tag: String, message: String)` |
+| **Web** | `SerenadaLogger` interface — `log(level: SerenadaLogLevel, tag: string, message: string): void` |
+
+### Log Tags
+
+Tags are consistent across all three platforms:
+
+| Tag | Components |
+|-----|-----------|
+| `Session` | SerenadaSession |
+| `Signaling` | SignalingClient / SignalingEngine |
+| `Transport` | WS/SSE transports |
+| `WebRTC` | WebRtcEngine / MediaEngine |
+| `PeerConnection` | PeerConnectionSlot |
+| `Negotiation` | PeerNegotiationEngine |
+| `Audio` | CallAudioSessionController |
+| `Camera` | CameraCaptureController, CompositeCameraCapturer |
+| `ScreenShare` | ScreenShareController |
+| `Stats` | CallStatsCollector |
+
+### Log Levels
+
+| Level | iOS | Android | Web |
+|-------|-----|---------|-----|
+| Debug | `.debug` | `DEBUG` | `'debug'` |
+| Info | `.info` | `INFO` | `'info'` |
+| Warning | `.warning` | `WARNING` | `'warning'` |
+| Error | `.error` | `ERROR` | `'error'` |
+
+See each platform's quick-start guide for setup examples.
+
+---
+
 ## String Overrides
 
 Call-UI bundles English strings as the default. Host apps can override any string to provide localization or custom copy. Any string not overridden falls back to the bundled English default.
