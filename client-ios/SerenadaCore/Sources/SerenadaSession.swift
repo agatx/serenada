@@ -48,10 +48,10 @@ public final class SerenadaSession: ObservableObject {
 
     public var onPermissionsRequired: (([MediaCapability]) -> Void)?
 
-    let signalingClient: SessionSignaling
-    let webRtcEngine: SessionMediaEngine
-    let callAudioSessionController: SessionAudioController
-    let apiClient: SessionAPIClient
+    private let signalingClient: SessionSignaling
+    private let webRtcEngine: SessionMediaEngine
+    private let callAudioSessionController: SessionAudioController
+    private let apiClient: SessionAPIClient
     private let clock: SessionClock
 
     private let config: SerenadaConfig

@@ -148,26 +148,26 @@ suspend fun runDiagnosticsIceCheck(
 
     val token = coreApiClient.awaitDiagnosticToken(host).getOrElse { error ->
         val message = error.message ?: "Diagnostic token failed"
-        onLogLine("Token error: $message")
+        log("Token error: $message")
         return@withContext DiagnosticsIceReport(
             turnsOnly = turnsOnly,
             stun = DiagnosticsCheckResult(DiagnosticsCheckState.Fail, message),
             turn = DiagnosticsCheckResult(DiagnosticsCheckState.Fail, message),
             iceServersSummary = "n/a",
-            logs = listOf("Token error: $message"),
+            logs = logs.toList(),
         )
     }
     log("Diagnostic token received.")
 
     val creds = coreApiClient.awaitTurnCredentials(host, token).getOrElse { error ->
         val message = error.message ?: "TURN credentials failed"
-        onLogLine("TURN credentials error: $message")
+        log("TURN credentials error: $message")
         return@withContext DiagnosticsIceReport(
             turnsOnly = turnsOnly,
             stun = DiagnosticsCheckResult(DiagnosticsCheckState.Fail, message),
             turn = DiagnosticsCheckResult(DiagnosticsCheckState.Fail, message),
             iceServersSummary = "n/a",
-            logs = listOf("TURN credentials error: $message"),
+            logs = logs.toList(),
         )
     }
     log("TURN credentials: ttl=${creds.ttl}s, usernameTs=${creds.username.substringBefore(':', "n/a")}, uris=${creds.uris.size}")
