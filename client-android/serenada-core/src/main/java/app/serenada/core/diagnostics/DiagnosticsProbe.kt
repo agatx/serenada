@@ -240,14 +240,7 @@ private fun runIceGathering(
     turnsOnly: Boolean,
     log: (String) -> Unit,
 ): Pair<DiagnosticsCheckResult, DiagnosticsCheckResult> {
-    val appContext = context.applicationContext
-    enableVerboseWebRtcLoggingForDiagnostics()
-    PeerConnectionFactory.initialize(
-        PeerConnectionFactory.InitializationOptions.builder(appContext)
-            .setEnableInternalTracer(false)
-            .createInitializationOptions(),
-    )
-    val factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+    val factory = getOrCreatePeerConnectionFactory(context)
     val stunFound = AtomicBoolean(false)
     val turnFound = AtomicBoolean(false)
     val candidateSeq = AtomicInteger(0)
@@ -333,7 +326,6 @@ private fun runIceGathering(
     })
 
     if (peerConnection == null) {
-        factory.dispose()
         return Pair(
             DiagnosticsCheckResult(DiagnosticsCheckState.Fail, "PeerConnection creation failed"),
             DiagnosticsCheckResult(DiagnosticsCheckState.Fail, "PeerConnection creation failed"),
@@ -399,7 +391,6 @@ private fun runIceGathering(
 
     runCatching { peerConnection.close() }
     runCatching { peerConnection.dispose() }
-    factory.dispose()
 
     val stunResult = when {
         turnsOnly -> DiagnosticsCheckResult(DiagnosticsCheckState.Warn, "Skipped (TURNS only)")
@@ -415,14 +406,46 @@ private fun runIceGathering(
     return Pair(stunResult, turnResult)
 }
 
+private val diagnosticsPcFactoryLock = Any()
+@Volatile private var diagnosticsPcFactory: PeerConnectionFactory? = null
+
+/**
+ * Eagerly initialize the [PeerConnectionFactory] so that its internal network
+ * thread is warmed up before the first ICE probe runs.  Without this, the very
+ * first probe can complete before network interfaces are enumerated, causing
+ * relay (TURN) candidates to be missed.
+ */
+internal fun warmUpPeerConnectionFactory(context: Context) {
+    getOrCreatePeerConnectionFactory(context)
+}
+
+private fun getOrCreatePeerConnectionFactory(context: Context): PeerConnectionFactory {
+    diagnosticsPcFactory?.let { return it }
+    synchronized(diagnosticsPcFactoryLock) {
+        diagnosticsPcFactory?.let { return it }
+        // Initialize must happen before enableVerboseWebRtcLogging — it loads
+        // the native library that the logging JNI calls depend on.
+        PeerConnectionFactory.initialize(
+            PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+                .setEnableInternalTracer(false)
+                .createInitializationOptions(),
+        )
+        enableVerboseWebRtcLoggingForDiagnostics()
+        val factory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+        diagnosticsPcFactory = factory
+        return factory
+    }
+}
+
 private val diagnosticsWebRtcLoggingEnabled = AtomicBoolean(false)
 
 private fun enableVerboseWebRtcLoggingForDiagnostics() {
-    if (!diagnosticsWebRtcLoggingEnabled.compareAndSet(false, true)) return
+    if (diagnosticsWebRtcLoggingEnabled.get()) return
     runCatching {
         Logging.enableLogThreads()
         Logging.enableLogTimeStamps()
         Logging.enableLogToDebugOutput(Logging.Severity.LS_VERBOSE)
+        diagnosticsWebRtcLoggingEnabled.set(true)
         Log.i("Diagnostics", "Verbose native WebRTC logging enabled")
     }.onFailure { error ->
         Log.w("Diagnostics", "Failed to enable WebRTC verbose logging", error)

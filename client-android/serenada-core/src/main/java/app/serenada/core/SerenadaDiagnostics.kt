@@ -43,6 +43,12 @@ class SerenadaDiagnostics(
     private val apiClient = CoreApiClient(okHttpClient)
     private val handler = Handler(Looper.getMainLooper())
 
+    init {
+        // Eagerly warm up the PeerConnectionFactory on a background thread so
+        // its network thread is ready by the time the user runs an ICE probe.
+        Thread { app.serenada.core.diagnostics.warmUpPeerConnectionFactory(appContext) }.start()
+    }
+
     suspend fun runAll(): DiagnosticsReport = suspendCancellableCoroutine { continuation ->
         runAll { report ->
             if (continuation.isActive) {
