@@ -89,8 +89,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.rebuildState();
         });
 
-        // Start connection + join (skip when deps injected — test harness drives these)
-        if (!deps) {
+        // Start connection + join (skip only when a fake signaling engine is injected)
+        if (!deps?.signaling) {
             this.signaling.connect();
             this.signaling.joinRoom(roomId);
         }
