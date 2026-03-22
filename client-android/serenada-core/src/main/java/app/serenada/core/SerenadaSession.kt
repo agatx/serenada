@@ -25,6 +25,7 @@ import app.serenada.core.call.LocalFrameSnapshotCapture
 import app.serenada.core.call.Participant
 import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RemoteParticipant
+import app.serenada.core.call.SerenadaPeerConnectionState
 import app.serenada.core.call.RealtimeCallStats
 import app.serenada.core.call.RoomState
 import app.serenada.core.call.SessionAudioController
@@ -825,7 +826,7 @@ class SerenadaSession internal constructor(
             ?: peerSlots.keys.toList()
         val remoteParticipants = orderedRemoteCids.mapNotNull { cid ->
             val slot = peerSlots[cid] ?: return@mapNotNull null
-            RemoteParticipant(cid = cid, videoEnabled = slot.isRemoteVideoTrackEnabled(), connectionState = slot.getConnectionState().name)
+            RemoteParticipant(cid = cid, videoEnabled = slot.isRemoteVideoTrackEnabled(), connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
         }
         val currentState = _state.value
         val currentDiagnostics = _diagnostics.value
