@@ -34,6 +34,7 @@ export type CallErrorCode =
     | 'roomEnded'
     | 'permissionDenied'
     | 'serverError'
+    | 'webrtcUnavailable'
     | 'unknown';
 
 export interface CallError {
