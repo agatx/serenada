@@ -627,7 +627,7 @@ public final class SerenadaSession: ObservableObject {
             hasJoinAcknowledged: { [weak self] in self?.hasJoinAcknowledgedCurrentAttempt ?? false },
             isSignalingConnected: { [weak self] in self?.diagnostics.isSignalingConnected ?? false },
             onJoinTimeout: { [weak self] in self?.failJoinWithError(.connectionFailed) },
-            onEnsureSignalingConnection: { [weak self] in self?.signalingClient.connect(host: self?.serverHost ?? "") },
+            onEnsureSignalingConnection: { [weak self] in self?.ensureSignalingConnection() },
             onRecovery: { [weak self] hint, preferInCall in
                 self?.recoverFromJoiningIfNeeded(
                     participantHint: hint ?? self?.currentRoomState?.participants.count, preferInCall: preferInCall
