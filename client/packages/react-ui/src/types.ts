@@ -85,6 +85,8 @@ export function resolveString(
 // ---------------------------------------------------------------------------
 
 export interface CallFlowProps {
+    /** Optional CSS class name(s) applied to the root element for host-app style overrides. */
+    className?: string;
     /** Full call URL — triggers URL-first mode (creates session internally). */
     url?: string;
     /** Provide an existing session handle — triggers session-first mode. */

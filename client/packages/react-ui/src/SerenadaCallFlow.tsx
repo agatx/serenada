@@ -160,6 +160,7 @@ const VideoTile: React.FC<{
 };
 
 export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
+    className: hostClassName,
     url,
     session: externalSession,
     serverHost,
@@ -648,6 +649,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     const rootClassName = [
         'serenada-callflow',
+        hostClassName,
         effectiveState.phase === 'inCall' && isMultiParty ? 'multi-party-call' : '',
         !areControlsVisible ? 'controls-hidden' : '',
     ].filter(Boolean).join(' ');
@@ -659,7 +661,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     if (effectiveState.phase === 'idle' || effectiveState.phase === 'joining') {
         return (
-            <div className={rootClassName} style={rootStyle}>
+            <div data-serenada-callflow="" className={rootClassName} style={rootStyle}>
                 <div style={centerContentStyle}>
                     <div style={spinnerStyle} />
                     <p style={messageTextStyle}>{resolveString('joiningCall', strings)}</p>
@@ -670,7 +672,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     if (effectiveState.phase === 'awaitingPermissions') {
         return (
-            <div className={rootClassName} style={rootStyle}>
+            <div data-serenada-callflow="" className={rootClassName} style={rootStyle}>
                 <div style={centerContentStyle}>
                     <h2 style={headingStyle}>{resolveString('permissionRequired', strings)}</h2>
                     <p style={messageTextStyle}>{resolveString('permissionPrompt', strings)}</p>
@@ -694,7 +696,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     if (effectiveState.phase === 'error') {
         return (
-            <div className={rootClassName} style={rootStyle}>
+            <div data-serenada-callflow="" className={rootClassName} style={rootStyle}>
                 <div style={centerContentStyle}>
                     <h2 style={{ ...headingStyle, color: '#ef4444' }}>{resolveString('errorOccurred', strings)}</h2>
                     {effectiveState.error && (
@@ -710,7 +712,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     if (effectiveState.phase === 'ending') {
         return (
-            <div className={rootClassName} style={rootStyle}>
+            <div data-serenada-callflow="" className={rootClassName} style={rootStyle}>
                 <div style={centerContentStyle}>
                     <p style={messageTextStyle}>{resolveString('callEnded', strings)}</p>
                 </div>
@@ -839,7 +841,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     if (effectiveState.phase === 'inCall' && isMultiParty) {
         return (
-            <div className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
+            <div data-serenada-callflow="" className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
                 {callProbe}
                 {overlayContent}
                 <div className="call-container">
@@ -975,7 +977,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }
 
     return (
-        <div className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
+        <div data-serenada-callflow="" className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
             {callProbe}
             {overlayContent}
             <div className={`call-container ${isLocalLarge ? 'local-large' : ''}`}>

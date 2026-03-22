@@ -1,3 +1,14 @@
+/**
+ * Serenada call flow CSS — injected into <head> at runtime.
+ *
+ * Isolation approach: all selectors are scoped under [data-serenada-callflow]
+ * (an attribute on the root element) to prevent style leakage into host apps.
+ *
+ * Why not Shadow DOM: video elements and the Fullscreen API do not work
+ * reliably inside shadow roots across browsers, making shadow DOM unsuitable
+ * for a WebRTC call UI.
+ */
+
 const STYLES_ID = 'serenada-callflow-styles';
 
 const CALL_FLOW_CSS = `
@@ -5,28 +16,28 @@ const CALL_FLOW_CSS = `
   to { transform: rotate(360deg); }
 }
 
-.serenada-callflow {
+[data-serenada-callflow] {
   --serenada-accent: #3b82f6;
-  position: fixed;
-  inset: 0;
-  overflow: hidden;
+  position: fixed !important;
+  inset: 0 !important;
+  overflow: hidden !important;
   background: #000;
   color: #fff;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
-.serenada-callflow video {
+[data-serenada-callflow] video {
   display: block;
 }
 
-.serenada-callflow .call-container {
+[data-serenada-callflow] .call-container {
   position: absolute;
   inset: 0;
   overflow: hidden;
   background: #000;
 }
 
-.serenada-callflow .video-remote-container.primary {
+[data-serenada-callflow] .video-remote-container.primary {
   position: absolute;
   inset: 0;
   display: flex;
@@ -35,7 +46,7 @@ const CALL_FLOW_CSS = `
   z-index: 1;
 }
 
-.serenada-callflow .video-remote {
+[data-serenada-callflow] .video-remote {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -43,8 +54,8 @@ const CALL_FLOW_CSS = `
   background: #000;
 }
 
-.serenada-callflow .video-local-container.pip,
-.serenada-callflow .video-remote-container.pip {
+[data-serenada-callflow] .video-local-container.pip,
+[data-serenada-callflow] .video-remote-container.pip {
   position: absolute;
   right: 20px;
   bottom: 100px;
@@ -63,7 +74,7 @@ const CALL_FLOW_CSS = `
   transition: all 0.25s ease;
 }
 
-.serenada-callflow .video-local-container.primary {
+[data-serenada-callflow] .video-local-container.primary {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -71,8 +82,8 @@ const CALL_FLOW_CSS = `
 }
 
 @media (min-width: 768px) {
-  .serenada-callflow .video-local-container.pip,
-  .serenada-callflow .video-remote-container.pip {
+  [data-serenada-callflow] .video-local-container.pip,
+  [data-serenada-callflow] .video-remote-container.pip {
     right: 32px;
     bottom: 100px;
     width: min(240px, 30vw);
@@ -80,7 +91,7 @@ const CALL_FLOW_CSS = `
   }
 }
 
-.serenada-callflow .video-local {
+[data-serenada-callflow] .video-local {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -88,11 +99,11 @@ const CALL_FLOW_CSS = `
   background: #000;
 }
 
-.serenada-callflow .video-local.mirrored {
+[data-serenada-callflow] .video-local.mirrored {
   transform: scaleX(-1);
 }
 
-.serenada-callflow.multi-party-call .video-stage {
+[data-serenada-callflow].multi-party-call .video-stage {
   position: absolute;
   inset: 0;
   padding: 16px 16px 184px;
@@ -103,7 +114,7 @@ const CALL_FLOW_CSS = `
   z-index: 1;
 }
 
-.serenada-callflow.multi-party-call .video-stage-viewport {
+[data-serenada-callflow].multi-party-call .video-stage-viewport {
   width: 100%;
   height: 100%;
   display: flex;
@@ -111,7 +122,7 @@ const CALL_FLOW_CSS = `
   justify-content: center;
 }
 
-.serenada-callflow.multi-party-call .video-stage-rows {
+[data-serenada-callflow].multi-party-call .video-stage-rows {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -121,7 +132,7 @@ const CALL_FLOW_CSS = `
   max-height: 100%;
 }
 
-.serenada-callflow.multi-party-call .video-stage-row {
+[data-serenada-callflow].multi-party-call .video-stage-row {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -129,7 +140,7 @@ const CALL_FLOW_CSS = `
   max-width: 100%;
 }
 
-.serenada-callflow.multi-party-call .video-stage-tile {
+[data-serenada-callflow].multi-party-call .video-stage-tile {
   position: relative;
   overflow: hidden;
   flex: 0 0 auto;
@@ -141,14 +152,14 @@ const CALL_FLOW_CSS = `
   box-shadow: 0 18px 38px rgba(0, 0, 0, 0.35);
 }
 
-.serenada-callflow.multi-party-call .video-stage-remote {
+[data-serenada-callflow].multi-party-call .video-stage-remote {
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #060708;
 }
 
-.serenada-callflow .video-grid-label {
+[data-serenada-callflow] .video-grid-label {
   position: absolute;
   bottom: 12px;
   left: 12px;
@@ -160,7 +171,7 @@ const CALL_FLOW_CSS = `
   backdrop-filter: blur(6px);
 }
 
-.serenada-callflow .video-stage-placeholder {
+[data-serenada-callflow] .video-stage-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -170,7 +181,7 @@ const CALL_FLOW_CSS = `
   color: rgba(255, 255, 255, 0.6);
 }
 
-.serenada-callflow .video-stage-pin-indicator {
+[data-serenada-callflow] .video-stage-pin-indicator {
   position: absolute;
   top: 8px;
   left: 8px;
@@ -184,7 +195,7 @@ const CALL_FLOW_CSS = `
   backdrop-filter: blur(6px);
 }
 
-.serenada-callflow.multi-party-call .video-local-container-stage {
+[data-serenada-callflow].multi-party-call .video-local-container-stage {
   right: 16px;
   bottom: 108px;
   width: min(132px, 26vw);
@@ -197,15 +208,15 @@ const CALL_FLOW_CSS = `
 }
 
 @media (min-width: 768px) {
-  .serenada-callflow.multi-party-call .video-stage {
+  [data-serenada-callflow].multi-party-call .video-stage {
     padding: 24px 28px 136px;
   }
 
-  .serenada-callflow.multi-party-call .video-stage-tile {
+  [data-serenada-callflow].multi-party-call .video-stage-tile {
     border-radius: 12px;
   }
 
-  .serenada-callflow.multi-party-call .video-local-container-stage {
+  [data-serenada-callflow].multi-party-call .video-local-container-stage {
     right: 32px;
     bottom: 112px;
     width: min(220px, 22vw);
@@ -215,7 +226,7 @@ const CALL_FLOW_CSS = `
   }
 }
 
-.serenada-callflow .controls-bar {
+[data-serenada-callflow] .controls-bar {
   position: absolute;
   left: 50%;
   bottom: 20px;
@@ -231,19 +242,19 @@ const CALL_FLOW_CSS = `
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
-.serenada-callflow.controls-hidden .controls-bar {
+[data-serenada-callflow].controls-hidden .controls-bar {
   opacity: 0;
   transform: translateX(-50%) translateY(20px);
   pointer-events: none;
 }
 
-.serenada-callflow.controls-hidden .video-local-container.pip,
-.serenada-callflow.controls-hidden .video-remote-container.pip {
+[data-serenada-callflow].controls-hidden .video-local-container.pip,
+[data-serenada-callflow].controls-hidden .video-remote-container.pip {
   bottom: 20px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
 }
 
-.serenada-callflow .btn-control {
+[data-serenada-callflow] .btn-control {
   width: 50px;
   height: 50px;
   display: flex;
@@ -257,41 +268,41 @@ const CALL_FLOW_CSS = `
   transition: all 0.2s ease;
 }
 
-.serenada-callflow .btn-control:hover {
+[data-serenada-callflow] .btn-control:hover {
   background: #30363d;
 }
 
-.serenada-callflow .btn-control:disabled {
+[data-serenada-callflow] .btn-control:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.serenada-callflow .btn-control:disabled:hover {
+[data-serenada-callflow] .btn-control:disabled:hover {
   background: #161b22;
 }
 
-.serenada-callflow .btn-control.active {
+[data-serenada-callflow] .btn-control.active {
   background: #fff;
   color: #000;
 }
 
-.serenada-callflow .btn-control.active-screen-share {
+[data-serenada-callflow] .btn-control.active-screen-share {
   background: #8b1b1b;
 }
 
-.serenada-callflow .btn-control.active-screen-share:hover {
+[data-serenada-callflow] .btn-control.active-screen-share:hover {
   background: #da3633;
 }
 
-.serenada-callflow .btn-leave {
+[data-serenada-callflow] .btn-leave {
   background: #551111;
 }
 
-.serenada-callflow .btn-leave:hover {
+[data-serenada-callflow] .btn-leave:hover {
   background: #da3633;
 }
 
-.serenada-callflow .btn-zoom {
+[data-serenada-callflow] .btn-zoom {
   position: absolute;
   top: 20px;
   right: 20px;
@@ -310,22 +321,22 @@ const CALL_FLOW_CSS = `
   transition: all 0.2s ease;
 }
 
-.serenada-callflow .btn-zoom:hover {
+[data-serenada-callflow] .btn-zoom:hover {
   transform: scale(1.05);
   border-color: var(--serenada-accent);
   color: var(--serenada-accent);
 }
 
-.serenada-callflow .btn-zoom:active {
+[data-serenada-callflow] .btn-zoom:active {
   transform: scale(0.95);
 }
 
-.serenada-callflow.controls-hidden .btn-zoom {
+[data-serenada-callflow].controls-hidden .btn-zoom {
   opacity: 0;
   pointer-events: none;
 }
 
-.serenada-callflow .debug-toggle-zone {
+[data-serenada-callflow] .debug-toggle-zone {
   position: absolute;
   top: 0;
   left: 0;
@@ -337,7 +348,7 @@ const CALL_FLOW_CSS = `
   user-select: none;
 }
 
-.serenada-callflow .waiting-message {
+[data-serenada-callflow] .waiting-message {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -351,7 +362,7 @@ const CALL_FLOW_CSS = `
   z-index: 15;
 }
 
-.serenada-callflow .qr-code-container {
+[data-serenada-callflow] .qr-code-container {
   width: 200px;
   height: 200px;
   padding: 8px;
@@ -360,7 +371,7 @@ const CALL_FLOW_CSS = `
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
-.serenada-callflow .btn-small {
+[data-serenada-callflow] .btn-small {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -374,12 +385,12 @@ const CALL_FLOW_CSS = `
   transition: border-color 0.2s ease, color 0.2s ease;
 }
 
-.serenada-callflow .btn-small:hover {
+[data-serenada-callflow] .btn-small:hover {
   border-color: var(--serenada-accent);
   color: var(--serenada-accent);
 }
 
-.serenada-callflow .waiting-actions {
+[data-serenada-callflow] .waiting-actions {
   display: flex;
   flex-direction: column;
   align-items: center;
