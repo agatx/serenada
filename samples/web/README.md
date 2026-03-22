@@ -53,3 +53,27 @@ const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 const room = await serenada.createRoom()
 <SerenadaCallFlow url={room.url} session={room.session} onDismiss={() => navigate('/')} />
 ```
+
+## Transport Visibility
+
+The SDK exposes which signaling transport (WebSocket or SSE) is currently active.
+
+```typescript
+// Web — available on CallState
+const state = session.state;
+console.log(state.activeTransport); // 'ws' | 'sse' | null
+```
+
+On Android and iOS, the active transport is available on the diagnostics object:
+
+```kotlin
+// Android — available on CallDiagnostics
+val diagnostics = session.diagnostics.value
+println(diagnostics.activeTransport) // "ws" or "sse"
+```
+
+```swift
+// iOS — available on CallDiagnostics
+let diagnostics = session.diagnostics
+print(diagnostics.activeTransport ?? "none") // "ws" or "sse"
+```
