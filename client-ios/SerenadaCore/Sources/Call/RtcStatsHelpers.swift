@@ -90,7 +90,10 @@ func peerConnectionState(_ state: RTCPeerConnectionState) -> SerenadaPeerConnect
     case .disconnected: return .disconnected
     case .failed: return .failed
     case .closed: return .closed
-    @unknown default: return .new
+    @unknown default:
+        // Future RTCPeerConnectionState values are mapped to .new as a safe default.
+        // This avoids crashing on SDK upgrades when the WebRTC framework adds new states.
+        return .new
     }
 }
 
