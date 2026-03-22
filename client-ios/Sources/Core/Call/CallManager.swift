@@ -474,6 +474,7 @@ final class CallManager: ObservableObject {
         }
 
         if state.phase == .idle {
+            saveSessionToHistoryIfNeeded(session)
             clearActiveSession(resetUiState: true)
             return
         }

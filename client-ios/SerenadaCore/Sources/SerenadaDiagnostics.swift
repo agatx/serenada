@@ -87,6 +87,11 @@ public final class SerenadaDiagnostics {
     public init(config: SerenadaConfig) {
         self.config = config
         self.apiClient = CoreAPIClient()
+        #if canImport(WebRTC)
+        // Eagerly warm up the shared RTCPeerConnectionFactory so its network
+        // thread is ready by the time the user runs an ICE probe.
+        IceGatheringProbe.warmUpFactory()
+        #endif
     }
 
     // MARK: - High-level reports
@@ -245,7 +250,16 @@ public final class SerenadaDiagnostics {
             return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["No ICE servers"])
         }
         let probe = IceGatheringProbe()
-        return await probe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
+        var report = await probe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
+        // Zero candidates (not even host) means the NetworkMonitor hadn't
+        // enumerated interfaces yet — a transient race after the previous
+        // PeerConnection was torn down.  Retry once; the monitor will be ready.
+        if report.logs.isEmpty {
+            onCandidateLog?("Zero candidates gathered — retrying (NetworkMonitor race)...")
+            let retryProbe = IceGatheringProbe()
+            report = await retryProbe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
+        }
+        return report
 #else
         return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["WebRTC not available"])
 #endif
@@ -370,6 +384,20 @@ public final class SerenadaDiagnostics {
 #if canImport(WebRTC)
 @MainActor
 private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
+    /// Shared factory — creating a new one per probe and letting it be deallocated
+    /// tears down the native NetworkMonitor, causing a race where the next probe's
+    /// monitor hasn't enumerated interfaces yet and ICE gathering completes with
+    /// zero candidates.
+    private static var sharedFactory: RTCPeerConnectionFactory?
+
+    static func warmUpFactory() {
+        if sharedFactory == nil {
+            let encoderFactory = RTCDefaultVideoEncoderFactory()
+            let decoderFactory = RTCDefaultVideoDecoderFactory()
+            sharedFactory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
+        }
+    }
+
     private var continuation: CheckedContinuation<IceProbeReport, Never>?
     private var peerConnection: RTCPeerConnection?
     private var hasSrflx = false
@@ -391,9 +419,8 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
     }
 
     private func start(urls: [String], username: String, credential: String) {
-        let encoderFactory = RTCDefaultVideoEncoderFactory()
-        let decoderFactory = RTCDefaultVideoDecoderFactory()
-        let factory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
+        Self.warmUpFactory()
+        let factory = Self.sharedFactory!
 
         let config = RTCConfiguration()
         config.iceServers = [RTCIceServer(urlStrings: urls, username: username, credential: credential)]
