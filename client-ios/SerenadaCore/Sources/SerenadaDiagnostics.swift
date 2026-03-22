@@ -107,12 +107,14 @@ public final class SerenadaDiagnostics {
 
     public func runConnectivityChecks() async -> ConnectivityReport {
         var report = ConnectivityReport()
+        // Fetch the diagnostic token once and reuse it for the TURN credentials check.
+        var tokenForTurn: String?
         report.roomApi = await runTimedCheck { try await self.apiClient.createRoomId(host: self.config.serverHost); return }
         report.webSocket = await runTimedCheck { try await self.testWebSocket() }
         report.sse = await runTimedCheck { try await self.testSse() }
-        report.diagnosticToken = await runTimedCheck { try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost); return }
+        report.diagnosticToken = await runTimedCheck { tokenForTurn = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost) }
         report.turnCredentials = await runTimedCheck {
-            let token = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost)
+            let token = try tokenForTurn ?? (try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost))
             _ = try await self.apiClient.fetchTurnCredentials(host: self.config.serverHost, token: token)
         }
         return report

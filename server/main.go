@@ -75,7 +75,8 @@ func main() {
 
 	// API: 5 requests per minute per IP
 	turnCredsLimiter := NewIPLimiter(5.0/60.0, 5)
-	diagnosticLimiter := NewIPLimiter(5.0/60.0, 5)
+	// Diagnostic token: 20 requests per minute per IP (bursty during device-check runs)
+	diagnosticLimiter := NewIPLimiter(20.0/60.0, 10)
 	// Room ID: 30 requests per minute per IP
 	roomIDLimiter := NewIPLimiter(30.0/60.0, 10)
 	// Push: 10 requests per minute

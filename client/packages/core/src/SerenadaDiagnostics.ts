@@ -43,7 +43,9 @@ export class SerenadaDiagnostics {
     }
 
     async runConnectivityChecks(): Promise<ConnectivityReport> {
-        const [roomApi, webSocket, sse, diagnosticToken, turnCredentials] = await Promise.all([
+        // Fetch the diagnostic token once and reuse it for the TURN credentials check.
+        let tokenForTurn: string | undefined;
+        const [roomApi, webSocket, sse, diagnosticToken] = await Promise.all([
             this.runTimedCheck(async () => {
                 await this.createRoomId();
             }),
@@ -54,13 +56,14 @@ export class SerenadaDiagnostics {
                 await this.testSse();
             }),
             this.runTimedCheck(async () => {
-                await this.fetchDiagnosticToken();
-            }),
-            this.runTimedCheck(async () => {
-                const token = await this.fetchDiagnosticToken();
-                await this.fetchTurnCredentials(token);
+                tokenForTurn = await this.fetchDiagnosticToken();
             }),
         ]);
+
+        const turnCredentials = await this.runTimedCheck(async () => {
+            const token = tokenForTurn ?? await this.fetchDiagnosticToken();
+            await this.fetchTurnCredentials(token);
+        });
 
         return { roomApi, webSocket, sse, diagnosticToken, turnCredentials };
     }

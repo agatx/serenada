@@ -90,15 +90,22 @@ class SerenadaDiagnostics(
 
     suspend fun runConnectivityChecks(host: String = config.serverHost): ConnectivityReport = withContext(Dispatchers.IO) {
         val normalizedHost = host.trim().ifBlank { config.serverHost }
+        // Fetch the diagnostic token once and reuse it for the TURN credentials check.
+        var tokenForTurn: String? = null
+        val roomApi = runTimedCheck { awaitCreateRoomId(normalizedHost) }
+        val webSocket = runTimedCheck { testWebSocket(normalizedHost) }
+        val sse = runTimedCheck { testSse(normalizedHost) }
+        val diagnosticToken = runTimedCheck { tokenForTurn = awaitDiagnosticToken(normalizedHost) }
+        val turnCredentials = runTimedCheck {
+            val token = tokenForTurn ?: awaitDiagnosticToken(normalizedHost)
+            awaitTurnCredentials(normalizedHost, token)
+        }
         ConnectivityReport(
-            roomApi = runTimedCheck { awaitCreateRoomId(normalizedHost) },
-            webSocket = runTimedCheck { testWebSocket(normalizedHost) },
-            sse = runTimedCheck { testSse(normalizedHost) },
-            diagnosticToken = runTimedCheck { awaitDiagnosticToken(normalizedHost) },
-            turnCredentials = runTimedCheck {
-                val token = awaitDiagnosticToken(normalizedHost)
-                awaitTurnCredentials(normalizedHost, token)
-            },
+            roomApi = roomApi,
+            webSocket = webSocket,
+            sse = sse,
+            diagnosticToken = diagnosticToken,
+            turnCredentials = turnCredentials,
         )
     }
 
