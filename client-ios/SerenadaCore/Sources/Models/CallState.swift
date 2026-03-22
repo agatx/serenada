@@ -59,6 +59,8 @@ public enum CallError: Equatable, Sendable {
     case signalingTimeout
     case connectionFailed
     case roomFull
+    case roomEnded
+    case permissionDenied
     case serverError(String)
     case unknown(String)
 }

@@ -607,6 +607,10 @@ final class CallManager: ObservableObject {
             return L10n.callStatusConnectionFailed
         case .roomFull:
             return L10n.errorRoomCapacityUnsupported
+        case .roomEnded:
+            return L10n.callStatusRoomEnded
+        case .permissionDenied:
+            return L10n.callStatusConnectionFailed
         case .serverError(let message), .unknown(let message):
             return message.isEmpty ? L10n.errorUnknown : message
         }

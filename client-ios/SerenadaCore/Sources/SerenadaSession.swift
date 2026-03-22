@@ -686,6 +686,8 @@ public final class SerenadaSession: ObservableObject {
                 return .connectionFailed
             case "JOIN_TIMEOUT":
                 return .signalingTimeout
+            case "ROOM_ENDED":
+                return .roomEnded
             case .some:
                 return .serverError(rawMessage ?? code ?? "Server error")
             default:
