@@ -2,76 +2,105 @@ import SerenadaCore
 import XCTest
 
 final class LayoutConformanceTests: XCTestCase {
-    private let strictTolerance: CGFloat = 0.005
+    private static let strictTolerance: CGFloat = 0.005
 
-    func testAllCases() throws {
-        let cases = try Self.loadFixtures()
-        XCTAssertGreaterThan(cases.count, 0, "No conformance cases loaded")
+    // MARK: - Parameterised harness
 
-        for testCase in cases {
-            let scene = testCase.scene
-            let expected = testCase.expected
-            let result = computeLayout(scene: scene)
+    private static let allFixtures: [FixtureCase] = (try? loadFixtures()) ?? []
 
-            XCTAssertEqual(
-                result.mode.rawValue,
-                expected.mode,
-                "\(testCase.id): mode mismatch"
+    /// Index into `allFixtures` for the current invocation.
+    private var fixtureIndex = -1
+
+    override class var defaultTestSuite: XCTestSuite {
+        let suite = XCTestSuite(name: NSStringFromClass(self))
+        for i in allFixtures.indices {
+            let test = LayoutConformanceTests(selector: #selector(verifyFixtureCase))
+            test.fixtureIndex = i
+            suite.addTest(test)
+        }
+        return suite
+    }
+
+    override var name: String {
+        guard fixtureIndex >= 0, fixtureIndex < Self.allFixtures.count else {
+            return super.name
+        }
+        return "-[LayoutConformanceTests \(Self.allFixtures[fixtureIndex].id)]"
+    }
+
+    // MARK: - Test body
+
+    @objc private func verifyFixtureCase() {
+        guard fixtureIndex >= 0, fixtureIndex < Self.allFixtures.count else {
+            XCTFail("Invalid fixture index \(fixtureIndex)")
+            return
+        }
+
+        let testCase = Self.allFixtures[fixtureIndex]
+        let scene = testCase.scene
+        let expected = testCase.expected
+        let result = computeLayout(scene: scene)
+
+        XCTAssertEqual(
+            result.mode.rawValue,
+            expected.mode,
+            "\(testCase.id): mode mismatch"
+        )
+
+        XCTAssertEqual(
+            result.tiles.count,
+            expected.tileCount,
+            "\(testCase.id): tile count mismatch"
+        )
+
+        for (index, expectedTile) in expected.tiles.enumerated() {
+            guard index < result.tiles.count else {
+                XCTFail("\(testCase.id): missing tile[\(index)]")
+                continue
+            }
+
+            let actualTile = result.tiles[index]
+            XCTAssertEqual(actualTile.id, expectedTile.id, "\(testCase.id) tile[\(index)] id")
+            XCTAssertEqual(actualTile.type.rawValue, expectedTile.type, "\(testCase.id) tile[\(index)] type")
+            XCTAssertEqual(actualTile.fit.rawValue, expectedTile.fit, "\(testCase.id) tile[\(index)] fit")
+
+            let actualNorm = normalizeFrame(
+                actualTile.frame,
+                viewportWidth: scene.viewportWidth,
+                viewportHeight: scene.viewportHeight
             )
-
-            XCTAssertEqual(
-                result.tiles.count,
-                expected.tileCount,
-                "\(testCase.id): tile count mismatch"
+            assertFrameClose(
+                actualNorm,
+                expectedTile.normalizedFrame,
+                tolerance: Self.strictTolerance,
+                label: "\(testCase.id) tile[\(index)]"
             )
+        }
 
-            for (index, expectedTile) in expected.tiles.enumerated() {
-                guard index < result.tiles.count else {
-                    XCTFail("\(testCase.id): missing tile[\(index)]")
-                    continue
-                }
+        if expected.localPip == nil {
+            XCTAssertNil(result.localPip, "\(testCase.id): localPip should be nil")
+        } else {
+            XCTAssertNotNil(result.localPip, "\(testCase.id): localPip should not be nil")
+            if let pip = result.localPip, let expectedPip = expected.localPip {
+                XCTAssertEqual(pip.participantId, expectedPip.participantId, "\(testCase.id) pip participantId")
+                XCTAssertEqual(anchorToString(pip.anchor), expectedPip.anchor, "\(testCase.id) pip anchor")
 
-                let actualTile = result.tiles[index]
-                XCTAssertEqual(actualTile.id, expectedTile.id, "\(testCase.id) tile[\(index)] id")
-                XCTAssertEqual(actualTile.type.rawValue, expectedTile.type, "\(testCase.id) tile[\(index)] type")
-                XCTAssertEqual(actualTile.fit.rawValue, expectedTile.fit, "\(testCase.id) tile[\(index)] fit")
-
-                let actualNorm = normalizeFrame(
-                    actualTile.frame,
+                let actualPipNorm = normalizeFrame(
+                    pip.frame,
                     viewportWidth: scene.viewportWidth,
                     viewportHeight: scene.viewportHeight
                 )
                 assertFrameClose(
-                    actualNorm,
-                    expectedTile.normalizedFrame,
-                    tolerance: strictTolerance,
-                    label: "\(testCase.id) tile[\(index)]"
+                    actualPipNorm,
+                    expectedPip.normalizedFrame,
+                    tolerance: Self.strictTolerance,
+                    label: "\(testCase.id) pip"
                 )
-            }
-
-            if expected.localPip == nil {
-                XCTAssertNil(result.localPip, "\(testCase.id): localPip should be nil")
-            } else {
-                XCTAssertNotNil(result.localPip, "\(testCase.id): localPip should not be nil")
-                if let pip = result.localPip, let expectedPip = expected.localPip {
-                    XCTAssertEqual(pip.participantId, expectedPip.participantId, "\(testCase.id) pip participantId")
-                    XCTAssertEqual(anchorToString(pip.anchor), expectedPip.anchor, "\(testCase.id) pip anchor")
-
-                    let actualPipNorm = normalizeFrame(
-                        pip.frame,
-                        viewportWidth: scene.viewportWidth,
-                        viewportHeight: scene.viewportHeight
-                    )
-                    assertFrameClose(
-                        actualPipNorm,
-                        expectedPip.normalizedFrame,
-                        tolerance: strictTolerance,
-                        label: "\(testCase.id) pip"
-                    )
-                }
             }
         }
     }
+
+    // MARK: - Helpers
 
     private struct NormalizedFrame {
         let x: CGFloat
@@ -109,6 +138,8 @@ final class LayoutConformanceTests: XCTestCase {
         case .bottomRight: return "bottomRight"
         }
     }
+
+    // MARK: - Fixture loading
 
     private struct FixtureRoot: Decodable {
         let cases: [FixtureCase]
