@@ -49,7 +49,8 @@ The 10 workstreams and current status:
    - [x] Update in-repo host apps, UI modules, tests, and samples in the same sweep.
 
 4. **Decompose Session Orchestration**
-   - [ ] Refactor iOS and Android `SerenadaSession` into a thin facade over `JoinCoordinator`, `ConnectionRecoveryCoordinator`, `PermissionsGate`, `PeerRegistry`, and `StatsPoller`.
+   - [x] Refactor iOS and Android `SerenadaSession` into a thin facade over extracted coordinators.
+     Five coordinators now own all non-trivial session logic: `StatsPoller` (stats polling), `ConnectionStatusTracker` (connected/recovering/retrying state machine), `TurnManager` (TURN fetch/refresh/default ICE), `JoinTimer` (join timeout/kickstart/recovery), and `PeerNegotiationEngine` (slot lifecycle, offer/answer/ICE processing, ICE restart, non-host fallback, aggregate peer state). Session is a thin facade that owns shared state (`peerSlots`, `internalPhase`, `clientId`, `hostCid`, `currentRoomState`) and coordinates between coordinators via closure-based communication. ~20 methods and priority maps moved per platform. iOS session reduced from ~1664 to ~1250 LOC; Android from ~1334 to ~930 LOC.
    - [x] Make `PeerConnectionSlot` an owned state machine with explicit methods for offer lifecycle, ICE restart lifecycle, non-host fallback, and cleanup; session code must stop mutating slot fields directly.
      Both iOS and Android slots now use `private(set)` / `private set` fields with explicit mutation methods: `beginOffer()`, `completeOffer()`, `markOfferSent()`, `markPendingIceRestart()`, `clearPendingIceRestart()`, `recordIceRestart()`, and task-management methods for offer timeout, ICE restart, and non-host fallback tasks.
    - [x] Keep signaling protocol v1 and resilience constants unchanged.

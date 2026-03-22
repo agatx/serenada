@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.util.Log
 import app.serenada.core.call.ConnectionStatusTracker
 import app.serenada.core.call.JoinTimer
+import app.serenada.core.call.PeerNegotiationEngine
 import app.serenada.core.call.StatsPoller
 import app.serenada.core.call.TurnManager
 import app.serenada.core.call.CallAudioSessionController
@@ -40,9 +41,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import org.json.JSONObject
-import org.webrtc.IceCandidate
-import org.webrtc.PeerConnection
-import org.webrtc.SessionDescription
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -84,7 +82,7 @@ class SerenadaSession internal constructor(
             handler.post {
                 if (_state.value.phase == CallPhase.InCall) {
                     if (isConnectionDegraded()) markConnectionDegraded()
-                    scheduleIceRestart("network-online", 0)
+                    peerNegotiationEngine.scheduleIceRestart("network-online", 0)
                 }
             }
         }
@@ -146,10 +144,9 @@ class SerenadaSession internal constructor(
         setIceServers = { servers -> webRtcEngine.setIceServers(servers) },
         onIceServersReady = {
             while (pendingMessages.isNotEmpty() && webRtcEngine.hasIceServers()) {
-                processSignalingPayload(pendingMessages.removeFirst())
+                peerNegotiationEngine.processSignalingPayload(pendingMessages.removeFirst())
             }
-            maybeSendOffer()
-            peerSlots.values.forEach { if (!shouldIOffer(it.remoteCid)) maybeScheduleNonHostOfferFallback(it.remoteCid, "ice-ready") }
+            peerNegotiationEngine.onIceServersReady()
         },
         sendTurnRefresh = { sendMessage("turn-refresh", null) },
     )
@@ -188,6 +185,7 @@ class SerenadaSession internal constructor(
     )
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
     private val peerSlots = mutableMapOf<String, PeerConnectionSlot>()
+    private val peerNegotiationEngine: PeerNegotiationEngine
     private var reconnectToken: String? = null
     private var hasJoinSignalStarted = false
     private var hasJoinAcknowledged = false
@@ -197,6 +195,53 @@ class SerenadaSession internal constructor(
     private val isMediaEngineInjected = mediaEngine != null
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
+
+    init {
+        peerNegotiationEngine = PeerNegotiationEngine(
+            handler = handler,
+            getClientId = { clientId },
+            getHostCid = { hostCid },
+            getParticipantCount = { _state.value.participantCount },
+            getCurrentRoomState = { currentRoomState },
+            isSignalingConnected = { signalingClient.isConnected() },
+            hasIceServers = { webRtcEngine.hasIceServers() },
+            getSlot = { cid: String -> peerSlots[cid] },
+            getAllSlots = { peerSlots.toMap() },
+            setSlot = { cid: String, slot: PeerConnectionSlot -> peerSlots[cid] = slot },
+            removeSlotEntry = { cid: String -> peerSlots.remove(cid) },
+            createSlotViaEngine = {
+                remoteCid: String,
+                onLocalIce: (String, org.webrtc.IceCandidate) -> Unit,
+                onRemoteVideo: (String, org.webrtc.VideoTrack?) -> Unit,
+                onConnState: (String, org.webrtc.PeerConnection.PeerConnectionState) -> Unit,
+                onIceConnState: (String, org.webrtc.PeerConnection.IceConnectionState) -> Unit,
+                onSigState: (String, org.webrtc.PeerConnection.SignalingState) -> Unit,
+                onRenegotiation: (String) -> Unit ->
+                webRtcEngine.createSlot(
+                    remoteCid = remoteCid,
+                    onLocalIceCandidate = onLocalIce,
+                    onRemoteVideoTrack = onRemoteVideo,
+                    onConnectionStateChange = onConnState,
+                    onIceConnectionStateChange = onIceConnState,
+                    onSignalingStateChange = onSigState,
+                    onRenegotiationNeeded = onRenegotiation,
+                )
+            },
+            engineRemoveSlot = { slot: PeerConnectionSlot -> webRtcEngine.removeSlot(slot) },
+            sendMessage = { type: String, payload: org.json.JSONObject?, to: String? -> sendMessage(type, payload, to) },
+            onRemoteParticipantsChanged = { refreshRemoteParticipants() },
+            onAggregatePeerStateChanged = { ice: IceConnectionState, conn: PeerConnectionState, sig: RtcSignalingState ->
+                val current = _diagnostics.value
+                val next = current.copy(
+                    iceConnectionState = ice,
+                    peerConnectionState = conn,
+                    rtcSignalingState = sig,
+                )
+                if (next != current) updateDiagnostics(next)
+            },
+            onConnectionStatusUpdate = { updateConnectionStatusFromSignals() },
+        )
+    }
 
     var onPermissionsRequired: ((List<MediaCapability>) -> Unit)? = null
 
@@ -741,134 +786,7 @@ class SerenadaSession internal constructor(
             pendingMessages.add(msg)
             return
         }
-        processSignalingPayload(msg)
-    }
-
-    // --- Internal: Peer Connections ---
-
-    private fun getOrCreateSlot(remoteCid: String): PeerConnectionSlot {
-        return peerSlots.getOrPut(remoteCid) {
-            webRtcEngine.createSlot(
-                remoteCid = remoteCid,
-                onLocalIceCandidate = { cid: String, candidate: IceCandidate ->
-                    val payload = JSONObject().apply {
-                        val candidateJson = JSONObject()
-                        candidateJson.put("candidate", candidate.sdp)
-                        candidateJson.put("sdpMid", candidate.sdpMid)
-                        candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
-                        put("candidate", candidateJson)
-                    }
-                    sendMessage("ice", payload, to = cid)
-                },
-                onRemoteVideoTrack = { _, _ ->
-                    handler.post { refreshRemoteParticipants() }
-                },
-                onConnectionStateChange = { cid, connState ->
-                    handler.post {
-                        when (connState) {
-                            PeerConnection.PeerConnectionState.CONNECTED -> {
-                                clearIceRestartTimer(cid)
-                                peerSlots[cid]?.clearPendingIceRestart()
-                            }
-                            PeerConnection.PeerConnectionState.DISCONNECTED ->
-                                scheduleIceRestart(cid, "conn-disconnected", 2000)
-                            PeerConnection.PeerConnectionState.FAILED ->
-                                scheduleIceRestart(cid, "conn-failed", 0)
-                            else -> Unit
-                        }
-                        refreshRemoteParticipants()
-                        updateAggregatePeerState()
-                        updateConnectionStatusFromSignals()
-                    }
-                },
-                onIceConnectionStateChange = { cid, iceState ->
-                    handler.post {
-                        when (iceState) {
-                            PeerConnection.IceConnectionState.CONNECTED,
-                            PeerConnection.IceConnectionState.COMPLETED -> {
-                                clearIceRestartTimer(cid)
-                                peerSlots[cid]?.clearPendingIceRestart()
-                            }
-                            PeerConnection.IceConnectionState.DISCONNECTED ->
-                                scheduleIceRestart(cid, "ice-disconnected", 2000)
-                            PeerConnection.IceConnectionState.FAILED ->
-                                scheduleIceRestart(cid, "ice-failed", 0)
-                            else -> Unit
-                        }
-                        refreshRemoteParticipants()
-                        updateAggregatePeerState()
-                        updateConnectionStatusFromSignals()
-                    }
-                },
-                onSignalingStateChange = { cid, sigState ->
-                    handler.post {
-                        if (sigState == PeerConnection.SignalingState.STABLE) {
-                            clearOfferTimeout(cid)
-                            if (peerSlots[cid]?.pendingIceRestart == true) {
-                                peerSlots[cid]?.clearPendingIceRestart()
-                                triggerIceRestart(cid, "pending-retry")
-                            }
-                        }
-                        updateAggregatePeerState()
-                        updateConnectionStatusFromSignals()
-                    }
-                },
-                onRenegotiationNeeded = { cid ->
-                    handler.post {
-                        peerSlots[cid]?.let { maybeSendOffer(it, force = true) }
-                    }
-                }
-            )
-        }
-    }
-
-    private fun removePeerSlot(remoteCid: String) {
-        clearOfferTimeout(remoteCid)
-        clearIceRestartTimer(remoteCid)
-        clearNonHostOfferFallback(remoteCid)
-        val slot = peerSlots.remove(remoteCid) ?: return
-        webRtcEngine.removeSlot(slot)
-        slot.closePeerConnection()
-    }
-
-    private fun processSignalingPayload(msg: SignalingMessage) {
-        val fromCid = msg.payload?.optString("from").orEmpty().ifBlank { return }
-        val slot = getOrCreateSlot(fromCid)
-        if (!slot.isReady() && !slot.ensurePeerConnection()) {
-            pendingMessages.add(msg)
-            return
-        }
-        when (msg.type) {
-            "offer" -> {
-                clearNonHostOfferFallback(fromCid)
-                val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
-                slot.setRemoteDescription(SessionDescription.Type.OFFER, sdp) {
-                    slot.createAnswer(onSdp = { answerSdp ->
-                        val payload = JSONObject().apply { put("sdp", answerSdp) }
-                        sendMessage("answer", payload, to = fromCid)
-                    })
-                }
-            }
-            "answer" -> {
-                clearNonHostOfferFallback(fromCid)
-                val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
-                slot.setRemoteDescription(SessionDescription.Type.ANSWER, sdp) {
-                    clearOfferTimeout(fromCid)
-                    slot.clearPendingIceRestart()
-                    updateAggregatePeerState()
-                    updateConnectionStatusFromSignals()
-                }
-            }
-            "ice" -> {
-                val candidateJson = msg.payload?.optJSONObject("candidate") ?: return
-                val candidate = IceCandidate(
-                    candidateJson.optString("sdpMid").ifBlank { null },
-                    candidateJson.optInt("sdpMLineIndex", 0),
-                    candidateJson.optString("candidate", "")
-                )
-                slot.addIceCandidate(candidate)
-            }
-        }
+        peerNegotiationEngine.processSignalingPayload(msg)
     }
 
     // --- Internal: Participants ---
@@ -876,28 +794,8 @@ class SerenadaSession internal constructor(
     private fun updateParticipants(roomState: RoomState) {
         val count = roomState.participants.size
         val isHostNow = clientId != null && clientId == roomState.hostCid
-        val remotePeers = roomState.participants.filter { it.cid != clientId }
-        val remoteCids = remotePeers.map { it.cid }.toSet()
         val phase = if (count <= 1) CallPhase.Waiting else CallPhase.InCall
         if (phase != CallPhase.Joining) clearJoinTimeout()
-
-        peerSlots.keys.filter { it !in remoteCids }.forEach { removePeerSlot(it) }
-        if (remotePeers.isEmpty()) {
-            clearOfferTimeout()
-            clearIceRestartTimer()
-            clearNonHostOfferFallback()
-        }
-
-        remotePeers.forEach { participant ->
-            val slot = getOrCreateSlot(participant.cid)
-            slot.ensurePeerConnection()
-            if (shouldIOffer(participant.cid, roomState)) {
-                clearNonHostOfferFallback(participant.cid)
-                maybeSendOffer(slot)
-            } else {
-                maybeScheduleNonHostOfferFallback(participant.cid, "participants")
-            }
-        }
 
         updateState(
             _state.value.copy(
@@ -906,8 +804,9 @@ class SerenadaSession internal constructor(
                 participantCount = count,
             )
         )
+
+        peerNegotiationEngine.syncPeers(roomState)
         refreshRemoteParticipants()
-        updateAggregatePeerState()
         updateConnectionStatusFromSignals()
     }
 
@@ -935,161 +834,7 @@ class SerenadaSession internal constructor(
         }
     }
 
-    // --- Internal: Offer / ICE ---
-
-    private fun shouldIOffer(remoteCid: String, roomState: RoomState? = currentRoomState): Boolean {
-        val state = roomState ?: return false
-        val myCid = clientId ?: return false
-        val myJoinedAt = state.participants.find { it.cid == myCid }?.joinedAt ?: 0L
-        val theirJoinedAt = state.participants.find { it.cid == remoteCid }?.joinedAt ?: 0L
-        return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
-    }
-
-    private fun maybeSendOffer(force: Boolean = false, iceRestart: Boolean = false) {
-        peerSlots.values.forEach { slot ->
-            if (shouldIOffer(slot.remoteCid, currentRoomState)) maybeSendOffer(slot, force, iceRestart)
-        }
-    }
-
-    private fun maybeSendOffer(slot: PeerConnectionSlot, force: Boolean = false, iceRestart: Boolean = false) {
-        if (slot.isMakingOffer) { if (iceRestart) slot.markPendingIceRestart(); return }
-        if (!force && slot.sentOffer) return
-        if (!canOffer(slot)) return
-        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) { if (iceRestart) slot.markPendingIceRestart(); return }
-        slot.beginOffer()
-        val started = slot.createOffer(
-            iceRestart = iceRestart,
-            onSdp = { sdp ->
-                val payload = JSONObject().apply { put("sdp", sdp) }
-                sendMessage("offer", payload, to = slot.remoteCid)
-                scheduleOfferTimeout(slot.remoteCid)
-            },
-            onComplete = { success ->
-                handler.post {
-                    slot.completeOffer()
-                    if (!success && iceRestart) scheduleIceRestart(slot.remoteCid, "offer-failed", 500)
-                }
-            }
-        )
-        if (!started) { slot.completeOffer(); if (iceRestart) slot.markPendingIceRestart(); return }
-        if (!force) slot.markOfferSent()
-    }
-
-    private fun canOffer(slot: PeerConnectionSlot): Boolean {
-        if (!signalingClient.isConnected()) return false
-        if (!slot.isReady()) return false
-        if (!shouldIOffer(slot.remoteCid, currentRoomState)) return false
-        val participantCids = currentRoomState?.participants?.map { it.cid }?.toSet() ?: emptySet()
-        return slot.remoteCid in participantCids
-    }
-
     // --- Internal: Timers ---
-
-    private fun scheduleOfferTimeout(remoteCid: String) {
-        val slot = peerSlots[remoteCid] ?: return
-        clearOfferTimeout(remoteCid)
-        val runnable = Runnable {
-            slot.cancelOfferTimeout()
-            if (slot.getSignalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
-                slot.markPendingIceRestart()
-                slot.rollbackLocalDescription {
-                    handler.post {
-                        if (shouldIOffer(remoteCid)) scheduleIceRestart(remoteCid, "offer-timeout", 0)
-                        else maybeScheduleNonHostOfferFallback(remoteCid, "offer-timeout")
-                    }
-                }
-            } else {
-                if (shouldIOffer(remoteCid)) scheduleIceRestart(remoteCid, "offer-timeout-stale", 0)
-                else maybeScheduleNonHostOfferFallback(remoteCid, "offer-timeout-stale")
-            }
-        }
-        slot.setOfferTimeoutTask(runnable)
-        handler.postDelayed(runnable, WebRtcResilienceConstants.OFFER_TIMEOUT_MS)
-    }
-
-    private fun clearOfferTimeout(remoteCid: String? = null) {
-        if (remoteCid != null) {
-            peerSlots[remoteCid]?.let { slot -> slot.offerTimeoutTask?.let { handler.removeCallbacks(it) }; slot.cancelOfferTimeout() }
-        } else {
-            peerSlots.values.forEach { slot -> slot.offerTimeoutTask?.let { r -> handler.removeCallbacks(r) }; slot.cancelOfferTimeout() }
-        }
-    }
-
-    private fun scheduleIceRestart(reason: String, delayMs: Long) {
-        peerSlots.values.forEach { if (shouldIOffer(it.remoteCid)) scheduleIceRestart(it.remoteCid, reason, delayMs) }
-    }
-
-    private fun scheduleIceRestart(remoteCid: String, reason: String, delayMs: Long) {
-        val slot = peerSlots[remoteCid] ?: return
-        if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
-        if (slot.iceRestartTask != null) return
-        if (System.currentTimeMillis() - slot.lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
-        val runnable = Runnable { slot.cancelIceRestartTask(); triggerIceRestart(remoteCid, reason) }
-        slot.setIceRestartTask(runnable)
-        handler.postDelayed(runnable, delayMs)
-    }
-
-    private fun clearIceRestartTimer(remoteCid: String? = null) {
-        if (remoteCid != null) {
-            peerSlots[remoteCid]?.let { slot -> slot.iceRestartTask?.let { handler.removeCallbacks(it) }; slot.cancelIceRestartTask() }
-        } else {
-            peerSlots.values.forEach { slot -> slot.iceRestartTask?.let { r -> handler.removeCallbacks(r) }; slot.cancelIceRestartTask() }
-        }
-    }
-
-    private fun triggerIceRestart(remoteCid: String, reason: String) {
-        val slot = peerSlots[remoteCid] ?: return
-        if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
-        if (slot.isMakingOffer) { slot.markPendingIceRestart(); return }
-        Log.w(TAG, "ICE restart triggered for $remoteCid ($reason)")
-        slot.recordIceRestart()
-        maybeSendOffer(slot, force = true, iceRestart = true)
-    }
-
-    private fun maybeScheduleNonHostOfferFallback(remoteCid: String, reason: String) {
-        val slot = peerSlots[remoteCid] ?: return
-        if (shouldIOffer(remoteCid)) { clearNonHostOfferFallback(remoteCid); return }
-        if (!signalingClient.isConnected()) return
-        if (slot.nonHostFallbackTask != null) return
-        if (slot.nonHostFallbackAttempts >= WebRtcResilienceConstants.NON_HOST_FALLBACK_MAX_ATTEMPTS) return
-        val runnable = Runnable {
-            slot.clearNonHostFallbackTask()
-            slot.incrementNonHostFallbackAttempts()
-            Log.w(TAG, "Non-host offer fallback for $remoteCid ($reason)")
-            maybeSendNonHostFallbackOffer(remoteCid)
-        }
-        slot.setNonHostFallbackTask(runnable)
-        handler.postDelayed(runnable, WebRtcResilienceConstants.NON_HOST_FALLBACK_DELAY_MS)
-    }
-
-    private fun clearNonHostOfferFallback(remoteCid: String? = null) {
-        if (remoteCid != null) {
-            peerSlots[remoteCid]?.let { slot -> slot.nonHostFallbackTask?.let { handler.removeCallbacks(it) }; slot.cancelNonHostFallbackTask() }
-        } else {
-            peerSlots.values.forEach { slot -> slot.nonHostFallbackTask?.let { r -> handler.removeCallbacks(r) }; slot.cancelNonHostFallbackTask() }
-        }
-    }
-
-    private fun maybeSendNonHostFallbackOffer(remoteCid: String) {
-        val slot = peerSlots[remoteCid] ?: return
-        if (shouldIOffer(remoteCid)) return
-        if (!signalingClient.isConnected()) return
-        if (!slot.isReady() && !slot.ensurePeerConnection()) return
-        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) return
-        if (slot.hasRemoteDescription()) return
-        if (slot.isMakingOffer) return
-        slot.beginOffer()
-        val started = slot.createOffer(
-            onSdp = { sdp ->
-                sendMessage("offer", JSONObject().apply { put("sdp", sdp) }, to = remoteCid)
-                scheduleOfferTimeout(remoteCid)
-            },
-            onComplete = { success ->
-                handler.post { slot.completeOffer(); if (!success) maybeScheduleNonHostOfferFallback(remoteCid, "offer-failed") }
-            }
-        )
-        if (!started) { slot.completeOffer(); maybeScheduleNonHostOfferFallback(remoteCid, "offer-not-started") }
-    }
 
     private fun scheduleJoinTimeout(roomId: String, joinAttemptId: Long) {
         joinTimer.scheduleTimeout(roomId, joinAttemptId)
@@ -1127,28 +872,6 @@ class SerenadaSession internal constructor(
 
     // --- Internal: State ---
 
-    private fun updateAggregatePeerState() {
-        var bestIcePri = Int.MAX_VALUE; var bestIce = "NEW"
-        var bestConnPri = Int.MAX_VALUE; var bestConn = "NEW"
-        var bestSigPri = Int.MAX_VALUE; var bestSig = "STABLE"
-        for (slot in peerSlots.values) {
-            val ip = ICE_PRIORITY[slot.getIceConnectionState()] ?: Int.MAX_VALUE
-            if (ip < bestIcePri) { bestIcePri = ip; bestIce = slot.getIceConnectionState().name }
-            val cp = CONN_PRIORITY[slot.getConnectionState()] ?: Int.MAX_VALUE
-            if (cp < bestConnPri) { bestConnPri = cp; bestConn = slot.getConnectionState().name }
-            val sp = SIG_PRIORITY[slot.getSignalingState()] ?: Int.MAX_VALUE
-            if (sp < bestSigPri) { bestSigPri = sp; bestSig = slot.getSignalingState().name }
-        }
-        val current = _diagnostics.value
-        val next = current.copy(
-            iceConnectionState = IceConnectionState.from(bestIce),
-            peerConnectionState = PeerConnectionState.from(bestConn),
-            rtcSignalingState = RtcSignalingState.from(bestSig),
-        )
-        if (next != current) {
-            updateDiagnostics(next)
-        }
-    }
 
     private fun parseRoomState(payload: JSONObject?): RoomState? {
         if (payload == null) return null
@@ -1229,15 +952,13 @@ class SerenadaSession internal constructor(
         clearJoinTimeout()
         clearJoinKickstart()
         clearJoinRecovery()
-        clearNonHostOfferFallback()
+        peerNegotiationEngine.resetAll()
         clearTurnRefresh()
         clearReconnect()
         callAudioSessionController.deactivate()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
         signalingClient.close()
-        clearOfferTimeout()
-        clearIceRestartTimer()
         peerSlots.values.forEach { it.closePeerConnection() }
         peerSlots.clear()
         webRtcEngine.release()
@@ -1313,22 +1034,6 @@ class SerenadaSession internal constructor(
         val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
             android.Manifest.permission.CAMERA,
             android.Manifest.permission.RECORD_AUDIO,
-        )
-        val ICE_PRIORITY = mapOf(
-            PeerConnection.IceConnectionState.FAILED to 0, PeerConnection.IceConnectionState.DISCONNECTED to 1,
-            PeerConnection.IceConnectionState.CHECKING to 2, PeerConnection.IceConnectionState.NEW to 3,
-            PeerConnection.IceConnectionState.CONNECTED to 4, PeerConnection.IceConnectionState.COMPLETED to 5,
-            PeerConnection.IceConnectionState.CLOSED to 6,
-        )
-        val CONN_PRIORITY = mapOf(
-            PeerConnection.PeerConnectionState.FAILED to 0, PeerConnection.PeerConnectionState.DISCONNECTED to 1,
-            PeerConnection.PeerConnectionState.CONNECTING to 2, PeerConnection.PeerConnectionState.NEW to 3,
-            PeerConnection.PeerConnectionState.CONNECTED to 4, PeerConnection.PeerConnectionState.CLOSED to 5,
-        )
-        val SIG_PRIORITY = mapOf(
-            PeerConnection.SignalingState.CLOSED to 0, PeerConnection.SignalingState.HAVE_LOCAL_OFFER to 1,
-            PeerConnection.SignalingState.HAVE_REMOTE_OFFER to 2, PeerConnection.SignalingState.HAVE_LOCAL_PRANSWER to 3,
-            PeerConnection.SignalingState.HAVE_REMOTE_PRANSWER to 4, PeerConnection.SignalingState.STABLE to 5,
         )
     }
 }

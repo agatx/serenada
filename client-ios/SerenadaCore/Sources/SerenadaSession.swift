@@ -86,6 +86,7 @@ public final class SerenadaSession: ObservableObject {
     private var joinTimer: JoinTimer?
     private var connectionStatusTracker: ConnectionStatusTracker?
     private var statsPoller: StatsPoller?
+    private var peerNegotiationEngine: PeerNegotiationEngine?
 
     private let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
 
@@ -169,8 +170,7 @@ public final class SerenadaSession: ObservableObject {
             setIceServers: { [weak self] servers in self?.webRtcEngine.setIceServers(servers) },
             onIceServersReady: { [weak self] in
                 self?.flushPendingMessages()
-                self?.maybeSendOffer()
-                self?.maybeScheduleNonHostOfferFallback(reason: "ice-ready")
+                self?.peerNegotiationEngine?.onIceServersReady()
             },
             sendTurnRefresh: { [weak self] in self?.sendMessage(type: "turn-refresh") }
         )
@@ -200,6 +200,42 @@ public final class SerenadaSession: ObservableObject {
             onRefreshRemoteParticipants: { [weak self] in
                 self?.refreshRemoteParticipants()
             }
+        )
+
+        peerNegotiationEngine = PeerNegotiationEngine(
+            getClientId: { [weak self] in self?.clientId },
+            getHostCid: { [weak self] in self?.hostCid },
+            getInternalPhase: { [weak self] in self?.internalPhase ?? .idle },
+            getParticipantCount: { [weak self] in self?.participantCount ?? 0 },
+            getCurrentRoomState: { [weak self] in self?.currentRoomState },
+            isSignalingConnected: { [weak self] in self?.signalingClient.isConnected() ?? false },
+            hasIceServers: { [weak self] in self?.webRtcEngine.hasIceServers() ?? false },
+            getSlot: { [weak self] cid in self?.peerSlots[cid] },
+            getAllSlots: { [weak self] in self?.peerSlots ?? [:] },
+            setSlot: { [weak self] cid, slot in self?.peerSlots[cid] = slot },
+            removeSlotEntry: { [weak self] cid in self?.peerSlots.removeValue(forKey: cid) },
+            createSlotViaEngine: { [weak self] remoteCid, onLocalIce, onRemoteVideo, onConnState, onIceConnState, onSigState, onRenegotiation in
+                self?.webRtcEngine.createSlot(
+                    remoteCid: remoteCid,
+                    onLocalIceCandidate: onLocalIce,
+                    onRemoteVideoTrack: onRemoteVideo,
+                    onConnectionStateChange: onConnState,
+                    onIceConnectionStateChange: onIceConnState,
+                    onSignalingStateChange: onSigState,
+                    onRenegotiationNeeded: onRenegotiation
+                )
+            },
+            engineRemoveSlot: { [weak self] slot in self?.webRtcEngine.removeSlot(slot) },
+            sendMessage: { [weak self] type, payload, to in self?.sendMessage(type: type, payload: payload, to: to) },
+            onRemoteParticipantsChanged: { [weak self] in self?.refreshRemoteParticipants() },
+            onAggregatePeerStateChanged: { [weak self] ice, conn, sig in
+                self?.commitSnapshot { _, d in
+                    d.iceConnectionState = ice
+                    d.peerConnectionState = conn
+                    d.rtcSignalingState = sig
+                }
+            },
+            onConnectionStatusUpdate: { [weak self] in self?.updateConnectionStatusFromSignals() }
         )
 
         internalPhase = .joining
@@ -673,121 +709,13 @@ public final class SerenadaSession: ObservableObject {
             recoverFromJoiningIfNeeded(participantHint: participantCountHint(payload: message.payload), preferInCall: true)
         }
 
-        if message.type == "answer",
-           let fromCid = message.payload?.objectValue?["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !fromCid.isEmpty {
-            clearNonHostOfferFallback(remoteCid: fromCid)
-        }
-
         guard webRtcEngine.hasIceServers() else {
             pendingMessages.append(message)
             return
         }
-        processSignalingPayload(message)
+        peerNegotiationEngine?.processSignalingPayload(message)
     }
 
-    private func getOrCreateSlot(remoteCid: String) -> PeerConnectionSlot {
-        if let slot = peerSlots[remoteCid] {
-            return slot
-        }
-
-        guard let slot = webRtcEngine.createSlot(
-            remoteCid: remoteCid,
-            onLocalIceCandidate: { [weak self] cid, candidate in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.sendMessage(
-                        type: "ice",
-                        payload: .object([
-                            "candidate": .object([
-                                "candidate": .string(candidate.candidate),
-                                "sdpMid": candidate.sdpMid.map(JSONValue.string) ?? .null,
-                                "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
-                            ])
-                        ]),
-                        to: cid
-                    )
-                }
-            },
-            onRemoteVideoTrack: { [weak self] _, _ in
-                Task { @MainActor in
-                    self?.refreshRemoteParticipants()
-                }
-            },
-            onConnectionStateChange: { [weak self] cid, state in
-                Task { @MainActor in
-                    guard let self else { return }
-                    switch state {
-                    case "CONNECTED":
-                        self.clearIceRestartTimer(remoteCid: cid)
-                        self.peerSlots[cid]?.clearPendingIceRestart()
-                    case "DISCONNECTED":
-                        self.scheduleIceRestart(remoteCid: cid, reason: "conn-disconnected", delayMs: 2000)
-                    case "FAILED":
-                        self.scheduleIceRestart(remoteCid: cid, reason: "conn-failed", delayMs: 0)
-                    default:
-                        break
-                    }
-                    self.refreshRemoteParticipants()
-                    self.updateAggregatePeerState()
-                    self.updateConnectionStatusFromSignals()
-                }
-            },
-            onIceConnectionStateChange: { [weak self] cid, state in
-                Task { @MainActor in
-                    guard let self else { return }
-                    switch state {
-                    case "CONNECTED", "COMPLETED":
-                        self.clearIceRestartTimer(remoteCid: cid)
-                        self.peerSlots[cid]?.clearPendingIceRestart()
-                    case "DISCONNECTED":
-                        self.scheduleIceRestart(remoteCid: cid, reason: "ice-disconnected", delayMs: 2000)
-                    case "FAILED":
-                        self.scheduleIceRestart(remoteCid: cid, reason: "ice-failed", delayMs: 0)
-                    default:
-                        break
-                    }
-                    self.refreshRemoteParticipants()
-                    self.updateAggregatePeerState()
-                    self.updateConnectionStatusFromSignals()
-                }
-            },
-            onSignalingStateChange: { [weak self] cid, state in
-                Task { @MainActor in
-                    guard let self else { return }
-                    if state == "STABLE" {
-                        self.clearOfferTimeout(remoteCid: cid)
-                        if self.peerSlots[cid]?.pendingIceRestart == true {
-                            self.peerSlots[cid]?.clearPendingIceRestart()
-                            self.triggerIceRestart(remoteCid: cid, reason: "pending-retry")
-                        }
-                    }
-                    self.updateAggregatePeerState()
-                    self.updateConnectionStatusFromSignals()
-                }
-            },
-            onRenegotiationNeeded: { [weak self] cid in
-                Task { @MainActor in
-                    guard let self, let slot = self.peerSlots[cid] else { return }
-                    self.maybeSendOffer(slot: slot, force: true, iceRestart: false)
-                }
-            }
-        ) else {
-            preconditionFailure("WebRTC peer slot factory is unavailable")
-        }
-
-        peerSlots[remoteCid] = slot
-        return slot
-    }
-
-    private func removePeerSlot(remoteCid: String) {
-        guard let slot = peerSlots.removeValue(forKey: remoteCid) else { return }
-        clearOfferTimeout(remoteCid: remoteCid)
-        clearIceRestartTimer(remoteCid: remoteCid)
-        clearNonHostOfferFallback(remoteCid: remoteCid)
-        webRtcEngine.removeSlot(slot)
-        slot.closePeerConnection()
-    }
 
     private func updateParticipants(_ roomState: RoomState) {
         currentRoomState = roomState
@@ -795,22 +723,9 @@ public final class SerenadaSession: ObservableObject {
         let count = max(1, roomState.participants.count)
         let isHostNow = clientId != nil && clientId == roomState.hostCid
         let phase: CallPhase = count <= 1 ? .waiting : .inCall
-        let remoteParticipants = roomState.participants.filter { $0.cid != clientId }
-        let remoteCids = Set(remoteParticipants.map(\.cid))
 
         if phase != .joining {
             clearJoinTimeout()
-        }
-
-        let departing = Set(peerSlots.keys).subtracting(remoteCids)
-        for remoteCid in departing {
-            removePeerSlot(remoteCid: remoteCid)
-        }
-
-        if count <= 1 {
-            clearOfferTimeout()
-            clearIceRestartTimer()
-            clearNonHostOfferFallback()
         }
 
         internalPhase = phase
@@ -819,362 +734,11 @@ public final class SerenadaSession: ObservableObject {
             s.localParticipant.isHost = isHostNow
         }
 
-        if count > 1 {
-            for participant in remoteParticipants {
-                let slot = getOrCreateSlot(remoteCid: participant.cid)
-                _ = slot.ensurePeerConnection()
-                if shouldIOffer(remoteCid: participant.cid, roomState: roomState) {
-                    clearNonHostOfferFallback(remoteCid: participant.cid)
-                    maybeSendOffer(slot: slot)
-                } else {
-                    maybeScheduleNonHostOfferFallback(remoteCid: participant.cid, reason: "participants")
-                }
-            }
-        }
-
+        peerNegotiationEngine?.syncPeers(roomState: roomState)
         refreshRemoteParticipants()
-        updateAggregatePeerState()
         updateConnectionStatusFromSignals()
     }
 
-    private func shouldIOffer(remoteCid: String, roomState: RoomState? = nil) -> Bool {
-        let roomState = roomState ?? currentRoomState
-        guard let roomState, let myCid = clientId else { return false }
-        let myJoinedAt = roomState.participants.first(where: { $0.cid == myCid })?.joinedAt ?? 0
-        let theirJoinedAt = roomState.participants.first(where: { $0.cid == remoteCid })?.joinedAt ?? 0
-        return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
-    }
-
-    private func processSignalingPayload(_ message: SignalingMessage) {
-        guard let fromCid = message.payload?.objectValue?["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !fromCid.isEmpty else {
-            return
-        }
-
-        let slot = getOrCreateSlot(remoteCid: fromCid)
-        if !slot.isReady(), !slot.ensurePeerConnection() {
-            pendingMessages.append(message)
-            return
-        }
-
-        switch message.type {
-        case "offer":
-            clearNonHostOfferFallback(remoteCid: fromCid)
-            guard let sdp = message.payload?.objectValue?["sdp"]?.stringValue, !sdp.isEmpty else { return }
-            slot.setRemoteDescription(type: .offer, sdp: sdp) { [weak self] success in
-                guard let self else { return }
-                guard success else {
-                    self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "offer-apply-failed")
-                    return
-                }
-                self.clearNonHostOfferFallback(remoteCid: fromCid)
-                slot.createAnswer(onSdp: { [weak self] answerSdp in
-                    self?.sendMessage(
-                        type: "answer",
-                        payload: .object(["sdp": .string(answerSdp)]),
-                        to: fromCid
-                    )
-                }, onComplete: { [weak self] answerSuccess in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        if !answerSuccess {
-                            self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "answer-create-failed")
-                        }
-                    }
-                })
-            }
-
-        case "answer":
-            clearNonHostOfferFallback(remoteCid: fromCid)
-            guard let sdp = message.payload?.objectValue?["sdp"]?.stringValue, !sdp.isEmpty else { return }
-            slot.setRemoteDescription(type: .answer, sdp: sdp) { [weak self] success in
-                guard let self else { return }
-                if success {
-                    self.clearOfferTimeout(remoteCid: fromCid)
-                    self.peerSlots[fromCid]?.clearPendingIceRestart()
-                    self.updateAggregatePeerState()
-                    self.updateConnectionStatusFromSignals()
-                } else if self.shouldIOffer(remoteCid: fromCid) {
-                    self.scheduleIceRestart(remoteCid: fromCid, reason: "answer-apply-failed", delayMs: 0)
-                } else {
-                    self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "answer-apply-failed")
-                }
-            }
-
-        case "ice":
-            guard let candidateObject = message.payload?.objectValue?["candidate"]?.objectValue,
-                  let candidate = candidateObject["candidate"]?.stringValue else {
-                return
-            }
-            slot.addIceCandidate(
-                IceCandidatePayload(
-                    sdpMid: candidateObject["sdpMid"]?.stringValue,
-                    sdpMLineIndex: Int32(candidateObject["sdpMLineIndex"]?.intValue ?? 0),
-                    candidate: candidate
-                )
-            )
-
-        default:
-            break
-        }
-    }
-
-    private static let icePriority: [String: Int] = [
-        "FAILED": 0, "DISCONNECTED": 1, "CHECKING": 2, "NEW": 3, "CONNECTED": 4, "COMPLETED": 5, "CLOSED": 6, "COUNT": 7, "UNKNOWN": 8,
-    ]
-    private static let connectionPriority: [String: Int] = [
-        "FAILED": 0, "DISCONNECTED": 1, "CONNECTING": 2, "NEW": 3, "CONNECTED": 4, "CLOSED": 5, "UNKNOWN": 6,
-    ]
-    private static let signalingPriority: [String: Int] = [
-        "HAVE_LOCAL_OFFER": 0, "HAVE_REMOTE_OFFER": 1, "HAVE_LOCAL_PRANSWER": 2, "HAVE_REMOTE_PRANSWER": 3, "STABLE": 4, "CLOSED": 5, "UNKNOWN": 6,
-    ]
-
-    private func updateAggregatePeerState() {
-        var bestIcePri = Int.max
-        var nextIceState = "NEW"
-        var bestConnPri = Int.max
-        var nextConnectionState = "NEW"
-        var bestSigPri = Int.max
-        var nextSignalingState = "STABLE"
-
-        for slot in peerSlots.values {
-            let icePri = Self.icePriority[slot.getIceConnectionState()] ?? .max
-            if icePri < bestIcePri {
-                bestIcePri = icePri
-                nextIceState = slot.getIceConnectionState()
-            }
-
-            let connPri = Self.connectionPriority[slot.getConnectionState()] ?? .max
-            if connPri < bestConnPri {
-                bestConnPri = connPri
-                nextConnectionState = slot.getConnectionState()
-            }
-
-            let sigPri = Self.signalingPriority[slot.getSignalingState()] ?? .max
-            if sigPri < bestSigPri {
-                bestSigPri = sigPri
-                nextSignalingState = slot.getSignalingState()
-            }
-        }
-
-        commitSnapshot { _, d in
-            d.iceConnectionState = IceConnectionState(rawValueOrUnknown: nextIceState)
-            d.peerConnectionState = PeerConnectionState(rawValueOrUnknown: nextConnectionState)
-            d.rtcSignalingState = SignalingState(rawValueOrUnknown: nextSignalingState)
-        }
-    }
-
-    private func maybeSendOffer(force: Bool = false, iceRestart: Bool = false) {
-        for slot in peerSlots.values where shouldIOffer(remoteCid: slot.remoteCid) {
-            maybeSendOffer(slot: slot, force: force, iceRestart: iceRestart)
-        }
-    }
-
-    private func maybeSendOffer(slot: PeerConnectionSlot, force: Bool = false, iceRestart: Bool = false) {
-        if slot.isMakingOffer {
-            if iceRestart {
-                slot.markPendingIceRestart()
-            }
-            return
-        }
-
-        if !force && slot.sentOffer {
-            return
-        }
-
-        if !canOffer(slot: slot) {
-            return
-        }
-
-        if slot.getSignalingState() != "STABLE" {
-            if iceRestart {
-                slot.markPendingIceRestart()
-            }
-            return
-        }
-
-        slot.beginOffer()
-        let started = slot.createOffer(
-            iceRestart: iceRestart,
-            onSdp: { [weak self] sdp in
-                self?.sendMessage(
-                    type: "offer",
-                    payload: .object(["sdp": .string(sdp)]),
-                    to: slot.remoteCid
-                )
-                self?.scheduleOfferTimeout(remoteCid: slot.remoteCid)
-            },
-            onComplete: { [weak self] success in
-                Task { @MainActor in
-                    guard let self else { return }
-                    slot.completeOffer()
-                    if !success {
-                        if iceRestart {
-                            self.scheduleIceRestart(remoteCid: slot.remoteCid, reason: "offer-failed", delayMs: 500)
-                        } else if self.shouldIOffer(remoteCid: slot.remoteCid) {
-                            self.maybeSendOffer(slot: slot)
-                        }
-                    }
-                }
-            }
-        )
-
-        if !started {
-            slot.completeOffer()
-            if iceRestart {
-                slot.markPendingIceRestart()
-            }
-            return
-        }
-
-        if !force {
-            slot.markOfferSent()
-        }
-    }
-
-    private func canOffer(slot: PeerConnectionSlot) -> Bool {
-        guard participantCount > 1 else { return false }
-        guard signalingClient.isConnected() else { return false }
-        guard shouldIOffer(remoteCid: slot.remoteCid) else { return false }
-        return slot.isReady() || slot.ensurePeerConnection()
-    }
-
-    private func scheduleOfferTimeout(
-        remoteCid: String,
-        triggerIceRestart: Bool = true,
-        onTimedOut: (() -> Void)? = nil
-    ) {
-        clearOfferTimeout(remoteCid: remoteCid)
-        guard let slot = peerSlots[remoteCid] else { return }
-
-        slot.setOfferTimeoutTask(Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.offerTimeoutNs)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, let slot = self.peerSlots[remoteCid] else { return }
-                guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else { return }
-                if triggerIceRestart {
-                    slot.markPendingIceRestart()
-                }
-                slot.rollbackLocalDescription { _ in
-                    Task { @MainActor in
-                        if triggerIceRestart {
-                            if self.shouldIOffer(remoteCid: remoteCid) {
-                                self.scheduleIceRestart(remoteCid: remoteCid, reason: "offer-timeout", delayMs: 0)
-                            } else {
-                                self.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-timeout")
-                            }
-                        } else {
-                            onTimedOut?()
-                        }
-                    }
-                }
-            }
-        })
-    }
-
-    private func clearOfferTimeout(remoteCid: String? = nil) {
-        if let remoteCid {
-            peerSlots[remoteCid]?.cancelOfferTimeout()
-            return
-        }
-
-        for slot in peerSlots.values {
-            slot.cancelOfferTimeout()
-        }
-    }
-
-    private func maybeScheduleNonHostOfferFallback(reason: String) {
-        for slot in peerSlots.values where !shouldIOffer(remoteCid: slot.remoteCid) {
-            maybeScheduleNonHostOfferFallback(remoteCid: slot.remoteCid, reason: reason)
-        }
-    }
-
-    private func maybeScheduleNonHostOfferFallback(remoteCid: String, reason: String) {
-        guard let slot = peerSlots[remoteCid] else { return }
-        guard participantCount > 1 else {
-            clearNonHostOfferFallback(remoteCid: remoteCid)
-            return
-        }
-        guard !shouldIOffer(remoteCid: remoteCid) else {
-            clearNonHostOfferFallback(remoteCid: remoteCid)
-            return
-        }
-        guard signalingClient.isConnected() else { return }
-        guard slot.nonHostFallbackTask == nil else { return }
-        guard slot.nonHostFallbackAttempts < WebRtcResilience.nonHostFallbackMaxAttempts else { return }
-
-        slot.setNonHostFallbackTask(Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.nonHostFallbackDelayNs)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, let slot = self.peerSlots[remoteCid] else { return }
-                slot.clearNonHostFallbackTask()
-                slot.incrementNonHostFallbackAttempts()
-                self.maybeSendNonHostFallbackOffer(remoteCid: remoteCid)
-            }
-        })
-    }
-
-    private func clearNonHostOfferFallback(remoteCid: String? = nil) {
-        if let remoteCid {
-            peerSlots[remoteCid]?.cancelNonHostFallbackTask()
-            return
-        }
-
-        for slot in peerSlots.values {
-            slot.cancelNonHostFallbackTask()
-        }
-    }
-
-    private func maybeSendNonHostFallbackOffer(remoteCid: String) {
-        guard let slot = peerSlots[remoteCid] else { return }
-        guard participantCount > 1 else { return }
-        guard !shouldIOffer(remoteCid: remoteCid) else { return }
-        guard signalingClient.isConnected() else { return }
-        guard slot.isReady() || slot.ensurePeerConnection() else { return }
-        guard slot.getSignalingState() == "STABLE" else {
-            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "signaling-not-stable")
-            return
-        }
-        guard !slot.hasRemoteDescription() else { return }
-        guard !slot.isMakingOffer else {
-            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "already-making-offer")
-            return
-        }
-
-        slot.beginOffer()
-        let started = slot.createOffer(
-            onSdp: { [weak self] sdp in
-                self?.sendMessage(
-                    type: "offer",
-                    payload: .object(["sdp": .string(sdp)]),
-                    to: remoteCid
-                )
-                self?.scheduleOfferTimeout(
-                    remoteCid: remoteCid,
-                    triggerIceRestart: false,
-                    onTimedOut: { [weak self] in
-                        self?.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-timeout")
-                    }
-                )
-            },
-            onComplete: { [weak self] success in
-                Task { @MainActor in
-                    guard let self else { return }
-                    slot.completeOffer()
-                    if !success {
-                        self.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-failed")
-                    }
-                }
-            }
-        )
-
-        if !started {
-            slot.completeOffer()
-            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-not-started")
-        }
-    }
 
     private func scheduleJoinTimeout(roomId: String, joinAttempt: Int64) {
         joinTimer?.scheduleTimeout(roomId: roomId, joinAttempt: joinAttempt)
@@ -1195,75 +759,10 @@ public final class SerenadaSession: ObservableObject {
     private func failJoinWithError(_ error: CallError) {
         clearJoinTimeout()
         clearJoinConnectKickstart()
-        clearNonHostOfferFallback()
         currentError = error
         resetResources()
         internalPhase = .error
         commitSnapshot()
-    }
-
-    private func scheduleIceRestart(reason: String, delayMs: Int) {
-        for slot in peerSlots.values where shouldIOffer(remoteCid: slot.remoteCid) {
-            scheduleIceRestart(remoteCid: slot.remoteCid, reason: reason, delayMs: delayMs)
-        }
-    }
-
-    private func scheduleIceRestart(remoteCid: String, reason: String, delayMs: Int) {
-        guard let slot = peerSlots[remoteCid] else { return }
-        if !canOffer(slot: slot) {
-            slot.markPendingIceRestart()
-            return
-        }
-
-        guard slot.iceRestartTask == nil else { return }
-
-        let now = Date().timeIntervalSince1970 * 1000
-        guard now - slot.lastIceRestartAt >= Double(WebRtcResilience.iceRestartCooldownMs) else { return }
-
-        slot.setIceRestartTask(Task { [weak self] in
-            if delayMs > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-            }
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.triggerIceRestart(remoteCid: remoteCid, reason: reason)
-            }
-        })
-    }
-
-    private func clearIceRestartTimer(remoteCid: String? = nil) {
-        if let remoteCid {
-            peerSlots[remoteCid]?.cancelIceRestartTask()
-            return
-        }
-
-        for slot in peerSlots.values {
-            slot.cancelIceRestartTask()
-        }
-    }
-
-    private func triggerIceRestart(reason: String) {
-        for slot in peerSlots.values where shouldIOffer(remoteCid: slot.remoteCid) {
-            triggerIceRestart(remoteCid: slot.remoteCid, reason: reason)
-        }
-    }
-
-    private func triggerIceRestart(remoteCid: String, reason: String) {
-        guard let slot = peerSlots[remoteCid] else { return }
-        slot.cancelIceRestartTask()
-
-        guard canOffer(slot: slot) else {
-            slot.markPendingIceRestart()
-            return
-        }
-
-        if slot.isMakingOffer {
-            slot.markPendingIceRestart()
-            return
-        }
-
-        slot.recordIceRestart()
-        maybeSendOffer(slot: slot, force: true, iceRestart: true)
     }
 
     private func handleTurnRefreshed(_ message: SignalingMessage) {
@@ -1279,7 +778,7 @@ public final class SerenadaSession: ObservableObject {
         let pending = pendingMessages
         pendingMessages.removeAll()
         for message in pending {
-            processSignalingPayload(message)
+            peerNegotiationEngine?.processSignalingPayload(message)
         }
     }
 
@@ -1377,6 +876,7 @@ public final class SerenadaSession: ObservableObject {
 
     private func resetResources() {
         stopRemoteVideoStatePolling()
+        peerNegotiationEngine?.resetAll()
         signalingClient.close()
         peerSlots.values.forEach { $0.closePeerConnection() }
         peerSlots.removeAll()
@@ -1395,9 +895,6 @@ public final class SerenadaSession: ObservableObject {
         clearJoinTimeout()
         clearJoinConnectKickstart()
         clearJoinRecovery()
-        clearOfferTimeout()
-        clearNonHostOfferFallback()
-        clearIceRestartTimer()
         clearConnectionStatusRetryingTimer()
         clearTurnRefresh()
 
@@ -1618,7 +1115,7 @@ public final class SerenadaSession: ObservableObject {
                 }
 
                 if path.status == .satisfied {
-                    self.scheduleIceRestart(reason: "network-online", delayMs: 0)
+                    self.peerNegotiationEngine?.scheduleIceRestart(reason: "network-online", delayMs: 0)
                 }
             }
         }
@@ -1641,7 +1138,7 @@ extension SerenadaSession: SignalingClientListener {
         }
 
         if internalPhase == .inCall {
-            triggerIceRestart(reason: "signaling-reconnect")
+            peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
         }
     }
 
