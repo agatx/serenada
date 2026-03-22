@@ -5,7 +5,7 @@ Serenada SDKs follow [Semantic Versioning 2.0.0](https://semver.org/).
 
 ### Pre-1.0 (current)
 - **Minor** bumps (0.x.0) may include breaking changes
-- **Patch** bumps (0.0.x) are backward-compatible bug fixes and improvements
+- **Patch** bumps (0.1.x) are backward-compatible bug fixes and improvements
 
 ### Post-1.0
 - **Major** bumps for breaking changes

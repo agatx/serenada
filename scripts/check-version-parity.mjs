@@ -47,6 +47,11 @@ const sources = [
         file: 'client-ios/SerenadaCore/Sources/SerenadaCore.swift',
         regex: /static\s+let\s+version\s*=\s*"([^"]+)"/,
     },
+    {
+        name: '@serenada/react-ui pinned @serenada/core dep',
+        file: 'client/packages/react-ui/package.json',
+        regex: /"@serenada\/core"\s*:\s*"\^?([^"]+)"/,
+    },
 ];
 
 // ── Parse and compare ───────────────────────────────────────────────
@@ -79,7 +84,7 @@ if (uniqueVersions.length > 1) {
         console.error(`  ${v.name}: ${v.version}`);
     }
     allMatch = false;
-} else if (uniqueVersions.length === 1) {
+} else if (uniqueVersions.length === 1 && allMatch && versions.length === sources.length) {
     console.log(`OK: All ${versions.length} version sources match at ${uniqueVersions[0]}.`);
 }
 
