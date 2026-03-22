@@ -1,5 +1,6 @@
 import type { RoomState, SignalingMessage } from '../signaling/types.js';
-import type { ConnectionStatus } from '../types.js';
+import type { ConnectionStatus, SerenadaLogger } from '../types.js';
+import { formatError } from '../formatError.js';
 import {
     OFFER_TIMEOUT_MS,
     ICE_RESTART_COOLDOWN_MS,
@@ -38,6 +39,7 @@ interface PeerState {
 export interface MediaEngineConfig {
     serverHost: string;
     turnsOnly?: boolean;
+    logger?: SerenadaLogger;
 }
 
 export class MediaEngine {
@@ -73,6 +75,7 @@ export class MediaEngine {
     private appliedTurnToken: string | null = null;
     private serverHost: string;
     private turnsOnly: boolean;
+    private logger?: SerenadaLogger;
 
     // Injected dependencies
     private sendSignalingMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void;
@@ -87,6 +90,7 @@ export class MediaEngine {
     ) {
         this.serverHost = config.serverHost;
         this.turnsOnly = config.turnsOnly ?? false;
+        this.logger = config.logger;
         this.sendSignalingMessage = sendMessage;
         this.setupEventListeners();
     }
@@ -152,7 +156,7 @@ export class MediaEngine {
                     break;
             }
         } catch (err) {
-            console.error(`[WebRTC] Error processing message ${type}:`, err);
+            this.logger?.log('error', 'WebRTC', `Error processing message ${type}: ${formatError(err)}`);
         }
     }
 
@@ -208,7 +212,7 @@ export class MediaEngine {
             this.notifyChange();
             return stream;
         } catch (err) {
-            console.error("Error accessing media", err);
+            this.logger?.log('error', 'WebRTC', `Error accessing media: ${formatError(err)}`);
             this.requestingMedia = false;
             return null;
         }
@@ -259,7 +263,7 @@ export class MediaEngine {
             this.sendSignalingMessage('content_state', { active: true, contentType: 'screenShare' });
             this.notifyChange();
         } catch (err) {
-            console.error('[WebRTC] Failed to start screen share', err);
+            this.logger?.log('error', 'ScreenShare', `Failed to start screen share: ${formatError(err)}`);
         }
     }
 
@@ -284,7 +288,7 @@ export class MediaEngine {
             const cameraTrack = await this.acquireCameraTrack(this.facingMode, wasVideoEnabled);
             await this.swapLocalVideoTrack(cameraTrack, previousVideoTrack);
         } catch (err) {
-            console.error('[WebRTC] Failed to stop screen share and restore camera', err);
+            this.logger?.log('error', 'ScreenShare', `Failed to stop screen share and restore camera: ${formatError(err)}`);
             await this.swapLocalVideoTrack(null, previousVideoTrack);
         } finally {
             this.isScreenSharing = false;
@@ -308,7 +312,7 @@ export class MediaEngine {
             await this.swapLocalVideoTrack(newVideoTrack, oldVideoTrack);
             this.notifyChange();
         } catch (err) {
-            console.error('[WebRTC] Failed to flip camera', err);
+            this.logger?.log('error', 'Camera', `Failed to flip camera: ${formatError(err)}`);
         }
     }
 
@@ -355,7 +359,7 @@ export class MediaEngine {
         const myId = this.clientId;
         if (!this.roomState || !myId) {
             if (this.peers.size > 0) {
-                console.log('[WebRTC] Room state cleared, cleaning up all peers');
+                this.logger?.log('debug', 'WebRTC', 'Room state cleared, cleaning up all peers');
                 this.cleanupAllPeers();
             }
             return;
@@ -366,7 +370,7 @@ export class MediaEngine {
 
         for (const [cid] of this.peers) {
             if (!remoteCids.has(cid)) {
-                console.log(`[WebRTC] Participant ${cid} left, cleaning up peer`);
+                this.logger?.log('debug', 'WebRTC', `Participant ${cid} left, cleaning up peer`);
                 this.cleanupPeer(cid);
             }
         }
@@ -406,7 +410,7 @@ export class MediaEngine {
         }
 
         pc.ontrack = (event) => {
-            console.log(`[WebRTC][${remoteCid}] Remote track received`);
+            this.logger?.log('debug', 'WebRTC', `[${remoteCid}] Remote track received`);
             let remoteStream: MediaStream;
             if (event.streams?.[0]) {
                 remoteStream = event.streams[0];
@@ -422,7 +426,7 @@ export class MediaEngine {
         };
 
         pc.oniceconnectionstatechange = () => {
-            console.log(`[WebRTC][${remoteCid}] ICE: ${pc.iceConnectionState}`);
+            this.logger?.log('debug', 'WebRTC', `[${remoteCid}] ICE: ${pc.iceConnectionState}`);
             this.updateAggregateState();
             if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
                 if (peerState.iceRestartTimer) { window.clearTimeout(peerState.iceRestartTimer); peerState.iceRestartTimer = null; }
@@ -437,7 +441,7 @@ export class MediaEngine {
         };
 
         pc.onconnectionstatechange = () => {
-            console.log(`[WebRTC][${remoteCid}] Connection: ${pc.connectionState}`);
+            this.logger?.log('debug', 'WebRTC', `[${remoteCid}] Connection: ${pc.connectionState}`);
             this.updateAggregateState();
             if (pc.connectionState === 'connected') {
                 if (peerState.iceRestartTimer) { window.clearTimeout(peerState.iceRestartTimer); peerState.iceRestartTimer = null; }
@@ -531,18 +535,18 @@ export class MediaEngine {
                 peer.offerTimeout = null;
                 const currentPeer = this.peers.get(remoteCid);
                 if (!currentPeer) return;
-                console.warn(`[WebRTC][${remoteCid}] Offer timeout`);
+                this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Offer timeout`);
                 currentPeer.pendingIceRestart = true;
                 if (currentPeer.pc.signalingState === 'have-local-offer') {
                     currentPeer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
-                        .catch(err => console.warn(`[WebRTC][${remoteCid}] Rollback failed`, err))
+                        .catch(err => this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Rollback failed: ${formatError(err)}`))
                         .finally(() => this.scheduleIceRestart(remoteCid, 'offer-timeout', 0));
                 } else {
                     this.scheduleIceRestart(remoteCid, 'offer-timeout-unexpected-state', 0);
                 }
             }, OFFER_TIMEOUT_MS);
         } catch (err) {
-            console.error(`[WebRTC][${remoteCid}] Error creating offer:`, err);
+            this.logger?.log('error', 'WebRTC', `[${remoteCid}] Error creating offer: ${formatError(err)}`);
         } finally {
             peer.isMakingOffer = false;
             if (peer.pendingIceRestart) {
@@ -572,7 +576,7 @@ export class MediaEngine {
         if (peer.isMakingOffer) { peer.pendingIceRestart = true; return; }
         peer.lastIceRestartAt = Date.now();
         peer.pendingIceRestart = false;
-        console.warn(`[WebRTC] ICE restart triggered for ${remoteCid} (${reason})`);
+        this.logger?.log('warning', 'WebRTC', `ICE restart triggered for ${remoteCid} (${reason})`);
         await this.createOfferTo(remoteCid, { iceRestart: true });
     }
 
@@ -592,7 +596,7 @@ export class MediaEngine {
             if (!this.isSignalingConnected) return;
 
             currentPeer.nonHostFallbackAttempts++;
-            console.warn(`[WebRTC][${remoteCid}] Non-host fallback offer (attempt ${currentPeer.nonHostFallbackAttempts})`);
+            this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Non-host fallback offer (attempt ${currentPeer.nonHostFallbackAttempts})`);
             try {
                 const offer = await currentPeer.pc.createOffer();
                 await currentPeer.pc.setLocalDescription(offer as RTCSessionDescriptionInit);
@@ -605,12 +609,12 @@ export class MediaEngine {
                     if (!p) return;
                     if (p.pc.signalingState === 'have-local-offer') {
                         try { await p.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit); }
-                        catch (err) { console.warn(`[WebRTC][${remoteCid}] Non-host rollback failed`, err); }
+                        catch (err) { this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Non-host rollback failed: ${formatError(err)}`); }
                     }
                     this.scheduleNonHostFallback(remoteCid);
                 }, OFFER_TIMEOUT_MS);
             } catch (err) {
-                console.error(`[WebRTC][${remoteCid}] Non-host fallback offer failed`, err);
+                this.logger?.log('error', 'WebRTC', `[${remoteCid}] Non-host fallback offer failed: ${formatError(err)}`);
                 this.scheduleNonHostFallback(remoteCid);
             }
         }, NON_HOST_FALLBACK_DELAY_MS);
@@ -630,7 +634,7 @@ export class MediaEngine {
             await peer.pc.setLocalDescription(answer);
             this.sendSignalingMessage('answer', { sdp: answer.sdp }, fromCid);
         } catch (err) {
-            console.error(`[WebRTC][${fromCid}] Error handling offer:`, err);
+            this.logger?.log('error', 'WebRTC', `[${fromCid}] Error handling offer: ${formatError(err)}`);
         }
     }
 
@@ -642,7 +646,7 @@ export class MediaEngine {
             await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
             if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
         } catch (err) {
-            console.error(`[WebRTC][${fromCid}] Error handling answer:`, err);
+            this.logger?.log('error', 'WebRTC', `[${fromCid}] Error handling answer: ${formatError(err)}`);
         }
     }
 
@@ -656,7 +660,7 @@ export class MediaEngine {
                 peer.iceBuffer.push(candidate);
             }
         } catch (err) {
-            console.error(`[WebRTC][${fromCid}] Error handling ICE candidate:`, err);
+            this.logger?.log('error', 'WebRTC', `[${fromCid}] Error handling ICE candidate: ${formatError(err)}`);
         }
     }
 
@@ -745,7 +749,7 @@ export class MediaEngine {
                 return true;
             }
         } catch (err) {
-            if (!signal.aborted) console.error('[WebRTC] Error fetching ICE servers:', err);
+            if (!signal.aborted) this.logger?.log('error', 'WebRTC', `Error fetching ICE servers: ${formatError(err)}`);
         } finally {
             clearTimeout(timeoutTimer);
             signal.removeEventListener('abort', onExternalAbort);
@@ -779,7 +783,7 @@ export class MediaEngine {
             };
             await sender.setParameters(nextParams);
         } catch (err) {
-            console.warn('[WebRTC] Failed to apply audio sender parameters', err);
+            this.logger?.log('warning', 'WebRTC', `Failed to apply audio sender parameters: ${formatError(err)}`);
         }
     }
 
@@ -805,7 +809,7 @@ export class MediaEngine {
                 const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
                 if (sender) {
                     try { await sender.replaceTrack(newTrack); }
-                    catch (err) { console.warn('[WebRTC] Failed to replace track on peer', err); }
+                    catch (err) { this.logger?.log('warning', 'WebRTC', `Failed to replace track on peer: ${formatError(err)}`); }
                 }
             })
         );
@@ -853,10 +857,10 @@ export class MediaEngine {
         try {
             const nextTrack = await this.acquireCameraTrack(this.facingMode, currentVideoTrack?.enabled ?? true);
             await this.swapLocalVideoTrack(nextTrack, currentVideoTrack);
-            console.info(`[WebRTC] Refreshed local video track (${reason})`);
+            this.logger?.log('info', 'WebRTC', `Refreshed local video track (${reason})`);
             return true;
         } catch (err) {
-            console.error(`[WebRTC] Failed to refresh local video track (${reason})`, err);
+            this.logger?.log('error', 'WebRTC', `Failed to refresh local video track (${reason}): ${formatError(err)}`);
             return false;
         } finally {
             this.cameraRecoveryInFlight = false;

@@ -1,6 +1,8 @@
+import type { SerenadaLogger } from '../../types.js';
 import type { SignalingMessage } from '../types.js';
 import type { SignalingTransport, TransportHandlers, TransportKind } from './types.js';
 import { CONNECT_TIMEOUT_MS } from '../../constants.js';
+import { formatError } from '../../formatError.js';
 
 export class WebSocketTransport implements SignalingTransport {
     kind: TransportKind = 'ws';
@@ -9,10 +11,12 @@ export class WebSocketTransport implements SignalingTransport {
     private open = false;
     private connectTimeout: number | null = null;
     private wsUrl: string;
+    private logger?: SerenadaLogger;
 
-    constructor(handlers: TransportHandlers, wsUrl: string) {
+    constructor(handlers: TransportHandlers, wsUrl: string, logger?: SerenadaLogger) {
         this.handlers = handlers;
         this.wsUrl = wsUrl;
+        this.logger = logger;
     }
 
     private clearConnectTimeout() {
@@ -34,7 +38,7 @@ export class WebSocketTransport implements SignalingTransport {
 
         this.connectTimeout = window.setTimeout(() => {
             if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
-                console.warn(`[WS] Connection timeout after ${CONNECT_TIMEOUT_MS}ms`);
+                this.logger?.log('warning', 'Transport', `WS connection timeout after ${CONNECT_TIMEOUT_MS}ms`);
                 this.ws.close();
                 this.open = false;
                 this.handlers.onClose('timeout');
@@ -64,7 +68,7 @@ export class WebSocketTransport implements SignalingTransport {
                 const msg: SignalingMessage = JSON.parse(event.data);
                 this.handlers.onMessage(msg);
             } catch (e) {
-                console.error('Failed to parse message', e);
+                this.logger?.log('error', 'Transport', `Failed to parse WS message: ${formatError(e)}`);
             }
         };
     }

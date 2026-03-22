@@ -1,6 +1,8 @@
+import type { SerenadaLogger } from '../../types.js';
 import type { SignalingMessage } from '../types.js';
 import type { SignalingTransport, TransportHandlers, TransportKind } from './types.js';
 import { CONNECT_TIMEOUT_MS } from '../../constants.js';
+import { formatError } from '../../formatError.js';
 
 const createSid = () => {
     if (window.crypto && window.crypto.getRandomValues) {
@@ -19,11 +21,13 @@ export class SseTransport implements SignalingTransport {
     private sid: string;
     private sseUrl: string;
     private connectTimeout: number | null = null;
+    private logger?: SerenadaLogger;
 
-    constructor(handlers: TransportHandlers, baseUrl: string, options?: { sid?: string }) {
+    constructor(handlers: TransportHandlers, baseUrl: string, options?: { sid?: string; logger?: SerenadaLogger }) {
         this.handlers = handlers;
         this.sid = options?.sid || createSid();
         this.sseUrl = `${baseUrl}/sse`;
+        this.logger = options?.logger;
     }
 
     getSessionId(): string {
@@ -55,7 +59,7 @@ export class SseTransport implements SignalingTransport {
 
         this.connectTimeout = window.setTimeout(() => {
             if (this.es && this.es.readyState !== EventSource.OPEN) {
-                console.warn(`[SSE] Connection timeout after ${CONNECT_TIMEOUT_MS}ms`);
+                this.logger?.log('warning', 'Transport', `SSE connection timeout after ${CONNECT_TIMEOUT_MS}ms`);
                 this.es.close();
                 this.es = null;
                 this.open = false;
@@ -83,7 +87,7 @@ export class SseTransport implements SignalingTransport {
                 const msg: SignalingMessage = JSON.parse(event.data);
                 this.handlers.onMessage(msg);
             } catch (e) {
-                console.error('Failed to parse message', e);
+                this.logger?.log('error', 'Transport', `Failed to parse SSE message: ${formatError(e)}`);
             }
         };
     }
@@ -136,7 +140,7 @@ export class SseTransport implements SignalingTransport {
                 }
             })
             .catch(err => {
-                console.error('[SSE] Failed to send message', err);
+                this.logger?.log('error', 'Transport', `Failed to send SSE message: ${formatError(err)}`);
             });
     }
 }

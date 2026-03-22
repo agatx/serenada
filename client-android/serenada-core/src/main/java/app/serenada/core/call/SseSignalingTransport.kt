@@ -1,6 +1,7 @@
 package app.serenada.core.call
 
-import android.util.Log
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Call
 import okhttp3.Callback
@@ -15,7 +16,8 @@ import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
 internal class SseSignalingTransport(
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val logger: SerenadaLogger? = null,
 ) : SignalingTransport {
     override val kind: SignalingClient.TransportKind = SignalingClient.TransportKind.SSE
 
@@ -167,7 +169,7 @@ internal class SseSignalingTransport(
         val msg = try {
             SignalingMessage.fromJson(payload)
         } catch (e: RuntimeException) {
-            Log.w(TAG, "Failed to parse signaling message from SSE stream", e)
+            logger?.log(SerenadaLogLevel.WARNING, "Transport", "Failed to parse signaling message from SSE stream: ${e.message}")
             null
         } ?: return
         onMessageCallback?.invoke(msg)

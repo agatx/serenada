@@ -38,7 +38,11 @@ export type {
     IceProbeReport,
     RoomOccupancy,
     RoomWatcherState,
+    SerenadaLogLevel,
+    SerenadaLogger,
 } from './types.js';
+
+export { ConsoleSerenadaLogger } from './ConsoleLogger.js';
 
 // Public utilities
 export {

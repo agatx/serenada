@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
 import { SerenadaCallFlow } from '@serenada/react-ui';
 import type { SerenadaString } from '@serenada/react-ui';
-import { SerenadaCore, SNAPSHOT_PREPARE_TIMEOUT_MS } from '@serenada/core';
+import { SerenadaCore, ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS } from '@serenada/core';
 import type { CallState, SerenadaSessionHandle } from '@serenada/core';
 import { useToast } from '../contexts/ToastContext';
 import { saveCall } from '../utils/callHistory';
@@ -224,7 +224,7 @@ const CallRoom: React.FC = () => {
     const callStartTimeRef = useRef<number | null>(null);
     const pushNotifySentRef = useRef(false);
 
-    const core = useMemo(() => new SerenadaCore({ serverHost: getConfiguredServerHost() }), []);
+    const core = useMemo(() => new SerenadaCore({ serverHost: getConfiguredServerHost(), logger: new ConsoleSerenadaLogger() }), []);
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
 
     const stopPreview = useCallback(() => {

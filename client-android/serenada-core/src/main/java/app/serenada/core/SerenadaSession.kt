@@ -9,7 +9,6 @@ import android.net.NetworkRequest
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.util.Log
 import app.serenada.core.call.ConnectionStatusTracker
 import app.serenada.core.call.JoinTimer
 import app.serenada.core.call.LiveSessionClock
@@ -65,6 +64,7 @@ class SerenadaSession internal constructor(
     audioController: SessionAudioController? = null,
     mediaEngine: SessionMediaEngine? = null,
     clock: SessionClock? = null,
+    private val logger: SerenadaLogger? = null,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -246,6 +246,7 @@ class SerenadaSession internal constructor(
                 if (next != current) updateDiagnostics(next)
             },
             onConnectionStatusUpdate = { updateConnectionStatusFromSignals() },
+            logger = logger,
         )
     }
 
@@ -264,9 +265,10 @@ class SerenadaSession internal constructor(
         context = appContext,
         handler = handler,
         onProximityChanged = { near ->
-            Log.d(TAG, "Proximity sensor changed: ${if (near) "NEAR" else "FAR"}")
+            logger?.log(SerenadaLogLevel.DEBUG, "Session", "Proximity sensor changed: ${if (near) "NEAR" else "FAR"}")
         },
-        onAudioEnvironmentChanged = { applyLocalVideoPreference() }
+        onAudioEnvironmentChanged = { applyLocalVideoPreference() },
+        logger = logger,
     )
 
     private val forceSse = config.transports == listOf(SerenadaTransport.SSE)
@@ -310,7 +312,7 @@ class SerenadaSession internal constructor(
     }
 
     private val signalingClient: SessionSignaling = (signaling ?: SignalingClient(
-        okHttpClient, handler, signalingListener, forceSse = forceSse,
+        okHttpClient, handler, signalingListener, forceSse = forceSse, logger = logger,
     )).also { it.listener = signalingListener }
 
     // --- Public API ---
@@ -360,7 +362,7 @@ class SerenadaSession internal constructor(
         assertMainThread()
         if (_diagnostics.value.isScreenSharing) return
         if (!webRtcEngine.startScreenShare(intent)) {
-            Log.w(TAG, "Failed to start screen sharing")
+            logger?.log(SerenadaLogLevel.WARNING, "Session", "Failed to start screen sharing")
             return
         }
         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = true))
@@ -372,7 +374,7 @@ class SerenadaSession internal constructor(
         assertMainThread()
         if (!_diagnostics.value.isScreenSharing) return
         if (!webRtcEngine.stopScreenShare()) {
-            Log.w(TAG, "Failed to stop screen sharing")
+            logger?.log(SerenadaLogLevel.WARNING, "Session", "Failed to stop screen sharing")
             return
         }
         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
@@ -631,7 +633,8 @@ class SerenadaSession internal constructor(
                     setFeatureDegradation(degradation)
                 }
             },
-            isHdVideoExperimentalEnabled = config.isHdVideoExperimentalEnabled
+            isHdVideoExperimentalEnabled = config.isHdVideoExperimentalEnabled,
+            logger = logger,
         )
     }
 
@@ -684,7 +687,7 @@ class SerenadaSession internal constructor(
     }
 
     private fun sendMessage(type: String, payload: JSONObject?, to: String? = null) {
-        Log.d(TAG, "TX $type")
+        logger?.log(SerenadaLogLevel.DEBUG, "Session", "TX $type")
         val msg = SignalingMessage(
             type = type,
             rid = roomId,
@@ -697,7 +700,7 @@ class SerenadaSession internal constructor(
     }
 
     private fun handleSignalingMessage(msg: SignalingMessage) {
-        Log.d(TAG, "RX ${msg.type}")
+        logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${msg.type}")
         when (msg.type) {
             "joined" -> handleJoined(msg)
             "room_state" -> handleRoomState(msg)

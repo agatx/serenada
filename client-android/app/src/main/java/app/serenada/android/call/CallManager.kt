@@ -25,6 +25,7 @@ import app.serenada.core.RoomOccupancy
 import app.serenada.core.RoomWatcher
 import app.serenada.core.RoomWatcherDelegate
 import app.serenada.core.SerenadaConfig
+import app.serenada.core.AndroidSerenadaLogger
 import app.serenada.core.SerenadaCore
 import app.serenada.core.SerenadaSession
 import app.serenada.core.SerenadaTransport
@@ -134,7 +135,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             } else {
                 listOf(SerenadaTransport.WS, SerenadaTransport.SSE)
             }
-        return SerenadaCore(
+        val core = SerenadaCore(
             config = SerenadaConfig(
                 serverHost = host,
                 defaultAudioEnabled = settingsStore.isDefaultMicrophoneEnabled,
@@ -144,6 +145,8 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             ),
             context = appContext,
         )
+        core.logger = AndroidSerenadaLogger()
+        return core
     }
 
     private fun beginSdkSession(session: SerenadaSession, hostOverride: String? = null) {

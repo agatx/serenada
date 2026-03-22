@@ -12,13 +12,15 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
-import android.util.Log
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 
 class CallAudioSessionController(
     context: Context,
     private val handler: Handler,
     private val onProximityChanged: (Boolean) -> Unit,
-    private val onAudioEnvironmentChanged: () -> Unit
+    private val onAudioEnvironmentChanged: () -> Unit,
+    private val logger: SerenadaLogger? = null,
 ) : SessionAudioController {
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -37,7 +39,7 @@ class CallAudioSessionController(
     private var bluetoothScoActive = false
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
-        Log.d("CallManager", "Audio focus changed: $focusChange")
+        logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus changed: $focusChange")
     }
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
@@ -80,12 +82,13 @@ class CallAudioSessionController(
             applyCallAudioRouting()
             onAudioEnvironmentChanged()
         }.onSuccess {
-            Log.d(
-                "CallManager",
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "Audio",
                 "Audio session activated (prevMode=$previousAudioMode, focusGranted=$audioFocusGranted)"
             )
         }.onFailure { error ->
-            Log.w("CallManager", "Failed to activate audio session", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to activate audio session: ${error.message}")
         }
     }
 
@@ -106,9 +109,9 @@ class CallAudioSessionController(
             setSpeakerphoneEnabled(previousSpeakerphoneOn)
             audioManager.mode = previousAudioMode
         }.onSuccess {
-            Log.d("CallManager", "Audio session restored (mode=$previousAudioMode)")
+            logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio session restored (mode=$previousAudioMode)")
         }.onFailure { error ->
-            Log.w("CallManager", "Failed to restore audio session", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to restore audio session: ${error.message}")
         }
         abandonAudioFocus()
     }
@@ -138,7 +141,7 @@ class CallAudioSessionController(
                 handler
             )
         }.getOrElse { error ->
-            Log.w("CallManager", "Failed to register proximity listener", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to register proximity listener: ${error.message}")
             false
         }
         if (registered) {
@@ -155,7 +158,7 @@ class CallAudioSessionController(
         runCatching {
             sensorManager?.unregisterListener(proximitySensorListener)
         }.onFailure { error ->
-            Log.w("CallManager", "Failed to unregister proximity listener", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to unregister proximity listener: ${error.message}")
         }
         proximityMonitoringActive = false
         isProximityNear = false
@@ -167,7 +170,7 @@ class CallAudioSessionController(
             audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler)
             audioDeviceMonitoringActive = true
         }.onFailure { error ->
-            Log.w("CallManager", "Failed to register audio device callback", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to register audio device callback: ${error.message}")
         }
     }
 
@@ -176,7 +179,7 @@ class CallAudioSessionController(
         runCatching {
             audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         }.onFailure { error ->
-            Log.w("CallManager", "Failed to unregister audio device callback", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to unregister audio device callback: ${error.message}")
         }
         audioDeviceMonitoringActive = false
     }
@@ -198,7 +201,7 @@ class CallAudioSessionController(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val bluetoothDevice = findBluetoothCommunicationDevice()
             if (bluetoothDevice == null || !audioManager.setCommunicationDevice(bluetoothDevice)) {
-                Log.w("CallManager", "Failed to route audio to Bluetooth headset")
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to route audio to Bluetooth headset")
                 routeAudioToSpeaker()
             }
             return
@@ -295,7 +298,7 @@ class CallAudioSessionController(
                     it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
                 }
                 if (speaker == null || !audioManager.setCommunicationDevice(speaker)) {
-                    Log.w("CallManager", "Failed to route audio to built-in speaker")
+                    logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to route audio to built-in speaker")
                 }
             } else {
                 audioManager.clearCommunicationDevice()
@@ -334,7 +337,7 @@ class CallAudioSessionController(
             ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
         audioFocusGranted = granted
-        Log.d("CallManager", "Audio focus request granted=$granted")
+        logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus request granted=$granted")
     }
 
     private fun abandonAudioFocus() {
@@ -352,9 +355,9 @@ class CallAudioSessionController(
             }
             Unit
         }.onSuccess {
-            Log.d("CallManager", "Audio focus abandoned")
+            logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus abandoned")
         }.onFailure { error ->
-            Log.w("CallManager", "Failed to abandon audio focus", error)
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to abandon audio focus: ${error.message}")
         }
     }
 }

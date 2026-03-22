@@ -1,6 +1,7 @@
 package app.serenada.core.call
 
-import android.util.Log
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
@@ -32,6 +33,7 @@ class PeerConnectionSlot(
     private val applyAudioSenderParameters: (PeerConnection) -> Unit,
     private val currentVideoSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy,
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
+    private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
     private data class MediaTotals(
         var inboundPacketsReceived: Long = 0L,
@@ -131,8 +133,9 @@ class PeerConnectionSlot(
             blackFrameAnalysisEnabled = isRemoteBlackFrameAnalysisEnabled()
         )
         if (stateChanged) {
-            Log.d(
-                "PeerConnectionSlot",
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "PeerConnection",
                 "[RemoteVideo][$remoteCid] syntheticBlack=${remoteBlackFrameAnalyzer.isSyntheticBlackDetected()} trackEnabled=${remoteVideoTrack?.enabled()}"
             )
         }
@@ -156,7 +159,7 @@ class PeerConnectionSlot(
             }
 
             override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-                Log.d("PeerConnectionSlot", "[$remoteCid] Connection state: $newState")
+                logger?.log(SerenadaLogLevel.DEBUG, "PeerConnection", "[$remoteCid] Connection state: $newState")
                 onConnectionStateChange(remoteCid, newState)
             }
 
@@ -174,12 +177,12 @@ class PeerConnectionSlot(
             }
 
             override fun onSignalingChange(newState: PeerConnection.SignalingState) {
-                Log.d("PeerConnectionSlot", "[$remoteCid] Signaling state: $newState")
+                logger?.log(SerenadaLogLevel.DEBUG, "PeerConnection", "[$remoteCid] Signaling state: $newState")
                 onSignalingStateChange(remoteCid, newState)
             }
 
             override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
-                Log.d("PeerConnectionSlot", "[$remoteCid] ICE state: $newState")
+                logger?.log(SerenadaLogLevel.DEBUG, "PeerConnection", "[$remoteCid] ICE state: $newState")
                 onIceConnectionStateChange(remoteCid, newState)
             }
 
@@ -271,14 +274,14 @@ class PeerConnectionSlot(
                     }
 
                     override fun onSetFailure(error: String?) {
-                        Log.w("PeerConnectionSlot", "[$remoteCid] Failed to set local offer: $error")
+                        logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local offer: $error")
                         onComplete?.invoke(false)
                     }
                 }, desc)
             }
 
             override fun onCreateFailure(error: String?) {
-                Log.w("PeerConnectionSlot", "[$remoteCid] Offer creation failed: $error")
+                logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Offer creation failed: $error")
                 onComplete?.invoke(false)
             }
         }, constraints)
@@ -311,14 +314,14 @@ class PeerConnectionSlot(
                     }
 
                     override fun onSetFailure(error: String?) {
-                        Log.w("PeerConnectionSlot", "[$remoteCid] Failed to set local answer: $error")
+                        logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local answer: $error")
                         onComplete?.invoke(false)
                     }
                 }, desc)
             }
 
             override fun onCreateFailure(error: String?) {
-                Log.w("PeerConnectionSlot", "[$remoteCid] Answer creation failed: $error")
+                logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Answer creation failed: $error")
                 onComplete?.invoke(false)
             }
         }, constraints)
@@ -342,7 +345,7 @@ class PeerConnectionSlot(
             }
 
             override fun onSetFailure(error: String?) {
-                Log.w("PeerConnectionSlot", "[$remoteCid] Failed to set remote description ($type): $error")
+                logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set remote description ($type): $error")
             }
         }, desc)
     }
@@ -376,7 +379,7 @@ class PeerConnectionSlot(
             }
 
             override fun onSetFailure(error: String?) {
-                Log.w("PeerConnectionSlot", "[$remoteCid] Failed to rollback local description: $error")
+                logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to rollback local description: $error")
                 onComplete?.invoke(false)
             }
         }, desc)
@@ -446,7 +449,7 @@ class PeerConnectionSlot(
             encodings[0].maxFramerate = policy.maxFramerate
             sender.setParameters(params)
         } catch (e: Exception) {
-            Log.w("PeerConnectionSlot", "[$remoteCid] Failed to apply video sender parameters", e)
+            logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to apply video sender parameters: ${e.message}")
         }
     }
 

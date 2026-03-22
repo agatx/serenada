@@ -19,6 +19,7 @@ class SerenadaCore(
     private val context: Context,
 ) {
     var delegate: SerenadaCoreDelegate? = null
+    var logger: SerenadaLogger? = null
 
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
@@ -44,6 +45,7 @@ class SerenadaCore(
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
+            logger = logger,
         )
         session.start()
         return session
@@ -63,6 +65,7 @@ class SerenadaCore(
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
+            logger = logger,
         )
         session.start()
         return session
@@ -94,6 +97,7 @@ class SerenadaCore(
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
+            logger = logger,
         )
         session.start()
         return CreateRoomResult(roomId = roomId, roomUrl = roomUrl, session = session)

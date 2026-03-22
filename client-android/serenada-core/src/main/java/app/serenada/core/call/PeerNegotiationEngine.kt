@@ -1,8 +1,9 @@
 package app.serenada.core.call
 
 import android.os.Handler
-import android.util.Log
 import app.serenada.core.IceConnectionState
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import app.serenada.core.PeerConnectionState
 import app.serenada.core.RtcSignalingState
 import org.webrtc.IceCandidate
@@ -41,6 +42,7 @@ class PeerNegotiationEngine(
     private val onRemoteParticipantsChanged: () -> Unit,
     private val onAggregatePeerStateChanged: (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Unit,
     private val onConnectionStatusUpdate: () -> Unit,
+    private val logger: SerenadaLogger? = null,
 ) {
     companion object {
         private const val TAG = "PeerNegotiationEngine"
@@ -338,7 +340,7 @@ class PeerNegotiationEngine(
         val slot = getSlot(remoteCid) ?: return
         if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
         if (slot.isMakingOffer) { slot.markPendingIceRestart(); return }
-        Log.w(TAG, "ICE restart triggered for $remoteCid ($reason)")
+        logger?.log(SerenadaLogLevel.WARNING, "Negotiation", "ICE restart triggered for $remoteCid ($reason)")
         slot.recordIceRestart(clock.nowMs())
         maybeSendOffer(slot, force = true, iceRestart = true)
     }
@@ -352,7 +354,7 @@ class PeerNegotiationEngine(
         val runnable = Runnable {
             slot.clearNonHostFallbackTask()
             slot.incrementNonHostFallbackAttempts()
-            Log.w(TAG, "Non-host offer fallback for $remoteCid ($reason)")
+            logger?.log(SerenadaLogLevel.WARNING, "Negotiation", "Non-host offer fallback for $remoteCid ($reason)")
             maybeSendNonHostFallbackOffer(remoteCid)
         }
         slot.setNonHostFallbackTask(runnable)
