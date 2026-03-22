@@ -37,13 +37,17 @@ export interface IceCandidatePayload {
 
 function parseParticipants(raw: unknown): Array<{ cid: string; joinedAt?: number }> | null {
     if (!Array.isArray(raw)) return null;
-    return raw.map((p: unknown) => {
+    const result: Array<{ cid: string; joinedAt?: number }> = [];
+    for (const p of raw) {
+        if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
         const rec = p as Record<string, unknown>;
-        return {
-            cid: String(rec?.cid ?? ''),
-            joinedAt: typeof rec?.joinedAt === 'number' ? rec.joinedAt : undefined,
-        };
-    });
+        if (typeof rec.cid !== 'string' || rec.cid.trim() === '') continue;
+        result.push({
+            cid: rec.cid,
+            joinedAt: typeof rec.joinedAt === 'number' ? rec.joinedAt : undefined,
+        });
+    }
+    return result;
 }
 
 export function parseJoinedPayload(raw: Record<string, unknown> | undefined): JoinedPayload | null {
@@ -91,8 +95,8 @@ export function parseTurnRefreshedPayload(raw: Record<string, unknown> | undefin
 
 export function parseOfferPayload(raw: Record<string, unknown> | undefined): OfferPayload | null {
     if (!raw) return null;
-    if (typeof raw.from !== 'string') return null;
-    if (typeof raw.sdp !== 'string') return null;
+    if (typeof raw.from !== 'string' || raw.from === '') return null;
+    if (typeof raw.sdp !== 'string' || raw.sdp === '') return null;
     return {
         from: raw.from,
         sdp: raw.sdp,
@@ -102,8 +106,8 @@ export function parseOfferPayload(raw: Record<string, unknown> | undefined): Off
 
 export function parseAnswerPayload(raw: Record<string, unknown> | undefined): AnswerPayload | null {
     if (!raw) return null;
-    if (typeof raw.from !== 'string') return null;
-    if (typeof raw.sdp !== 'string') return null;
+    if (typeof raw.from !== 'string' || raw.from === '') return null;
+    if (typeof raw.sdp !== 'string' || raw.sdp === '') return null;
     return {
         from: raw.from,
         sdp: raw.sdp,
@@ -112,10 +116,13 @@ export function parseAnswerPayload(raw: Record<string, unknown> | undefined): An
 
 export function parseIceCandidatePayload(raw: Record<string, unknown> | undefined): IceCandidatePayload | null {
     if (!raw) return null;
-    if (typeof raw.from !== 'string') return null;
-    if (!raw.candidate || typeof raw.candidate !== 'object') return null;
+    if (typeof raw.from !== 'string' || raw.from === '') return null;
+    const candidate = raw.candidate;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+    const candObj = candidate as Record<string, unknown>;
+    if (typeof candObj.candidate !== 'string') return null;
     return {
         from: raw.from,
-        candidate: raw.candidate as RTCIceCandidateInit,
+        candidate: candidate as RTCIceCandidateInit,
     };
 }

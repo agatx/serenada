@@ -242,28 +242,27 @@ export class SignalingEngine {
     private handleIncomingMessage(msg: SignalingMessage): void {
         switch (msg.type) {
             case 'joined': {
-                this.clearJoinTimers();
-                this.joinAcked = true;
                 if (msg.cid) this.clientId = msg.cid;
                 const joined = parseJoinedPayload(msg.payload);
-                if (joined) {
-                    this.roomState = {
-                        hostCid: joined.hostCid,
-                        participants: joined.participants,
-                        maxParticipants: joined.maxParticipants,
-                    };
-                    if (joined.turnToken) {
-                        this.turnToken = joined.turnToken;
-                    }
-                    if (joined.turnTokenTTLMs) {
-                        this.turnTokenTTLMs = joined.turnTokenTTLMs;
-                        this.scheduleTurnRefresh();
-                    }
-                    if (joined.reconnectToken) {
-                        this.reconnectToken = joined.reconnectToken;
-                        this.reconnectTokenRoomId = msg.rid || this.currentRoomId;
-                        this.persistReconnectStorage();
-                    }
+                if (!joined) break;
+                this.clearJoinTimers();
+                this.joinAcked = true;
+                this.roomState = {
+                    hostCid: joined.hostCid,
+                    participants: joined.participants,
+                    maxParticipants: joined.maxParticipants,
+                };
+                if (joined.turnToken) {
+                    this.turnToken = joined.turnToken;
+                }
+                if (joined.turnTokenTTLMs) {
+                    this.turnTokenTTLMs = joined.turnTokenTTLMs;
+                    this.scheduleTurnRefresh();
+                }
+                if (joined.reconnectToken) {
+                    this.reconnectToken = joined.reconnectToken;
+                    this.reconnectTokenRoomId = msg.rid || this.currentRoomId;
+                    this.persistReconnectStorage();
                 }
                 this.persistClientId();
                 break;
