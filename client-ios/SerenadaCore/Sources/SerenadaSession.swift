@@ -56,6 +56,7 @@ public final class SerenadaSession: ObservableObject {
 
     private let config: SerenadaConfig
     private let delegateProvider: (() -> SerenadaCoreDelegate?)?
+    private let logger: SerenadaLogger?
     private let pathMonitor = NWPathMonitor()
     private let pathMonitorQueue = DispatchQueue(label: "SerenadaSession.PathMonitor")
 
@@ -96,7 +97,8 @@ public final class SerenadaSession: ObservableObject {
         roomUrl: URL? = nil,
         serverHost: String,
         config: SerenadaConfig,
-        delegateProvider: (() -> SerenadaCoreDelegate?)? = nil
+        delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
+        logger: SerenadaLogger? = nil
     ) {
         self.init(
             roomId: roomId,
@@ -104,6 +106,7 @@ public final class SerenadaSession: ObservableObject {
             serverHost: serverHost,
             config: config,
             delegateProvider: delegateProvider,
+            logger: logger,
             signaling: nil,
             apiClient: nil,
             audioController: nil,
@@ -118,6 +121,7 @@ public final class SerenadaSession: ObservableObject {
         serverHost: String,
         config: SerenadaConfig,
         delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
+        logger: SerenadaLogger? = nil,
         signaling: SessionSignaling? = nil,
         apiClient: SessionAPIClient? = nil,
         audioController: SessionAudioController? = nil,
@@ -129,12 +133,14 @@ public final class SerenadaSession: ObservableObject {
         self.serverHost = serverHost
         self.config = config
         self.delegateProvider = delegateProvider
+        self.logger = logger
         self.clock = clock ?? LiveSessionClock()
         self.signalingClient = signaling ?? SignalingClient(forceSseSignaling: !config.transports.contains(.ws))
         self.apiClient = apiClient ?? CoreAPIClient()
         self.callAudioSessionController = audioController ?? CallAudioSessionController(
             onProximityChanged: { _ in },
-            onAudioEnvironmentChanged: {}
+            onAudioEnvironmentChanged: {},
+            logger: logger
         )
         self.webRtcEngine = mediaEngine ?? WebRtcEngine(
             onCameraFacingChanged: { _ in },
@@ -143,7 +149,7 @@ public final class SerenadaSession: ObservableObject {
             onScreenShareStopped: {},
             onZoomFactorChanged: { _ in },
             onFeatureDegradation: { _ in },
-            onDebugTrace: nil,
+            logger: logger,
             isHdVideoExperimentalEnabled: false
         )
 

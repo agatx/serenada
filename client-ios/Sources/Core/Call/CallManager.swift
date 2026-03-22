@@ -371,13 +371,15 @@ final class CallManager: ObservableObject {
     }
 
     private func makeSerenadaCore(host: String) -> SerenadaCore {
-        SerenadaCore(
+        let core = SerenadaCore(
             config: SerenadaConfig(
                 serverHost: host,
                 defaultAudioEnabled: settingsStore.isDefaultMicrophoneEnabled,
                 defaultVideoEnabled: settingsStore.isDefaultCameraEnabled
             )
         )
+        core.logger = PrintSerenadaLogger()
+        return core
     }
 
     private func activateSession(_ session: SerenadaSession) {

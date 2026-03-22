@@ -1,14 +1,16 @@
 package app.serenada.core.call
 
 import android.os.Handler
-import android.util.Log
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import okhttp3.OkHttpClient
 
 class SignalingClient(
     private val okHttpClient: OkHttpClient,
     private val handler: Handler,
     initialListener: SessionSignaling.Listener? = null,
-    private val forceSse: Boolean = false
+    private val forceSse: Boolean = false,
+    private val logger: SerenadaLogger? = null,
 ) : SessionSignaling {
     enum class TransportKind(val wireName: String) {
         WS("ws"),
@@ -29,8 +31,8 @@ class SignalingClient(
         TransportKind.SSE to false
     )
 
-    private val wsTransport = WebSocketSignalingTransport(okHttpClient)
-    private val sseTransport = SseSignalingTransport(okHttpClient)
+    private val wsTransport = WebSocketSignalingTransport(okHttpClient, logger = logger)
+    private val sseTransport = SseSignalingTransport(okHttpClient, logger = logger)
     private val transports = listOf<SignalingTransport>(wsTransport, sseTransport)
 
     @Volatile private var connected = false
@@ -55,7 +57,7 @@ class SignalingClient(
             return
         }
         if (forceSse) {
-            Log.i(TAG, "FORCE_SSE_SIGNALING is enabled; using SSE only")
+            logger?.log(SerenadaLogLevel.INFO, "Signaling", "FORCE_SSE_SIGNALING is enabled; using SSE only")
         }
         resetTransportState()
         if (normalized != normalizedHost) {
@@ -187,7 +189,7 @@ class SignalingClient(
         if (kind == TransportKind.WS) wsConsecutiveFailures = 0
         lastPongAt = System.currentTimeMillis()
         missedPongs = 0
-        Log.i(TAG, "Signaling connected via ${kind.wireName}")
+        logger?.log(SerenadaLogLevel.INFO, "Signaling", "Signaling connected via ${kind.wireName}")
         handler.post { listener?.onOpen(kind.wireName) }
         startPing()
     }
@@ -228,8 +230,9 @@ class SignalingClient(
         val current = transportOrder.getOrNull(transportIndex) ?: return false
         val nextIndex = transportIndex + 1
         val next = transportOrder.getOrNull(nextIndex) ?: return false
-        Log.w(
-            TAG,
+        logger?.log(
+            SerenadaLogLevel.WARNING,
+            "Signaling",
             "Transport ${current.wireName} failed ($reason), falling back to ${next.wireName}"
         )
         transportIndex = nextIndex

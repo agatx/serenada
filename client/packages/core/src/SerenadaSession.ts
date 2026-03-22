@@ -47,14 +47,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
             wsUrl: urls.wsUrl,
             httpBaseUrl: urls.httpBaseUrl,
             transports: config.transports,
+            logger: config.logger,
         });
 
         this.media = new MediaEngine(
-            { serverHost: config.serverHost, turnsOnly: config.turnsOnly },
+            { serverHost: config.serverHost, turnsOnly: config.turnsOnly, logger: config.logger },
             (type, payload, to) => this.signaling.sendMessage(type, payload, to),
         );
 
-        this.statsCollector = new CallStatsCollector();
+        this.statsCollector = new CallStatsCollector(config.logger);
 
         // Wire signaling events to media engine
         this.unsubSignalingMessages = this.signaling.subscribeToMessages((msg) => {

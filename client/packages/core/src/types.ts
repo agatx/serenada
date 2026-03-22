@@ -49,6 +49,7 @@ export interface SerenadaConfig {
     defaultVideoEnabled?: boolean;
     transports?: TransportKind[];
     turnsOnly?: boolean;
+    logger?: SerenadaLogger;
 }
 
 export interface CreateRoomResult {
@@ -152,4 +153,10 @@ export interface IceProbeReport {
     turnPassed: boolean;
     logs: string[];
     iceServersSummary?: string;
+}
+
+export type SerenadaLogLevel = 'debug' | 'info' | 'warning' | 'error';
+
+export interface SerenadaLogger {
+    log(level: SerenadaLogLevel, tag: string, message: string): void;
 }

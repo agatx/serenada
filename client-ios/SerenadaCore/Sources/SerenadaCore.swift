@@ -37,6 +37,7 @@ public final class SerenadaCore {
 
     public let config: SerenadaConfig
     public weak var delegate: SerenadaCoreDelegate?
+    public var logger: SerenadaLogger?
 
     public init(config: SerenadaConfig) {
         self.config = config
@@ -53,7 +54,8 @@ public final class SerenadaCore {
             roomUrl: url,
             serverHost: serverHost,
             config: config,
-            delegateProvider: { [weak self] in self?.delegate }
+            delegateProvider: { [weak self] in self?.delegate },
+            logger: logger
         )
         return session
     }
@@ -66,7 +68,8 @@ public final class SerenadaCore {
             roomUrl: url,
             serverHost: config.serverHost,
             config: config,
-            delegateProvider: { [weak self] in self?.delegate }
+            delegateProvider: { [weak self] in self?.delegate },
+            logger: logger
         )
         return session
     }
@@ -85,7 +88,8 @@ public final class SerenadaCore {
             roomUrl: url,
             serverHost: serverHost,
             config: config,
-            delegateProvider: { [weak self] in self?.delegate }
+            delegateProvider: { [weak self] in self?.delegate },
+            logger: logger
         )
         return CreateRoomResult(url: url, roomId: roomId, session: session)
     }

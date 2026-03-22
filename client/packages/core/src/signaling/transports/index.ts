@@ -1,3 +1,4 @@
+import type { SerenadaLogger } from '../../types.js';
 import type { SignalingTransport, TransportHandlers, TransportKind } from './types.js';
 import { WebSocketTransport } from './ws.js';
 import { SseTransport } from './sse.js';
@@ -10,6 +11,7 @@ export interface CreateTransportOptions {
     wsUrl: string;
     httpBaseUrl: string;
     sseSid?: string;
+    logger?: SerenadaLogger;
 }
 
 export const createSignalingTransport = (
@@ -18,7 +20,7 @@ export const createSignalingTransport = (
     options: CreateTransportOptions,
 ): SignalingTransport => {
     if (kind === 'sse') {
-        return new SseTransport(handlers, options.httpBaseUrl, { sid: options.sseSid });
+        return new SseTransport(handlers, options.httpBaseUrl, { sid: options.sseSid, logger: options.logger });
     }
-    return new WebSocketTransport(handlers, options.wsUrl);
+    return new WebSocketTransport(handlers, options.wsUrl, options.logger);
 };

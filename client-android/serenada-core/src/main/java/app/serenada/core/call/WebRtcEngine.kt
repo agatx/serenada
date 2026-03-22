@@ -6,8 +6,9 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.MediaRecorder
-import android.util.Log
 import app.serenada.core.FeatureDegradationState
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import java.util.Collections
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,7 +38,8 @@ class WebRtcEngine(
     private val onScreenShareStopped: () -> Unit,
     private val onFeatureDegradation: (FeatureDegradationState) -> Unit = {},
     private var isHdVideoExperimentalEnabled: Boolean = false,
-    private var isRemoteBlackFrameAnalysisEnabled: Boolean = true
+    private var isRemoteBlackFrameAnalysisEnabled: Boolean = true,
+    private val logger: SerenadaLogger? = null,
 ) : SessionMediaEngine {
 
     data class VideoSenderPolicy(
@@ -77,6 +79,7 @@ class WebRtcEngine(
         onFlashlightStateChanged = onFlashlightStateChanged,
         onFeatureDegradation = onFeatureDegradation,
         onVideoSenderParametersChanged = { applyVideoSenderParameters() },
+        logger = logger,
     )
 
     private val screenShareController = ScreenShareController(
@@ -92,6 +95,7 @@ class WebRtcEngine(
                 onCameraFacingChanged(false)
             }
         },
+        logger = logger,
     )
 
     init {
@@ -100,7 +104,7 @@ class WebRtcEngine(
             .createInitializationOptions()
         PeerConnectionFactory.initialize(initOptions)
         enableVerboseWebRtcLoggingIfDebug()
-        Log.i("WebRtcEngine", "WebRTC initialized")
+        logger?.log(SerenadaLogLevel.INFO, "WebRTC", "WebRTC initialized")
 
         // Keep VP8 hardware support enabled, but disable H264 high profile to reduce encode latency
         // regressions seen on some Android devices with constrained hardware encoders.
@@ -120,9 +124,9 @@ class WebRtcEngine(
             Logging.enableLogThreads()
             Logging.enableLogTimeStamps()
             Logging.enableLogToDebugOutput(Logging.Severity.LS_VERBOSE)
-            Log.i("WebRtcEngine", "Verbose native WebRTC logging enabled")
+            logger?.log(SerenadaLogLevel.INFO, "WebRTC", "Verbose native WebRTC logging enabled")
         }.onFailure { error ->
-            Log.w("WebRtcEngine", "Failed to enable WebRTC verbose logging", error)
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "Failed to enable WebRTC verbose logging: ${error.message}")
         }
     }
 
@@ -151,36 +155,36 @@ class WebRtcEngine(
             .setAudioTrackErrorCallback(
                 object : JavaAudioDeviceModule.AudioTrackErrorCallback {
                     override fun onWebRtcAudioTrackInitError(errorMessage: String?) {
-                        Log.w("WebRtcEngine", "AudioTrack init error: $errorMessage")
+                        logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "AudioTrack init error: $errorMessage")
                     }
 
                     override fun onWebRtcAudioTrackStartError(
                         errorCode: JavaAudioDeviceModule.AudioTrackStartErrorCode?,
                         errorMessage: String?
                     ) {
-                        Log.w("WebRtcEngine", "AudioTrack start error: code=$errorCode message=$errorMessage")
+                        logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "AudioTrack start error: code=$errorCode message=$errorMessage")
                     }
 
                     override fun onWebRtcAudioTrackError(errorMessage: String?) {
-                        Log.w("WebRtcEngine", "AudioTrack runtime error: $errorMessage")
+                        logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "AudioTrack runtime error: $errorMessage")
                     }
                 }
             )
             .setAudioRecordErrorCallback(
                 object : JavaAudioDeviceModule.AudioRecordErrorCallback {
                     override fun onWebRtcAudioRecordInitError(errorMessage: String?) {
-                        Log.w("WebRtcEngine", "AudioRecord init error: $errorMessage")
+                        logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "AudioRecord init error: $errorMessage")
                     }
 
                     override fun onWebRtcAudioRecordStartError(
                         errorCode: JavaAudioDeviceModule.AudioRecordStartErrorCode?,
                         errorMessage: String?
                     ) {
-                        Log.w("WebRtcEngine", "AudioRecord start error: code=$errorCode message=$errorMessage")
+                        logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "AudioRecord start error: code=$errorCode message=$errorMessage")
                     }
 
                     override fun onWebRtcAudioRecordError(errorMessage: String?) {
-                        Log.w("WebRtcEngine", "AudioRecord runtime error: $errorMessage")
+                        logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "AudioRecord runtime error: $errorMessage")
                     }
                 }
             )
@@ -200,7 +204,7 @@ class WebRtcEngine(
         videoSource = peerConnectionFactory.createVideoSource(false)
         cameraController.resetCameraSourceToSelfie()
         if (!cameraController.restartVideoCapturer(CameraCaptureController.LocalCameraSource.SELFIE, videoSource)) {
-            Log.w("WebRtcEngine", "No camera capturer available for ${CameraCaptureController.LocalCameraSource.SELFIE}")
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available for ${CameraCaptureController.LocalCameraSource.SELFIE}")
             videoSource?.dispose()
             videoSource = null
             localAudioTrack?.setEnabled(false)
@@ -249,7 +253,7 @@ class WebRtcEngine(
 
     override fun setIceServers(servers: List<PeerConnection.IceServer>) {
         if (released) return
-        Log.d("WebRtcEngine", "ICE servers set: ${servers.size}")
+        logger?.log(SerenadaLogLevel.DEBUG, "WebRTC", "ICE servers set: ${servers.size}")
         iceServers = servers
         peerSlots.forEach { slot ->
             slot.setIceServers(servers)
@@ -320,6 +324,7 @@ class WebRtcEngine(
             applyAudioSenderParameters = ::applyAudioSenderParameters,
             currentVideoSenderPolicy = ::activeVideoSenderPolicy,
             isRemoteBlackFrameAnalysisEnabled = { isRemoteBlackFrameAnalysisEnabled },
+            logger = logger,
         )
         peerSlots.add(slot)
         if (!iceServers.isNullOrEmpty()) {
@@ -371,7 +376,7 @@ class WebRtcEngine(
             val method = track.javaClass.getMethod("setContentHint", String::class.java)
             method.invoke(track, "speech")
         }.onFailure {
-            Log.d("WebRtcEngine", "Audio content hint not supported")
+            logger?.log(SerenadaLogLevel.DEBUG, "WebRTC", "Audio content hint not supported")
         }
     }
 
@@ -384,9 +389,9 @@ class WebRtcEngine(
             if (encodings[0].maxBitrateBps == null) return
             encodings[0].maxBitrateBps = null
             sender.setParameters(params)
-            Log.d("WebRtcEngine", "Cleared audio sender max bitrate cap")
+            logger?.log(SerenadaLogLevel.DEBUG, "WebRTC", "Cleared audio sender max bitrate cap")
         } catch (e: Exception) {
-            Log.w("WebRtcEngine", "Failed to apply audio sender parameters", e)
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "Failed to apply audio sender parameters: ${e.message}")
         }
     }
 

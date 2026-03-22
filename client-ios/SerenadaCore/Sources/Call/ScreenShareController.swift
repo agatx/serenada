@@ -1,12 +1,10 @@
 import Foundation
-import os.log
 #if canImport(WebRTC)
 import WebRTC
 #endif
 
 @MainActor
 final class ScreenShareController {
-    private static let log = OSLog(subsystem: "app.serenada.ios", category: "ScreenShareController")
 
     private(set) var isScreenSharing = false
 
@@ -29,6 +27,7 @@ final class ScreenShareController {
     private let setLocalVideoTrackEnabled: (Bool) -> Void
     var onScreenShareStopped: () -> Void
     private let onStateChanged: (Bool) -> Void
+    private let logger: SerenadaLogger?
 
     // MARK: - Init
 
@@ -39,7 +38,8 @@ final class ScreenShareController {
         isLocalVideoTrackEnabled: @escaping () -> Bool,
         setLocalVideoTrackEnabled: @escaping (Bool) -> Void,
         onScreenShareStopped: @escaping () -> Void,
-        onStateChanged: @escaping (Bool) -> Void
+        onStateChanged: @escaping (Bool) -> Void,
+        logger: SerenadaLogger? = nil
     ) {
         self.cameraController = cameraController
         self.localVideoSourceProvider = localVideoSourceProvider
@@ -47,18 +47,21 @@ final class ScreenShareController {
         self.setLocalVideoTrackEnabled = setLocalVideoTrackEnabled
         self.onScreenShareStopped = onScreenShareStopped
         self.onStateChanged = onStateChanged
+        self.logger = logger
     }
 #else
     init(
         cameraController: CameraCaptureController,
         setLocalVideoTrackEnabled: @escaping (Bool) -> Void,
         onScreenShareStopped: @escaping () -> Void,
-        onStateChanged: @escaping (Bool) -> Void
+        onStateChanged: @escaping (Bool) -> Void,
+        logger: SerenadaLogger? = nil
     ) {
         self.cameraController = cameraController
         self.setLocalVideoTrackEnabled = setLocalVideoTrackEnabled
         self.onScreenShareStopped = onScreenShareStopped
         self.onStateChanged = onStateChanged
+        self.logger = logger
     }
 #endif
 
@@ -80,7 +83,7 @@ final class ScreenShareController {
 
     #if BROADCAST_EXTENSION
         // Defer camera teardown until broadcast actually starts (user confirms picker)
-        os_log("startScreenShare: BROADCAST_EXTENSION path, creating BroadcastFrameReader", log: Self.log, type: .info)
+        logger?.log(.info, tag: "ScreenShare", "startScreenShare: BROADCAST_EXTENSION path, creating BroadcastFrameReader")
         let reader = BroadcastFrameReader(delegate: localVideoSource)
         broadcastFrameReader = reader
 
@@ -88,29 +91,29 @@ final class ScreenShareController {
 
         reader.onBroadcastStarted = { [weak self] in
             Task { @MainActor in
-                os_log("startScreenShare: onBroadcastStarted callback fired", log: ScreenShareController.log, type: .info)
+                self?.logger?.log(.info, tag: "ScreenShare", "startScreenShare: onBroadcastStarted callback fired")
                 startTimeoutTask?.cancel()
                 guard let self else { return }
                 guard self.broadcastFrameReader === reader else {
-                    os_log("startScreenShare: reader mismatch, ignoring", log: ScreenShareController.log, type: .error)
+                    self.logger?.log(.error, tag: "ScreenShare", "startScreenShare: reader mismatch, ignoring")
                     return
                 }
                 // Now tear down camera — broadcast is confirmed
-                os_log("startScreenShare: tearing down camera, setting isScreenSharing=true", log: ScreenShareController.log, type: .info)
+                self.logger?.log(.info, tag: "ScreenShare", "startScreenShare: tearing down camera, setting isScreenSharing=true")
                 self.cameraController.stopAllCapturers()
                 self.isScreenSharing = true
                 self.cameraController.isScreenSharing = true
                 self.cameraController.notifyCameraModeAndFlash()
                 self.setLocalVideoTrackEnabled(true)
                 self.onStateChanged(true)
-                os_log("startScreenShare: calling onComplete(true)", log: ScreenShareController.log, type: .info)
+                self.logger?.log(.info, tag: "ScreenShare", "startScreenShare: calling onComplete(true)")
                 onComplete?(true)
             }
         }
 
         reader.onBroadcastFinished = { [weak self] in
             Task { @MainActor in
-                os_log("startScreenShare: onBroadcastFinished callback fired", log: ScreenShareController.log, type: .info)
+                self?.logger?.log(.info, tag: "ScreenShare", "startScreenShare: onBroadcastFinished callback fired")
                 guard let self else { return }
                 guard self.broadcastFrameReader === reader else { return }
                 _ = self.stopScreenShare()

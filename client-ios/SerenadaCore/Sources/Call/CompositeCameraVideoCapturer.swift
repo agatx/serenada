@@ -26,7 +26,7 @@ final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOu
     private let session = AVCaptureMultiCamSession()
     private let backOutput = AVCaptureVideoDataOutput()
     private let frontOutput = AVCaptureVideoDataOutput()
-    private let onDebugTrace: ((String) -> Void)?
+    private let logger: SerenadaLogger?
 
     private var configured = false
     private var isRunning = false
@@ -45,8 +45,8 @@ final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOu
 
     private(set) var primaryCaptureDevice: AVCaptureDevice?
 
-    init(delegate: RTCVideoCapturerDelegate, onDebugTrace: ((String) -> Void)? = nil) {
-        self.onDebugTrace = onDebugTrace
+    init(delegate: RTCVideoCapturerDelegate, logger: SerenadaLogger? = nil) {
+        self.logger = logger
         super.init(delegate: delegate)
         captureQueue.setSpecific(key: queueKey, value: ())
     }
@@ -564,9 +564,7 @@ final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOu
     }
 
     private func debugTrace(_ message: String) {
-#if DEBUG
-        onDebugTrace?(message)
-#endif
+        logger?.log(.debug, tag: "Camera", message)
     }
 
     private func runOnCaptureQueueSync(_ block: () -> Void) {

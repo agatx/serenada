@@ -8,7 +8,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.DisplayMetrics
-import android.util.Log
+import app.serenada.core.SerenadaLogLevel
+import app.serenada.core.SerenadaLogger
 import kotlin.math.min
 import kotlin.math.roundToInt
 import org.webrtc.EglBase
@@ -23,6 +24,7 @@ internal class ScreenShareController(
     private val videoSourceProvider: () -> org.webrtc.VideoSource?,
     private val onScreenShareStopped: () -> Unit,
     private val onStateChanged: (Boolean) -> Unit,
+    private val logger: SerenadaLogger? = null,
 ) {
     var isScreenSharing: Boolean = false
         private set
@@ -55,14 +57,15 @@ internal class ScreenShareController(
             isScreenSharing = true
             cameraController.isScreenSharing = true
             onStateChanged(true)
-            Log.d(
-                TAG,
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "ScreenShare",
                 "Screen share capture profile: ${captureProfile.width}x${captureProfile.height}@${captureProfile.fps}fps"
             )
             cameraController.applyTorchForCurrentMode()
             true
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to start screen sharing", e)
+            logger?.log(SerenadaLogLevel.WARNING, "ScreenShare", "Failed to start screen sharing: ${e.message}")
             runCatching { capturer.dispose() }
             runCatching { textureHelper.dispose() }
             val videoSource = videoSourceProvider()
@@ -83,7 +86,7 @@ internal class ScreenShareController(
         val videoSource = videoSourceProvider()
         if (!cameraController.restartVideoCapturer(sourceToRestore, videoSource) &&
             !cameraController.restartVideoCapturer(CameraCaptureController.LocalCameraSource.SELFIE, videoSource)) {
-            Log.w(TAG, "Failed to restore camera after screen sharing stop")
+            logger?.log(SerenadaLogLevel.WARNING, "ScreenShare", "Failed to restore camera after screen sharing stop")
         }
         return true
     }

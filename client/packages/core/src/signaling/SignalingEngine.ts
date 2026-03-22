@@ -1,8 +1,10 @@
 import type { RoomState, SignalingMessage } from './types.js';
 import type { RoomStatuses } from './roomStatuses.js';
 import type { SignalingTransport, TransportKind } from './transports/types.js';
+import type { SerenadaLogger } from '../types.js';
 import { createSignalingTransport } from './transports/index.js';
 import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './roomStatuses.js';
+import { formatError } from '../formatError.js';
 import {
     RECONNECT_BACKOFF_BASE_MS,
     RECONNECT_BACKOFF_CAP_MS,
@@ -19,6 +21,7 @@ export interface SignalingEngineConfig {
     wsUrl: string;
     httpBaseUrl: string;
     transports?: TransportKind[];
+    logger?: SerenadaLogger;
 }
 
 export type SignalingStateListener = () => void;
@@ -68,6 +71,9 @@ export class SignalingEngine {
     private connecting = false;
     private lastCreateMaxParticipants: number | undefined = undefined;
 
+    // Logger
+    private logger?: SerenadaLogger;
+
     // Listeners
     private messageListeners: SignalingMessageListener[] = [];
     private stateListeners: SignalingStateListener[] = [];
@@ -76,6 +82,7 @@ export class SignalingEngine {
         this.wsUrl = config.wsUrl;
         this.httpBaseUrl = config.httpBaseUrl;
         this.transportOrder = config.transports ?? ['ws', 'sse'];
+        this.logger = config.logger;
         this.loadReconnectStorage();
     }
 
@@ -110,12 +117,12 @@ export class SignalingEngine {
             };
             this.transport.send(msg);
         } else {
-            console.warn('Signaling transport not connected');
+            this.logger?.log('warning', 'Signaling', 'Transport not connected');
         }
     }
 
     joinRoom(roomId: string, options?: { createMaxParticipants?: number }): void {
-        console.log(`[Signaling] joinRoom call for ${roomId}`);
+        this.logger?.log('debug', 'Signaling', `joinRoom call for ${roomId}`);
         this.error = null;
         this.clearJoinTimers();
         this.needsRejoin = false;
@@ -151,27 +158,27 @@ export class SignalingEngine {
             this.joinKickstartTimer = window.setTimeout(() => {
                 this.joinKickstartTimer = null;
                 if (this.joinAttemptId !== attemptId || this.joinAcked) return;
-                console.log('[Signaling] Join kickstart: re-sending join');
+                this.logger?.log('debug', 'Signaling', 'Join kickstart: re-sending join');
                 doSendJoin();
             }, JOIN_CONNECT_KICKSTART_MS);
 
             this.joinRecoveryTimer = window.setTimeout(() => {
                 this.joinRecoveryTimer = null;
                 if (this.joinAttemptId !== attemptId || this.joinAcked) return;
-                console.log('[Signaling] Join recovery: re-sending join');
+                this.logger?.log('debug', 'Signaling', 'Join recovery: re-sending join');
                 doSendJoin();
             }, JOIN_RECOVERY_MS);
 
             this.joinHardTimeout = window.setTimeout(() => {
                 this.joinHardTimeout = null;
                 if (this.joinAttemptId !== attemptId || this.joinAcked) return;
-                console.error('[Signaling] Join hard timeout reached');
+                this.logger?.log('error', 'Signaling', 'Join hard timeout reached');
                 this.clearJoinTimers();
                 this.error = 'Join timed out';
                 this.notifyStateChange();
             }, JOIN_HARD_TIMEOUT_MS);
         } else {
-            console.log('[Signaling] Transport not ready, buffering join');
+            this.logger?.log('debug', 'Signaling', 'Transport not ready, buffering join');
             this.pendingJoin = roomId;
         }
         this.notifyStateChange();
@@ -263,7 +270,7 @@ export class SignalingEngine {
                         this.turnTokenTTLMs = msg.payload.turnTokenTTLMs as number;
                         this.scheduleTurnRefresh();
                     }
-                    console.log('[Signaling] TURN credentials refreshed');
+                    this.logger?.log('debug', 'Signaling', 'TURN credentials refreshed');
                 }
                 break;
             case 'pong':
@@ -344,7 +351,7 @@ export class SignalingEngine {
                         this.pendingJoin = null;
                         this.joinRoom(roomId);
                     } else if (this.needsRejoin && this.currentRoomId) {
-                        console.log(`[Signaling] Auto-rejoining room ${this.currentRoomId}`);
+                        this.logger?.log('debug', 'Signaling', `Auto-rejoining room ${this.currentRoomId}`);
                         this.needsRejoin = false;
                         this.joinRoom(this.currentRoomId);
                     }
@@ -355,7 +362,7 @@ export class SignalingEngine {
                 if (connectionId !== this.transportId) return;
                 this.connecting = false;
                 if (this.closedByDestroy) return;
-                console.error(`[Signaling] Disconnected via ${reason}`, err);
+                this.logger?.log('error', 'Signaling', `Disconnected via ${reason}${err ? `: ${formatError(err)}` : ''}`);
                 this.isConnected = false;
                 this.activeTransport = null;
                 this.clearPingInterval();
@@ -384,6 +391,7 @@ export class SignalingEngine {
             wsUrl: this.wsUrl,
             httpBaseUrl: this.httpBaseUrl,
             sseSid: this.sseSid || undefined,
+            logger: this.logger,
         });
 
         this.transport = transport;
@@ -391,7 +399,7 @@ export class SignalingEngine {
             transport.connect();
         } catch (err) {
             this.connecting = false;
-            console.error(`[Signaling] Transport connect() threw`, err);
+            this.logger?.log('error', 'Signaling', `Transport connect() threw: ${formatError(err)}`);
             this.scheduleReconnect();
         }
     }
@@ -402,7 +410,7 @@ export class SignalingEngine {
         if (reason === 'unsupported' || reason === 'timeout') return true;
         if (!this.transportConnectedOnce[kind]) return true;
         if (kind === 'ws' && this.wsConsecutiveFailures >= WS_FALLBACK_CONSECUTIVE_FAILURES) {
-            console.warn(`[Signaling] ${this.wsConsecutiveFailures} consecutive WS failures, allowing SSE fallback`);
+            this.logger?.log('warning', 'Signaling', `${this.wsConsecutiveFailures} consecutive WS failures, allowing SSE fallback`);
             return true;
         }
         return false;
@@ -411,7 +419,7 @@ export class SignalingEngine {
     private tryNextTransport(reason: string): boolean {
         const nextIndex = this.transportIndex + 1;
         if (nextIndex >= this.transportOrder.length) return false;
-        console.warn(`[Signaling] ${this.transportOrder[this.transportIndex]} failed (${reason}), trying ${this.transportOrder[nextIndex]}`);
+        this.logger?.log('warning', 'Signaling', `${this.transportOrder[this.transportIndex]} failed (${reason}), trying ${this.transportOrder[nextIndex]}`);
         this.reconnectAttempts = 0;
         this.doConnect(nextIndex);
         return true;
@@ -442,7 +450,7 @@ export class SignalingEngine {
             if (elapsed > PING_INTERVAL_MS) {
                 this.missedPongs++;
                 if (this.missedPongs >= PONG_MISS_THRESHOLD) {
-                    console.warn(`[Signaling] ${this.missedPongs} missed pongs, treating connection as dead`);
+                    this.logger?.log('warning', 'Signaling', `${this.missedPongs} missed pongs, treating connection as dead`);
                     this.missedPongs = 0;
                     if (this.transport) {
                         if (this.transport.forceClose) {
@@ -463,11 +471,11 @@ export class SignalingEngine {
         if (!this.isConnected || !this.turnTokenTTLMs || !this.currentRoomId) return;
 
         const refreshDelay = this.turnTokenTTLMs * TURN_REFRESH_TRIGGER_RATIO;
-        console.log(`[Signaling] Scheduling TURN refresh in ${Math.round(refreshDelay / 1000)}s`);
+        this.logger?.log('debug', 'Signaling', `Scheduling TURN refresh in ${Math.round(refreshDelay / 1000)}s`);
         this.turnRefreshTimer = window.setTimeout(() => {
             this.turnRefreshTimer = null;
             if (this.isConnected && this.currentRoomId) {
-                console.log('[Signaling] Sending turn-refresh request');
+                this.logger?.log('debug', 'Signaling', 'Sending turn-refresh request');
                 this.sendMessage('turn-refresh');
             }
         }, refreshDelay);
@@ -509,14 +517,14 @@ export class SignalingEngine {
             const storedTokenRoom = window.sessionStorage.getItem(this.storageKeyReconnectTokenRoom);
             if (storedTokenRoom && !this.reconnectTokenRoomId) this.reconnectTokenRoomId = storedTokenRoom;
         } catch (err) {
-            console.warn('[Signaling] Failed to load reconnectCid', err);
+            this.logger?.log('warning', 'Signaling', `Failed to load reconnectCid: ${err}`);
         }
     }
 
     private persistClientId(): void {
         if (this.clientId) {
             try { window.sessionStorage.setItem(this.storageKeyClientId, this.clientId); }
-            catch (err) { console.warn('[Signaling] Failed to persist reconnectCid', err); }
+            catch (err) { this.logger?.log('warning', 'Signaling', `Failed to persist reconnectCid: ${err}`); }
         }
     }
 
@@ -529,7 +537,7 @@ export class SignalingEngine {
                 window.sessionStorage.setItem(this.storageKeyReconnectTokenRoom, this.reconnectTokenRoomId);
             }
         } catch (err) {
-            console.warn('[Signaling] Failed to persist reconnectToken', err);
+            this.logger?.log('warning', 'Signaling', `Failed to persist reconnectToken: ${err}`);
         }
     }
 
@@ -539,7 +547,7 @@ export class SignalingEngine {
             window.sessionStorage.removeItem(this.storageKeyReconnectToken);
             window.sessionStorage.removeItem(this.storageKeyReconnectTokenRoom);
         } catch (err) {
-            console.warn('[Signaling] Failed to clear reconnectCid', err);
+            this.logger?.log('warning', 'Signaling', `Failed to clear reconnectCid: ${err}`);
         }
         this.reconnectToken = null;
         this.reconnectTokenRoomId = null;
