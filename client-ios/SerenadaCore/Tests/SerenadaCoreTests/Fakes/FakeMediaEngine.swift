@@ -13,7 +13,8 @@ final class FakeMediaEngine: SessionMediaEngine {
     private(set) var toggleVideoCalls: [Bool] = []
     private(set) var iceServersSet = false
     private(set) var createdSlotCids: [String] = []
-    private(set) var removedSlots: [PeerConnectionSlot] = []
+    private(set) var removedSlots: [any PeerConnectionSlotProtocol] = []
+    private(set) var fakeSlots: [String: FakePeerConnectionSlot] = [:]
 
     private var _iceServers: [IceServerConfig]?
     private var onCameraFacingChanged: ((Bool) -> Void)?
@@ -62,28 +63,19 @@ final class FakeMediaEngine: SessionMediaEngine {
         onIceConnectionStateChange: @escaping (String, String) -> Void,
         onSignalingStateChange: @escaping (String, String) -> Void,
         onRenegotiationNeeded: @escaping (String) -> Void
-    ) -> PeerConnectionSlot? {
+    ) -> (any PeerConnectionSlotProtocol)? {
         createdSlotCids.append(remoteCid)
-        #if canImport(WebRTC)
-        return PeerConnectionSlot(
+        let slot = FakePeerConnectionSlot(
             remoteCid: remoteCid,
-            factory: nil,
-            iceServers: nil,
-            localAudioTrack: nil,
-            localVideoTrack: nil,
-            onLocalIceCandidate: onLocalIceCandidate,
-            onRemoteVideoTrack: { cid, track in onRemoteVideoTrack(cid, track) },
             onConnectionStateChange: onConnectionStateChange,
             onIceConnectionStateChange: onIceConnectionStateChange,
-            onSignalingStateChange: onSignalingStateChange,
-            onRenegotiationNeeded: onRenegotiationNeeded
+            onSignalingStateChange: onSignalingStateChange
         )
-        #else
-        return PeerConnectionSlot(remoteCid: remoteCid)
-        #endif
+        fakeSlots[remoteCid] = slot
+        return slot
     }
 
-    func removeSlot(_ slot: PeerConnectionSlot) {
+    func removeSlot(_ slot: any PeerConnectionSlotProtocol) {
         removedSlots.append(slot)
     }
 

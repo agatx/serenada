@@ -12,7 +12,7 @@ The 10 workstreams and current status:
 - [x] Eliminate the iOS dual-state / `@Published` timing trap.
 - [x] Remove duplicated UI-facing call state models where core state can be consumed directly.
 - [x] Add DI seams for signaling, WebRTC, API, and audio (timers/schedulers deferred).
-- [ ] Add orchestration-level tests for join, reconnect, negotiation, and recovery.
+- [x] Add orchestration-level tests for join, reconnect, negotiation, and recovery.
 - [x] Enforce Android main-thread usage and fix Android stats/resource lifecycle.
 - [x] Encapsulate `PeerConnectionSlot` state machines.
 - [x] Replace raw public WebRTC string state with typed diagnostics.

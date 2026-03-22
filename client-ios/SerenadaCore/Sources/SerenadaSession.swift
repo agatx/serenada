@@ -66,7 +66,7 @@ public final class SerenadaSession: ObservableObject {
     private var clientId: String?
     private var hostCid: String?
     private var currentRoomState: RoomState?
-    private var peerSlots: [String: PeerConnectionSlot] = [:]
+    private var peerSlots: [String: any PeerConnectionSlotProtocol] = [:]
     private var pendingMessages: [SignalingMessage] = []
 
     private var pendingJoinRoom: String?

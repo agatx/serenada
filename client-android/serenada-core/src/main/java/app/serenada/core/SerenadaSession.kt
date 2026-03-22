@@ -22,7 +22,7 @@ import app.serenada.core.call.ContentTypeWire
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.LocalFrameSnapshotCapture
 import app.serenada.core.call.Participant
-import app.serenada.core.call.PeerConnectionSlot
+import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RemoteParticipant
 import app.serenada.core.call.RealtimeCallStats
 import app.serenada.core.call.RoomState
@@ -184,7 +184,7 @@ class SerenadaSession internal constructor(
         onRefreshRemoteParticipants = { refreshRemoteParticipants() },
     )
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
-    private val peerSlots = mutableMapOf<String, PeerConnectionSlot>()
+    private val peerSlots = mutableMapOf<String, PeerConnectionSlotProtocol>()
     private val peerNegotiationEngine: PeerNegotiationEngine
     private var reconnectToken: String? = null
     private var hasJoinSignalStarted = false
@@ -207,7 +207,7 @@ class SerenadaSession internal constructor(
             hasIceServers = { webRtcEngine.hasIceServers() },
             getSlot = { cid: String -> peerSlots[cid] },
             getAllSlots = { peerSlots.toMap() },
-            setSlot = { cid: String, slot: PeerConnectionSlot -> peerSlots[cid] = slot },
+            setSlot = { cid: String, slot: PeerConnectionSlotProtocol -> peerSlots[cid] = slot },
             removeSlotEntry = { cid: String -> peerSlots.remove(cid) },
             createSlotViaEngine = {
                 remoteCid: String,
@@ -227,7 +227,7 @@ class SerenadaSession internal constructor(
                     onRenegotiationNeeded = onRenegotiation,
                 )
             },
-            engineRemoveSlot = { slot: PeerConnectionSlot -> webRtcEngine.removeSlot(slot) },
+            engineRemoveSlot = { slot: PeerConnectionSlotProtocol -> webRtcEngine.removeSlot(slot) },
             sendMessage = { type: String, payload: org.json.JSONObject?, to: String? -> sendMessage(type, payload, to) },
             onRemoteParticipantsChanged = { refreshRemoteParticipants() },
             onAggregatePeerStateChanged = { ice: IceConnectionState, conn: PeerConnectionState, sig: RtcSignalingState ->

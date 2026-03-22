@@ -18,7 +18,7 @@ import org.webrtc.VideoTrack
 import kotlin.math.max
 
 class PeerConnectionSlot(
-    val remoteCid: String,
+    override val remoteCid: String,
     private val factory: PeerConnectionFactory?,
     private var iceServers: List<PeerConnection.IceServer>?,
     private var localAudioTrack: AudioTrack?,
@@ -32,7 +32,7 @@ class PeerConnectionSlot(
     private val applyAudioSenderParameters: (PeerConnection) -> Unit,
     private val currentVideoSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy,
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
-) {
+) : PeerConnectionSlotProtocol {
     private data class MediaTotals(
         var inboundPacketsReceived: Long = 0L,
         var inboundPacketsLost: Long = 0L,
@@ -77,45 +77,45 @@ class PeerConnectionSlot(
         val freezeDurationSeconds: Double
     )
 
-    var sentOffer: Boolean = false
+    override var sentOffer: Boolean = false
         private set
-    var isMakingOffer: Boolean = false
+    override var isMakingOffer: Boolean = false
         private set
-    var pendingIceRestart: Boolean = false
+    override var pendingIceRestart: Boolean = false
         private set
-    var lastIceRestartAt: Long = 0L
+    override var lastIceRestartAt: Long = 0L
         private set
-    var offerTimeoutTask: Runnable? = null
+    override var offerTimeoutTask: Runnable? = null
         private set
-    var iceRestartTask: Runnable? = null
+    override var iceRestartTask: Runnable? = null
         private set
-    var nonHostFallbackTask: Runnable? = null
+    override var nonHostFallbackTask: Runnable? = null
         private set
-    var nonHostFallbackAttempts: Int = 0
+    override var nonHostFallbackAttempts: Int = 0
         private set
 
     // Offer lifecycle
-    fun beginOffer() { isMakingOffer = true }
-    fun completeOffer() { isMakingOffer = false }
-    fun markOfferSent() { sentOffer = true }
+    override fun beginOffer() { isMakingOffer = true }
+    override fun completeOffer() { isMakingOffer = false }
+    override fun markOfferSent() { sentOffer = true }
 
     // ICE restart lifecycle
-    fun markPendingIceRestart() { pendingIceRestart = true }
-    fun clearPendingIceRestart() { pendingIceRestart = false }
-    fun recordIceRestart() {
+    override fun markPendingIceRestart() { pendingIceRestart = true }
+    override fun clearPendingIceRestart() { pendingIceRestart = false }
+    override fun recordIceRestart() {
         lastIceRestartAt = System.currentTimeMillis()
         pendingIceRestart = false
     }
 
     // Task management
-    fun setOfferTimeoutTask(task: Runnable) { offerTimeoutTask = task }
-    fun cancelOfferTimeout() { offerTimeoutTask = null }
-    fun setIceRestartTask(task: Runnable) { iceRestartTask = task }
-    fun cancelIceRestartTask() { iceRestartTask = null }
-    fun setNonHostFallbackTask(task: Runnable) { nonHostFallbackTask = task }
-    fun cancelNonHostFallbackTask() { nonHostFallbackTask = null }
-    fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
-    fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
+    override fun setOfferTimeoutTask(task: Runnable) { offerTimeoutTask = task }
+    override fun cancelOfferTimeout() { offerTimeoutTask = null }
+    override fun setIceRestartTask(task: Runnable) { iceRestartTask = task }
+    override fun cancelIceRestartTask() { iceRestartTask = null }
+    override fun setNonHostFallbackTask(task: Runnable) { nonHostFallbackTask = task }
+    override fun cancelNonHostFallbackTask() { nonHostFallbackTask = null }
+    override fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
+    override fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
     private var peerConnection: PeerConnection? = null
     private var remoteVideoTrack: VideoTrack? = null
@@ -138,12 +138,12 @@ class PeerConnectionSlot(
         }
     }
 
-    fun setIceServers(servers: List<PeerConnection.IceServer>) {
+    override fun setIceServers(servers: List<PeerConnection.IceServer>) {
         iceServers = servers
         ensurePeerConnection()
     }
 
-    fun ensurePeerConnection(): Boolean {
+    override fun ensurePeerConnection(): Boolean {
         if (peerConnection != null) return true
         val f = factory ?: return false
         val servers = iceServers ?: return false
@@ -203,7 +203,7 @@ class PeerConnectionSlot(
         return true
     }
 
-    fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {
+    override fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {
         localAudioTrack = audioTrack
         localVideoTrack = videoTrack
         val pc = peerConnection ?: run {
@@ -221,7 +221,7 @@ class PeerConnectionSlot(
         }
     }
 
-    fun closePeerConnection() {
+    override fun closePeerConnection() {
         offerTimeoutTask = null
         iceRestartTask = null
         nonHostFallbackTask = null
@@ -240,10 +240,10 @@ class PeerConnectionSlot(
         onRemoteVideoTrack(remoteCid, null)
     }
 
-    fun createOffer(
-        iceRestart: Boolean = false,
+    override fun createOffer(
+        iceRestart: Boolean,
         onSdp: (String) -> Unit,
-        onComplete: ((Boolean) -> Unit)? = null,
+        onComplete: ((Boolean) -> Unit)?,
     ): Boolean {
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) return false
@@ -285,7 +285,7 @@ class PeerConnectionSlot(
         return true
     }
 
-    fun createAnswer(onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)? = null) {
+    override fun createAnswer(onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)?) {
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) {
                 onComplete?.invoke(false)
@@ -324,10 +324,10 @@ class PeerConnectionSlot(
         }, constraints)
     }
 
-    fun setRemoteDescription(
+    override fun setRemoteDescription(
         type: SessionDescription.Type,
         sdp: String,
-        onComplete: (() -> Unit)? = null,
+        onComplete: (() -> Unit)?,
     ) {
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) return
@@ -347,7 +347,7 @@ class PeerConnectionSlot(
         }, desc)
     }
 
-    fun addIceCandidate(candidate: IceCandidate) {
+    override fun addIceCandidate(candidate: IceCandidate) {
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) {
                 if (pendingIceCandidates.size < WebRtcResilienceConstants.ICE_CANDIDATE_BUFFER_MAX) {
@@ -367,7 +367,7 @@ class PeerConnectionSlot(
         pc.addIceCandidate(candidate)
     }
 
-    fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)? = null) {
+    override fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)?) {
         val pc = peerConnection ?: return
         val desc = SessionDescription(SessionDescription.Type.ROLLBACK, "")
         pc.setLocalDescription(object : SdpObserverAdapter() {
@@ -382,25 +382,25 @@ class PeerConnectionSlot(
         }, desc)
     }
 
-    fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {
+    override fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {
         attachRemoteSink(renderer)
     }
 
-    fun detachRemoteRenderer(renderer: SurfaceViewRenderer) {
+    override fun detachRemoteRenderer(renderer: SurfaceViewRenderer) {
         detachRemoteSink(renderer)
     }
 
-    fun attachRemoteSink(sink: VideoSink) {
+    override fun attachRemoteSink(sink: VideoSink) {
         if (!remoteSinks.add(sink)) return
         remoteVideoTrack?.addSink(sink)
     }
 
-    fun detachRemoteSink(sink: VideoSink) {
+    override fun detachRemoteSink(sink: VideoSink) {
         remoteVideoTrack?.removeSink(sink)
         remoteSinks.remove(sink)
     }
 
-    fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit) {
+    override fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit) {
         val pc = peerConnection
         if (pc == null) {
             onComplete("pc=none remote=$remoteCid", null)
@@ -414,26 +414,26 @@ class PeerConnectionSlot(
         }
     }
 
-    fun isReady(): Boolean = peerConnection != null
+    override fun isReady(): Boolean = peerConnection != null
 
-    fun getConnectionState(): PeerConnection.PeerConnectionState =
+    override fun getConnectionState(): PeerConnection.PeerConnectionState =
         peerConnection?.connectionState() ?: PeerConnection.PeerConnectionState.NEW
 
-    fun getIceConnectionState(): PeerConnection.IceConnectionState =
+    override fun getIceConnectionState(): PeerConnection.IceConnectionState =
         peerConnection?.iceConnectionState() ?: PeerConnection.IceConnectionState.NEW
 
-    fun getSignalingState(): PeerConnection.SignalingState =
+    override fun getSignalingState(): PeerConnection.SignalingState =
         peerConnection?.signalingState() ?: PeerConnection.SignalingState.STABLE
 
-    fun hasRemoteDescription(): Boolean = remoteDescriptionSet || peerConnection?.remoteDescription != null
+    override fun hasRemoteDescription(): Boolean = remoteDescriptionSet || peerConnection?.remoteDescription != null
 
-    fun isRemoteVideoTrackEnabled(): Boolean {
+    override fun isRemoteVideoTrackEnabled(): Boolean {
         val track = remoteVideoTrack ?: return false
         if (!track.enabled()) return false
         return !remoteBlackFrameAnalyzer.isVideoConsideredOff()
     }
 
-    fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
+    override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
         val pc = peerConnection ?: return
         val sender = pc.senders.firstOrNull { it.track()?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND } ?: return
         try {

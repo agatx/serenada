@@ -125,6 +125,78 @@ final class SessionTestHarness {
         await Task.yield()
     }
 
+    // MARK: - Negotiation Test Helpers
+
+    /// Advance to inCall state with TURN credentials ready and ICE servers set.
+    func advanceToInCallWithTurn(
+        localCid: String = "local-cid-1",
+        remoteCid: String = "remote-cid-1",
+        localJoinedAt: Int = 1,
+        remoteJoinedAt: Int = 2,
+        turnToken: String = "test-turn-token"
+    ) async {
+        await advancePastPermissions()
+        openSignaling()
+        simulateJoinedResponse(
+            cid: localCid,
+            participants: [
+                (cid: localCid, joinedAt: localJoinedAt),
+                (cid: remoteCid, joinedAt: remoteJoinedAt)
+            ],
+            hostCid: localCid,
+            turnToken: turnToken
+        )
+        await yieldToMainActor()
+        // Give TURN fetch time to complete
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        await yieldToMainActor()
+    }
+
+    func simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp") {
+        let msg = SignalingMessage(
+            type: "offer",
+            rid: session.roomId,
+            payload: .object([
+                "from": .string(fromCid),
+                "sdp": .string(sdp)
+            ])
+        )
+        fakeSignaling.simulateMessage(msg)
+    }
+
+    func simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp") {
+        let msg = SignalingMessage(
+            type: "answer",
+            rid: session.roomId,
+            payload: .object([
+                "from": .string(fromCid),
+                "sdp": .string(sdp)
+            ])
+        )
+        fakeSignaling.simulateMessage(msg)
+    }
+
+    func simulateIceCandidateFromRemote(
+        fromCid: String,
+        candidate: String = "candidate:1 1 udp 2130706431 192.168.1.1 12345 typ host",
+        sdpMid: String = "0",
+        sdpMLineIndex: Int = 0
+    ) {
+        let msg = SignalingMessage(
+            type: "ice",
+            rid: session.roomId,
+            payload: .object([
+                "from": .string(fromCid),
+                "candidate": .object([
+                    "candidate": .string(candidate),
+                    "sdpMid": .string(sdpMid),
+                    "sdpMLineIndex": .number(Double(sdpMLineIndex))
+                ])
+            ])
+        )
+        fakeSignaling.simulateMessage(msg)
+    }
+
     func tearDown() {
         session.cancelJoin()
     }

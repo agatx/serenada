@@ -114,8 +114,13 @@ public final class SerenadaDiagnostics {
         report.sse = await runTimedCheck { try await self.testSse() }
         report.diagnosticToken = await runTimedCheck { tokenForTurn = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost) }
         report.turnCredentials = await runTimedCheck {
-            let token = try tokenForTurn ?? (try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost))
-            _ = try await self.apiClient.fetchTurnCredentials(host: self.config.serverHost, token: token)
+            let resolvedToken: String
+            if let existing = tokenForTurn {
+                resolvedToken = existing
+            } else {
+                resolvedToken = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost)
+            }
+            _ = try await self.apiClient.fetchTurnCredentials(host: self.config.serverHost, token: resolvedToken)
         }
         return report
     }

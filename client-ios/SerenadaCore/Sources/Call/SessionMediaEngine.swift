@@ -24,8 +24,8 @@ protocol SessionMediaEngine: AnyObject {
         onIceConnectionStateChange: @escaping (String, String) -> Void,
         onSignalingStateChange: @escaping (String, String) -> Void,
         onRenegotiationNeeded: @escaping (String) -> Void
-    ) -> PeerConnectionSlot?
-    func removeSlot(_ slot: PeerConnectionSlot)
+    ) -> (any PeerConnectionSlotProtocol)?
+    func removeSlot(_ slot: any PeerConnectionSlotProtocol)
     func attachLocalRenderer(_ renderer: AnyObject)
     func detachLocalRenderer(_ renderer: AnyObject)
     func setOnCameraFacingChanged(_ handler: @escaping (Bool) -> Void)

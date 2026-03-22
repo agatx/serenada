@@ -1,9 +1,8 @@
 package app.serenada.core.fakes
 
 import android.content.Intent
-import app.serenada.core.call.PeerConnectionSlot
+import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.SessionMediaEngine
-import app.serenada.core.call.WebRtcEngine
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
@@ -22,7 +21,8 @@ class FakeMediaEngine : SessionMediaEngine {
     var iceServersSet = false
         private set
     val createdSlotCids = mutableListOf<String>()
-    val removedSlots = mutableListOf<PeerConnectionSlot>()
+    val removedSlots = mutableListOf<PeerConnectionSlotProtocol>()
+    val fakeSlots = mutableMapOf<String, FakePeerConnectionSlot>()
 
     private var _iceServers: List<PeerConnection.IceServer>? = null
 
@@ -49,34 +49,19 @@ class FakeMediaEngine : SessionMediaEngine {
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
-    ): PeerConnectionSlot {
+    ): PeerConnectionSlotProtocol {
         createdSlotCids.add(remoteCid)
-        return PeerConnectionSlot(
+        val slot = FakePeerConnectionSlot(
             remoteCid = remoteCid,
-            factory = null,
-            iceServers = null,
-            localAudioTrack = null,
-            localVideoTrack = null,
-            onLocalIceCandidate = onLocalIceCandidate,
-            onRemoteVideoTrack = onRemoteVideoTrack,
             onConnectionStateChange = onConnectionStateChange,
             onIceConnectionStateChange = onIceConnectionStateChange,
             onSignalingStateChange = onSignalingStateChange,
-            onRenegotiationNeeded = onRenegotiationNeeded,
-            applyAudioSenderParameters = {},
-            currentVideoSenderPolicy = {
-                WebRtcEngine.VideoSenderPolicy(
-                    maxBitrateBps = null,
-                    minBitrateBps = null,
-                    maxFramerate = null,
-                    degradationPreference = null,
-                )
-            },
-            isRemoteBlackFrameAnalysisEnabled = { false },
         )
+        fakeSlots[remoteCid] = slot
+        return slot
     }
 
-    override fun removeSlot(slot: PeerConnectionSlot) {
+    override fun removeSlot(slot: PeerConnectionSlotProtocol) {
         removedSlots.add(slot)
     }
 

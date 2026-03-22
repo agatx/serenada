@@ -479,7 +479,7 @@ class WebRtcEngine(
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
-    ): PeerConnectionSlot {
+    ): PeerConnectionSlotProtocol {
         val slot = PeerConnectionSlot(
             remoteCid = remoteCid,
             factory = peerConnectionFactory,
@@ -503,7 +503,7 @@ class WebRtcEngine(
         return slot
     }
 
-    override fun removeSlot(slot: PeerConnectionSlot) {
+    override fun removeSlot(slot: PeerConnectionSlotProtocol) {
         peerSlots.remove(slot)
     }
 

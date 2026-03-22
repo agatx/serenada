@@ -7,7 +7,7 @@ class StatsPoller(
     private val handler: Handler,
     private val statsExecutorProvider: () -> ExecutorService?,
     private val isActivePhase: () -> Boolean,
-    private val getPeerSlots: () -> List<PeerConnectionSlot>,
+    private val getPeerSlots: () -> List<PeerConnectionSlotProtocol>,
     private val onStatsUpdated: (RealtimeCallStats) -> Unit,
     private val onRefreshRemoteParticipants: () -> Unit,
 ) {

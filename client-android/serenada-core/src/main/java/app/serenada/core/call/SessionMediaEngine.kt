@@ -27,8 +27,8 @@ interface SessionMediaEngine {
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
-    ): PeerConnectionSlot
-    fun removeSlot(slot: PeerConnectionSlot)
+    ): PeerConnectionSlotProtocol
+    fun removeSlot(slot: PeerConnectionSlotProtocol)
     fun attachLocalRenderer(renderer: SurfaceViewRenderer, rendererEvents: RendererCommon.RendererEvents?)
     fun detachLocalRenderer(renderer: SurfaceViewRenderer)
     fun attachLocalSink(sink: VideoSink)

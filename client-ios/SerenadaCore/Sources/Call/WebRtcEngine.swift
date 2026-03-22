@@ -303,7 +303,7 @@ public final class WebRtcEngine: SessionMediaEngine {
         onIceConnectionStateChange: @escaping (String, String) -> Void,
         onSignalingStateChange: @escaping (String, String) -> Void,
         onRenegotiationNeeded: @escaping (String) -> Void
-    ) -> PeerConnectionSlot? {
+    ) -> (any PeerConnectionSlotProtocol)? {
 #if canImport(WebRTC)
         guard let peerConnectionFactory else { return nil }
         let slot = PeerConnectionSlot(
@@ -328,9 +328,9 @@ public final class WebRtcEngine: SessionMediaEngine {
 #endif
     }
 
-    public func removeSlot(_ slot: PeerConnectionSlot) {
+    public func removeSlot(_ slot: any PeerConnectionSlotProtocol) {
 #if canImport(WebRTC)
-        peerSlots.removeAll { $0 === slot }
+        peerSlots.removeAll { $0 === (slot as AnyObject) }
 #endif
     }
 

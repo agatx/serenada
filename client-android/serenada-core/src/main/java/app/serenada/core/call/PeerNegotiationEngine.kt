@@ -20,10 +20,10 @@ class PeerNegotiationEngine(
     private val isSignalingConnected: () -> Boolean,
     private val hasIceServers: () -> Boolean,
     // Slot access (session owns peerSlots)
-    private val getSlot: (String) -> PeerConnectionSlot?,
-    private val getAllSlots: () -> Map<String, PeerConnectionSlot>,
-    private val setSlot: (String, PeerConnectionSlot) -> Unit,
-    private val removeSlotEntry: (String) -> PeerConnectionSlot?,
+    private val getSlot: (String) -> PeerConnectionSlotProtocol?,
+    private val getAllSlots: () -> Map<String, PeerConnectionSlotProtocol>,
+    private val setSlot: (String, PeerConnectionSlotProtocol) -> Unit,
+    private val removeSlotEntry: (String) -> PeerConnectionSlotProtocol?,
     // WebRTC engine
     private val createSlotViaEngine: (
         remoteCid: String,
@@ -33,8 +33,8 @@ class PeerNegotiationEngine(
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
-    ) -> PeerConnectionSlot,
-    private val engineRemoveSlot: (PeerConnectionSlot) -> Unit,
+    ) -> PeerConnectionSlotProtocol,
+    private val engineRemoveSlot: (PeerConnectionSlotProtocol) -> Unit,
     // Callbacks to session
     private val sendMessage: (String, JSONObject?, String?) -> Unit,
     private val onRemoteParticipantsChanged: () -> Unit,
@@ -149,7 +149,7 @@ class PeerNegotiationEngine(
 
     // --- Slot Lifecycle ---
 
-    private fun getOrCreateSlot(remoteCid: String): PeerConnectionSlot {
+    private fun getOrCreateSlot(remoteCid: String): PeerConnectionSlotProtocol {
         getSlot(remoteCid)?.let { return it }
         val slot = createSlotViaEngine(
             remoteCid,
@@ -245,7 +245,7 @@ class PeerNegotiationEngine(
         return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
     }
 
-    private fun canOffer(slot: PeerConnectionSlot): Boolean {
+    private fun canOffer(slot: PeerConnectionSlotProtocol): Boolean {
         if (!isSignalingConnected()) return false
         if (!slot.isReady()) return false
         if (!shouldIOffer(slot.remoteCid, getCurrentRoomState())) return false
@@ -259,7 +259,7 @@ class PeerNegotiationEngine(
         }
     }
 
-    private fun maybeSendOffer(slot: PeerConnectionSlot, force: Boolean = false, iceRestart: Boolean = false) {
+    private fun maybeSendOffer(slot: PeerConnectionSlotProtocol, force: Boolean = false, iceRestart: Boolean = false) {
         if (slot.isMakingOffer) { if (iceRestart) slot.markPendingIceRestart(); return }
         if (!force && slot.sentOffer) return
         if (!canOffer(slot)) return

@@ -140,6 +140,54 @@ class TestSessionFactory(
         ShadowLooper.idleMainLooper()
     }
 
+    fun simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp") {
+        val payload = JSONObject().apply {
+            put("from", fromCid)
+            put("sdp", sdp)
+        }
+        fakeSignaling.simulateMessage(SignalingMessage("offer", roomId, null, null, null, payload))
+        ShadowLooper.idleMainLooper()
+    }
+
+    fun simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp") {
+        val payload = JSONObject().apply {
+            put("from", fromCid)
+            put("sdp", sdp)
+        }
+        fakeSignaling.simulateMessage(SignalingMessage("answer", roomId, null, null, null, payload))
+        ShadowLooper.idleMainLooper()
+    }
+
+    fun simulateIceCandidateFromRemote(fromCid: String, candidate: String = "candidate:test") {
+        val payload = JSONObject().apply {
+            put("from", fromCid)
+            put("candidate", JSONObject().apply {
+                put("candidate", candidate)
+                put("sdpMid", "0")
+                put("sdpMLineIndex", 0)
+            })
+        }
+        fakeSignaling.simulateMessage(SignalingMessage("ice", roomId, null, null, null, payload))
+        ShadowLooper.idleMainLooper()
+    }
+
+    fun advanceToInCallWithTurn(
+        localCid: String = "local-cid-1",
+        remoteCid: String = "remote-cid-1",
+        localJoinedAt: Long = 1L,
+        remoteJoinedAt: Long = 2L,
+        turnToken: String = "test-turn-token",
+    ) {
+        grantPermissionsAndStart()
+        openSignaling()
+        simulateJoinedResponse(
+            cid = localCid,
+            participants = listOf(localCid to localJoinedAt, remoteCid to remoteJoinedAt),
+            hostCid = localCid,
+            turnToken = turnToken,
+        )
+    }
+
     fun tearDown() {
         session.cancelJoin()
         ShadowLooper.idleMainLooper()

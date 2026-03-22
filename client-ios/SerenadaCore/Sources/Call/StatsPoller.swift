@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 final class StatsPoller {
     private let isActivePhase: () -> Bool
-    private let getPeerSlots: () -> [PeerConnectionSlot]
+    private let getPeerSlots: () -> [any PeerConnectionSlotProtocol]
     private let onStatsUpdated: (RealtimeCallStats) -> Void
     private let onRefreshRemoteParticipants: () -> Void
 
@@ -13,7 +13,7 @@ final class StatsPoller {
 
     init(
         isActivePhase: @escaping () -> Bool,
-        getPeerSlots: @escaping () -> [PeerConnectionSlot],
+        getPeerSlots: @escaping () -> [any PeerConnectionSlotProtocol],
         onStatsUpdated: @escaping (RealtimeCallStats) -> Void,
         onRefreshRemoteParticipants: @escaping () -> Void
     ) {

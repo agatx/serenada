@@ -12,10 +12,10 @@ final class PeerNegotiationEngine {
     private let hasIceServers: () -> Bool
 
     // Slot access (session owns peerSlots)
-    private let getSlot: (String) -> PeerConnectionSlot?
-    private let getAllSlots: () -> [String: PeerConnectionSlot]
-    private let setSlot: (String, PeerConnectionSlot) -> Void
-    private let removeSlotEntry: (String) -> PeerConnectionSlot?
+    private let getSlot: (String) -> (any PeerConnectionSlotProtocol)?
+    private let getAllSlots: () -> [String: any PeerConnectionSlotProtocol]
+    private let setSlot: (String, any PeerConnectionSlotProtocol) -> Void
+    private let removeSlotEntry: (String) -> (any PeerConnectionSlotProtocol)?
 
     // WebRTC engine
     private let createSlotViaEngine: (
@@ -26,8 +26,8 @@ final class PeerNegotiationEngine {
         _ onIceConnectionStateChange: @escaping (String, String) -> Void,
         _ onSignalingStateChange: @escaping (String, String) -> Void,
         _ onRenegotiationNeeded: @escaping (String) -> Void
-    ) -> PeerConnectionSlot?
-    private let engineRemoveSlot: (PeerConnectionSlot) -> Void
+    ) -> (any PeerConnectionSlotProtocol)?
+    private let engineRemoveSlot: (any PeerConnectionSlotProtocol) -> Void
 
     // Callbacks to session
     private let sendMessage: (String, JSONValue?, String?) -> Void
@@ -43,10 +43,10 @@ final class PeerNegotiationEngine {
         getCurrentRoomState: @escaping () -> RoomState?,
         isSignalingConnected: @escaping () -> Bool,
         hasIceServers: @escaping () -> Bool,
-        getSlot: @escaping (String) -> PeerConnectionSlot?,
-        getAllSlots: @escaping () -> [String: PeerConnectionSlot],
-        setSlot: @escaping (String, PeerConnectionSlot) -> Void,
-        removeSlotEntry: @escaping (String) -> PeerConnectionSlot?,
+        getSlot: @escaping (String) -> (any PeerConnectionSlotProtocol)?,
+        getAllSlots: @escaping () -> [String: any PeerConnectionSlotProtocol],
+        setSlot: @escaping (String, any PeerConnectionSlotProtocol) -> Void,
+        removeSlotEntry: @escaping (String) -> (any PeerConnectionSlotProtocol)?,
         createSlotViaEngine: @escaping (
             _ remoteCid: String,
             _ onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
@@ -55,8 +55,8 @@ final class PeerNegotiationEngine {
             _ onIceConnectionStateChange: @escaping (String, String) -> Void,
             _ onSignalingStateChange: @escaping (String, String) -> Void,
             _ onRenegotiationNeeded: @escaping (String) -> Void
-        ) -> PeerConnectionSlot?,
-        engineRemoveSlot: @escaping (PeerConnectionSlot) -> Void,
+        ) -> (any PeerConnectionSlotProtocol)?,
+        engineRemoveSlot: @escaping (any PeerConnectionSlotProtocol) -> Void,
         sendMessage: @escaping (String, JSONValue?, String?) -> Void,
         onRemoteParticipantsChanged: @escaping () -> Void,
         onAggregatePeerStateChanged: @escaping (IceConnectionState, PeerConnectionState, SignalingState) -> Void,
@@ -212,7 +212,7 @@ final class PeerNegotiationEngine {
 
     // MARK: - Slot Lifecycle
 
-    private func getOrCreateSlot(remoteCid: String) -> PeerConnectionSlot {
+    private func getOrCreateSlot(remoteCid: String) -> any PeerConnectionSlotProtocol {
         if let slot = getSlot(remoteCid) {
             return slot
         }
@@ -325,7 +325,7 @@ final class PeerNegotiationEngine {
         return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
     }
 
-    private func canOffer(slot: PeerConnectionSlot) -> Bool {
+    private func canOffer(slot: any PeerConnectionSlotProtocol) -> Bool {
         guard getParticipantCount() > 1 else { return false }
         guard isSignalingConnected() else { return false }
         guard shouldIOffer(remoteCid: slot.remoteCid) else { return false }
@@ -338,7 +338,7 @@ final class PeerNegotiationEngine {
         }
     }
 
-    private func maybeSendOffer(slot: PeerConnectionSlot, force: Bool = false, iceRestart: Bool = false) {
+    private func maybeSendOffer(slot: any PeerConnectionSlotProtocol, force: Bool = false, iceRestart: Bool = false) {
         if slot.isMakingOffer {
             if iceRestart {
                 slot.markPendingIceRestart()
@@ -564,6 +564,7 @@ final class PeerNegotiationEngine {
 
         slot.beginOffer()
         let started = slot.createOffer(
+            iceRestart: false,
             onSdp: { [weak self] sdp in
                 self?.sendMessage(
                     "offer",
