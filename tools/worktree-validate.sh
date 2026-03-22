@@ -46,12 +46,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 TARGET="${1:-$DEFAULT_ROOT}"
+ORIGINAL_TARGET="$TARGET"
 if [[ "$TARGET" != /* ]]; then
-    TARGET="$(cd "$TARGET" 2>/dev/null && pwd)"
+    TARGET="$(cd "$TARGET" 2>/dev/null && pwd || true)"
 fi
 
-if [ ! -d "$TARGET" ]; then
-    echo "Directory not found: $TARGET"
+if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then
+    echo "Directory not found: $ORIGINAL_TARGET"
     exit 1
 fi
 
@@ -85,7 +86,7 @@ fi
 # .env
 if [ -f "$TARGET/.env" ]; then
     # Check for placeholder secrets
-    if grep -q 'dev-secret\|dev-room-id-secret\|change-me' "$TARGET/.env" 2>/dev/null; then
+    if grep -qE 'dev-secret|dev-room-id-secret|change-me' "$TARGET/.env" 2>/dev/null; then
         check_warn ".env exists but contains placeholder secrets"
     else
         check_pass ".env configured"
@@ -145,9 +146,17 @@ else
         fi
     done
 
+    # Check npm is available for build/lint/test steps
+    HAS_NPM=false
+    if command -v npm >/dev/null 2>&1; then
+        HAS_NPM=true
+    fi
+
     # TypeScript build
     if [ "${SKIP_BUILD:-}" != "1" ]; then
-        if [ -d "$CLIENT/node_modules" ]; then
+        if [ "$HAS_NPM" != true ]; then
+            check_skip "Web build ('npm' not found)"
+        elif [ -d "$CLIENT/node_modules" ]; then
             log_info "Building web client..."
             if (cd "$CLIENT" && run_quiet npm run build); then
                 check_pass "TypeScript + Vite build"
@@ -163,18 +172,26 @@ else
 
     # Lint
     if [ "${SKIP_BUILD:-}" != "1" ]; then
-        if [ -d "$CLIENT/node_modules" ]; then
+        if [ "$HAS_NPM" != true ]; then
+            check_skip "Web lint ('npm' not found)"
+        elif [ -d "$CLIENT/node_modules" ]; then
             if (cd "$CLIENT" && run_quiet npm run lint); then
                 check_pass "ESLint"
             else
-                check_warn "ESLint errors found (pre-existing lint issues)"
+                check_warn "ESLint errors found"
             fi
+        else
+            check_skip "Lint: node_modules missing"
         fi
+    else
+        check_skip "Web lint (SKIP_BUILD=1)"
     fi
 
     # Tests
     if [ "${SKIP_TEST:-}" != "1" ]; then
-        if [ -d "$CLIENT/node_modules" ]; then
+        if [ "$HAS_NPM" != true ]; then
+            check_skip "Web tests ('npm' not found)"
+        elif [ -d "$CLIENT/node_modules" ]; then
             log_info "Running web tests..."
             if (cd "$CLIENT" && run_quiet npm test -- --run); then
                 check_pass "Vitest"
@@ -224,11 +241,13 @@ else
     # Build
     if [ "${SKIP_BUILD:-}" != "1" ] && command -v go >/dev/null 2>&1; then
         log_info "Building Go server..."
-        if (cd "$SERVER" && run_quiet go build -o /dev/null .); then
+        GO_BUILD_OUT=$(mktemp "${TMPDIR:-/tmp}/serenada-server.XXXXXX")
+        if (cd "$SERVER" && run_quiet go build -o "$GO_BUILD_OUT" .); then
             check_pass "Go build"
         else
             check_fail "Go build failed"
         fi
+        rm -f "$GO_BUILD_OUT"
     elif [ "${SKIP_BUILD:-}" = "1" ]; then
         check_skip "Go build (SKIP_BUILD=1)"
     fi
@@ -314,6 +333,22 @@ else
     elif [ "${SKIP_BUILD:-}" = "1" ]; then
         check_skip "Android build (SKIP_BUILD=1)"
     fi
+
+    # Tests
+    if [ "${SKIP_TEST:-}" != "1" ] && [ -x "$ANDROID/gradlew" ] && command -v java >/dev/null 2>&1; then
+        if [ "$HAS_ANDROID_SDK" = true ]; then
+            log_info "Running Android unit tests..."
+            if (cd "$ANDROID" && run_quiet ./gradlew --no-daemon :app:testDebugUnitTest); then
+                check_pass "Android unit tests"
+            else
+                check_fail "Android unit tests failed"
+            fi
+        else
+            check_skip "Android tests (no SDK)"
+        fi
+    elif [ "${SKIP_TEST:-}" = "1" ]; then
+        check_skip "Android tests (SKIP_TEST=1)"
+    fi
 fi
 
 # ============================================================
@@ -373,7 +408,7 @@ else
 
     # Resolve a simulator destination (pick first available iPhone 16 by device ID)
     IOS_SIM_ID=""
-    if command -v xcrun >/dev/null 2>&1; then
+    if command -v xcrun >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
         IOS_SIM_ID=$(xcrun simctl list devices available -j 2>/dev/null \
             | python3 -c "
 import sys, json
@@ -411,17 +446,18 @@ for runtime, devices in data.get('devices', {}).items():
         check_skip "iOS build (SKIP_BUILD=1)"
     fi
 
-    # Tests
+    # Tests (unit tests only — UI tests require a live server and have known flaky failures)
     if [ "${SKIP_TEST:-}" != "1" ] && [ -d "$IOS/SerenadaiOS.xcodeproj" ] && command -v xcodebuild >/dev/null 2>&1; then
-        log_info "Running iOS tests..."
+        log_info "Running iOS unit tests..."
         if (cd "$IOS" && run_quiet xcodebuild test \
             -project SerenadaiOS.xcodeproj \
             -scheme SerenadaiOS \
             -destination "$IOS_DEST" \
+            -only-testing:SerenadaiOSTests \
             -quiet); then
-            check_pass "iOS tests"
+            check_pass "iOS unit tests"
         else
-            check_fail "iOS tests failed"
+            check_fail "iOS unit tests failed"
         fi
     elif [ "${SKIP_TEST:-}" = "1" ]; then
         check_skip "iOS tests (SKIP_TEST=1)"

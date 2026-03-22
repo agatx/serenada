@@ -41,12 +41,13 @@ if [ -z "$MAIN_REPO" ] || [ ! -d "$MAIN_REPO" ]; then
 fi
 
 TARGET="${1:-$MAIN_REPO}"
+ORIGINAL_TARGET="$TARGET"
 if [[ "$TARGET" != /* ]]; then
-    TARGET="$(cd "$TARGET" 2>/dev/null && pwd)"
+    TARGET="$(cd "$TARGET" 2>/dev/null && pwd || true)"
 fi
 
-if [ ! -d "$TARGET" ]; then
-    die "Directory not found: $TARGET"
+if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then
+    die "Directory not found: $ORIGINAL_TARGET"
 fi
 
 log_info "Bootstrapping: $TARGET"
@@ -79,13 +80,18 @@ fi
 # --- Web client ---
 if [ "${SKIP_WEB:-}" != "1" ]; then
     if [ -f "$TARGET/client/package.json" ]; then
-        log_info "Installing web client dependencies..."
-        if (cd "$TARGET/client" && npm install --no-audit --no-fund 2>&1); then
-            log_ok "Web client: npm install complete"
-            record "web:ok"
+        if command -v npm >/dev/null 2>&1; then
+            log_info "Installing web client dependencies..."
+            if (cd "$TARGET/client" && npm ci --no-audit --no-fund 2>&1); then
+                log_ok "Web client: npm ci complete"
+                record "web:ok"
+            else
+                log_error "Web client: npm ci failed"
+                record "web:failed"
+            fi
         else
-            log_error "Web client: npm install failed"
-            record "web:failed"
+            log_warn "Web client: 'npm' not found in PATH"
+            record "web:no-npm"
         fi
     else
         log_warn "Web client: package.json not found"
