@@ -142,7 +142,6 @@ class SerenadaSession internal constructor(
     private val signalingMessageRouter = SignalingMessageRouter(
         getClientId = { clientId },
         getHostCid = { hostCid },
-        getCurrentRoomState = { currentRoomState },
         onJoined = { cid, _, roomState, turnToken, turnTTL, newReconnectToken ->
             clientId = cid
             updateState(_state.value.copy(localCid = clientId))
@@ -184,7 +183,7 @@ class SerenadaSession internal constructor(
         onPong = { signalingClient.recordPong() },
         sendMessage = { type, payload, to -> sendMessage(type, payload, to) },
         clearJoinTimers = { joinFlowCoordinator.clearAllJoinTimers() },
-        setJoinAcknowledged = { joinFlowCoordinator.hasJoinAcknowledged = true },
+        setJoinAcknowledged = { joinFlowCoordinator.markJoinAcknowledged() },
     )
     private val turnManager = TurnManager(
         handler = handler,
@@ -324,7 +323,7 @@ class SerenadaSession internal constructor(
 
     private val signalingListener = object : SessionSignaling.Listener {
         override fun onOpen(activeTransport: String) {
-            joinFlowCoordinator.reconnectAttempts = 0
+            joinFlowCoordinator.resetReconnectAttempts()
             updateDiagnostics(
                 _diagnostics.value.copy(
                     isSignalingConnected = true,

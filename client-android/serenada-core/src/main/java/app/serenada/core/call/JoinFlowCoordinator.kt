@@ -36,10 +36,13 @@ class JoinFlowCoordinator(
     var joinAttemptSerial = 0L
         private set
     var hasJoinSignalStarted = false
+        private set
     var hasJoinAcknowledged = false
+        private set
 
     // --- Reconnect state ---
     var reconnectAttempts = 0
+        private set
     private var reconnectRunnable: Runnable? = null
 
     private fun assertMainThread() {
@@ -176,6 +179,7 @@ class JoinFlowCoordinator(
     // --- Reconnect ---
 
     fun scheduleReconnect() {
+        clearReconnect()
         reconnectAttempts += 1
         val backoff = (WebRtcResilienceConstants.RECONNECT_BACKOFF_BASE_MS * (1L shl minOf(reconnectAttempts - 1, 13)))
             .coerceAtMost(WebRtcResilienceConstants.RECONNECT_BACKOFF_CAP_MS)
@@ -195,6 +199,12 @@ class JoinFlowCoordinator(
         reconnectRunnable?.let { handler.removeCallbacks(it) }
         reconnectRunnable = null
     }
+
+    // --- Explicit setters for private-set properties ---
+
+    fun markJoinSignalStarted() { hasJoinSignalStarted = true }
+    fun markJoinAcknowledged() { hasJoinAcknowledged = true }
+    fun resetReconnectAttempts() { reconnectAttempts = 0 }
 
     // --- Reset ---
 

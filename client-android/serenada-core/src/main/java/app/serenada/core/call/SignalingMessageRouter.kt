@@ -14,7 +14,6 @@ class SignalingMessageRouter(
     // State readers
     private val getClientId: () -> String?,
     private val getHostCid: () -> String?,
-    private val getCurrentRoomState: () -> RoomState?,
     // Mutation callbacks
     private val onJoined: (clientId: String, hostCid: String?, roomState: RoomState?, turnToken: String?, turnTTL: Long?, reconnectToken: String?) -> Unit,
     private val onRoomStateUpdated: (RoomState) -> Unit,
