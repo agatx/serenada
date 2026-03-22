@@ -22,8 +22,8 @@ interface SerenadaCoreDelegate {
     fun onSessionEnded(session: SerenadaSession, reason: EndReason) {}
 }
 
-enum class EndReason {
-    LOCAL_LEFT,
-    REMOTE_ENDED,
-    ERROR,
+sealed class EndReason {
+    object LocalLeft : EndReason()
+    object RemoteEnded : EndReason()
+    data class Error(val error: CallError) : EndReason()
 }

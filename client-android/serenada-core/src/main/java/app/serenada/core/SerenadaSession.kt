@@ -128,8 +128,8 @@ class SerenadaSession internal constructor(
         isSignalingConnected = { signalingClient.isConnected() },
         onJoinTimeout = {
             resetResources()
-            updateState(CallState(phase = CallPhase.Error, errorMessage = "Connection failed"))
-            delegate?.invoke()?.onSessionEnded(this, EndReason.ERROR)
+            updateState(CallState(phase = CallPhase.Error, error = CallError.ConnectionFailed))
+            delegate?.invoke()?.onSessionEnded(this, EndReason.Error(CallError.ConnectionFailed))
         },
         ensureSignalingConnection = { ensureSignalingConnection() },
         onRecovery = {
@@ -321,7 +321,7 @@ class SerenadaSession internal constructor(
         assertMainThread()
         if (_state.value.phase == CallPhase.Idle) return
         sendMessage("leave", null)
-        cleanupCall(EndReason.LOCAL_LEFT)
+        cleanupCall(EndReason.LocalLeft)
     }
 
     fun end() {
@@ -412,7 +412,7 @@ class SerenadaSession internal constructor(
         assertMainThread()
         if (awaitingPermissions) {
             awaitingPermissions = false
-            cleanupCall(EndReason.LOCAL_LEFT)
+            cleanupCall(EndReason.LocalLeft)
         }
     }
 
@@ -544,7 +544,7 @@ class SerenadaSession internal constructor(
             _state.value.copy(
                 phase = CallPhase.Joining,
                 roomId = roomId,
-                errorMessage = null,
+                error = null,
                 localAudioEnabled = config.defaultAudioEnabled,
                 localVideoEnabled = config.defaultVideoEnabled,
                 remoteParticipants = emptyList(),
@@ -752,7 +752,7 @@ class SerenadaSession internal constructor(
     }
 
     private fun handleRoomEnded() {
-        cleanupCall(EndReason.REMOTE_ENDED)
+        cleanupCall(EndReason.RemoteEnded)
     }
 
     private fun handleContentState(msg: SignalingMessage) {
@@ -778,16 +778,19 @@ class SerenadaSession internal constructor(
     }
 
     private fun handleError(msg: SignalingMessage) {
-        val rawMessage = msg.payload?.optString("message").orEmpty().ifBlank { null }
+        val code = msg.payload?.optString("code")?.trim()?.ifBlank { null }
+        val rawMessage = msg.payload?.optString("message")?.trim()?.ifBlank { null }
+        val callError = when (code) {
+            "ROOM_CAPACITY_UNSUPPORTED" -> CallError.RoomFull
+            "CONNECTION_FAILED" -> CallError.ConnectionFailed
+            "JOIN_TIMEOUT" -> CallError.SignalingTimeout
+            "ROOM_ENDED" -> CallError.RoomEnded
+            else -> if (rawMessage != null) CallError.ServerError(rawMessage) else CallError.Unknown("Unknown error")
+        }
         clearJoinTimeout()
         resetResources()
-        updateState(
-            CallState(
-                phase = CallPhase.Error,
-                errorMessage = rawMessage ?: "Unknown error"
-            )
-        )
-        delegate?.invoke()?.onSessionEnded(this, EndReason.ERROR)
+        updateState(CallState(phase = CallPhase.Error, error = callError))
+        delegate?.invoke()?.onSessionEnded(this, EndReason.Error(callError))
     }
 
     private fun handleSignalingPayload(msg: SignalingMessage) {

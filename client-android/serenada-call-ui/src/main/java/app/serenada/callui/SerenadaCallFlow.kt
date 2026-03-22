@@ -242,7 +242,7 @@ private fun rememberCallUiState(
             phase = state.phase,
             roomId = state.roomId,
             localCid = state.localCid,
-            errorMessageText = state.errorMessage,
+            errorMessageText = state.error?.displayMessage,
             isHost = state.isHost,
             participantCount = state.participantCount,
             localAudioEnabled = state.localAudioEnabled,

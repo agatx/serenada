@@ -244,12 +244,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 roomId = state.roomId ?: currentRoomId,
                 localCid = state.localCid,
                 statusMessageResId = statusMessageResId,
-                errorMessageResId = if (state.phase == CallPhase.Error && state.errorMessage.isNullOrBlank()) {
+                errorMessageResId = if (state.phase == CallPhase.Error && state.error == null) {
                     R.string.error_unknown
                 } else {
                     null
                 },
-                errorMessageText = if (state.phase == CallPhase.Error) state.errorMessage else null,
+                errorMessageText = if (state.phase == CallPhase.Error) state.error?.displayMessage else null,
                 isHost = state.isHost,
                 participantCount = state.participantCount,
                 localAudioEnabled = state.localAudioEnabled,

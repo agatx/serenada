@@ -20,7 +20,7 @@ data class CallState(
     val remoteParticipants: List<RemoteParticipant> = emptyList(),
     val connectionStatus: ConnectionStatus = ConnectionStatus.Connected,
     val localCameraMode: LocalCameraMode = LocalCameraMode.SELFIE,
-    val errorMessage: String? = null,
+    val error: CallError? = null,
     val requiredPermissions: List<MediaCapability> = emptyList(),
 ) {
     val remoteVideoEnabled: Boolean

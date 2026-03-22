@@ -94,7 +94,8 @@ class SerenadaSessionContractTest {
         factory.simulateError(code = "ROOM_CAPACITY_UNSUPPORTED", message = "Room is full")
 
         assertEquals(CallPhase.Error, factory.session.state.value.phase)
-        assertNotNull(factory.session.state.value.errorMessage)
+        assertNotNull(factory.session.state.value.error)
+        assertTrue(factory.session.state.value.error is CallError.RoomFull)
         assertTrue("Engine should be released", factory.fakeMedia.releaseCalls > 0)
         assertTrue("Signaling should be closed", factory.fakeSignaling.closeCalls > 0)
     }
