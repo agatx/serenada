@@ -52,6 +52,7 @@ public final class SerenadaSession: ObservableObject {
     let webRtcEngine: SessionMediaEngine
     let callAudioSessionController: SessionAudioController
     let apiClient: SessionAPIClient
+    let clock: SessionClock
 
     private let config: SerenadaConfig
     private let delegateProvider: (() -> SerenadaCoreDelegate?)?
@@ -106,7 +107,8 @@ public final class SerenadaSession: ObservableObject {
             signaling: nil,
             apiClient: nil,
             audioController: nil,
-            mediaEngine: nil
+            mediaEngine: nil,
+            clock: nil
         )
     }
 
@@ -119,13 +121,15 @@ public final class SerenadaSession: ObservableObject {
         signaling: SessionSignaling? = nil,
         apiClient: SessionAPIClient? = nil,
         audioController: SessionAudioController? = nil,
-        mediaEngine: SessionMediaEngine? = nil
+        mediaEngine: SessionMediaEngine? = nil,
+        clock: SessionClock? = nil
     ) {
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.serverHost = serverHost
         self.config = config
         self.delegateProvider = delegateProvider
+        self.clock = clock ?? LiveSessionClock()
         self.signalingClient = signaling ?? SignalingClient(forceSseSignaling: !config.transports.contains(.ws))
         self.apiClient = apiClient ?? CoreAPIClient()
         self.callAudioSessionController = audioController ?? CallAudioSessionController(
@@ -147,6 +151,7 @@ public final class SerenadaSession: ObservableObject {
         configureRuntimeBridges()
 
         joinTimer = JoinTimer(
+            clock: self.clock,
             getRoomId: { [weak self] in self?.roomId ?? "" },
             getJoinAttemptSerial: { [weak self] in self?.joinAttemptSerial ?? 0 },
             getInternalPhase: { [weak self] in self?.internalPhase ?? .idle },
@@ -161,6 +166,7 @@ public final class SerenadaSession: ObservableObject {
         )
 
         turnManager = TurnManager(
+            clock: self.clock,
             serverHost: serverHost,
             apiClient: self.apiClient,
             getJoinAttemptSerial: { [weak self] in self?.joinAttemptSerial ?? 0 },
@@ -176,6 +182,7 @@ public final class SerenadaSession: ObservableObject {
         )
 
         connectionStatusTracker = ConnectionStatusTracker(
+            clock: self.clock,
             getInternalPhase: { [weak self] in self?.internalPhase ?? .idle },
             getDiagnostics: { [weak self] in self?.diagnostics ?? CallDiagnostics() },
             getCurrentStatus: { [weak self] in self?.state.connectionStatus ?? .connected },
@@ -186,6 +193,7 @@ public final class SerenadaSession: ObservableObject {
         )
 
         statsPoller = StatsPoller(
+            clock: self.clock,
             isActivePhase: { [weak self] in
                 guard let self else { return false }
                 return self.internalPhase == .inCall || self.internalPhase == .waiting || self.internalPhase == .joining
@@ -203,6 +211,7 @@ public final class SerenadaSession: ObservableObject {
         )
 
         peerNegotiationEngine = PeerNegotiationEngine(
+            clock: self.clock,
             getClientId: { [weak self] in self?.clientId },
             getHostCid: { [weak self] in self?.hostCid },
             getInternalPhase: { [weak self] in self?.internalPhase ?? .idle },
@@ -861,7 +870,8 @@ public final class SerenadaSession: ObservableObject {
         if transitionToEnding {
             delegateProvider?()?.sessionDidEnd(self, reason: reason)
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard let clock = self?.clock else { return }
+                try? await clock.sleep(nanoseconds: 1_500_000_000)
                 guard let self else { return }
                 guard self.state.phase == .ending else { return }
                 self.internalPhase = .idle
@@ -1019,7 +1029,8 @@ public final class SerenadaSession: ObservableObject {
 
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(backoff) * 1_000_000)
+            guard let clock = self?.clock else { return }
+            try? await clock.sleep(nanoseconds: UInt64(backoff) * 1_000_000)
             guard !Task.isCancelled else { return }
             guard let self else { return }
 

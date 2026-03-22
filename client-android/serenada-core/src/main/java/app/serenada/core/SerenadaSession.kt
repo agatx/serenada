@@ -12,7 +12,9 @@ import android.os.PowerManager
 import android.util.Log
 import app.serenada.core.call.ConnectionStatusTracker
 import app.serenada.core.call.JoinTimer
+import app.serenada.core.call.LiveSessionClock
 import app.serenada.core.call.PeerNegotiationEngine
+import app.serenada.core.call.SessionClock
 import app.serenada.core.call.StatsPoller
 import app.serenada.core.call.TurnManager
 import app.serenada.core.call.CallAudioSessionController
@@ -62,11 +64,13 @@ class SerenadaSession internal constructor(
     apiClient: SessionAPIClient? = null,
     audioController: SessionAudioController? = null,
     mediaEngine: SessionMediaEngine? = null,
+    clock: SessionClock? = null,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
     private var webRtcStatsExecutor: ExecutorService? = newWebRtcStatsExecutor()
     private val apiClient: SessionAPIClient = apiClient ?: CoreApiClient(okHttpClient)
+    internal val clock: SessionClock = clock ?: LiveSessionClock()
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -152,6 +156,7 @@ class SerenadaSession internal constructor(
     )
     private val statsPoller = StatsPoller(
         handler = handler,
+        clock = this.clock,
         statsExecutorProvider = { webRtcStatsExecutor },
         isActivePhase = {
             val phase = _state.value.phase
@@ -199,6 +204,7 @@ class SerenadaSession internal constructor(
     init {
         peerNegotiationEngine = PeerNegotiationEngine(
             handler = handler,
+            clock = this.clock,
             getClientId = { clientId },
             getHostCid = { hostCid },
             getParticipantCount = { _state.value.participantCount },

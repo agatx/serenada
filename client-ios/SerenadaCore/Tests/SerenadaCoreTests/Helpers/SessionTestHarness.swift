@@ -8,6 +8,7 @@ final class SessionTestHarness {
     let fakeAPI: FakeAPIClient
     let fakeAudio: FakeAudioController
     let fakeMedia: FakeMediaEngine
+    let fakeClock: FakeSessionClock
 
     init(
         roomId: String = "test-room-id",
@@ -19,6 +20,7 @@ final class SessionTestHarness {
         self.fakeAPI = FakeAPIClient()
         self.fakeAudio = FakeAudioController()
         self.fakeMedia = FakeMediaEngine()
+        self.fakeClock = FakeSessionClock()
 
         self.session = SerenadaSession(
             roomId: roomId,
@@ -27,7 +29,8 @@ final class SessionTestHarness {
             signaling: fakeSignaling,
             apiClient: fakeAPI,
             audioController: fakeAudio,
-            mediaEngine: fakeMedia
+            mediaEngine: fakeMedia,
+            clock: fakeClock
         )
     }
 
@@ -147,8 +150,8 @@ final class SessionTestHarness {
             turnToken: turnToken
         )
         await yieldToMainActor()
-        // Give TURN fetch time to complete
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        // Advance clock past TURN fetch timeout to let async TURN fetch complete
+        await fakeClock.advance(byMs: Int64(WebRtcResilience.turnFetchTimeoutMs) + 100)
         await yieldToMainActor()
     }
 

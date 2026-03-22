@@ -2,6 +2,9 @@ import Foundation
 
 @MainActor
 final class PeerNegotiationEngine {
+    // Clock
+    private let clock: SessionClock
+
     // State readers
     private let getClientId: () -> String?
     private let getHostCid: () -> String?
@@ -36,6 +39,7 @@ final class PeerNegotiationEngine {
     private let onConnectionStatusUpdate: () -> Void
 
     init(
+        clock: SessionClock,
         getClientId: @escaping () -> String?,
         getHostCid: @escaping () -> String?,
         getInternalPhase: @escaping () -> CallPhase,
@@ -62,6 +66,7 @@ final class PeerNegotiationEngine {
         onAggregatePeerStateChanged: @escaping (IceConnectionState, PeerConnectionState, SignalingState) -> Void,
         onConnectionStatusUpdate: @escaping () -> Void
     ) {
+        self.clock = clock
         self.getClientId = getClientId
         self.getHostCid = getHostCid
         self.getInternalPhase = getInternalPhase
@@ -411,7 +416,8 @@ final class PeerNegotiationEngine {
         guard let slot = getSlot(remoteCid) else { return }
 
         slot.setOfferTimeoutTask(Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.offerTimeoutNs)
+            guard let clock = self?.clock else { return }
+            try? await clock.sleep(nanoseconds: WebRtcResilience.offerTimeoutNs)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, let slot = self.getSlot(remoteCid) else { return }
@@ -458,12 +464,13 @@ final class PeerNegotiationEngine {
 
         guard slot.iceRestartTask == nil else { return }
 
-        let now = Date().timeIntervalSince1970 * 1000
-        guard now - slot.lastIceRestartAt >= Double(WebRtcResilience.iceRestartCooldownMs) else { return }
+        let now = Double(clock.nowMs())
+        guard slot.lastIceRestartAt <= 0 || now - slot.lastIceRestartAt >= Double(WebRtcResilience.iceRestartCooldownMs) else { return }
 
         slot.setIceRestartTask(Task { [weak self] in
+            guard let clock = self?.clock else { return }
             if delayMs > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                try? await clock.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {
@@ -497,7 +504,7 @@ final class PeerNegotiationEngine {
             return
         }
 
-        slot.recordIceRestart()
+        slot.recordIceRestart(nowMs: clock.nowMs())
         maybeSendOffer(slot: slot, force: true, iceRestart: true)
     }
 
@@ -524,7 +531,8 @@ final class PeerNegotiationEngine {
         guard slot.nonHostFallbackAttempts < WebRtcResilience.nonHostFallbackMaxAttempts else { return }
 
         slot.setNonHostFallbackTask(Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.nonHostFallbackDelayNs)
+            guard let clock = self?.clock else { return }
+            try? await clock.sleep(nanoseconds: WebRtcResilience.nonHostFallbackDelayNs)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, let slot = self.getSlot(remoteCid) else { return }

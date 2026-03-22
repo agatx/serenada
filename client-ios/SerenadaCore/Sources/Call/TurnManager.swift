@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor
 final class TurnManager {
+    private let clock: SessionClock
     private let serverHost: String
     private let apiClient: SessionAPIClient
     private let getJoinAttemptSerial: () -> Int64
@@ -18,6 +19,7 @@ final class TurnManager {
     private var lastTurnTokenForAttempt: String?
 
     init(
+        clock: SessionClock,
         serverHost: String,
         apiClient: SessionAPIClient,
         getJoinAttemptSerial: @escaping () -> Int64,
@@ -28,6 +30,7 @@ final class TurnManager {
         onIceServersReady: @escaping () -> Void,
         sendTurnRefresh: @escaping () -> Void
     ) {
+        self.clock = clock
         self.serverHost = serverHost
         self.apiClient = apiClient
         self.getJoinAttemptSerial = getJoinAttemptSerial
@@ -102,8 +105,8 @@ final class TurnManager {
                         return .failed
                     }
                 }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: WebRtcResilience.turnFetchTimeoutNs)
+                group.addTask { [clock] in
+                    try? await clock.sleep(nanoseconds: WebRtcResilience.turnFetchTimeoutNs)
                     return .timedOut
                 }
                 let first = await group.next() ?? .failed
@@ -146,7 +149,8 @@ final class TurnManager {
         let delayNs = UInt64(Double(ttlMs) * WebRtcResilience.turnRefreshTriggerRatio * 1_000_000)
 
         turnRefreshTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delayNs)
+            guard let clock = self?.clock else { return }
+            try? await clock.sleep(nanoseconds: delayNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
             let phase = self.getPhase()

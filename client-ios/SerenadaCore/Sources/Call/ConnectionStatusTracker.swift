@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor
 final class ConnectionStatusTracker {
+    private let clock: SessionClock
     private let getInternalPhase: () -> CallPhase
     private let getDiagnostics: () -> CallDiagnostics
     private let getCurrentStatus: () -> SerenadaConnectionStatus
@@ -11,11 +12,13 @@ final class ConnectionStatusTracker {
     private let connectionStatusRetryingDelayNs: UInt64 = 10_000_000_000
 
     init(
+        clock: SessionClock,
         getInternalPhase: @escaping () -> CallPhase,
         getDiagnostics: @escaping () -> CallDiagnostics,
         getCurrentStatus: @escaping () -> SerenadaConnectionStatus,
         setConnectionStatus: @escaping (SerenadaConnectionStatus) -> Void
     ) {
+        self.clock = clock
         self.getInternalPhase = getInternalPhase
         self.getDiagnostics = getDiagnostics
         self.getCurrentStatus = getCurrentStatus
@@ -80,7 +83,7 @@ final class ConnectionStatusTracker {
 
         connectionStatusRetryingTask = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: self.connectionStatusRetryingDelayNs)
+            try? await self.clock.sleep(nanoseconds: self.connectionStatusRetryingDelayNs)
             guard !Task.isCancelled else { return }
             guard self.getInternalPhase() == .inCall else {
                 self.reset()

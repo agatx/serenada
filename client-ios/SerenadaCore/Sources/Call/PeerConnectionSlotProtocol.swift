@@ -25,7 +25,7 @@ public protocol PeerConnectionSlotProtocol: AnyObject {
     // ICE restart lifecycle
     func markPendingIceRestart()
     func clearPendingIceRestart()
-    func recordIceRestart()
+    func recordIceRestart(nowMs: Int64?)
 
     // Task management
     func setOfferTimeoutTask(_ task: Task<Void, Never>)

@@ -28,7 +28,7 @@ interface PeerConnectionSlotProtocol {
     // ICE restart lifecycle
     fun markPendingIceRestart()
     fun clearPendingIceRestart()
-    fun recordIceRestart()
+    fun recordIceRestart(nowMs: Long = System.currentTimeMillis())
 
     // Task management
     fun setOfferTimeoutTask(task: Runnable)

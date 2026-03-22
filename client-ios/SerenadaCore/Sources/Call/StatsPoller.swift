@@ -1,22 +1,26 @@
+import Combine
 import Foundation
 
 @MainActor
 final class StatsPoller {
+    private let clock: SessionClock
     private let isActivePhase: () -> Bool
     private let getPeerSlots: () -> [any PeerConnectionSlotProtocol]
     private let onStatsUpdated: (RealtimeCallStats) -> Void
     private let onRefreshRemoteParticipants: () -> Void
 
-    private var remoteVideoPollTimer: Timer?
+    private var pollTimerCancellable: AnyCancellable?
     private var webrtcStatsRequestInFlight = false
     private var lastWebRtcStatsPollAtMs: Int64 = 0
 
     init(
+        clock: SessionClock,
         isActivePhase: @escaping () -> Bool,
         getPeerSlots: @escaping () -> [any PeerConnectionSlotProtocol],
         onStatsUpdated: @escaping (RealtimeCallStats) -> Void,
         onRefreshRemoteParticipants: @escaping () -> Void
     ) {
+        self.clock = clock
         self.isActivePhase = isActivePhase
         self.getPeerSlots = getPeerSlots
         self.onStatsUpdated = onStatsUpdated
@@ -26,18 +30,16 @@ final class StatsPoller {
     func start() {
         stop()
 
-        remoteVideoPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.onRefreshRemoteParticipants()
-                self.pollWebRtcStats()
-            }
+        pollTimerCancellable = clock.scheduleRepeating(intervalSeconds: 0.5) { [weak self] in
+            guard let self else { return }
+            self.onRefreshRemoteParticipants()
+            self.pollWebRtcStats()
         }
     }
 
     func stop() {
-        remoteVideoPollTimer?.invalidate()
-        remoteVideoPollTimer = nil
+        pollTimerCancellable?.cancel()
+        pollTimerCancellable = nil
         webrtcStatsRequestInFlight = false
         lastWebRtcStatsPollAtMs = 0
     }
@@ -45,7 +47,7 @@ final class StatsPoller {
     private func pollWebRtcStats() {
         guard isActivePhase() else { return }
 
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let now = clock.nowMs()
         if webrtcStatsRequestInFlight { return }
         if now - lastWebRtcStatsPollAtMs < 2000 { return }
 
@@ -76,7 +78,7 @@ final class StatsPoller {
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
             self.webrtcStatsRequestInFlight = false
-            self.lastWebRtcStatsPollAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            self.lastWebRtcStatsPollAtMs = self.clock.nowMs()
             self.onStatsUpdated(Self.mergeRealtimeStats(stats))
         }
     }

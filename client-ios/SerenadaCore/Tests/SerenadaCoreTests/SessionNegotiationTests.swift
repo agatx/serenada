@@ -194,11 +194,9 @@ final class SessionNegotiationTests: XCTestCase {
         // Simulate connection FAILED (delay=0 → immediate)
         fakeSlot?.simulateConnectionStateChange("FAILED")
         await harness.yieldToMainActor()
-        // Give the immediate task time to fire (may need several yields)
-        for _ in 0..<5 {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            await harness.yieldToMainActor()
-        }
+        // Advance clock to let any delayed tasks fire, plus yields for MainActor scheduling
+        await harness.fakeClock.advance(byMs: 100)
+        await harness.yieldToMainActor()
 
         // Either iceRestartTask is set, a new offer was already made, or pendingIceRestart was set
         let offersAfter = fakeSlot?.createOfferCalls ?? 0

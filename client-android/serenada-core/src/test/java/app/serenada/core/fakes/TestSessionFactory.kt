@@ -2,6 +2,7 @@ package app.serenada.core.fakes
 
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaSession
+import app.serenada.core.call.SessionClock
 import app.serenada.core.call.SignalingMessage
 import okhttp3.OkHttpClient
 import org.json.JSONArray
@@ -9,6 +10,11 @@ import org.json.JSONObject
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.shadows.ShadowLooper
+
+class FakeSessionClock(private var currentTimeMs: Long = 0L) : SessionClock {
+    override fun nowMs(): Long = currentTimeMs
+    fun advance(byMs: Long) { currentTimeMs += byMs }
+}
 
 class TestSessionFactory(
     val roomId: String = "test-room-id",
@@ -19,6 +25,7 @@ class TestSessionFactory(
     val fakeAPI = FakeAPIClient()
     val fakeAudio = FakeAudioController()
     val fakeMedia = FakeMediaEngine()
+    val fakeClock = FakeSessionClock()
 
     val session: SerenadaSession = SerenadaSession(
         roomId = roomId,
@@ -32,6 +39,7 @@ class TestSessionFactory(
         apiClient = fakeAPI,
         audioController = fakeAudio,
         mediaEngine = fakeMedia,
+        clock = fakeClock,
     )
 
     fun startSession() {

@@ -57,8 +57,8 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     func markPendingIceRestart() { pendingIceRestart = true }
     func clearPendingIceRestart() { pendingIceRestart = false }
-    func recordIceRestart() {
-        lastIceRestartAt = Date().timeIntervalSince1970 * 1000
+    func recordIceRestart(nowMs: Int64? = nil) {
+        lastIceRestartAt = nowMs.map(TimeInterval.init) ?? Date().timeIntervalSince1970 * 1000
         pendingIceRestart = false
     }
 

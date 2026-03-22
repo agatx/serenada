@@ -5,6 +5,7 @@ import java.util.concurrent.ExecutorService
 
 class StatsPoller(
     private val handler: Handler,
+    private val clock: SessionClock,
     private val statsExecutorProvider: () -> ExecutorService?,
     private val isActivePhase: () -> Boolean,
     private val getPeerSlots: () -> List<PeerConnectionSlotProtocol>,
@@ -37,7 +38,7 @@ class StatsPoller(
 
     private fun pollWebRtcStats() {
         if (!isActivePhase()) return
-        val now = System.currentTimeMillis()
+        val now = clock.nowMs()
         if (webrtcStatsRequestInFlight) return
         if (now - lastWebRtcStatsPollAtMs < WEBRTC_STATS_POLL_INTERVAL_MS) return
         val slots = getPeerSlots()
@@ -58,7 +59,7 @@ class StatsPoller(
                                 val merged = mergeRealtimeStats(stats)
                                 handler.post {
                                     webrtcStatsRequestInFlight = false
-                                    lastWebRtcStatsPollAtMs = System.currentTimeMillis()
+                                    lastWebRtcStatsPollAtMs = clock.nowMs()
                                     if (merged != null) {
                                         onStatsUpdated(merged)
                                     }

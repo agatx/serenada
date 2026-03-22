@@ -12,6 +12,7 @@ import org.json.JSONObject
 
 class PeerNegotiationEngine(
     private val handler: Handler,
+    private val clock: SessionClock,
     // State readers
     private val getClientId: () -> String?,
     private val getHostCid: () -> String?,
@@ -319,7 +320,7 @@ class PeerNegotiationEngine(
         val slot = getSlot(remoteCid) ?: return
         if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
         if (slot.iceRestartTask != null) return
-        if (System.currentTimeMillis() - slot.lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
+        if (slot.lastIceRestartAt > 0 && clock.nowMs() - slot.lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
         val runnable = Runnable { slot.cancelIceRestartTask(); triggerIceRestart(remoteCid, reason) }
         slot.setIceRestartTask(runnable)
         handler.postDelayed(runnable, delayMs)
@@ -338,7 +339,7 @@ class PeerNegotiationEngine(
         if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
         if (slot.isMakingOffer) { slot.markPendingIceRestart(); return }
         Log.w(TAG, "ICE restart triggered for $remoteCid ($reason)")
-        slot.recordIceRestart()
+        slot.recordIceRestart(clock.nowMs())
         maybeSendOffer(slot, force = true, iceRestart = true)
     }
 

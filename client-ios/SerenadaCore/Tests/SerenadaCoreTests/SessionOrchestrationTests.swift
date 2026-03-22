@@ -201,8 +201,8 @@ final class SessionOrchestrationTests: XCTestCase {
         await harness.yieldToMainActor()
         // Give async TURN fetch time to complete
         await harness.yieldToMainActor()
-        // Extra yield for the task group
-        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        // Advance clock past TURN fetch timeout
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.turnFetchTimeoutMs) + 100)
 
         XCTAssertFalse(harness.fakeAPI.fetchTurnCredentialsCalls.isEmpty, "Should fetch TURN credentials")
         let call = harness.fakeAPI.fetchTurnCredentialsCalls.first
@@ -220,7 +220,8 @@ final class SessionOrchestrationTests: XCTestCase {
 
         harness.simulateJoinedResponse(cid: "my-cid", turnToken: "bad-token")
         await harness.yieldToMainActor()
-        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        // Advance clock past TURN fetch timeout
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.turnFetchTimeoutMs) + 100)
 
         // Even on TURN failure, default STUN servers should be applied
         // (the session calls applyDefaultIceServers() first in ensureIceSetupIfNeeded,
@@ -228,12 +229,91 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertTrue(harness.fakeMedia.iceServersSet, "Default STUN servers should be applied")
     }
 
-    // MARK: - Deferred Timer Tests
+    // MARK: - Timer Tests (via FakeSessionClock)
 
-    // Timer-dependent tests are deferred until clock abstraction is added.
-    //
-    // testJoinTimeout: Join timeout fires after JOIN_HARD_TIMEOUT_MS -> .error phase
-    // testReconnectBackoff: Close -> reconnect after RECONNECT_BACKOFF_BASE_MS
-    // testIceRestartCooldown: ICE restart respects cooldown between attempts
-    // testOfferTimeout: Offer timeout fires after OFFER_TIMEOUT_MS -> rollback + ICE restart
+    func testJoinHardTimeout() async {
+        await harness.advancePastPermissions()
+        XCTAssertEqual(harness.session.state.phase, .joining)
+
+        // Advance clock past the join hard timeout
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.joinHardTimeoutMs))
+
+        XCTAssertEqual(harness.session.state.phase, .error)
+    }
+
+    func testJoinKickstartIsNoOpIfSignalingAlreadyStarted() async {
+        // After advancePastPermissions, signaling connect is already triggered.
+        // The kickstart timer should be a no-op (hasJoinSignalStarted is already true).
+        await harness.advancePastPermissions()
+        let connectCallsBefore = harness.fakeSignaling.connectCalls.count
+
+        // Advance past kickstart delay — should NOT trigger another connect
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.joinConnectKickstartMs))
+
+        XCTAssertEqual(harness.fakeSignaling.connectCalls.count, connectCallsBefore,
+                        "Kickstart should be no-op since signaling already started")
+    }
+
+    func testJoinRecoveryAfterJoinSent() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+
+        // After signaling opens, a join is sent and recovery is scheduled.
+        // Simulate joined so hasJoinAcknowledged is true.
+        harness.simulateJoinedResponse(cid: "my-cid")
+        await harness.yieldToMainActor()
+
+        // Already transitioned to waiting, recovery won't fire (phase != .joining).
+        XCTAssertEqual(harness.session.state.phase, .waiting)
+    }
+
+    func testReconnectBackoffTiming() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+        harness.simulateJoinedResponse(cid: "my-cid")
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .waiting)
+
+        // Close signaling to trigger reconnect
+        harness.fakeSignaling.simulateClosed(reason: "test")
+        await harness.yieldToMainActor()
+
+        let connectCallsBefore = harness.fakeSignaling.connectCalls.count
+
+        // Before backoff elapses, should NOT reconnect
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.reconnectBackoffBaseMs) - 1)
+        XCTAssertEqual(harness.fakeSignaling.connectCalls.count, connectCallsBefore,
+                        "Should not reconnect before backoff")
+
+        // After backoff elapses, should reconnect
+        await harness.fakeClock.advance(byMs: 2)
+        XCTAssertTrue(harness.fakeSignaling.connectCalls.count > connectCallsBefore,
+                       "Should reconnect after backoff")
+    }
+
+    func testConnectionStatusRetryingDelay() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+        harness.simulateJoinedResponse(
+            cid: "my-cid",
+            participants: [
+                (cid: "my-cid", joinedAt: 1),
+                (cid: "remote-cid", joinedAt: 2)
+            ],
+            hostCid: "my-cid"
+        )
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .inCall)
+
+        // Close signaling while in-call to trigger connection degraded
+        harness.fakeSignaling.simulateClosed(reason: "test")
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.connectionStatus, .recovering)
+
+        // Advance past the 10-second retrying delay
+        await harness.fakeClock.advance(byMs: 10_000)
+
+        XCTAssertEqual(harness.session.state.connectionStatus, .retrying)
+    }
 }

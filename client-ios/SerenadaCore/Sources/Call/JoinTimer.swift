@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor
 final class JoinTimer {
+    private let clock: SessionClock
     private let getRoomId: () -> String
     private let getJoinAttemptSerial: () -> Int64
     private let getInternalPhase: () -> CallPhase
@@ -17,6 +18,7 @@ final class JoinTimer {
     private var joinRecoveryTask: Task<Void, Never>?
 
     init(
+        clock: SessionClock,
         getRoomId: @escaping () -> String,
         getJoinAttemptSerial: @escaping () -> Int64,
         getInternalPhase: @escaping () -> CallPhase,
@@ -27,6 +29,7 @@ final class JoinTimer {
         ensureSignalingConnection: @escaping () -> Void,
         onRecovery: @escaping (_ participantHint: Int?, _ preferInCall: Bool) -> Void
     ) {
+        self.clock = clock
         self.getRoomId = getRoomId
         self.getJoinAttemptSerial = getJoinAttemptSerial
         self.getInternalPhase = getInternalPhase
@@ -42,7 +45,8 @@ final class JoinTimer {
         clearTimeout()
 
         joinTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.joinHardTimeoutNs)
+            guard let clock = self?.clock else { return }
+            try? await clock.sleep(nanoseconds: WebRtcResilience.joinHardTimeoutNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
             guard self.getInternalPhase() == .joining else { return }
@@ -61,7 +65,8 @@ final class JoinTimer {
         clearKickstart()
 
         joinConnectKickstartTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.joinConnectKickstartNs)
+            guard let clock = self?.clock else { return }
+            try? await clock.sleep(nanoseconds: WebRtcResilience.joinConnectKickstartNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
             guard self.getInternalPhase() == .joining else { return }
@@ -81,7 +86,8 @@ final class JoinTimer {
         clearRecovery()
 
         joinRecoveryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.joinRecoveryNs)
+            guard let clock = self?.clock else { return }
+            try? await clock.sleep(nanoseconds: WebRtcResilience.joinRecoveryNs)
             guard !Task.isCancelled else { return }
             guard let self else { return }
             guard self.getRoomId() == roomId else { return }

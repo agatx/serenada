@@ -51,8 +51,8 @@ class FakePeerConnectionSlot(
     // ICE restart lifecycle
     override fun markPendingIceRestart() { pendingIceRestart = true }
     override fun clearPendingIceRestart() { pendingIceRestart = false }
-    override fun recordIceRestart() {
-        lastIceRestartAt = System.currentTimeMillis()
+    override fun recordIceRestart(nowMs: Long) {
+        lastIceRestartAt = nowMs
         pendingIceRestart = false
     }
 
