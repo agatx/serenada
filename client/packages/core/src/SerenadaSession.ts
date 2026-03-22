@@ -1,10 +1,36 @@
-import type { CallState, CallStats, CameraMode, ConnectionStatus, MediaCapability, SerenadaConfig, SerenadaSessionHandle } from './types.js';
+import type { CallErrorCode, CallState, CallStats, CameraMode, ConnectionStatus, MediaCapability, SerenadaConfig, SerenadaSessionHandle } from './types.js';
 import { SignalingEngine } from './signaling/SignalingEngine.js';
 import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
 import type { TransportKind } from './signaling/transports/types.js';
 import type { SignalingMessage } from './signaling/types.js';
 import { resolveServerUrls } from './serverUrls.js';
+
+function mapErrorCode(serverCode: string): CallErrorCode {
+    switch (serverCode) {
+        case 'JOIN_TIMEOUT':
+            return 'signalingTimeout';
+        case 'ROOM_FULL':
+        case 'ROOM_CAPACITY_UNSUPPORTED':
+            return 'roomFull';
+        case 'ROOM_ENDED':
+            return 'roomEnded';
+        case 'CONNECTION_FAILED':
+            return 'connectionFailed';
+        case 'NOT_IN_ROOM':
+        case 'NOT_HOST':
+            return 'permissionDenied';
+        case 'BAD_REQUEST':
+        case 'UNSUPPORTED_VERSION':
+        case 'INVALID_ROOM_ID':
+        case 'SERVER_NOT_CONFIGURED':
+        case 'INVALID_RECONNECT_TOKEN':
+        case 'TURN_REFRESH_FAILED':
+            return 'serverError';
+        default:
+            return 'unknown';
+    }
+}
 
 export class SerenadaSession implements SerenadaSessionHandle {
     private signaling: SignalingEngine;
@@ -250,7 +276,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             connectionStatus: this.media.connectionStatus as ConnectionStatus,
             activeTransport: this.signaling.activeTransport as TransportKind | null,
             requiredPermissions: this._state.requiredPermissions,
-            error: error ? { code: 'signaling_error', message: error } : null,
+            error: error ? { code: mapErrorCode(error.code), message: error.message } : null,
         };
 
         this.notifyListeners();

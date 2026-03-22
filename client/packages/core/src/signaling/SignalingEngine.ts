@@ -35,7 +35,7 @@ export class SignalingEngine {
     roomState: RoomState | null = null;
     turnToken: string | null = null;
     turnTokenTTLMs: number | null = null;
-    error: string | null = null;
+    error: { code: string; message: string } | null = null;
     roomStatuses: RoomStatuses = {};
 
     // Config
@@ -174,7 +174,7 @@ export class SignalingEngine {
                 if (this.joinAttemptId !== attemptId || this.joinAcked) return;
                 this.logger?.log('error', 'Signaling', 'Join hard timeout reached');
                 this.clearJoinTimers();
-                this.error = 'Join timed out';
+                this.error = { code: 'JOIN_TIMEOUT', message: 'Join timed out' };
                 this.notifyStateChange();
             }, JOIN_HARD_TIMEOUT_MS);
         } else {
@@ -303,7 +303,10 @@ export class SignalingEngine {
                 break;
             case 'error':
                 if (msg.payload && msg.payload.message) {
-                    this.error = String(msg.payload.message);
+                    this.error = {
+                        code: (msg.payload.code as string) ?? 'UNKNOWN',
+                        message: String(msg.payload.message),
+                    };
                 }
                 break;
         }

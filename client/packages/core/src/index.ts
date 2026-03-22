@@ -26,6 +26,7 @@ export type {
     Participant,
     LocalParticipant,
     CallError,
+    CallErrorCode,
     CallState,
     SerenadaConfig,
     CreateRoomResult,

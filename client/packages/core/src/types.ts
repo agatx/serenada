@@ -25,8 +25,17 @@ export interface LocalParticipant {
     isHost: boolean;
 }
 
+export type CallErrorCode =
+    | 'signalingTimeout'
+    | 'connectionFailed'
+    | 'roomFull'
+    | 'roomEnded'
+    | 'permissionDenied'
+    | 'serverError'
+    | 'unknown';
+
 export interface CallError {
-    code: string;
+    code: CallErrorCode;
     message: string;
 }
 
