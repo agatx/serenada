@@ -536,12 +536,12 @@ public final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
-    public func getConnectionState() -> String {
+    public func getConnectionState() -> SerenadaPeerConnectionState {
 #if canImport(WebRTC)
-        guard let peerConnection else { return "NEW" }
-        return connectionStateString(peerConnection.connectionState)
+        guard let peerConnection else { return .new }
+        return peerConnectionState(peerConnection.connectionState)
 #else
-        return "NEW"
+        return .new
 #endif
     }
 

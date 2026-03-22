@@ -609,8 +609,8 @@ final class PeerNegotiationEngine {
     private static let icePriority: [String: Int] = [
         "FAILED": 0, "DISCONNECTED": 1, "CHECKING": 2, "NEW": 3, "CONNECTED": 4, "COMPLETED": 5, "CLOSED": 6, "COUNT": 7, "UNKNOWN": 8,
     ]
-    private static let connectionPriority: [String: Int] = [
-        "FAILED": 0, "DISCONNECTED": 1, "CONNECTING": 2, "NEW": 3, "CONNECTED": 4, "CLOSED": 5, "UNKNOWN": 6,
+    private static let connectionPriority: [SerenadaPeerConnectionState: Int] = [
+        .failed: 0, .disconnected: 1, .connecting: 2, .new: 3, .connected: 4, .closed: 5,
     ]
     private static let signalingPriority: [String: Int] = [
         "HAVE_LOCAL_OFFER": 0, "HAVE_REMOTE_OFFER": 1, "HAVE_LOCAL_PRANSWER": 2, "HAVE_REMOTE_PRANSWER": 3, "STABLE": 4, "CLOSED": 5, "UNKNOWN": 6,
@@ -620,7 +620,7 @@ final class PeerNegotiationEngine {
         var bestIcePri = Int.max
         var nextIceState = "NEW"
         var bestConnPri = Int.max
-        var nextConnectionState = "NEW"
+        var nextConnectionState: SerenadaPeerConnectionState = .new
         var bestSigPri = Int.max
         var nextSignalingState = "STABLE"
 
@@ -646,7 +646,7 @@ final class PeerNegotiationEngine {
 
         onAggregatePeerStateChanged(
             IceConnectionState(rawValueOrUnknown: nextIceState),
-            PeerConnectionState(rawValueOrUnknown: nextConnectionState),
+            PeerConnectionState(rawValueOrUnknown: nextConnectionState.rawValue),
             SignalingState(rawValueOrUnknown: nextSignalingState)
         )
     }

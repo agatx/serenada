@@ -50,7 +50,7 @@ public protocol PeerConnectionSlotProtocol: AnyObject {
 
     // State queries
     func isReady() -> Bool
-    func getConnectionState() -> String
+    func getConnectionState() -> SerenadaPeerConnectionState
     func getIceConnectionState() -> String
     func getSignalingState() -> String
     func hasRemoteDescription() -> Bool

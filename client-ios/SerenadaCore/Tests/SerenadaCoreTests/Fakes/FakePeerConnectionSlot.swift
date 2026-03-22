@@ -16,7 +16,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     // State machine
     private(set) var signalingState = "STABLE"
-    private(set) var connectionState = "NEW"
+    private(set) var connectionState: SerenadaPeerConnectionState = .new
     private(set) var iceConnectionState = "NEW"
     private(set) var ready = true
     private(set) var remoteDescriptionSet = false
@@ -169,7 +169,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     // MARK: - State Queries
 
     func isReady() -> Bool { ready }
-    func getConnectionState() -> String { connectionState }
+    func getConnectionState() -> SerenadaPeerConnectionState { connectionState }
     func getIceConnectionState() -> String { iceConnectionState }
     func getSignalingState() -> String { signalingState }
     func hasRemoteDescription() -> Bool { remoteDescriptionSet }
@@ -192,9 +192,9 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     // MARK: - Test Drivers
 
-    func simulateConnectionStateChange(_ state: String) {
+    func simulateConnectionStateChange(_ state: SerenadaPeerConnectionState) {
         connectionState = state
-        onConnectionStateChange?(remoteCid, state)
+        onConnectionStateChange?(remoteCid, state.rawValue)
     }
 
     func simulateIceConnectionStateChange(_ state: String) {

@@ -32,11 +32,11 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     public let cid: String
     public var audioEnabled: Bool
     public var videoEnabled: Bool
-    public var connectionState: String
+    public var connectionState: SerenadaPeerConnectionState
 
     public var id: String { cid }
 
-    public init(cid: String, audioEnabled: Bool = true, videoEnabled: Bool = true, connectionState: String = "NEW") {
+    public init(cid: String, audioEnabled: Bool = true, videoEnabled: Bool = true, connectionState: SerenadaPeerConnectionState = .new) {
         self.cid = cid
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled

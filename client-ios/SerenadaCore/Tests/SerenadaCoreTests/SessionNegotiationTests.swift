@@ -172,7 +172,7 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertNotNil(fakeSlot)
 
         // Simulate connection DISCONNECTED
-        fakeSlot?.simulateConnectionStateChange("DISCONNECTED")
+        fakeSlot?.simulateConnectionStateChange(.disconnected)
         await harness.yieldToMainActor()
 
         // ICE restart should be scheduled (task set)
@@ -192,7 +192,7 @@ final class SessionNegotiationTests: XCTestCase {
         let offersBefore = fakeSlot?.createOfferCalls ?? 0
 
         // Simulate connection FAILED (delay=0 → immediate)
-        fakeSlot?.simulateConnectionStateChange("FAILED")
+        fakeSlot?.simulateConnectionStateChange(.failed)
         await harness.yieldToMainActor()
         // Advance clock to let any delayed tasks fire, plus yields for MainActor scheduling
         await harness.fakeClock.advance(byMs: 100)
@@ -217,12 +217,12 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertNotNil(fakeSlot)
 
         // Schedule an ICE restart
-        fakeSlot?.simulateConnectionStateChange("DISCONNECTED")
+        fakeSlot?.simulateConnectionStateChange(.disconnected)
         await harness.yieldToMainActor()
         XCTAssertNotNil(fakeSlot?.iceRestartTask, "ICE restart should be scheduled")
 
         // Simulate CONNECTED → should clear the restart task
-        fakeSlot?.simulateConnectionStateChange("CONNECTED")
+        fakeSlot?.simulateConnectionStateChange(.connected)
         await harness.yieldToMainActor()
 
         XCTAssertNil(fakeSlot?.iceRestartTask, "ICE restart task should be cleared on CONNECTED")

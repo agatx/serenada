@@ -838,7 +838,7 @@ public final class SerenadaSession: ObservableObject {
                     cid: participant.cid,
                     audioEnabled: true,
                     videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
-                    connectionState: slot?.getConnectionState() ?? "NEW"
+                    connectionState: slot?.getConnectionState() ?? .new
                 )
             }
 

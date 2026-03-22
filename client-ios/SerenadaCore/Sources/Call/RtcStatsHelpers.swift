@@ -79,21 +79,18 @@ func positiveRatePerMinute(currentValue: Int64, previousValue: Int64, elapsedSec
 }
 
 func connectionStateString(_ state: RTCPeerConnectionState) -> String {
+    peerConnectionState(state).rawValue
+}
+
+func peerConnectionState(_ state: RTCPeerConnectionState) -> SerenadaPeerConnectionState {
     switch state {
-    case .new:
-        return "NEW"
-    case .connecting:
-        return "CONNECTING"
-    case .connected:
-        return "CONNECTED"
-    case .disconnected:
-        return "DISCONNECTED"
-    case .failed:
-        return "FAILED"
-    case .closed:
-        return "CLOSED"
-    @unknown default:
-        return "UNKNOWN"
+    case .new: return .new
+    case .connecting: return .connecting
+    case .connected: return .connected
+    case .disconnected: return .disconnected
+    case .failed: return .failed
+    case .closed: return .closed
+    @unknown default: return .new
     }
 }
 
