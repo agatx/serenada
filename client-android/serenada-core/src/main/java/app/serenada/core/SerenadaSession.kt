@@ -10,6 +10,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import app.serenada.core.call.ConnectionStatusTracker
+import app.serenada.core.call.JoinTimer
+import app.serenada.core.call.StatsPoller
+import app.serenada.core.call.TurnManager
 import app.serenada.core.call.CallAudioSessionController
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
@@ -104,18 +108,87 @@ class SerenadaSession internal constructor(
     private var pendingJoinRoom: String? = null
     private var joinAttemptSerial = 0L
     private var reconnectAttempts = 0
-    private var connectionStatusRetryingRunnable: Runnable? = null
-    private var joinTimeoutRunnable: Runnable? = null
-    private var joinKickstartRunnable: Runnable? = null
-    private var joinRecoveryRunnable: Runnable? = null
-    private var turnRefreshRunnable: Runnable? = null
-    private var remoteVideoStatePollRunnable: Runnable? = null
-    private var webrtcStatsRequestInFlight = false
-    private var lastWebRtcStatsPollAtMs = 0L
+    private val connectionStatusTracker = ConnectionStatusTracker(
+        handler = handler,
+        getPhase = { _state.value.phase },
+        getDiagnostics = { _diagnostics.value },
+        getCurrentStatus = { _state.value.connectionStatus },
+        setConnectionStatus = { status ->
+            if (_state.value.connectionStatus != status) updateState(_state.value.copy(connectionStatus = status))
+        },
+    )
+    private val joinTimer = JoinTimer(
+        handler = handler,
+        getPhase = { _state.value.phase },
+        getJoinAttemptSerial = { joinAttemptSerial },
+        hasJoinSignalStarted = { hasJoinSignalStarted },
+        hasJoinAcknowledged = { hasJoinAcknowledged },
+        isSignalingConnected = { signalingClient.isConnected() },
+        onJoinTimeout = {
+            resetResources()
+            updateState(CallState(phase = CallPhase.Error, errorMessage = "Connection failed"))
+            delegate?.invoke()?.onSessionEnded(this, EndReason.ERROR)
+        },
+        ensureSignalingConnection = { ensureSignalingConnection() },
+        onRecovery = {
+            if (_state.value.phase == CallPhase.Joining) {
+                updateState(_state.value.copy(phase = CallPhase.Waiting, participantCount = 1))
+                updateConnectionStatusFromSignals()
+            }
+        },
+        setPendingJoinRoom = { roomId -> pendingJoinRoom = roomId },
+    )
+    private val turnManager = TurnManager(
+        handler = handler,
+        serverHost = serverHost,
+        apiClient = this.apiClient,
+        isSignalingConnected = { signalingClient.isConnected() },
+        setIceServers = { servers -> webRtcEngine.setIceServers(servers) },
+        onIceServersReady = {
+            while (pendingMessages.isNotEmpty() && webRtcEngine.hasIceServers()) {
+                processSignalingPayload(pendingMessages.removeFirst())
+            }
+            maybeSendOffer()
+            peerSlots.values.forEach { if (!shouldIOffer(it.remoteCid)) maybeScheduleNonHostOfferFallback(it.remoteCid, "ice-ready") }
+        },
+        sendTurnRefresh = { sendMessage("turn-refresh", null) },
+    )
+    private val statsPoller = StatsPoller(
+        handler = handler,
+        statsExecutorProvider = { webRtcStatsExecutor },
+        isActivePhase = {
+            val phase = _state.value.phase
+            phase == CallPhase.InCall || phase == CallPhase.Waiting || phase == CallPhase.Joining
+        },
+        getPeerSlots = { peerSlots.values.toList() },
+        onStatsUpdated = { merged ->
+            val nextCallStats = CallStats(
+                bitrate = merged.availableOutgoingKbps,
+                packetLoss = merged.videoRxPacketLossPct,
+                jitter = merged.audioJitterMs,
+                roundTripTime = merged.rttMs,
+                audioRxKbps = merged.audioRxKbps,
+                audioTxKbps = merged.audioTxKbps,
+                videoRxKbps = merged.videoRxKbps,
+                videoTxKbps = merged.videoTxKbps,
+                videoFps = merged.videoFps,
+                videoResolution = merged.videoResolution,
+                iceCandidatePair = merged.transportPath,
+                realtimeStats = merged,
+                updatedAtMs = merged.updatedAtMs,
+            )
+            updateDiagnostics(
+                _diagnostics.value.copy(
+                    callStats = nextCallStats,
+                    realtimeStats = merged,
+                )
+            )
+        },
+        onRefreshRemoteParticipants = { refreshRemoteParticipants() },
+    )
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
     private val peerSlots = mutableMapOf<String, PeerConnectionSlot>()
     private var reconnectToken: String? = null
-    private var turnTokenTTLMs: Long? = null
     private var hasJoinSignalStarted = false
     private var hasJoinAcknowledged = false
     private var cpuWakeLock: PowerManager.WakeLock? = null
@@ -597,8 +670,7 @@ class SerenadaSession internal constructor(
             reconnectToken = it
         }
         msg.payload?.optLong("turnTokenTTLMs", 0)?.takeIf { it > 0 }?.let { ttl ->
-            turnTokenTTLMs = ttl
-            scheduleTurnRefresh(ttl)
+            turnManager.handleJoinedTTL(ttl)
         }
         val roomState = parseRoomState(msg.payload)
         if (roomState != null) {
@@ -608,9 +680,9 @@ class SerenadaSession internal constructor(
         }
         val token = msg.payload?.optString("turnToken").orEmpty().ifBlank { null }
         if (!token.isNullOrBlank()) {
-            fetchTurnCredentials(token)
+            turnManager.fetchTurnCredentials(token)
         } else {
-            applyDefaultIceServers()
+            turnManager.applyDefaultIceServers()
         }
     }
 
@@ -1020,117 +1092,37 @@ class SerenadaSession internal constructor(
     }
 
     private fun scheduleJoinTimeout(roomId: String, joinAttemptId: Long) {
-        clearJoinTimeout()
-        val runnable = Runnable {
-            joinTimeoutRunnable = null
-            if (_state.value.phase == CallPhase.Joining && joinAttemptSerial == joinAttemptId) {
-                Log.w(TAG, "Join timeout for room $roomId")
-                resetResources()
-                updateState(CallState(phase = CallPhase.Error, errorMessage = "Connection failed"))
-                delegate?.invoke()?.onSessionEnded(this, EndReason.ERROR)
-            }
-        }
-        joinTimeoutRunnable = runnable
-        handler.postDelayed(runnable, WebRtcResilienceConstants.JOIN_HARD_TIMEOUT_MS)
+        joinTimer.scheduleTimeout(roomId, joinAttemptId)
     }
 
-    private fun clearJoinTimeout() { joinTimeoutRunnable?.let { handler.removeCallbacks(it) }; joinTimeoutRunnable = null }
+    private fun clearJoinTimeout() {
+        joinTimer.clearTimeout()
+    }
 
     private fun scheduleJoinKickstart(joinAttemptId: Long) {
-        clearJoinKickstart()
-        val runnable = Runnable {
-            joinKickstartRunnable = null
-            if (_state.value.phase != CallPhase.Joining) return@Runnable
-            if (joinAttemptSerial != joinAttemptId) return@Runnable
-            if (hasJoinSignalStarted) return@Runnable
-            ensureSignalingConnection()
-        }
-        joinKickstartRunnable = runnable
-        handler.postDelayed(runnable, WebRtcResilienceConstants.JOIN_CONNECT_KICKSTART_MS)
+        joinTimer.scheduleKickstart(joinAttemptId)
     }
 
-    private fun clearJoinKickstart() { joinKickstartRunnable?.let { handler.removeCallbacks(it) }; joinKickstartRunnable = null }
+    private fun clearJoinKickstart() {
+        joinTimer.clearKickstart()
+    }
 
     private fun scheduleJoinRecovery(roomId: String) {
-        clearJoinRecovery()
-        val runnable = Runnable {
-            joinRecoveryRunnable = null
-            if (!signalingClient.isConnected()) return@Runnable
-            if (!hasJoinAcknowledged) {
-                if (_state.value.phase == CallPhase.Joining) {
-                    pendingJoinRoom = roomId
-                    ensureSignalingConnection()
-                }
-                return@Runnable
-            }
-            if (_state.value.phase == CallPhase.Joining) {
-                updateState(_state.value.copy(phase = CallPhase.Waiting, participantCount = 1))
-                updateConnectionStatusFromSignals()
-            }
-        }
-        joinRecoveryRunnable = runnable
-        handler.postDelayed(runnable, WebRtcResilienceConstants.JOIN_RECOVERY_MS)
+        joinTimer.scheduleRecovery(roomId)
     }
 
-    private fun clearJoinRecovery() { joinRecoveryRunnable?.let { handler.removeCallbacks(it) }; joinRecoveryRunnable = null }
+    private fun clearJoinRecovery() {
+        joinTimer.clearRecovery()
+    }
 
     // --- Internal: TURN ---
 
-    private fun fetchTurnCredentials(token: String) {
-        var resolved = false
-        val timeoutRunnable = Runnable {
-            if (resolved) return@Runnable; resolved = true
-            applyDefaultIceServers()
-        }
-        handler.postDelayed(timeoutRunnable, WebRtcResilienceConstants.TURN_FETCH_TIMEOUT_MS)
-        apiClient.fetchTurnCredentials(serverHost, token) { result ->
-            handler.post {
-                handler.removeCallbacks(timeoutRunnable)
-                if (resolved) return@post; resolved = true
-                result.onSuccess { applyTurnCredentials(it) }.onFailure { applyDefaultIceServers() }
-            }
-        }
-    }
-
-    private fun applyTurnCredentials(creds: TurnCredentials) {
-        val servers = creds.uris.map {
-            PeerConnection.IceServer.builder(it).setUsername(creds.username).setPassword(creds.password).createIceServer()
-        }
-        webRtcEngine.setIceServers(servers)
-        onIceServersReady()
-    }
-
-    private fun applyDefaultIceServers() {
-        webRtcEngine.setIceServers(listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()))
-        onIceServersReady()
-    }
-
-    private fun onIceServersReady() {
-        while (pendingMessages.isNotEmpty() && webRtcEngine.hasIceServers()) {
-            processSignalingPayload(pendingMessages.removeFirst())
-        }
-        maybeSendOffer()
-        peerSlots.values.forEach { if (!shouldIOffer(it.remoteCid)) maybeScheduleNonHostOfferFallback(it.remoteCid, "ice-ready") }
-    }
-
-    private fun scheduleTurnRefresh(ttlMs: Long) {
-        clearTurnRefresh()
-        if (ttlMs <= 0) return
-        val delayMs = (ttlMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
-        val runnable = Runnable {
-            turnRefreshRunnable = null
-            if (!signalingClient.isConnected()) return@Runnable
-            sendMessage("turn-refresh", null)
-        }
-        turnRefreshRunnable = runnable
-        handler.postDelayed(runnable, delayMs)
-    }
-
-    private fun clearTurnRefresh() { turnRefreshRunnable?.let { handler.removeCallbacks(it) }; turnRefreshRunnable = null }
-
     private fun handleTurnRefreshed(msg: SignalingMessage) {
-        msg.payload?.optLong("turnTokenTTLMs", 0)?.takeIf { it > 0 }?.let { scheduleTurnRefresh(it) }
-        msg.payload?.optString("turnToken").orEmpty().ifBlank { null }?.let { fetchTurnCredentials(it) }
+        turnManager.handleTurnRefreshed(msg)
+    }
+
+    private fun clearTurnRefresh() {
+        turnManager.cancelRefresh()
     }
 
     // --- Internal: State ---
@@ -1197,150 +1189,30 @@ class SerenadaSession internal constructor(
 
     // --- Internal: Connection Status ---
 
-    private fun isConnectionDegraded(diagnostics: CallDiagnostics = _diagnostics.value): Boolean {
-        return !diagnostics.isSignalingConnected ||
-            diagnostics.iceConnectionState == IceConnectionState.DISCONNECTED ||
-            diagnostics.iceConnectionState == IceConnectionState.FAILED ||
-            diagnostics.peerConnectionState == PeerConnectionState.DISCONNECTED ||
-            diagnostics.peerConnectionState == PeerConnectionState.FAILED
-    }
-
-    private fun setConnectionStatus(status: ConnectionStatus) {
-        if (_state.value.connectionStatus == status) return
-        updateState(_state.value.copy(connectionStatus = status))
-    }
-
-    private fun resetConnectionStatusMachine() {
-        clearConnectionStatusRetryingTimer()
-        setConnectionStatus(ConnectionStatus.Connected)
+    private fun isConnectionDegraded(): Boolean {
+        return connectionStatusTracker.isConnectionDegraded()
     }
 
     private fun markConnectionDegraded() {
-        if (_state.value.phase != CallPhase.InCall) { resetConnectionStatusMachine(); return }
-        when (_state.value.connectionStatus) {
-            ConnectionStatus.Connected -> { setConnectionStatus(ConnectionStatus.Recovering); scheduleConnectionStatusRetryingTimer() }
-            ConnectionStatus.Recovering -> scheduleConnectionStatusRetryingTimer()
-            ConnectionStatus.Retrying -> Unit
-        }
+        connectionStatusTracker.update()
     }
 
     private fun updateConnectionStatusFromSignals() {
-        if (_state.value.phase != CallPhase.InCall) { resetConnectionStatusMachine(); return }
-        if (isConnectionDegraded(_diagnostics.value)) { markConnectionDegraded(); return }
-        resetConnectionStatusMachine()
-    }
-
-    private fun scheduleConnectionStatusRetryingTimer() {
-        if (connectionStatusRetryingRunnable != null) return
-        val runnable = Runnable {
-            connectionStatusRetryingRunnable = null
-            if (_state.value.phase != CallPhase.InCall) { resetConnectionStatusMachine(); return@Runnable }
-            if (_state.value.connectionStatus == ConnectionStatus.Recovering) setConnectionStatus(ConnectionStatus.Retrying)
-        }
-        connectionStatusRetryingRunnable = runnable
-        handler.postDelayed(runnable, 10_000)
+        connectionStatusTracker.update()
     }
 
     private fun clearConnectionStatusRetryingTimer() {
-        connectionStatusRetryingRunnable?.let { handler.removeCallbacks(it) }; connectionStatusRetryingRunnable = null
+        connectionStatusTracker.cancelTimer()
     }
 
     // --- Internal: Stats Polling ---
 
     private fun startRemoteVideoStatePolling() {
-        if (remoteVideoStatePollRunnable != null) return
-        val runnable = object : Runnable {
-            override fun run() {
-                refreshRemoteParticipants()
-                pollWebRtcStats()
-                handler.postDelayed(this, 500)
-            }
-        }
-        remoteVideoStatePollRunnable = runnable
-        handler.post(runnable)
+        statsPoller.start()
     }
 
     private fun stopRemoteVideoStatePolling() {
-        remoteVideoStatePollRunnable?.let { handler.removeCallbacks(it) }; remoteVideoStatePollRunnable = null
-        webrtcStatsRequestInFlight = false; lastWebRtcStatsPollAtMs = 0L
-    }
-
-    private fun pollWebRtcStats() {
-        val phase = _state.value.phase
-        if (phase != CallPhase.InCall && phase != CallPhase.Waiting && phase != CallPhase.Joining) return
-        val now = System.currentTimeMillis()
-        if (webrtcStatsRequestInFlight) return
-        if (now - lastWebRtcStatsPollAtMs < WEBRTC_STATS_POLL_INTERVAL_MS) return
-        val slots = peerSlots.values.toList()
-        if (slots.isEmpty()) return
-        webrtcStatsRequestInFlight = true
-        val executor = webRtcStatsExecutor?.takeIf { !it.isShutdown }
-        if (executor == null) { webrtcStatsRequestInFlight = false; return }
-        try { executor.execute {
-            val stats = mutableListOf<RealtimeCallStats>()
-            var remaining = slots.size
-            slots.forEach { slot ->
-                slot.collectWebRtcStats { _, realtimeStats ->
-                    synchronized(stats) {
-                        realtimeStats?.let(stats::add)
-                        remaining -= 1
-                        if (remaining == 0) {
-                            val merged = mergeRealtimeStats(stats)
-                            handler.post {
-                                webrtcStatsRequestInFlight = false
-                                lastWebRtcStatsPollAtMs = System.currentTimeMillis()
-                                if (merged != null) {
-                                    val nextCallStats = CallStats(
-                                        bitrate = merged.availableOutgoingKbps,
-                                        packetLoss = merged.videoRxPacketLossPct,
-                                        jitter = merged.audioJitterMs,
-                                        roundTripTime = merged.rttMs,
-                                        audioRxKbps = merged.audioRxKbps,
-                                        audioTxKbps = merged.audioTxKbps,
-                                        videoRxKbps = merged.videoRxKbps,
-                                        videoTxKbps = merged.videoTxKbps,
-                                        videoFps = merged.videoFps,
-                                        videoResolution = merged.videoResolution,
-                                        iceCandidatePair = merged.transportPath,
-                                        realtimeStats = merged,
-                                        updatedAtMs = merged.updatedAtMs,
-                                    )
-                                    updateDiagnostics(
-                                        _diagnostics.value.copy(
-                                            callStats = nextCallStats,
-                                            realtimeStats = merged,
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        } catch (_: java.util.concurrent.RejectedExecutionException) { webrtcStatsRequestInFlight = false }
-    }
-
-    private fun mergeRealtimeStats(stats: List<RealtimeCallStats>): RealtimeCallStats? {
-        if (stats.isEmpty()) return null
-        fun sumN(sel: (RealtimeCallStats) -> Double?) = stats.mapNotNull(sel).sum().takeIf { stats.any { s -> sel(s) != null } }
-        fun maxN(sel: (RealtimeCallStats) -> Double?) = stats.mapNotNull(sel).maxOrNull()
-        return RealtimeCallStats(
-            transportPath = stats.mapNotNull { it.transportPath }.distinct().joinToString().ifBlank { null },
-            rttMs = maxN { it.rttMs }, availableOutgoingKbps = sumN { it.availableOutgoingKbps },
-            audioRxPacketLossPct = maxN { it.audioRxPacketLossPct }, audioTxPacketLossPct = maxN { it.audioTxPacketLossPct },
-            audioJitterMs = maxN { it.audioJitterMs }, audioPlayoutDelayMs = maxN { it.audioPlayoutDelayMs },
-            audioConcealedPct = maxN { it.audioConcealedPct },
-            audioRxKbps = sumN { it.audioRxKbps }, audioTxKbps = sumN { it.audioTxKbps },
-            videoRxPacketLossPct = maxN { it.videoRxPacketLossPct }, videoTxPacketLossPct = maxN { it.videoTxPacketLossPct },
-            videoRxKbps = sumN { it.videoRxKbps }, videoTxKbps = sumN { it.videoTxKbps },
-            videoFps = maxN { it.videoFps }, videoResolution = stats.asReversed().firstNotNullOfOrNull { it.videoResolution },
-            videoFreezeCount60s = stats.mapNotNull { it.videoFreezeCount60s }.sum().takeIf { it > 0 },
-            videoFreezeDuration60s = sumN { it.videoFreezeDuration60s },
-            videoRetransmitPct = maxN { it.videoRetransmitPct }, videoNackPerMin = sumN { it.videoNackPerMin },
-            videoPliPerMin = sumN { it.videoPliPerMin }, videoFirPerMin = sumN { it.videoFirPerMin },
-            updatedAtMs = stats.maxOf { it.updatedAtMs },
-        )
+        statsPoller.stop()
     }
 
     // --- Internal: Cleanup ---
@@ -1376,7 +1248,7 @@ class SerenadaSession internal constructor(
         pendingJoinRoom = null; pendingMessages.clear(); reconnectAttempts = 0
         clearConnectionStatusRetryingTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
-        reconnectToken = null; turnTokenTTLMs = null; hasJoinSignalStarted = false; hasJoinAcknowledged = false
+        reconnectToken = null; turnManager.reset(); hasJoinSignalStarted = false; hasJoinAcknowledged = false
         updateDiagnostics(CallDiagnostics())
     }
 
@@ -1437,7 +1309,6 @@ class SerenadaSession internal constructor(
 
     private companion object {
         const val TAG = "SerenadaSession"
-        const val WEBRTC_STATS_POLL_INTERVAL_MS = 2000L
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
             android.Manifest.permission.CAMERA,

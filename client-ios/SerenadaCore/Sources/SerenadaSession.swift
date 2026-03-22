@@ -74,29 +74,20 @@ public final class SerenadaSession: ObservableObject {
     private var reconnectAttempts = 0
     private var reconnectToken: String?
     private var reconnectCid: String?
-    private var turnTokenTTLMs: Int64?
+    private var turnManager: TurnManager?
 
     private var hasBegunJoin = false
     private var hasJoinSignalStartedForAttempt = false
     private var hasJoinAcknowledgedCurrentAttempt = false
-    private var hasInitializedIceSetupForAttempt = false
-    private var lastTurnTokenForAttempt: String?
     private var userPreferredVideoEnabled = true
     private var isVideoPausedByProximity = false
 
     private var reconnectTask: Task<Void, Never>?
-    private var joinTimeoutTask: Task<Void, Never>?
-    private var joinConnectKickstartTask: Task<Void, Never>?
-    private var joinRecoveryTask: Task<Void, Never>?
-    private var connectionStatusRetryingTask: Task<Void, Never>?
-    private var turnRefreshTask: Task<Void, Never>?
-    private var remoteVideoPollTimer: Timer?
-
-    private var lastWebRtcStatsPollAtMs: Int64 = 0
-    private var webrtcStatsRequestInFlight = false
+    private var joinTimer: JoinTimer?
+    private var connectionStatusTracker: ConnectionStatusTracker?
+    private var statsPoller: StatsPoller?
 
     private let permissionRequestTimeoutNs: UInt64 = 2_000_000_000
-    private let connectionStatusRetryingDelayNs: UInt64 = 10_000_000_000
 
     public convenience init(
         roomId: String,
@@ -154,6 +145,63 @@ public final class SerenadaSession: ObservableObject {
         signalingClient.listener = self
         configureRuntimeBridges()
 
+        joinTimer = JoinTimer(
+            getRoomId: { [weak self] in self?.roomId ?? "" },
+            getJoinAttemptSerial: { [weak self] in self?.joinAttemptSerial ?? 0 },
+            getInternalPhase: { [weak self] in self?.internalPhase ?? .idle },
+            hasJoinSignalStarted: { [weak self] in self?.hasJoinSignalStartedForAttempt ?? false },
+            hasJoinAcknowledged: { [weak self] in self?.hasJoinAcknowledgedCurrentAttempt ?? false },
+            isSignalingConnected: { [weak self] in self?.diagnostics.isSignalingConnected ?? false },
+            onJoinTimeout: { [weak self] in self?.failJoinWithError(.connectionFailed) },
+            ensureSignalingConnection: { [weak self] in self?.ensureSignalingConnection() },
+            onRecovery: { [weak self] participantHint, preferInCall in
+                self?.recoverFromJoiningIfNeeded(participantHint: participantHint ?? self?.currentRoomState?.participants.count, preferInCall: preferInCall)
+            }
+        )
+
+        turnManager = TurnManager(
+            serverHost: serverHost,
+            apiClient: self.apiClient,
+            getJoinAttemptSerial: { [weak self] in self?.joinAttemptSerial ?? 0 },
+            getRoomId: { [weak self] in self?.roomId ?? "" },
+            getPhase: { [weak self] in self?.mapPhase(self?.internalPhase ?? .idle) ?? .idle },
+            isSignalingConnected: { [weak self] in self?.signalingClient.isConnected() ?? false },
+            setIceServers: { [weak self] servers in self?.webRtcEngine.setIceServers(servers) },
+            onIceServersReady: { [weak self] in
+                self?.flushPendingMessages()
+                self?.maybeSendOffer()
+                self?.maybeScheduleNonHostOfferFallback(reason: "ice-ready")
+            },
+            sendTurnRefresh: { [weak self] in self?.sendMessage(type: "turn-refresh") }
+        )
+
+        connectionStatusTracker = ConnectionStatusTracker(
+            getInternalPhase: { [weak self] in self?.internalPhase ?? .idle },
+            getDiagnostics: { [weak self] in self?.diagnostics ?? CallDiagnostics() },
+            getCurrentStatus: { [weak self] in self?.state.connectionStatus ?? .connected },
+            setConnectionStatus: { [weak self] status in
+                guard let self, self.state.connectionStatus != status else { return }
+                self.commitSnapshot { s, _ in s.connectionStatus = status }
+            }
+        )
+
+        statsPoller = StatsPoller(
+            isActivePhase: { [weak self] in
+                guard let self else { return false }
+                return self.internalPhase == .inCall || self.internalPhase == .waiting || self.internalPhase == .joining
+            },
+            getPeerSlots: { [weak self] in
+                guard let self else { return [] }
+                return Array(self.peerSlots.values)
+            },
+            onStatsUpdated: { [weak self] merged in
+                self?.commitSnapshot { _, d in d.realtimeStats = merged }
+            },
+            onRefreshRemoteParticipants: { [weak self] in
+                self?.refreshRemoteParticipants()
+            }
+        )
+
         internalPhase = .joining
         commitSnapshot { s, _ in
             s.localParticipant.audioEnabled = config.defaultAudioEnabled
@@ -169,12 +217,6 @@ public final class SerenadaSession: ObservableObject {
     deinit {
         pathMonitor.cancel()
         reconnectTask?.cancel()
-        joinTimeoutTask?.cancel()
-        joinConnectKickstartTask?.cancel()
-        joinRecoveryTask?.cancel()
-        connectionStatusRetryingTask?.cancel()
-        turnRefreshTask?.cancel()
-        remoteVideoPollTimer?.invalidate()
     }
 
     public func leave() {
@@ -545,8 +587,7 @@ public final class SerenadaSession: ObservableObject {
             reconnectToken = token
         }
         if let ttl = message.payload?.objectValue?["turnTokenTTLMs"]?.intValue {
-            turnTokenTTLMs = Int64(ttl)
-            scheduleTurnRefresh(ttlMs: Int64(ttl))
+            turnManager?.handleJoinedTTL(ttlMs: Int64(ttl))
         }
 
         ensureIceSetupIfNeeded(turnToken: turnToken(from: message.payload))
@@ -580,18 +621,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func ensureIceSetupIfNeeded(turnToken: String?) {
-        let normalizedToken = turnToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if !hasInitializedIceSetupForAttempt {
-            hasInitializedIceSetupForAttempt = true
-            applyDefaultIceServers()
-        }
-
-        guard let normalizedToken, !normalizedToken.isEmpty else { return }
-        guard lastTurnTokenForAttempt != normalizedToken else { return }
-
-        lastTurnTokenForAttempt = normalizedToken
-        fetchTurnCredentials(token: normalizedToken, applyDefaultOnFailure: false)
+        turnManager?.ensureIceSetupIfNeeded(turnToken: turnToken)
     }
 
     private func handleError(_ message: SignalingMessage) {
@@ -1147,42 +1177,19 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func scheduleJoinTimeout(roomId: String, joinAttempt: Int64) {
-        clearJoinTimeout()
-
-        joinTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.joinHardTimeoutNs)
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            guard self.internalPhase == .joining else { return }
-            guard self.roomId == roomId else { return }
-            guard self.joinAttemptSerial == joinAttempt else { return }
-            self.failJoinWithError(.connectionFailed)
-        }
+        joinTimer?.scheduleTimeout(roomId: roomId, joinAttempt: joinAttempt)
     }
 
     private func clearJoinTimeout() {
-        joinTimeoutTask?.cancel()
-        joinTimeoutTask = nil
+        joinTimer?.clearTimeout()
     }
 
     private func scheduleJoinConnectKickstart(roomId: String, joinAttempt: Int64) {
-        clearJoinConnectKickstart()
-
-        joinConnectKickstartTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.joinConnectKickstartNs)
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            guard self.internalPhase == .joining else { return }
-            guard self.roomId == roomId else { return }
-            guard self.joinAttemptSerial == joinAttempt else { return }
-            guard !self.hasJoinSignalStartedForAttempt else { return }
-            self.ensureSignalingConnection()
-        }
+        joinTimer?.scheduleKickstart(roomId: roomId, joinAttempt: joinAttempt)
     }
 
     private func clearJoinConnectKickstart() {
-        joinConnectKickstartTask?.cancel()
-        joinConnectKickstartTask = nil
+        joinTimer?.clearKickstart()
     }
 
     private func failJoinWithError(_ error: CallError) {
@@ -1259,94 +1266,12 @@ public final class SerenadaSession: ObservableObject {
         maybeSendOffer(slot: slot, force: true, iceRestart: true)
     }
 
-    private func fetchTurnCredentials(token: String, applyDefaultOnFailure: Bool = true) {
-        let roomIdAtFetchStart = roomId
-        let joinAttemptAtFetchStart = joinAttemptSerial
-
-        enum TurnFetchOutcome {
-            case success(TurnCredentials)
-            case failed
-            case timedOut
-        }
-
-        Task {
-            let outcome = await withTaskGroup(of: TurnFetchOutcome.self) { group in
-                group.addTask { [apiClient] in
-                    do {
-                        return .success(try await apiClient.fetchTurnCredentials(host: self.serverHost, token: token))
-                    } catch {
-                        return .failed
-                    }
-                }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: WebRtcResilience.turnFetchTimeoutNs)
-                    return .timedOut
-                }
-                let first = await group.next() ?? .failed
-                group.cancelAll()
-                return first
-            }
-
-            guard self.roomId == roomIdAtFetchStart else { return }
-            guard self.joinAttemptSerial == joinAttemptAtFetchStart else { return }
-
-            switch outcome {
-            case .success(let credentials):
-                self.applyTurnCredentials(credentials)
-            case .timedOut, .failed:
-                if applyDefaultOnFailure {
-                    self.applyDefaultIceServers()
-                }
-            }
-        }
-    }
-
-    private func applyTurnCredentials(_ credentials: TurnCredentials) {
-        let servers = credentials.uris.map {
-            IceServerConfig(urls: [$0], username: credentials.username, credential: credentials.password)
-        }
-        webRtcEngine.setIceServers(servers)
-        flushPendingMessages()
-        maybeSendOffer()
-        maybeScheduleNonHostOfferFallback(reason: "turn-ready")
-    }
-
     private func handleTurnRefreshed(_ message: SignalingMessage) {
-        guard state.phase != .idle else { return }
-        if let ttl = message.payload?.objectValue?["turnTokenTTLMs"]?.intValue {
-            turnTokenTTLMs = Int64(ttl)
-            scheduleTurnRefresh(ttlMs: Int64(ttl))
-        }
-        ensureIceSetupIfNeeded(turnToken: turnToken(from: message.payload))
-    }
-
-    private func scheduleTurnRefresh(ttlMs: Int64) {
-        clearTurnRefresh()
-        guard ttlMs > 0 else { return }
-        let delayNs = UInt64(Double(ttlMs) * WebRtcResilience.turnRefreshTriggerRatio * 1_000_000)
-
-        turnRefreshTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delayNs)
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            guard self.state.phase == .waiting || self.state.phase == .inCall || self.state.phase == .joining else { return }
-            guard self.signalingClient.isConnected() else { return }
-            self.sendMessage(type: "turn-refresh")
-        }
+        turnManager?.handleTurnRefreshed(payload: message.payload)
     }
 
     private func clearTurnRefresh() {
-        turnRefreshTask?.cancel()
-        turnRefreshTask = nil
-    }
-
-    private func applyDefaultIceServers() {
-        webRtcEngine.setIceServers([
-            IceServerConfig(urls: ["stun:stun.l.google.com:19302"], username: nil, credential: nil)
-        ])
-        flushPendingMessages()
-        maybeSendOffer()
-        maybeScheduleNonHostOfferFallback(reason: "default-ice-ready")
+        turnManager?.cancelRefresh()
     }
 
     private func flushPendingMessages() {
@@ -1416,104 +1341,11 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func startRemoteVideoStatePolling() {
-        stopRemoteVideoStatePolling()
-
-        remoteVideoPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.refreshRemoteParticipants()
-                self.pollWebRtcStats()
-            }
-        }
+        statsPoller?.start()
     }
 
     private func stopRemoteVideoStatePolling() {
-        remoteVideoPollTimer?.invalidate()
-        remoteVideoPollTimer = nil
-        webrtcStatsRequestInFlight = false
-        lastWebRtcStatsPollAtMs = 0
-    }
-
-    private func pollWebRtcStats() {
-        if internalPhase != .inCall && internalPhase != .waiting && internalPhase != .joining {
-            return
-        }
-
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        if webrtcStatsRequestInFlight { return }
-        if now - lastWebRtcStatsPollAtMs < 2000 { return }
-
-        webrtcStatsRequestInFlight = true
-
-        let slots = Array(peerSlots.values)
-        guard !slots.isEmpty else {
-            webrtcStatsRequestInFlight = false
-            lastWebRtcStatsPollAtMs = now
-            commitSnapshot { _, d in d.realtimeStats = .empty }
-            return
-        }
-
-        let group = DispatchGroup()
-        var stats: [RealtimeCallStats] = []
-        let lock = NSLock()
-
-        for slot in slots {
-            group.enter()
-            slot.collectRealtimeCallStats { realtimeStats in
-                lock.lock()
-                stats.append(realtimeStats)
-                lock.unlock()
-                group.leave()
-            }
-        }
-
-        group.notify(queue: .main) { [weak self] in
-            guard let self else { return }
-            self.webrtcStatsRequestInFlight = false
-            self.lastWebRtcStatsPollAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-            self.commitSnapshot { _, d in
-                d.realtimeStats = self.mergeRealtimeStats(stats)
-            }
-        }
-    }
-
-    private func mergeRealtimeStats(_ stats: [RealtimeCallStats]) -> RealtimeCallStats {
-        guard !stats.isEmpty else { return .empty }
-
-        func sumNonNil(_ values: [Double]) -> Double? {
-            guard !values.isEmpty else { return nil }
-            return values.reduce(0, +)
-        }
-
-        var merged = RealtimeCallStats.empty
-        merged.transportPath = Array(Set(stats.compactMap(\.transportPath))).sorted().joined(separator: " | ")
-        if merged.transportPath?.isEmpty == true {
-            merged.transportPath = nil
-        }
-        merged.rttMs = stats.compactMap(\.rttMs).max()
-        merged.availableOutgoingKbps = stats.compactMap(\.availableOutgoingKbps).min()
-        merged.audioRxPacketLossPct = stats.compactMap(\.audioRxPacketLossPct).max()
-        merged.audioTxPacketLossPct = stats.compactMap(\.audioTxPacketLossPct).max()
-        merged.audioJitterMs = stats.compactMap(\.audioJitterMs).max()
-        merged.audioPlayoutDelayMs = stats.compactMap(\.audioPlayoutDelayMs).max()
-        merged.audioConcealedPct = stats.compactMap(\.audioConcealedPct).max()
-        merged.audioRxKbps = sumNonNil(stats.compactMap(\.audioRxKbps))
-        merged.audioTxKbps = sumNonNil(stats.compactMap(\.audioTxKbps))
-        merged.videoRxPacketLossPct = stats.compactMap(\.videoRxPacketLossPct).max()
-        merged.videoTxPacketLossPct = stats.compactMap(\.videoTxPacketLossPct).max()
-        merged.videoRxKbps = sumNonNil(stats.compactMap(\.videoRxKbps))
-        merged.videoTxKbps = sumNonNil(stats.compactMap(\.videoTxKbps))
-        merged.videoFps = stats.compactMap(\.videoFps).min()
-        let resolutions = Array(Set(stats.compactMap(\.videoResolution))).sorted()
-        merged.videoResolution = resolutions.isEmpty ? nil : resolutions.joined(separator: " | ")
-        merged.videoFreezeCount60s = stats.compactMap(\.videoFreezeCount60s).reduce(0, +)
-        merged.videoFreezeDuration60s = sumNonNil(stats.compactMap(\.videoFreezeDuration60s))
-        merged.videoRetransmitPct = stats.compactMap(\.videoRetransmitPct).max()
-        merged.videoNackPerMin = sumNonNil(stats.compactMap(\.videoNackPerMin))
-        merged.videoPliPerMin = sumNonNil(stats.compactMap(\.videoPliPerMin))
-        merged.videoFirPerMin = sumNonNil(stats.compactMap(\.videoFirPerMin))
-        merged.updatedAtMs = stats.map(\.updatedAtMs).max() ?? 0
-        return merged
+        statsPoller?.stop()
     }
 
     private func cleanupCall(reason: EndReason, transitionToEnding: Bool) {
@@ -1573,10 +1405,8 @@ public final class SerenadaSession: ObservableObject {
         isVideoPausedByProximity = false
         hasJoinSignalStartedForAttempt = false
         hasJoinAcknowledgedCurrentAttempt = false
-        hasInitializedIceSetupForAttempt = false
-        lastTurnTokenForAttempt = nil
         reconnectToken = nil
-        turnTokenTTLMs = nil
+        turnManager?.reset()
 
         participantCount = 0
         commitSnapshot { s, d in
@@ -1660,29 +1490,11 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func scheduleJoinRecovery(for roomId: String) {
-        clearJoinRecovery()
-
-        joinRecoveryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: WebRtcResilience.joinRecoveryNs)
-            guard !Task.isCancelled else { return }
-            guard let self else { return }
-            guard self.roomId == roomId else { return }
-            guard self.diagnostics.isSignalingConnected else { return }
-            guard self.hasJoinAcknowledgedCurrentAttempt else {
-                if self.internalPhase == .joining {
-                    self.pendingJoinRoom = roomId
-                    self.ensureSignalingConnection()
-                }
-                return
-            }
-
-            self.recoverFromJoiningIfNeeded(participantHint: self.currentRoomState?.participants.count)
-        }
+        joinTimer?.scheduleRecovery(for: roomId)
     }
 
     private func clearJoinRecovery() {
-        joinRecoveryTask?.cancel()
-        joinRecoveryTask = nil
+        joinTimer?.clearRecovery()
     }
 
     private func participantCountHint(payload: JSONValue?) -> Int? {
@@ -1729,74 +1541,15 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func clearConnectionStatusRetryingTimer() {
-        connectionStatusRetryingTask?.cancel()
-        connectionStatusRetryingTask = nil
-    }
-
-    private func setConnectionStatus(_ status: SerenadaConnectionStatus) {
-        guard state.connectionStatus != status else { return }
-        commitSnapshot { s, _ in s.connectionStatus = status }
-    }
-
-    private func resetConnectionStatusMachine() {
-        clearConnectionStatusRetryingTimer()
-        setConnectionStatus(.connected)
-    }
-
-    private func scheduleConnectionStatusRetryingTimer() {
-        guard connectionStatusRetryingTask == nil else { return }
-
-        connectionStatusRetryingTask = Task { [weak self] in
-            guard let self else { return }
-            try? await Task.sleep(nanoseconds: self.connectionStatusRetryingDelayNs)
-            guard !Task.isCancelled else { return }
-            guard self.internalPhase == .inCall else {
-                self.resetConnectionStatusMachine()
-                return
-            }
-            guard self.state.connectionStatus == .recovering else { return }
-            self.connectionStatusRetryingTask = nil
-            self.setConnectionStatus(.retrying)
-        }
-    }
-
-    private func markConnectionDegraded() {
-        guard internalPhase == .inCall else {
-            resetConnectionStatusMachine()
-            return
-        }
-
-        switch state.connectionStatus {
-        case .connected:
-            setConnectionStatus(.recovering)
-            scheduleConnectionStatusRetryingTimer()
-        case .recovering:
-            scheduleConnectionStatusRetryingTimer()
-        case .retrying:
-            break
-        }
+        connectionStatusTracker?.cancelTimer()
     }
 
     private func updateConnectionStatusFromSignals() {
-        guard internalPhase == .inCall else {
-            resetConnectionStatusMachine()
-            return
-        }
-
-        if isConnectionDegraded() {
-            markConnectionDegraded()
-            return
-        }
-
-        resetConnectionStatusMachine()
+        connectionStatusTracker?.update()
     }
 
     private func isConnectionDegraded() -> Bool {
-        !diagnostics.isSignalingConnected ||
-        diagnostics.iceConnectionState == .disconnected ||
-        diagnostics.iceConnectionState == .failed ||
-        diagnostics.peerConnectionState == .disconnected ||
-        diagnostics.peerConnectionState == .failed
+        connectionStatusTracker?.isConnectionDegraded() ?? false
     }
 
     // MARK: - Snapshot Management
@@ -1861,7 +1614,7 @@ public final class SerenadaSession: ObservableObject {
                 guard self.internalPhase == .inCall else { return }
 
                 if self.isConnectionDegraded() {
-                    self.markConnectionDegraded()
+                    self.updateConnectionStatusFromSignals()
                 }
 
                 if path.status == .satisfied {
