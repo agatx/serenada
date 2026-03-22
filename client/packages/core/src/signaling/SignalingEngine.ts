@@ -4,6 +4,7 @@ import type { SignalingTransport, TransportKind } from './transports/types.js';
 import type { SerenadaLogger } from '../types.js';
 import { createSignalingTransport } from './transports/index.js';
 import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './roomStatuses.js';
+import { formatError } from '../formatError.js';
 import {
     RECONNECT_BACKOFF_BASE_MS,
     RECONNECT_BACKOFF_CAP_MS,
@@ -361,7 +362,7 @@ export class SignalingEngine {
                 if (connectionId !== this.transportId) return;
                 this.connecting = false;
                 if (this.closedByDestroy) return;
-                this.logger?.log('error', 'Signaling', `Disconnected via ${reason}${err ? `: ${err}` : ''}`);
+                this.logger?.log('error', 'Signaling', `Disconnected via ${reason}${err ? `: ${formatError(err)}` : ''}`);
                 this.isConnected = false;
                 this.activeTransport = null;
                 this.clearPingInterval();
@@ -398,7 +399,7 @@ export class SignalingEngine {
             transport.connect();
         } catch (err) {
             this.connecting = false;
-            this.logger?.log('error', 'Signaling', `Transport connect() threw: ${err}`);
+            this.logger?.log('error', 'Signaling', `Transport connect() threw: ${formatError(err)}`);
             this.scheduleReconnect();
         }
     }

@@ -9,7 +9,6 @@ import android.net.NetworkRequest
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.util.Log
 import app.serenada.core.call.ConnectionStatusTracker
 import app.serenada.core.call.JoinTimer
 import app.serenada.core.call.LiveSessionClock

@@ -218,8 +218,8 @@ public final class WebRtcEngine: SessionMediaEngine {
         cameraController.setOnFeatureDegradation(handler)
     }
 
+    @available(*, deprecated, message: "Use SerenadaLogger instead. This method is a no-op.")
     public func setOnDebugTrace(_ handler: ((String) -> Void)?) {
-        // Legacy no-op; logging is now done via SerenadaLogger.
     }
 
     public func startLocalMedia(preferVideo: Bool = true) {

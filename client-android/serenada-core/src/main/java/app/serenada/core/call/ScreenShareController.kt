@@ -8,7 +8,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.DisplayMetrics
-import android.util.Log
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
 import kotlin.math.min

@@ -2,6 +2,7 @@ import type { SerenadaLogger } from '../../types.js';
 import type { SignalingMessage } from '../types.js';
 import type { SignalingTransport, TransportHandlers, TransportKind } from './types.js';
 import { CONNECT_TIMEOUT_MS } from '../../constants.js';
+import { formatError } from '../../formatError.js';
 
 export class WebSocketTransport implements SignalingTransport {
     kind: TransportKind = 'ws';
@@ -67,7 +68,7 @@ export class WebSocketTransport implements SignalingTransport {
                 const msg: SignalingMessage = JSON.parse(event.data);
                 this.handlers.onMessage(msg);
             } catch (e) {
-                this.logger?.log('error', 'Transport', `Failed to parse WS message: ${e}`);
+                this.logger?.log('error', 'Transport', `Failed to parse WS message: ${formatError(e)}`);
             }
         };
     }

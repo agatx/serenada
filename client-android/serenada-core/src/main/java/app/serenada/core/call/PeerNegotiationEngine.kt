@@ -1,7 +1,6 @@
 package app.serenada.core.call
 
 import android.os.Handler
-import android.util.Log
 import app.serenada.core.IceConnectionState
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger

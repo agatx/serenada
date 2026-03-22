@@ -1,6 +1,5 @@
 package app.serenada.core.call
 
-import android.util.Log
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
 import okhttp3.OkHttpClient

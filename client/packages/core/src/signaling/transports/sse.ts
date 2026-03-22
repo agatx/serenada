@@ -2,6 +2,7 @@ import type { SerenadaLogger } from '../../types.js';
 import type { SignalingMessage } from '../types.js';
 import type { SignalingTransport, TransportHandlers, TransportKind } from './types.js';
 import { CONNECT_TIMEOUT_MS } from '../../constants.js';
+import { formatError } from '../../formatError.js';
 
 const createSid = () => {
     if (window.crypto && window.crypto.getRandomValues) {
@@ -86,7 +87,7 @@ export class SseTransport implements SignalingTransport {
                 const msg: SignalingMessage = JSON.parse(event.data);
                 this.handlers.onMessage(msg);
             } catch (e) {
-                this.logger?.log('error', 'Transport', `Failed to parse SSE message: ${e}`);
+                this.logger?.log('error', 'Transport', `Failed to parse SSE message: ${formatError(e)}`);
             }
         };
     }
@@ -139,7 +140,7 @@ export class SseTransport implements SignalingTransport {
                 }
             })
             .catch(err => {
-                this.logger?.log('error', 'Transport', `Failed to send SSE message: ${err}`);
+                this.logger?.log('error', 'Transport', `Failed to send SSE message: ${formatError(err)}`);
             });
     }
 }

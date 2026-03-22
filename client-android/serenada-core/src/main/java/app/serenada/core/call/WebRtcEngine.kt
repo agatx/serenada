@@ -6,7 +6,6 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.MediaRecorder
-import android.util.Log
 import app.serenada.core.FeatureDegradationState
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger

@@ -1,7 +1,6 @@
 package app.serenada.core.call
 
 import android.content.Context
-import android.util.Log
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
 import java.nio.ByteBuffer

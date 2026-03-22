@@ -124,8 +124,8 @@ final class CameraCaptureController {
         onFeatureDegradation = handler
     }
 
+    @available(*, deprecated, message: "Use SerenadaLogger instead. This method is a no-op.")
     func setOnDebugTrace(_ handler: ((String) -> Void)?) {
-        // Legacy no-op; logging is now done via SerenadaLogger.
     }
 
 #if canImport(WebRTC)

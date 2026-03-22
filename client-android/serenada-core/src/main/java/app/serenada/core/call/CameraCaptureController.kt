@@ -11,7 +11,6 @@ import android.hardware.camera2.CaptureRequest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.util.Range
 import app.serenada.core.FeatureDegradation
 import app.serenada.core.FeatureDegradationState

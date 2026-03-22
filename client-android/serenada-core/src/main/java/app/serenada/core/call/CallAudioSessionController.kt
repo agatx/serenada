@@ -12,7 +12,6 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
-import android.util.Log
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
 
