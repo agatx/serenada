@@ -17,15 +17,14 @@ function mapErrorCode(serverCode: string): CallErrorCode {
             return 'roomEnded';
         case 'CONNECTION_FAILED':
             return 'connectionFailed';
-        case 'NOT_IN_ROOM':
-        case 'NOT_HOST':
-            return 'permissionDenied';
         case 'BAD_REQUEST':
         case 'UNSUPPORTED_VERSION':
         case 'INVALID_ROOM_ID':
         case 'SERVER_NOT_CONFIGURED':
         case 'INVALID_RECONNECT_TOKEN':
         case 'TURN_REFRESH_FAILED':
+        case 'NOT_IN_ROOM':
+        case 'NOT_HOST':
             return 'serverError';
         default:
             return 'unknown';
