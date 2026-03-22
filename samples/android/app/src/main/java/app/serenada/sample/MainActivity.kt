@@ -9,7 +9,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import app.serenada.core.CreateRoomResult
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaCore
 import app.serenada.callui.SerenadaCallFlow
@@ -20,11 +19,6 @@ private val sampleCallFlowConfig = SerenadaCallFlowConfig(
     screenSharingEnabled = false,
     inviteControlsEnabled = false,
 )
-
-private sealed interface ActiveCall {
-    data class InviteURL(val url: String) : ActiveCall
-    data class CreatedRoom(val result: CreateRoomResult) : ActiveCall
-}
 
 class MainActivity : ComponentActivity() {
     private lateinit var serenada: SerenadaCore
@@ -45,30 +39,24 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun SampleApp(serenada: SerenadaCore) {
-    var activeCall by remember { mutableStateOf<ActiveCall?>(null) }
+    var callUrl by remember { mutableStateOf<String?>(null) }
 
-    when (val call = activeCall) {
-        is ActiveCall.InviteURL -> SerenadaCallFlow(
-            url = call.url,
+    if (callUrl != null) {
+        SerenadaCallFlow(
+            url = callUrl!!,
             config = sampleCallFlowConfig,
-            onDismiss = { activeCall = null },
+            onDismiss = { callUrl = null },
         )
-
-        is ActiveCall.CreatedRoom -> SerenadaCallFlow(
-            session = call.result.session,
-            config = sampleCallFlowConfig,
-            onDismiss = { activeCall = null },
-        )
-
-        null -> HomeScreen(
-            onStartCall = { activeCall = it },
+    } else {
+        HomeScreen(
+            onJoinUrl = { callUrl = it },
             serenada = serenada,
         )
     }
 }
 
 @Composable
-private fun HomeScreen(onStartCall: (ActiveCall) -> Unit, serenada: SerenadaCore) {
+private fun HomeScreen(onJoinUrl: (String) -> Unit, serenada: SerenadaCore) {
     var urlText by remember { mutableStateOf("") }
     var isCreatingRoom by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -111,7 +99,7 @@ private fun HomeScreen(onStartCall: (ActiveCall) -> Unit, serenada: SerenadaCore
         Button(
             onClick = {
                 errorMessage = null
-                onStartCall(ActiveCall.InviteURL(urlText))
+                onJoinUrl(urlText)
             },
             enabled = urlText.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
@@ -122,14 +110,6 @@ private fun HomeScreen(onStartCall: (ActiveCall) -> Unit, serenada: SerenadaCore
         Spacer(modifier = Modifier.height(24.dp))
 
         Text("Create a new call", style = MaterialTheme.typography.titleMedium)
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            "createRoom() already returns a joined session, so the sample reuses it instead of joining twice.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -142,7 +122,13 @@ private fun HomeScreen(onStartCall: (ActiveCall) -> Unit, serenada: SerenadaCore
                         .onSuccess { result ->
                             isCreatingRoom = false
                             lastCreatedRoomUrl = result.roomUrl
-                            onStartCall(ActiveCall.CreatedRoom(result))
+                            // Stop the session that createRoom() auto-started;
+                            // SerenadaCallFlow will create its own session from the
+                            // URL, which lets it drive the permission flow correctly.
+                            // leave() works whether the session is awaiting permissions
+                            // or already joined signaling (permissions pre-granted).
+                            result.session.leave()
+                            onJoinUrl(result.roomUrl)
                         }
                         .onFailure { error ->
                             isCreatingRoom = false
