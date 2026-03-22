@@ -781,7 +781,7 @@ class SerenadaSession internal constructor(
         val code = msg.payload?.optString("code")?.trim()?.ifBlank { null }
         val rawMessage = msg.payload?.optString("message")?.trim()?.ifBlank { null }
         val callError = when (code) {
-            "ROOM_CAPACITY_UNSUPPORTED" -> CallError.RoomFull
+            "ROOM_CAPACITY_UNSUPPORTED", "ROOM_FULL" -> CallError.RoomFull
             "CONNECTION_FAILED" -> CallError.ConnectionFailed
             "JOIN_TIMEOUT" -> CallError.SignalingTimeout
             "ROOM_ENDED" -> CallError.RoomEnded
