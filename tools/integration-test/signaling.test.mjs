@@ -64,7 +64,7 @@ function connectWS() {
       ws,
       /** Send a protocol v1 message. */
       send(msg) {
-        ws.send(JSON.stringify({ v: 1, ...msg }));
+        ws.send(JSON.stringify({ ...msg, v: 1 }));
       },
       /**
        * Wait for the next message matching an optional predicate.

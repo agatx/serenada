@@ -24,12 +24,15 @@ export TURN_SECRET
 export TURN_TOKEN_SECRET
 export ROOM_ID_ENV=test
 export ALLOWED_ORIGINS="*"
-export RATE_LIMIT_BYPASS_IPS="*"
+export RATE_LIMIT_BYPASS_IPS="127.0.0.1,::1"
 export PORT
 
 ROOM_ID_SECRET=$(openssl rand -hex 32)
 TURN_SECRET=$(openssl rand -hex 32)
 TURN_TOKEN_SECRET=$(openssl rand -hex 32)
+
+export DATA_DIR
+DATA_DIR="$(mktemp -d)"
 
 # ── Install test dependencies ───────────────────────────────────────────────
 echo "Installing test dependencies..."
@@ -40,10 +43,13 @@ echo "Starting server on port $PORT..."
 SERVER_PID=""
 
 cleanup() {
-  if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
+  if [ -n "$SERVER_PID" ]; then
+    # Kill the process group (server + child go process)
+    kill $SERVER_PID 2>/dev/null || true
+    pkill -P $SERVER_PID 2>/dev/null || true
+    wait $SERVER_PID 2>/dev/null || true
   fi
+  [ -n "${DATA_DIR:-}" ] && rm -rf "$DATA_DIR"
 }
 trap cleanup EXIT
 
