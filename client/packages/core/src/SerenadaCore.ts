@@ -12,8 +12,7 @@ export class SerenadaCore {
     }
 
     static isSupported(): boolean {
-        return typeof RTCPeerConnection !== 'undefined'
-            && typeof navigator?.mediaDevices?.getUserMedia === 'function';
+        return typeof RTCPeerConnection !== 'undefined';
     }
 
     join(url: string): SerenadaSessionHandle;
@@ -54,9 +53,10 @@ export class SerenadaCore {
         };
         const noop = () => {};
         const noopAsync = async () => {};
+        const emptyMap = new Map<string, MediaStream>();
         return {
             get state() { return errorState; },
-            subscribe(cb: (state: CallState) => void) { cb(errorState); return noop; },
+            subscribe(_cb: (state: CallState) => void) { return noop; },
             subscribeToMessages(_cb: (message: SignalingMessage) => void) { return noop; },
             leave: noop,
             end: noop,
@@ -72,7 +72,7 @@ export class SerenadaCore {
             cancelJoin: noop,
             destroy: noop,
             get localStream() { return null; },
-            get remoteStreams() { return new Map<string, MediaStream>(); },
+            get remoteStreams() { return emptyMap; },
             get callStats() { return null; },
             get hasMultipleCameras() { return false; },
             get canScreenShare() { return false; },
