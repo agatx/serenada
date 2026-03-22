@@ -69,11 +69,11 @@ On Android and iOS, the active transport is available on the diagnostics object:
 ```kotlin
 // Android — available on CallDiagnostics
 val diagnostics = session.diagnostics.value
-println(diagnostics.activeTransport) // "ws" or "sse"
+println(diagnostics.activeTransport ?: "none") // "ws", "sse", or "none"
 ```
 
 ```swift
 // iOS — available on CallDiagnostics
 let diagnostics = session.diagnostics
-print(diagnostics.activeTransport ?? "none") // "ws" or "sse"
+print(diagnostics.activeTransport ?? "none") // "ws", "sse", or "none" if nil
 ```
