@@ -212,7 +212,14 @@ suspend fun runDiagnosticsIceCheck(
     onIceServersSummary(iceServersSummary)
     log("ICE servers: $iceServersSummary")
 
-    val gather = runIceGathering(context, servers, turnsOnly, ::log)
+    var gather = runIceGathering(context, servers, turnsOnly, ::log)
+    // Zero total candidates (not even host) means the NetworkMonitor hadn't
+    // enumerated interfaces yet — a transient race after the previous
+    // PeerConnection was torn down.  Retry once; the monitor will be ready.
+    if (gather.third == 0) {
+        log("Zero candidates gathered — retrying (NetworkMonitor race)...")
+        gather = runIceGathering(context, servers, turnsOnly, ::log)
+    }
     DiagnosticsIceReport(
         turnsOnly = turnsOnly,
         stun = gather.first,
@@ -234,12 +241,15 @@ private fun normalizeFps(rawFps: Int): Int {
     return if (rawFps > 1000) rawFps / 1000 else rawFps
 }
 
+/**
+ * Returns (stunResult, turnResult, totalCandidateCount).
+ */
 private fun runIceGathering(
     context: Context,
     servers: List<PeerConnection.IceServer>,
     turnsOnly: Boolean,
     log: (String) -> Unit,
-): Pair<DiagnosticsCheckResult, DiagnosticsCheckResult> {
+): Triple<DiagnosticsCheckResult, DiagnosticsCheckResult, Int> {
     val factory = getOrCreatePeerConnectionFactory(context)
     val stunFound = AtomicBoolean(false)
     val turnFound = AtomicBoolean(false)
@@ -326,9 +336,10 @@ private fun runIceGathering(
     })
 
     if (peerConnection == null) {
-        return Pair(
+        return Triple(
             DiagnosticsCheckResult(DiagnosticsCheckState.Fail, "PeerConnection creation failed"),
             DiagnosticsCheckResult(DiagnosticsCheckState.Fail, "PeerConnection creation failed"),
+            0,
         )
     }
 
@@ -389,8 +400,11 @@ private fun runIceGathering(
         }
     }
 
+    // close() stops ICE and media but does not immediately free the native
+    // NetworkMonitor.  Skipping dispose() lets the monitor stay alive until
+    // GC, so the next PeerConnection's monitor can register without a gap
+    // that would cause zero-candidate ICE gathering.
     runCatching { peerConnection.close() }
-    runCatching { peerConnection.dispose() }
 
     val stunResult = when {
         turnsOnly -> DiagnosticsCheckResult(DiagnosticsCheckState.Warn, "Skipped (TURNS only)")
@@ -403,7 +417,7 @@ private fun runIceGathering(
         turnFound.get() -> DiagnosticsCheckResult(DiagnosticsCheckState.Pass, "Detected")
         else -> DiagnosticsCheckResult(DiagnosticsCheckState.Fail, "No relay candidate")
     }
-    return Pair(stunResult, turnResult)
+    return Triple(stunResult, turnResult, candidateSeq.get())
 }
 
 private val diagnosticsPcFactoryLock = Any()

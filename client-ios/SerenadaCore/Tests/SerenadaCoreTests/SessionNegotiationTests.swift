@@ -150,7 +150,7 @@ final class SessionNegotiationTests: XCTestCase {
         // If they are ready (default STUN), it should be processed immediately
         harness.simulateOfferFromRemote(fromCid: "remote")
         await harness.yieldToMainActor()
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await harness.fakeClock.advance(byMs: 100)
         await harness.yieldToMainActor()
 
         // Either way, after yielding, the answer should eventually be sent
@@ -277,11 +277,9 @@ final class SessionNegotiationTests: XCTestCase {
 
         harness.openSignaling()
         await harness.yieldToMainActor()
-        // Give ICE restart task time to fire (may need several yields)
-        for _ in 0..<5 {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            await harness.yieldToMainActor()
-        }
+        // Give ICE restart task time to fire
+        await harness.fakeClock.advance(byMs: 5000)
+        await harness.yieldToMainActor()
 
         let offersAfter = fakeSlot?.createOfferCalls ?? 0
         let hasTask = fakeSlot?.iceRestartTask != nil
@@ -318,7 +316,7 @@ final class SessionNegotiationTests: XCTestCase {
             turnToken: "test-turn-token"
         )
         await harness.yieldToMainActor()
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await harness.fakeClock.advance(byMs: 100)
         await harness.yieldToMainActor()
 
         XCTAssertTrue(harness.fakeMedia.createdSlotCids.contains("remote-a"))

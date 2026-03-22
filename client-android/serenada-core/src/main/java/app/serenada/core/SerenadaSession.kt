@@ -70,7 +70,7 @@ class SerenadaSession internal constructor(
     private val handler = Handler(Looper.getMainLooper())
     private var webRtcStatsExecutor: ExecutorService? = newWebRtcStatsExecutor()
     private val apiClient: SessionAPIClient = apiClient ?: CoreApiClient(okHttpClient)
-    internal val clock: SessionClock = clock ?: LiveSessionClock()
+    private val clock: SessionClock = clock ?: LiveSessionClock()
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager

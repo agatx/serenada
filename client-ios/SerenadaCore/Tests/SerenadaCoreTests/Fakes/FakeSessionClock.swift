@@ -94,6 +94,13 @@ final class FakeSessionClock: SessionClock {
         }
     }
 
+    deinit {
+        for entry in pendingSleeps {
+            entry.continuation.resume(throwing: CancellationError())
+        }
+        pendingSleeps.removeAll()
+    }
+
     private func cancelSleep(id: UUID) {
         if let index = pendingSleeps.firstIndex(where: { $0.id == id }) {
             let entry = pendingSleeps.remove(at: index)

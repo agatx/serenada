@@ -52,7 +52,7 @@ public final class SerenadaSession: ObservableObject {
     let webRtcEngine: SessionMediaEngine
     let callAudioSessionController: SessionAudioController
     let apiClient: SessionAPIClient
-    let clock: SessionClock
+    private let clock: SessionClock
 
     private let config: SerenadaConfig
     private let delegateProvider: (() -> SerenadaCoreDelegate?)?

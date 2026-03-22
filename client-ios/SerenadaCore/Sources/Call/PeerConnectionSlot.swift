@@ -27,8 +27,8 @@ public final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func markPendingIceRestart() { pendingIceRestart = true }
     public func clearPendingIceRestart() { pendingIceRestart = false }
 
-    public func recordIceRestart(nowMs: Int64? = nil) {
-        lastIceRestartAt = nowMs.map(TimeInterval.init) ?? Date().timeIntervalSince1970 * 1000
+    public func recordIceRestart(nowMs: Int64) {
+        lastIceRestartAt = TimeInterval(nowMs)
         pendingIceRestart = false
     }
 
