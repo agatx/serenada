@@ -128,7 +128,7 @@ public final class PeerConnectionSlot {
         static let freezeWindowMs: Int64 = 60_000
     }
 
-    private let factory: RTCPeerConnectionFactory
+    private let factory: RTCPeerConnectionFactory?
     private var iceServers: [IceServerConfig]?
     private var localAudioTrack: RTCAudioTrack?
     private var localVideoTrack: RTCVideoTrack?
@@ -152,7 +152,7 @@ public final class PeerConnectionSlot {
 #if canImport(WebRTC)
     public init(
         remoteCid: String,
-        factory: RTCPeerConnectionFactory,
+        factory: RTCPeerConnectionFactory?,
         iceServers: [IceServerConfig]?,
         localAudioTrack: RTCAudioTrack?,
         localVideoTrack: RTCVideoTrack?,
@@ -196,6 +196,7 @@ public final class PeerConnectionSlot {
     public func ensurePeerConnection() -> Bool {
 #if canImport(WebRTC)
         if peerConnection != nil { return true }
+        guard let factory else { return false }
         guard let iceServers else { return false }
 
         let rtcServers = iceServers.map {

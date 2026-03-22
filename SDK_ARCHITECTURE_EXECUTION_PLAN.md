@@ -37,7 +37,8 @@ The 10 workstreams and current status:
 2. **Foundation: DI, Test Harness, Runtime Safety**
    - [x] Introduce internal factories/interfaces for signaling, WebRTC, API, and audio dependencies in iOS and Android session layers.
      Protocols (iOS) and interfaces (Android) created for `SessionSignaling`, `SessionAPIClient`, `SessionAudioController`, and `SessionMediaEngine`. Concrete classes conform to these abstractions. `SerenadaSession` on both platforms accepts optional DI params with production defaults. Clock/timer/scheduler abstractions deferred to a follow-up.
-   - [ ] Build a hermetic session harness with fake signaling/media/timers and add contract tests for permission gating, join ack timeout, join recovery, reconnect backoff, WS-to-SSE failover, offer timeout, ICE restart, turn refresh, leave, and end.
+   - [x] Build a hermetic session harness with fake signaling/media/timers and add contract tests for permission gating, join ack timeout, join recovery, reconnect backoff, WS-to-SSE failover, offer timeout, ICE restart, turn refresh, leave, and end.
+     Fake implementations created for all four DI seams on both platforms. iOS: 10 contract tests (all green) covering join flow, error handling, reconnect, leave/end cleanup, TURN fetch/failure. Android: 13 contract tests (10 message-driven + 3 timer-dependent using Robolectric ShadowLooper). Production changes: PeerConnectionSlot.factory made nullable on both platforms; Android recreateWebRtcEngineForNewCall() preserves injected engines. Timer-dependent iOS tests deferred until clock abstraction is added.
    - [x] Android: add main-thread preconditions on all public `SerenadaCore` and `SerenadaSession` entrypoints and replace the current reusable stats executor with a lifecycle-owned scheduler that cannot be reused after shutdown.
 
 3. **Unify State And Model Ownership**

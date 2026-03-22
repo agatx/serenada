@@ -121,6 +121,7 @@ class SerenadaSession internal constructor(
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var userPreferredVideoEnabled = config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
+    private val isMediaEngineInjected = mediaEngine != null
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
 
@@ -512,7 +513,9 @@ class SerenadaSession internal constructor(
 
     private fun recreateWebRtcEngineForNewCall() {
         runCatching { webRtcEngine.release() }
-        webRtcEngine = buildWebRtcEngine()
+        if (!isMediaEngineInjected) {
+            webRtcEngine = buildWebRtcEngine()
+        }
     }
 
     // --- Internal: Signaling ---

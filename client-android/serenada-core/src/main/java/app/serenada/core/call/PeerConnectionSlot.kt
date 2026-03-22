@@ -19,7 +19,7 @@ import kotlin.math.max
 
 class PeerConnectionSlot(
     val remoteCid: String,
-    private val factory: PeerConnectionFactory,
+    private val factory: PeerConnectionFactory?,
     private var iceServers: List<PeerConnection.IceServer>?,
     private var localAudioTrack: AudioTrack?,
     private var localVideoTrack: VideoTrack?,
@@ -145,11 +145,12 @@ class PeerConnectionSlot(
 
     fun ensurePeerConnection(): Boolean {
         if (peerConnection != null) return true
+        val f = factory ?: return false
         val servers = iceServers ?: return false
         val config = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
-        val pc = factory.createPeerConnection(config, object : PeerConnection.Observer {
+        val pc = f.createPeerConnection(config, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {
                 onLocalIceCandidate(remoteCid, candidate)
             }
