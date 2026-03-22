@@ -1,18 +1,24 @@
+import AVFoundation
 import Foundation
 
 @MainActor
-final class JoinTimer {
+final class JoinFlowCoordinator {
     private let clock: SessionClock
+
+    // State readers
     private let getRoomId: () -> String
     private let getJoinAttemptSerial: () -> Int64
     private let getInternalPhase: () -> CallPhase
     private let hasJoinSignalStarted: () -> Bool
     private let hasJoinAcknowledged: () -> Bool
     private let isSignalingConnected: () -> Bool
+
+    // Callbacks
     private let onJoinTimeout: () -> Void
-    private let ensureSignalingConnection: () -> Void
+    private let onEnsureSignalingConnection: () -> Void
     private let onRecovery: (_ participantHint: Int?, _ preferInCall: Bool) -> Void
 
+    // Timer state
     private var joinTimeoutTask: Task<Void, Never>?
     private var joinConnectKickstartTask: Task<Void, Never>?
     private var joinRecoveryTask: Task<Void, Never>?
@@ -26,7 +32,7 @@ final class JoinTimer {
         hasJoinAcknowledged: @escaping () -> Bool,
         isSignalingConnected: @escaping () -> Bool,
         onJoinTimeout: @escaping () -> Void,
-        ensureSignalingConnection: @escaping () -> Void,
+        onEnsureSignalingConnection: @escaping () -> Void,
         onRecovery: @escaping (_ participantHint: Int?, _ preferInCall: Bool) -> Void
     ) {
         self.clock = clock
@@ -37,12 +43,14 @@ final class JoinTimer {
         self.hasJoinAcknowledged = hasJoinAcknowledged
         self.isSignalingConnected = isSignalingConnected
         self.onJoinTimeout = onJoinTimeout
-        self.ensureSignalingConnection = ensureSignalingConnection
+        self.onEnsureSignalingConnection = onEnsureSignalingConnection
         self.onRecovery = onRecovery
     }
 
-    func scheduleTimeout(roomId: String, joinAttempt: Int64) {
-        clearTimeout()
+    // MARK: - Join Timeout
+
+    func scheduleJoinTimeout(roomId: String, joinAttempt: Int64) {
+        clearJoinTimeout()
 
         joinTimeoutTask = Task { [weak self] in
             guard let clock = self?.clock else { return }
@@ -56,13 +64,15 @@ final class JoinTimer {
         }
     }
 
-    func clearTimeout() {
+    func clearJoinTimeout() {
         joinTimeoutTask?.cancel()
         joinTimeoutTask = nil
     }
 
-    func scheduleKickstart(roomId: String, joinAttempt: Int64) {
-        clearKickstart()
+    // MARK: - Join Connect Kickstart
+
+    func scheduleJoinConnectKickstart(roomId: String, joinAttempt: Int64) {
+        clearJoinConnectKickstart()
 
         joinConnectKickstartTask = Task { [weak self] in
             guard let clock = self?.clock else { return }
@@ -73,17 +83,19 @@ final class JoinTimer {
             guard self.getRoomId() == roomId else { return }
             guard self.getJoinAttemptSerial() == joinAttempt else { return }
             guard !self.hasJoinSignalStarted() else { return }
-            self.ensureSignalingConnection()
+            self.onEnsureSignalingConnection()
         }
     }
 
-    func clearKickstart() {
+    func clearJoinConnectKickstart() {
         joinConnectKickstartTask?.cancel()
         joinConnectKickstartTask = nil
     }
 
-    func scheduleRecovery(for roomId: String) {
-        clearRecovery()
+    // MARK: - Join Recovery
+
+    func scheduleJoinRecovery(for roomId: String) {
+        clearJoinRecovery()
 
         joinRecoveryTask = Task { [weak self] in
             guard let clock = self?.clock else { return }
@@ -94,7 +106,7 @@ final class JoinTimer {
             guard self.isSignalingConnected() else { return }
             guard self.hasJoinAcknowledged() else {
                 if self.getInternalPhase() == .joining {
-                    self.ensureSignalingConnection()
+                    self.onEnsureSignalingConnection()
                 }
                 return
             }
@@ -102,14 +114,29 @@ final class JoinTimer {
         }
     }
 
-    func clearRecovery() {
+    func clearJoinRecovery() {
         joinRecoveryTask?.cancel()
         joinRecoveryTask = nil
     }
 
-    func clearAll() {
-        clearTimeout()
-        clearKickstart()
-        clearRecovery()
+    // MARK: - Clear All Timers
+
+    func clearAllTimers() {
+        clearJoinTimeout()
+        clearJoinConnectKickstart()
+        clearJoinRecovery()
+    }
+
+    // MARK: - Permissions
+
+    static func missingPermissions() -> [MediaCapability] {
+        var required: [MediaCapability] = []
+        if AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
+            required.append(.camera)
+        }
+        if AVAudioSession.sharedInstance().recordPermission != .granted {
+            required.append(.microphone)
+        }
+        return required
     }
 }
