@@ -100,5 +100,17 @@ xcodebuild -project SerenadaiOS.xcodeproj -scheme SerenadaiOS \
 ```
 - Use the following deep-link to join a live call: `https://serenada.app/call/YovflsGamCygX912gb26Jeaq8Es`
 
+## Worktree Setup
+When working in a git worktree, run the bootstrap script to install all dependencies:
+```bash
+tools/worktree-bootstrap.sh .
+```
+Skip platforms you don't need with `SKIP_WEB=1`, `SKIP_SERVER=1`, `SKIP_ANDROID=1`, `SKIP_IOS=1`.
+
+Validate the worktree is build-ready:
+```bash
+tools/worktree-validate.sh .
+```
+
 ## When unsure
 - Ask for clarification instead of guessing

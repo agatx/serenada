@@ -98,6 +98,21 @@ xcodebuild \
   test
 ```
 
+### Worktree Bootstrap & Validation
+After creating a git worktree, bootstrap it to install all dependencies:
+```bash
+tools/worktree-bootstrap.sh <worktree-path>    # install deps in a worktree
+tools/worktree-bootstrap.sh                     # or run in the main checkout
+SKIP_ANDROID=1 SKIP_IOS=1 tools/worktree-bootstrap.sh ../my-wt  # web+server only
+```
+
+Validate that a worktree (or the main repo) is build-ready:
+```bash
+tools/worktree-validate.sh <worktree-path>     # full validation (builds + tests)
+tools/worktree-validate.sh                      # validate the main checkout
+SKIP_BUILD=1 SKIP_TEST=1 tools/worktree-validate.sh  # structure + deps only
+```
+
 ### Load Testing
 ```bash
 ./server/loadtest/run-local.sh    # Run signaling load sweep against local Docker stack
