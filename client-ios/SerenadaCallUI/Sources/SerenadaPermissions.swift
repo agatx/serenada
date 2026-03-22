@@ -10,26 +10,31 @@ public enum SerenadaPermissions {
     /// Returns `true` if all requested permissions are granted.
     public static func request(_ permissions: [MediaCapability], completion: @escaping (Bool) -> Void) {
         let group = DispatchGroup()
-        var allGranted = true
+        let lock = NSLock()
+        var results = [Bool]()
 
         for permission in permissions {
             group.enter()
             switch permission {
             case .camera:
                 AVCaptureDevice.requestAccess(for: .video) { granted in
-                    if !granted { allGranted = false }
+                    lock.lock()
+                    results.append(granted)
+                    lock.unlock()
                     group.leave()
                 }
             case .microphone:
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    if !granted { allGranted = false }
+                    lock.lock()
+                    results.append(granted)
+                    lock.unlock()
                     group.leave()
                 }
             }
         }
 
         group.notify(queue: .main) {
-            completion(allGranted)
+            completion(results.allSatisfy { $0 })
         }
     }
 

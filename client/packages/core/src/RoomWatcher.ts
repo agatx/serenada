@@ -16,6 +16,7 @@ export class RoomWatcher {
     private watchedRoomIds: string[] = [];
     private hasConnected = false;
     private stopped = false;
+    private wasConnected = false;
 
     constructor(config: SerenadaConfig, dependencies: RoomWatcherDependencies = {}) {
         const urls = resolveServerUrls(config.serverHost);
@@ -25,9 +26,11 @@ export class RoomWatcher {
             transports: config.transports,
         });
         this.unsubscribeStateChange = this.signaling.onStateChange(() => {
-            if (this.signaling.isConnected && this.watchedRoomIds.length > 0) {
+            const nowConnected = this.signaling.isConnected;
+            if (nowConnected && !this.wasConnected && this.watchedRoomIds.length > 0) {
                 this.signaling.watchRooms(this.watchedRoomIds);
             }
+            this.wasConnected = nowConnected;
             this.notify();
         });
     }

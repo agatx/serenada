@@ -103,6 +103,21 @@ class SerenadaCore(
         return CreateRoomResult(roomId = roomId, roomUrl = roomUrl, session = session)
     }
 
+    /**
+     * Create a room ID without starting a session.
+     * Use this when you only need a room ID (e.g., for invite links).
+     */
+    suspend fun createRoomId(): String {
+        assertMainThread()
+        return suspendCancellableCoroutine { continuation ->
+            apiClient.createRoomId(config.serverHost) { result ->
+                result
+                    .onSuccess { continuation.resume(it) }
+                    .onFailure { continuation.resumeWithException(it) }
+            }
+        }
+    }
+
     private fun resolveRoomUrl(url: String): ResolvedRoomUrl? {
         val trimmed = url.trim()
         if (!trimmed.contains("/")) return null

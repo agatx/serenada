@@ -360,10 +360,9 @@ final class CallManager: ObservableObject {
 
         let core = makeSerenadaCore(host: normalizedHost)
         do {
-            let created = try await core.createRoom()
-            created.session.cancelJoin()
-            saveRoom(roomId: created.roomId, name: normalizedName, host: normalizedHost)
-            let link = buildSavedRoomInviteLink(host: normalizedHost, roomId: created.roomId, roomName: normalizedName)
+            let roomId = try await core.createRoomId()
+            saveRoom(roomId: roomId, name: normalizedName, host: normalizedHost)
+            let link = buildSavedRoomInviteLink(host: normalizedHost, roomId: roomId, roomName: normalizedName)
             return .success(link)
         } catch {
             return .failure(error)

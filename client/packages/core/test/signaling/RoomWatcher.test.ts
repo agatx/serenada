@@ -79,6 +79,14 @@ describe('RoomWatcher', () => {
             },
         });
 
+        // Subsequent state changes while connected should NOT re-send watch_rooms
+        signaling.watchCalls = [];
+        signaling.emit({
+            isConnected: true,
+            roomStatuses: { alpha: { count: 2, maxParticipants: 4 } },
+        });
+        expect(signaling.watchCalls).toEqual([]);
+
         watcher.stop();
         unsubscribe();
 

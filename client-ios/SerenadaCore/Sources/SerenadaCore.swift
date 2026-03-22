@@ -94,6 +94,13 @@ public final class SerenadaCore {
         return CreateRoomResult(url: url, roomId: roomId, session: session)
     }
 
+    /// Create a room ID without starting a session.
+    /// Use this when you only need a room ID (e.g., for invite links).
+    public func createRoomId() async throws -> String {
+        let apiClient = CoreAPIClient()
+        return try await apiClient.createRoomId(host: config.serverHost)
+    }
+
     private func buildRoomURL(host: String, roomId: String) -> URL? {
         guard let parsedHost = EndpointHostParser.splitHostAndPort(from: host) else { return nil }
 

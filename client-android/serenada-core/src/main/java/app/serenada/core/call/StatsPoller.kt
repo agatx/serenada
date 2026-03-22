@@ -81,9 +81,10 @@ class StatsPoller(
             if (stats.isEmpty()) return null
             fun sumN(sel: (RealtimeCallStats) -> Double?) = stats.mapNotNull(sel).sum().takeIf { stats.any { s -> sel(s) != null } }
             fun maxN(sel: (RealtimeCallStats) -> Double?) = stats.mapNotNull(sel).maxOrNull()
+            fun minN(sel: (RealtimeCallStats) -> Double?) = stats.mapNotNull(sel).minOrNull()
             return RealtimeCallStats(
                 transportPath = stats.mapNotNull { it.transportPath }.distinct().joinToString().ifBlank { null },
-                rttMs = maxN { it.rttMs }, availableOutgoingKbps = sumN { it.availableOutgoingKbps },
+                rttMs = maxN { it.rttMs }, availableOutgoingKbps = minN { it.availableOutgoingKbps },
                 audioRxPacketLossPct = maxN { it.audioRxPacketLossPct }, audioTxPacketLossPct = maxN { it.audioTxPacketLossPct },
                 audioJitterMs = maxN { it.audioJitterMs }, audioPlayoutDelayMs = maxN { it.audioPlayoutDelayMs },
                 audioConcealedPct = maxN { it.audioConcealedPct },
