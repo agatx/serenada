@@ -227,7 +227,7 @@ for scenario in "${SCENARIOS[@]}"; do
             ios_pid=$!
             PIDS+=("$ios_pid")
 
-            barrier_wait_all "$barrier_dir" 90 "web.participant-count-ok" "android.participant-count-ok" || {
+            barrier_wait_all "$barrier_dir" 45 "web.participant-count-ok" "android.participant-count-ok" || {
                 kill_scenario
                 return 1
             }
@@ -360,7 +360,7 @@ for scenario in "${SCENARIOS[@]}"; do
             barrier_write "$BARRIER_DIR" "peer.ready"
 
             # Wait for both in-call
-            barrier_wait_all "$BARRIER_DIR" 45 "web.in-call" "android.in-call" || { kill_pair; return 1; }
+            barrier_wait_all "$BARRIER_DIR" 30 "web.in-call" "android.in-call" || { kill_pair; return 1; }
 
             # Signal leave
             barrier_write "$BARRIER_DIR" "leave"
@@ -383,7 +383,7 @@ for scenario in "${SCENARIOS[@]}"; do
             barrier_write "$BARRIER_DIR" "peer.ready.2"
 
             # Wait for both in-call again
-            barrier_wait_all "$BARRIER_DIR" 45 "web.rejoin-in-call" "android.rejoin-in-call" || { kill_pair; return 1; }
+            barrier_wait_all "$BARRIER_DIR" 30 "web.rejoin-in-call" "android.rejoin-in-call" || { kill_pair; return 1; }
 
             # Signal end
             barrier_write "$BARRIER_DIR" "end"

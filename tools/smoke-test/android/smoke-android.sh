@@ -76,7 +76,8 @@ element_value() {
     local tag="$1"
     local xml node value
     xml=$(ui_dump)
-    node=$(echo "$xml" | grep "$tag" | head -1 || true)
+    # XML is a single line — isolate the specific node containing the tag
+    node=$(echo "$xml" | grep -o "<node [^>]*${tag}[^>]*>" | head -1 || true)
     if [ -z "$node" ]; then
         return 1
     fi
@@ -236,7 +237,7 @@ else
     barrier_wait "$BARRIER_DIR" "peer.ready" 45
 
     # Stabilize — brief pause for media connection
-    sleep 3
+    sleep 1
     take_screenshot "in_call_1"
     barrier_write "$BARRIER_DIR" "android.in-call"
 
@@ -258,7 +259,7 @@ else
 
     # Wait for peer again
     barrier_wait "$BARRIER_DIR" "peer.ready.2" 45
-    sleep 3
+    sleep 1
     take_screenshot "in_call_2"
     barrier_write "$BARRIER_DIR" "android.rejoin-in-call"
 

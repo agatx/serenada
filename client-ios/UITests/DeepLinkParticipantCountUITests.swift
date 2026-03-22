@@ -26,7 +26,9 @@ final class DeepLinkParticipantCountUITests: XCTestCase {
         guard assertCallScreenVisible(in: app, timeout: 45) else { return }
         guard waitForParticipantCount(in: app, minimum: expectedParticipants, timeout: 60) else { return }
 
-        RunLoop.current.run(until: Date().addingTimeInterval(5))
+        // Hold long enough for slower platforms (Android uiautomator polling)
+        // to also observe the participant count before we leave.
+        RunLoop.current.run(until: Date().addingTimeInterval(15))
 
         guard leaveCall(in: app) else { return }
         _ = assertJoinScreenVisible(in: app, timeout: 20)

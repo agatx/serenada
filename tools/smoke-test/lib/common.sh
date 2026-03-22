@@ -31,7 +31,7 @@ barrier_wait() {
     local start
     start=$(date +%s)
     while [ ! -f "$dir/$name" ]; do
-        sleep 1
+        sleep 0.2
         local now
         now=$(date +%s)
         if [ $((now - start)) -ge "$timeout" ]; then
