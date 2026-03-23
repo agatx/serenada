@@ -33,7 +33,7 @@ xcodebuild \
 The simulator is enough to verify project setup and call flow wiring. Use a physical device to validate camera and microphone behavior.
 For physical-device runs, set your Apple development team in Xcode signing settings first.
 
-If you change [project.yml](/Users/alexeygavrilov/Developer/src/connected/samples/ios/project.yml), regenerate the checked-in project with:
+If you change [project.yml](project.yml), regenerate the checked-in project with:
 
 ```bash
 cd samples/ios

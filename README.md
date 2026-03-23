@@ -154,6 +154,19 @@ go run ./cmd/loadconduit --base-url http://localhost --report-json ./loadtest/re
 Detailed request/timing sequence:
 - [`server/loadtest/LOAD_SIMULATION_SEQUENCE.md`](server/loadtest/LOAD_SIMULATION_SEQUENCE.md)
 
+### Integration Tests
+
+```bash
+bash tools/integration-test/run.sh    # Run signaling integration tests (requires Go 1.24+)
+```
+
+### Version Parity
+
+Verify SDK versions match across all platforms:
+```bash
+node scripts/check-version-parity.mjs
+```
+
 ## Architecture
 
 ```

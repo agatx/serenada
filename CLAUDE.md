@@ -118,6 +118,11 @@ SKIP_BUILD=1 SKIP_TEST=1 tools/worktree-validate.sh  # structure + deps only
 ./server/loadtest/run-local.sh    # Run signaling load sweep against local Docker stack
 ```
 
+### Integration Tests
+```bash
+bash tools/integration-test/run.sh    # Run signaling integration tests (requires Go 1.24+)
+```
+
 ### Cross-Platform Smoke Test
 ```bash
 bash tools/smoke-test/smoke-test.sh                          # Full run (both devices plugged in)
@@ -156,12 +161,13 @@ Dependencies: gorilla/websocket, webpush-go, godotenv, modernc.org/sqlite.
 Monorepo with headless SDK + React UI layer + thin app shell. Built with React 19 + TypeScript + Vite.
 
 **Headless SDK** (`packages/core/`):
-- `src/SerenadaCore.ts` — entry point (join/createRoom)
+- `src/SerenadaCore.ts` — entry point (join/createRoom), `isSupported()` static method for WebRTC capability detection
 - `src/SerenadaSession.ts` — session state machine, pub/sub state distribution
 - `src/signaling/SignalingEngine.ts` — dual-transport signaling (WS + SSE)
+- `src/signaling/payloads.ts` — typed payload interfaces and parse functions
 - `src/media/MediaEngine.ts` — WebRTC peer connections, local media, ICE management
 - `src/constants.ts` — shared resilience constants (cross-platform verified)
-- `src/types.ts` — public type definitions (CallState, CallPhase, etc.)
+- `src/types.ts` — public type definitions (CallState, CallPhase, CallErrorCode, PeerConnectionState, etc.)
 
 **React UI** (`packages/react-ui/`):
 - `src/SerenadaCallFlow.tsx` — pre-built call UI component (URL-first or session-first)
@@ -189,6 +195,9 @@ Kotlin + Jetpack Compose + Material3. Three-module Gradle project.
 - `call/PeerConnectionSlot.kt` — per-peer connection management
 - `call/CompositeCameraCapturer.kt` — 3-mode camera (selfie → world → composite)
 - `call/WebRtcResilienceConstants.kt` — shared resilience constants
+- `call/SignalingMessageRouter.kt` — inbound signaling message dispatch
+- `call/JoinFlowCoordinator.kt` — join flow timers and reconnect scheduling
+- `call/SignalingPayloads.kt` — typed payload data classes for signaling messages
 - `network/CoreApiClient.kt` — HTTP API client
 - `diagnostics/` — connectivity and TURN probes
 
@@ -214,7 +223,10 @@ SwiftUI + Swift 5.10, project generated via XcodeGen (`project.yml`). Two SPM pa
 - `Sources/Call/WebRtcEngine.swift` — WebRTC integration
 - `Sources/Call/PeerConnectionSlot.swift` — per-peer connection management
 - `Sources/Call/WebRtcResilienceConstants.swift` — shared resilience constants
+- `Sources/Call/SignalingMessageRouter.swift` — inbound signaling message dispatch
+- `Sources/Call/JoinFlowCoordinator.swift` — join flow timers and permission checks (absorbed JoinTimer)
 - `Sources/Signaling/` — SignalingClient + WS/SSE transports
+- `Sources/Signaling/SignalingPayloads.swift` — typed payload structs for signaling messages
 - `Sources/Networking/CoreAPIClient.swift` — HTTP API client
 - `Sources/RoomWatcher.swift` — room occupancy monitoring
 
@@ -246,6 +258,10 @@ JSON message envelope with fields: `v` (version), `type`, `rid` (room ID), `sid`
 WebRTC resilience timing constants (reconnect backoff, join timeout, ICE restart cooldown, etc.) are shared across all three clients. Verify parity with:
 ```bash
 node scripts/check-resilience-constants.mjs
+```
+Verify SDK version parity across all platforms with:
+```bash
+node scripts/check-version-parity.mjs
 ```
 Source files: `client/packages/core/src/constants.ts`, `client-android/serenada-core/.../call/WebRtcResilienceConstants.kt`, `client-ios/SerenadaCore/Sources/Call/WebRtcResilienceConstants.swift`.
 
