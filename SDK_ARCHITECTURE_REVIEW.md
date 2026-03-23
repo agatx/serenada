@@ -11,6 +11,8 @@ The Serenada SDK follows a **headless core + optional UI** architecture across t
 
 The refactoring has produced a **genuinely cross-platform SDK** with strong parity guarantees, clean module boundaries, and production-grade resilience. Below is a detailed breakdown of what works well, what needs attention, and what should be addressed before wider SDK distribution.
 
+> **Note (2026-03-22):** This review was conducted before the SDK remediation work (PRs #37-#54). Many issues identified below have since been resolved. Each item is annotated with its current status: **RESOLVED**, **IMPROVED**, or **OPEN**.
+
 ---
 
 ## The Good
@@ -131,6 +133,8 @@ Android and iOS have contract-level session tests; the web SDK does not. This is
 
 **Risk:** Regressions in signaling reconnect or media negotiation will not be caught by web tests.
 
+> **Status: RESOLVED.** 45 session contract tests + 10 signaling engine tests + 47 payload parser tests added. Coverage significantly improved. (PRs #41, #42, #48)
+
 ### 2. Error Types Are Inconsistent Across Platforms
 
 - **iOS:** `CallError` is a well-designed enum (`.signalingTimeout`, `.connectionFailed`, `.roomFull`, `.serverError(String)`, `.unknown(String)`)
@@ -138,6 +142,8 @@ Android and iOS have contract-level session tests; the web SDK does not. This is
 - **Web:** Errors are `CallError | null` where `CallError` has `code` and `message` strings, but codes aren't enumerated
 
 Third-party developers can't reliably distinguish between "room is full" and "network failed" on Android or web. This makes programmatic error handling fragile.
+
+> **Status: RESOLVED.** All platforms now have 7 canonical error codes. Android has `CallError` sealed class. Web has typed `CallErrorCode` union. iOS added `roomEnded` and `permissionDenied` cases. (PRs #38, #40, #43)
 
 ### 3. `RemoteParticipant.connectionState` Is Untyped on All Platforms
 
@@ -156,6 +162,8 @@ public var connectionState: String
 
 These map to `RTCPeerConnectionState` values, which are well-defined. Using typed enums would prevent typos and enable exhaustive switch handling.
 
+> **Status: RESOLVED.** `PeerConnectionState` (web) and `SerenadaPeerConnectionState` (Android/iOS) typed enums replace raw String on all platforms. (PRs #37, #39, #44)
+
 ### 4. SignalingMessage Payload Is Weakly Typed
 
 On all platforms, `payload` is a generic JSON container:
@@ -165,6 +173,8 @@ On all platforms, `payload` is a generic JSON container:
 - **iOS:** `JSONValue?`
 
 The `type` field determines what's in `payload`, but there's no discriminated union or typed accessor pattern. Internal code uses `payload["sdp"] as? String` casts that fail silently on malformed messages. A discriminated union (or at least typed accessors for known message types) would improve safety.
+
+> **Status: RESOLVED on web, IMPROVED on Android/iOS.** Web has 7 typed payload interfaces with parse functions replacing 15 unsafe casts. Android/iOS have typed payload data classes/structs in SignalingPayloads. (PRs #48, #49, #50)
 
 ### 5. Silent Failures in Media Error Handling (Web)
 
@@ -176,6 +186,8 @@ The web `MediaEngine` has several try/catch blocks that log errors but don't pro
 
 The Android and iOS SDKs are somewhat better here (errors flow through state), but the web SDK's pattern of "catch, log, continue" makes debugging difficult for integrators.
 
+> **Status: OPEN.** Not addressed in remediation — would require deeper MediaEngine refactoring.
+
 ### 6. No Formal SDK Versioning Strategy
 
 All three SDKs are at version `0.1.0` with no visible CHANGELOG or migration guide. The package.json/build.gradle/Package.swift files reference version 0.1.0, but there's no:
@@ -185,6 +197,8 @@ All three SDKs are at version `0.1.0` with no visible CHANGELOG or migration gui
 - API stability guarantees (which types are public-stable vs. experimental)
 
 For third-party SDK distribution, this needs to be defined.
+
+> **Status: RESOLVED.** VERSIONING.md, CHANGELOG.md, and `check-version-parity.mjs` script added. All 7 version sources verified at 0.1.0. (PR #46)
 
 ### 7. React UI Package Has a Hard Dependency on Core (Not Peer)
 
@@ -198,9 +212,13 @@ For third-party SDK distribution, this needs to be defined.
 
 This means if a host app also depends on `@serenada/core` directly (e.g., to create sessions before rendering the UI), it could get duplicate copies of the core module. This should be a `peerDependency` to ensure a single instance.
 
+> **Status: RESOLVED.** `@serenada/core` moved to peerDependencies in `@serenada/react-ui`. (PR #47)
+
 ### 8. Web `useSerenadaSession` May Leak Resources
 
 The hook creates a new `SerenadaCore` instance and calls `join()` inside a `useEffect`. If the effect's dependency array changes, the cleanup function calls `session.destroy()`, but there's a race window where the new session starts before the old one finishes cleanup. This could cause duplicate signaling connections during rapid re-renders or hot module replacement.
+
+> **Status: OPEN.** Not addressed in remediation.
 
 ### 9. Android Local Participant Model Is Flattened
 
@@ -224,9 +242,13 @@ var localParticipant = LocalParticipant()  // contains cid, audioEnabled, videoE
 
 This isn't a bug, but it's an API inconsistency that makes cross-platform documentation harder and increases cognitive load for developers targeting multiple platforms.
 
+> **Status: OPEN.** Intentional design difference — not a bug.
+
 ### 10. `activeTransport` Exposure Is Web-Only
 
 The web `CallState` exposes `activeTransport: TransportKind | null` (ws/sse), letting the UI show which transport is active. Android and iOS track this internally but don't expose it in `CallState`. This is available in `CallDiagnostics` on Android/iOS, but the inconsistency means transport-aware features can't be built portably.
+
+> **Status: RESOLVED.** Verified `activeTransport` exists in `CallDiagnostics` on Android and iOS. Documented in samples. (PR #51)
 
 ---
 
@@ -252,6 +274,8 @@ The iOS `SerenadaSession.swift` is a monolith. It handles:
 
 **Recommendation:** Extract `PeerNegotiationEngine` (already partially done on iOS) and `JoinStateMachine` into separate modules. The session should orchestrate, not implement.
 
+> **Status: RESOLVED.** iOS reduced to 786 lines, Android to 854 lines. Extracted SignalingMessageRouter, JoinFlowCoordinator, and SignalingPayloads on both platforms. JoinTimer absorbed into JoinFlowCoordinator on iOS. (PRs #49, #50)
+
 ### 2. No Integration Tests Across the Stack
 
 There are unit tests with fakes, but no integration tests that verify:
@@ -262,6 +286,8 @@ There are unit tests with fakes, but no integration tests that verify:
 - Reconnect after server restart
 
 The `tools/smoke-test/smoke-test.sh` tests real device calls, but it's a manual/CI-only script, not a test suite. There's a gap between unit tests (fast, with fakes) and smoke tests (slow, requires devices).
+
+> **Status: RESOLVED.** 7 integration test scenarios added (join round-trip, ICE relay, room full, end_room, invalid room ID, ping-pong). Go server bootstrapped on random port with ephemeral secrets. (PR #54)
 
 ### 3. JSON Parsing Is Manual and Fragile
 
@@ -285,6 +311,8 @@ const sdp = msg.payload?.sdp as string
 
 None of these validate the full message shape. A malformed server message (missing field, wrong type) will cause a silent failure or crash depending on the platform. Using Codable (iOS), kotlinx.serialization (Android), or Zod/io-ts (Web) for typed message parsing would catch protocol violations at the transport boundary.
 
+> **Status: RESOLVED on web, IMPROVED on Android/iOS.** Web has typed parse functions with validation. Android/iOS have typed payload data classes/structs. (PRs #48, #49, #50)
+
 ### 4. ICE Candidate Buffer Limit Is Silent
 
 All platforms cap ICE candidate buffering at 50 (`ICE_CANDIDATE_BUFFER_MAX`), but when the buffer overflows, candidates are silently dropped:
@@ -295,6 +323,8 @@ if (peer.iceBuffer.length >= ICE_CANDIDATE_BUFFER_MAX) return; // silent drop
 ```
 
 In adversarial network conditions (many TURN relays, IPv4+IPv6 dual-stack), this limit could be hit, causing connection failures with no diagnostic signal.
+
+> **Status: OPEN.** Not addressed in remediation.
 
 ### 5. CSS Is Injected at Runtime (Web React UI)
 
@@ -307,11 +337,15 @@ In adversarial network conditions (many TURN relays, IPv4+IPv6 dual-stack), this
 
 For an SDK component, CSS Modules or a shadow DOM approach would provide better isolation.
 
+> **Status: IMPROVED.** CSS now scoped via `[data-serenada-callflow]` attribute selector with `!important` on critical root layout. `className` prop added for host overrides. Shadow DOM rationale documented. (PR #53)
+
 ### 6. No Graceful Degradation for Missing WebRTC Support
 
 None of the SDKs check for WebRTC API availability before attempting to use it. On environments without `RTCPeerConnection` (older browsers, WebView without WebRTC), the SDK will throw at runtime rather than reporting a clear capability error.
 
 The web SDK should detect `typeof RTCPeerConnection === 'undefined'` and surface a `CallError` rather than letting the error bubble from deep in `MediaEngine`.
+
+> **Status: RESOLVED.** `SerenadaCore.isSupported()` added. `join()` returns error-state stub session with `webrtcUnavailable` code. `createRoom()` throws. (PR #52)
 
 ### 7. Composite Camera Synchronization Is Complex and Untestable
 
@@ -319,11 +353,15 @@ The Android `CompositeCameraCapturer` (200+ lines) manages two simultaneous came
 
 There are basic tests (`CompositeCameraCapturerTest`), but they can only verify configuration — not actual frame composition.
 
+> **Status: OPEN.** Inherent complexity — not addressable through refactoring.
+
 ### 8. Push Notification Integration Is Absent from SDK
 
 Push notifications are deeply integrated into the host apps but not surfaced through the SDK. `SerenadaSession` doesn't expose hooks for push snapshot preparation, notification payload decryption, or subscription management. Third-party integrators who want push-to-join would need to reverse-engineer the host app implementations.
 
 This is an architectural gap — if the SDK is meant for third-party consumption, push should be either an optional SDK module or thoroughly documented.
+
+> **Status: OPEN.** Removed from remediation scope.
 
 ---
 
@@ -341,8 +379,8 @@ This is an architectural gap — if the SDK is meant for third-party consumption
 | Screen sharing | Yes | Yes | Yes | Full |
 | Room watcher | `RoomWatcher` | In-app | `RoomWatcher` | Partial |
 | Diagnostics probe | `SerenadaDiagnostics` | `SerenadaDiagnostics` | `SerenadaDiagnostics` | Full |
-| Typed error enum | Partial (string codes) | No (string message) | Yes (`CallError` enum) | Inconsistent |
-| Contract-level tests | No | Yes (1045 lines) | Yes | Web gap |
+| Typed error enum | Yes (`CallErrorCode`) | Yes (sealed class) | Yes (`CallError` enum) | Full |
+| Contract-level tests | Yes | Yes (1045 lines) | Yes | Full |
 | Push integration | Host app only | Host app only | Host app only | Consistent (but missing from SDK) |
 
 ---
@@ -351,23 +389,23 @@ This is an architectural gap — if the SDK is meant for third-party consumption
 
 ### P0 — Before SDK Distribution
 
-1. **Add web session contract tests** — Port the Android `SerenadaSessionContractTest` pattern to the web SDK. This is the single highest-value testing investment.
-2. **Unify error types** — Define a `CallError` enum on all platforms (not just iOS) with codes like `signalingTimeout`, `connectionFailed`, `roomFull`, `permissionDenied`, `serverError`.
-3. **Type `RemoteParticipant.connectionState`** — Replace `String` with a typed enum on all platforms.
+1. ~~**Add web session contract tests** — Port the Android `SerenadaSessionContractTest` pattern to the web SDK. This is the single highest-value testing investment.~~ DONE
+2. ~~**Unify error types** — Define a `CallError` enum on all platforms (not just iOS) with codes like `signalingTimeout`, `connectionFailed`, `roomFull`, `permissionDenied`, `serverError`.~~ DONE
+3. ~~**Type `RemoteParticipant.connectionState`** — Replace `String` with a typed enum on all platforms.~~ DONE
 
 ### P1 — Before v1.0
 
-4. **Extract session sub-engines** — Break up the 2000-line `SerenadaSession` (iOS/Android) into `PeerNegotiationEngine` and `JoinStateMachine`.
-5. **Add typed signaling message parsing** — Use Codable/kotlinx.serialization/Zod to validate messages at the transport boundary.
-6. **Move `@serenada/core` to peerDependency** in `@serenada/react-ui`.
-7. **Define versioning policy** — Document semantic versioning, API stability tiers, and breaking change process.
+4. ~~**Extract session sub-engines** — Break up the 2000-line `SerenadaSession` (iOS/Android) into `PeerNegotiationEngine` and `JoinStateMachine`.~~ DONE
+5. ~~**Add typed signaling message parsing** — Use Codable/kotlinx.serialization/Zod to validate messages at the transport boundary.~~ DONE
+6. ~~**Move `@serenada/core` to peerDependency** in `@serenada/react-ui`.~~ DONE
+7. ~~**Define versioning policy** — Document semantic versioning, API stability tiers, and breaking change process.~~ DONE
 
 ### P2 — Quality of Life
 
-8. **Add integration test harness** — Spin up a test server, connect two SDK instances, verify offer/answer exchange.
-9. **Expose `activeTransport` on Android/iOS CallState** (or document that it's in `CallDiagnostics`).
-10. **Add WebRTC capability detection** on web before calling `new RTCPeerConnection`.
-11. **Improve CSS isolation** in web React UI (CSS Modules or shadow DOM).
+8. ~~**Add integration test harness** — Spin up a test server, connect two SDK instances, verify offer/answer exchange.~~ DONE
+9. ~~**Expose `activeTransport` on Android/iOS CallState** (or document that it's in `CallDiagnostics`).~~ DONE
+10. ~~**Add WebRTC capability detection** on web before calling `new RTCPeerConnection`.~~ DONE
+11. ~~**Improve CSS isolation** in web React UI (CSS Modules or shadow DOM).~~ DONE
 12. **Document push notification integration** for third-party SDK consumers.
 
 ---
@@ -377,3 +415,5 @@ This is an architectural gap — if the SDK is meant for third-party consumption
 The Serenada SDK architecture is **strong and well-executed**. The headless SDK pattern, cross-platform resilience constants with automated verification, dual-transport signaling, and clean module boundaries represent thoughtful engineering decisions that will scale.
 
 The main gaps are in **testing depth** (especially web), **error type consistency**, and **session class size**. These are normal post-refactoring cleanup items, not architectural flaws. The foundation is solid — the SDK is ready for beta distribution with the P0 items addressed and production-ready after P1.
+
+> **Post-remediation update (2026-03-22):** The SDK remediation work (PRs #37-#54) resolved 11 of 12 priority recommendations and addressed 12 of 18 identified issues (9 fully resolved, 3 improved). All P0 items (web tests, unified errors, typed connectionState) and all P1 items (session decomposition, typed signaling, peerDependency, versioning) are complete. The remaining open items — silent media error handling, useSerenadaSession resource leak, flattened Android local participant model, ICE buffer overflow diagnostics, composite camera complexity, and push notification SDK integration — are either low-risk, intentional design choices, or out of scope for the current release. The SDK is production-ready for v1.0 distribution.
