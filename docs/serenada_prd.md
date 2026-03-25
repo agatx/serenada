@@ -14,7 +14,7 @@
 Family members need a **frictionless way to start a video call** without installing apps, creating accounts, or navigating complex UIs. The experience should be instant and link-based.
 
 ### 1.2 Proposed solution
-**Serenada** is a **single-page web application (SPA)** that enables quick **1:1 video calls** using **WebRTC**, accessible directly from modern browsers on desktop and mobile (especially Android).
+**Serenada** is a **link-based calling product** that enables quick **1:1 and small-group video calls** using **WebRTC**, with web and native clients available across desktop and mobile platforms.
 
 Core interaction:
 - Open the site
@@ -31,7 +31,7 @@ Core interaction:
 Serenada must:
 1. Allow a user to **start a video call with one tap**
 2. Generate a **unique, shareable URL** for each call
-3. Allow another user to **join the same call from a browser**
+3. Allow another user to **join the same call from a browser or native client**
 4. Provide **basic in-call controls** (mute, camera toggle, end call)
 5. Work reliably on:
    - Android Chrome (primary)
@@ -42,7 +42,7 @@ Serenada must:
 ### 2.2 Non-goals (explicitly out of scope)
 - User accounts or authentication
 - Contact lists
-- Group calls (>2 participants)
+- Group calls larger than the current small-room limit (more than 4 participants)
 - Text chat
 - Call recording
 - Screen sharing

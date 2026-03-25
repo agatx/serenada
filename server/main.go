@@ -15,6 +15,7 @@ func main() {
 	// Load .env from current directory or parent directory (for local dev)
 	_ = godotenv.Load()
 	_ = godotenv.Load("../.env")
+	refreshAllowedOriginsFromEnv()
 	rateLimitBypass = parseRateLimitBypass(os.Getenv("RATE_LIMIT_BYPASS_IPS"))
 
 	// Initialize signaling

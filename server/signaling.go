@@ -874,6 +874,12 @@ func (h *Hub) handleWatchRooms(c *Client, msg Message) {
 
 	h.mu.Lock()
 	status := make(map[string]map[string]int)
+	for rid, clientSet := range h.watchers {
+		delete(clientSet, c)
+		if len(clientSet) == 0 {
+			delete(h.watchers, rid)
+		}
+	}
 	for _, rid := range payload.RIDs {
 		if err := validateRoomID(rid); err != nil {
 			continue

@@ -49,6 +49,7 @@
 		932FE0F4C5B2A808073B537A /* BackoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC9E71EE9415390DBBFC4A7 /* BackoffTests.swift */; };
 		9342C14683CA7530772F5F93 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE887624CBDA34B0B333C6A /* SettingsStore.swift */; };
 		9ADDE9F64E5B64AB5128AF50 /* CameraModeFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F052EA0D1D083D292B3CF0E /* CameraModeFlowTests.swift */; };
+		9C333A1799F89B5A4A9080BB /* RoomWatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D3BC3109B79353E8157F76 /* RoomWatcherTests.swift */; };
 		A166AEDB8228E8C0BB59B927 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */; };
 		A281E4C5D7AE35EEF75A87A8 /* SerenadaSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7830FA5A71601737755C721D /* SerenadaSessionTests.swift */; };
 		A3E593BBB26536974F9B5152 /* JoinSnapshotFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0824DD6CEC2DF4431D724B4D /* JoinSnapshotFeature.swift */; };
@@ -162,6 +163,7 @@
 		6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushKeyStore.swift; sourceTree = "<group>"; };
 		70D055EA10214AFAD5F76FFE /* layout_conformance_v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = layout_conformance_v1.json; sourceTree = "<group>"; };
 		7830FA5A71601737755C721D /* SerenadaSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaSessionTests.swift; sourceTree = "<group>"; };
+		79D3BC3109B79353E8157F76 /* RoomWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomWatcherTests.swift; sourceTree = "<group>"; };
 		7C5B216BB8A302914AB1CA5B /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		7EE887624CBDA34B0B333C6A /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		8656DA5A095E572174461E96 /* L10nTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10nTests.swift; sourceTree = "<group>"; };
@@ -385,6 +387,7 @@
 				23CA15C6609960E60FFBCD90 /* JoinFlowCoordinatorTests.swift */,
 				F54D58A452D7949DF145435E /* JoinRecoveryTests.swift */,
 				E194DC9F376B307952F4AD8E /* LayoutConformanceTests.swift */,
+				79D3BC3109B79353E8157F76 /* RoomWatcherTests.swift */,
 				7830FA5A71601737755C721D /* SerenadaSessionTests.swift */,
 				8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */,
 				09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */,
@@ -775,6 +778,7 @@
 				366BA266D1F08550723BA77D /* LayoutConformanceTests.swift in Sources */,
 				C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */,
 				71320D322F59D2244B5A2027 /* RoomStatusesTests.swift in Sources */,
+				9C333A1799F89B5A4A9080BB /* RoomWatcherTests.swift in Sources */,
 				3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */,
 				F237C6E7ED0C17810C58C49F /* SavedRoomStoreTests.swift in Sources */,
 				A281E4C5D7AE35EEF75A87A8 /* SerenadaSessionTests.swift in Sources */,

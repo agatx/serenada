@@ -6,9 +6,7 @@ import (
 	"strings"
 )
 
-var (
-	allowedOrigins = parseAllowedOrigins(os.Getenv("ALLOWED_ORIGINS"))
-)
+var allowedOrigins = map[string]bool{}
 
 func parseAllowedOrigins(raw string) map[string]bool {
 	origins := make(map[string]bool)
@@ -19,6 +17,10 @@ func parseAllowedOrigins(raw string) map[string]bool {
 		}
 	}
 	return origins
+}
+
+func refreshAllowedOriginsFromEnv() {
+	allowedOrigins = parseAllowedOrigins(os.Getenv("ALLOWED_ORIGINS"))
 }
 
 func isOriginAllowed(r *http.Request) bool {

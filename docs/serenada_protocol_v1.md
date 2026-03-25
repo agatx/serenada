@@ -429,10 +429,13 @@ Client keepalive. Server ignores.
 ### 4.12 Room Status Monitoring (WebSocket/SSE)
 
 Used to aggregate real-time occupancy for a list of rooms (e.g., recent calls list).
-Currently consumed by both the React web home screen and the native Android home screen recent-calls UX.
+Currently consumed by the React web home screen and the native Android/iOS home screen recent-calls UX.
 
 #### `watch_rooms` (client → server)
 Subscribe to updates for a list of rooms.
+
+Each `watch_rooms` message replaces the client's previous watched-room set.
+Send `rids: []` to clear all room-watch subscriptions for that connection.
 
 ```json
 {
@@ -579,6 +582,7 @@ Returns TURN credentials for a valid TURN token. The token is issued by the back
 
 ### 8.3 `GET|POST /api/diagnostic-token`
 Issues a short-lived diagnostic TURN token (5 seconds).
+This is a diagnostics-only, rate-limited exception to the normal joined-session TURN token flow.
 
 **Response**
 ```json
@@ -603,7 +607,7 @@ Triggers a room invite push notification to subscribers of the room.
 ## 9. Security requirements
 
 - **HTTPS for APIs, WebSocket/SSE for signaling**.
-- **TURN Gating**: TURN tokens are only issued in the `joined` message after successful `rid` validation, preventing unauthorized use of the TURN relay by unauthenticated clients.
+- **TURN Gating**: Call TURN tokens are issued only in the `joined` message after successful `rid` validation. `/api/diagnostic-token` remains available as a short-lived, rate-limited diagnostics exception.
 - Rate limit:
   - new WS connections per IP
   - SSE requests per IP

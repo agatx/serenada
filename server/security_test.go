@@ -28,9 +28,9 @@ func TestParseAllowedOriginsMultiple(t *testing.T) {
 	if len(origins) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(origins))
 	}
-	for _, o := range []string{"https://a.com", "https://b.com", "https://c.com"} {
-		if !origins[o] {
-			t.Fatalf("expected %q to be present", o)
+	for _, origin := range []string{"https://a.com", "https://b.com", "https://c.com"} {
+		if !origins[origin] {
+			t.Fatalf("expected %q to be present", origin)
 		}
 	}
 }
@@ -42,6 +42,28 @@ func TestParseAllowedOriginsWhitespace(t *testing.T) {
 	}
 	if !origins["https://a.com"] {
 		t.Fatalf("expected trimmed origin to be present")
+	}
+}
+
+func TestRefreshAllowedOriginsFromEnv(t *testing.T) {
+	original := allowedOrigins
+	defer func() { allowedOrigins = original }()
+
+	t.Setenv("ALLOWED_ORIGINS", "https://allowed.example,https://other.example")
+	refreshAllowedOriginsFromEnv()
+
+	req := httptest.NewRequest(http.MethodGet, "http://serenada.app/api/room-id", nil)
+	req.Host = "serenada.app"
+	req.Header.Set("Origin", "https://allowed.example")
+	if !isOriginAllowed(req) {
+		t.Fatalf("expected configured origin to be allowed")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "http://serenada.app/api/room-id", nil)
+	req.Host = "serenada.app"
+	req.Header.Set("Origin", "https://denied.example")
+	if isOriginAllowed(req) {
+		t.Fatalf("expected non-configured origin to be denied")
 	}
 }
 
@@ -78,8 +100,8 @@ func TestIsOriginAllowedRejectsUnknown(t *testing.T) {
 
 func TestIsOriginAllowedLocalhostBypass(t *testing.T) {
 	original := allowedOrigins
-	allowedOrigins = parseAllowedOrigins("")
 	defer func() { allowedOrigins = original }()
+	allowedOrigins = parseAllowedOrigins("")
 
 	for _, origin := range []string{
 		"http://localhost",
@@ -96,34 +118,47 @@ func TestIsOriginAllowedLocalhostBypass(t *testing.T) {
 
 func TestIsOriginAllowedHostFallback(t *testing.T) {
 	original := allowedOrigins
-	allowedOrigins = parseAllowedOrigins("")
 	defer func() { allowedOrigins = original }()
+	allowedOrigins = parseAllowedOrigins("")
 
-	req := httptest.NewRequest(http.MethodGet, "http://myapp.example.com/", nil)
-	req.Host = "myapp.example.com"
-	req.Header.Set("Origin", "https://myapp.example.com")
+	req := httptest.NewRequest(http.MethodGet, "http://serenada.app/api/room-id", nil)
+	req.Host = "serenada.app"
+	req.Header.Set("Origin", "https://serenada.app")
 	if !isOriginAllowed(req) {
-		t.Fatalf("origin matching Host header should be allowed")
+		t.Fatalf("expected same-host origin to be allowed")
 	}
 }
 
 func TestIsOriginAllowedHostFallbackMismatch(t *testing.T) {
 	original := allowedOrigins
-	allowedOrigins = parseAllowedOrigins("")
 	defer func() { allowedOrigins = original }()
+	allowedOrigins = parseAllowedOrigins("")
 
-	req := httptest.NewRequest(http.MethodGet, "http://myapp.example.com/", nil)
-	req.Host = "myapp.example.com"
-	req.Header.Set("Origin", "https://other.example.com")
+	req := httptest.NewRequest(http.MethodGet, "http://serenada.app/api/room-id", nil)
+	req.Host = "serenada.app"
+	req.Header.Set("Origin", "https://other.example")
 	if isOriginAllowed(req) {
 		t.Fatalf("origin not matching Host should be rejected")
 	}
 }
 
+func TestIsOriginAllowedLocalhostFallback(t *testing.T) {
+	original := allowedOrigins
+	defer func() { allowedOrigins = original }()
+	allowedOrigins = parseAllowedOrigins("")
+
+	req := httptest.NewRequest(http.MethodGet, "http://serenada.app/api/room-id", nil)
+	req.Host = "serenada.app"
+	req.Header.Set("Origin", "http://localhost:5173")
+	if !isOriginAllowed(req) {
+		t.Fatalf("expected localhost origin to be allowed")
+	}
+}
+
 func TestIsOriginAllowedEmptyHostRejects(t *testing.T) {
 	original := allowedOrigins
-	allowedOrigins = parseAllowedOrigins("")
 	defer func() { allowedOrigins = original }()
+	allowedOrigins = parseAllowedOrigins("")
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = ""

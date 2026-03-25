@@ -12,22 +12,30 @@ import (
 
 var rateLimitBypass = parseRateLimitBypass(os.Getenv("RATE_LIMIT_BYPASS_IPS"))
 
+const (
+	ipLimiterEntryTTL      = 30 * time.Minute
+	ipLimiterPruneInterval = 10 * time.Minute
+)
+
 // SimpleTokenBucket implements a token bucket rate limiter.
 type SimpleTokenBucket struct {
 	tokens         float64
 	capacity       float64
 	refillRate     float64 // tokens per second
 	lastRefillTime time.Time
+	lastSeen       time.Time
 	mu             sync.Mutex
 }
 
 func NewSimpleTokenBucket(capacity float64, refillRate float64) *SimpleTokenBucket {
 	// Initial full bucket
+	now := time.Now()
 	return &SimpleTokenBucket{
 		tokens:         capacity,
 		capacity:       capacity,
 		refillRate:     refillRate,
-		lastRefillTime: time.Now(),
+		lastRefillTime: now,
+		lastSeen:       now,
 	}
 }
 
@@ -53,10 +61,12 @@ func (tb *SimpleTokenBucket) Allow() bool {
 
 // Global Rate Limiter Manager
 type IPLimiter struct {
-	ips   map[string]*SimpleTokenBucket
-	mu    sync.Mutex
-	rate  float64
-	burst float64
+	ips          map[string]*SimpleTokenBucket
+	mu           sync.Mutex
+	rate         float64
+	burst        float64
+	lastPrunedAt time.Time
+	now          func() time.Time
 }
 
 type rateLimitBypassList struct {
@@ -124,6 +134,7 @@ func NewIPLimiter(r float64, b float64) *IPLimiter {
 		ips:   make(map[string]*SimpleTokenBucket),
 		rate:  r,
 		burst: b,
+		now:   time.Now,
 	}
 }
 
@@ -131,16 +142,32 @@ func (i *IPLimiter) GetLimiter(ip string) *SimpleTokenBucket {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	now := i.now()
+	i.pruneStaleEntries(now)
+
 	limiter, exists := i.ips[ip]
 	if !exists {
 		limiter = NewSimpleTokenBucket(i.burst, i.rate)
 		i.ips[ip] = limiter
 	}
+	limiter.lastSeen = now
 
 	return limiter
 }
 
-// Cleanup routine to remove old IPs could be added here to prevent memory leaks
+func (i *IPLimiter) pruneStaleEntries(now time.Time) {
+	if !i.lastPrunedAt.IsZero() && now.Sub(i.lastPrunedAt) < ipLimiterPruneInterval {
+		return
+	}
+
+	cutoff := now.Add(-ipLimiterEntryTTL)
+	for ip, limiter := range i.ips {
+		if limiter.lastSeen.Before(cutoff) {
+			delete(i.ips, ip)
+		}
+	}
+	i.lastPrunedAt = now
+}
 
 // Middleware
 func rateLimitMiddleware(limiter *IPLimiter, next http.HandlerFunc) http.HandlerFunc {

@@ -92,4 +92,25 @@ describe('RoomWatcher', () => {
 
         expect(signaling.destroyCalls).toBe(1);
     });
+
+    it('clears server-side subscriptions when the watched room list becomes empty after connecting', () => {
+        const signaling = new FakeSignalingEngine();
+        const watcher = new RoomWatcher(
+            { serverHost: 'serenada.app' },
+            { createSignalingEngine: () => signaling as unknown as SignalingEngine },
+        );
+
+        watcher.watchRooms(['alpha']);
+        signaling.emit({
+            isConnected: true,
+            activeTransport: 'ws',
+        });
+        expect(signaling.watchCalls).toEqual([['alpha']]);
+
+        signaling.watchCalls = [];
+        watcher.watchRooms([]);
+
+        expect(signaling.connectCalls).toBe(1);
+        expect(signaling.watchCalls).toEqual([[]]);
+    });
 });

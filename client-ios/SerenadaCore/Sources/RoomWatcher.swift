@@ -1,5 +1,15 @@
 import Foundation
 
+@MainActor
+protocol RoomWatcherSignalingClient: AnyObject {
+    var listener: SignalingClientListener? { get set }
+    func connect(host: String)
+    func isConnected() -> Bool
+    func send(_ message: SignalingMessage)
+    func close()
+    func recordPong()
+}
+
 /// Room occupancy info (participant count and max capacity).
 public struct RoomOccupancy: Equatable {
     public let count: Int
@@ -23,7 +33,7 @@ public final class RoomWatcher {
     /// Delegate notified when room occupancy changes.
     public weak var delegate: RoomWatcherDelegate?
 
-    private let signalingClient: SignalingClient
+    private let signalingClient: any RoomWatcherSignalingClient
     private var watchedRoomIds: [String] = []
     private var statuses: [String: RoomOccupancy] = [:]
     private var reconnectAttempts = 0
@@ -35,6 +45,11 @@ public final class RoomWatcher {
         self.signalingClient.listener = self
     }
 
+    init(signalingClient: any RoomWatcherSignalingClient) {
+        self.signalingClient = signalingClient
+        self.signalingClient.listener = self
+    }
+
     /// Current occupancy statuses keyed by room ID.
     public var currentStatuses: [String: RoomOccupancy] {
         statuses
@@ -42,6 +57,7 @@ public final class RoomWatcher {
 
     /// Start watching the given room IDs for occupancy changes.
     public func watchRooms(roomIds: [String], host: String) {
+        let hostChanged = self.host.map { $0.compare(host, options: .caseInsensitive) != .orderedSame } ?? false
         self.host = host
         watchedRoomIds = roomIds
 
@@ -50,6 +66,10 @@ public final class RoomWatcher {
 
         reconnectTask?.cancel()
         reconnectTask = nil
+
+        if hostChanged {
+            signalingClient.close()
+        }
 
         guard !watchedRoomIds.isEmpty else {
             if signalingClient.isConnected() {
@@ -111,7 +131,8 @@ public final class RoomWatcher {
 
     private func mergeStatusesPayload(payload: JSONValue?) {
         guard let payload = payload?.objectValue else { return }
-        for (rid, value) in payload {
+        let watchedSet = Set(watchedRoomIds)
+        for (rid, value) in payload where watchedSet.contains(rid) {
             if let status = parseOccupancy(value, fallback: statuses[rid]) {
                 statuses[rid] = status
             }
@@ -127,6 +148,7 @@ public final class RoomWatcher {
         else {
             return
         }
+        guard watchedRoomIds.contains(rid) else { return }
 
         statuses[rid] = RoomOccupancy(
             count: max(0, count),
@@ -194,3 +216,5 @@ extension RoomWatcher: SignalingClientListener {
         scheduleReconnect()
     }
 }
+
+extension SignalingClient: RoomWatcherSignalingClient {}

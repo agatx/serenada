@@ -68,6 +68,9 @@ export class RoomWatcher {
         this.notify();
 
         if (this.watchedRoomIds.length === 0) {
+            if (this.hasConnected && this.signaling.isConnected) {
+                this.signaling.watchRooms([]);
+            }
             return;
         }
 
