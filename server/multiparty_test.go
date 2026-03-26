@@ -544,10 +544,12 @@ func TestWatchRoomsReplacesPreviousSubscriptions(t *testing.T) {
 
 	hub.handleMessage(watcher, watchRoomsPayload([]string{ridB}))
 	msgs := drainMessages(watcher)
+	foundRoomStatuses := false
 	for _, msg := range msgs {
 		if msg.Type != "room_statuses" {
 			continue
 		}
+		foundRoomStatuses = true
 		var payload map[string]map[string]int
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			t.Fatalf("failed to parse room_statuses payload: %v", err)
@@ -558,6 +560,9 @@ func TestWatchRoomsReplacesPreviousSubscriptions(t *testing.T) {
 		if _, ok := payload[ridB]; !ok {
 			t.Fatalf("expected room_statuses payload to include replacement room %s", ridB)
 		}
+	}
+	if !foundRoomStatuses {
+		t.Fatal("expected room_statuses message when replacing watched rooms")
 	}
 
 	participantA := fakeClient(hub)
@@ -613,10 +618,12 @@ func TestWatchRoomsClearsSubscriptionsWithEmptyList(t *testing.T) {
 
 	hub.handleMessage(watcher, watchRoomsPayload([]string{}))
 	msgs := drainMessages(watcher)
+	foundRoomStatuses := false
 	for _, msg := range msgs {
 		if msg.Type != "room_statuses" {
 			continue
 		}
+		foundRoomStatuses = true
 		var payload map[string]map[string]int
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			t.Fatalf("failed to parse room_statuses payload: %v", err)
@@ -624,6 +631,9 @@ func TestWatchRoomsClearsSubscriptionsWithEmptyList(t *testing.T) {
 		if len(payload) != 0 {
 			t.Fatalf("expected empty room_statuses payload after clearing subscriptions, got %+v", payload)
 		}
+	}
+	if !foundRoomStatuses {
+		t.Fatal("expected room_statuses message when clearing watched rooms")
 	}
 
 	participant := fakeClient(hub)

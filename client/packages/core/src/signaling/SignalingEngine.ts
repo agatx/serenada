@@ -210,7 +210,6 @@ export class SignalingEngine {
     }
 
     watchRooms(rids: string[]): void {
-        if (rids.length === 0) return;
         this.sendMessage('watch_rooms', { rids });
     }
 
