@@ -1,6 +1,6 @@
-# Scaling Architecture Plan: Redis Pub/Sub + Cloudflare TURN
+# Scaling Architecture Plan: Room-Affinity + Cloudflare TURN
 
-**Status:** Draft (v3 — revised after second code review)
+**Status:** Draft (v4 — simplified to room-affinity approach)
 **Date:** 2026-03-26
 
 ## Goal
@@ -19,56 +19,55 @@ Remove hardware single points of failure (SPOFs) from the signaling server and e
 
 The good news: media flows P2P (not through the server), so the signaling server is lightweight and low-throughput. A room with 4 participants generates maybe a few dozen signaling messages total. The scaling challenge is primarily **availability**, not throughput.
 
-## State Inventory
+## Approach: Room-Affinity Routing
 
-Every piece of state that needs a scaling strategy:
+### Why room affinity over centralized state
 
-| State | Current Location | Size/Volume | Lifetime |
-|-------|-----------------|-------------|----------|
-| `Hub.rooms` (room membership, host, capacity) | In-memory map | Small (~100 bytes/room) | Duration of call |
-| `Hub.clients` / `clientsBySID` | In-memory map | Small (~200 bytes/client) | Duration of WS/SSE connection |
-| `Hub.watchers` (room occupancy monitors) | In-memory map | Small | Duration of watcher connection |
-| Rate limit buckets (`IPLimiter`) | In-memory map | Small | 30min TTL, auto-pruned |
-| Push subscriptions | SQLite (`subscriptions.db`) | Rows, grows over time | Persistent until unsubscribed |
-| VAPID keys | File (`vapid.json`) | 2 keys | Permanent |
-| Push snapshots | Filesystem (`data/snapshots/`) | Up to 300KB each | 10min TTL |
-| TURN credentials | Generated on-the-fly (HMAC) | Stateless | 15min TTL |
-| Reconnect tokens | Generated on-the-fly (HMAC) | Stateless | Stateless (verified by HMAC) |
+An earlier iteration of this plan proposed moving all room state to Redis with Lua scripts for atomic operations (join, leave), Redis pub/sub for cross-instance relay, and a cross-node ghost eviction protocol. Code review revealed escalating complexity:
 
-## Target Architecture
+- **Lua scripts** required to replicate the join state machine (provisional capacity, second-participant locking, ghost eviction, stable JoinedAt)
+- **Lua scripts** required for leave (atomic host reassignment + empty room deletion to prevent race with concurrent join)
+- **SSE sticky sessions** required because SSE uses split GET/POST keyed by `sid`, resolved from local `clientsBySID` (`sse.go:98`)
+- **Cross-node ghost eviction protocol** required because ghost cleanup must close local WS/SSE connections (`signaling.go:807-827`)
+- **Reconnect token validation ordering** required careful two-phase design to avoid security regression (`signaling.go:350-355`)
+- **Push subscription IDs** required composite-keyed Redis indexes to preserve `UNIQUE(room_id, endpoint)` semantics (`push.go:163`)
+- **TURN wire format change** required across all three client platforms for dual-provider credentials
+
+The core insight: Serenada's rooms are **2-4 participants and short-lived**. There is no scenario where a single room needs to span servers. The only benefit of cross-server room state was surviving a server crash — but clients already have robust reconnect logic, and media flows P2P throughout. A 5-second reconnect is invisible to users.
+
+Room affinity eliminates all signaling complexity while still removing every SPOF.
+
+### Design
 
 ```
-                         ┌──────────────────────────────────┐
-                         │        Cloud Load Balancer        │
-                         │  (TLS termination, health checks) │
-                         │  WS: sticky by IP or cookie       │
-                         │  SSE: sticky by sid param          │
-                         └──────┬───────────┬───────────────┘
+                         ┌────────────────────────────────────────┐
+                         │           Load Balancer                 │
+                         │  (TLS termination, health checks)       │
+                         │                                        │
+                         │  /ws?rid=X, /sse?rid=X → hash(X)      │
+                         │  /api/*, /device-check  → round-robin  │
+                         └──────┬───────────┬─────────────────────┘
                                 │           │
                     ┌───────────▼──┐  ┌─────▼───────────┐
                     │  Server A    │  │  Server B        │
                     │  (Go)        │  │  (Go)            │
                     │              │  │                   │
-                    │ Local:       │  │ Local:            │
-                    │  • WS/SSE    │  │  • WS/SSE        │
-                    │    conns     │  │    conns          │
-                    │  • Client    │  │  • Client         │
-                    │    objects   │  │    objects         │
-                    │  • clientsBy │  │  • clientsBy      │
-                    │    SID map   │  │    SID map        │
+                    │ Owns rooms   │  │ Owns rooms       │
+                    │ where        │  │ where             │
+                    │ hash(rid)=A  │  │ hash(rid)=B      │
+                    │              │  │                   │
+                    │ signaling.go │  │ signaling.go      │
+                    │ UNCHANGED    │  │ UNCHANGED         │
                     └──────┬───┬──┘  └──┬───┬────────────┘
                            │   │        │   │
               ┌────────────▼───▼────────▼───▼─────────┐
               │            Redis (Sentinel)             │
               │                                        │
-              │  Shared:                               │
-              │   • Room state (hashes)                │
-              │   • Cross-instance relay (pub/sub)     │
-              │   • Ghost eviction commands (pub/sub)  │
-              │   • Watcher notifications (pub/sub)    │
-              │   • Rate limit counters                │
+              │  Shared (non-signaling only):           │
               │   • Push subscriptions (with auto-IDs) │
               │   • Snapshots (binary, 10min TTL)      │
+              │   • Rate limit counters                │
+              │   • Room-exists flags (for watchers)   │
               └────────────────────────────────────────┘
 
      Clients ◄────── WebRTC P2P media ──────► Clients
@@ -83,210 +82,112 @@ Every piece of state that needs a scaling strategy:
 
 ### Key Design Decisions
 
-- **Sticky sessions required for SSE transport.** The SSE transport uses split GET (stream) + POST (send) connections keyed by `sid`, resolved from the local `clientsBySID` map (`sse.go:98`). A POST landing on the wrong server returns 410 Gone. The LB must route SSE requests to the same backend by `sid` query param. WS connections are self-contained (single upgraded connection), so WS only needs stickiness for connection lifetime (which any LB provides natively).
-- **Redis Sentinel for HA.** Open-source, ships with Redis, zero licensing cost. 3 nodes (1 primary + 2 replicas).
-- **Cloudflare TURN as primary, self-hosted coturn as fallback.** Requires a wire format change to support per-server credentials (see Layer 3).
-- **Lua scripts for atomic room operations.** Redis MULTI/EXEC cannot conditionally abort based on intermediate reads, so the join flow's capacity locking and ghost eviction require Lua scripts (see Layer 2).
+- **Room-affinity routing.** The LB consistently hashes `rid` (room ID) from the query string to route all clients for a room to the same server instance. All room state stays in-memory with the current Hub/Room/Client mutex-based logic. **`signaling.go` is unchanged.**
+- **No sticky session complexity.** Because all WS/SSE connections for a room land on the same server, SSE's split GET/POST works naturally — the `sid` lookup is always local.
+- **Redis for non-signaling state only.** Push subscriptions, snapshots, rate limits. Redis is never in the signaling hot path. A brief Redis outage degrades push notifications and rate limiting but does not affect active calls.
+- **Server failure = rooms on that server are lost.** Clients reconnect within seconds (existing resilience logic), create a new room on a surviving server. Media continues P2P throughout — users see a brief "reconnecting" overlay, not a dropped call.
+- **Cloudflare TURN as primary, self-hosted coturn as fallback.** Requires a wire format change to support per-provider credentials.
 - **Single new Go dependency:** `go-redis/v9`.
 
-## Layer 1: Signaling — What Stays Local vs. Moves to Redis
+## Layer 1: Signaling — What Changes (Almost Nothing)
 
-### Stays local (per-instance, not shared)
+### Unchanged
 
-- `Client` struct (WS/SSE connection, send channel, transport goroutines)
-- `clientsBySID` map — only the server holding the connection needs this; SSE POST resolution depends on this being local
-- SSE stale reaper — only evicts local connections
+- `signaling.go` — Hub, Room, Client types, all join/leave/relay logic, mutex-based concurrency
+- `ws.go` — WebSocket transport
+- `sse.go` — SSE transport (GET stream + POST send, `clientsBySID` lookup)
+- `room_id.go` — HMAC-based room ID generation/validation
+- `security.go` — CORS/origin validation
 
-### Moves to Redis
+### Small additions
 
-| Current | Redis Structure | Key Pattern |
-|---------|----------------|-------------|
-| `Hub.rooms[rid]` | Hash | `room:{rid}` → `{hostCid, maxParticipants, capacityLocked, requestedMax}` |
-| `Room.Participants` | Hash | `room:{rid}:participants` → `{cid: serverID\|joinedAt}` |
-| `Hub.watchers` | Not stored — use pub/sub channel instead | — |
-| Rate limit buckets | Sorted set + Lua script (sliding window) | `rl:{endpoint}:{ip}` |
-| Push subscriptions | Hash + counter (see Layer 5) | `push:subs:{roomId}`, `push:sub:{id}`, `push:id_counter` |
-| Snapshots | Binary key + TTL | `snap:{id}:data`, `snap:{id}:meta` with 10min `EXPIRE` |
+- `main.go` — Add `/healthz` endpoint (returns 200 if server is up, optionally checks Redis)
+- `signaling.go` — On room create/delete, set/remove a lightweight Redis key (`room:exists:{rid}`) so watchers on other servers can check occupancy. Fire-and-forget, non-blocking.
 
-### Cross-instance messaging (Redis Pub/Sub)
+### Watchers across servers
 
-```
-Channel: "room:{rid}"
-  → All signaling messages for that room (offer, answer, ice, room_state, etc.)
-  → Server subscribes when it has ≥1 local client in that room
-  → Server unsubscribes when its last local client leaves
+Current watchers (`watch_rooms`) use in-memory state. With room affinity, a watcher connected to Server A can only see rooms owned by Server A.
 
-Channel: "room:{rid}:status"
-  → Occupancy change notifications (for watcher clients)
-  → Server subscribes when it has ≥1 local watcher for that room
+**Solution: Redis room-exists flags + HTTP polling fallback.**
 
-Channel: "server:{instanceID}"
-  → Targeted commands to a specific server instance (ghost eviction, etc.)
-  → Each server subscribes to its own channel on startup
-```
+When a room is created or deleted, the owning server sets/removes `room:exists:{rid}` in Redis (with participant count). The `watch_rooms` handler checks Redis for rooms not owned by this server. This is a lightweight read, not in the signaling hot path.
 
-## Layer 2: How Key Operations Change
+Alternatively, watchers can use a new `GET /api/room-status?rids=X,Y,Z` HTTP endpoint that any server can handle by reading Redis. This is simpler and avoids the persistent-connection complexity entirely.
 
-### Join flow — Lua script required
+## Layer 2: Push Subscriptions — SQLite to Redis
 
-The current join logic (`signaling.go:265-484`) performs a complex multi-step state transition under mutex:
-1. Create room if missing (with provisional capacity if group-capable)
-2. Validate reconnect token and evict ghost if reconnecting
-3. Lock capacity on second participant (min of requested, client capability, server ceiling)
-4. Reject clients that don't support the room's locked capacity
-5. Check room full after ghost eviction
-6. Add participant, record stable JoinedAt timestamp
+### Problem
 
-**Redis MULTI/EXEC cannot express this** because it cannot conditionally abort based on intermediate read results (e.g., "if HLEN == 1 AND capacityLocked == false, then update maxParticipants"). This requires a **Lua script** that executes atomically on the Redis server.
+SQLite is a local file SPOF. Push subscriptions must be shared across server instances.
+
+### Stable numeric IDs
+
+The snapshot encryption flow depends on stable numeric subscription IDs:
+1. Client calls `GET /api/push/recipients` → receives `[{id: 5, publicKey: ...}]`
+2. Client encrypts snapshot key per recipient ID
+3. Server delivers push with per-recipient wrapped keys, looked up by numeric ID
+
+### Redis schema
+
+The current SQLite schema has `UNIQUE(room_id, endpoint)` — the same browser endpoint can subscribe to multiple rooms. The Redis design preserves this.
 
 ```
-New (two-phase: Go validation + Lua state transition):
+INCR push:id_counter → returns next ID (e.g., 42)
 
-  Phase 1 — Go server (BEFORE calling Lua):
-  If reconnectCID is provided:
-    - Validate reconnect token using HMAC-SHA256 (same as current
-      validateReconnectToken in signaling.go:41-50)
-    - If invalid → reject with INVALID_RECONNECT_TOKEN, do NOT call Lua
-    - If no secret configured → allow (backward compat with legacy clients)
-  This preserves the current security invariant: ghost eviction never
-  happens without prior token validation (signaling.go:350-355).
+HSET push:sub:42 room_id <rid> transport <t> endpoint <ep> auth <a>
+     p256dh <p> locale <l> enc_pubkey <k> created_at <ts>
 
-  Phase 2 — Lua script (room_join.lua):
-  Inputs: rid, cid, serverID, reconnectCID (only if token already validated),
-          clientMaxParticipants, createMaxParticipants, serverCeiling
-
-  Atomically:
-  1. HSETNX room:{rid} fields to create if missing
-     - If new: set provisional capacity (maxParticipants=2 if createMax>2,
-       capacityLocked=false, requestedMax=createMax)
-  2. If reconnectCID provided (token already validated by Go):
-     - HGET room:{rid}:participants {reconnectCID} → get ownerServerID
-     - If exists: HDEL the ghost entry (Redis side); return ownerServerID
-       for local cleanup (see ghost eviction below)
-  3. If !capacityLocked AND participant count == 1:
-     - Lock capacity: min(requestedMax, clientMaxParticipants, serverCeiling)
-     - HSET capacityLocked=true, maxParticipants=lockedValue
-  4. If clientMaxParticipants < room.maxParticipants → return ROOM_CAPACITY_UNSUPPORTED
-  5. If participant count >= maxParticipants → return ROOM_FULL
-  6. HSET room:{rid}:participants {cid} → {serverID}|{joinedAt}
-     - Only set joinedAt if CID has no existing timestamp (stable on reconnect)
-  7. Return success + participant list + room metadata + ghost ownerServerID
-
-  Phase 3 — Go server (AFTER Lua returns):
-  - Sends "joined" to the local client
-  - PUBLISH room:{rid} → room_state message
-  - If ghost was on another server: publish eviction command (see below)
+SADD push:room:{rid} 42                    # index: room → subscription IDs
+SET  push:ep:{rid}:{endpointHash} 42       # index: (room, endpoint) → subscription ID
+                                            # endpointHash = SHA-256(endpoint) truncated
+                                            # to keep key length bounded
 ```
 
-### Relay flow (offer/answer/ice)
+**Lookup patterns:**
+- **Subscribe (upsert):** Check `GET push:ep:{rid}:{endpointHash}` — if exists, update that sub's fields. If not, `INCR` to get new ID, `HSET` the sub, `SADD` to room index, `SET` the composite endpoint index.
+- **Unsubscribe:** `GET push:ep:{rid}:{endpointHash}` → get ID → `DEL push:sub:{id}`, `SREM push:room:{rid} {id}`, `DEL push:ep:{rid}:{endpointHash}`
+- **Get recipients for room:** `SMEMBERS push:room:{rid}` → get IDs → `HGETALL` each
+- **Snapshot key lookup:** Same numeric IDs, no change to snapshot metadata format
+
+**Why composite key:** A single endpoint (browser) can subscribe to rooms A and B. `push:ep:A:{hash}` → ID 5, `push:ep:B:{hash}` → ID 7. Unsubscribing from room A deletes only ID 5. This matches the current `DELETE FROM subscriptions WHERE room_id = ? AND endpoint = ?` behavior.
+
+### Snapshots
+
+Push snapshots (encrypted camera frames) move from filesystem to Redis:
 
 ```
-Current:
-  1. Find room in local Hub
-  2. Iterate room.Participants, send to each local *Client
-
-New:
-  1. PUBLISH room:{rid} → the relay message (with "from" CID and optional "to" CID)
-  2. Each server receiving the pub/sub message:
-     - Checks if it has local clients matching the target CID
-     - Delivers to matching local WS/SSE connections
-     - Ignores if no local clients match (message was for another server's clients)
+SET snap:{id}:data <binary>  EX 600    # 10-minute TTL
+SET snap:{id}:meta <json>    EX 600
 ```
 
-### Disconnect / leave — Lua script required
+Replaces `data/snapshots/*.bin` and `*.json` files. Cleanup is automatic via Redis TTL (replaces `cleanupOldSnapshots`).
 
-The current leave flow (`signaling.go:697-738`) does more than just remove a participant:
-1. Removes client from room participants (under room lock)
-2. If the leaving client was the host, reassigns `hostCID` to another participant
-3. If room is now empty, deletes the room (under hub lock)
+## Layer 3: Rate Limiting — Shared Across Instances
 
-The deletion step has a race condition even in the current code: between releasing room.mu (line 729) and reacquiring hub.mu (line 736), a concurrent join can find and enter the room. In the Redis version, this race is worse because there are no local locks protecting the Redis state.
+Current `IPLimiter` uses in-memory token buckets. With multiple servers, the same IP could get N times the intended rate by hitting different servers.
 
-**Solution: Lua script `room_leave.lua`**
+### Redis sliding window
 
-```
-Lua script (room_leave.lua):
-  Inputs: rid, cid
-
-  Atomically:
-  1. HDEL room:{rid}:participants {cid}
-  2. remaining = HLEN room:{rid}:participants
-  3. If remaining == 0:
-     - DEL room:{rid}
-     - DEL room:{rid}:participants
-     - Return { deleted: true }
-  4. If room:{rid}.hostCid == cid (the host left):
-     - Pick any remaining CID from room:{rid}:participants
-     - HSET room:{rid} hostCid → newHostCID
-     - Return { deleted: false, newHost: newHostCID, participants: [...] }
-  5. Else:
-     - Return { deleted: false, participants: [...] }
-
-  Because Lua scripts execute atomically on Redis, a concurrent join
-  cannot interleave between the emptiness check and the DEL — it will
-  either see the room before deletion (and join succeeds) or after
-  (and room_join.lua creates a new room).
-
-Go server then:
-  - Remove client from local maps (clientsBySID, etc.)
-  - If not deleted: PUBLISH room:{rid} → room_state with updated host
-  - If deleted: unsubscribe from room:{rid} pub/sub channel
-```
-
-### Reconnect — explicit cross-node ghost eviction
-
-The current ghost eviction (`signaling.go:346-416`, `signaling.go:807-827`) performs critical cleanup: removes the ghost from the hub's client maps, removes from watchers, decrements transport stats, and **closes the ghost's send channel** (which terminates the WS/SSE write pump). Simply overwriting the Redis participant entry is **not safe** — the ghost's local WS/SSE connection remains active on the old server and can continue relaying stale messages.
+Replace in-memory token buckets with Redis sorted sets (standard sliding window pattern):
 
 ```
-New (two cases):
-
-Case A — Ghost is on THIS server:
-  1. Lua script removes ghost from Redis participants (step 2 above)
-  2. Server finds ghost in local clientsBySID → runs cleanupEvictedClient()
-     (close send channel, remove from local maps, decrement stats)
-  3. Proceed with join
-
-Case B — Ghost is on ANOTHER server:
-  1. Lua script removes ghost from Redis participants, returns ownerServerID
-  2. Joining server publishes eviction command to "server:{ownerServerID}":
-     { type: "evict_ghost", cid: "C-xxx", sid: "S-yyy", rid: "room123" }
-  3. Owner server receives command, finds ghost client locally,
-     runs cleanupEvictedClient() (close send channel, etc.)
-  4. Owner server publishes ack (optional — join can proceed optimistically
-     since Redis participant entry is already updated)
-
-  Safety invariant: after the Lua script runs, the ghost's CID is removed
-  from Redis participants. Even if the old server hasn't cleaned up yet,
-  the ghost cannot relay because:
-  - Relay messages are published to room:{rid} pub/sub
-  - The relay handler on the old server checks if the sending client's
-    CID is still in Redis participants before publishing
-  - Ghost's CID is gone → relay blocked
-
-  This requires adding a Redis participants check to the relay path
-  (HGET room:{rid}:participants {senderCID} before PUBLISH).
+Key: rl:{endpoint}:{ip}
+ZADD rl:ws:1.2.3.4 <now_ms> <request_id>
+ZREMRANGEBYSCORE rl:ws:1.2.3.4 0 <now_ms - window_ms>
+ZCARD rl:ws:1.2.3.4 → count in window
 ```
 
-## Layer 3: TURN — Dual Provider with Wire Format Change
+If count exceeds limit → 429. Each key auto-expires via `EXPIRE` slightly longer than the window.
+
+This is a well-understood pattern, no Lua required (the three commands can run in a pipeline; minor over-counting under extreme concurrency is acceptable for rate limiting).
+
+## Layer 4: TURN — Dual Provider with Wire Format Change
 
 ### Problem with current format
 
-The current `TurnConfig` struct (`turn_auth.go:18`) returns a single `username`/`password` pair applied to all URIs:
-
-```json
-{
-  "username": "1674000000:192-168-1-1",
-  "password": "base64HmacSha1...",
-  "uris": ["stun:stun.example.com", "turn:turn.example.com", "turns:turn.example.com:443?transport=tcp"],
-  "ttl": 900
-}
-```
-
-All three clients (Web `MediaEngine.ts:747`, Android `TurnManager.kt`, iOS `TurnManager.swift`) apply this single credential to all URIs. Cloudflare TURN and self-hosted coturn use different credential schemes, so a single pair cannot authenticate to both.
+The current `TurnConfig` struct (`turn_auth.go:18`) returns a single `username`/`password` pair applied to all URIs. All three clients apply this single credential to all URIs. Cloudflare TURN and self-hosted coturn use different credential schemes, so a single pair cannot authenticate to both.
 
 ### New wire format: `iceServers` array
-
-Change the response to return an array of ICE server configurations, each with its own credentials:
 
 ```json
 {
@@ -341,107 +242,86 @@ Response provides the `urls`, `username`, `credential` for the Cloudflare entry.
 
 $0.05/GB of relayed traffic. For a 1:1 video call where TURN is needed (~500kbps video), that's roughly $0.01/hour. Most calls don't need TURN at all (direct P2P works).
 
-## Layer 4: Load Balancer + Deployment
+## Layer 5: Load Balancer
 
-### Load balancer requirements
+### Routing rules
 
-- WebSocket upgrade support (for `/ws`)
-- Long-lived HTTP connections (for `/sse`)
-- **Sticky sessions for SSE transport** — route by `sid` query parameter so that SSE POST requests (which send signaling messages) land on the same server that holds the SSE GET stream. Without this, `hub.getClientBySID(sid)` returns nil and the POST gets 410 Gone.
-- WS connections are inherently sticky (single upgraded connection), but the LB should support connection draining on deploy.
-- Health check endpoint (`GET /healthz` → 200 if Redis is reachable)
+| Path | Routing | Why |
+|------|---------|-----|
+| `/ws?rid=X` | Consistent hash on `rid` param | All room participants on same server |
+| `/sse?rid=X&sid=Y` | Consistent hash on `rid` param | SSE GET + POST land on same server naturally |
+| `/api/turn-credentials` | Round-robin | Stateless credential generation |
+| `/api/room-id` | Round-robin | Stateless |
+| `/api/push/*` | Round-robin | Reads/writes Redis (shared) |
+| `/api/internal/stats` | Per-server | Server-specific metrics |
+| `/device-check` | Round-robin | Stateless |
+| `/healthz` | Per-server (LB health probe) | Server health |
 
-### Sticky session strategies
+### SSE detail
 
-| LB | WS | SSE Stickiness | Notes |
-|----|-----|---------------|-------|
-| **Cloudflare LB** | Native WS support | Session affinity by cookie or header | Can use `sid` in cookie; simplest if already on Cloudflare |
-| **nginx upstream** | `proxy_http_version 1.1; proxy_set_header Upgrade` | `hash $arg_sid consistent` | Requires extracting `sid` from query string |
-| **Fly.io** | Native | `fly-force-instance-id` header or `fly-prefer-region` | App can set affinity header in SSE response |
-| **AWS ALB** | Native | Sticky sessions by cookie | Standard; requires cookie-based affinity |
+With room-affinity, the SSE sticky session problem disappears. The client includes `rid` on both the GET (open stream) and POST (send message) requests. The LB hashes `rid` → same server for both. Since `clientsBySID` is local and both requests land on the same server, the `sid` lookup always succeeds.
 
-### Redis deployment
+**Pre-room SSE connections** (client connects before knowing the room ID): these don't exist in the current client flow. Clients open WS/SSE only when navigating to `/call/:roomId`, at which point the room ID is known.
 
-- **Managed (simplest):** Upstash Redis (serverless, free tier 10K cmds/day), or Redis Cloud free tier (30MB).
-- **Self-hosted:** Redis Sentinel with 3 nodes (1 primary + 2 replicas). Lightweight — Redis uses ~10MB RAM for this workload.
+### LB options
 
-## Layer 5: Push Subscriptions — Stable Numeric IDs
+| LB | Configuration | Notes |
+|----|--------------|-------|
+| **nginx upstream** | `hash $arg_rid consistent;` | Works with existing docker-compose. Add second `app-server` service. |
+| **Cloudflare LB** | Session affinity rule on `rid` query param | Zero-infra if already on Cloudflare |
+| **Fly.io** | `fly-replay` header based on rid hash | Built-in multi-region support |
 
-### Problem
+### Server failure and rehashing
 
-The current SQLite schema uses `INTEGER PRIMARY KEY AUTOINCREMENT` for subscription IDs. The snapshot upload flow depends on these stable numeric IDs:
-1. Client calls `GET /api/push/recipients` → receives `[{id: 5, publicKey: ...}, {id: 7, publicKey: ...}]`
-2. Client encrypts snapshot key material per recipient ID
-3. Client uploads snapshot with `recipients: [{id: 5, wrappedKey: ...}, {id: 7, wrappedKey: ...}]`
-4. Server stores wrapped keys keyed by numeric ID in snapshot metadata
-5. Push delivery (`sendOne`) looks up `snapshotMeta.Recipients[fmt.Sprintf("%d", target.ID)]`
+When a server crashes:
+1. LB health check detects failure (1-3 seconds)
+2. LB rehashes — rooms from dead server distribute across surviving servers
+3. Clients' WS/SSE connections drop → existing reconnect logic kicks in
+4. Clients reconnect, LB routes to surviving server, new room is created
+5. WebRTC renegotiation happens automatically
+6. **Media never stopped** — P2P stream continued throughout
 
-A plain Redis hash without auto-incrementing IDs would break this correlation.
-
-### Solution: Redis counter + composite-keyed indexes
-
-The current SQLite schema has `UNIQUE(room_id, endpoint)` — the same browser endpoint can be subscribed to multiple rooms simultaneously. Unsubscribe deletes by `(room_id, endpoint)`, not by endpoint alone. The Redis design must preserve this scoping.
-
-```
-INCR push:id_counter → returns next ID (e.g., 42)
-
-HSET push:sub:42 room_id <rid> transport <t> endpoint <ep> auth <a>
-     p256dh <p> locale <l> enc_pubkey <k> created_at <ts>
-
-SADD push:room:{rid} 42                    # index: room → subscription IDs
-SET  push:ep:{rid}:{endpointHash} 42       # index: (room, endpoint) → subscription ID
-                                            # endpointHash = SHA-256(endpoint) truncated
-                                            # to keep key length bounded
-```
-
-**Lookup patterns:**
-- **Subscribe (upsert):** Check `GET push:ep:{rid}:{endpointHash}` — if exists, update that sub's fields (`HSET push:sub:{existingID} ...`). If not, `INCR` to get new ID, `HSET` the sub, `SADD` to room index, `SET` the composite endpoint index.
-- **Unsubscribe:** `GET push:ep:{rid}:{endpointHash}` → get ID → `DEL push:sub:{id}`, `SREM push:room:{rid} {id}`, `DEL push:ep:{rid}:{endpointHash}`
-- **Get recipients for room:** `SMEMBERS push:room:{rid}` → get IDs → `HGETALL` each
-- **Snapshot key lookup:** same numeric IDs, no change to snapshot metadata format
-
-**Why composite key matters:** A single endpoint (browser) can subscribe to rooms A and B. `push:ep:A:{hash}` → ID 5, `push:ep:B:{hash}` → ID 7. Unsubscribing from room A deletes only ID 5; room B's subscription (ID 7) is untouched. This matches the current `DELETE FROM subscriptions WHERE room_id = ? AND endpoint = ?` behavior.
+When a server is added:
+1. Consistent hashing means only ~1/N rooms rehash to the new server
+2. Those rooms' clients reconnect naturally (same flow as above)
+3. No drain needed for a clean addition — but graceful shutdown is nice-to-have
 
 ## Migration Path (Phased)
 
 | Phase | Scope | Risk | Details |
 |-------|-------|------|---------|
-| **Phase 0** | Add `/healthz` endpoint. Add Redis client dependency (`go-redis/v9`). Add server instance ID. Keep everything else unchanged. | None — additive | Prepare the codebase for Redis without changing behavior. |
+| **Phase 0** | Add `/healthz` endpoint. Add Redis client dependency (`go-redis/v9`). Keep everything else unchanged. | None — additive | Prepare the codebase for Redis without changing behavior. |
 | **Phase 1** | Move push subscriptions + snapshots to Redis (with stable numeric IDs). Remove SQLite dependency. Deploy 1 instance + Redis. | Low — push is non-critical path | Push subs use counter-based IDs. Snapshots become Redis keys with TTL. SQLite + filesystem removed. |
-| **Phase 2** | Move room state to Redis. Implement Lua join script. Add pub/sub for cross-instance relay and ghost eviction. Rate limiting to Redis. Deploy 2 instances with sticky LB. | **High — core signaling changes** | Hub becomes a thin local cache + Redis backend. Lua script handles atomic join. Cross-node ghost eviction via server channels. This is the main effort. |
-| **Phase 3** | Change TURN wire format to `iceServers` array. Update all three clients. Add Cloudflare TURN credential generation. Keep coturn as fallback. | Medium — cross-platform client changes | Backward-compatible: new clients handle both formats, server returns legacy format if CF not configured. |
-| **Phase 4** | Clean up: remove SQLite migration code, clean up env vars, update documentation. | Low — just removing old code | coturn stays as fallback in docker-compose. |
+| **Phase 2** | Add room-exists flags in Redis. Update watcher handler (or add HTTP polling endpoint). Move rate limiting to Redis. | Low — watcher changes are additive | Watchers can see rooms on other servers. Rate limits shared. |
+| **Phase 3** | Configure LB with consistent hash on `rid`. Deploy second server instance. | Low — signaling code unchanged | This is the actual multi-instance deployment. Test with load testing tool. |
+| **Phase 4** | Change TURN wire format to `iceServers` array. Update all three clients. Add Cloudflare TURN credential generation. Keep coturn as fallback. | Medium — cross-platform client changes | Backward-compatible: new clients handle both formats. |
 
 ## Estimated Scope
 
 | Component | Lines Changed (est.) | New Dependencies |
 |-----------|---------------------|------------------|
-| Redis room state + Lua join/leave scripts | ~450-550 | `go-redis/v9` |
-| Redis pub/sub + ghost eviction protocol | ~200 | (same) |
-| Redis push subscriptions (with ID counter) | ~150 | (same) |
-| Redis snapshots | ~50 | (same) |
-| Redis rate limiting | ~80 | (same) |
+| Redis push subscriptions (with ID counter + composite keys) | ~150 | `go-redis/v9` |
+| Redis snapshots (replace filesystem) | ~50 | (same) |
+| Redis rate limiting (sliding window) | ~80 | (same) |
+| Redis room-exists flags + watcher update | ~60 | (same) |
 | Cloudflare TURN integration (server) | ~80 | None (HTTP call) |
 | TURN wire format change (server) | ~40 | None |
 | TURN wire format change (Web client) | ~30 | None |
 | TURN wire format change (Android client) | ~30 | None |
 | TURN wire format change (iOS client) | ~30 | None |
-| Health check endpoint + instance ID | ~20 | None |
-| **Total** | **~1150-1300** | **1 new Go dep** |
+| Health check endpoint | ~15 | None |
+| LB configuration (nginx) | ~20 | None |
+| **Total** | **~585-650** | **1 new Go dep** |
 
 ## Files Affected
 
 ### Server (`server/`)
-- `main.go` — Redis init, healthz endpoint, instance ID
-- `signaling.go` — Hub refactored: local client maps + Redis room state + pub/sub relay
-- `ws.go` / `sse.go` — Minimal changes (local client management unchanged)
-- `turn_auth.go` — New `iceServers` array format, Cloudflare TURN credential generation, coturn fallback
+- `main.go` — Redis init, healthz endpoint
+- `signaling.go` — **Minimal**: add room-exists Redis flag on room create/delete (~10 lines)
 - `push.go` — Redis-backed subscriptions with auto-incrementing IDs, Redis snapshot storage
 - `rate_limit.go` — Redis sliding window rate limiting
+- `turn_auth.go` — New `iceServers` array format, Cloudflare TURN credential generation, coturn fallback
 - New: `redis.go` — Redis client setup, connection pool, helpers
-- New: `pubsub.go` — Redis pub/sub subscription management, message routing, ghost eviction protocol
-- New: `lua/room_join.lua` — Atomic join script (capacity locking, ghost eviction, participant add)
-- New: `lua/room_leave.lua` — Atomic leave script (host reassignment, empty room deletion)
 
 ### Client changes (TURN format only)
 - `client/packages/core/src/media/MediaEngine.ts` — Parse `iceServers` array with fallback
@@ -449,21 +329,37 @@ SET  push:ep:{rid}:{endpointHash} 42       # index: (room, endpoint) → subscri
 - `client-ios/SerenadaCore/Sources/Networking/TurnCredentials.swift` — Parse `iceServers` array with fallback
 
 ### Docker / Infra
-- `docker-compose.yml` — Add Redis service, keep coturn
-- `docker-compose.prod.yml` — Add Redis, add sticky session config for nginx upstream
+- `docker-compose.yml` — Add Redis service, add second `app-server`, keep coturn
+- `docker-compose.prod.yml` — Same + nginx upstream with consistent hash
+- `nginx/nginx.prod.conf` — `hash $arg_rid consistent;` in upstream block
 - `.env.example` — New vars: `REDIS_URL`, `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`
 
-## Required Test Coverage Before Implementation
+### NOT changed
+- `signaling.go` — Hub/Room/Client types, join/leave/relay logic, mutex concurrency (unchanged except ~10 lines for room-exists flag)
+- `ws.go` — WebSocket transport (unchanged)
+- `sse.go` — SSE transport (unchanged)
+- `room_id.go` — Room ID validation (unchanged)
+- `security.go` — CORS (unchanged)
 
-The following multi-node scenarios must have integration tests before treating the implementation as production-ready:
+## Required Test Coverage
 
-1. **SSE routing under sticky LB** — Verify SSE GET + POST pairs always land on the same backend; verify 410 behavior when stickiness breaks
-2. **Concurrent joins** — Two clients joining the same room simultaneously must not oversubscribe; Lua script atomicity must be verified under contention
-3. **Reconnect token validation** — Verify that invalid reconnect tokens are rejected in Go *before* the Lua script runs; verify that ghost eviction never fires without valid token
-4. **Cross-node reconnect / ghost eviction** — Ghost on Server A, reconnect on Server B: verify ghost's WS/SSE connection is terminated, send channel closed, and relay blocked
-5. **Leave + host reassignment** — Verify host is reassigned atomically when host leaves a non-empty room; verify concurrent join during leave cannot race against room deletion
-6. **Leave + concurrent join race** — Client A leaves (room becomes empty), Client B joins simultaneously: verify either B joins (room survives) or B creates a new room; no lost joins or stale state
-7. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
-8. **Multi-room push subscriptions** — Verify the same endpoint can subscribe to rooms A and B independently; unsubscribing from A must not affect B's subscription
-9. **TURN dual-provider fallback** — Verify all three clients correctly parse the new `iceServers` array, create separate ICE server entries per provider, and fall back to legacy format
-10. **Redis failover** — Verify behavior during Redis Sentinel promotion (brief unavailability); signaling should degrade gracefully, not crash
+1. **Room-affinity routing** — Verify all clients for the same `rid` land on the same server; verify room operations work identically to single-server
+2. **Server failure + client reconnect** — Kill one server, verify clients reconnect to surviving server within resilience timeout, new room is created, WebRTC renegotiates
+3. **Consistent hash rebalancing** — Add/remove server, verify only ~1/N rooms are disrupted
+4. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
+5. **Multi-room push subscriptions** — Verify the same endpoint can subscribe to rooms A and B independently; unsubscribing from A must not affect B
+6. **TURN dual-provider fallback** — Verify all three clients correctly parse the new `iceServers` array, create separate ICE server entries per provider, and fall back to legacy format
+7. **Watcher cross-server visibility** — Verify watchers can see room occupancy for rooms on other servers via Redis flags
+8. **Rate limiting shared state** — Verify rate limits are enforced across servers (same IP can't get 2x the limit)
+9. **Redis unavailability** — Verify that Redis being down does not affect active calls (signaling is in-memory); push and rate limiting degrade gracefully
+
+## Alternatives Considered
+
+### Redis centralized state (Option 2, v1-v3 of this plan)
+Move all room state to Redis. Any server handles any room. Required Lua scripts for atomic join/leave, Redis pub/sub for relay, cross-node ghost eviction protocol, SSE sticky sessions. **Rejected:** ~1200 lines of changes, Redis in the signaling hot path, multiple subtle distributed systems failure modes. Complexity not justified by the marginal benefit of room survival.
+
+### P2P server replication
+Servers replicate room state to peers via internal connections. Any server handles any room. **Rejected:** Still requires a room-owner arbiter for join atomicity (which is effectively room affinity for the control plane). Adds peer connection management, cluster membership, split-brain handling. The relay broadcast is wasted overhead when rooms are 2-4 participants and the LB already sends both to the same server.
+
+### Embedded NATS
+Embed NATS server in each Go instance for inter-node messaging. **Rejected:** Similar complexity to P2P replication with an additional dependency. Solves a problem (cross-server room state) that room affinity avoids entirely.
