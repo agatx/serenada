@@ -1,7 +1,7 @@
 # Scaling Architecture Plan: Redis Pub/Sub + Cloudflare TURN
 
-**Status:** Draft (v2 — revised after code review)
-**Date:** 2026-03-25
+**Status:** Draft (v3 — revised after second code review)
+**Date:** 2026-03-26
 
 ## Goal
 
@@ -140,15 +140,26 @@ The current join logic (`signaling.go:265-484`) performs a complex multi-step st
 **Redis MULTI/EXEC cannot express this** because it cannot conditionally abort based on intermediate read results (e.g., "if HLEN == 1 AND capacityLocked == false, then update maxParticipants"). This requires a **Lua script** that executes atomically on the Redis server.
 
 ```
-New (Lua script: room_join.lua):
-  Inputs: rid, cid, serverID, reconnectCID, reconnectToken,
+New (two-phase: Go validation + Lua state transition):
+
+  Phase 1 — Go server (BEFORE calling Lua):
+  If reconnectCID is provided:
+    - Validate reconnect token using HMAC-SHA256 (same as current
+      validateReconnectToken in signaling.go:41-50)
+    - If invalid → reject with INVALID_RECONNECT_TOKEN, do NOT call Lua
+    - If no secret configured → allow (backward compat with legacy clients)
+  This preserves the current security invariant: ghost eviction never
+  happens without prior token validation (signaling.go:350-355).
+
+  Phase 2 — Lua script (room_join.lua):
+  Inputs: rid, cid, serverID, reconnectCID (only if token already validated),
           clientMaxParticipants, createMaxParticipants, serverCeiling
 
   Atomically:
   1. HSETNX room:{rid} fields to create if missing
      - If new: set provisional capacity (maxParticipants=2 if createMax>2,
        capacityLocked=false, requestedMax=createMax)
-  2. If reconnectCID provided:
+  2. If reconnectCID provided (token already validated by Go):
      - HGET room:{rid}:participants {reconnectCID} → get ownerServerID
      - If exists: HDEL the ghost entry (Redis side); return ownerServerID
        for local cleanup (see ghost eviction below)
@@ -159,9 +170,9 @@ New (Lua script: room_join.lua):
   5. If participant count >= maxParticipants → return ROOM_FULL
   6. HSET room:{rid}:participants {cid} → {serverID}|{joinedAt}
      - Only set joinedAt if CID has no existing timestamp (stable on reconnect)
-  7. Return success + participant list + room metadata
+  7. Return success + participant list + room metadata + ghost ownerServerID
 
-  The Go server then:
+  Phase 3 — Go server (AFTER Lua returns):
   - Sends "joined" to the local client
   - PUBLISH room:{rid} → room_state message
   - If ghost was on another server: publish eviction command (see below)
@@ -182,19 +193,44 @@ New:
      - Ignores if no local clients match (message was for another server's clients)
 ```
 
-### Disconnect / leave
+### Disconnect / leave — Lua script required
+
+The current leave flow (`signaling.go:697-738`) does more than just remove a participant:
+1. Removes client from room participants (under room lock)
+2. If the leaving client was the host, reassigns `hostCID` to another participant
+3. If room is now empty, deletes the room (under hub lock)
+
+The deletion step has a race condition even in the current code: between releasing room.mu (line 729) and reacquiring hub.mu (line 736), a concurrent join can find and enter the room. In the Redis version, this race is worse because there are no local locks protecting the Redis state.
+
+**Solution: Lua script `room_leave.lua`**
 
 ```
-Current:
-  1. Remove client from local Hub.clients
-  2. Remove from Room.Participants
-  3. If room empty, delete room
+Lua script (room_leave.lua):
+  Inputs: rid, cid
 
-New:
-  1. Remove client from local maps
-  2. HDEL room:{rid}:participants {cid}
-  3. If HLEN == 0, DEL room:{rid} + DEL room:{rid}:participants
-  4. PUBLISH room:{rid} → room_state update
+  Atomically:
+  1. HDEL room:{rid}:participants {cid}
+  2. remaining = HLEN room:{rid}:participants
+  3. If remaining == 0:
+     - DEL room:{rid}
+     - DEL room:{rid}:participants
+     - Return { deleted: true }
+  4. If room:{rid}.hostCid == cid (the host left):
+     - Pick any remaining CID from room:{rid}:participants
+     - HSET room:{rid} hostCid → newHostCID
+     - Return { deleted: false, newHost: newHostCID, participants: [...] }
+  5. Else:
+     - Return { deleted: false, participants: [...] }
+
+  Because Lua scripts execute atomically on Redis, a concurrent join
+  cannot interleave between the emptiness check and the DEL — it will
+  either see the room before deletion (and join succeeds) or after
+  (and room_join.lua creates a new room).
+
+Go server then:
+  - Remove client from local maps (clientsBySID, etc.)
+  - If not deleted: PUBLISH room:{rid} → room_state with updated host
+  - If deleted: unsubscribe from room:{rid} pub/sub channel
 ```
 
 ### Reconnect — explicit cross-node ghost eviction
@@ -342,7 +378,9 @@ The current SQLite schema uses `INTEGER PRIMARY KEY AUTOINCREMENT` for subscript
 
 A plain Redis hash without auto-incrementing IDs would break this correlation.
 
-### Solution: Redis counter + structured keys
+### Solution: Redis counter + composite-keyed indexes
+
+The current SQLite schema has `UNIQUE(room_id, endpoint)` — the same browser endpoint can be subscribed to multiple rooms simultaneously. Unsubscribe deletes by `(room_id, endpoint)`, not by endpoint alone. The Redis design must preserve this scoping.
 
 ```
 INCR push:id_counter → returns next ID (e.g., 42)
@@ -350,15 +388,19 @@ INCR push:id_counter → returns next ID (e.g., 42)
 HSET push:sub:42 room_id <rid> transport <t> endpoint <ep> auth <a>
      p256dh <p> locale <l> enc_pubkey <k> created_at <ts>
 
-SADD push:room:{rid} 42       # index: room → subscription IDs
-SET  push:ep:{endpoint} 42    # index: endpoint → subscription ID (for UPSERT/dedup)
+SADD push:room:{rid} 42                    # index: room → subscription IDs
+SET  push:ep:{rid}:{endpointHash} 42       # index: (room, endpoint) → subscription ID
+                                            # endpointHash = SHA-256(endpoint) truncated
+                                            # to keep key length bounded
 ```
 
 **Lookup patterns:**
-- Subscribe: `INCR` to get ID, `HSET` the sub, `SADD` to room index, `SET` endpoint index
-- Unsubscribe: look up ID by endpoint, `DEL` the sub hash, `SREM` from room, `DEL` endpoint index
-- Get recipients for room: `SMEMBERS push:room:{rid}` → get IDs → `HGETALL` each
-- Snapshot key lookup: same numeric IDs, no change to snapshot metadata format
+- **Subscribe (upsert):** Check `GET push:ep:{rid}:{endpointHash}` — if exists, update that sub's fields (`HSET push:sub:{existingID} ...`). If not, `INCR` to get new ID, `HSET` the sub, `SADD` to room index, `SET` the composite endpoint index.
+- **Unsubscribe:** `GET push:ep:{rid}:{endpointHash}` → get ID → `DEL push:sub:{id}`, `SREM push:room:{rid} {id}`, `DEL push:ep:{rid}:{endpointHash}`
+- **Get recipients for room:** `SMEMBERS push:room:{rid}` → get IDs → `HGETALL` each
+- **Snapshot key lookup:** same numeric IDs, no change to snapshot metadata format
+
+**Why composite key matters:** A single endpoint (browser) can subscribe to rooms A and B. `push:ep:A:{hash}` → ID 5, `push:ep:B:{hash}` → ID 7. Unsubscribing from room A deletes only ID 5; room B's subscription (ID 7) is untouched. This matches the current `DELETE FROM subscriptions WHERE room_id = ? AND endpoint = ?` behavior.
 
 ## Migration Path (Phased)
 
@@ -374,7 +416,7 @@ SET  push:ep:{endpoint} 42    # index: endpoint → subscription ID (for UPSERT/
 
 | Component | Lines Changed (est.) | New Dependencies |
 |-----------|---------------------|------------------|
-| Redis room state + Lua join script | ~400-500 | `go-redis/v9` |
+| Redis room state + Lua join/leave scripts | ~450-550 | `go-redis/v9` |
 | Redis pub/sub + ghost eviction protocol | ~200 | (same) |
 | Redis push subscriptions (with ID counter) | ~150 | (same) |
 | Redis snapshots | ~50 | (same) |
@@ -385,7 +427,7 @@ SET  push:ep:{endpoint} 42    # index: endpoint → subscription ID (for UPSERT/
 | TURN wire format change (Android client) | ~30 | None |
 | TURN wire format change (iOS client) | ~30 | None |
 | Health check endpoint + instance ID | ~20 | None |
-| **Total** | **~1100-1200** | **1 new Go dep** |
+| **Total** | **~1150-1300** | **1 new Go dep** |
 
 ## Files Affected
 
@@ -399,6 +441,7 @@ SET  push:ep:{endpoint} 42    # index: endpoint → subscription ID (for UPSERT/
 - New: `redis.go` — Redis client setup, connection pool, helpers
 - New: `pubsub.go` — Redis pub/sub subscription management, message routing, ghost eviction protocol
 - New: `lua/room_join.lua` — Atomic join script (capacity locking, ghost eviction, participant add)
+- New: `lua/room_leave.lua` — Atomic leave script (host reassignment, empty room deletion)
 
 ### Client changes (TURN format only)
 - `client/packages/core/src/media/MediaEngine.ts` — Parse `iceServers` array with fallback
@@ -416,7 +459,11 @@ The following multi-node scenarios must have integration tests before treating t
 
 1. **SSE routing under sticky LB** — Verify SSE GET + POST pairs always land on the same backend; verify 410 behavior when stickiness breaks
 2. **Concurrent joins** — Two clients joining the same room simultaneously must not oversubscribe; Lua script atomicity must be verified under contention
-3. **Cross-node reconnect / ghost eviction** — Ghost on Server A, reconnect on Server B: verify ghost's WS/SSE connection is terminated, send channel closed, and relay blocked
-4. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
-5. **TURN dual-provider fallback** — Verify all three clients correctly parse the new `iceServers` array, create separate ICE server entries per provider, and fall back to legacy format
-6. **Redis failover** — Verify behavior during Redis Sentinel promotion (brief unavailability); signaling should degrade gracefully, not crash
+3. **Reconnect token validation** — Verify that invalid reconnect tokens are rejected in Go *before* the Lua script runs; verify that ghost eviction never fires without valid token
+4. **Cross-node reconnect / ghost eviction** — Ghost on Server A, reconnect on Server B: verify ghost's WS/SSE connection is terminated, send channel closed, and relay blocked
+5. **Leave + host reassignment** — Verify host is reassigned atomically when host leaves a non-empty room; verify concurrent join during leave cannot race against room deletion
+6. **Leave + concurrent join race** — Client A leaves (room becomes empty), Client B joins simultaneously: verify either B joins (room survives) or B creates a new room; no lost joins or stale state
+7. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
+8. **Multi-room push subscriptions** — Verify the same endpoint can subscribe to rooms A and B independently; unsubscribing from A must not affect B's subscription
+9. **TURN dual-provider fallback** — Verify all three clients correctly parse the new `iceServers` array, create separate ICE server entries per provider, and fall back to legacy format
+10. **Redis failover** — Verify behavior during Redis Sentinel promotion (brief unavailability); signaling should degrade gracefully, not crash
