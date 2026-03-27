@@ -346,9 +346,9 @@ $0.05/GB of relayed traffic. For a 1:1 video call where TURN is needed (~500kbps
 | Path | Routing | Why |
 |------|---------|-----|
 | `/ws?rid=X` | Consistent hash on `rid` param | All room participants on same server |
-| `/sse?rid=X&sid=Y` | Consistent hash on `rid` param | Participant SSE logic |
-| `/ws` (Watchers) | Round-robin | Watchers monitor multiple rooms, so they lack a single `rid`. Because the watcher firehose is global, they can land on any server. |
-| `/sse?sid=Y` (Watchers) | Consistent hash on `sid` param | Watcher SSE needs sticky sessions. Since watcher connections lack `rid`, hashing on `sid` ensures GET and POST land on the same server. |
+| `/sse?rid=X&sid=Y` | Consistent hash on `rid` param | SSE GET + POST land on same server via `rid` |
+| `/ws` (Watchers, no `rid`) | Round-robin | Watchers monitor multiple rooms, no single `rid`. Firehose is global, any server works. |
+| `/sse?sid=Y` (Watchers, no `rid`) | Consistent hash on `sid` param | Watcher SSE needs sticky sessions for GET/POST. `sid` ensures both land on the same server. |
 | `/api/turn-credentials` | Round-robin | Stateless credential generation |
 | `/api/room-id` | Round-robin | Stateless |
 | `/api/push/*` | Round-robin | Reads/writes Redis (shared) |
@@ -366,9 +366,28 @@ With room-affinity, the SSE sticky session problem disappears. The client includ
 
 | LB | Configuration | Notes |
 |----|--------------|-------|
-| **nginx upstream** | `hash $arg_rid consistent;` | Works with existing docker-compose. Add second `app-server` service. |
+| **nginx upstream** | `map` + `hash $hash_key consistent;` (see below) | Works with existing docker-compose. Add second `app-server` service. |
 | **Cloudflare LB** | Session affinity rule on `rid` query param | Zero-infra if already on Cloudflare |
 | **Fly.io** | `fly-replay` header based on rid hash | Built-in multi-region support |
+
+### nginx hash key selection
+
+Participants and watchers require different hash keys. Participants have `rid` (room affinity), watchers have only `sid` (sticky sessions). A naive concatenation (`$arg_rid$arg_sid`) breaks room affinity because participants in the same room have different `sid` values.
+
+Use nginx `map` to select the hash key conditionally:
+
+```nginx
+map $arg_rid $hash_key {
+    ""      $arg_sid;    # no rid (watchers) → hash on sid for sticky sessions
+    default $arg_rid;    # rid present (participants) → hash on rid for room affinity
+}
+
+upstream serenada {
+    hash $hash_key consistent;
+    server app1:8080;
+    server app2:8080;
+}
+```
 
 ### Server failure and rehashing
 
@@ -392,7 +411,7 @@ When a server is added:
 | Phase | Scope | Risk | Details |
 |-------|-------|------|---------|
 | **Phase 0** | Add `/healthz` endpoint. Add Redis client dependency (`go-redis/v9`). Keep everything else unchanged. | None — additive | Prepare the codebase for Redis without changing behavior. |
-| **Phase 1** | Add `rid` query parameter to WS/SSE URLs across all three clients. Server ignores it. | Low — additive, no behavior change | LB prerequisite. Ship client updates. Existing clients without `rid` continue working via round-robin fallback. |
+| **Phase 1** | Add `rid` query parameter to WS/SSE URLs across all three clients. Server extracts `rid` and enforces matching with join payload. | Low — additive | LB prerequisite. Ship client updates. Server rejects joins where URL `rid` != payload `roomId`. Single-instance deployment until all clients ship `rid`. |
 | **Phase 2** | Move push subscriptions + snapshots to Redis (with stable numeric IDs). Remove SQLite dependency. Deploy 1 instance + Redis. | Low — push is non-critical path | Push subs use counter-based IDs. Snapshots become Redis keys with TTL. SQLite + filesystem removed. |
 | **Phase 3** | Add Redis watcher firehose (TTL heartbeat + global pub/sub). Move rate limiting to Redis. | Low — watcher changes are additive | Watchers can see rooms on other servers via Redis. Ghost rooms auto-expire. Rate limits shared. Local-room watcher path unchanged. |
 | **Phase 4** | Configure LB with consistent hash on `rid`. Deploy second server instance. | Low — signaling code unchanged | This is the actual multi-instance deployment. Depends on Phase 1 (clients ship `rid`). Test with load testing tool. |
@@ -410,6 +429,7 @@ When a server is added:
 | `rid` on transport URLs (Web) | ~10 | None |
 | `rid` on transport URLs (Android) | ~10 | None |
 | `rid` on transport URLs (iOS) | ~10 | None |
+| Server `rid` extraction + join validation | ~15 | None |
 | Redis push subscriptions (with ID counter + composite keys) | ~150 | `go-redis/v9` |
 | Redis snapshots (replace filesystem) | ~50 | (same) |
 | Redis rate limiting (sliding window) | ~80 | (same) |
@@ -417,13 +437,13 @@ When a server is added:
 | Cloudflare TURN with server-side failover | ~60 | None (HTTP call) |
 | Health check endpoint | ~15 | None |
 | LB configuration (nginx) | ~20 | None |
-| **Total** | **~495-550** | **1 new Go dep** |
+| **Total** | **~510-570** | **1 new Go dep** |
 
 ## Files Affected
 
 ### Server (`server/`)
 - `main.go` — Redis init, healthz endpoint, room-status heartbeat goroutine
-- `signaling.go` — Watcher-status writes: after `broadcastRoomStatusUpdate()`, write `room:status:{rid}` with EX 30 + `PUBLISH watcher:events` (~20 lines). In `handleWatchRooms()`, read Redis for non-local rooms (~15 lines).
+- `signaling.go` — In `handleJoin()`, validate URL `rid` matches join payload `roomId` (~5 lines). Watcher-status writes: after `broadcastRoomStatusUpdate()`, write `room:status:{rid}` with EX 30 + `PUBLISH watcher:events` (~20 lines). In `handleWatchRooms()`, read Redis for non-local rooms (~15 lines).
 - `push.go` — Redis-backed subscriptions with auto-incrementing IDs, Redis snapshot storage
 - `rate_limit.go` — Redis sliding window rate limiting
 - `turn_auth.go` — Cloudflare TURN credential generation with coturn fallback (~60 lines)
@@ -443,7 +463,7 @@ None.
 ### Docker / Infra
 - `docker-compose.yml` — Add Redis service, add second `app-server`, keep coturn
 - `docker-compose.prod.yml` — Same + nginx upstream with consistent hash
-- `nginx/nginx.prod.conf` — `hash $arg_rid$arg_sid consistent;` in upstream block (hashes on `rid` if present, or `sid` for watcher SSE fallback)
+- `nginx/nginx.prod.conf` — `map $arg_rid` + `hash $hash_key consistent;` in upstream block (hashes on `rid` for participants, falls back to `sid` for watcher SSE)
 - `.env.example` — New vars: `REDIS_URL`, `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`
 
 ### NOT changed
@@ -458,20 +478,21 @@ None.
 
 ### Scaling tests
 1. **Transport `rid` parameter** — Verify all three clients include `rid` on WS and SSE URLs; verify server accepts connections with and without `rid` (backward compat)
-2. **Room-affinity routing** — Verify all clients for the same `rid` land on the same server via LB consistent hash
-3. **Server failure + client reconnect** — Kill one server, verify clients reconnect to surviving server within resilience timeout, new room is created, WebRTC renegotiates
-4. **Consistent hash rebalancing** — Add/remove server, verify only ~1/N rooms are disrupted
-5. **Watcher cross-server visibility** — Verify watchers see room status for rooms on other servers; verify `room_statuses` initial response includes remote rooms; verify `room_status_update` fires for remote room events (join, leave, capacity lock, delete); verify version monotonicity prevents stale updates
-6. **Watcher ghost room cleanup** — Kill a server, verify its rooms' Redis status keys expire within 30 seconds; verify watchers see count=0 after expiry
-7. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
-8. **Multi-room push subscriptions** — Verify the same endpoint can subscribe to rooms A and B independently; unsubscribing from A must not affect B
-9. **Rate limiting shared state** — Verify rate limits are enforced across servers (same IP can't get 2x the limit)
-10. **Redis unavailability** — Verify that Redis being down does not affect active calls (signaling is in-memory); push, watchers, and rate limiting degrade gracefully
+2. **`rid` matching enforcement** — Verify server rejects join when URL `rid` differs from join payload `roomId`; verify server allows join when they match; verify server allows join when URL `rid` is absent (backward compat with old clients on single instance)
+3. **Room-affinity routing** — Verify all clients for the same `rid` land on the same server via LB consistent hash; verify nginx `map` routes watchers (no `rid`) by `sid`
+4. **Server failure + client reconnect** — Kill one server, verify clients reconnect to surviving server within resilience timeout, new room is created, WebRTC renegotiates
+5. **Consistent hash rebalancing** — Add/remove server, verify only ~1/N rooms are disrupted
+6. **Watcher cross-server visibility** — Verify watchers see room status for rooms on other servers; verify `room_statuses` initial response includes remote rooms; verify `room_status_update` fires for remote room events (join, leave, capacity lock, delete); verify version monotonicity prevents stale updates
+7. **Watcher ghost room cleanup** — Kill a server, verify its rooms' Redis status keys expire within 30 seconds; verify watchers see count=0 after expiry
+8. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
+9. **Multi-room push subscriptions** — Verify the same endpoint can subscribe to rooms A and B independently; unsubscribing from A must not affect B
+10. **Rate limiting shared state** — Verify rate limits are enforced across servers (same IP can't get 2x the limit)
+11. **Redis unavailability** — Verify that Redis being down does not affect active calls (signaling is in-memory); push, watchers, and rate limiting degrade gracefully
 
 ### TURN tests (independent)
-11. **Cloudflare TURN happy path** — Verify server calls Cloudflare API and returns credentials in legacy `TurnConfig` format; verify client connects to Cloudflare TURN successfully
-12. **Cloudflare TURN failover** — Verify that when Cloudflare API is unreachable, server falls back to coturn credentials; verify client connects to coturn successfully
-13. **TURN provider switch transparency** — Verify that switching between providers (by setting/unsetting `CF_TURN_KEY_ID`) requires zero client changes and no client restarts
+12. **Cloudflare TURN happy path** — Verify server calls Cloudflare API and returns credentials in legacy `TurnConfig` format; verify client connects to Cloudflare TURN successfully
+13. **Cloudflare TURN failover** — Verify that when Cloudflare API is unreachable, server falls back to coturn credentials; verify client connects to coturn successfully
+14. **TURN provider switch transparency** — Verify that switching between providers (by setting/unsetting `CF_TURN_KEY_ID`) requires zero client changes and no client restarts
 
 ## Alternatives Considered
 
