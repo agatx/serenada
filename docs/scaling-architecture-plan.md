@@ -1,6 +1,6 @@
 # Scaling Architecture Plan: Room-Affinity + Cloudflare TURN
 
-**Status:** Draft (v9)
+**Status:** Draft (v10)
 **Date:** 2026-03-26
 
 ## Goal
@@ -128,7 +128,13 @@ To add `rid` for participant connections while keeping watcher connections rid-l
 - Extract `rid` from query parameter and store as a **new field** `transportRID` on the `Client` struct. This must NOT reuse the existing `Client.rid` field, which means "currently joined room" and drives rejoin logic (`signaling.go`) and SSE stale-client handling (`sse.go`). `transportRID` is the room requested at connection time; `rid` is the room the client has actually joined (set by `handleJoin`, cleared by `handleLeave`).
 - Pass `transportRID` to `handleJoin()` for validation (see Layer 2)
 
-**Diagnostics probes:** If SSE/WS diagnostics probes open connections without a room context, they should use a sentinel value (e.g., `rid=_diag`) so the LB can still route them. These connections don't participate in rooms, so any server can handle them.
+**Diagnostics probes:** Diagnostics are **exempt** from the `rid` requirement. They open transports only to validate connectivity; they never send `join`, so they do not participate in room-affinity. Keep the current probe URLs unchanged:
+- Web SDK diagnostics: `wss://{host}/ws`, `https://{host}/sse?sid={sid}` (`client/packages/core/src/SerenadaDiagnostics.ts`)
+- Android diagnostics: `wss://{host}/ws`, `https://{host}/sse?sid={sid}` (`client-android/serenada-core/.../SerenadaDiagnostics.kt`)
+- iOS diagnostics: `wss://{host}/ws`, `https://{host}/sse?sid={sid}` (`client-ios/SerenadaCore/Sources/SerenadaDiagnostics.swift`)
+- Browser `/device-check`: `wss://{host}/ws`, `https://{host}/sse?sid={sid}` (`server/device_check.go`)
+
+For LB routing: diagnostic SSE is already sticky via `sid`; diagnostic WS has neither `rid` nor `sid`, which is acceptable because it only tests handshake/open. Any server can handle it.
 
 ### Backward compatibility & Rollout Safety
 
@@ -148,7 +154,7 @@ Old clients without `rid` on the URL cannot participate in room-affinity. If the
 
 - `main.go` — Add two health endpoints:
   - `/healthz` — **liveness only** (returns 200 if process is up). Used by LB active health checks to detect server failures. Must NOT check Redis — a Redis blip must not cause the LB to eject an otherwise healthy signaling node (this would turn a degraded dependency into a full outage, contradicting the "Redis is non-critical" design).
-  - `/readyz` — **readiness** (returns 200 if Redis is reachable, 503 otherwise). Used for operational monitoring and dashboards, NOT for LB health decisions.
+  - `/readyz` — **readiness** (returns 200 if Redis is reachable, 503 otherwise). If Redis is not configured yet in pre-Redis phases, return 200 and report `"disabled"` in the response body/logs. Used for operational monitoring and dashboards, NOT for LB health decisions.
 
 ## Layer 3: Watchers — Redis Status with TTL Heartbeat + Single Firehose
 
@@ -359,7 +365,21 @@ Server (handleTurnCredentials in turn_auth.go):
 
 ### Tradeoff
 
-Clients use one TURN provider per credential fetch, not both simultaneously. In practice this is fine: Cloudflare TURN has high availability (global edge), and if it's down, the server falls back to coturn on the next credential request. The worst case for failover depends on the turn-refresh cycle: turn token TTL is 30 minutes (`signaling.go`), clients refresh at 80% of TTL = 24 minutes (`TURN_REFRESH_TRIGGER_RATIO` in `constants.ts`), and TURN credentials themselves are valid for 15 minutes (`turn_auth.go`). So in the worst case, a client using Cloudflare TURN credentials could wait up to ~24 minutes before its next `turn-refresh` request triggers coturn fallback. If faster failover is needed, reduce `turnTokenTTL` or `TURN_REFRESH_TRIGGER_RATIO`. Cloudflare credential TTL (900s in the API call above) should be aligned with the turn-refresh interval to avoid credentials expiring mid-call before refresh fires.
+Clients use one TURN provider per credential fetch, not both simultaneously. In practice this is fine, but the TTL policy must be concrete so credentials never outlive the refresh schedule.
+
+**Implementation policy (explicit):**
+- `signaling.go`: change `turnTokenTTL` from **30 minutes** to **15 minutes**
+- Clients: keep `TURN_REFRESH_TRIGGER_RATIO = 0.8` (all three platforms already use this)
+- coturn credentials (`turn_auth.go`): keep TTL at **15 minutes**
+- Cloudflare credentials: request `ttl = 900` seconds (**15 minutes**)
+
+This yields:
+- joined/turn-refreshed payload advertises `turnTokenTTLMs = 15m`
+- clients refresh at **12 minutes**
+- both Cloudflare and coturn credentials remain valid until **15 minutes**
+- worst-case provider failover window is bounded to **~12 minutes**, not ~24 minutes
+
+This is the Phase T default. If faster provider failover is needed later, reduce token TTL and credential TTL **together**; do not change one without the other.
 
 ### Cloudflare TURN pricing
 
@@ -373,7 +393,7 @@ $0.05/GB of relayed traffic. For a 1:1 video call where TURN is needed (~500kbps
 |------|---------|-----|
 | `/ws?rid=X` | Consistent hash on `rid` param | All room participants on same server |
 | `/sse?rid=X&sid=Y` | Consistent hash on `rid` param | SSE GET + POST land on same server via `rid` |
-| `/ws` (Watchers, no `rid`) | Round-robin | Watchers monitor multiple rooms, no single `rid`. Firehose is global, any server works. |
+| `/ws` (Watchers or diagnostics, no `rid`) | Hashed upstream on empty key (nginx) or round-robin | No room affinity is required. Any server works because these connections never join a room. |
 | `/sse?sid=Y` (Watchers, no `rid`) | Consistent hash on `sid` param | Watcher SSE needs sticky sessions for GET/POST. `sid` ensures both land on the same server. |
 | `/api/turn-credentials` | Round-robin | Stateless credential generation |
 | `/api/room-id` | Round-robin | Stateless |
@@ -440,7 +460,7 @@ location /device-check { proxy_pass http://serenada_api; ... }
 # Or with nginx Plus / third-party module: health_check uri=/healthz;
 ```
 
-Requests to `/ws` or `/sse` with neither `rid` nor `sid` (e.g., diagnostics probes) will hash on an empty key, which consistently routes to the same server — acceptable for non-room connections.
+Requests to `/ws` with neither `rid` nor `sid` (diagnostic WebSocket probes) will hash on an empty key under the nginx reference config, which consistently routes to one backend. This is acceptable because diagnostics only test handshake/open and never join a room. On LBs that cannot hash an empty key, plain round-robin is also correct for these probes.
 
 ### Server failure and rehashing
 
@@ -458,8 +478,8 @@ Adding a server changes the hash ring. Existing participants stay connected to t
 
 **Required procedure:**
 1. Add the new server to the LB upstream but mark it as `down` (accepts no traffic yet)
-2. Drain active rooms: stop accepting new connections on existing servers (health check returns 503) or wait for natural call completion during a low-traffic window
-3. Once active rooms are empty (or acceptably few), enable the new server and re-enable health checks
+2. Wait for **natural drain** on the existing ring during a low-traffic window, or use an explicit **drain mode** that rejects new participant signaling connections (`/ws?rid=...`, `/sse?rid=...`) while leaving `/healthz` at 200. Do NOT overload `/healthz` for drain control.
+3. Once active rooms are empty (or acceptably few), enable the new server in the upstream
 4. Clients reconnect and the new hash ring takes effect cleanly
 
 **Alternative: ring pinning.** The server can register its active room IDs in Redis on startup. The LB (or a thin routing layer) checks Redis before hashing: if a room is pinned to a server, route there regardless of the hash. Pins auto-expire when rooms end. This allows live addition without draining, but adds routing complexity.
@@ -472,7 +492,7 @@ For Serenada's expected scale (infrequent server additions), the drain procedure
 
 | Phase | Scope | Risk | Details |
 |-------|-------|------|---------|
-| **Phase 0** | Add `/healthz` endpoint. Add Redis client dependency (`go-redis/v9`). Keep everything else unchanged. | None — additive | Prepare the codebase for Redis without changing behavior. |
+| **Phase 0** | Add `/healthz` endpoint, add `/readyz` scaffold, add Redis client dependency (`go-redis/v9`). Keep everything else unchanged. | None — additive | Prepare the codebase for Redis without changing behavior. `/healthz` is liveness-only. `/readyz` returns 200 with `"disabled"` until Redis is configured in later phases. |
 | **Phase 1** | Add `rid` query parameter to WS/SSE URLs across all three clients. Server extracts `rid` and enforces matching with join payload. | Low — additive | LB prerequisite. Ship client updates. Server rejects joins where URL `rid` != payload `roomId`. Single-instance deployment until all clients ship `rid`. |
 | **Phase 2** | Move push subscriptions + snapshots to Redis (with stable numeric IDs). Shared VAPID keys via env vars. Remove SQLite dependency. Deploy 1 instance + Redis. | Low — push is non-critical path | Push subs use counter-based IDs. Snapshots become Redis keys with TTL. VAPID keys loaded from env vars (required for multi-instance in Phase 4). SQLite + filesystem removed. **Migration note:** existing SQLite subscriptions are NOT migrated — they are dropped. This is acceptable because (a) push subscriptions auto-recreate when users next open the app, (b) push is a non-critical path (notifications, not call functionality), and (c) the subscription count is small. If zero-loss migration is needed, a one-time `sqlite-to-redis-import` script can be run during the Phase 2 deployment window before removing SQLite. |
 | **Phase 3** | Add Redis watcher firehose (TTL heartbeat + global pub/sub). Move rate limiting to Redis. | Low — watcher changes are additive | Watchers can see rooms on other servers via Redis. Ghost rooms auto-expire. Rate limits shared. Local-room watcher path unchanged. |
@@ -482,7 +502,7 @@ For Serenada's expected scale (infrequent server additions), the drain procedure
 
 | Phase | Scope | Risk | Details |
 |-------|-------|------|---------|
-| **Phase T** | Add Cloudflare TURN provider in `turn_auth.go` with server-side failover to coturn. Set `CF_TURN_KEY_ID` + `CF_TURN_API_TOKEN` env vars. | Low — server-only, zero client changes | Clients receive credentials in the same legacy `TurnConfig` format. Cloudflare primary, coturn fallback. Can be deployed independently of scaling phases. |
+| **Phase T** | Add Cloudflare TURN provider in `turn_auth.go` with server-side failover to coturn. Set `CF_TURN_KEY_ID` + `CF_TURN_API_TOKEN` env vars. Align TURN token + provider credential TTLs to 15 minutes. | Low — server-only, zero client changes | Clients receive credentials in the same legacy `TurnConfig` format. Cloudflare primary, coturn fallback. `turnTokenTTL=15m`, provider credential TTLs = `15m`, refresh at `12m` via the existing 0.8 client ratio. Can be deployed independently of scaling phases. |
 
 ## Estimated Scope
 
@@ -506,11 +526,13 @@ For Serenada's expected scale (infrequent server additions), the drain procedure
 
 ### Server (`server/`)
 - `main.go` — Redis init, `/healthz` (liveness) + `/readyz` (readiness) endpoints, room-status heartbeat goroutine
-- `signaling.go` — In `handleJoin()`, validate URL `rid` matches join payload `roomId` (~5 lines). Watcher-status writes: after `broadcastRoomStatusUpdate()`, write `room:status:{rid}` with EX 30 + `PUBLISH watcher:events` (~20 lines). In `handleWatchRooms()`, read Redis for non-local rooms (~15 lines).
+- `signaling.go` — Add `Client.transportRID`, add room `epoch`/watcher `version` metadata, validate URL `rid` matches join payload `roomId` (~5 lines). Watcher-status writes: after `broadcastRoomStatusUpdate()`, write `room:status:{rid}` with EX 30 + `PUBLISH watcher:events` (~20 lines). In `handleWatchRooms()`, read Redis for non-local rooms (~15 lines).
 - `push.go` — Redis-backed subscriptions with auto-incrementing IDs, Redis snapshot storage, shared VAPID key loading from env vars
 - `rate_limit.go` — Redis sliding window rate limiting
-- `turn_auth.go` — Cloudflare TURN credential generation with coturn fallback (~60 lines)
-- New: `redis.go` — Redis client setup, connection pool, single `watcher:events` subscriber, local watcher interest tracking + version-checked fanout
+- `turn_auth.go` — Cloudflare TURN credential generation with coturn fallback (~60 lines), keep provider credential TTL aligned to 15 minutes
+- `ws.go` — Extract `rid` query param into `Client.transportRID`
+- `sse.go` — Extract `rid` query param into `Client.transportRID`
+- New: `redis.go` — Redis client setup, connection pool, single `watcher:events` subscriber, local watcher interest tracking + epoch/version-checked fanout
 
 ### Client changes — threading `rid` through transport API
 **Web:**
@@ -538,10 +560,14 @@ None.
 - `nginx/nginx.prod.conf` — Dual upstream (`serenada_signaling` with `map`/`hash`, `serenada_api` round-robin) + location blocks routing `/ws`,`/sse` to hashed upstream and `/api/*` to round-robin
 - `.env.example` — New vars: `REDIS_URL`, `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`, `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`
 
+### Diagnostics / monitoring
+- `client/packages/core/src/SerenadaDiagnostics.ts` — No `rid` change; keep current probe URLs (`/ws`, `/sse?sid=...`)
+- `client-android/serenada-core/src/main/java/app/serenada/core/SerenadaDiagnostics.kt` — No `rid` change; keep current probe URLs (`/ws`, `/sse?sid=...`)
+- `client-ios/SerenadaCore/Sources/SerenadaDiagnostics.swift` — No `rid` change; keep current probe URLs (`/ws`, `/sse?sid=...`)
+- `server/device_check.go` — No `rid` change; keep current probe URLs (`/ws`, `/sse?sid=...`)
+
 ### NOT changed
-- `signaling.go` — Hub/Room/Client types, join/leave/relay logic, mutex concurrency (unchanged beyond watcher-status additions)
-- `ws.go` — WebSocket transport (extracts `rid` query param → `Client.transportRID`)
-- `sse.go` — SSE transport (extracts `rid` query param → `Client.transportRID`)
+- `signaling.go` — Core room ownership model, join/leave/relay flow, and mutex concurrency remain in-memory and unchanged in structure; changes are limited to `transportRID` validation plus watcher epoch/version metadata
 - `room_id.go` — Room ID validation (unchanged)
 - `security.go` — CORS (unchanged)
 - All client TURN parsing code (unchanged — legacy format preserved)
@@ -559,13 +585,15 @@ None.
 8. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
 9. **Multi-room push subscriptions** — Verify the same endpoint can subscribe to rooms A and B independently; unsubscribing from A must not affect B
 10. **Rate limiting shared state** — Verify rate limits are enforced across servers (same IP can't get 2x the limit)
-11. **Redis unavailability** — Verify that Redis being down does not affect active calls (signaling is in-memory); push, watchers, and rate limiting degrade gracefully; verify `/healthz` returns 200 even when Redis is down; verify `/readyz` returns 503 when Redis is unreachable
+11. **Redis unavailability** — Verify that Redis being down does not affect active calls (signaling is in-memory); push, watchers, and rate limiting degrade gracefully; verify `/healthz` returns 200 even when Redis is down; verify `/readyz` returns 503 when Redis is unreachable (or 200 `"disabled"` in pre-Redis phases)
 12. **Shared VAPID keys** — Verify that two server instances with the same `VAPID_PRIVATE_KEY`/`VAPID_PUBLIC_KEY` env vars can each send web push to subscriptions created by the other instance; verify fallback to `vapid.json` when env vars are unset (single-instance compat)
+13. **Diagnostics probes** — Verify Web SDK, Android SDK, iOS SDK, and `/device-check` still succeed without `rid`; verify SSE diagnostics remain sticky via `sid`; verify WS diagnostics work via empty-key hash or round-robin routing
+14. **Drain mode** — Verify maintenance drain rejects new participant signaling connections without changing `/healthz`; verify existing rooms continue until natural completion; verify enabling the new server after drain does not split active rooms
 
 ### TURN tests (independent)
-13. **Cloudflare TURN happy path** — Verify server calls Cloudflare API and returns credentials in legacy `TurnConfig` format; verify client connects to Cloudflare TURN successfully
-14. **Cloudflare TURN failover** — Verify that when Cloudflare API is unreachable, server falls back to coturn credentials; verify client connects to coturn successfully
-14. **TURN provider switch transparency** — Verify that switching between providers (by setting/unsetting `CF_TURN_KEY_ID`) requires zero client changes and no client restarts
+15. **Cloudflare TURN happy path** — Verify server calls Cloudflare API and returns credentials in legacy `TurnConfig` format with `ttl=900`; verify client refresh is scheduled from `turnTokenTTLMs=15m` and occurs before credentials expire
+16. **Cloudflare TURN failover** — Verify that when Cloudflare API is unreachable, server falls back to coturn credentials; verify client connects to coturn successfully; verify worst-case failover is bounded by the 12-minute refresh interval
+17. **TURN provider switch transparency** — Verify that switching between providers (by setting/unsetting `CF_TURN_KEY_ID`) requires zero client changes and no client restarts
 
 ## Alternatives Considered
 
