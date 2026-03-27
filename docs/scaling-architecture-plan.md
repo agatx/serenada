@@ -1,6 +1,6 @@
 # Scaling Architecture Plan: Room-Affinity + Cloudflare TURN
 
-**Status:** Draft (v7)
+**Status:** Draft (v8)
 **Date:** 2026-03-26
 
 ## Goal
@@ -97,30 +97,36 @@ The room ID is only sent later inside the `join` message payload. The LB cannot 
 
 | Platform | New WS URL | New SSE URL |
 |----------|-----------|-------------|
-| All | `wss://{host}/ws?rid={rid}` | `https://{host}/sse?rid={rid}&sid={sid}` |
+| Participants | `wss://{host}/ws?rid={rid}` | `https://{host}/sse?rid={rid}&sid={sid}` |
+| Watchers | `wss://{host}/ws` (unchanged) | `https://{host}/sse?sid={sid}` (unchanged) |
 
-**Web client** (`client/packages/core/src/signaling/transports/ws.ts`):
-- `buildWsUrl()`: append `?rid={roomId}` query parameter
-- The `roomId` is already available in `SignalingEngine` (set before `connect()` is called)
+Current client `connect()` APIs do not carry room context into transport setup:
+- **Web:** `SignalingEngine.connect()` takes no parameters; `createSignalingTransport()` receives only `{ wsUrl, httpBaseUrl, sseSid? }`
+- **Android:** `SignalingClient.connect(host)` takes only `host`; transports are instantiated without room context
+- **iOS:** `SignalingClient.connect(host:)` takes only `host`; transports built with `host` only
 
-**Web client** (`client/packages/core/src/signaling/transports/sse.ts`):
-- `buildSseUrl()`: add `rid={roomId}` alongside existing `sid` parameter
+To add `rid` for participant connections while keeping watcher connections rid-less, room context must be threaded through the engine/client API and down to the transport layer.
 
-**Android client** (`serenada-core/.../WebSocketSignalingTransport.kt`):
-- `buildWssUrl()` at line 77: append `?rid={roomId}` parameter
+**Web client:**
+- `SignalingEngine` — pass optional `roomId` to `connect()` or set it as a property before connect
+- `CreateTransportOptions` (`transports/index.ts`) — add optional `rid?: string`
+- `ws.ts` / `sse.ts` — append `rid` to URL if provided
 
-**Android client** (`serenada-core/.../SseSignalingTransport.kt`):
-- `buildSseUrl()` at line 191: add `rid` query parameter alongside `sid`
+**Android client:**
+- `SignalingClient` — add `roomId` parameter to `connect(host, roomId?)` or set via property
+- `WebSocketSignalingTransport.connect()` — accept optional `rid` parameter
+- `SseSignalingTransport.connect()` — accept optional `rid` parameter
+- `buildWssUrl()` / `buildSseUrl()` — append `rid` if non-null
 
-**iOS client** (`SerenadaCore/Sources/Signaling/WebSocketSignalingTransport.swift`):
-- `buildWssURL()` at line 99: add `rid` query item
-
-**iOS client** (`SerenadaCore/Sources/Signaling/SseSignalingTransport.swift`):
-- `buildSseURL()` at line 135: add `rid` query item alongside `sid`
+**iOS client:**
+- `SignalingClient` — add `roomId` parameter to `connect(host:roomId:)` or set via property
+- `WebSocketSignalingTransport.connect()` — accept optional `rid` parameter
+- `SseSignalingTransport.connect()` — accept optional `rid` parameter
+- `buildWssURL()` / `buildSseURL()` — append `rid` if non-nil
 
 **Server** (`ws.go`, `sse.go`):
-- Server ignores the `rid` query parameter (it's consumed by the LB only)
-- No server-side changes needed for this parameter
+- Extract `rid` from query parameter and store on the `Client` struct
+- Pass to `handleJoin()` for validation (see Layer 2)
 
 **Diagnostics probes:** If SSE/WS diagnostics probes open connections without a room context, they should use a sentinel value (e.g., `rid=_diag`) so the LB can still route them. These connections don't participate in rooms, so any server can handle them.
 
@@ -193,12 +199,14 @@ Any server (has local watcher clients):
     3. If yes: compare version to last-seen version; drop if stale/out-of-order
     4. Fan out as room_status_update to matching local watchers (same message format as today)
 
-  On Redis key expiry (ghost room cleanup):
-    - Server does NOT need to detect expiry in real-time
-    - The watcher UI already handles count=0 gracefully (room shown as empty)
-    - On next watch_rooms request or page refresh, the expired key returns nil → count=0
-    - Optionally: a periodic sweep (every 30s) can re-check watched rooms and push
-      room_status_update with count=0 for any that have expired
+  Expiry sweep (mandatory, every 15 seconds):
+    - Each server runs a periodic sweep of its locally-tracked watched rids
+    - For each non-local rid a watcher cares about:
+      EXISTS room:status:{rid} → if missing (expired or deleted), push
+      room_status_update with count=0 to local watchers and remove from tracking
+    - This ensures connected watchers see ghost rooms disappear within
+      ~45 seconds of a server crash (30s TTL + up to 15s sweep interval)
+    - The sweep is cheap: one pipelined EXISTS per tracked rid per server
 ```
 
 ### Why this works
@@ -215,8 +223,8 @@ Any server (has local watcher clients):
 
 - `signaling.go` — After `broadcastRoomStatusUpdate()`: write `room:status:{rid}` to Redis with EX 30 and `PUBLISH watcher:events`. ~20 lines.
 - `signaling.go` — In `handleWatchRooms()`: for non-local rooms, read from Redis. ~15 lines.
-- `sse.go` or `main.go` — Heartbeat goroutine: every 15s, refresh TTL on all active rooms. ~15 lines.
-- New helper in `redis.go` — Single `watcher:events` subscriber, local watcher interest tracking, version-checked fanout. ~40 lines.
+- `main.go` — Heartbeat goroutine: every 15s, refresh TTL on all active rooms. ~15 lines.
+- New helper in `redis.go` — Single `watcher:events` subscriber, local watcher interest tracking, version-checked fanout, mandatory expiry sweep (every 15s, pipelined EXISTS per tracked rid). ~50 lines.
 
 ## Layer 4: Push Subscriptions — SQLite to Redis
 
@@ -374,20 +382,38 @@ With room-affinity, the SSE sticky session problem disappears. The client includ
 
 Participants and watchers require different hash keys. Participants have `rid` (room affinity), watchers have only `sid` (sticky sessions). A naive concatenation (`$arg_rid$arg_sid`) breaks room affinity because participants in the same room have different `sid` values.
 
-Use nginx `map` to select the hash key conditionally:
+Two upstreams are needed: one hashed (for signaling connections with affinity requirements) and one round-robin (for stateless API routes and WS watchers):
 
 ```nginx
+# Hashed upstream: room affinity (rid) or sticky sessions (sid)
 map $arg_rid $hash_key {
     ""      $arg_sid;    # no rid (watchers) → hash on sid for sticky sessions
     default $arg_rid;    # rid present (participants) → hash on rid for room affinity
 }
 
-upstream serenada {
+upstream serenada_signaling {
     hash $hash_key consistent;
     server app1:8080;
     server app2:8080;
 }
+
+# Round-robin upstream: stateless routes
+upstream serenada_api {
+    server app1:8080;
+    server app2:8080;
+}
+
+# Signaling connections (WS/SSE) → hashed upstream
+location /ws  { proxy_pass http://serenada_signaling; ... }
+location /sse { proxy_pass http://serenada_signaling; ... }
+
+# Stateless routes → round-robin upstream
+location /api         { proxy_pass http://serenada_api; ... }
+location /device-check { proxy_pass http://serenada_api; ... }
+location /healthz     { proxy_pass http://serenada_api; ... }
 ```
+
+Requests to `/ws` or `/sse` with neither `rid` nor `sid` (e.g., diagnostics probes) will hash on an empty key, which consistently routes to the same server — acceptable for non-room connections.
 
 ### Server failure and rehashing
 
@@ -399,10 +425,19 @@ When a server crashes:
 5. WebRTC renegotiation happens automatically
 6. **Media never stopped** — P2P stream continued throughout
 
-When a server is added:
-1. Consistent hashing means only ~1/N rooms rehash to the new server
-2. Those rooms' clients reconnect naturally (same flow as above)
-3. No drain needed for a clean addition — but graceful shutdown is nice-to-have
+When a server is added (requires maintenance procedure):
+
+Adding a server changes the hash ring. Existing participants stay connected to the old server, but any new join or reconnect for the same room will hash to the new server — splitting the room across two instances.
+
+**Required procedure:**
+1. Add the new server to the LB upstream but mark it as `down` (accepts no traffic yet)
+2. Drain active rooms: stop accepting new connections on existing servers (health check returns 503) or wait for natural call completion during a low-traffic window
+3. Once active rooms are empty (or acceptably few), enable the new server and re-enable health checks
+4. Clients reconnect and the new hash ring takes effect cleanly
+
+**Alternative: ring pinning.** The server can register its active room IDs in Redis on startup. The LB (or a thin routing layer) checks Redis before hashing: if a room is pinned to a server, route there regardless of the hash. Pins auto-expire when rooms end. This allows live addition without draining, but adds routing complexity.
+
+For Serenada's expected scale (infrequent server additions), the drain procedure is simpler and safer. Ring pinning is a future optimization if zero-downtime scaling becomes a requirement.
 
 ## Migration Path (Phased)
 
@@ -426,9 +461,9 @@ When a server is added:
 
 | Component | Lines Changed (est.) | New Dependencies |
 |-----------|---------------------|------------------|
-| `rid` on transport URLs (Web) | ~10 | None |
-| `rid` on transport URLs (Android) | ~10 | None |
-| `rid` on transport URLs (iOS) | ~10 | None |
+| `rid` threading through transport API (Web) | ~25 | None |
+| `rid` threading through transport API (Android) | ~25 | None |
+| `rid` threading through transport API (iOS) | ~25 | None |
 | Server `rid` extraction + join validation | ~15 | None |
 | Redis push subscriptions (with ID counter + composite keys) | ~150 | `go-redis/v9` |
 | Redis snapshots (replace filesystem) | ~50 | (same) |
@@ -437,7 +472,7 @@ When a server is added:
 | Cloudflare TURN with server-side failover | ~60 | None (HTTP call) |
 | Health check endpoint | ~15 | None |
 | LB configuration (nginx) | ~20 | None |
-| **Total** | **~510-570** | **1 new Go dep** |
+| **Total** | **~555-620** | **1 new Go dep** |
 
 ## Files Affected
 
@@ -449,13 +484,22 @@ When a server is added:
 - `turn_auth.go` — Cloudflare TURN credential generation with coturn fallback (~60 lines)
 - New: `redis.go` — Redis client setup, connection pool, single `watcher:events` subscriber, local watcher interest tracking + version-checked fanout
 
-### Client changes — transport URLs only (`rid` parameter)
-- `client/packages/core/src/signaling/transports/ws.ts` — Add `rid` query param to WS URL
-- `client/packages/core/src/signaling/transports/sse.ts` — Add `rid` query param to SSE URL
-- `client-android/serenada-core/.../WebSocketSignalingTransport.kt` — Add `rid` to `buildWssUrl()`
-- `client-android/serenada-core/.../SseSignalingTransport.kt` — Add `rid` to `buildSseUrl()`
-- `client-ios/SerenadaCore/Sources/Signaling/WebSocketSignalingTransport.swift` — Add `rid` to `buildWssURL()`
-- `client-ios/SerenadaCore/Sources/Signaling/SseSignalingTransport.swift` — Add `rid` to `buildSseURL()`
+### Client changes — threading `rid` through transport API
+**Web:**
+- `client/packages/core/src/signaling/SignalingEngine.ts` — Pass `roomId` to transport creation
+- `client/packages/core/src/signaling/transports/index.ts` — Add `rid` to `CreateTransportOptions`
+- `client/packages/core/src/signaling/transports/ws.ts` — Append `rid` to WS URL
+- `client/packages/core/src/signaling/transports/sse.ts` — Append `rid` to SSE URL
+
+**Android:**
+- `serenada-core/.../SignalingClient.kt` — Add `roomId` to `connect()` signature or property
+- `serenada-core/.../WebSocketSignalingTransport.kt` — Accept `rid`, append to `buildWssUrl()`
+- `serenada-core/.../SseSignalingTransport.kt` — Accept `rid`, append to `buildSseUrl()`
+
+**iOS:**
+- `SerenadaCore/Sources/Signaling/SignalingClient.swift` — Add `roomId` to `connect()` signature or property
+- `SerenadaCore/Sources/Signaling/WebSocketSignalingTransport.swift` — Accept `rid`, append to `buildWssURL()`
+- `SerenadaCore/Sources/Signaling/SseSignalingTransport.swift` — Accept `rid`, append to `buildSseURL()`
 
 ### Client changes — TURN
 None.
@@ -463,7 +507,7 @@ None.
 ### Docker / Infra
 - `docker-compose.yml` — Add Redis service, add second `app-server`, keep coturn
 - `docker-compose.prod.yml` — Same + nginx upstream with consistent hash
-- `nginx/nginx.prod.conf` — `map $arg_rid` + `hash $hash_key consistent;` in upstream block (hashes on `rid` for participants, falls back to `sid` for watcher SSE)
+- `nginx/nginx.prod.conf` — Dual upstream (`serenada_signaling` with `map`/`hash`, `serenada_api` round-robin) + location blocks routing `/ws`,`/sse` to hashed upstream and `/api/*` to round-robin
 - `.env.example` — New vars: `REDIS_URL`, `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`
 
 ### NOT changed
@@ -481,7 +525,7 @@ None.
 2. **`rid` matching enforcement** — Verify server rejects join when URL `rid` differs from join payload `roomId`; verify server allows join when they match; verify server allows join when URL `rid` is absent (backward compat with old clients on single instance)
 3. **Room-affinity routing** — Verify all clients for the same `rid` land on the same server via LB consistent hash; verify nginx `map` routes watchers (no `rid`) by `sid`
 4. **Server failure + client reconnect** — Kill one server, verify clients reconnect to surviving server within resilience timeout, new room is created, WebRTC renegotiates
-5. **Consistent hash rebalancing** — Add/remove server, verify only ~1/N rooms are disrupted
+5. **Server addition with drain** — Add a server using the drain procedure; verify no active rooms are split across servers; verify new rooms hash correctly after drain completes
 6. **Watcher cross-server visibility** — Verify watchers see room status for rooms on other servers; verify `room_statuses` initial response includes remote rooms; verify `room_status_update` fires for remote room events (join, leave, capacity lock, delete); verify version monotonicity prevents stale updates
 7. **Watcher ghost room cleanup** — Kill a server, verify its rooms' Redis status keys expire within 30 seconds; verify watchers see count=0 after expiry
 8. **Snapshot recipient ID mapping** — Verify numeric IDs survive Redis migration and round-trip correctly through subscribe → recipients → upload → deliver
