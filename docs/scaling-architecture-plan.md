@@ -1,6 +1,6 @@
 # Scaling Architecture Plan: Room-Affinity + Cloudflare TURN
 
-**Status:** Draft (v6)
+**Status:** Draft (v7)
 **Date:** 2026-03-26
 
 ## Goal
@@ -124,21 +124,19 @@ The room ID is only sent later inside the `join` message payload. The LB cannot 
 
 **Diagnostics probes:** If SSE/WS diagnostics probes open connections without a room context, they should use a sentinel value (e.g., `rid=_diag`) so the LB can still route them. These connections don't participate in rooms, so any server can handle them.
 
-### Backward compatibility
+### Backward compatibility & Rollout Safety
 
-Old clients without `rid` on the URL will still connect successfully — the server doesn't require it. The LB falls back to round-robin for requests without `rid`, which means old clients may land on any server. This is acceptable during the rollout window: the old client's room is created on whatever server it lands on, and since it's the only client without `rid`, there's no affinity mismatch.
+Old clients without `rid` on the URL cannot participate in room-affinity. If the LB falls back to round-robin for these requests, two old clients joining the same room will likely land on different servers, creating a split-brain (disjoint in-memory rooms). 
 
-Once all supported client versions include `rid`, the fallback can be removed.
+**Critical Invariant:** Phase 4 (multi-instance deployment) **must be strictly gated** until all supported participant client versions send `rid`. Until the rollout is complete, the backend must run as a single instance.
 
 ## Layer 2: Signaling — What Changes (Almost Nothing)
 
-### Unchanged
+### Minor Changes Required
 
-- `signaling.go` — Hub, Room, Client types, all join/leave/relay logic, mutex-based concurrency
-- `ws.go` — WebSocket transport (server ignores `rid` query param)
-- `sse.go` — SSE transport (GET stream + POST send, `clientsBySID` lookup; server ignores `rid` query param)
-- `room_id.go` — HMAC-based room ID generation/validation
-- `security.go` — CORS/origin validation
+- **`signaling.go` Enforce `rid` matching** — In `handleJoin`, the server must validate that the `join` payload's `roomId` exactly matches the transport URL's `rid`. If they differ, the server must reject the join. This prevents clients from bypassing the LB's hash ring or switching rooms on a single connection. Clients must establish a new transport to join a different room.
+- `ws.go` / `sse.go` — WebSocket and SSE transports must extract the `rid` query param and pass it to the `Client` struct for validation during join.
+- `room_id.go` / `security.go` — Unchanged.
 
 ### Small additions
 
@@ -348,7 +346,9 @@ $0.05/GB of relayed traffic. For a 1:1 video call where TURN is needed (~500kbps
 | Path | Routing | Why |
 |------|---------|-----|
 | `/ws?rid=X` | Consistent hash on `rid` param | All room participants on same server |
-| `/sse?rid=X&sid=Y` | Consistent hash on `rid` param | SSE GET + POST land on same server naturally |
+| `/sse?rid=X&sid=Y` | Consistent hash on `rid` param | Participant SSE logic |
+| `/ws` (Watchers) | Round-robin | Watchers monitor multiple rooms, so they lack a single `rid`. Because the watcher firehose is global, they can land on any server. |
+| `/sse?sid=Y` (Watchers) | Consistent hash on `sid` param | Watcher SSE needs sticky sessions. Since watcher connections lack `rid`, hashing on `sid` ensures GET and POST land on the same server. |
 | `/api/turn-credentials` | Round-robin | Stateless credential generation |
 | `/api/room-id` | Round-robin | Stateless |
 | `/api/push/*` | Round-robin | Reads/writes Redis (shared) |
@@ -443,13 +443,13 @@ None.
 ### Docker / Infra
 - `docker-compose.yml` — Add Redis service, add second `app-server`, keep coturn
 - `docker-compose.prod.yml` — Same + nginx upstream with consistent hash
-- `nginx/nginx.prod.conf` — `hash $arg_rid consistent;` in upstream block
+- `nginx/nginx.prod.conf` — `hash $arg_rid$arg_sid consistent;` in upstream block (hashes on `rid` if present, or `sid` for watcher SSE fallback)
 - `.env.example` — New vars: `REDIS_URL`, `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`
 
 ### NOT changed
 - `signaling.go` — Hub/Room/Client types, join/leave/relay logic, mutex concurrency (unchanged beyond watcher-status additions)
-- `ws.go` — WebSocket transport (server ignores `rid` query param)
-- `sse.go` — SSE transport (server ignores `rid` query param)
+- `ws.go` — WebSocket transport (extracts `rid` and passes to Client)
+- `sse.go` — SSE transport (extracts `rid` and passes to Client)
 - `room_id.go` — Room ID validation (unchanged)
 - `security.go` — CORS (unchanged)
 - All client TURN parsing code (unchanged — legacy format preserved)
