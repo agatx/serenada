@@ -151,4 +151,12 @@
     <string name="settings_saved_rooms_share_link_chooser">Share room link</string>
     <string name="common_copy">Copy</string>
     <string name="common_share">Share</string>
+
+    <string name="settings_feedback_title">Feedback</string>
+    <string name="settings_send_feedback">Send Feedback</string>
+    <string name="feedback_placeholder">Describe your issue or suggestion...</string>
+    <string name="feedback_success">Thank you for your feedback!</string>
+    <string name="feedback_rate_limit">Please wait before sending more feedback.</string>
+    <string name="feedback_error">Failed to send feedback. Please try again.</string>
+    <string name="feedback_send">Send</string>
 </resources>

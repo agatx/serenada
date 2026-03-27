@@ -156,3 +156,11 @@
 "call_error_generic" = "Something went wrong";
 "call_joining" = "Joining...";
 "call_ended" = "Call ended";
+
+"feedback_title" = "Feedback";
+"feedback_send_action" = "Send Feedback";
+"feedback_placeholder" = "Describe your issue or suggestion...";
+"feedback_send" = "Send";
+"feedback_success" = "Thank you for your feedback!";
+"feedback_rate_limit" = "Please wait before sending more feedback.";
+"feedback_error" = "Failed to send feedback. Please try again.";

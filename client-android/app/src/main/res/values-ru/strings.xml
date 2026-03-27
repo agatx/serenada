@@ -151,4 +151,12 @@
     <string name="settings_invites_title">Приглашения</string>
     <string name="settings_invite_notifications">Уведомления о приглашениях</string>
     <string name="settings_invite_notifications_info">Показывать уведомления, когда вас зовут в сохраненную комнату.</string>
+
+    <string name="settings_feedback_title">Отзыв</string>
+    <string name="settings_send_feedback">Отправить отзыв</string>
+    <string name="feedback_placeholder">Опишите проблему или предложение...</string>
+    <string name="feedback_success">Спасибо за ваш отзыв!</string>
+    <string name="feedback_rate_limit">Подождите перед отправкой нового отзыва.</string>
+    <string name="feedback_error">Не удалось отправить отзыв. Попробуйте ещё раз.</string>
+    <string name="feedback_send">Отправить</string>
 </resources>

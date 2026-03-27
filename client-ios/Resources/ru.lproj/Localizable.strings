@@ -156,3 +156,11 @@
 "call_error_generic" = "Что-то пошло не так";
 "call_joining" = "Подключение...";
 "call_ended" = "Звонок завершён";
+
+"feedback_title" = "Отзыв";
+"feedback_send_action" = "Отправить отзыв";
+"feedback_placeholder" = "Опишите проблему или предложение...";
+"feedback_send" = "Отправить";
+"feedback_success" = "Спасибо за ваш отзыв!";
+"feedback_rate_limit" = "Подождите перед отправкой нового отзыва.";
+"feedback_error" = "Не удалось отправить отзыв. Попробуйте ещё раз.";

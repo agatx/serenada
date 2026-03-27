@@ -48,6 +48,8 @@ Edit `.env.production` and set the following required variables:
 - `FCM_SERVICE_ACCOUNT_FILE` or `FCM_SERVICE_ACCOUNT_JSON` *(optional, required for native Android and iOS push receive)*:
   - `FCM_SERVICE_ACCOUNT_FILE`: absolute path on VPS to Firebase service-account JSON
   - `FCM_SERVICE_ACCOUNT_JSON`: inline JSON string (alternative to file path)
+- `TELEGRAM_BOT_TOKEN` *(optional)*: Telegram bot token for receiving user feedback (create via [@BotFather](https://t.me/BotFather))
+- `TELEGRAM_CHAT_ID` *(optional)*: Telegram chat ID where feedback messages are sent
 - `RATE_LIMIT_BYPASS_IPS` *(optional, test-only)*: Comma-separated exact IPs/CIDRs that bypass HTTP rate limits (e.g. `127.0.0.1,10.0.0.0/8`)
 - `ENABLE_INTERNAL_STATS` *(optional, default disabled)*: Set to `1` only for controlled load testing to expose `/api/internal/stats`
 - `INTERNAL_STATS_TOKEN` *(required when internal stats are enabled)*: Required as `X-Internal-Token` header on `/api/internal/stats`
