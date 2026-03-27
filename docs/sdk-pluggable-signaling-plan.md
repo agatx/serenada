@@ -134,12 +134,17 @@ interface SignalingProvider {
 
   // --- ICE servers ---
   // Provider is responsible for sourcing TURN credentials.
-  // Called once after join and whenever the session needs a refresh.
+  // Called once after join to obtain initial ICE server configs.
   // On failure: the session retries with exponential backoff (1s, 2s, 4s)
   // up to 3 attempts. If all attempts fail, the session transitions to
   // 'failed' state with error code 'ice_server_fetch_failed'. Providers
   // should reject the promise with an Error — do not resolve with an
   // empty array to indicate failure.
+  //
+  // Credential refresh: the provider owns the TTL. The session does NOT
+  // poll this method. When credentials rotate, the provider emits
+  // 'iceServersChanged' with fresh configs. The session applies them
+  // to existing and future peer connections. See the event below.
   getIceServers(): Promise<RTCIceServer[]>
 
   // --- Capabilities ---
@@ -159,6 +164,8 @@ interface SignalingProvider {
   on(event: 'message', cb: (data: PeerMessage) => void): void
   on(event: 'roomEnded', cb: (data: RoomEndedEvent) => void): void
   on(event: 'error', cb: (data: ErrorEvent) => void): void
+  // Provider emits this when TURN credentials rotate (provider owns the TTL).
+  // The session applies the new configs to all peer connections.
   on(event: 'iceServersChanged', cb: (servers: RTCIceServer[]) => void): void
   off(event: string, cb: Function): void
 }
@@ -265,8 +272,8 @@ interface SignalingProvider {
     // Listener
     var listener: Listener?
 
-    // All listener callbacks are dispatched on the main thread.
-    // Third-party providers MUST post to the main looper before invoking.
+    // Callbacks may be invoked on any thread. The session wraps the listener
+    // with a trampoline that dispatches to the main looper if needed.
     interface Listener {
         fun onConnected(info: ConnectionInfo? = null)
         fun onDisconnected(reason: String?)
@@ -320,8 +327,8 @@ struct ProviderCapabilities {
     var handlesReconnection: Bool = false
 }
 
-// All delegate callbacks are dispatched on @MainActor.
-// Third-party providers MUST dispatch to MainActor before invoking.
+// Delegate callbacks may be invoked on any thread/actor. The session wraps
+// the delegate with a trampoline that dispatches to @MainActor if needed.
 @MainActor
 protocol SignalingProviderDelegate: AnyObject {
     func providerDidConnect(info: ConnectionInfo?)
@@ -347,7 +354,7 @@ The existing fallback offer mechanism (500-2000ms timeout where the non-offerer 
 
 **Room-state snapshots are optional.** The `roomStateUpdated` event carries a full participant list that the session can use to reconcile its peer map — cleaning up stale peers and discovering new ones. This is useful for reconnect recovery and for providers with reliable membership APIs. However, it is not required: the session also builds and maintains state from incremental `peerJoined`/`peerLeft` events. Stale peers (from missed `peerLeft` events) are naturally cleaned up when their WebRTC connections fail. Providers that support snapshots should fire `roomStateUpdated` on membership changes; providers that only have incremental presence can omit it entirely.
 
-**Callback threading guarantees.** The current SDK sessions are main-thread constrained: Android sessions run on the main looper, iOS signaling is `@MainActor`. The provider contract requires all listener/delegate callbacks to be dispatched on the main thread (Android) or `@MainActor` (iOS). Third-party adapters that receive events on background threads must post to the main thread before invoking the listener. The session does not add its own marshaling layer — the provider contract is the enforcement point. The Web SDK uses single-threaded JS, so this constraint is implicit.
+**Defensive callback threading.** The current SDK sessions are main-thread constrained: Android sessions run on the main looper, iOS signaling is `@MainActor`. Rather than requiring third-party providers to marshal callbacks to the correct thread (and crashing deep in `PeerNegotiationEngine` when they forget), the session wraps the provider's listener/delegate with a thin trampoline that dispatches to the main thread (Android) or `@MainActor` (iOS) if the callback arrives on a background thread. This is cheap (`Handler.post` / `MainActor.run`) and dramatically improves developer experience — the most common third-party integration mistake (forgetting `runOnUiThread` when using OkHttp, gRPC, or MQTT callbacks) results in silent correct behavior instead of a crash blamed on the SDK. The Web SDK uses single-threaded JS, so this is implicit.
 
 **Transport diagnostics via `ConnectionInfo`.** The current SDK exposes `activeTransport` (`ws` vs `sse`) in call diagnostics. The `connected` event carries an optional `ConnectionInfo` with a `transport` field. The built-in provider populates this with `'ws'` or `'sse'`. Third-party adapters can provide their own transport descriptor (e.g., `'mqtt'`, `'grpc'`) or omit it — the session treats the field as diagnostic-only and does not branch on its value.
 
@@ -356,6 +363,8 @@ The existing fallback offer mechanism (500-2000ms timeout where the non-offerer 
 **ICE servers via `getIceServers()` with defined failure contract.** The current SDK has a multi-step TURN flow: server sends `turnToken` → `TurnManager` makes HTTP call to `/api/turn-credentials`. The interface replaces this with a single `getIceServers()` method. The provider is responsible for sourcing credentials from whatever backend it uses. The built-in provider wraps the existing token + HTTP fetch flow internally.
 
 On failure: providers should reject/throw with an `Error`. The session retries with exponential backoff (1s, 2s, 4s) up to 3 attempts. If all attempts fail, the session transitions to `failed` state with error code `ice_server_fetch_failed`. Providers must not resolve with an empty array to indicate failure — an empty array means "no TURN servers needed" (STUN-only), which is a valid configuration.
+
+**ICE credential refresh: provider owns the TTL.** The session calls `getIceServers()` once after join to obtain initial configs. It does not poll or re-call this method on a timer — WebRTC itself cannot detect credential expiration until an ICE restart fails. Instead, the provider owns the credential lifecycle: when the backend signals rotation (or when the provider's internal TTL timer fires), the provider emits `iceServersChanged` with fresh configs. The session applies these to all existing and future peer connections. The built-in `SerenadaServerProvider` handles this internally (the Serenada server pushes `turn_credentials` messages when credentials rotate). Third-party providers should set up their own refresh timer based on the TTL returned by their TURN credential API.
 
 **No protocol envelope.** The interface deals in `type` + `payload`, not the Serenada JSON envelope (`v`, `type`, `rid`, `sid`, `cid`, `to`). The built-in provider wraps/unwraps the envelope. Third-party adapters use whatever framing their system provides.
 
@@ -567,7 +576,12 @@ The TURN probe only needs ICE server configs to test connectivity. It doesn't ca
 
 ## Refactoring Strategy
 
-The refactoring is internal to the SDK — no protocol changes, no server changes. **API changes:** `serverHost` becomes optional in `SerenadaConfig` on all platforms; `subscribeToMessages()` is removed from the Web SDK (replaced by `onPeerMessage()`). Since the SDK is not yet publicly used, these are non-breaking in practice.
+The refactoring is mostly internal to the SDK — no server changes. **Changes:**
+
+- **Protocol**: Section 5.1 of `serenada_protocol_v1.md` ("Roles for offer/answer") is updated to specify lexicographic peer ID comparison instead of `(joinedAt, cid)` ordering. The `joinedAt` field remains in the protocol for informational purposes but is no longer referenced by the offer ownership rule. This is a behavioral change but transparent to users — offer/answer assignment is an internal mechanism, and the fallback offer timer (500-2000ms) ensures correct WebRTC setup regardless of which peer initiates.
+- **API**: `serverHost` becomes optional in `SerenadaConfig` on all platforms; `subscribeToMessages()` is removed from the Web SDK (replaced by `onPeerMessage()`). Since the SDK is not yet publicly used, these are non-breaking in practice.
+
+All three platforms must land the `shouldIOffer()` change simultaneously to avoid glare between mismatched clients. The fallback offer mechanism provides resilience during any rollout window.
 
 ### Phase 1: Extract interface (all platforms)
 
@@ -595,7 +609,7 @@ Modify `SerenadaSession` on each platform to program against `SignalingProvider`
 - Branch reconnection logic: transport-blip handling when `handlesReconnection`, session-driven `joinRoom()` retry otherwise
 - Make `roomStateUpdated` handling opportunistic: reconcile peer map when received, but don't require it
 - Remove `subscribeToMessages()`; add `onPeerMessage()` to public session API (Web)
-- Update `DebugPanel` in `react-ui` to use `onPeerMessage()` instead of `subscribeToMessages()`
+- Update `SerenadaCallFlow` in `react-ui` to use `onPeerMessage()` instead of `subscribeToMessages()`
 - Split `SerenadaDiagnostics` into device checks (always) + server checks (gated on `serverHost`)
 
 ### Phase 5: Gate server-bound APIs
@@ -616,7 +630,7 @@ Add `serverHost`-presence checks to `createRoom()`, `createRoomId()`, `RoomWatch
 | `SerenadaConfig` optional `serverHost` + validation | ~15 |
 | `SerenadaCore` entry point changes + server-bound API gating | ~25 |
 | `SerenadaDiagnostics` split device vs. server checks | ~20 |
-| `react-ui` `DebugPanel` update (`subscribeToMessages` → `onPeerMessage`) | ~10 |
+| `react-ui` `SerenadaCallFlow` update (`subscribeToMessages` → `onPeerMessage`) | ~10 |
 | **Android** | |
 | `SignalingProvider` interface + event types + `ProviderCapabilities` | ~70 |
 | `SerenadaServerProvider` (wraps SignalingClient + TurnManager) | ~110 |
@@ -635,7 +649,7 @@ Add `serverHost`-presence checks to `createRoom()`, `createRoomId()`, `RoomWatch
 | `SerenadaDiagnostics` split device vs. server checks | ~15 |
 | **Total** | **~1,090** |
 
-Web is the largest due to tighter coupling, the `subscribeToMessages` removal, the `SignalingProviderEmitter` base class, and the `DebugPanel` update. Android and iOS are slightly smaller because their sessions already use listener/protocol patterns. The `shouldIOffer` change is small on each platform (~5-10 lines) because it simplifies from a two-criterion comparison to a single lexicographic check. The `getIceServers()` retry logic and reconnection branching account for the remaining scope increase.
+Web is the largest due to tighter coupling, the `subscribeToMessages` removal, the `SignalingProviderEmitter` base class, and the `SerenadaCallFlow` update. Android and iOS are slightly smaller because their sessions already use listener/protocol patterns. The `shouldIOffer` change is small on each platform (~5-10 lines) because it simplifies from a two-criterion comparison to a single lexicographic check. The `getIceServers()` retry logic and reconnection branching account for the remaining scope increase.
 
 ## Files Affected
 
@@ -649,7 +663,7 @@ Web is the largest due to tighter coupling, the `subscribeToMessages` removal, t
 - `src/SerenadaDiagnostics.ts` — split `runAll()` (device + TURN in provider mode; `signaling` marked `skipped`); add `runTurnProbe()`; gate `runConnectivityChecks()` on `serverHost`
 
 ### Web (`client/packages/react-ui/`)
-- `src/components/DebugPanel.tsx` — replace `subscribeToMessages()` with `onPeerMessage()`
+- `src/SerenadaCallFlow.tsx` — replace `subscribeToMessages()` with `onPeerMessage()` (used for `content_state` message handling)
 
 ### Android (`client-android/serenada-core/`)
 - New: `SignalingProvider.kt` — interface + event types + threading contract
@@ -670,6 +684,9 @@ Web is the largest due to tighter coupling, the `subscribeToMessages` removal, t
 - `Sources/SerenadaCore.swift` — config validation; gate `createRoom()`/`createRoomId()` on `serverHost`
 - `Sources/SerenadaDiagnostics.swift` — split device vs. server checks
 - `Sources/Call/TurnManager.swift` — becomes internal to `SerenadaServerProvider`
+
+### Documentation (`docs/`)
+- `serenada_protocol_v1.md` — update section 5.1 ("Roles for offer/answer") from `(joinedAt, cid)` ordering to lexicographic peer ID comparison; note `joinedAt` is informational
 
 ### Not changed
 - `SignalingEngine.ts` / `SignalingClient.kt` / `SignalingClient.swift` — existing transport code, now wrapped by `SerenadaServerProvider`
@@ -703,20 +720,21 @@ For third-party integrations, the scaling problem disappears entirely — the in
 6. **ICE server flow — retry** — mock provider `getIceServers()` fails twice then succeeds; verify session retries with backoff and ultimately applies servers
 7. **ICE server flow — exhausted retries** — mock provider `getIceServers()` fails 3 times; verify session transitions to `failed` state with `ice_server_fetch_failed` error code
 8. **ICE server flow — empty array** — mock provider returns `[]`; verify session treats this as valid STUN-only config (no error)
-9. **Reconnection (provider-managed)** — mock provider with `handlesReconnection: true` fires `disconnected` → `connected`; verify session does not call `joinRoom()` again; verify session re-sends offers to known peers
-10. **Reconnection (session-managed)** — mock provider with `handlesReconnection: false` fires `disconnected`; verify session transitions to `reconnecting` and calls `joinRoom()` with `reconnectPeerId`; verify backoff timing matches `WebRtcResilienceConstants`
-11. **Version check** — verify session rejects a provider with `version: 0` or `version: 2` at construction time with a clear error
-12. **Callback threading (Android)** — verify provider callbacks invoked on background thread cause assertion failure or are marshaled; verify main-thread callbacks work correctly
-13. **Callback threading (iOS)** — verify `@MainActor` constraint is enforced on delegate callbacks
-14. **Transport diagnostics** — verify `ConnectionInfo.transport` propagates to session diagnostics for built-in provider; verify omitted `transport` does not break session
-15. **Server-bound API gating** — verify `createRoom()`, `createRoomId()`, `RoomWatcher`, and `runConnectivityChecks()` throw when config has no `serverHost`; verify config rejects both `serverHost` + `signalingProvider` set simultaneously, and neither set
-16. **Diagnostics three-tier split** — verify `runAll()` returns device + TURN results in provider mode and marks `signaling` as `skipped`; verify `runTurnProbe()` works with custom provider's `getIceServers()`; verify `runConnectivityChecks()` throws in provider mode
-17. **Web `onPeerMessage()`** — verify works in both built-in and custom provider modes; verify `subscribeToMessages` is removed from the public API
+9. **ICE credential refresh** — mock provider emits `iceServersChanged` with new configs mid-call; verify session applies them to existing peer connections; verify session does not re-call `getIceServers()`
+10. **Reconnection (provider-managed)** — mock provider with `handlesReconnection: true` fires `disconnected` → `connected`; verify session does not call `joinRoom()` again; verify session re-sends offers to known peers
+11. **Reconnection (session-managed)** — mock provider with `handlesReconnection: false` fires `disconnected`; verify session transitions to `reconnecting` and calls `joinRoom()` with `reconnectPeerId`; verify backoff timing matches `WebRtcResilienceConstants`
+12. **Version check** — verify session rejects a provider with `version: 0` or `version: 2` at construction time with a clear error
+13. **Callback threading (Android)** — verify provider callbacks invoked on a background thread are correctly trampolined to the main looper; verify main-thread callbacks work without double-dispatch
+14. **Callback threading (iOS)** — verify provider delegate callbacks invoked off `@MainActor` are correctly trampolined to `MainActor`; verify on-actor callbacks work without double-dispatch
+15. **Transport diagnostics** — verify `ConnectionInfo.transport` propagates to session diagnostics for built-in provider; verify omitted `transport` does not break session
+16. **Server-bound API gating** — verify `createRoom()`, `createRoomId()`, `RoomWatcher`, and `runConnectivityChecks()` throw when config has no `serverHost`; verify config rejects both `serverHost` + `signalingProvider` set simultaneously, and neither set
+17. **Diagnostics three-tier split** — verify `runAll()` returns device + TURN results in provider mode and marks `signaling` as `skipped`; verify `runTurnProbe()` works with custom provider's `getIceServers()`; verify `runConnectivityChecks()` throws in provider mode
+18. **Web `onPeerMessage()`** — verify works in both built-in and custom provider modes; verify `subscribeToMessages` is removed from the public API
 
 ### Integration tests
-18. **Built-in provider end-to-end** — existing call flows work identically after refactoring (regression); verify lexicographic offer ownership produces working calls
-19. **Third-party adapter smoke test** — minimal adapter using an in-memory message bus (incremental presence only, no snapshots), verify two sessions can complete offer/answer/ICE exchange and establish media
+19. **Built-in provider end-to-end** — existing call flows work identically after refactoring (regression); verify lexicographic offer ownership produces working calls
+20. **Third-party adapter smoke test** — minimal adapter using an in-memory message bus (incremental presence only, no snapshots), verify two sessions can complete offer/answer/ICE exchange and establish media
 
 ### Sample apps
-20. **Update existing samples** to show both built-in and custom provider usage
-21. **New sample** — minimal third-party adapter example (e.g., using a WebSocket relay as a stand-in for the integrator's system)
+21. **Update existing samples** to show both built-in and custom provider usage
+22. **New sample** — minimal third-party adapter example (e.g., using a WebSocket relay as a stand-in for the integrator's system)
