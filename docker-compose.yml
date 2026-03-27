@@ -21,6 +21,8 @@ services:
       - DATA_DIR=/app/data
       - ENABLE_INTERNAL_STATS=${ENABLE_INTERNAL_STATS}
       - INTERNAL_STATS_TOKEN=${INTERNAL_STATS_TOKEN}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     volumes:
       - ./server/data:/app/data
       - ./secrets:/app/secrets:ro
