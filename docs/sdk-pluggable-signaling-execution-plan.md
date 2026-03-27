@@ -49,9 +49,9 @@ Status legend:
 - [ ] Audit in-repo call sites, samples, and tests for the new config contract before implementation lands.
 
 ## Cross-Cutting Workstream - Offer Ownership Cutover
-- [ ] Implement the lexicographic peer-ID offer-ownership rule on web, Android, and iOS as one coordinated change set.
-- [ ] Remove any remaining runtime dependency on `joinedAt` for offer/answer ownership while keeping `joinedAt` available for informational UI only.
-- [ ] Verify the fallback-offer timer still recovers negotiation when the expected offer does not arrive after the ownership-rule change.
+- [ ] Treat the offer-ownership implementation tasks in Phases 3, 4, and 5 as one coordinated rollout rather than three independent changes.
+- [ ] Confirm after the platform rewires land that `joinedAt` remains informational only and is no longer part of runtime offer/answer ownership.
+- [ ] Verify the fallback-offer timer still recovers negotiation when the expected offer does not arrive after the coordinated ownership-rule change.
 - [ ] Do not merge a partial offer-ownership rollout on only one or two platforms.
 
 ## Phase 3 - Web SDK Implementation
