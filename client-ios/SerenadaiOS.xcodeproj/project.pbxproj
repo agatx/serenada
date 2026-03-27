@@ -11,6 +11,7 @@
 		0361CD790E1AFC86D02CF4F6 /* FakeAudioController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2247BFD0D693E4041DAF16 /* FakeAudioController.swift */; };
 		0587ECB1D9436E518EF012E9 /* FakeAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F42A2D07ED2383049D7227F /* FakeAPIClient.swift */; };
 		0A2C0A7E3C1A621804CC59C9 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = EA93F28D0C87ABED6B756036 /* Localizable.strings */; };
+		0DFE82331F5566B5EDA39486 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = D479C87899A2276880ED95C6 /* GoogleService-Info.plist */; };
 		144C4C15F4B31D2E8AE8057A /* FakeSessionClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99B88E3237E25D45BB2BD9B4 /* FakeSessionClock.swift */; };
 		169DFB9313A225EBD1962BFE /* BroadcastShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C9C837439E676ED7F04801 /* BroadcastShared.swift */; };
 		16ED701C50FCF1CF741D04F1 /* JoinRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F54D58A452D7949DF145435E /* JoinRecoveryTests.swift */; };
@@ -187,6 +188,7 @@
 		C5849DCA4B2F1D0DD0411242 /* PushSubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionManager.swift; sourceTree = "<group>"; };
 		CC2247BFD0D693E4041DAF16 /* FakeAudioController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioController.swift; sourceTree = "<group>"; };
 		D0BE7FF0C166694E0F58114A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D479C87899A2276880ED95C6 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		D5DEACDD78A7F800281C0FC6 /* CaptureResolutionSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResolutionSelectionTests.swift; sourceTree = "<group>"; };
 		D6A49EB1B8C461E0A475E453 /* FakePeerConnectionSlot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakePeerConnectionSlot.swift; sourceTree = "<group>"; };
 		D9036C71CC2E91FAD8FB5170 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
@@ -301,6 +303,7 @@
 		4C2BB5F4B1F4D2ED577B9AF6 = {
 			isa = PBXGroup;
 			children = (
+				D479C87899A2276880ED95C6 /* GoogleService-Info.plist */,
 				F86221F53AB93BC5BEEE7E9F /* BroadcastUpload */,
 				961901030B63AB715A9ED19C /* NotificationService */,
 				3DDC1D067C4415DBE46DAC91 /* Packages */,
@@ -688,6 +691,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7B08F470FBB83FCC41A84E2B /* Assets.xcassets in Resources */,
+				0DFE82331F5566B5EDA39486 /* GoogleService-Info.plist in Resources */,
 				0A2C0A7E3C1A621804CC59C9 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

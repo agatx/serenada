@@ -218,7 +218,6 @@ final class APIClient {
             throw APIError.http("Push notify failed")
         }
     }
-}
 
     func submitFeedback(host: String, message: String, locale: String, appVersion: String) async throws -> Int {
         guard let url = buildURL(host: host, path: "/api/feedback") else {

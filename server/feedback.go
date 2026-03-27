@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type TelegramService struct {
@@ -88,7 +89,7 @@ func handleFeedback(tg *TelegramService) http.HandlerFunc {
 			http.Error(w, "Missing message", http.StatusBadRequest)
 			return
 		}
-		if len(msg) > 2000 {
+		if utf8.RuneCountInString(msg) > 2000 {
 			http.Error(w, "Message too long (max 2000 characters)", http.StatusBadRequest)
 			return
 		}
@@ -96,6 +97,7 @@ func handleFeedback(tg *TelegramService) http.HandlerFunc {
 		platform := strings.TrimSpace(req.Platform)
 		locale := strings.TrimSpace(req.Locale)
 		version := strings.TrimSpace(req.Version)
+		userAgent := strings.TrimSpace(req.UserAgent)
 
 		// Format the Telegram message
 		var sb strings.Builder
@@ -113,6 +115,9 @@ func handleFeedback(tg *TelegramService) http.HandlerFunc {
 			}
 			sb.WriteString(strings.Join(parts, " | "))
 			sb.WriteString("\n")
+		}
+		if userAgent != "" {
+			sb.WriteString("UA: " + userAgent + "\n")
 		}
 		sb.WriteString("---\n")
 		sb.WriteString(msg)

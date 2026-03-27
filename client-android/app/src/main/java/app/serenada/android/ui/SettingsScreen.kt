@@ -115,6 +115,7 @@ fun SettingsScreen(
     var feedbackText by remember { mutableStateOf("") }
     var isSendingFeedback by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val feedbackApiClient = remember { HostApiClient(OkHttpClient()) }
 
     Scaffold(
         topBar = {
@@ -418,39 +419,32 @@ fun SettingsScreen(
                     TextButton(
                         onClick = {
                             isSendingFeedback = true
-                            val apiClient = HostApiClient(OkHttpClient())
-                            apiClient.submitFeedback(
+                            feedbackApiClient.submitFeedback(
                                 host = host,
                                 message = feedbackText.trim(),
                                 locale = selectedLanguage,
                                 appVersion = appVersion
                             ) { result ->
-                                isSendingFeedback = false
-                                result.fold(
-                                    onSuccess = { code ->
-                                        val msgRes = when {
-                                            code == 429 -> R.string.feedback_rate_limit
-                                            code in 200..299 -> R.string.feedback_success
-                                            else -> R.string.feedback_error
-                                        }
-                                        scope.launch {
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(context, context.getString(msgRes), Toast.LENGTH_SHORT).show()
-                                                if (code in 200..299) {
-                                                    showFeedbackDialog = false
-                                                    feedbackText = ""
-                                                }
+                                scope.launch(Dispatchers.Main) {
+                                    isSendingFeedback = false
+                                    result.fold(
+                                        onSuccess = { code ->
+                                            val msgRes = when {
+                                                code == 429 -> R.string.feedback_rate_limit
+                                                code in 200..299 -> R.string.feedback_success
+                                                else -> R.string.feedback_error
                                             }
-                                        }
-                                    },
-                                    onFailure = {
-                                        scope.launch {
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(context, context.getString(R.string.feedback_error), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(msgRes), Toast.LENGTH_SHORT).show()
+                                            if (code in 200..299) {
+                                                showFeedbackDialog = false
+                                                feedbackText = ""
                                             }
+                                        },
+                                        onFailure = {
+                                            Toast.makeText(context, context.getString(R.string.feedback_error), Toast.LENGTH_SHORT).show()
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         },
                         enabled = feedbackText.trim().isNotEmpty() && !isSendingFeedback

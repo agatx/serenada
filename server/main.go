@@ -117,7 +117,7 @@ func main() {
 	http.HandleFunc("/api/push/snapshot/", withTimeout(enableCors(handlePushSnapshot), 10*time.Second))
 
 	// Feedback Route
-	http.HandleFunc("/api/feedback", withTimeout(rateLimitMiddleware(feedbackLimiter, enableCors(handleFeedback(telegramService))), 10*time.Second))
+	http.HandleFunc("/api/feedback", withTimeout(enableCors(rateLimitMiddleware(feedbackLimiter, handleFeedback(telegramService))), 10*time.Second))
 
 	http.HandleFunc("/device-check", withTimeout(handleDeviceCheck, 15*time.Second))
 
