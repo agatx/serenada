@@ -202,8 +202,13 @@ Any server (has local watcher clients):
   Expiry sweep (mandatory, every 15 seconds):
     - Each server runs a periodic sweep of its locally-tracked watched rids
     - For each non-local rid a watcher cares about:
-      EXISTS room:status:{rid} → if missing (expired or deleted), push
-      room_status_update with count=0 to local watchers and remove from tracking
+      EXISTS room:status:{rid} → if missing (expired or deleted) AND
+      last-known count was > 0, push room_status_update with count=0
+      to local watchers and clear cached state (last-seen count/version)
+    - Important: do NOT remove the watcher's interest in the rid.
+      Subscriptions persist until the client sends a new watch_rooms
+      or disconnects. If the room is later recreated, the firehose
+      event will still match and be delivered to the watcher.
     - This ensures connected watchers see ghost rooms disappear within
       ~45 seconds of a server crash (30s TTL + up to 15s sweep interval)
     - The sweep is cheap: one pipelined EXISTS per tracked rid per server
@@ -362,7 +367,7 @@ $0.05/GB of relayed traffic. For a 1:1 video call where TURN is needed (~500kbps
 | `/api/push/*` | Round-robin | Reads/writes Redis (shared) |
 | `/api/internal/stats` | Per-server | Server-specific metrics |
 | `/device-check` | Round-robin | Stateless |
-| `/healthz` | Per-server (LB health probe) | Server health |
+| `/healthz` | Not proxied — LB probes each backend directly | Used by LB active health checks to detect per-server failures |
 
 ### SSE detail
 
@@ -410,7 +415,13 @@ location /sse { proxy_pass http://serenada_signaling; ... }
 # Stateless routes → round-robin upstream
 location /api         { proxy_pass http://serenada_api; ... }
 location /device-check { proxy_pass http://serenada_api; ... }
-location /healthz     { proxy_pass http://serenada_api; ... }
+
+# /healthz is NOT proxied — it is used by the LB's own active health
+# checks, which probe each backend directly (not through the upstream).
+# nginx health checks are configured per-server in the upstream block:
+#   server app1:8080 max_fails=2 fail_timeout=5s;
+#   server app2:8080 max_fails=2 fail_timeout=5s;
+# Or with nginx Plus / third-party module: health_check uri=/healthz;
 ```
 
 Requests to `/ws` or `/sse` with neither `rid` nor `sid` (e.g., diagnostics probes) will hash on an empty key, which consistently routes to the same server — acceptable for non-room connections.
