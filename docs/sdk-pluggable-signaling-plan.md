@@ -377,7 +377,8 @@ Usage:
 
 ```typescript
 const adapter = new MySignalingAdapter(myMessagingChannel)
-const session = SerenadaCore.join({ signalingProvider: adapter, roomId: 'group-123' })
+const serenada = createSerenadaCore({ signalingProvider: adapter })
+const session = serenada.join({ roomId: 'group-123' })
 ```
 
 ## Public API Changes
@@ -431,23 +432,30 @@ struct SerenadaConfig {
 
 ### Entry points
 
-Existing signatures are preserved — `serverHost`-based usage works identically:
+Join signatures remain focused on room identity. The signaling source comes from `SerenadaConfig`, not from `join(...)` parameters.
+
+Existing `serverHost`-based usage works identically:
 ```typescript
-// Built-in signaling (unchanged)
-SerenadaCore.join(url)
-SerenadaCore.join({ roomId, serverUrl })
+// Web, built-in signaling (unchanged)
+const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
+serenada.join(url)
+serenada.join({ roomId })
 
 // Custom provider (new)
 const adapter = new MySignalingAdapter(myChannel)
-SerenadaCore.join({ signalingProvider: adapter, roomId: 'group-123' })
+const serenadaWithProvider = createSerenadaCore({ signalingProvider: adapter })
+serenadaWithProvider.join({ roomId: 'group-123' })
 ```
 
-On Android/iOS, `join()` overloads accept either `serverHost` or `signalingProvider`:
+Android/iOS follow the same model: configure the signaling source once, then call the existing `join(...)` overloads:
 ```kotlin
 // Android
-SerenadaCore.join(url)                                   // built-in
-SerenadaCore.join(roomId, serverHost)                    // built-in
-SerenadaCore.join(roomId, signalingProvider = adapter)   // custom
+val builtIn = SerenadaCore(SerenadaConfig(serverHost = "serenada.app"), context)
+builtIn.join(url)
+builtIn.join(roomId)
+
+val custom = SerenadaCore(SerenadaConfig(signalingProvider = adapter), context)
+custom.join(roomId)
 ```
 
 ### Server-bound API availability
@@ -463,7 +471,7 @@ Because `serverHost` presence is known at config construction time, all APIs can
 | `SerenadaDiagnostics.runConnectivityChecks()` | Serenada server probes (WS, SSE, room API, diagnostic token) | Throws: "requires serverHost" |
 | `SerenadaDiagnostics.runTurnProbe()` | TURN reachability via server-issued token | TURN reachability via `provider.getIceServers()` |
 | `isSupported()` | Works | Works |
-| `subscribeToMessages()` (Web) | Returns `SignalingMessage` objects | See below |
+| `subscribeToMessages()` (Web) | Returns `SignalingMessage` objects | Throws: "unavailable with custom signalingProvider; use onPeerMessage()" |
 
 ### Diagnostics: three-tier split
 
@@ -477,7 +485,7 @@ Current `SerenadaDiagnostics.runAll()` performs device checks, TURN probes, and 
 
 The TURN probe only needs ICE server configs to test connectivity. It doesn't care whether those configs came from the Serenada `/api/turn-credentials` endpoint or from `provider.getIceServers()`.
 
-- **`runAll()`** — In server mode: runs all three tiers (current behavior). In provider mode: runs device + TURN tiers, omits Serenada server probes. No error, no throw — the report has fewer sections but TURN latency is still included.
+- **`runAll()`** — In server mode: runs all three tiers (current behavior). In provider mode: runs device + TURN tiers and returns the same `DiagnosticsReport` shape as today; the server-specific `signaling` field is populated as `skipped` with reason `requires serverHost`, while `turn` contains the TURN probe result. No sections are omitted.
 - **`runTurnProbe()`** — New. Obtains ICE servers from whichever source is configured (`serverHost` → token + HTTP fetch, `signalingProvider` → `getIceServers()`), then tests reachability and measures latency. Works in both modes.
 - **`runConnectivityChecks()`** — Serenada server-specific probes only. Throws if no `serverHost` configured.
 - **Device checks** (camera, mic, speaker, network) — Always available regardless of mode.
@@ -486,13 +494,11 @@ The TURN probe only needs ICE server configs to test connectivity. It doesn't ca
 
 The current Web SDK exposes `subscribeToMessages(callback: (message: SignalingMessage) => void)` on the public `SerenadaSessionHandle` interface. `SignalingMessage` uses the Serenada protocol envelope (`v`, `type`, `rid`, `cid`, `to`, `payload`).
 
-With a custom provider, there is no Serenada envelope — messages arrive as `PeerMessage { from, type, payload }`. Two options:
+With a custom provider, there is no Serenada envelope — messages arrive as `PeerMessage { from, type, payload }`.
 
-**Option A (recommended): Deprecate `subscribeToMessages` in favor of provider events.** The session exposes a new `onPeerMessage(callback)` method that works in both modes. `subscribeToMessages` continues to work with the built-in provider (returns Serenada envelope as today) and throws or returns a no-op unsubscribe in provider mode. This is a soft deprecation — existing code using the built-in provider is unaffected.
+**Chosen behavior:** soft-deprecate `subscribeToMessages` in favor of a new `onPeerMessage(callback)` API that works in both modes. `subscribeToMessages` continues to work with the built-in provider (returns Serenada envelope as today). In provider mode, it synchronously throws `Error("subscribeToMessages() is unavailable with custom signalingProvider; use onPeerMessage()")`.
 
-**Option B: Adapt provider messages into SignalingMessage shape.** The session wraps `PeerMessage` into a `SignalingMessage`-like object with `v: 1`, `type`, `cid: from`, and `payload`. This preserves the API but the `rid`/`sid`/`to` fields would be synthetic. Misleading for consumers expecting real protocol messages.
-
-Option A is cleaner. The `subscribeToMessages` API is primarily used for debug logging (the `DebugPanel` component in `react-ui`), not for application logic. Adding `onPeerMessage` and soft-deprecating `subscribeToMessages` is not a breaking change — existing consumers of the built-in provider continue to work.
+Throwing is preferable to a silent no-op because it fails loudly for unsupported usage while preserving full backward compatibility for existing built-in-provider consumers. The method is primarily used for debug logging (`DebugPanel` in `react-ui`), not core application logic.
 
 ## Refactoring Strategy
 
@@ -563,7 +569,7 @@ Android and iOS are slightly smaller because their sessions already use listener
 - `src/types.ts` — `SerenadaConfig.serverHost` becomes optional, add `signalingProvider`; add `onPeerMessage` to `SerenadaSessionHandle`
 - `src/SerenadaSession.ts` — use `SignalingProvider` instead of `SignalingEngine`; add `onPeerMessage()`; soft-deprecate `subscribeToMessages()` in provider mode
 - `src/SerenadaCore.ts` — config validation (exactly one of `serverHost`/`signalingProvider`); gate `createRoom()`/`createRoomId()` on `serverHost`
-- `src/SerenadaDiagnostics.ts` — split `runAll()` (device-only in provider mode); gate `runConnectivityChecks()` on `serverHost`
+- `src/SerenadaDiagnostics.ts` — split `runAll()` (device + TURN in provider mode; `signaling` marked `skipped`); add `runTurnProbe()`; gate `runConnectivityChecks()` on `serverHost`
 - `src/media/MediaEngine.ts` — receive ICE servers from session (via provider), not via direct HTTP fetch
 
 ### Android (`client-android/serenada-core/`)
@@ -616,8 +622,8 @@ For third-party integrations, the scaling problem disappears entirely — the in
 6. **Callback threading (iOS)** — verify `@MainActor` constraint is enforced on delegate callbacks
 7. **Transport diagnostics** — verify `ConnectionInfo.transport` propagates to session diagnostics for built-in provider; verify omitted `transport` does not break session
 8. **Server-bound API gating** — verify `createRoom()`, `createRoomId()`, `RoomWatcher`, and `runConnectivityChecks()` throw when config has no `serverHost`; verify config rejects both `serverHost` + `signalingProvider` set simultaneously, and neither set
-9. **Diagnostics three-tier split** — verify `runAll()` returns device + TURN results in provider mode (no server probes); verify `runTurnProbe()` works with custom provider's `getIceServers()`; verify `runConnectivityChecks()` throws in provider mode
-10. **Web `subscribeToMessages()` deprecation** — verify returns Serenada envelope with built-in provider (unchanged); verify throws or returns no-op unsubscribe in provider mode; verify `onPeerMessage()` works in both modes
+9. **Diagnostics three-tier split** — verify `runAll()` returns device + TURN results in provider mode and marks `signaling` as `skipped`; verify `runTurnProbe()` works with custom provider's `getIceServers()`; verify `runConnectivityChecks()` throws in provider mode
+10. **Web `subscribeToMessages()` deprecation** — verify returns Serenada envelope with built-in provider (unchanged); verify it throws the documented error in provider mode; verify `onPeerMessage()` works in both modes
 
 ### Integration tests
 11. **Built-in provider end-to-end** — existing call flows work identically after refactoring (regression)
