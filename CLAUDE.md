@@ -148,6 +148,7 @@ Go signaling server — flat package structure (no deep hierarchy). Key files:
 - `ws.go` / `sse.go` — WebSocket and SSE transport handlers
 - `room_id.go` — HMAC-based room ID generation/validation
 - `push.go` / `push_fcm.go` — Web Push (VAPID) and Firebase Cloud Messaging
+- `feedback.go` — user feedback endpoint with Telegram bot forwarding
 - `security.go` — CORS/origin validation
 - `rate_limit.go` — IP-based rate limiting
 - `internal/stats/` — metrics collection
@@ -206,7 +207,7 @@ Kotlin + Jetpack Compose + Material3. Three-module Gradle project.
 
 **Host app** (`app/`):
 - `call/CallManager.kt` — app-level call orchestrator (integrates SDK)
-- `ui/` — Compose screens (JoinScreen, SettingsScreen, DiagnosticsScreen)
+- `ui/` — Compose screens (JoinScreen, SettingsScreen, DiagnosticsScreen) with in-app feedback dialog
 - `push/` — Firebase Cloud Messaging integration
 - `service/` — foreground call service
 
@@ -239,7 +240,7 @@ SwiftUI + Swift 5.10, project generated via XcodeGen (`project.yml`). Two SPM pa
 - `Core/Call/CallManager.swift` — app-level call orchestrator (integrates SDK)
 - `Core/Push/` — push notifications (JoinSnapshotFeature, PushSubscriptionManager)
 - `Core/Stores/` — settings, saved rooms, recent calls
-- `UI/Screens/` — SwiftUI screens (JoinScreen, SettingsScreen, DiagnosticsScreen)
+- `UI/Screens/` — SwiftUI screens (JoinScreen, SettingsScreen, DiagnosticsScreen, FeedbackScreen)
 - `Shared/PushKeyStore.swift` — push encryption keys (shared with NotificationService extension)
 - `NotificationService/` — push notification app extension (decrypts snapshot images)
 - `BroadcastUpload/` — screen sharing broadcast extension
@@ -288,6 +289,7 @@ Server reads `.env` from the project root. See `.env.example` for all variables.
 - `ALLOWED_ORIGINS` — CORS origins
 - `BLOCK_WEBSOCKET` — test SSE fallback (`hang` or `block`)
 - `TRANSPORTS` — transport priority (default: `ws,sse`)
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` — optional, for receiving user feedback via Telegram
 
 ## Testing Deep Link
 

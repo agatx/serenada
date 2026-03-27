@@ -84,7 +84,14 @@ const resources = {
             "remove": "Remove",
             "create": "Create",
             "save": "Save",
-            "cancel": "Cancel"
+            "cancel": "Cancel",
+            "footer_feedback": "Feedback",
+            "feedback_title": "Send Feedback",
+            "feedback_placeholder": "Describe your issue or suggestion...",
+            "feedback_submit": "Send",
+            "feedback_success": "Thank you for your feedback!",
+            "feedback_rate_limit": "Please wait before sending more feedback.",
+            "feedback_error": "Failed to send feedback. Please try again."
         }
     },
     ru: {
@@ -168,7 +175,14 @@ const resources = {
             "remove": "Удалить",
             "create": "Создать",
             "save": "Сохранить",
-            "cancel": "Отмена"
+            "cancel": "Отмена",
+            "footer_feedback": "Отзыв",
+            "feedback_title": "Отправить отзыв",
+            "feedback_placeholder": "Опишите проблему или предложение...",
+            "feedback_submit": "Отправить",
+            "feedback_success": "Спасибо за ваш отзыв!",
+            "feedback_rate_limit": "Подождите перед отправкой нового отзыва.",
+            "feedback_error": "Не удалось отправить отзыв. Попробуйте еще раз."
         }
     },
     es: {
@@ -252,7 +266,14 @@ const resources = {
             "remove": "Eliminar",
             "create": "Crear",
             "save": "Guardar",
-            "cancel": "Cancelar"
+            "cancel": "Cancelar",
+            "footer_feedback": "Comentarios",
+            "feedback_title": "Enviar comentarios",
+            "feedback_placeholder": "Describe tu problema o sugerencia...",
+            "feedback_submit": "Enviar",
+            "feedback_success": "¡Gracias por tus comentarios!",
+            "feedback_rate_limit": "Espera antes de enviar más comentarios.",
+            "feedback_error": "No se pudo enviar. Inténtalo de nuevo."
         }
     },
     fr: {
@@ -336,7 +357,14 @@ const resources = {
             "remove": "Supprimer",
             "create": "Créer",
             "save": "Enregistrer",
-            "cancel": "Annuler"
+            "cancel": "Annuler",
+            "footer_feedback": "Retour",
+            "feedback_title": "Envoyer un retour",
+            "feedback_placeholder": "Décrivez votre problème ou suggestion...",
+            "feedback_submit": "Envoyer",
+            "feedback_success": "Merci pour votre retour !",
+            "feedback_rate_limit": "Veuillez patienter avant d'envoyer un autre retour.",
+            "feedback_error": "Échec de l'envoi. Veuillez réessayer."
         }
     }
 };

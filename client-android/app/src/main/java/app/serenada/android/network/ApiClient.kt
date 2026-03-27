@@ -223,6 +223,43 @@ class HostApiClient(private val okHttpClient: OkHttpClient) {
         })
     }
 
+    fun submitFeedback(
+        host: String,
+        message: String,
+        locale: String,
+        appVersion: String,
+        onResult: (Result<Int>) -> Unit
+    ) {
+        val url = buildHttpsUrl(host, "/api/feedback")
+        if (url == null) {
+            onResult(Result.failure(IllegalArgumentException("Invalid host")))
+            return
+        }
+
+        val payload = JSONObject().apply {
+            put("message", message)
+            put("platform", "android")
+            put("locale", locale)
+            put("version", appVersion)
+        }
+        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+        val httpRequest = Request.Builder()
+            .url(url)
+            .post(requestBody)
+            .build()
+        okHttpClient.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                onResult(Result.failure(e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    onResult(Result.success(response.code))
+                }
+            }
+        })
+    }
+
     private fun parsePushRecipients(body: String): Result<List<PushRecipient>> {
         return try {
             val recipientsJson = JSONArray(body)

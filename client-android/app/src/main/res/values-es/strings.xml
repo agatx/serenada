@@ -150,4 +150,12 @@
     <string name="settings_invites_title">Invitaciones</string>
     <string name="settings_invite_notifications">Notificaciones de invitación</string>
     <string name="settings_invite_notifications_info">Mostrar notificaciones cuando te inviten a una sala guardada.</string>
+
+    <string name="settings_feedback_title">Comentarios</string>
+    <string name="settings_send_feedback">Enviar comentarios</string>
+    <string name="feedback_placeholder">Describe tu problema o sugerencia...</string>
+    <string name="feedback_success">¡Gracias por tus comentarios!</string>
+    <string name="feedback_rate_limit">Espera antes de enviar más comentarios.</string>
+    <string name="feedback_error">No se pudo enviar. Inténtalo de nuevo.</string>
+    <string name="feedback_send">Enviar</string>
 </resources>

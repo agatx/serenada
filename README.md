@@ -22,6 +22,7 @@ A simple, privacy-focused video calling application built with WebRTC. No accoun
 - **Self-hostable** – Run your own instance with full control
 - **Optional join alerts** – Encrypted push notifications with snapshot previews (web + native Android + native iOS)
 - **Room invite push** – In waiting state you can explicitly invite subscribers of the room; Android and iOS show these only for saved rooms and have a Settings toggle to disable invite notifications
+- **In-app feedback** – Send bug reports and suggestions directly from the app (web footer, Android/iOS settings); messages are forwarded to a configurable Telegram chat
 
 ## Quick Start
 

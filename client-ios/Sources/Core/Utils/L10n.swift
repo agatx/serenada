@@ -92,6 +92,14 @@ enum L10n {
     static var settingsAppVersion: String { text("settings_app_version") }
     static var settingsErrorInvalidServerHost: String { text("settings_error_invalid_server_host") }
 
+    static var feedbackTitle: String { text("feedback_title") }
+    static var feedbackSendAction: String { text("feedback_send_action") }
+    static var feedbackPlaceholder: String { text("feedback_placeholder") }
+    static var feedbackSend: String { text("feedback_send") }
+    static var feedbackSuccess: String { text("feedback_success") }
+    static var feedbackRateLimit: String { text("feedback_rate_limit") }
+    static var feedbackError: String { text("feedback_error") }
+
     static var errorSomethingWentWrong: String { text("error_something_went_wrong") }
     static var errorEnterRoomOrId: String { text("error_enter_room_or_id") }
     static var errorFailedCreateRoom: String { text("error_failed_create_room") }

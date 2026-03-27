@@ -156,3 +156,11 @@
 "call_error_generic" = "Algo salió mal";
 "call_joining" = "Uniéndose...";
 "call_ended" = "Llamada finalizada";
+
+"feedback_title" = "Comentarios";
+"feedback_send_action" = "Enviar comentarios";
+"feedback_placeholder" = "Describe tu problema o sugerencia...";
+"feedback_send" = "Enviar";
+"feedback_success" = "¡Gracias por tus comentarios!";
+"feedback_rate_limit" = "Espera antes de enviar más comentarios.";
+"feedback_error" = "No se pudo enviar. Inténtalo de nuevo.";
