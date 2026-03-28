@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Offer ownership now uses lexicographic peer ID ordering on web, Android, and iOS
 - Web peer-message integration now uses `onPeerMessage()` instead of exposing `subscribeToMessages()`
 - Provider mode now gates server-only APIs and server-bound diagnostics with clear `requires serverHost` failures
+- iOS `SerenadaDiagnostics.runConnectivityChecks()` is now `async throws`, which is a source-compatible break for existing call sites
 
 ## [0.2.0] — 2026-03-23
 

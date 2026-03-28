@@ -38,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -190,9 +191,9 @@ class SerenadaSession internal constructor(
                 )
             )
         },
-        onTurnRefreshed = { _ -> Unit },
+        onTurnRefreshed = { _ -> },
         onSignalingPayload = { msg -> handleSignalingPayload(msg) },
-        onPong = { Unit },
+        onPong = { },
         sendMessage = { type, payload, to -> sendMessage(type, payload, to) },
         clearJoinTimers = { joinFlowCoordinator.clearAllJoinTimers() },
         setJoinAcknowledged = { joinFlowCoordinator.markJoinAcknowledged() },
@@ -1123,7 +1124,7 @@ class SerenadaSession internal constructor(
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
-        providerScope.cancel()
+        providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
     }
 

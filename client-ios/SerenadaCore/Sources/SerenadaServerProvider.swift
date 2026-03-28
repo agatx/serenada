@@ -162,10 +162,15 @@ extension SerenadaServerProvider: SignalingClientListener {
         case "room_state":
             handleRoomState(message)
         case "room_ended":
-            let endedBy = currentHostPeerId
+            let endedBy = message.payload?.objectValue?["by"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+                ?? currentHostPeerId
+            let reason = message.payload?.objectValue?["reason"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+                ?? "room ended"
             clearReconnect()
             clearRoomState()
-            delegate?.signalingProviderDidEndRoom(RoomEndedEvent(by: endedBy, reason: "room ended"))
+            delegate?.signalingProviderDidEndRoom(RoomEndedEvent(by: endedBy, reason: reason))
         case "error":
             let payload = ErrorPayload(from: message.payload)
             delegate?.signalingProviderDidReceiveError(
@@ -370,11 +375,5 @@ private extension SerenadaServerProvider {
             order.append(localPeerId)
         }
         return order.compactMap { deduped[$0] }
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
     }
 }

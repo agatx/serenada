@@ -27,6 +27,18 @@ final class SessionOrchestrationTests: XCTestCase {
         }
     }
 
+    private func waitUntil(
+        attempts: Int = 8,
+        condition: @escaping () -> Bool
+    ) async {
+        for _ in 0..<attempts {
+            if condition() {
+                return
+            }
+            await harness.yieldToMainActor()
+        }
+    }
+
     // MARK: - Test 1: Permission Gating
 
     func testPermissionGating() async {
@@ -399,6 +411,51 @@ final class SessionOrchestrationTests: XCTestCase {
         await harness.yieldToMainActor()
         XCTAssertTrue(harness.fakeProvider.connectCalls > connectCallsBefore,
                        "Should reconnect after backoff")
+    }
+
+    func testReconnectWithoutProviderManagedReconnectionRejoinsWithReconnectPeerId() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+        harness.simulateJoinedResponse(cid: "my-cid")
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .waiting)
+
+        harness.fakeProvider.simulateDisconnected(reason: "connection lost")
+        await harness.yieldToMainActor()
+        await waitUntil { [self] in
+            harness.fakeClock.pendingSleepCount > 0
+        }
+
+        let connectCallsBefore = harness.fakeProvider.connectCalls
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.reconnectBackoffBaseMs) - 1)
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.fakeProvider.connectCalls, connectCallsBefore)
+
+        await harness.fakeClock.advance(byMs: 2)
+        await harness.yieldToMainActor()
+        XCTAssertGreaterThan(harness.fakeProvider.connectCalls, connectCallsBefore)
+
+        harness.fakeProvider.simulateConnected()
+        await waitUntil { [self] in
+            harness.fakeProvider.joinCalls.count > 1
+        }
+
+        XCTAssertEqual(harness.fakeProvider.joinCalls.last?.options.reconnectPeerId, "my-cid")
+    }
+
+    func testRoomEndedTransitionsSessionToEndingAndClearsRemoteState() async {
+        await harness.advanceToInCallWithTurn(
+            localCid: "my-cid",
+            remoteCid: "remote-cid",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        harness.fakeProvider.simulateRoomEnded(by: "remote-cid", reason: "host ended")
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.phase, .ending)
+        XCTAssertTrue(harness.session.state.remoteParticipants.isEmpty)
     }
 
     func testConnectionStatusRetryingDelay() async {

@@ -10,7 +10,7 @@ import type {
 } from './types.js';
 import type {
     ConnectionInfo,
-    ErrorEvent,
+    SignalingErrorEvent,
     JoinOptions,
     PeerEvent,
     PeerMessage,
@@ -24,6 +24,7 @@ import { CallStatsCollector } from './media/callStats.js';
 import {
     RECONNECT_BACKOFF_BASE_MS,
     RECONNECT_BACKOFF_CAP_MS,
+    JOIN_HARD_TIMEOUT_MS,
 } from './constants.js';
 import type { RoomState, SignalingMessage } from './signaling/types.js';
 
@@ -207,6 +208,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private permissionCheckDone = false;
     private permissionCheckInFlight = false;
     private endingTimer: number | null = null;
+    private joinTimeoutTimer: number | null = null;
     private reconnectTimer: number | null = null;
     private reconnectAttempts = 0;
     private pendingJoinOptions: JoinOptions | null = null;
@@ -219,7 +221,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private activeTransport: string | null = null;
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
-    private error: ErrorEvent | null = null;
+    private error: SignalingErrorEvent | null = null;
 
     onPermissionsRequired: ((permissions: MediaCapability[]) => void) | null = null;
 
@@ -384,6 +386,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             window.clearTimeout(this.endingTimer);
             this.endingTimer = null;
         }
+        this.clearJoinTimeout();
         for (const unsubscribe of this.providerUnsubscribers) {
             unsubscribe();
         }
@@ -399,6 +402,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         this.started = true;
         this.pendingJoinOptions = {};
+        this.scheduleJoinTimeout();
         this.signaling.connect();
     }
 
@@ -433,6 +437,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.isConnected = true;
         this.activeTransport = info?.transport ?? null;
         this.clearReconnectTimer();
+        this.clearJoinTimeout();
         this.reconnectAttempts = 0;
         this.media.updateSignalingConnected(true);
 
@@ -455,6 +460,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.isConnected = false;
         this.activeTransport = null;
         this.joinInFlight = false;
+        this.clearJoinTimeout();
         this.media.updateSignalingConnected(false);
 
         if (this.handlesReconnection) {
@@ -474,6 +480,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.joinInFlight = false;
         this.pendingJoinOptions = null;
         this.reconnectRecoveryPending = false;
+        this.clearJoinTimeout();
         this.error = null;
         this.clientId = event.peerId;
         this.roomState = buildRoomState(event, null, event.peerId);
@@ -538,11 +545,12 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.rebuildState();
     };
 
-    private readonly handleError = (event: ErrorEvent): void => {
+    private readonly handleError = (event: SignalingErrorEvent): void => {
         if (this._destroyed) {
             return;
         }
         this.joinInFlight = false;
+        this.clearJoinTimeout();
         this.error = event;
         this.rebuildState();
     };
@@ -603,6 +611,33 @@ export class SerenadaSession implements SerenadaSessionHandle {
         });
     }
 
+    private scheduleJoinTimeout(): void {
+        if (this._destroyed || this.handlesReconnection) {
+            return;
+        }
+        this.clearJoinTimeout();
+        this.joinTimeoutTimer = globalThis.setTimeout(() => {
+            this.joinTimeoutTimer = null;
+            if (this._destroyed || this.roomState || this.error || !this.pendingJoinOptions) {
+                return;
+            }
+            this.pendingJoinOptions = null;
+            this.joinInFlight = false;
+            this.error = {
+                code: 'JOIN_TIMEOUT',
+                message: 'Join timed out',
+            };
+            this.rebuildState();
+        }, JOIN_HARD_TIMEOUT_MS);
+    }
+
+    private clearJoinTimeout(): void {
+        if (this.joinTimeoutTimer !== null) {
+            globalThis.clearTimeout(this.joinTimeoutTimer);
+            this.joinTimeoutTimer = null;
+        }
+    }
+
     private scheduleReconnect(): void {
         if (this._destroyed || this.handlesReconnection || !this.started) {
             return;
@@ -627,6 +662,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 return;
             }
             this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined };
+            this.scheduleJoinTimeout();
             this.signaling.connect();
         }, delayMs);
     }

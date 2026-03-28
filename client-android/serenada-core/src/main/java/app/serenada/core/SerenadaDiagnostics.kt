@@ -185,6 +185,10 @@ class SerenadaDiagnostics(
     }
 
     /** Probe ICE connectivity (STUN/TURN) and return candidate details. */
+    @Deprecated(
+        message = "Use runTurnProbe(turnsOnly, host, onCandidateLog) instead.",
+        replaceWith = ReplaceWith("runTurnProbe(turnsOnly = turnsOnly, host = host, onCandidateLog = onCandidateLog)")
+    )
     suspend fun runIceProbe(
         turnsOnly: Boolean,
         host: String? = resolvedConfig.serverHost,

@@ -434,7 +434,7 @@ struct DiagnosticsScreen: View {
 
         appendLog(turnsOnly ? L10n.diagnosticsRunIceTurnsOnly : L10n.diagnosticsRunIceFull)
         let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalizedHost))
-        let report = await diag.runIceProbe(turnsOnly: turnsOnly) { candidate in
+        let report = await diag.runTurnProbe(turnsOnly: turnsOnly) { candidate in
             appendLog("ICE: \(candidate)")
         }
         iceReport = report

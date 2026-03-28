@@ -115,6 +115,9 @@ public struct ErrorEvent: Equatable, Sendable {
     }
 }
 
+/// Receives provider events. Implementations may invoke these callbacks from
+/// any thread; the SDK session layer hops back to the main actor before
+/// mutating observable SDK state.
 public protocol SignalingProviderDelegate: AnyObject {
     func signalingProviderDidConnect(_ info: ConnectionInfo)
     func signalingProviderDidDisconnect(reason: String?)
@@ -141,6 +144,11 @@ public extension SignalingProviderDelegate {
     func signalingProviderDidChangeIceServers(_ iceServers: [IceServerConfig]) {}
 }
 
+/// Transport-agnostic signaling contract for iOS SDK sessions.
+///
+/// The SDK invokes provider methods and property access from the main actor.
+/// Custom providers should therefore remain main-thread confined unless they
+/// perform their own synchronization internally.
 public protocol SignalingProvider: AnyObject {
     var version: Int { get }
     var capabilities: ProviderCapabilities { get }

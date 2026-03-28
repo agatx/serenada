@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
@@ -35,13 +36,13 @@ internal class SerenadaServerProvider(
     override var listener: SignalingProvider.Listener? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val signaling: SessionSignaling = (signaling ?: SignalingClient(
+    private val signaling: SessionSignaling = signaling ?: SignalingClient(
         okHttpClient = okHttpClient,
         handler = handler,
         initialListener = null,
         forceSse = transports == listOf(SerenadaTransport.SSE),
         logger = logger,
-    )).also { it.listener = signalingListener }
+    )
 
     private var reconnectAttempts = 0
     private var reconnectRunnable: Runnable? = null
@@ -69,7 +70,7 @@ internal class SerenadaServerProvider(
         pendingJoinRoomId = null
         previousParticipants.clear()
         signaling.close()
-        scope.cancel()
+        scope.coroutineContext.cancelChildren()
     }
 
     override fun joinRoom(roomId: String, options: JoinOptions) {
@@ -148,16 +149,22 @@ internal class SerenadaServerProvider(
         }
     }
 
+    init {
+        this.signaling.listener = signalingListener
+    }
+
     private fun handleIncomingMessage(message: SignalingMessage) {
         when (message.type) {
             "joined" -> handleJoined(message)
             "room_state" -> handleRoomState(message)
             "room_ended" -> {
+                val endedBy = message.payload?.optString("by").orEmpty().ifBlank { currentHostPeerId }
+                val reason = message.payload?.optString("reason").orEmpty().ifBlank { "room ended" }
                 clearReconnect()
                 clearTurnRefresh()
                 currentRoomId = null
                 previousParticipants.clear()
-                listener?.onRoomEnded(RoomEndedEvent(by = currentHostPeerId, reason = "room ended"))
+                listener?.onRoomEnded(RoomEndedEvent(by = endedBy, reason = reason))
             }
             "error" -> {
                 message.payload.toErrorPayload()?.let { payload ->

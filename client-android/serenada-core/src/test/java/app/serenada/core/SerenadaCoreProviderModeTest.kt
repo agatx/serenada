@@ -24,6 +24,31 @@ import org.robolectric.annotation.Config
 class SerenadaCoreProviderModeTest {
 
     @Test
+    fun `missing serverHost and signalingProvider is rejected`() {
+        try {
+            resolveSerenadaConfig(SerenadaConfig())
+            fail("Expected missing serverHost/signalingProvider to be rejected")
+        } catch (error: IllegalArgumentException) {
+            assertEquals("Provide exactly one of serverHost or signalingProvider", error.message)
+        }
+    }
+
+    @Test
+    fun `serverHost and signalingProvider together are rejected`() {
+        try {
+            resolveSerenadaConfig(
+                SerenadaConfig(
+                    serverHost = "serenada.app",
+                    signalingProvider = FakeSignalingProvider(),
+                )
+            )
+            fail("Expected serverHost + signalingProvider to be rejected")
+        } catch (error: IllegalArgumentException) {
+            assertEquals("Provide exactly one of serverHost or signalingProvider", error.message)
+        }
+    }
+
+    @Test
     fun `unsupported signalingProvider version is rejected`() {
         val provider = object : SignalingProvider {
             override val version: Int = 2

@@ -86,6 +86,19 @@ public struct IceProbeReport: Equatable {
     }
 }
 
+private final class LockedContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didResume else { return false }
+        didResume = true
+        return true
+    }
+}
+
 // MARK: - SerenadaDiagnostics
 
 /// Pre-flight diagnostics utility. Checks device capabilities and server connectivity.
@@ -130,6 +143,9 @@ public final class SerenadaDiagnostics {
     }
 
     /// Test server connectivity (room API, WebSocket, SSE, TURN credentials).
+    ///
+    /// - Throws: An error when `serverHost` is unavailable or a required
+    ///   connectivity probe cannot be executed.
     public func runConnectivityChecks() async throws -> ConnectivityReport {
         let serverHost = try requireServerHost(config)
         var report = ConnectivityReport()
@@ -179,6 +195,7 @@ public final class SerenadaDiagnostics {
     }
 
     /// Probe ICE connectivity (STUN/TURN) by gathering candidates with a real peer connection.
+    @available(*, deprecated, message: "Use runTurnProbe(turnsOnly:onCandidateLog:) instead.")
     public func runIceProbe(turnsOnly: Bool, onCandidateLog: ((String) -> Void)? = nil) async -> IceProbeReport {
         await runTurnProbe(turnsOnly: turnsOnly, onCandidateLog: onCandidateLog)
     }
@@ -357,7 +374,9 @@ public final class SerenadaDiagnostics {
         await withCheckedContinuation { continuation in
             let monitor = NWPathMonitor()
             let queue = DispatchQueue(label: "SerenadaDiagnostics.Network")
+            let gate = LockedContinuationGate()
             monitor.pathUpdateHandler = { path in
+                guard gate.claim() else { return }
                 let result: DiagnosticCheckResult = path.status == .satisfied
                     ? .available
                     : .unavailable(reason: "No network connection")
@@ -461,12 +480,6 @@ public final class SerenadaDiagnostics {
         }
 
         return devices
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
     }
 }
 

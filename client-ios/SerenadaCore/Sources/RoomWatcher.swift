@@ -23,7 +23,7 @@ public final class RoomWatcher {
     /// Delegate notified when room occupancy changes.
     public weak var delegate: RoomWatcherDelegate?
 
-    private let signalingClient: SignalingClient
+    private let signalingClient: SessionSignaling
     private var watchedRoomIds: [String] = []
     private var statuses: [String: RoomOccupancy] = [:]
     private var reconnectAttempts = 0
@@ -32,6 +32,11 @@ public final class RoomWatcher {
 
     public init() {
         self.signalingClient = SignalingClient()
+        self.signalingClient.listener = self
+    }
+
+    internal init(signalingClient: SessionSignaling) {
+        self.signalingClient = signalingClient
         self.signalingClient.listener = self
     }
 
@@ -202,11 +207,5 @@ extension RoomWatcher: SignalingClientListener {
 
     func onClosed(reason: String) {
         scheduleReconnect()
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
     }
 }

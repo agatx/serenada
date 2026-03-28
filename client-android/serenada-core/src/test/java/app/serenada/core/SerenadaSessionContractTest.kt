@@ -2,6 +2,7 @@ package app.serenada.core
 
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.WebRtcResilienceConstants
+import android.os.Looper
 import app.serenada.core.fakes.TestSessionFactory
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -171,6 +172,56 @@ class SerenadaSessionContractTest {
 
         assertNotEquals(CallPhase.Idle, factory.session.state.value.phase)
         assertFalse(factory.session.diagnostics.value.isSignalingConnected)
+    }
+
+    @Test
+    fun `self-managed reconnect rejoins with reconnect peer id`() {
+        factory.tearDown()
+        factory = TestSessionFactory(handlesReconnection = false)
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to 1L, "remote-cid" to 2L),
+            hostCid = "my-cid",
+        )
+        assertEquals(CallPhase.InCall, factory.session.state.value.phase)
+
+        factory.fakeProvider.simulateDisconnected(reason = "connection lost")
+        ShadowLooper.idleMainLooper()
+
+        Shadows.shadowOf(Looper.getMainLooper())
+            .idleFor(WebRtcResilienceConstants.RECONNECT_BACKOFF_BASE_MS, TimeUnit.MILLISECONDS)
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(2, factory.fakeProvider.connectCalls.size)
+
+        factory.fakeProvider.simulateConnected()
+        ShadowLooper.idleMainLooper()
+
+        val reconnectJoin = factory.fakeProvider.joinCalls.last()
+        assertEquals("test-room-id", reconnectJoin.first)
+        assertEquals("my-cid", reconnectJoin.second.reconnectPeerId)
+    }
+
+    @Test
+    fun `room ended resets session to idle`() {
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to 1L, "remote-cid" to 2L),
+            hostCid = "my-cid",
+        )
+        assertEquals(CallPhase.InCall, factory.session.state.value.phase)
+
+        factory.fakeProvider.simulateRoomEnded(by = "remote-cid", reason = "host ended")
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(CallPhase.Idle, factory.session.state.value.phase)
+        assertTrue(factory.session.state.value.remoteParticipants.isEmpty())
     }
 
     // ── Leave cleanup ───────────────────────────────────────────────

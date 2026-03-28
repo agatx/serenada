@@ -7,6 +7,11 @@ public enum SerenadaTransport: String, Equatable, Sendable {
 }
 
 /// SDK configuration.
+///
+/// `SerenadaConfig` is marked `@unchecked Sendable` because a custom
+/// `SignalingProvider` is class-bound and cannot be proven sendable by the
+/// compiler. Callers are responsible for keeping provider implementations
+/// thread-safe according to the provider contract.
 public struct SerenadaConfig: Equatable, @unchecked Sendable {
     /// Server host or origin (e.g. "serenada.app" or "localhost:8080").
     public let serverHost: String?
@@ -84,11 +89,5 @@ private func haveSameProvider(_ lhs: SignalingProvider?, _ rhs: SignalingProvide
         ObjectIdentifier(lhs) == ObjectIdentifier(rhs)
     default:
         false
-    }
-}
-
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
     }
 }

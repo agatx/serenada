@@ -3,7 +3,7 @@ import CoreImage
 import Foundation
 import UIKit
 #if canImport(WebRTC)
-import WebRTC
+@preconcurrency import WebRTC
 #endif
 
 public struct IceServerConfig: Equatable, Sendable {

@@ -103,7 +103,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
         }
 
         const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), TURN_FETCH_TIMEOUT_MS);
+        const timeout = globalThis.setTimeout(() => controller.abort(), TURN_FETCH_TIMEOUT_MS);
 
         try {
             const response = await fetch(
@@ -130,7 +130,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
                 credential: typeof data.password === 'string' ? data.password : undefined,
             }];
         } finally {
-            window.clearTimeout(timeout);
+            globalThis.clearTimeout(timeout);
         }
     }
 
@@ -162,8 +162,8 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             case 'room_ended':
                 this.previousParticipants.clear();
                 this.emit('roomEnded', {
-                    by: this.currentHostPeerId ?? '',
-                    reason: 'room ended',
+                    by: roomEndedBy(message.payload) ?? this.currentHostPeerId ?? '',
+                    reason: roomEndedReason(message.payload) ?? 'room ended',
                 });
                 break;
             case 'error': {
@@ -303,4 +303,14 @@ function toRecordPayload(payload: unknown): Record<string, unknown> | undefined 
         return payload as Record<string, unknown>;
     }
     return { value: payload };
+}
+
+function roomEndedBy(payload: Record<string, unknown> | undefined): string | null {
+    const by = payload?.by;
+    return typeof by === 'string' && by.trim().length > 0 ? by : null;
+}
+
+function roomEndedReason(payload: Record<string, unknown> | undefined): string | null {
+    const reason = payload?.reason;
+    return typeof reason === 'string' && reason.trim().length > 0 ? reason : null;
 }

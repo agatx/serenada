@@ -48,10 +48,13 @@ export interface RoomEndedEvent {
     reason: string;
 }
 
-export interface ErrorEvent {
+export interface SignalingErrorEvent {
     code: string;
     message: string;
 }
+
+/** @deprecated Use `SignalingErrorEvent`. */
+export type ErrorEvent = SignalingErrorEvent;
 
 export interface SignalingProviderEventMap {
     connected: ConnectionInfo | undefined;
@@ -62,7 +65,7 @@ export interface SignalingProviderEventMap {
     peerLeft: PeerEvent;
     message: PeerMessage;
     roomEnded: RoomEndedEvent;
-    error: ErrorEvent;
+    error: SignalingErrorEvent;
     iceServersChanged: RTCIceServer[];
 }
 

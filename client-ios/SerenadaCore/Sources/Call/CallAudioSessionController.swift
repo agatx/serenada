@@ -40,7 +40,7 @@ internal final class CallAudioSessionController: SessionAudioController {
             try audioSession.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
-                options: [.allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
+                options: [.allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers]
             )
             try audioSession.setActive(true)
         } catch {

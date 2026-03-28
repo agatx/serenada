@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { JOIN_HARD_TIMEOUT_MS } from '../src/constants.js';
 import { TestSessionHarness } from './helpers/TestSessionHarness.js';
 
 // SerenadaSession uses `window.setTimeout` / `window.clearTimeout`.
@@ -104,6 +105,25 @@ describe('SerenadaSession', () => {
             harness.signaling.emitConnected('sse');
 
             expect(harness.state.activeTransport).toBe('sse');
+        });
+
+        it('times out a self-managed provider join and ignores a late connect', async () => {
+            harness = new TestSessionHarness({ handlesReconnection: false, autoStart: true });
+
+            expect(harness.signaling.connectCalls).toBe(1);
+            expect(harness.signaling.joinRoomCalls).toHaveLength(0);
+
+            await vi.advanceTimersByTimeAsync(JOIN_HARD_TIMEOUT_MS + 1);
+
+            expect(harness.state.phase).toBe('error');
+            expect(harness.state.error).toEqual({
+                code: 'signalingTimeout',
+                message: 'Join timed out',
+            });
+
+            harness.signaling.emitConnected('ws');
+
+            expect(harness.signaling.joinRoomCalls).toHaveLength(0);
         });
     });
 
