@@ -17,8 +17,9 @@ import (
 
 const maxMessageSize = 65536 // 64KB
 
-// TURN token TTL: 30 minutes. Clients proactively refresh at 80% of TTL.
-const turnTokenTTL = 30 * time.Minute
+// TURN token TTL: 15 minutes. Clients proactively refresh at 80% of TTL (~12 min).
+// Both Cloudflare and coturn credentials are issued with a 15-minute TTL to match.
+const turnTokenTTL = 15 * time.Minute
 
 // issueReconnectToken generates an HMAC proof that allows a client to reclaim
 // its CID on reconnect. Format: hex(HMAC-SHA256(secret, cid|rid)).
