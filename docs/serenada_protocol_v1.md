@@ -202,7 +202,7 @@ Sent when participants join/leave or host changes.
 **Client behavior**
 - Update UI for “waiting for someone to join” vs “in call”.
 - Treat `maxParticipants` as the room's current effective capacity. It may increase from `2` to a higher locked value when the second participant joins a provisional room.
-- Preserve `joinedAt` ordering because it is used to choose the per-peer offerer in multi-party rooms.
+- Treat `joinedAt` as informational only. It may be shown in UI, but clients must not depend on it for offer ownership.
 - If participant list shrinks to 1 during a call, treat as remote left.
 
 ---
@@ -480,12 +480,12 @@ Pushed whenever a watched room's participant count changes. `maxParticipants` is
 ### 5.1 Roles for offer/answer
 To avoid “glare” (both sides sending offers), assign offer ownership per peer edge:
 
-- Build a deterministic ordering from `participants[].joinedAt`.
-- Earlier joiner is the offerer for that pair.
-- If `joinedAt` ties, break ties by lexical `cid`.
+- Compare peer IDs lexicographically.
+- The participant whose `cid` sorts first is the offerer for that pair.
+- `joinedAt` does not participate in offer ownership.
 
 **Rule:**
-- For each remote participant, if your `(joinedAt, cid)` tuple sorts before theirs, create and send `offer` to that participant.
+- For each remote participant, if your `cid` sorts before theirs, create and send `offer` to that participant.
 - Otherwise wait for their `offer` and respond with `answer`.
 - All `offer`, `answer`, and `ice` messages should be directed with `to`.
 

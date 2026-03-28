@@ -204,6 +204,25 @@ All three native SDKs follow a **headless core + optional UI** pattern:
 
 Android enforces main-thread access on all public SDK entrypoints with fail-fast preconditions.
 
+### Signaling Modes
+
+All SDKs now support two signaling modes through the same `SerenadaConfig`, and they validate the choice at construction time:
+
+- Built-in Serenada signaling: set `serverHost`.
+- Custom signaling provider: set `signalingProvider`.
+
+Provide exactly one of `serverHost` or `signalingProvider`.
+
+In custom-provider mode:
+
+- `join()` still creates a normal `SerenadaSession`.
+- The built-in provider-facing identifier is `peerId`; built-in `cid` mapping stays internal.
+- `hostPeerId` and `roomStateUpdated` remain optional.
+- `runAll()` still works, and TURN probing uses provider-supplied ICE servers.
+- Server-only APIs require `serverHost`: `createRoom()`, native `createRoomId()`, `RoomWatcher`, `validateServerHost()`, and `runConnectivityChecks()`.
+
+On web, provider-delivered peer messages are exposed through `session.onPeerMessage(...)`. Raw Serenada transport envelopes are no longer part of the public SDK surface.
+
 ## Documentation
 
 - [SDK API Reference](https://agatx.github.io/serenada/) – Generated API docs for all platforms (Web, Android, iOS)

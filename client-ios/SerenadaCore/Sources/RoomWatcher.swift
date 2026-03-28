@@ -41,8 +41,14 @@ public final class RoomWatcher {
     }
 
     /// Start watching the given room IDs for occupancy changes.
-    public func watchRooms(roomIds: [String], host: String) {
-        self.host = host
+    public func watchRooms(roomIds: [String], host: String?) throws {
+        guard let resolvedHost = host?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty else {
+            throw APIError.invalidResponse("requires serverHost")
+        }
+        let hostChanged = self.host?.caseInsensitiveCompare(resolvedHost) != .orderedSame && self.host != nil
+        self.host = resolvedHost
         watchedRoomIds = roomIds
 
         let watchedSet = Set(watchedRoomIds)
@@ -50,6 +56,10 @@ public final class RoomWatcher {
 
         reconnectTask?.cancel()
         reconnectTask = nil
+
+        if hostChanged {
+            signalingClient.close()
+        }
 
         guard !watchedRoomIds.isEmpty else {
             if signalingClient.isConnected() {
@@ -61,7 +71,7 @@ public final class RoomWatcher {
         if signalingClient.isConnected() {
             sendWatchRooms()
         } else {
-            signalingClient.connect(host: host)
+            signalingClient.connect(host: resolvedHost)
         }
     }
 
@@ -192,5 +202,11 @@ extension RoomWatcher: SignalingClientListener {
 
     func onClosed(reason: String) {
         scheduleReconnect()
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

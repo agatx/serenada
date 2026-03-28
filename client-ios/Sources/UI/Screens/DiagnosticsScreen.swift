@@ -377,7 +377,21 @@ struct DiagnosticsScreen: View {
         }
 
         let diag = SerenadaDiagnostics(config: SerenadaConfig(serverHost: normalizedHost))
-        let report = await diag.runConnectivityChecks()
+        let report: ConnectivityReport
+        do {
+            report = try await diag.runConnectivityChecks()
+        } catch {
+            connectivityChecks = [
+                DiagnosticsCheckResult(
+                    title: L10n.diagnosticsConnectivityHost,
+                    status: .fail,
+                    detail: error.localizedDescription,
+                    latencyMs: nil
+                )
+            ]
+            appendLog(error.localizedDescription)
+            return
+        }
 
         let titles = [
             L10n.diagnosticsConnectivityRoomApi,

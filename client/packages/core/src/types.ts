@@ -1,5 +1,5 @@
+import type { SignalingProvider, PeerMessage } from './SignalingProvider.js';
 import type { TransportKind } from './signaling/transports/types.js';
-import type { SignalingMessage } from './signaling/types.js';
 import type { RoomStatus, RoomStatuses } from './signaling/roomStatuses.js';
 
 /** Current phase of the call lifecycle. */
@@ -62,7 +62,7 @@ export interface CallState {
     localParticipant: LocalParticipant | null;
     remoteParticipants: Participant[];
     connectionStatus: ConnectionStatus;
-    activeTransport: TransportKind | null;
+    activeTransport: string | null;
     requiredPermissions: MediaCapability[] | null;
     error: CallError | null;
 }
@@ -70,7 +70,9 @@ export interface CallState {
 /** SDK configuration passed to {@link SerenadaCore}. */
 export interface SerenadaConfig {
     /** Bare host or full origin, e.g. `serenada.app` or `http://qa-box:8080`. */
-    serverHost: string;
+    serverHost?: string;
+    /** Custom signaling provider. Provide exactly one of `serverHost` or `signalingProvider`. */
+    signalingProvider?: SignalingProvider;
     /** Whether the microphone is enabled when joining. Defaults to `true`. */
     defaultAudioEnabled?: boolean;
     /** Whether the camera is enabled when joining. Defaults to `true`. */
@@ -97,7 +99,7 @@ export interface CreateRoomResult {
  */
 export interface SerenadaSessionHandle {
     subscribe(callback: (state: CallState) => void): () => void;
-    subscribeToMessages(callback: (message: SignalingMessage) => void): () => void;
+    onPeerMessage(callback: (message: PeerMessage) => void): () => void;
     leave(): void;
     end(): void;
     toggleAudio(): void;

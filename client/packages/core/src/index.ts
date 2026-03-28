@@ -9,6 +9,8 @@ export { SerenadaCore } from './SerenadaCore.js';
 export { SerenadaSession } from './SerenadaSession.js';
 export { SerenadaDiagnostics } from './SerenadaDiagnostics.js';
 export { RoomWatcher } from './RoomWatcher.js';
+export { SerenadaServerProvider } from './SerenadaServerProvider.js';
+export { SignalingProviderEmitter } from './SignalingProvider.js';
 
 // Factory functions (match documented API)
 import { SerenadaCore as _SerenadaCore } from './SerenadaCore.js';
@@ -43,6 +45,21 @@ export type {
     SerenadaLogLevel,
     SerenadaLogger,
 } from './types.js';
+export type {
+    ProviderCapabilities,
+    ConnectionInfo,
+    JoinOptions,
+    SignalingProviderParticipant,
+    JoinedEvent,
+    RoomStateEvent,
+    PeerEvent,
+    PeerMessage,
+    RoomEndedEvent,
+    ErrorEvent,
+    SignalingProviderEventMap,
+    SignalingProviderEventName,
+    SignalingProvider,
+} from './SignalingProvider.js';
 
 export { ConsoleSerenadaLogger } from './ConsoleLogger.js';
 

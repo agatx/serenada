@@ -692,7 +692,7 @@ final class CallManager: ObservableObject {
         let watchedSet = Set(watchedRoomIds)
         roomStatuses = roomStatuses.filter { watchedSet.contains($0.key) }
 
-        roomWatcher.watchRooms(roomIds: watchedRoomIds, host: serverHost)
+        try? roomWatcher.watchRooms(roomIds: watchedRoomIds, host: serverHost)
     }
 
     private func isCurrentServerHost(_ host: String?) -> Bool {

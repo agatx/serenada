@@ -16,7 +16,6 @@ import app.serenada.core.call.PeerNegotiationEngine
 import app.serenada.core.call.SessionClock
 import app.serenada.core.call.SignalingMessageRouter
 import app.serenada.core.call.StatsPoller
-import app.serenada.core.call.TurnManager
 import app.serenada.core.call.CallAudioSessionController
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
@@ -27,19 +26,27 @@ import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RemoteParticipant
 import app.serenada.core.call.SerenadaPeerConnectionState
 import app.serenada.core.call.RoomState
+import app.serenada.core.call.Participant
 import app.serenada.core.call.SessionAudioController
 import app.serenada.core.call.SessionMediaEngine
-import app.serenada.core.call.SessionSignaling
-import app.serenada.core.call.SignalingClient
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcEngine
+import app.serenada.core.call.toContentStatePayload
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import org.json.JSONObject
+import org.json.JSONArray
+import org.webrtc.PeerConnection
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -54,12 +61,12 @@ class SerenadaSession internal constructor(
     val roomId: String,
     /** Full URL for this call session (e.g. "https://serenada.app/call/ABC123"). */
     val roomUrl: String?,
-    private val serverHost: String,
     private val config: SerenadaConfig,
     private val context: Context,
     private val delegate: (() -> SerenadaCoreDelegate?)?,
     okHttpClient: OkHttpClient,
-    signaling: SessionSignaling? = null,
+    initialSignalingProvider: SignalingProvider? = null,
+    signaling: app.serenada.core.call.SessionSignaling? = null,
     apiClient: SessionAPIClient? = null,
     audioController: SessionAudioController? = null,
     mediaEngine: SessionMediaEngine? = null,
@@ -71,6 +78,8 @@ class SerenadaSession internal constructor(
     private var webRtcStatsExecutor: ExecutorService? = newWebRtcStatsExecutor()
     private val apiClient: SessionAPIClient = apiClient ?: CoreApiClient(okHttpClient)
     private val clock: SessionClock = clock ?: LiveSessionClock()
+    private val resolvedConfig = resolveSerenadaConfig(config)
+    private val providerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -123,11 +132,16 @@ class SerenadaSession internal constructor(
         handler = handler,
         roomId = roomId,
         getPhase = { _state.value.phase },
-        isSignalingConnected = { signalingClient.isConnected() },
+        isSignalingConnected = { _diagnostics.value.isSignalingConnected },
         onStartJoinInternal = { startJoinInternal() },
         onPermissionCheckRequired = { startWithPermissionCheck() },
-        connectSignaling = { host -> signalingClient.connect(host) },
-        sendSignalingMessage = { msg -> signalingClient.send(msg) },
+        connectProvider = { signalingProvider.connect() },
+        joinRoom = { targetRoomId, reconnectPeerId ->
+            signalingProvider.joinRoom(
+                targetRoomId,
+                JoinOptions(reconnectPeerId = reconnectPeerId, maxParticipants = 4),
+            )
+        },
         onJoinTimeout = {
             resetResources()
             updateState(CallState(phase = CallPhase.Error, error = CallError.ConnectionFailed))
@@ -140,27 +154,21 @@ class SerenadaSession internal constructor(
             }
         },
         setPendingJoinRoom = { roomId -> pendingJoinRoom = roomId },
-        getReconnectToken = { reconnectToken },
-        serverHost = serverHost,
+        getReconnectPeerId = { clientId },
     )
     private val signalingMessageRouter = SignalingMessageRouter(
         getClientId = { clientId },
         getHostCid = { hostCid },
-        onJoined = { cid, _, roomState, turnToken, turnTTL, newReconnectToken ->
+        onJoined = { cid, _, roomState, _, _, newReconnectToken ->
             clientId = cid
             updateState(_state.value.copy(localCid = clientId))
             newReconnectToken?.let { reconnectToken = it }
-            turnTTL?.let { turnManager.handleJoinedTTL(it) }
             if (roomState != null) {
                 currentRoomState = roomState
                 hostCid = roomState.hostCid
                 updateParticipants(roomState)
             }
-            if (!turnToken.isNullOrBlank()) {
-                turnManager.fetchTurnCredentials(turnToken)
-            } else {
-                turnManager.applyDefaultIceServers()
-            }
+            loadInitialIceServers()
         },
         onRoomStateUpdated = { roomState ->
             currentRoomState = roomState
@@ -182,26 +190,12 @@ class SerenadaSession internal constructor(
                 )
             )
         },
-        onTurnRefreshed = { msg -> turnManager.handleTurnRefreshed(msg) },
+        onTurnRefreshed = { _ -> Unit },
         onSignalingPayload = { msg -> handleSignalingPayload(msg) },
-        onPong = { signalingClient.recordPong() },
+        onPong = { Unit },
         sendMessage = { type, payload, to -> sendMessage(type, payload, to) },
         clearJoinTimers = { joinFlowCoordinator.clearAllJoinTimers() },
         setJoinAcknowledged = { joinFlowCoordinator.markJoinAcknowledged() },
-    )
-    private val turnManager = TurnManager(
-        handler = handler,
-        serverHost = serverHost,
-        apiClient = this.apiClient,
-        isSignalingConnected = { signalingClient.isConnected() },
-        setIceServers = { servers -> webRtcEngine.setIceServers(servers) },
-        onIceServersReady = {
-            while (pendingMessages.isNotEmpty() && webRtcEngine.hasIceServers()) {
-                peerNegotiationEngine.processSignalingPayload(pendingMessages.removeFirst())
-            }
-            peerNegotiationEngine.onIceServersReady()
-        },
-        sendTurnRefresh = { sendMessage("turn-refresh", null) },
     )
     private val statsPoller = StatsPoller(
         handler = handler,
@@ -240,13 +234,17 @@ class SerenadaSession internal constructor(
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
     private val peerSlots = mutableMapOf<String, PeerConnectionSlotProtocol>()
     private val peerNegotiationEngine: PeerNegotiationEngine
+    private lateinit var signalingProvider: SignalingProvider
     private var reconnectToken: String? = null
+    private var reconnectRecoveryPending = false
+    private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var userPreferredVideoEnabled = config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
     private val isMediaEngineInjected = mediaEngine != null
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
+    private var hasInitialIceServers = false
 
     init {
         peerNegotiationEngine = PeerNegotiationEngine(
@@ -256,7 +254,7 @@ class SerenadaSession internal constructor(
             getHostCid = { hostCid },
             getParticipantCount = { _state.value.participantCount },
             getCurrentRoomState = { currentRoomState },
-            isSignalingConnected = { signalingClient.isConnected() },
+            isSignalingConnected = { _diagnostics.value.isSignalingConnected },
             hasIceServers = { webRtcEngine.hasIceServers() },
             getSlot = { cid: String -> peerSlots[cid] },
             getAllSlots = { peerSlots.toMap() },
@@ -295,13 +293,23 @@ class SerenadaSession internal constructor(
             onConnectionStatusUpdate = { updateConnectionStatusFromSignals() },
             logger = logger,
         )
+        signalingProvider = initialSignalingProvider ?: resolvedConfig.signalingProvider ?: SerenadaServerProvider(
+            serverHost = resolvedConfig.serverHost ?: throw IllegalStateException("requires serverHost"),
+            handler = handler,
+            okHttpClient = okHttpClient,
+            apiClient = this.apiClient,
+            signaling = signaling,
+            transports = config.transports,
+            logger = logger,
+        )
+        signalingProvider.listener = buildProviderListener()
     }
 
     /** Callback invoked when camera/microphone permissions are needed before joining. */
     var onPermissionsRequired: ((List<MediaCapability>) -> Unit)? = null
 
     val host: String
-        get() = serverHost
+        get() = resolvedConfig.serverHost ?: throw IllegalStateException("requires serverHost")
 
     private fun assertMainThread() {
         check(Looper.myLooper() == Looper.getMainLooper()) {
@@ -326,43 +334,119 @@ class SerenadaSession internal constructor(
             Thread(runnable, "webrtc-stats")
         }
 
-    private val signalingListener = object : SessionSignaling.Listener {
-        override fun onOpen(activeTransport: String) {
-            joinFlowCoordinator.resetReconnectAttempts()
-            updateDiagnostics(
-                _diagnostics.value.copy(
-                    isSignalingConnected = true,
-                    activeTransport = activeTransport,
-                )
-            )
-            updateConnectionStatusFromSignals()
-            pendingJoinRoom?.let { join ->
-                pendingJoinRoom = null
-                joinFlowCoordinator.sendJoin(join)
-            }
-        }
-
-        override fun onMessage(message: SignalingMessage) {
-            logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${message.type}")
-            signalingMessageRouter.processMessage(message)
-        }
-
-        override fun onClosed(reason: String) {
-            val shouldReconnect = _state.value.phase != CallPhase.Idle
-            updateDiagnostics(
-                _diagnostics.value.copy(
-                    isSignalingConnected = false,
-                    activeTransport = null,
-                )
-            )
-            updateConnectionStatusFromSignals()
-            if (shouldReconnect) joinFlowCoordinator.scheduleReconnect()
+    private fun runOnMain(block: () -> Unit) {
+        if (Looper.myLooper() == handler.looper) {
+            block()
+        } else {
+            handler.post(block)
         }
     }
 
-    private val signalingClient: SessionSignaling = (signaling ?: SignalingClient(
-        okHttpClient, handler, signalingListener, forceSse = forceSse, logger = logger,
-    )).also { it.listener = signalingListener }
+    private fun buildProviderListener(): SignalingProvider.Listener = object : SignalingProvider.Listener {
+        override fun onConnected(info: ConnectionInfo) {
+            runOnMain {
+                joinFlowCoordinator.resetReconnectAttempts()
+                updateDiagnostics(
+                    _diagnostics.value.copy(
+                        isSignalingConnected = true,
+                        activeTransport = info.transport,
+                    )
+                )
+                updateConnectionStatusFromSignals()
+                if (reconnectRecoveryPending && currentRoomState != null) {
+                    reconnectRecoveryPending = false
+                    peerNegotiationEngine.scheduleIceRestart("signaling-reconnect", 0)
+                }
+                pendingJoinRoom?.let { join ->
+                    pendingJoinRoom = null
+                    joinFlowCoordinator.sendJoin(join)
+                }
+            }
+        }
+
+        override fun onDisconnected(reason: String?) {
+            runOnMain {
+                val shouldReconnect = _state.value.phase != CallPhase.Idle
+                updateDiagnostics(
+                    _diagnostics.value.copy(
+                        isSignalingConnected = false,
+                        activeTransport = null,
+                    )
+                )
+                updateConnectionStatusFromSignals()
+                if (shouldReconnect) {
+                    if (signalingProvider.capabilities.handlesReconnection) {
+                        reconnectRecoveryPending = currentRoomState != null
+                    } else {
+                        joinFlowCoordinator.scheduleReconnect()
+                    }
+                }
+            }
+        }
+
+        override fun onJoined(event: JoinedEvent) {
+            runOnMain {
+                logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX joined")
+                signalingMessageRouter.processMessage(joinedMessageFromEvent(event))
+            }
+        }
+
+        override fun onRoomStateUpdated(event: RoomStateEvent) {
+            runOnMain {
+                logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX room_state")
+                signalingMessageRouter.processMessage(roomStateMessageFromEvent(event))
+            }
+        }
+
+        override fun onPeerJoined(event: PeerEvent) {
+            runOnMain {
+                currentRoomState = upsertParticipant(currentRoomState, event, clientId)
+                currentRoomState?.let { roomState ->
+                    hostCid = roomState.hostCid
+                    updateParticipants(roomState)
+                }
+            }
+        }
+
+        override fun onPeerLeft(event: PeerEvent) {
+            runOnMain {
+                currentRoomState = removeParticipant(currentRoomState, event.peerId, clientId)
+                currentRoomState?.let { roomState ->
+                    hostCid = roomState.hostCid
+                    updateParticipants(roomState)
+                }
+            }
+        }
+
+        override fun onMessage(message: PeerMessage) {
+            runOnMain {
+                logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${message.type}")
+                if (message.type == "content_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
+                    signalingMessageRouter.processMessage(signalingMessageFromPeerMessage(message))
+                }
+            }
+        }
+
+        override fun onRoomEnded(event: RoomEndedEvent) {
+            runOnMain {
+                logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX room_ended (${event.reason})")
+                cleanupCall(EndReason.RemoteEnded)
+            }
+        }
+
+        override fun onError(event: ErrorEvent) {
+            runOnMain {
+                logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX error ${event.code}")
+                signalingMessageRouter.processMessage(errorMessageFromEvent(event))
+            }
+        }
+
+        override fun onIceServersChanged(iceServers: List<PeerConnection.IceServer>) {
+            runOnMain {
+                applyIceServers(iceServers)
+            }
+        }
+    }
 
     // --- Public API ---
 
@@ -370,14 +454,14 @@ class SerenadaSession internal constructor(
     fun leave() {
         assertMainThread()
         if (_state.value.phase == CallPhase.Idle) return
-        sendMessage("leave", null)
+        signalingProvider.leaveRoom()
         cleanupCall(EndReason.LocalLeft)
     }
 
     /** End the call for all participants. */
     fun end() {
         assertMainThread()
-        sendMessage("end_room", null)
+        signalingProvider.endRoom()
         leave()
     }
 
@@ -593,6 +677,9 @@ class SerenadaSession internal constructor(
         pendingMessages.clear()
         peerSlots.clear()
         currentRoomState = null
+        hasInitialIceServers = false
+        reconnectRecoveryPending = false
+        iceFetchGeneration += 1
         if (webRtcStatsExecutor == null) {
             webRtcStatsExecutor = newWebRtcStatsExecutor()
         }
@@ -709,15 +796,11 @@ class SerenadaSession internal constructor(
 
     private fun sendMessage(type: String, payload: JSONObject?, to: String? = null) {
         logger?.log(SerenadaLogLevel.DEBUG, "Session", "TX $type")
-        val msg = SignalingMessage(
-            type = type,
-            rid = roomId,
-            sid = null,
-            cid = clientId,
-            to = to,
-            payload = payload
-        )
-        signalingClient.send(msg)
+        if (to != null) {
+            signalingProvider.sendToPeer(to, type, payload)
+        } else {
+            signalingProvider.broadcast(type, payload)
+        }
     }
 
     private fun handleSignalingPayload(msg: SignalingMessage) {
@@ -726,6 +809,215 @@ class SerenadaSession internal constructor(
             return
         }
         peerNegotiationEngine.processSignalingPayload(msg)
+    }
+
+    private fun joinedMessageFromEvent(event: JoinedEvent): SignalingMessage {
+        val participants = dedupeParticipants(event.participants.map {
+            Participant(cid = it.peerId, joinedAt = it.joinedAt)
+        }, event.peerId)
+        val resolvedHostPeerId = resolveHostPeerId(
+            explicitHostPeerId = event.hostPeerId,
+            participants = participants,
+            currentHostPeerId = hostCid,
+            localPeerId = event.peerId,
+        )
+        return SignalingMessage(
+            type = "joined",
+            rid = roomId,
+            sid = null,
+            cid = event.peerId,
+            to = null,
+            payload = JSONObject().apply {
+                resolvedHostPeerId?.let { put("hostCid", it) }
+                event.maxParticipants?.let { put("maxParticipants", it) }
+                put("participants", participantsJson(participants))
+            },
+        )
+    }
+
+    private fun roomStateMessageFromEvent(event: RoomStateEvent): SignalingMessage {
+        val participants = dedupeParticipants(event.participants.map {
+            Participant(cid = it.peerId, joinedAt = it.joinedAt)
+        }, clientId)
+        val resolvedHostPeerId = resolveHostPeerId(
+            explicitHostPeerId = event.hostPeerId,
+            participants = participants,
+            currentHostPeerId = hostCid,
+            localPeerId = clientId,
+        )
+        return SignalingMessage(
+            type = "room_state",
+            rid = roomId,
+            sid = null,
+            cid = null,
+            to = null,
+            payload = JSONObject().apply {
+                resolvedHostPeerId?.let { put("hostCid", it) }
+                event.maxParticipants?.let { put("maxParticipants", it) }
+                put("participants", participantsJson(participants))
+            },
+        )
+    }
+
+    private fun signalingMessageFromPeerMessage(message: PeerMessage): SignalingMessage {
+        val payload = JSONObject(message.payload?.toString() ?: "{}").apply {
+            if (optString("from").isBlank()) {
+                put("from", message.from)
+            }
+        }
+        return SignalingMessage(
+            type = message.type,
+            rid = roomId,
+            sid = null,
+            cid = message.from,
+            to = null,
+            payload = payload,
+        )
+    }
+
+    private fun errorMessageFromEvent(event: ErrorEvent): SignalingMessage {
+        return SignalingMessage(
+            type = "error",
+            rid = roomId,
+            sid = null,
+            cid = null,
+            to = null,
+            payload = JSONObject().apply {
+                put("code", event.code)
+                put("message", event.message)
+            },
+        )
+    }
+
+    private fun participantsJson(participants: List<Participant>): JSONArray {
+        val array = JSONArray()
+        participants.forEach { participant ->
+            array.put(JSONObject().apply {
+                put("cid", participant.cid)
+                participant.joinedAt?.let { put("joinedAt", it) }
+            })
+        }
+        return array
+    }
+
+    private fun dedupeParticipants(
+        participants: List<Participant>,
+        localPeerId: String?,
+    ): List<Participant> {
+        val deduped = linkedMapOf<String, Participant>()
+        participants.forEach { participant ->
+            if (participant.cid.isNotBlank()) {
+                deduped[participant.cid] = participant
+            }
+        }
+        if (!localPeerId.isNullOrBlank() && !deduped.containsKey(localPeerId)) {
+            deduped[localPeerId] = Participant(cid = localPeerId, joinedAt = null)
+        }
+        return deduped.values.toList()
+    }
+
+    private fun resolveHostPeerId(
+        explicitHostPeerId: String?,
+        participants: List<Participant>,
+        currentHostPeerId: String?,
+        localPeerId: String?,
+    ): String? {
+        val participantIds = participants.map { it.cid }.toSet()
+        return sequenceOf(explicitHostPeerId, currentHostPeerId, localPeerId)
+            .filterNotNull()
+            .firstOrNull { participantIds.contains(it) }
+            ?: participants.firstOrNull()?.cid
+    }
+
+    private fun upsertParticipant(
+        roomState: RoomState?,
+        event: PeerEvent,
+        localPeerId: String?,
+    ): RoomState? {
+        val participants = dedupeParticipants(
+            (roomState?.participants ?: emptyList()) + Participant(cid = event.peerId, joinedAt = event.joinedAt),
+            localPeerId,
+        )
+        val host = roomState?.hostCid ?: localPeerId ?: participants.firstOrNull()?.cid ?: return null
+        return RoomState(
+            hostCid = if (host in participants.map { it.cid }.toSet()) host else participants.first().cid,
+            participants = participants,
+            maxParticipants = roomState?.maxParticipants,
+        )
+    }
+
+    private fun removeParticipant(
+        roomState: RoomState?,
+        peerId: String,
+        localPeerId: String?,
+    ): RoomState? {
+        roomState ?: return null
+        val participants = dedupeParticipants(
+            roomState.participants.filter { it.cid != peerId },
+            localPeerId,
+        )
+        if (participants.isEmpty()) {
+            return null
+        }
+        val nextHost = when {
+            roomState.hostCid != peerId && participants.any { it.cid == roomState.hostCid } -> roomState.hostCid
+            !localPeerId.isNullOrBlank() && participants.any { it.cid == localPeerId } -> localPeerId
+            else -> participants.first().cid
+        }
+        return RoomState(
+            hostCid = nextHost,
+            participants = participants,
+            maxParticipants = roomState.maxParticipants,
+        )
+    }
+
+    private fun defaultIceServers(): List<PeerConnection.IceServer> {
+        return listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
+    }
+
+    private fun applyIceServers(iceServers: List<PeerConnection.IceServer>) {
+        val resolvedIceServers = if (iceServers.isEmpty()) defaultIceServers() else iceServers
+        webRtcEngine.setIceServers(resolvedIceServers)
+        hasInitialIceServers = true
+        while (pendingMessages.isNotEmpty()) {
+            peerNegotiationEngine.processSignalingPayload(pendingMessages.removeFirst())
+        }
+        peerNegotiationEngine.onIceServersReady()
+    }
+
+    private fun loadInitialIceServers() {
+        val fetchGeneration = ++iceFetchGeneration
+        providerScope.launch {
+            val retryDelaysMs = longArrayOf(0L, 1_000L, 2_000L, 4_000L)
+            var lastError: Throwable? = null
+            for (delayMs in retryDelaysMs) {
+                if (delayMs > 0) {
+                    delay(delayMs)
+                }
+                if (fetchGeneration != iceFetchGeneration) {
+                    return@launch
+                }
+                try {
+                    val iceServers = signalingProvider.getIceServers()
+                    if (fetchGeneration != iceFetchGeneration) {
+                        return@launch
+                    }
+                    applyIceServers(iceServers)
+                    return@launch
+                } catch (error: Throwable) {
+                    lastError = error
+                }
+            }
+
+            if (fetchGeneration != iceFetchGeneration) {
+                return@launch
+            }
+
+            val callError = CallError.ServerError(lastError?.message ?: "Failed to fetch ICE servers")
+            resetResources()
+            updateState(CallState(phase = CallPhase.Error, error = callError))
+            delegate?.invoke()?.onSessionEnded(this@SerenadaSession, EndReason.Error(callError))
+        }
     }
 
     // --- Internal: Participants ---
@@ -815,11 +1107,11 @@ class SerenadaSession internal constructor(
     private fun resetResources() {
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
-        turnManager.cancelRefresh()
+        iceFetchGeneration += 1
         callAudioSessionController.deactivate()
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
-        signalingClient.close()
+        signalingProvider.disconnect()
         peerSlots.values.forEach { it.closePeerConnection() }
         peerSlots.clear()
         webRtcEngine.release()
@@ -830,7 +1122,8 @@ class SerenadaSession internal constructor(
         pendingJoinRoom = null; pendingMessages.clear()
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
-        reconnectToken = null; turnManager.reset()
+        reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
+        providerScope.cancel()
         updateDiagnostics(CallDiagnostics())
     }
 

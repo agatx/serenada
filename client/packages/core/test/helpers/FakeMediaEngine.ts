@@ -24,10 +24,11 @@ export class FakeMediaEngine {
     startLocalMediaCalls = 0;
     cleanupAllPeersCalls = 0;
     destroyCalls = 0;
+    handleSignalingReconnectCalls = 0;
     processSignalingMessageCalls: SignalingMessage[] = [];
+    setIceServersCalls: RTCIceServer[][] = [];
     updateRoomStateCalls: { state: RoomState | null; clientId: string | null }[] = [];
     updateSignalingConnectedCalls: boolean[] = [];
-    updateTurnTokenCalls: string[] = [];
 
     // --- Callbacks ---
     private onChange: (() => void) | null = null;
@@ -72,8 +73,12 @@ export class FakeMediaEngine {
         this.updateSignalingConnectedCalls.push(connected);
     }
 
-    updateTurnToken(token: string): void {
-        this.updateTurnTokenCalls.push(token);
+    setIceServers(iceServers: RTCIceServer[]): void {
+        this.setIceServersCalls.push(iceServers);
+    }
+
+    handleSignalingReconnect(): void {
+        this.handleSignalingReconnectCalls++;
     }
 
     cleanupAllPeers(): void {

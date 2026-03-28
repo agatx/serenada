@@ -6,7 +6,7 @@ import UIKit
 import WebRTC
 #endif
 
-internal struct IceServerConfig: Equatable {
+public struct IceServerConfig: Equatable, Sendable {
     public let urls: [String]
     public let username: String?
     public let credential: String?

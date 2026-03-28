@@ -32,6 +32,8 @@ packages:
     path: client-ios/SerenadaCallUI
 ```
 
+When you construct `SerenadaConfig` directly, provide exactly one of `serverHost` or `signalingProvider`.
+
 ## Quick Start — URL-First (Simplest)
 
 ```swift
@@ -76,7 +78,7 @@ func handleDeepLink(_ url: URL) {
 Task {
     do {
         let room = try await serenada.createRoom()
-        let shareURL = room.roomUrl  // send to the other party
+        let shareURL = room.url  // send to the other party
         presentFullScreen {
             SerenadaCallFlow(session: room.session, onDismiss: { dismiss() })
         }
@@ -85,6 +87,48 @@ Task {
     }
 }
 ```
+
+`createRoom()` is server mode only. In provider mode there is no Serenada room API, so join by your own room ID instead.
+
+## Provider Mode (Custom Signaling)
+
+Provider mode uses the same `SerenadaCore`, but you inject a `SignalingProvider` instead of `serverHost`:
+
+```swift
+final class DemoProvider: SignalingProvider {
+    weak var delegate: SignalingProviderDelegate?
+
+    func connect() {
+        delegate?.signalingProviderDidConnect(ConnectionInfo(transport: "mock"))
+    }
+
+    func disconnect() {}
+
+    func joinRoom(_ roomId: String, options: JoinOptions) {
+        delegate?.signalingProviderDidJoin(
+            JoinedEvent(
+                peerId: "local-peer",
+                participants: [SignalingProviderParticipant(peerId: "local-peer", joinedAt: 1)],
+                hostPeerId: nil,
+                maxParticipants: 4
+            )
+        )
+    }
+
+    func leaveRoom() {}
+    func endRoom() {}
+    func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?) {}
+    func broadcast(type: String, payload: SignalingPayload?) {}
+    func getIceServers() async throws -> [IceServerConfig] { [] }
+}
+
+let serenada = SerenadaCore(config: .init(signalingProvider: DemoProvider()))
+let session = serenada.join(roomId: "group-123")
+```
+
+Provider delegates may call back from any thread or actor. The session re-enters `MainActor` before it mutates SDK state, so adapter code does not need to add its own `MainActor.run` wrapper just to satisfy Serenada internals. Host-app calls into public SDK APIs should still stay on `MainActor`.
+
+If your provider already owns reconnect behavior, set `ProviderCapabilities(handlesReconnection: true)`. Otherwise keep the default `false` and let the session rejoin with `reconnectPeerId`.
 
 ## Core-Only Integration (No UI)
 
@@ -169,6 +213,8 @@ diagnostics.runAll { report in
 }
 ```
 
+In provider mode, `runAll()` still runs local device/network/TURN checks, but `report.signaling` is `.skipped(reason: "requires serverHost")`.
+
 ### Connectivity Checks
 
 Test individual server endpoints (Room API, WebSocket, SSE, diagnostic token, TURN credentials):
@@ -178,6 +224,8 @@ let report = await diagnostics.runConnectivityChecks()
 // report.roomApi, .webSocket, .sse, .diagnosticToken, .turnCredentials
 // Each is a CheckOutcome: .notRun | .passed(latencyMs:) | .failed(error:)
 ```
+
+`runConnectivityChecks()` requires `serverHost`.
 
 ### ICE Probing
 
@@ -190,6 +238,12 @@ let iceReport = await diagnostics.runIceProbe(turnsOnly: false) { candidate in
 // iceReport.stunPassed, .turnPassed, .logs
 ```
 
+`runTurnProbe()` is the primary TURN/STUN probe and `runIceProbe()` remains as the compatibility alias:
+
+```swift
+let turnReport = await diagnostics.runTurnProbe(turnsOnly: false, onCandidateLog: print)
+```
+
 ### Server Validation
 
 Validate that a host is a reachable Serenada server:
@@ -197,6 +251,8 @@ Validate that a host is a reachable Serenada server:
 ```swift
 try await diagnostics.validateServerHost()
 ```
+
+`validateServerHost()` requires `serverHost`.
 
 Diagnostics never trigger OS permission prompts — if a permission is missing, the check returns `.notAuthorized`.
 
@@ -215,6 +271,8 @@ func roomWatcher(_ watcher: RoomWatcher, didUpdateStatuses statuses: [String: Ro
     // statuses["room1"]?.count, .maxParticipants
 }
 ```
+
+`RoomWatcher` is server mode only and throws `requires serverHost` when no host is supplied.
 
 ## Logging
 

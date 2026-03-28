@@ -2,8 +2,6 @@ import XCTest
 
 @MainActor
 final class DeepLinkParticipantCountUITests: XCTestCase {
-    private let serverHost = "https://serenada.app"
-
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -41,30 +39,16 @@ final class DeepLinkParticipantCountUITests: XCTestCase {
     }
 
     private func resolveDeepLinkURL() async throws -> String {
-        if let override = resolveDeepLinkOverride() {
-            return override
-        }
-        let roomId = try await createRoomId()
-        return "\(serverHost)/call/\(roomId)"
-    }
-
-    private func resolveDeepLinkOverride() -> String? {
-        let environment = ProcessInfo.processInfo.environment
-        let keys = [
+        try LiveRoomOverride.require(
+            keys: [
+            "SERENADA_UI_TEST_DEEPLINK",
             "SERENADA_UI_TEST_PARTICIPANT_COUNT_DEEPLINK",
             "TEST_RUNNER_SERENADA_UI_TEST_PARTICIPANT_COUNT_DEEPLINK",
             "SERENADA_UI_TEST_REJOIN_DEEPLINK",
             "TEST_RUNNER_SERENADA_UI_TEST_REJOIN_DEEPLINK"
-        ]
-
-        for key in keys {
-            let value = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !value.isEmpty {
-                return value
-            }
-        }
-
-        return nil
+            ],
+            purpose: "DeepLinkParticipantCountUITests"
+        )
     }
 
     private func addSystemAlertHandler() {
@@ -226,35 +210,5 @@ final class DeepLinkParticipantCountUITests: XCTestCase {
             return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return nil
-    }
-
-    private func createRoomId() async throws -> String {
-        guard let url = URL(string: "\(serverHost)/api/room-id") else {
-            XCTFail("Invalid room-id endpoint URL")
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = Data()
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            XCTFail("Failed to create room ID from server")
-            throw URLError(.badServerResponse)
-        }
-
-        struct RoomIdResponse: Decodable {
-            let roomId: String
-        }
-
-        let decoded = try JSONDecoder().decode(RoomIdResponse.self, from: data)
-        let roomId = decoded.roomId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if roomId.isEmpty {
-            XCTFail("Server returned empty room ID")
-            throw URLError(.cannotParseResponse)
-        }
-        return roomId
     }
 }

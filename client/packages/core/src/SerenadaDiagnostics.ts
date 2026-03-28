@@ -7,6 +7,8 @@ import type {
     IceProbeReport,
 } from './types.js';
 import { buildApiUrl, resolveServerBaseUrl, resolveServerUrls } from './serverUrls.js';
+import type { ResolvedSerenadaConfig } from './configValidation.js';
+import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
 
 interface DiagnosticTokenResponse {
     token?: string;
@@ -27,19 +29,28 @@ interface TurnCredentialsResponse {
  * and server connectivity (signaling, TURN) before joining a call.
  */
 export class SerenadaDiagnostics {
-    private config: SerenadaConfig;
+    private readonly config: SerenadaConfig;
+    private readonly resolvedConfig: ResolvedSerenadaConfig;
 
     constructor(config: SerenadaConfig) {
         this.config = config;
+        this.resolvedConfig = resolveSerenadaConfig(config);
     }
 
     /** Run all diagnostic checks and return a full report. */
     async runAll(): Promise<DiagnosticsReport> {
+        const devicesPromise = this.enumerateDevices();
+        const networkPromise = this.checkNetwork();
+        const turnPromise = this.checkTurn();
+        const signalingPromise = this.resolvedConfig.serverHost
+            ? this.checkSignaling()
+            : Promise.resolve({ status: 'skipped', reason: 'requires serverHost' } as DiagnosticCheckResult & { transport?: string });
+
         const [devices, network, signaling, turn] = await Promise.all([
-            this.enumerateDevices(),
-            this.checkNetwork(),
-            this.checkSignaling(),
-            this.checkTurn(),
+            devicesPromise,
+            networkPromise,
+            signalingPromise,
+            turnPromise,
         ]);
         const camera = this.checkMediaCapability(devices, 'videoinput', 'No camera found');
         const microphone = this.checkMediaCapability(devices, 'audioinput', 'No microphone found');
@@ -49,48 +60,49 @@ export class SerenadaDiagnostics {
 
     /** Test server connectivity: room API, WebSocket, SSE, and TURN credentials. */
     async runConnectivityChecks(): Promise<ConnectivityReport> {
+        const serverHost = requireServerHost(this.config);
         // Fetch the diagnostic token once and reuse it for the TURN credentials check.
         let tokenForTurn: string | undefined;
         const [roomApi, webSocket, sse, diagnosticToken] = await Promise.all([
             this.runTimedCheck(async () => {
-                await this.createRoomId();
+                await this.createRoomId(serverHost);
             }),
             this.runTimedCheck(async () => {
-                await this.testWebSocket();
+                await this.testWebSocket(serverHost);
             }),
             this.runTimedCheck(async () => {
-                await this.testSse();
+                await this.testSse(serverHost);
             }),
             this.runTimedCheck(async () => {
-                tokenForTurn = await this.fetchDiagnosticToken();
+                tokenForTurn = await this.fetchDiagnosticToken(serverHost);
             }),
         ]);
 
         const turnCredentials = await this.runTimedCheck(async () => {
-            const token = tokenForTurn ?? await this.fetchDiagnosticToken();
-            await this.fetchTurnCredentials(token);
+            const token = tokenForTurn ?? await this.fetchDiagnosticToken(serverHost);
+            await this.fetchTurnCredentials(serverHost, token);
         });
 
         return { roomApi, webSocket, sse, diagnosticToken, turnCredentials };
     }
 
-    /** Probe ICE connectivity (STUN/TURN) by gathering candidates with a real peer connection. */
-    async runIceProbe(turnsOnly: boolean, onCandidateLog?: (candidate: string) => void): Promise<IceProbeReport> {
+    /** Probe ICE connectivity using the active server or provider ICE source. */
+    async runTurnProbe(turnsOnly: boolean, onCandidateLog?: (candidate: string) => void): Promise<IceProbeReport> {
         try {
-            const token = await this.fetchDiagnosticToken();
-            const credentials = await this.fetchTurnCredentials(token);
-            const urls = turnsOnly
-                ? credentials.uris.filter((uri) => uri.toLowerCase().startsWith('turns:'))
-                : credentials.uris;
-
-            return await this.gatherIceCandidates(urls, credentials.username, credentials.password, onCandidateLog);
+            const iceServers = await this.resolveIceServers();
+            return await this.gatherIceCandidates(iceServers, turnsOnly, onCandidateLog);
         } catch (err) {
             return { stunPassed: false, turnPassed: false, logs: [toErrorMessage(err)] };
         }
     }
 
+    /** Probe ICE connectivity (STUN/TURN) by gathering candidates with a real peer connection. */
+    async runIceProbe(turnsOnly: boolean, onCandidateLog?: (candidate: string) => void): Promise<IceProbeReport> {
+        return this.runTurnProbe(turnsOnly, onCandidateLog);
+    }
+
     /** Validate that a server host is reachable by requesting a room ID. */
-    async validateServerHost(host: string = this.config.serverHost): Promise<void> {
+    async validateServerHost(host: string = requireServerHost(this.config)): Promise<void> {
         const response = await this.fetchJson<RoomIdResponse>(buildApiUrl(host, '/api/room-id'), {
             method: 'GET',
             timeoutMs: 5000,
@@ -130,10 +142,14 @@ export class SerenadaDiagnostics {
 
     /** Check if the signaling server is reachable. */
     async checkSignaling(): Promise<DiagnosticCheckResult & { transport?: string }> {
+        const serverHost = this.resolvedConfig.serverHost;
+        if (!serverHost) {
+            return { status: 'skipped', reason: 'requires serverHost' };
+        }
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
-            const res = await fetch(buildApiUrl(this.config.serverHost, '/api/room-id'), {
+            const res = await fetch(buildApiUrl(serverHost, '/api/room-id'), {
                 method: 'GET',
                 signal: controller.signal,
             });
@@ -149,9 +165,18 @@ export class SerenadaDiagnostics {
 
     /** Check if the TURN relay endpoint is reachable. */
     async checkTurn(): Promise<DiagnosticCheckResult & { latencyMs?: number }> {
+        const serverHost = this.resolvedConfig.serverHost;
+        if (!serverHost) {
+            try {
+                await this.resolveIceServers();
+                return { status: 'available' };
+            } catch (err) {
+                return { status: 'unavailable', reason: String(err) };
+            }
+        }
         try {
             const start = Date.now();
-            const res = await this.fetchResponse(buildApiUrl(this.config.serverHost, '/api/turn-credentials?token=probe'), {
+            const res = await this.fetchResponse(buildApiUrl(serverHost, '/api/turn-credentials?token=probe'), {
                 timeoutMs: 5000,
             });
             const latencyMs = Date.now() - start;
@@ -211,8 +236,8 @@ export class SerenadaDiagnostics {
         }
     }
 
-    private async createRoomId(): Promise<string> {
-        const response = await this.fetchJson<RoomIdResponse>(buildApiUrl(this.config.serverHost, '/api/room-id'), {
+    private async createRoomId(serverHost: string): Promise<string> {
+        const response = await this.fetchJson<RoomIdResponse>(buildApiUrl(serverHost, '/api/room-id'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: '',
@@ -224,8 +249,8 @@ export class SerenadaDiagnostics {
         return response.roomId;
     }
 
-    private async fetchDiagnosticToken(): Promise<string> {
-        const response = await this.fetchJson<DiagnosticTokenResponse>(buildApiUrl(this.config.serverHost, '/api/diagnostic-token'), {
+    private async fetchDiagnosticToken(serverHost: string): Promise<string> {
+        const response = await this.fetchJson<DiagnosticTokenResponse>(buildApiUrl(serverHost, '/api/diagnostic-token'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: '',
@@ -238,9 +263,9 @@ export class SerenadaDiagnostics {
         return token;
     }
 
-    private async fetchTurnCredentials(token: string): Promise<Required<TurnCredentialsResponse>> {
+    private async fetchTurnCredentials(serverHost: string, token: string): Promise<Required<TurnCredentialsResponse>> {
         const response = await this.fetchJson<TurnCredentialsResponse>(
-            buildApiUrl(this.config.serverHost, `/api/turn-credentials?token=${encodeURIComponent(token)}`),
+            buildApiUrl(serverHost, `/api/turn-credentials?token=${encodeURIComponent(token)}`),
             { timeoutMs: 5000 },
         );
         if (
@@ -260,12 +285,12 @@ export class SerenadaDiagnostics {
         };
     }
 
-    private async testWebSocket(): Promise<void> {
+    private async testWebSocket(serverHost: string): Promise<void> {
         if (typeof WebSocket === 'undefined') {
             throw new Error('WebSocket not available');
         }
 
-        const { wsUrl } = resolveServerUrls(this.config.serverHost);
+        const { wsUrl } = resolveServerUrls(serverHost);
         await new Promise<void>((resolve, reject) => {
             let settled = false;
             const socket = new WebSocket(wsUrl);
@@ -292,12 +317,12 @@ export class SerenadaDiagnostics {
         });
     }
 
-    private async testSse(): Promise<void> {
+    private async testSse(serverHost: string): Promise<void> {
         if (typeof EventSource === 'undefined') {
             throw new Error('EventSource not available');
         }
 
-        const baseUrl = resolveServerBaseUrl(this.config.serverHost);
+        const baseUrl = resolveServerBaseUrl(serverHost);
         const sid = `diag-${Math.random().toString(36).slice(2, 10)}`;
         const sseUrl = `${baseUrl}/sse?sid=${encodeURIComponent(sid)}`;
 
@@ -339,15 +364,31 @@ export class SerenadaDiagnostics {
     }
 
     private async gatherIceCandidates(
-        urls: string[],
-        username: string,
-        credential: string,
+        iceServers: RTCIceServer[],
+        turnsOnly: boolean,
         onCandidateLog?: (candidate: string) => void,
     ): Promise<IceProbeReport> {
         if (typeof RTCPeerConnection === 'undefined') {
             return { stunPassed: false, turnPassed: false, logs: ['WebRTC not available'] };
         }
-        if (urls.length === 0) {
+        const normalizedIceServers: RTCIceServer[] = [];
+        for (const iceServer of iceServers) {
+            const urls = Array.isArray(iceServer.urls) ? iceServer.urls : [iceServer.urls];
+            const filteredUrls = urls.filter((url): url is string => {
+                if (typeof url !== 'string' || url.length === 0) {
+                    return false;
+                }
+                return !turnsOnly || url.toLowerCase().startsWith('turns:');
+            });
+            if (filteredUrls.length === 0) {
+                continue;
+            }
+            normalizedIceServers.push({
+                ...iceServer,
+                urls: filteredUrls,
+            });
+        }
+        if (normalizedIceServers.length === 0) {
             return { stunPassed: false, turnPassed: false, logs: ['No ICE servers'] };
         }
 
@@ -361,13 +402,11 @@ export class SerenadaDiagnostics {
             let settled = false;
             let stunPassed = false;
             let turnPassed = false;
-            const iceServersSummary = urls.join(', ');
+            const iceServersSummary = normalizedIceServers
+                .flatMap((iceServer) => Array.isArray(iceServer.urls) ? iceServer.urls : [iceServer.urls])
+                .join(', ');
             const connection = new RTCPeerConnection({
-                iceServers: urls.map((url) => (
-                    url.toLowerCase().startsWith('stun:')
-                        ? { urls: [url] }
-                        : { urls: [url], username, credential }
-                )),
+                iceServers: normalizedIceServers,
             });
 
             const finish = () => {
@@ -418,6 +457,19 @@ export class SerenadaDiagnostics {
                     finish();
                 });
         });
+    }
+
+    private async resolveIceServers(): Promise<RTCIceServer[]> {
+        if (this.resolvedConfig.serverHost) {
+            const token = await this.fetchDiagnosticToken(this.resolvedConfig.serverHost);
+            const credentials = await this.fetchTurnCredentials(this.resolvedConfig.serverHost, token);
+            return [{
+                urls: credentials.uris,
+                username: credentials.username,
+                credential: credentials.password,
+            }];
+        }
+        return await (this.resolvedConfig.signalingProvider as NonNullable<ResolvedSerenadaConfig['signalingProvider']>).getIceServers();
     }
 
     private async fetchJson<T>(url: string, options: RequestInit & { timeoutMs: number }): Promise<T> {

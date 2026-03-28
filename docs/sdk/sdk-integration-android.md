@@ -49,6 +49,8 @@ dependencies {
 }
 ```
 
+When you construct `SerenadaConfig` directly, provide exactly one of `serverHost` or `signalingProvider`.
+
 ## Quick Start — URL-First (Simplest)
 
 ```kotlin
@@ -108,6 +110,50 @@ scope.launch {
 ```
 
 `SerenadaCore` and `SerenadaSession` must be used from the Android main thread. The SDK now fails fast if these entry points are invoked from a background thread.
+
+`createRoom()` is server mode only. In provider mode there is no Serenada room API, so join by your own room ID instead.
+
+## Provider Mode (Custom Signaling)
+
+Provider mode uses the same `SerenadaCore`, but you inject a `SignalingProvider` instead of `serverHost`:
+
+```kotlin
+class DemoProvider : SignalingProvider {
+    override var listener: SignalingProvider.Listener? = null
+
+    override fun connect() {
+        listener?.onConnected(ConnectionInfo(transport = "mock"))
+    }
+
+    override fun disconnect() = Unit
+
+    override fun joinRoom(roomId: String, options: JoinOptions) {
+        listener?.onJoined(
+            JoinedEvent(
+                peerId = "local-peer",
+                participants = listOf(SignalingProviderParticipant(peerId = "local-peer", joinedAt = 1L)),
+            )
+        )
+    }
+
+    override fun leaveRoom() = Unit
+    override fun endRoom() = Unit
+    override fun sendToPeer(peerId: String, type: String, payload: JSONObject?) = Unit
+    override fun broadcast(type: String, payload: JSONObject?) = Unit
+    override suspend fun getIceServers(): List<PeerConnection.IceServer> = emptyList()
+}
+
+val serenada = SerenadaCore(
+    config = SerenadaConfig(signalingProvider = DemoProvider()),
+    context = applicationContext,
+)
+
+val session = serenada.join(roomId = "group-123")
+```
+
+Provider callbacks may be invoked from any thread. The SDK marshals them onto the main looper before updating session state. Host-app calls into `SerenadaCore` and `SerenadaSession` still belong on the main thread.
+
+If your provider already owns reconnect logic, set `ProviderCapabilities(handlesReconnection = true)`. Otherwise leave it at the default `false` and let the session rejoin with `reconnectPeerId`.
 
 ## Core-Only Integration (No UI)
 
@@ -195,6 +241,8 @@ report.signaling    // Connected(transport) | Failed(reason)
 report.turn         // Reachable(latencyMs) | Unreachable(reason)
 ```
 
+In provider mode, `runAll()` still runs local device/network checks and TURN probing, but signaling is reported as skipped because there is no Serenada server to validate.
+
 Callback-based usage is also available:
 
 ```kotlin
@@ -218,6 +266,8 @@ val report = diagnostics.runConnectivityChecks()
 // Each is CheckOutcome.NotRun | CheckOutcome.Passed(latencyMs) | CheckOutcome.Failed(error)
 ```
 
+`runConnectivityChecks()` requires `serverHost`.
+
 ### ICE Probing
 
 Verify STUN/TURN reachability with a real ICE gather:
@@ -233,6 +283,14 @@ report.turnPassed
 report.logs
 ```
 
+`runTurnProbe()` is the primary TURN/STUN probe and `runIceProbe()` remains as a compatibility alias:
+
+```kotlin
+val turnReport = diagnostics.runTurnProbe(turnsOnly = false) { line ->
+    Log.d("Diagnostics", line)
+}
+```
+
 ### Server Validation
 
 Validate that a host is a reachable Serenada server:
@@ -241,6 +299,8 @@ Validate that a host is a reachable Serenada server:
 val diagnostics = SerenadaDiagnostics(config, applicationContext)
 diagnostics.validateServerHost()
 ```
+
+`validateServerHost()` requires `serverHost`.
 
 ## Room Watching
 
@@ -265,6 +325,8 @@ class RoomsViewModel : RoomWatcherDelegate {
 
 // watcher.currentStatuses -> Map<String, RoomOccupancy>
 ```
+
+`RoomWatcher` is server mode only and throws `requires serverHost` when no host is supplied.
 
 ## Foreground Service
 

@@ -323,11 +323,9 @@ final class PeerNegotiationEngine {
     // MARK: - Offer Logic
 
     private func shouldIOffer(remoteCid: String, roomState: RoomState? = nil) -> Bool {
-        let roomState = roomState ?? getCurrentRoomState()
-        guard let roomState, let myCid = getClientId() else { return false }
-        let myJoinedAt = roomState.participants.first(where: { $0.cid == myCid })?.joinedAt ?? 0
-        let theirJoinedAt = roomState.participants.first(where: { $0.cid == remoteCid })?.joinedAt ?? 0
-        return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
+        _ = roomState
+        guard let myCid = getClientId() else { return false }
+        return myCid < remoteCid
     }
 
     private func canOffer(slot: any PeerConnectionSlotProtocol) -> Bool {

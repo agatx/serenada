@@ -21,6 +21,7 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
 struct JoinedPayload {
     let hostCid: String?
     let participants: [Participant]?
+    let maxParticipants: Int?
     let turnToken: String?
     let turnTokenTTLMs: Int?
     let reconnectToken: String?
@@ -28,12 +29,13 @@ struct JoinedPayload {
 
     init(from payload: JSONValue?) {
         guard let obj = payload?.objectValue else {
-            hostCid = nil; participants = nil; turnToken = nil
+            hostCid = nil; participants = nil; maxParticipants = nil; turnToken = nil
             turnTokenTTLMs = nil; reconnectToken = nil; participantCount = nil
             return
         }
 
         hostCid = obj["hostCid"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        maxParticipants = obj["maxParticipants"]?.intValue
         turnToken = obj["turnToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         turnTokenTTLMs = obj["turnTokenTTLMs"]?.intValue
         reconnectToken = obj["reconnectToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)

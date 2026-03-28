@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { SerenadaCore } from '../src/SerenadaCore.js';
+import { SerenadaServerProvider } from '../src/SerenadaServerProvider.js';
 import type { SerenadaConfig } from '../src/types.js';
+import { FakeSignalingProvider } from './helpers/FakeSignalingProvider.js';
 
 // Provide a comprehensive window shim: SerenadaSession creates MediaEngine
 // which uses window.addEventListener, window.removeEventListener, document.addEventListener,
@@ -136,6 +138,7 @@ describe('SerenadaCore', () => {
             const session = core.join('https://serenada.app/call/ROOM1');
             session.leave();
             session.end();
+            session.onPeerMessage(() => {});
             session.toggleAudio();
             session.toggleVideo();
             session.cancelJoin();
@@ -165,6 +168,16 @@ describe('SerenadaCore', () => {
             unsubscribe(); // should not throw
             expect(cb).not.toHaveBeenCalled();
         });
+
+        it('onPeerMessage returns a no-op unsubscribe', () => {
+            const core = new SerenadaCore(testConfig);
+            const session = core.join('https://serenada.app/call/ROOM1');
+            const cb = vi.fn();
+            const unsubscribe = session.onPeerMessage(cb);
+            expect(typeof unsubscribe).toBe('function');
+            unsubscribe();
+            expect(cb).not.toHaveBeenCalled();
+        });
     });
 
     describe('createRoom', () => {
@@ -190,6 +203,51 @@ describe('SerenadaCore', () => {
             expect(result.session).toBeDefined();
             expect(result.session.state.phase).toBe('joining');
             result.session.destroy();
+        });
+    });
+
+    describe('config validation', () => {
+        it('throws when both serverHost and signalingProvider are provided', () => {
+            expect(() => new SerenadaCore({
+                serverHost: 'serenada.app',
+                signalingProvider: new FakeSignalingProvider(),
+            })).toThrow('Provide exactly one of serverHost or signalingProvider');
+        });
+
+        it('throws when neither serverHost nor signalingProvider is provided', () => {
+            expect(() => new SerenadaCore({})).toThrow('Provide exactly one of serverHost or signalingProvider');
+        });
+
+        it('throws when the signalingProvider version is unsupported', () => {
+            const provider = new FakeSignalingProvider();
+            Object.defineProperty(provider, 'version', { value: 2 });
+            expect(() => new SerenadaCore({ signalingProvider: provider })).toThrow('Unsupported signalingProvider version: 2');
+        });
+    });
+
+    describe('provider mode', () => {
+        beforeEach(() => {
+            (globalThis as Record<string, unknown>).RTCPeerConnection = class {};
+        });
+
+        it('joins by roomId without building a server-backed room URL', () => {
+            const core = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
+            const session = core.join({ roomId: 'ROOM42' });
+
+            expect(session.state.roomId).toBe('ROOM42');
+            expect(session.state.roomUrl).toBeNull();
+            session.destroy();
+        });
+
+        it('rejects createRoom without serverHost', async () => {
+            const core = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
+            await expect(core.createRoom()).rejects.toThrow('requires serverHost');
+        });
+
+        it('built-in server provider owns reconnect handling', () => {
+            const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
+            expect(provider.capabilities.handlesReconnection).toBe(true);
+            provider.disconnect();
         });
     });
 });

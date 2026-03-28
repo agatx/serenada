@@ -83,9 +83,11 @@ class RoomWatcher @JvmOverloads constructor(
         get() = statuses
 
     /** Start watching the given room IDs for occupancy changes. */
-    fun watchRooms(roomIds: List<String>, host: String) {
-        val hostChanged = this.host?.equals(host, ignoreCase = true) == false
-        this.host = host
+    fun watchRooms(roomIds: List<String>, host: String?) {
+        val resolvedHost = host?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("requires serverHost")
+        val hostChanged = this.host?.equals(resolvedHost, ignoreCase = true) == false
+        this.host = resolvedHost
         watchedRoomIds = roomIds
 
         val watched = watchedRoomIds.toSet()
@@ -104,7 +106,7 @@ class RoomWatcher @JvmOverloads constructor(
         if (signalingClient.isConnected()) {
             sendWatchRooms()
         } else {
-            signalingClient.connect(host)
+            signalingClient.connect(resolvedHost)
         }
     }
 

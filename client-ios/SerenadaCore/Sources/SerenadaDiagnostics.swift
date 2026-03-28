@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Network
 #if canImport(WebRTC)
 import WebRTC
 #endif
@@ -92,10 +93,16 @@ public struct IceProbeReport: Equatable {
 public final class SerenadaDiagnostics {
     private let config: SerenadaConfig
     private let apiClient: CoreAPIClient
+    private let resolvedConfig: ResolvedSerenadaConfig
 
     public init(config: SerenadaConfig) {
         self.config = config
         self.apiClient = CoreAPIClient()
+        do {
+            self.resolvedConfig = try resolveSerenadaConfig(config)
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
         #if canImport(WebRTC)
         // Eagerly warm up the shared RTCPeerConnectionFactory so its network
         // thread is ready by the time the user runs an ICE probe.
@@ -113,7 +120,9 @@ public final class SerenadaDiagnostics {
             report.microphone = checkMicrophoneSync()
             report.speaker = checkSpeakerSync()
             report.network = await checkNetworkAsync()
-            report.signaling = await checkSignalingAsync()
+            report.signaling = resolvedConfig.serverHost == nil
+                ? .skipped(reason: "requires serverHost")
+                : await checkSignalingAsync()
             report.turn = await checkTurnAsync()
             report.devices = enumerateDevices()
             completion(report)
@@ -121,41 +130,66 @@ public final class SerenadaDiagnostics {
     }
 
     /// Test server connectivity (room API, WebSocket, SSE, TURN credentials).
-    public func runConnectivityChecks() async -> ConnectivityReport {
+    public func runConnectivityChecks() async throws -> ConnectivityReport {
+        let serverHost = try requireServerHost(config)
         var report = ConnectivityReport()
         // Fetch the diagnostic token once and reuse it for the TURN credentials check.
         var tokenForTurn: String?
-        report.roomApi = await runTimedCheck { try await self.apiClient.createRoomId(host: self.config.serverHost); return }
-        report.webSocket = await runTimedCheck { try await self.testWebSocket() }
-        report.sse = await runTimedCheck { try await self.testSse() }
-        report.diagnosticToken = await runTimedCheck { tokenForTurn = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost) }
+        report.roomApi = await runTimedCheck {
+            _ = try await self.apiClient.createRoomId(host: serverHost)
+        }
+        report.webSocket = await runTimedCheck { try await self.testWebSocket(host: serverHost) }
+        report.sse = await runTimedCheck { try await self.testSse(host: serverHost) }
+        report.diagnosticToken = await runTimedCheck { tokenForTurn = try await self.apiClient.fetchDiagnosticToken(host: serverHost) }
         report.turnCredentials = await runTimedCheck {
             let resolvedToken: String
             if let existing = tokenForTurn {
                 resolvedToken = existing
             } else {
-                resolvedToken = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost)
+                resolvedToken = try await self.apiClient.fetchDiagnosticToken(host: serverHost)
             }
-            _ = try await self.apiClient.fetchTurnCredentials(host: self.config.serverHost, token: resolvedToken)
+            _ = try await self.apiClient.fetchTurnCredentials(host: serverHost, token: resolvedToken)
         }
         return report
     }
 
-    /// Probe ICE connectivity by gathering candidates against the configured TURN server.
-    public func runIceProbe(turnsOnly: Bool, onCandidateLog: ((String) -> Void)? = nil) async -> IceProbeReport {
+    /// Probe ICE connectivity by gathering candidates against the configured TURN server or provider ICE source.
+    public func runTurnProbe(turnsOnly: Bool, onCandidateLog: ((String) -> Void)? = nil) async -> IceProbeReport {
         do {
-            let token = try await apiClient.fetchDiagnosticToken(host: config.serverHost)
-            let credentials = try await apiClient.fetchTurnCredentials(host: config.serverHost, token: token)
-            let urls = turnsOnly ? credentials.uris.filter { $0.lowercased().hasPrefix("turns:") } : credentials.uris
-            return await gatherIceCandidates(urls: urls, username: credentials.username, credential: credentials.password, onCandidateLog: onCandidateLog)
+            let iceServers = try await resolveIceServers()
+            let filteredServers = iceServers.compactMap { server -> IceServerConfig? in
+                let urls = turnsOnly
+                    ? server.urls.filter { $0.lowercased().hasPrefix("turns:") }
+                    : server.urls
+                return urls.isEmpty ? nil : IceServerConfig(urls: urls, username: server.username, credential: server.credential)
+            }
+            guard let firstServer = filteredServers.first else {
+                return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["No ICE servers"])
+            }
+            let urls = filteredServers.flatMap(\.urls)
+            return await gatherIceCandidates(
+                urls: urls,
+                username: firstServer.username ?? "",
+                credential: firstServer.credential ?? "",
+                onCandidateLog: onCandidateLog
+            )
         } catch {
             return IceProbeReport(stunPassed: false, turnPassed: false, logs: [error.localizedDescription])
         }
     }
 
+    /// Probe ICE connectivity (STUN/TURN) by gathering candidates with a real peer connection.
+    public func runIceProbe(turnsOnly: Bool, onCandidateLog: ((String) -> Void)? = nil) async -> IceProbeReport {
+        await runTurnProbe(turnsOnly: turnsOnly, onCandidateLog: onCandidateLog)
+    }
+
     /// Validate that the configured server host is reachable.
-    public func validateServerHost() async throws {
-        try await apiClient.validateServerHost(config.serverHost)
+    public func validateServerHost(host: String? = nil) async throws {
+        let normalizedHost = host?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        let resolvedHost = try normalizedHost ?? requireServerHost(config)
+        try await apiClient.validateServerHost(resolvedHost)
     }
 
     // MARK: - Individual checks
@@ -205,8 +239,8 @@ public final class SerenadaDiagnostics {
 
     // MARK: - WebSocket / SSE tests
 
-    private func testWebSocket() async throws {
-        guard let parsed = EndpointHostParser.splitHostAndPort(from: config.serverHost) else {
+    private func testWebSocket(host: String) async throws {
+        guard let parsed = EndpointHostParser.splitHostAndPort(from: host) else {
             throw APIError.invalidHost
         }
         var components = URLComponents()
@@ -222,8 +256,8 @@ public final class SerenadaDiagnostics {
         task.cancel(with: .goingAway, reason: nil)
     }
 
-    private func testSse() async throws {
-        guard let parsed = EndpointHostParser.splitHostAndPort(from: config.serverHost) else {
+    private func testSse(host: String) async throws {
+        guard let parsed = EndpointHostParser.splitHostAndPort(from: host) else {
             throw APIError.invalidHost
         }
         let sid = "diag-\(UUID().uuidString)"
@@ -320,26 +354,26 @@ public final class SerenadaDiagnostics {
     }
 
     private func checkNetworkAsync() async -> DiagnosticCheckResult {
-        guard let url = apiClient.buildHTTPSURL(host: config.serverHost, path: "/api/room-id") else {
-            return .unavailable(reason: "Invalid server host")
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 5
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
-                return .available
+        await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            let queue = DispatchQueue(label: "SerenadaDiagnostics.Network")
+            monitor.pathUpdateHandler = { path in
+                let result: DiagnosticCheckResult = path.status == .satisfied
+                    ? .available
+                    : .unavailable(reason: "No network connection")
+                continuation.resume(returning: result)
+                monitor.cancel()
             }
-            return .unavailable(reason: "Server unreachable")
-        } catch {
-            return .unavailable(reason: error.localizedDescription)
+            monitor.start(queue: queue)
         }
     }
 
     private func checkSignalingAsync() async -> SignalingCheckResult {
+        guard let serverHost = resolvedConfig.serverHost else {
+            return .skipped(reason: "requires serverHost")
+        }
         do {
-            try await apiClient.validateServerHost(config.serverHost)
+            try await apiClient.validateServerHost(serverHost)
             return .connected(transport: "https")
         } catch {
             return .failed(reason: error.localizedDescription)
@@ -347,7 +381,21 @@ public final class SerenadaDiagnostics {
     }
 
     private func checkTurnAsync() async -> TurnCheckResult {
-        guard let url = apiClient.buildHTTPSURL(host: config.serverHost, path: "/api/turn-credentials") else {
+        if resolvedConfig.serverHost == nil {
+            let start = CFAbsoluteTimeGetCurrent()
+            do {
+                guard let signalingProvider = resolvedConfig.signalingProvider else {
+                    return .unreachable(reason: "Provide exactly one of serverHost or signalingProvider")
+                }
+                _ = try await signalingProvider.getIceServers()
+                let latencyMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+                return .reachable(latencyMs: latencyMs)
+            } catch {
+                return .unreachable(reason: error.localizedDescription)
+            }
+        }
+        guard let serverHost = resolvedConfig.serverHost,
+              let url = apiClient.buildHTTPSURL(host: serverHost, path: "/api/turn-credentials") else {
             return .unreachable(reason: "Invalid server host")
         }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -369,6 +417,24 @@ public final class SerenadaDiagnostics {
         } catch {
             return .unreachable(reason: error.localizedDescription)
         }
+    }
+
+    private func resolveIceServers() async throws -> [IceServerConfig] {
+        if let serverHost = resolvedConfig.serverHost {
+            let token = try await apiClient.fetchDiagnosticToken(host: serverHost)
+            let credentials = try await apiClient.fetchTurnCredentials(host: serverHost, token: token)
+            return [
+                IceServerConfig(
+                    urls: credentials.uris,
+                    username: credentials.username,
+                    credential: credentials.password
+                )
+            ]
+        }
+        guard let signalingProvider = resolvedConfig.signalingProvider else {
+            throw APIError.invalidResponse("Provide exactly one of serverHost or signalingProvider")
+        }
+        return try await signalingProvider.getIceServers()
     }
 
     private func enumerateDevices() -> [DeviceInfo] {
@@ -395,6 +461,12 @@ public final class SerenadaDiagnostics {
         }
 
         return devices
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

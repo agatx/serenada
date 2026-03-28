@@ -25,7 +25,9 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -42,6 +44,7 @@ class SerenadaDiagnostics(
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
     private val handler = Handler(Looper.getMainLooper())
+    private val resolvedConfig = resolveSerenadaConfig(config)
 
     init {
         // Eagerly warm up the PeerConnectionFactory on a background thread so
@@ -92,14 +95,19 @@ class SerenadaDiagnostics(
         checkMicrophone { micResult = it; tryComplete() }
         checkSpeaker { speakerResult = it; tryComplete() }
         checkNetwork { networkResult = it; tryComplete() }
-        checkSignaling { signalingResult = it; tryComplete() }
+        if (resolvedConfig.serverHost != null) {
+            checkSignaling { signalingResult = it; tryComplete() }
+        } else {
+            signalingResult = SignalingCheckResult.Skipped("requires serverHost")
+            tryComplete()
+        }
         checkTurn { turnResult = it; tryComplete() }
         enumerateDevices { devices = it; tryComplete() }
     }
 
     /** Test server connectivity (room API, WebSocket, SSE, TURN). */
-    suspend fun runConnectivityChecks(host: String = config.serverHost): ConnectivityReport = withContext(Dispatchers.IO) {
-        val normalizedHost = host.trim().ifBlank { config.serverHost }
+    suspend fun runConnectivityChecks(host: String = requireServerHost(config)): ConnectivityReport = withContext(Dispatchers.IO) {
+        val normalizedHost = host.trim().ifBlank { requireServerHost(config) }
         // Fetch the diagnostic token once and reuse it for the TURN credentials check.
         var tokenForTurn: String? = null
         val roomApi = runTimedCheck { awaitCreateRoomId(normalizedHost) }
@@ -120,23 +128,69 @@ class SerenadaDiagnostics(
     }
 
     /** Probe ICE connectivity (STUN/TURN) and return candidate details. */
-    suspend fun runIceProbe(
+    suspend fun runTurnProbe(
         turnsOnly: Boolean,
-        host: String = config.serverHost,
+        host: String? = resolvedConfig.serverHost,
         onCandidateLog: ((String) -> Unit)? = null,
     ): IceProbeReport {
-        val report = runDiagnosticsIceCheck(
-            context = appContext,
-            host = host.trim().ifBlank { config.serverHost },
-            turnsOnly = turnsOnly,
-            onLogLine = { line -> onCandidateLog?.invoke(line) },
-        )
-        return IceProbeReport(
-            stunPassed = report.stun.state == app.serenada.core.diagnostics.DiagnosticsCheckState.Pass,
-            turnPassed = report.turn.state == app.serenada.core.diagnostics.DiagnosticsCheckState.Pass,
-            logs = report.logs,
-            iceServersSummary = report.iceServersSummary,
-        )
+        val resolvedHost = host?.trim()?.takeIf { it.isNotEmpty() }
+        if (resolvedHost != null) {
+            val report = runDiagnosticsIceCheck(
+                context = appContext,
+                host = resolvedHost,
+                turnsOnly = turnsOnly,
+                onLogLine = { line -> onCandidateLog?.invoke(line) },
+            )
+            return IceProbeReport(
+                stunPassed = report.stun.state == app.serenada.core.diagnostics.DiagnosticsCheckState.Pass,
+                turnPassed = report.turn.state == app.serenada.core.diagnostics.DiagnosticsCheckState.Pass,
+                logs = report.logs,
+                iceServersSummary = report.iceServersSummary,
+            )
+        }
+
+        return try {
+            val iceServers = withContext(Dispatchers.IO) {
+                (resolvedConfig.signalingProvider ?: throw IllegalStateException("Provide exactly one of serverHost or signalingProvider"))
+                    .getIceServers()
+            }
+            val filteredUrls = iceServers
+                .flatMap { server ->
+                    server.urls.mapNotNull { it }
+                }
+                .filter { url ->
+                    !turnsOnly || url.startsWith("turns:", ignoreCase = true)
+                }
+            val logs = mutableListOf<String>()
+            val summary = if (filteredUrls.isEmpty()) "n/a" else filteredUrls.joinToString()
+            val summaryLine = "Using provider ICE servers: $summary"
+            logs += summaryLine
+            onCandidateLog?.invoke(summaryLine)
+            IceProbeReport(
+                stunPassed = !turnsOnly && filteredUrls.any { it.startsWith("stun:", ignoreCase = true) },
+                turnPassed = filteredUrls.any {
+                    it.startsWith("turn:", ignoreCase = true) || it.startsWith("turns:", ignoreCase = true)
+                },
+                logs = logs,
+                iceServersSummary = summary,
+            )
+        } catch (error: Throwable) {
+            IceProbeReport(
+                stunPassed = false,
+                turnPassed = false,
+                logs = listOf(error.message ?: "ICE probe failed"),
+                iceServersSummary = "n/a",
+            )
+        }
+    }
+
+    /** Probe ICE connectivity (STUN/TURN) and return candidate details. */
+    suspend fun runIceProbe(
+        turnsOnly: Boolean,
+        host: String? = resolvedConfig.serverHost,
+        onCandidateLog: ((String) -> Unit)? = null,
+    ): IceProbeReport {
+        return runTurnProbe(turnsOnly = turnsOnly, host = host, onCandidateLog = onCandidateLog)
     }
 
     /** Check whether a camera is available and authorized. */
@@ -198,6 +252,11 @@ class SerenadaDiagnostics(
 
     /** Check signaling server connectivity (WebSocket or SSE). */
     fun checkSignaling(completion: (SignalingCheckResult) -> Unit) {
+        val serverHost = resolvedConfig.serverHost
+        if (serverHost == null) {
+            completion(SignalingCheckResult.Skipped("requires serverHost"))
+            return
+        }
         val forceSse = config.transports == listOf(SerenadaTransport.SSE)
         var diagClient: SignalingClient? = null
         var completed = false
@@ -229,16 +288,30 @@ class SerenadaDiagnostics(
 
         handler.postDelayed(timeoutRunnable, 5000)
 
-        diagClient.connect(config.serverHost)
+        diagClient.connect(serverHost)
     }
 
     /** Check TURN server reachability and measure latency. */
     fun checkTurn(completion: (TurnCheckResult) -> Unit) {
-        apiClient.fetchDiagnosticToken(config.serverHost) { tokenResult ->
+        val serverHost = resolvedConfig.serverHost
+        if (serverHost == null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching {
+                    (resolvedConfig.signalingProvider ?: throw IllegalStateException("Provide exactly one of serverHost or signalingProvider"))
+                        .getIceServers()
+                }.onSuccess {
+                    handler.post { completion(TurnCheckResult.Reachable(0L)) }
+                }.onFailure { error ->
+                    handler.post { completion(TurnCheckResult.Unreachable(error.message ?: "unknown")) }
+                }
+            }
+            return
+        }
+        apiClient.fetchDiagnosticToken(serverHost) { tokenResult ->
             tokenResult
                 .onSuccess { token ->
                     val start = System.currentTimeMillis()
-                    apiClient.fetchTurnCredentials(config.serverHost, token) { turnResult ->
+                    apiClient.fetchTurnCredentials(serverHost, token) { turnResult ->
                         turnResult
                             .onSuccess {
                                 val latencyMs = System.currentTimeMillis() - start
@@ -252,7 +325,7 @@ class SerenadaDiagnostics(
     }
 
     /** Validate that a server host is reachable. Throws on failure. */
-    suspend fun validateServerHost(host: String = config.serverHost) {
+    suspend fun validateServerHost(host: String = requireServerHost(config)) {
         suspendCancellableCoroutine<Unit> { continuation ->
             apiClient.validateServerHost(host) { result ->
                 if (continuation.isActive) {
