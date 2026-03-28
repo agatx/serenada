@@ -1,4 +1,5 @@
 import type {
+    ActiveTransport,
     CallErrorCode,
     CallState,
     CallStats,
@@ -22,6 +23,7 @@ import type {
 import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
 import {
+    ICE_FETCH_RETRY_DELAYS_MS,
     RECONNECT_BACKOFF_BASE_MS,
     RECONNECT_BACKOFF_CAP_MS,
     JOIN_HARD_TIMEOUT_MS,
@@ -212,7 +214,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private started = false;
 
     private isConnected = false;
-    private activeTransport: string | null = null;
+    private activeTransport: ActiveTransport | null = null;
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
@@ -519,7 +521,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         for (const listener of this.peerMessageListeners) {
             listener(message);
         }
-        if (message.type === 'offer' || message.type === 'answer' || message.type === 'ice') {
+        if (message.type === 'content_state' || message.type === 'offer' || message.type === 'answer' || message.type === 'ice') {
             this.media.processSignalingMessage(toMediaSignalingMessage(message));
         }
     };
@@ -559,10 +561,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private async fetchInitialIceServers(): Promise<void> {
         const generation = this.iceFetchGeneration + 1;
         this.iceFetchGeneration = generation;
-        const retryDelaysMs = [0, 1000, 2000, 4000];
         let lastError: unknown = null;
 
-        for (const delayMs of retryDelaysMs) {
+        for (const delayMs of ICE_FETCH_RETRY_DELAYS_MS) {
             if (delayMs > 0) {
                 await this.wait(delayMs);
             }

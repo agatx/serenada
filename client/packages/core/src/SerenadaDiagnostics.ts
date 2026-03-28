@@ -10,6 +10,7 @@ import { buildApiUrl, resolveServerBaseUrl, resolveServerUrls } from './serverUr
 import type { ResolvedSerenadaConfig } from './configValidation.js';
 import { resolveSerenadaConfig } from './configValidation.js';
 import { formatError } from './formatError.js';
+import { normalizeIceServers } from './iceServers.js';
 
 interface DiagnosticTokenResponse {
     token?: string;
@@ -376,23 +377,7 @@ export class SerenadaDiagnostics {
         if (typeof RTCPeerConnection === 'undefined') {
             return { stunPassed: false, turnPassed: false, logs: ['WebRTC not available'] };
         }
-        const normalizedIceServers: RTCIceServer[] = [];
-        for (const iceServer of iceServers) {
-            const urls = Array.isArray(iceServer.urls) ? iceServer.urls : [iceServer.urls];
-            const filteredUrls = urls.filter((url): url is string => {
-                if (typeof url !== 'string' || url.length === 0) {
-                    return false;
-                }
-                return !turnsOnly || url.toLowerCase().startsWith('turns:');
-            });
-            if (filteredUrls.length === 0) {
-                continue;
-            }
-            normalizedIceServers.push({
-                ...iceServer,
-                urls: filteredUrls,
-            });
-        }
+        const normalizedIceServers = normalizeIceServers(iceServers, turnsOnly);
         if (normalizedIceServers.length === 0) {
             return { stunPassed: false, turnPassed: false, logs: ['No ICE servers'] };
         }

@@ -8,6 +8,9 @@ export type CallPhase = 'idle' | 'awaitingPermissions' | 'joining' | 'waiting' |
 /** Network connection status between the client and signaling server. */
 export type ConnectionStatus = 'connected' | 'recovering' | 'retrying';
 
+/** Active signaling transport, including custom provider-specific transport labels. */
+export type ActiveTransport = TransportKind | (string & {});
+
 /** Camera mode: selfie (front), world (rear), composite (picture-in-picture), or screen share. */
 export type CameraMode = 'selfie' | 'world' | 'composite' | 'screenShare';
 
@@ -62,7 +65,7 @@ export interface CallState {
     localParticipant: LocalParticipant | null;
     remoteParticipants: Participant[];
     connectionStatus: ConnectionStatus;
-    activeTransport: string | null;
+    activeTransport: ActiveTransport | null;
     requiredPermissions: MediaCapability[] | null;
     error: CallError | null;
 }

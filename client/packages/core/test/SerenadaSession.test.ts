@@ -350,6 +350,27 @@ describe('SerenadaSession', () => {
             });
         });
 
+        it('forwards provider content_state messages to the media engine', () => {
+            harness = new TestSessionHarness();
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'content_state',
+                payload: { active: true, contentType: 'screenShare' },
+            });
+
+            expect(harness.media.processSignalingMessageCalls).toHaveLength(1);
+            expect(harness.media.processSignalingMessageCalls[0]).toEqual({
+                v: 1,
+                type: 'content_state',
+                cid: 'peer-1',
+                payload: {
+                    from: 'peer-1',
+                    active: true,
+                    contentType: 'screenShare',
+                },
+            });
+        });
+
         it('forwards signaling connected state to media engine', () => {
             harness = new TestSessionHarness();
             harness.signaling.emitConnected('ws');

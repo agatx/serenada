@@ -23,6 +23,7 @@ export function createSerenadaDiagnostics(config: SerenadaConfig): _SerenadaDiag
 export type {
     CallPhase,
     ConnectionStatus,
+    ActiveTransport,
     CameraMode,
     MediaCapability,
     PeerConnectionState,
@@ -127,7 +128,7 @@ export {
     OFFER_TIMEOUT_MS, ICE_RESTART_COOLDOWN_MS,
     NON_HOST_FALLBACK_DELAY_MS, NON_HOST_FALLBACK_MAX_ATTEMPTS,
     ICE_CANDIDATE_BUFFER_MAX,
-    TURN_FETCH_TIMEOUT_MS, TURN_REFRESH_TRIGGER_RATIO,
+    TURN_FETCH_TIMEOUT_MS, TURN_REFRESH_TRIGGER_RATIO, ICE_FETCH_RETRY_DELAYS_MS,
     SNAPSHOT_PREPARE_TIMEOUT_MS,
     CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_RESUME_GAP_MS, LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,

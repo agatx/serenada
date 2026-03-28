@@ -31,6 +31,7 @@ import app.serenada.core.call.SessionAudioController
 import app.serenada.core.call.SessionMediaEngine
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcEngine
+import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.call.toContentStatePayload
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
@@ -991,9 +992,8 @@ class SerenadaSession internal constructor(
     private fun loadInitialIceServers() {
         val fetchGeneration = ++iceFetchGeneration
         providerScope.launch {
-            val retryDelaysMs = longArrayOf(0L, 1_000L, 2_000L, 4_000L)
             var lastError: Throwable? = null
-            for (delayMs in retryDelaysMs) {
+            for (delayMs in WebRtcResilienceConstants.ICE_FETCH_RETRY_DELAYS_MS) {
                 if (delayMs > 0) {
                     delay(delayMs)
                 }

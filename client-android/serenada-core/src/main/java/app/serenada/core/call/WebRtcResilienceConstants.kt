@@ -29,6 +29,7 @@ object WebRtcResilienceConstants {
     // ── TURN ─────────────────────────────────────────────────────────
     const val TURN_FETCH_TIMEOUT_MS = 2_000L
     const val TURN_REFRESH_TRIGGER_RATIO = 0.8
+    val ICE_FETCH_RETRY_DELAYS_MS = longArrayOf(0L, 1_000L, 2_000L, 4_000L)
 
     // ── Snapshot ─────────────────────────────────────────────────────
     const val SNAPSHOT_PREPARE_TIMEOUT_MS = 2_000L

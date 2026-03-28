@@ -228,7 +228,7 @@ private extension SerenadaServerProvider {
             turnManager?.cancelRefresh()
         }
 
-        let participants = dedupeParticipants(
+        let participants = dedupeProviderParticipants(
             participants: (payload.participants ?? []).map {
                 SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt)
             },
@@ -279,7 +279,7 @@ private extension SerenadaServerProvider {
 
     func roomStateEvent(from payload: JSONValue?) -> RoomStateEvent? {
         guard let object = payload?.objectValue else { return nil }
-        let participants = dedupeParticipants(
+        let participants = dedupeProviderParticipants(
             participants: (parseParticipants(from: object["participants"]?.arrayValue) ?? []).map {
                 SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt)
             },
@@ -368,22 +368,14 @@ private extension SerenadaServerProvider {
         reconnectToken = nil
     }
 
-    func dedupeParticipants(
+    func dedupeProviderParticipants(
         participants: [SignalingProviderParticipant],
         localPeerId: String?
     ) -> [SignalingProviderParticipant] {
-        var deduped: [String: SignalingProviderParticipant] = [:]
-        var order: [String] = []
-        for participant in participants where !participant.peerId.isEmpty {
-            if deduped[participant.peerId] == nil {
-                order.append(participant.peerId)
-            }
-            deduped[participant.peerId] = participant
-        }
-        if let localPeerId, !localPeerId.isEmpty, deduped[localPeerId] == nil {
-            deduped[localPeerId] = SignalingProviderParticipant(peerId: localPeerId, joinedAt: nil)
-            order.append(localPeerId)
-        }
-        return order.compactMap { deduped[$0] }
+        dedupeParticipants(
+            participants: participants,
+            localPeerId: localPeerId,
+            makeLocalParticipant: { SignalingProviderParticipant(peerId: $0, joinedAt: nil) }
+        )
     }
 }

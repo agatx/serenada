@@ -194,14 +194,11 @@ public final class SerenadaDiagnostics {
                     : server.urls
                 return urls.isEmpty ? nil : IceServerConfig(urls: urls, username: server.username, credential: server.credential)
             }
-            guard let firstServer = filteredServers.first else {
+            guard !filteredServers.isEmpty else {
                 return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["No ICE servers"])
             }
-            let urls = filteredServers.flatMap(\.urls)
             return await gatherIceCandidates(
-                urls: urls,
-                username: firstServer.username ?? "",
-                credential: firstServer.credential ?? "",
+                iceServers: filteredServers,
                 onCandidateLog: onCandidateLog
             )
         } catch {
@@ -331,20 +328,20 @@ public final class SerenadaDiagnostics {
 
     // MARK: - ICE probing
 
-    private func gatherIceCandidates(urls: [String], username: String, credential: String, onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
+    private func gatherIceCandidates(iceServers: [IceServerConfig], onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
 #if canImport(WebRTC)
-        guard !urls.isEmpty else {
+        guard !iceServers.isEmpty else {
             return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["No ICE servers"])
         }
         let probe = IceGatheringProbe()
-        var report = await probe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
+        var report = await probe.run(iceServers: iceServers, onCandidateLog: onCandidateLog)
         // Zero candidates (not even host) means the NetworkMonitor hadn't
         // enumerated interfaces yet — a transient race after the previous
         // PeerConnection was torn down.  Retry once; the monitor will be ready.
         if report.logs.isEmpty {
             onCandidateLog?("Zero candidates gathered — retrying (NetworkMonitor race)...")
             let retryProbe = IceGatheringProbe()
-            report = await retryProbe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
+            report = await retryProbe.run(iceServers: iceServers, onCandidateLog: onCandidateLog)
         }
         return report
 #else
@@ -527,12 +524,12 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
     private var finished = false
     private var onCandidateLog: ((String) -> Void)?
 
-    func run(urls: [String], username: String, credential: String, onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
+    func run(iceServers: [IceServerConfig], onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
         self.onCandidateLog = onCandidateLog
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
             Task { @MainActor [weak self] in
-                await self?.start(urls: urls, username: username, credential: credential)
+                await self?.start(iceServers: iceServers)
             }
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
@@ -541,12 +538,14 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
         }
     }
 
-    private func start(urls: [String], username: String, credential: String) async {
+    private func start(iceServers: [IceServerConfig]) async {
         Self.warmUpFactory()
         let factory = Self.sharedFactory!
 
         let config = RTCConfiguration()
-        config.iceServers = [RTCIceServer(urlStrings: urls, username: username, credential: credential)]
+        config.iceServers = iceServers.map {
+            RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
+        }
         config.sdpSemantics = .unifiedPlan
 
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)

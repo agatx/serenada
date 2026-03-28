@@ -692,7 +692,8 @@ public final class SerenadaSession: ObservableObject {
     private func joinedMessageFromEvent(_ event: JoinedEvent) -> SignalingMessage {
         let participants = dedupeParticipants(
             participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
-            localPeerId: event.peerId
+            localPeerId: event.peerId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
         let resolvedHostPeerId = resolveHostPeerId(
             explicitHostPeerId: event.hostPeerId,
@@ -718,7 +719,8 @@ public final class SerenadaSession: ObservableObject {
     private func roomStateMessageFromEvent(_ event: RoomStateEvent) -> SignalingMessage {
         let participants = dedupeParticipants(
             participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
-            localPeerId: clientId
+            localPeerId: clientId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
         let resolvedHostPeerId = resolveHostPeerId(
             explicitHostPeerId: event.hostPeerId,
@@ -776,25 +778,6 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    private func dedupeParticipants(
-        participants: [Participant],
-        localPeerId: String?
-    ) -> [Participant] {
-        var deduped: [String: Participant] = [:]
-        var order: [String] = []
-        for participant in participants where !participant.cid.isEmpty {
-            if deduped[participant.cid] == nil {
-                order.append(participant.cid)
-            }
-            deduped[participant.cid] = participant
-        }
-        if let localPeerId, !localPeerId.isEmpty, deduped[localPeerId] == nil {
-            deduped[localPeerId] = Participant(cid: localPeerId, joinedAt: nil)
-            order.append(localPeerId)
-        }
-        return order.compactMap { deduped[$0] }
-    }
-
     private func resolveHostPeerId(
         explicitHostPeerId: String?,
         participants: [Participant],
@@ -821,7 +804,8 @@ public final class SerenadaSession: ObservableObject {
     ) -> RoomState? {
         let participants = dedupeParticipants(
             participants: (roomState?.participants ?? []) + [Participant(cid: event.peerId, joinedAt: event.joinedAt)],
-            localPeerId: localPeerId
+            localPeerId: localPeerId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
         let nextHost = roomState?.hostCid ?? localPeerId ?? participants.first?.cid
         guard let nextHost else { return nil }
@@ -838,7 +822,8 @@ public final class SerenadaSession: ObservableObject {
         guard let roomState else { return nil }
         let participants = dedupeParticipants(
             participants: roomState.participants.filter { $0.cid != peerId },
-            localPeerId: localPeerId
+            localPeerId: localPeerId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
         guard !participants.isEmpty else { return nil }
         let nextHost: String
@@ -868,9 +853,8 @@ public final class SerenadaSession: ObservableObject {
         let fetchGeneration = iceFetchGeneration
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let retryDelaysMs = [0, 1_000, 2_000, 4_000]
             var lastError: Error?
-            for delayMs in retryDelaysMs {
+            for delayMs in WebRtcResilience.iceFetchRetryDelaysMs {
                 if delayMs > 0 {
                     try? await clock.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
                 }
