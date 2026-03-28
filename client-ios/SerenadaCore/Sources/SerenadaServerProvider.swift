@@ -116,16 +116,26 @@ internal final class SerenadaServerProvider: SignalingProvider {
     }
 
     func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?) {
-        precondition(Thread.isMainThread, "SerenadaServerProvider.sendToPeer() must be called on the main thread")
-        MainActor.assumeIsolated {
-            sendRawMessage(type: type, payload: payload, to: peerId)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                sendRawMessage(type: type, payload: payload, to: peerId)
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.sendRawMessage(type: type, payload: payload, to: peerId)
+            }
         }
     }
 
     func broadcast(type: String, payload: SignalingPayload?) {
-        precondition(Thread.isMainThread, "SerenadaServerProvider.broadcast() must be called on the main thread")
-        MainActor.assumeIsolated {
-            sendRawMessage(type: type, payload: payload)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                sendRawMessage(type: type, payload: payload)
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.sendRawMessage(type: type, payload: payload)
+            }
         }
     }
 
