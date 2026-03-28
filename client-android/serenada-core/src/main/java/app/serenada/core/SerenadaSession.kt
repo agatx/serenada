@@ -234,7 +234,7 @@ class SerenadaSession internal constructor(
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
     private val peerSlots = mutableMapOf<String, PeerConnectionSlotProtocol>()
     private val peerNegotiationEngine: PeerNegotiationEngine
-    private lateinit var signalingProvider: SignalingProvider
+    private val signalingProvider: SignalingProvider
     private var reconnectToken: String? = null
     private var reconnectRecoveryPending = false
     private var iceFetchGeneration = 0

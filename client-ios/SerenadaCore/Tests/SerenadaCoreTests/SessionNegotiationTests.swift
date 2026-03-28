@@ -125,7 +125,9 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertNotNil(fakeSlot)
 
         harness.simulateIceCandidateFromRemote(fromCid: "remote", candidate: "candidate:test")
-        await harness.yieldToMainActor()
+        await waitUntil {
+            fakeSlot?.addedIceCandidates.count == 1
+        }
 
         XCTAssertEqual(fakeSlot?.addedIceCandidates.count, 1, "ICE candidate should be added to slot")
         XCTAssertEqual(fakeSlot?.addedIceCandidates.first?.candidate, "candidate:test")

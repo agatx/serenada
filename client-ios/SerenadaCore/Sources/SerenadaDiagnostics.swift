@@ -501,15 +501,17 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
         self.onCandidateLog = onCandidateLog
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
-            self.start(urls: urls, username: username, credential: credential)
+            Task { @MainActor [weak self] in
+                await self?.start(urls: urls, username: username, credential: credential)
+            }
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
-                await self?.finish()
+                self?.finish()
             }
         }
     }
 
-    private func start(urls: [String], username: String, credential: String) {
+    private func start(urls: [String], username: String, credential: String) async {
         Self.warmUpFactory()
         let factory = Self.sharedFactory!
 
@@ -527,24 +529,17 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
         peerConnection = connection
         _ = connection.dataChannel(forLabel: "diag", configuration: RTCDataChannelConfiguration())
 
-        connection.offer(for: constraints) { [weak self] description, error in
-            guard let self else { return }
-            if let error {
-                self.logs.append("offer failed: \(error.localizedDescription)")
-                self.finish()
-                return
+        do {
+            let description = try await connection.offer(for: constraints)
+            do {
+                try await connection.setLocalDescription(description)
+            } catch {
+                logs.append("setLocalDescription failed: \(error.localizedDescription)")
+                finish()
             }
-            guard let description else {
-                self.logs.append("offer missing")
-                self.finish()
-                return
-            }
-            connection.setLocalDescription(description) { [weak self] setError in
-                if let setError {
-                    self?.logs.append("setLocalDescription failed: \(setError.localizedDescription)")
-                    self?.finish()
-                }
-            }
+        } catch {
+            logs.append("offer failed: \(error.localizedDescription)")
+            finish()
         }
     }
 
@@ -556,28 +551,35 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
         continuation = nil
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        let sdp = candidate.sdp.lowercased()
-        if sdp.contains(" typ srflx") { hasSrflx = true }
-        if sdp.contains(" typ relay") { hasRelay = true }
-        logs.append(candidate.sdp)
-        onCandidateLog?(candidate.sdp)
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        let sdp = candidate.sdp
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let normalizedSdp = sdp.lowercased()
+            if normalizedSdp.contains(" typ srflx") { hasSrflx = true }
+            if normalizedSdp.contains(" typ relay") { hasRelay = true }
+            logs.append(sdp)
+            onCandidateLog?(sdp)
+        }
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
-        if newState == .complete { finish() }
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        guard newState == .complete else { return }
+        Task { @MainActor [weak self] in
+            self?.finish()
+        }
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
-    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+    nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
 }
 #endif
