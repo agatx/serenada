@@ -313,8 +313,8 @@ func TestHandleTurnCredentialsCloudflareHappyPath(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer test-api-token" {
 			t.Errorf("bad auth header: %s", r.Header.Get("Authorization"))
 		}
-		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{"iceServers":{"urls":["stun:turn.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"cf-user","credential":"cf-pass"}}`)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"cf-user","credential":"cf-pass"}]}`)
 	}))
 
 	token, _, err := issueTurnToken(10*time.Minute, turnTokenKindCall)
@@ -344,8 +344,8 @@ func TestHandleTurnCredentialsCloudflareHappyPath(t *testing.T) {
 	if result.TTL != 900 {
 		t.Fatalf("expected TTL=900, got %d", result.TTL)
 	}
-	if len(result.URIs) != 3 {
-		t.Fatalf("expected 3 Cloudflare URIs, got %d", len(result.URIs))
+	if len(result.URIs) != 4 {
+		t.Fatalf("expected 4 Cloudflare URIs, got %d", len(result.URIs))
 	}
 }
 
@@ -435,8 +435,8 @@ func TestFetchCloudflareCredentialsSuccess(t *testing.T) {
 			t.Errorf("expected ttl=900, got %d", body["ttl"])
 		}
 
-		w.WriteHeader(http.StatusCreated)
-		fmt.Fprint(w, `{"iceServers":{"urls":["stun:turn.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"cf-user","credential":"cf-pass"}}`)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"cf-user","credential":"cf-pass"}]}`)
 	}))
 
 	config, err := fetchCloudflareCredentials(context.Background(), "any-key", "test-token", 900)
@@ -453,8 +453,8 @@ func TestFetchCloudflareCredentialsSuccess(t *testing.T) {
 	if config.TTL != 900 {
 		t.Fatalf("expected TTL 900, got %d", config.TTL)
 	}
-	if len(config.URIs) != 3 {
-		t.Fatalf("expected 3 URIs, got %d", len(config.URIs))
+	if len(config.URIs) != 4 {
+		t.Fatalf("expected 4 URIs, got %d", len(config.URIs))
 	}
 }
 

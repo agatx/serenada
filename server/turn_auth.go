@@ -129,13 +129,17 @@ func validateTurnToken(token, kind string) bool {
 	return true
 }
 
+// cloudflareICEServer is a single entry in the Cloudflare TURN API response.
+type cloudflareICEServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username"`
+	Credential string   `json:"credential"`
+}
+
 // cloudflareCredentialsResponse matches the Cloudflare TURN API response shape.
+// The generate-ice-servers endpoint returns iceServers as an array.
 type cloudflareCredentialsResponse struct {
-	IceServers struct {
-		URLs       []string `json:"urls"`
-		Username   string   `json:"username"`
-		Credential string   `json:"credential"`
-	} `json:"iceServers"`
+	IceServers []cloudflareICEServer `json:"iceServers"`
 }
 
 var (
@@ -152,7 +156,7 @@ var (
 // short-lived credentials. Returns a TurnConfig in the legacy format on
 // success, or an error if the API call fails.
 func fetchCloudflareCredentials(ctx context.Context, keyID, apiToken string, ttl int) (*TurnConfig, error) {
-	apiURL := fmt.Sprintf("%s/%s/credentials/generate", cfTURNBaseURL, keyID)
+	apiURL := fmt.Sprintf("%s/%s/credentials/generate-ice-servers", cfTURNBaseURL, keyID)
 
 	body, err := json.Marshal(map[string]int{"ttl": ttl})
 	if err != nil {
@@ -172,7 +176,7 @@ func fetchCloudflareCredentials(ctx context.Context, keyID, apiToken string, ttl
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("cloudflare API returned %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -182,10 +186,15 @@ func fetchCloudflareCredentials(ctx context.Context, keyID, apiToken string, ttl
 		return nil, fmt.Errorf("decode cloudflare response: %w", err)
 	}
 
+	if len(cfResp.IceServers) == 0 {
+		return nil, fmt.Errorf("cloudflare returned empty iceServers array")
+	}
+
+	entry := cfResp.IceServers[0]
 	return &TurnConfig{
-		Username: cfResp.IceServers.Username,
-		Password: cfResp.IceServers.Credential,
-		URIs:     cfResp.IceServers.URLs,
+		Username: entry.Username,
+		Password: entry.Credential,
+		URIs:     entry.URLs,
 		TTL:      ttl,
 	}, nil
 }
