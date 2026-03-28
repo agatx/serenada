@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -280,7 +281,7 @@ func TestHandleDiagnosticTokenMissingSecret(t *testing.T) {
 
 // mockCloudflareTURN sets up a mock Cloudflare TURN API server and overrides
 // cfHTTPClient and cfTURNBaseURL so fetchCloudflareCredentials hits the mock.
-// Returns a cleanup function (also registered via t.Cleanup).
+// Cleanup is registered via t.Cleanup automatically.
 func mockCloudflareTURN(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -427,7 +428,9 @@ func TestFetchCloudflareCredentialsSuccess(t *testing.T) {
 		}
 
 		var body map[string]int
-		json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
 		if body["ttl"] != 900 {
 			t.Errorf("expected ttl=900, got %d", body["ttl"])
 		}
@@ -436,7 +439,7 @@ func TestFetchCloudflareCredentialsSuccess(t *testing.T) {
 		fmt.Fprint(w, `{"iceServers":{"urls":["stun:turn.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"cf-user","credential":"cf-pass"}}`)
 	}))
 
-	config, err := fetchCloudflareCredentials("any-key", "test-token", 900)
+	config, err := fetchCloudflareCredentials(context.Background(), "any-key", "test-token", 900)
 	if err != nil {
 		t.Fatalf("fetchCloudflareCredentials: %v", err)
 	}
@@ -461,7 +464,7 @@ func TestFetchCloudflareCredentialsAPIError(t *testing.T) {
 		fmt.Fprint(w, `{"error":"forbidden"}`)
 	}))
 
-	_, err := fetchCloudflareCredentials("any-key", "bad-token", 900)
+	_, err := fetchCloudflareCredentials(context.Background(), "any-key", "bad-token", 900)
 	if err == nil {
 		t.Fatal("expected error from Cloudflare API")
 	}

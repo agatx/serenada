@@ -17,8 +17,10 @@ import (
 
 const maxMessageSize = 65536 // 64KB
 
-// TURN token TTL: 15 minutes. Clients proactively refresh at 80% of TTL (~12 min).
-// Both Cloudflare and coturn credentials are issued with a 15-minute TTL to match.
+// TURN token TTL for call credentials: 15 minutes.
+// Clients proactively refresh at 80% of TTL (~12 min). Both Cloudflare and coturn
+// call credentials are issued with a matching 15-minute TTL. Diagnostic tokens
+// use a shorter TTL (5 seconds).
 const turnTokenTTL = 15 * time.Minute
 
 // issueReconnectToken generates an HMAC proof that allows a client to reclaim

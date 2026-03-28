@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -150,7 +151,7 @@ var (
 // fetchCloudflareCredentials calls the Cloudflare TURN API to generate
 // short-lived credentials. Returns a TurnConfig in the legacy format on
 // success, or an error if the API call fails.
-func fetchCloudflareCredentials(keyID, apiToken string, ttl int) (*TurnConfig, error) {
+func fetchCloudflareCredentials(ctx context.Context, keyID, apiToken string, ttl int) (*TurnConfig, error) {
 	apiURL := fmt.Sprintf("%s/%s/credentials/generate", cfTURNBaseURL, keyID)
 
 	body, err := json.Marshal(map[string]int{"ttl": ttl})
@@ -158,7 +159,7 @@ func fetchCloudflareCredentials(keyID, apiToken string, ttl int) (*TurnConfig, e
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -271,7 +272,7 @@ func handleTurnCredentials() http.HandlerFunc {
 		cfAPIToken := os.Getenv("CF_TURN_API_TOKEN")
 
 		if cfKeyID != "" && cfAPIToken != "" {
-			config, err := fetchCloudflareCredentials(cfKeyID, cfAPIToken, credentialTTL)
+			config, err := fetchCloudflareCredentials(r.Context(), cfKeyID, cfAPIToken, credentialTTL)
 			if err != nil {
 				log.Printf("[TURN] Cloudflare TURN failed, falling back to coturn: %v", err)
 			} else {
