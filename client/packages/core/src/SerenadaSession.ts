@@ -26,6 +26,7 @@ import {
     RECONNECT_BACKOFF_CAP_MS,
     JOIN_HARD_TIMEOUT_MS,
 } from './constants.js';
+import { formatError } from './formatError.js';
 import type { RoomState, SignalingMessage } from './signaling/types.js';
 
 interface SessionDependencies {
@@ -59,13 +60,6 @@ function mapErrorCode(serverCode: string): CallErrorCode {
         default:
             return 'unknown';
     }
-}
-
-function toErrorMessage(error: unknown): string {
-    if (error instanceof Error && typeof error.message === 'string' && error.message.length > 0) {
-        return error.message;
-    }
-    return String(error);
 }
 
 function toRoomParticipant(participant: { peerId: string; joinedAt?: number }): { cid: string; joinedAt?: number } {
@@ -592,7 +586,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         this.error = {
             code: 'ICE_SERVER_FETCH_FAILED',
-            message: toErrorMessage(lastError),
+            message: formatError(lastError),
         };
         this.rebuildState();
     }

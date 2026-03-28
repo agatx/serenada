@@ -9,9 +9,6 @@ export interface ConnectionInfo {
 export interface JoinOptions {
     reconnectPeerId?: string;
     maxParticipants?: number;
-    capabilities?: {
-        maxParticipants?: number;
-    };
 }
 
 export interface SignalingProviderParticipant {
@@ -52,9 +49,6 @@ export interface SignalingErrorEvent {
     code: string;
     message: string;
 }
-
-/** @deprecated Use `SignalingErrorEvent`. */
-export type ErrorEvent = SignalingErrorEvent;
 
 export interface SignalingProviderEventMap {
     connected: ConnectionInfo | undefined;

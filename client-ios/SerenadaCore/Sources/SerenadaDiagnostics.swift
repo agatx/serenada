@@ -147,16 +147,31 @@ public final class SerenadaDiagnostics {
     /// - Throws: An error when `serverHost` is unavailable or a required
     ///   connectivity probe cannot be executed.
     public func runConnectivityChecks() async throws -> ConnectivityReport {
-        let serverHost = try requireServerHost(config)
+        guard let serverHost = resolvedConfig.serverHost else {
+            throw APIError.invalidResponse("requires serverHost")
+        }
         var report = ConnectivityReport()
-        // Fetch the diagnostic token once and reuse it for the TURN credentials check.
+        // Run independent probes concurrently. The diagnostic-token result is
+        // reused for the TURN credentials check that follows.
         var tokenForTurn: String?
-        report.roomApi = await runTimedCheck {
+        async let roomApiResult = runTimedCheck {
             _ = try await self.apiClient.createRoomId(host: serverHost)
         }
-        report.webSocket = await runTimedCheck { try await self.testWebSocket(host: serverHost) }
-        report.sse = await runTimedCheck { try await self.testSse(host: serverHost) }
-        report.diagnosticToken = await runTimedCheck { tokenForTurn = try await self.apiClient.fetchDiagnosticToken(host: serverHost) }
+        async let webSocketResult = runTimedCheck { try await self.testWebSocket(host: serverHost) }
+        async let sseResult = runTimedCheck { try await self.testSse(host: serverHost) }
+        async let diagnosticTokenResult: (CheckOutcome, String?) = {
+            var token: String?
+            let outcome = await runTimedCheck { token = try await self.apiClient.fetchDiagnosticToken(host: serverHost) }
+            return (outcome, token)
+        }()
+
+        report.roomApi = await roomApiResult
+        report.webSocket = await webSocketResult
+        report.sse = await sseResult
+        let (dtOutcome, dtToken) = await diagnosticTokenResult
+        report.diagnosticToken = dtOutcome
+        tokenForTurn = dtToken
+
         report.turnCredentials = await runTimedCheck {
             let resolvedToken: String
             if let existing = tokenForTurn {
@@ -205,7 +220,9 @@ public final class SerenadaDiagnostics {
         let normalizedHost = host?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nilIfEmpty
-        let resolvedHost = try normalizedHost ?? requireServerHost(config)
+        guard let resolvedHost = normalizedHost ?? resolvedConfig.serverHost else {
+            throw APIError.invalidResponse("requires serverHost")
+        }
         try await apiClient.validateServerHost(resolvedHost)
     }
 

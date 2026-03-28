@@ -8,7 +8,8 @@ import type {
 } from './types.js';
 import { buildApiUrl, resolveServerBaseUrl, resolveServerUrls } from './serverUrls.js';
 import type { ResolvedSerenadaConfig } from './configValidation.js';
-import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
+import { resolveSerenadaConfig } from './configValidation.js';
+import { formatError } from './formatError.js';
 
 interface DiagnosticTokenResponse {
     token?: string;
@@ -29,11 +30,9 @@ interface TurnCredentialsResponse {
  * and server connectivity (signaling, TURN) before joining a call.
  */
 export class SerenadaDiagnostics {
-    private readonly config: SerenadaConfig;
     private readonly resolvedConfig: ResolvedSerenadaConfig;
 
     constructor(config: SerenadaConfig) {
-        this.config = config;
         this.resolvedConfig = resolveSerenadaConfig(config);
     }
 
@@ -60,7 +59,8 @@ export class SerenadaDiagnostics {
 
     /** Test server connectivity: room API, WebSocket, SSE, and TURN credentials. */
     async runConnectivityChecks(): Promise<ConnectivityReport> {
-        const serverHost = requireServerHost(this.config);
+        const serverHost = this.resolvedConfig.serverHost;
+        if (!serverHost) throw new Error('requires serverHost');
         // Fetch the diagnostic token once and reuse it for the TURN credentials check.
         let tokenForTurn: string | undefined;
         const [roomApi, webSocket, sse, diagnosticToken] = await Promise.all([
@@ -92,7 +92,7 @@ export class SerenadaDiagnostics {
             const iceServers = await this.resolveIceServers();
             return await this.gatherIceCandidates(iceServers, turnsOnly, onCandidateLog);
         } catch (err) {
-            return { stunPassed: false, turnPassed: false, logs: [toErrorMessage(err)] };
+            return { stunPassed: false, turnPassed: false, logs: [formatError(err)] };
         }
     }
 
@@ -102,7 +102,12 @@ export class SerenadaDiagnostics {
     }
 
     /** Validate that a server host is reachable by requesting a room ID. */
-    async validateServerHost(host: string = requireServerHost(this.config)): Promise<void> {
+    async validateServerHost(host?: string): Promise<void> {
+        if (!host) {
+            const resolved = this.resolvedConfig.serverHost;
+            if (!resolved) throw new Error('requires serverHost');
+            host = resolved;
+        }
         const response = await this.fetchJson<RoomIdResponse>(buildApiUrl(host, '/api/room-id'), {
             method: 'GET',
             timeoutMs: 5000,
@@ -232,7 +237,7 @@ export class SerenadaDiagnostics {
             await block();
             return { status: 'passed', latencyMs: Date.now() - start };
         } catch (err) {
-            return { status: 'failed', error: toErrorMessage(err) };
+            return { status: 'failed', error: formatError(err) };
         }
     }
 
@@ -453,7 +458,7 @@ export class SerenadaDiagnostics {
             void connection.createOffer()
                 .then((offer) => connection.setLocalDescription(offer))
                 .catch((err) => {
-                    log(`ICE probe failed: ${toErrorMessage(err)}`);
+                    log(`ICE probe failed: ${formatError(err)}`);
                     finish();
                 });
         });
@@ -492,8 +497,4 @@ export class SerenadaDiagnostics {
             globalThis.clearTimeout(timeout);
         }
     }
-}
-
-function toErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
 }

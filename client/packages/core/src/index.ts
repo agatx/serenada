@@ -56,7 +56,6 @@ export type {
     PeerMessage,
     RoomEndedEvent,
     SignalingErrorEvent,
-    ErrorEvent,
     SignalingProviderEventMap,
     SignalingProviderEventName,
     SignalingProvider,

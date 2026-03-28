@@ -27,6 +27,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -44,6 +45,7 @@ class SerenadaDiagnostics(
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
     private val handler = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val resolvedConfig = resolveSerenadaConfig(config)
 
     init {
@@ -106,8 +108,10 @@ class SerenadaDiagnostics(
     }
 
     /** Test server connectivity (room API, WebSocket, SSE, TURN). */
-    suspend fun runConnectivityChecks(host: String = requireServerHost(config)): ConnectivityReport = withContext(Dispatchers.IO) {
-        val normalizedHost = host.trim().ifBlank { requireServerHost(config) }
+    suspend fun runConnectivityChecks(host: String? = resolvedConfig.serverHost): ConnectivityReport = withContext(Dispatchers.IO) {
+        val normalizedHost = host?.trim()?.takeIf { it.isNotEmpty() }
+            ?: resolvedConfig.serverHost
+            ?: throw IllegalStateException("requires serverHost")
         // Fetch the diagnostic token once and reuse it for the TURN credentials check.
         var tokenForTurn: String? = null
         val roomApi = runTimedCheck { awaitCreateRoomId(normalizedHost) }
@@ -299,7 +303,7 @@ class SerenadaDiagnostics(
     fun checkTurn(completion: (TurnCheckResult) -> Unit) {
         val serverHost = resolvedConfig.serverHost
         if (serverHost == null) {
-            CoroutineScope(Dispatchers.IO).launch {
+            scope.launch {
                 runCatching {
                     (resolvedConfig.signalingProvider ?: throw IllegalStateException("Provide exactly one of serverHost or signalingProvider"))
                         .getIceServers()
@@ -329,9 +333,11 @@ class SerenadaDiagnostics(
     }
 
     /** Validate that a server host is reachable. Throws on failure. */
-    suspend fun validateServerHost(host: String = requireServerHost(config)) {
+    suspend fun validateServerHost(host: String? = resolvedConfig.serverHost) {
+        val resolvedHost = host?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("requires serverHost")
         suspendCancellableCoroutine<Unit> { continuation ->
-            apiClient.validateServerHost(host) { result ->
+            apiClient.validateServerHost(resolvedHost) { result ->
                 if (continuation.isActive) {
                     result
                         .onSuccess { continuation.resume(Unit) }

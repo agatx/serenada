@@ -861,10 +861,12 @@ class SerenadaSession internal constructor(
     }
 
     private fun signalingMessageFromPeerMessage(message: PeerMessage): SignalingMessage {
-        val payload = JSONObject(message.payload?.toString() ?: "{}").apply {
-            if (optString("from").isBlank()) {
-                put("from", message.from)
-            }
+        val base = message.payload ?: JSONObject()
+        val payload = if (base.optString("from").isBlank()) {
+            // Put `from` directly — the provider already created this JSONObject for us.
+            base.put("from", message.from)
+        } else {
+            base
         }
         return SignalingMessage(
             type = message.type,

@@ -73,7 +73,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
     joinRoom(roomId: string, options?: JoinOptions): void {
         this.previousParticipants.clear();
         this.signaling.joinRoom(roomId, {
-            createMaxParticipants: options?.maxParticipants ?? options?.capabilities?.maxParticipants,
+            createMaxParticipants: options?.maxParticipants,
         });
     }
 
@@ -229,18 +229,17 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             maxParticipants: payload.maxParticipants,
         };
 
-        this.emitParticipantDiffs(this.previousParticipants, nextState.participants);
-        this.previousParticipants = toParticipantMap(nextState.participants);
+        const nextMap = toParticipantMap(nextState.participants);
+        this.emitParticipantDiffs(this.previousParticipants, nextMap);
+        this.previousParticipants = nextMap;
         this.currentHostPeerId = nextState.hostPeerId ?? null;
         this.emit('roomStateUpdated', nextState);
     }
 
     private emitParticipantDiffs(
         previous: Map<string, SignalingProviderParticipant>,
-        nextParticipants: SignalingProviderParticipant[],
+        next: Map<string, SignalingProviderParticipant>,
     ): void {
-        const next = toParticipantMap(nextParticipants);
-
         for (const [peerId, participant] of next) {
             if (!previous.has(peerId)) {
                 this.emit('peerJoined', participant);
