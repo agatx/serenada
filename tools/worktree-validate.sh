@@ -130,9 +130,16 @@ if [ "${SKIP_WEB:-}" = "1" ]; then
 else
     CLIENT="$TARGET/client"
 
-    # node_modules
+    # node_modules — auto-install if missing and npm is available
     if [ -d "$CLIENT/node_modules" ]; then
         check_pass "node_modules installed"
+    elif command -v npm >/dev/null 2>&1 && [ -f "$CLIENT/package.json" ]; then
+        log_info "node_modules missing — running npm ci..."
+        if (cd "$CLIENT" && run_quiet npm ci --no-audit --no-fund); then
+            check_pass "node_modules installed (auto)"
+        else
+            check_fail "node_modules missing and npm ci failed"
+        fi
     else
         check_fail "node_modules missing (run: cd client && npm install)"
     fi
@@ -406,31 +413,109 @@ else
         check_warn "xcodebuild not found"
     fi
 
-    # Resolve a simulator destination (pick first available iPhone 16 by device ID)
+    # Resolve a simulator destination — try several iPhone models, prefer booted ones
     IOS_SIM_ID=""
+    IOS_SIM_NAME=""
     if command -v xcrun >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-        IOS_SIM_ID=$(xcrun simctl list devices available -j 2>/dev/null \
+        IOS_SIM_LINE=$(xcrun simctl list devices available -j 2>/dev/null \
             | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
+# Preferred device names in order — pick first available, preferring booted
+preferred = ['iPhone 16', 'iPhone 16 Pro', 'iPhone 15', 'iPhone 15 Pro', 'iPhone 14']
+best = None
 for runtime, devices in data.get('devices', {}).items():
     if 'iOS' not in runtime:
         continue
     for d in devices:
-        if d.get('name') == 'iPhone 16' and d.get('isAvailable'):
-            print(d['udid'])
-            sys.exit(0)
+        if not d.get('isAvailable'):
+            continue
+        name = d.get('name', '')
+        try:
+            rank = preferred.index(name)
+        except ValueError:
+            # Accept any iPhone as a last resort
+            if 'iPhone' in name:
+                rank = len(preferred)
+            else:
+                continue
+        booted = 1 if d.get('state') != 'Booted' else 0
+        candidate = (rank, booted, d['udid'], name)
+        if best is None or candidate < best:
+            best = candidate
+if best:
+    # Tab-separated so shell can split udid from multi-word name
+    print(best[2] + '\t' + best[3])
 " 2>/dev/null || true)
+        if [ -n "$IOS_SIM_LINE" ]; then
+            IFS=$'\t' read -r IOS_SIM_ID IOS_SIM_NAME <<< "$IOS_SIM_LINE"
+        fi
     fi
 
+    # Fallback when python3 is unavailable: use name-based destination
+    if [ -z "$IOS_SIM_ID" ] && command -v xcrun >/dev/null 2>&1; then
+        IOS_SIM_NAME="iPhone 16"
+    fi
+
+    # Helper: query the current state of a simulator by UDID
+    sim_state() {
+        xcrun simctl list devices -j 2>/dev/null \
+            | python3 -c '
+import sys, json
+data = json.load(sys.stdin)
+target_udid = sys.argv[1] if len(sys.argv) > 1 else ""
+for devices in data.get("devices", {}).values():
+    for d in devices:
+        if d.get("udid") == target_udid:
+            print(d.get("state", "Unknown"))
+            sys.exit(0)
+print("Unknown")
+' "$1" 2>/dev/null || echo "Unknown"
+    }
+
+    # Helper: wait for a simulator to reach "Booted" state (polls every 2s, up to timeout)
+    wait_for_sim_boot() {
+        local udid="$1" timeout="${2:-30}" elapsed=0
+        while [ "$elapsed" -lt "$timeout" ]; do
+            if [ "$(sim_state "$udid")" = "Booted" ]; then
+                return 0
+            fi
+            sleep 2
+            elapsed=$((elapsed + 2))
+        done
+        return 1
+    }
+
+    IOS_HAS_SIM=false
     if [ -n "$IOS_SIM_ID" ]; then
         IOS_DEST="platform=iOS Simulator,id=$IOS_SIM_ID"
+        IOS_HAS_SIM=true
+        check_pass "iOS Simulator resolved ($IOS_SIM_NAME, $IOS_SIM_ID)"
+
+        # Boot the simulator if not already booted, then wait until it's ready
+        if [ "$(sim_state "$IOS_SIM_ID")" = "Booted" ]; then
+            : # already booted, nothing to do
+        else
+            log_info "Booting simulator ($IOS_SIM_NAME)..."
+            # boot may return non-zero if already booting/transitioning — that's OK
+            xcrun simctl boot "$IOS_SIM_ID" 2>/dev/null || true
+            if wait_for_sim_boot "$IOS_SIM_ID" 60; then
+                check_pass "Simulator booted"
+            else
+                check_warn "Simulator did not reach Booted state within 60s — builds may fail"
+            fi
+        fi
+    elif [ -n "$IOS_SIM_NAME" ]; then
+        # Fallback: no UDID resolved (python3 missing), use name-based destination
+        IOS_DEST="platform=iOS Simulator,name=$IOS_SIM_NAME"
+        IOS_HAS_SIM=true
+        check_pass "iOS Simulator destination ($IOS_SIM_NAME, name-based fallback)"
     else
-        IOS_DEST="platform=iOS Simulator,name=iPhone 16"
+        check_warn "No iOS Simulator found — skipping iOS build & tests"
     fi
 
-    # Build (only if project exists)
-    if [ "${SKIP_BUILD:-}" != "1" ] && [ -d "$IOS/SerenadaiOS.xcodeproj" ] && command -v xcodebuild >/dev/null 2>&1; then
+    # Build (only if project exists and simulator is available)
+    if [ "${SKIP_BUILD:-}" != "1" ] && [ "$IOS_HAS_SIM" = true ] && [ -d "$IOS/SerenadaiOS.xcodeproj" ] && command -v xcodebuild >/dev/null 2>&1; then
         log_info "Building iOS (simulator)..."
         if (cd "$IOS" && run_quiet xcodebuild build \
             -project SerenadaiOS.xcodeproj \
@@ -444,10 +529,12 @@ for runtime, devices in data.get('devices', {}).items():
         fi
     elif [ "${SKIP_BUILD:-}" = "1" ]; then
         check_skip "iOS build (SKIP_BUILD=1)"
+    elif [ "$IOS_HAS_SIM" != true ]; then
+        check_skip "iOS build (no simulator)"
     fi
 
     # Tests (unit tests only — UI tests require a live server and have known flaky failures)
-    if [ "${SKIP_TEST:-}" != "1" ] && [ -d "$IOS/SerenadaiOS.xcodeproj" ] && command -v xcodebuild >/dev/null 2>&1; then
+    if [ "${SKIP_TEST:-}" != "1" ] && [ "$IOS_HAS_SIM" = true ] && [ -d "$IOS/SerenadaiOS.xcodeproj" ] && command -v xcodebuild >/dev/null 2>&1; then
         log_info "Running iOS unit tests..."
         if (cd "$IOS" && run_quiet xcodebuild test \
             -project SerenadaiOS.xcodeproj \
@@ -461,6 +548,8 @@ for runtime, devices in data.get('devices', {}).items():
         fi
     elif [ "${SKIP_TEST:-}" = "1" ]; then
         check_skip "iOS tests (SKIP_TEST=1)"
+    elif [ "$IOS_HAS_SIM" != true ]; then
+        check_skip "iOS tests (no simulator)"
     fi
 fi
 
