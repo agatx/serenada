@@ -2,6 +2,10 @@ package app.serenada.core.call
 
 import android.os.Looper
 import app.serenada.core.CallError
+import app.serenada.core.ErrorEvent
+import app.serenada.core.JoinedEvent
+import app.serenada.core.PeerMessage
+import app.serenada.core.RoomStateEvent
 import org.json.JSONObject
 
 /**
@@ -53,6 +57,78 @@ internal class SignalingMessageRouter(
             if (active && contentType != null) put("contentType", contentType)
         }
         sendMessage("content_state", payload, null)
+    }
+
+    // --- Direct-dispatch methods for provider events ---
+
+    fun processJoinedEvent(event: JoinedEvent) {
+        assertMainThread()
+        clearJoinTimers()
+        setJoinAcknowledged()
+
+        val cid = event.peerId
+        val participants = dedupeParticipants(
+            event.participants.map { Participant(cid = it.peerId, joinedAt = it.joinedAt) },
+            cid,
+        )
+        val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), cid)
+        val roomState = if (!hostPeerId.isNullOrBlank()) {
+            RoomState(hostCid = hostPeerId, participants = participants, maxParticipants = event.maxParticipants)
+        } else null
+        onJoined(cid, roomState?.hostCid, roomState, null, null, null)
+    }
+
+    fun processRoomStateEvent(event: RoomStateEvent) {
+        assertMainThread()
+        clearJoinTimers()
+        setJoinAcknowledged()
+
+        val localPeerId = getClientId()
+        val participants = dedupeParticipants(
+            event.participants.map { Participant(cid = it.peerId, joinedAt = it.joinedAt) },
+            localPeerId,
+        )
+        val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), localPeerId)
+        if (hostPeerId.isNullOrBlank()) return
+        onRoomStateUpdated(RoomState(hostCid = hostPeerId, participants = participants, maxParticipants = event.maxParticipants))
+    }
+
+    fun processPeerMessage(message: PeerMessage) {
+        assertMainThread()
+        when (message.type) {
+            "content_state" -> {
+                val payload = message.payload
+                val fromCid = payload?.optString("from")?.ifBlank { null } ?: message.from
+                val active = payload?.optBoolean("active") ?: false
+                val contentType = if (active) payload?.optString("contentType")?.ifBlank { null } else null
+                onContentStateReceived(fromCid, active, contentType)
+            }
+            "offer", "answer", "ice" -> {
+                val base = message.payload ?: JSONObject()
+                if (base.optString("from").isBlank()) base.put("from", message.from)
+                onSignalingPayload(SignalingMessage(
+                    type = message.type,
+                    rid = null,
+                    sid = null,
+                    cid = message.from,
+                    to = null,
+                    payload = base,
+                ))
+            }
+        }
+    }
+
+    fun processErrorEvent(event: ErrorEvent) {
+        assertMainThread()
+        val callError = when (event.code) {
+            "ROOM_CAPACITY_UNSUPPORTED", "ROOM_FULL" -> CallError.RoomFull
+            "CONNECTION_FAILED" -> CallError.ConnectionFailed
+            "JOIN_TIMEOUT" -> CallError.SignalingTimeout
+            "ROOM_ENDED" -> CallError.RoomEnded
+            else -> if (event.message.isNotBlank()) CallError.ServerError(event.message)
+            else CallError.Unknown("Unknown error")
+        }
+        onError(callError)
     }
 
     // --- Private handlers ---

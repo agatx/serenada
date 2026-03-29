@@ -4,10 +4,12 @@ import Foundation
 final class SignalingMessageRouter {
     // State readers
     private let getClientId: () -> String?
+    private let getHostCid: () -> String?
+    private let getRoomId: () -> String?
 
     // Callbacks for mutations
-    private let onJoined: (_ cid: String?, _ payload: JoinedPayload, _ rawPayload: JSONValue?) -> Void
-    private let onRoomState: (_ payload: JSONValue?) -> Void
+    private let onJoined: (_ cid: String?, _ roomState: RoomState?, _ participantCountHint: Int?) -> Void
+    private let onRoomState: (_ roomState: RoomState?, _ participantCountHint: Int?) -> Void
     private let onRoomEnded: () -> Void
     private let onPong: () -> Void
     private let onTurnRefreshed: (_ payload: JSONValue?) -> Void
@@ -18,8 +20,10 @@ final class SignalingMessageRouter {
 
     init(
         getClientId: @escaping () -> String?,
-        onJoined: @escaping (_ cid: String?, _ payload: JoinedPayload, _ rawPayload: JSONValue?) -> Void,
-        onRoomState: @escaping (_ payload: JSONValue?) -> Void,
+        getHostCid: @escaping () -> String?,
+        getRoomId: @escaping () -> String?,
+        onJoined: @escaping (_ cid: String?, _ roomState: RoomState?, _ participantCountHint: Int?) -> Void,
+        onRoomState: @escaping (_ roomState: RoomState?, _ participantCountHint: Int?) -> Void,
         onRoomEnded: @escaping () -> Void,
         onPong: @escaping () -> Void,
         onTurnRefreshed: @escaping (_ payload: JSONValue?) -> Void,
@@ -29,6 +33,8 @@ final class SignalingMessageRouter {
         sendMessage: @escaping (_ type: String, _ payload: JSONValue?, _ to: String?) -> Void
     ) {
         self.getClientId = getClientId
+        self.getHostCid = getHostCid
+        self.getRoomId = getRoomId
         self.onJoined = onJoined
         self.onRoomState = onRoomState
         self.onRoomEnded = onRoomEnded
@@ -46,9 +52,12 @@ final class SignalingMessageRouter {
         switch message.type {
         case "joined":
             let payload = JoinedPayload(from: message.payload)
-            onJoined(message.cid, payload, message.payload)
+            let roomState = parseRoomState(payload: message.payload, fallbackHostCid: nil)
+            onJoined(message.cid, roomState, payload.participantCount)
         case "room_state":
-            onRoomState(message.payload)
+            let roomState = parseRoomState(payload: message.payload, fallbackHostCid: nil)
+            let hint = Self.participantCountHint(payload: message.payload)
+            onRoomState(roomState, hint)
         case "room_ended":
             onRoomEnded()
         case "pong":
@@ -66,6 +75,82 @@ final class SignalingMessageRouter {
         default:
             break
         }
+    }
+
+    // MARK: - Direct-dispatch methods for provider events
+
+    func processJoinedEvent(_ event: JoinedEvent) {
+        let participants = dedupeParticipants(
+            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
+            localPeerId: event.peerId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
+        )
+        let host = resolveHostPeerId(
+            explicitHostPeerId: event.hostPeerId,
+            participants: participants,
+            currentHostPeerId: getHostCid(),
+            localPeerId: event.peerId
+        )
+        let roomState: RoomState?
+        if let host, !host.isEmpty {
+            roomState = RoomState(hostCid: host, participants: participants, maxParticipants: event.maxParticipants)
+        } else {
+            roomState = nil
+        }
+        let hint = participants.isEmpty ? nil : max(1, participants.count)
+        onJoined(event.peerId, roomState, hint)
+    }
+
+    func processRoomStateEvent(_ event: RoomStateEvent) {
+        let localPeerId = getClientId()
+        let participants = dedupeParticipants(
+            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
+            localPeerId: localPeerId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
+        )
+        let host = resolveHostPeerId(
+            explicitHostPeerId: event.hostPeerId,
+            participants: participants,
+            currentHostPeerId: getHostCid(),
+            localPeerId: localPeerId
+        )
+        let hint = participants.isEmpty ? nil : max(1, participants.count)
+        guard let host, !host.isEmpty else {
+            onRoomState(nil, hint)
+            return
+        }
+        onRoomState(
+            RoomState(hostCid: host, participants: participants, maxParticipants: event.maxParticipants),
+            hint
+        )
+    }
+
+    func processPeerMessage(_ message: PeerMessage) {
+        switch message.type {
+        case "content_state":
+            let fromCid = message.payload?["from"]?.stringValue ?? message.from
+            let active = message.payload?["active"]?.boolValue == true
+            let contentType = active ? message.payload?["contentType"]?.stringValue : nil
+            onContentState(ContentStatePayload(fromCid: fromCid, active: active, contentType: contentType))
+        case "offer", "answer", "ice":
+            var payload = message.payload ?? [:]
+            if payload["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                payload["from"] = .string(message.from)
+            }
+            onSignalingPayload(SignalingMessage(
+                type: message.type,
+                rid: getRoomId(),
+                cid: message.from,
+                payload: .object(payload)
+            ))
+        default:
+            break
+        }
+    }
+
+    func processErrorEvent(_ event: ErrorEvent) {
+        let payload = ErrorPayload(code: event.code, message: event.message)
+        onError(payload.toCallError())
     }
 
     // MARK: - Outbound Helpers

@@ -9,6 +9,8 @@ import android.net.NetworkRequest
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import app.serenada.core.call.dedupeParticipants
+import app.serenada.core.call.resolveHostPeerId
 import app.serenada.core.call.ConnectionStatusTracker
 import app.serenada.core.call.JoinFlowCoordinator
 import app.serenada.core.call.LiveSessionClock
@@ -47,7 +49,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import org.json.JSONObject
-import org.json.JSONArray
 import org.webrtc.PeerConnection
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -389,14 +390,14 @@ class SerenadaSession internal constructor(
         override fun onJoined(event: JoinedEvent) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX joined")
-                signalingMessageRouter.processMessage(joinedMessageFromEvent(event))
+                signalingMessageRouter.processJoinedEvent(event)
             }
         }
 
         override fun onRoomStateUpdated(event: RoomStateEvent) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX room_state")
-                signalingMessageRouter.processMessage(roomStateMessageFromEvent(event))
+                signalingMessageRouter.processRoomStateEvent(event)
             }
         }
 
@@ -424,7 +425,7 @@ class SerenadaSession internal constructor(
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${message.type}")
                 if (message.type == "content_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
-                    signalingMessageRouter.processMessage(signalingMessageFromPeerMessage(message))
+                    signalingMessageRouter.processPeerMessage(message)
                 }
             }
         }
@@ -439,7 +440,7 @@ class SerenadaSession internal constructor(
         override fun onError(event: ErrorEvent) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX error ${event.code}")
-                signalingMessageRouter.processMessage(errorMessageFromEvent(event))
+                signalingMessageRouter.processErrorEvent(event)
             }
         }
 
@@ -813,125 +814,12 @@ class SerenadaSession internal constructor(
         peerNegotiationEngine.processSignalingPayload(msg)
     }
 
-    private fun joinedMessageFromEvent(event: JoinedEvent): SignalingMessage {
-        val participants = dedupeParticipants(event.participants.map {
-            Participant(cid = it.peerId, joinedAt = it.joinedAt)
-        }, event.peerId)
-        val resolvedHostPeerId = resolveHostPeerId(
-            explicitHostPeerId = event.hostPeerId,
-            participants = participants,
-            currentHostPeerId = hostCid,
-            localPeerId = event.peerId,
-        )
-        return SignalingMessage(
-            type = "joined",
-            rid = roomId,
-            sid = null,
-            cid = event.peerId,
-            to = null,
-            payload = JSONObject().apply {
-                resolvedHostPeerId?.let { put("hostCid", it) }
-                event.maxParticipants?.let { put("maxParticipants", it) }
-                put("participants", participantsJson(participants))
-            },
-        )
-    }
+    // Adapter functions (joinedMessageFromEvent, roomStateMessageFromEvent,
+    // signalingMessageFromPeerMessage, errorMessageFromEvent, participantsJson)
+    // removed — the router now accepts provider events directly.
 
-    private fun roomStateMessageFromEvent(event: RoomStateEvent): SignalingMessage {
-        val participants = dedupeParticipants(event.participants.map {
-            Participant(cid = it.peerId, joinedAt = it.joinedAt)
-        }, clientId)
-        val resolvedHostPeerId = resolveHostPeerId(
-            explicitHostPeerId = event.hostPeerId,
-            participants = participants,
-            currentHostPeerId = hostCid,
-            localPeerId = clientId,
-        )
-        return SignalingMessage(
-            type = "room_state",
-            rid = roomId,
-            sid = null,
-            cid = null,
-            to = null,
-            payload = JSONObject().apply {
-                resolvedHostPeerId?.let { put("hostCid", it) }
-                event.maxParticipants?.let { put("maxParticipants", it) }
-                put("participants", participantsJson(participants))
-            },
-        )
-    }
-
-    private fun signalingMessageFromPeerMessage(message: PeerMessage): SignalingMessage {
-        val base = message.payload ?: JSONObject()
-        val payload = if (base.optString("from").isBlank()) {
-            // Put `from` directly — the provider already created this JSONObject for us.
-            base.put("from", message.from)
-        } else {
-            base
-        }
-        return SignalingMessage(
-            type = message.type,
-            rid = roomId,
-            sid = null,
-            cid = message.from,
-            to = null,
-            payload = payload,
-        )
-    }
-
-    private fun errorMessageFromEvent(event: ErrorEvent): SignalingMessage {
-        return SignalingMessage(
-            type = "error",
-            rid = roomId,
-            sid = null,
-            cid = null,
-            to = null,
-            payload = JSONObject().apply {
-                put("code", event.code)
-                put("message", event.message)
-            },
-        )
-    }
-
-    private fun participantsJson(participants: List<Participant>): JSONArray {
-        val array = JSONArray()
-        participants.forEach { participant ->
-            array.put(JSONObject().apply {
-                put("cid", participant.cid)
-                participant.joinedAt?.let { put("joinedAt", it) }
-            })
-        }
-        return array
-    }
-
-    private fun dedupeParticipants(
-        participants: List<Participant>,
-        localPeerId: String?,
-    ): List<Participant> {
-        val deduped = linkedMapOf<String, Participant>()
-        participants.forEach { participant ->
-            if (participant.cid.isNotBlank()) {
-                deduped[participant.cid] = participant
-            }
-        }
-        if (!localPeerId.isNullOrBlank() && !deduped.containsKey(localPeerId)) {
-            deduped[localPeerId] = Participant(cid = localPeerId, joinedAt = null)
-        }
-        return deduped.values.toList()
-    }
-
-    private fun resolveHostPeerId(
-        explicitHostPeerId: String?,
-        participants: List<Participant>,
-        currentHostPeerId: String?,
-        localPeerId: String?,
-    ): String? {
-        val participantIds = participants.map { it.cid }.toSet()
-        return sequenceOf(explicitHostPeerId, currentHostPeerId, localPeerId)
-            .filterNotNull()
-            .firstOrNull { participantIds.contains(it) }
-            ?: participants.firstOrNull()?.cid
-    }
+    // dedupeParticipants and resolveHostPeerId extracted to ParticipantUtils.kt
+    // Adapter functions removed — the router now accepts provider events directly.
 
     private fun upsertParticipant(
         roomState: RoomState?,

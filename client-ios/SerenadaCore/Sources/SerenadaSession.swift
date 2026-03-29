@@ -474,28 +474,28 @@ public final class SerenadaSession: ObservableObject {
 
     // MARK: - Signaling Message Handling
 
-    private func handleJoined(cid: String?, payload: JoinedPayload, rawPayload: JSONValue?) {
+    private func handleJoined(cid: String?, roomState: RoomState?, participantCountHint: Int?) {
         joinFlowCoordinator?.clearAllTimers()
         hasJoinAcknowledgedCurrentAttempt = true
 
         if let cid { clientId = cid; reconnectCid = cid }
         commitSnapshot { s, _ in s.localParticipant.cid = self.clientId }
 
-        if let roomState = signalingMessageRouter?.parseRoomState(payload: rawPayload, fallbackHostCid: hostCid) {
+        if let roomState {
             hostCid = roomState.hostCid
             updateParticipants(roomState)
         } else {
-            recoverFromJoiningIfNeeded(participantHint: payload.participantCount)
+            recoverFromJoiningIfNeeded(participantHint: participantCountHint)
         }
         loadInitialIceServers()
     }
 
-    private func handleRoomState(payload: JSONValue?) {
+    private func handleRoomState(_ roomState: RoomState?, participantCountHint: Int?) {
         joinFlowCoordinator?.clearAllTimers()
         hasJoinAcknowledgedCurrentAttempt = true
 
-        guard let roomState = signalingMessageRouter?.parseRoomState(payload: payload, fallbackHostCid: hostCid) else {
-            recoverFromJoiningIfNeeded(participantHint: SignalingMessageRouter.participantCountHint(payload: payload))
+        guard let roomState else {
+            recoverFromJoiningIfNeeded(participantHint: participantCountHint)
             return
         }
         hostCid = roomState.hostCid
@@ -567,12 +567,12 @@ public final class SerenadaSession: ObservableObject {
 
     fileprivate func handleProviderJoined(_ event: JoinedEvent) {
         currentError = nil
-        signalingMessageRouter?.processMessage(joinedMessageFromEvent(event))
+        signalingMessageRouter?.processJoinedEvent(event)
     }
 
     fileprivate func handleProviderRoomStateUpdated(_ event: RoomStateEvent) {
         currentError = nil
-        signalingMessageRouter?.processMessage(roomStateMessageFromEvent(event))
+        signalingMessageRouter?.processRoomStateEvent(event)
     }
 
     fileprivate func handleProviderPeerJoined(_ event: PeerEvent) {
@@ -596,7 +596,7 @@ public final class SerenadaSession: ObservableObject {
 
     fileprivate func handleProviderMessage(_ message: PeerMessage) {
         guard ["content_state", "offer", "answer", "ice"].contains(message.type) else { return }
-        signalingMessageRouter?.processMessage(signalingMessageFromPeerMessage(message))
+        signalingMessageRouter?.processPeerMessage(message)
     }
 
     fileprivate func handleProviderRoomEnded(_ event: RoomEndedEvent) {
@@ -605,7 +605,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func handleProviderError(_ event: ErrorEvent) {
-        signalingMessageRouter?.processMessage(errorMessageFromEvent(event))
+        signalingMessageRouter?.processErrorEvent(event)
     }
 
     fileprivate func handleProviderIceServersChanged(_ iceServers: [IceServerConfig]) {
@@ -689,113 +689,9 @@ public final class SerenadaSession: ObservableObject {
         for message in pending { peerNegotiationEngine?.processSignalingPayload(message) }
     }
 
-    private func joinedMessageFromEvent(_ event: JoinedEvent) -> SignalingMessage {
-        let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
-            localPeerId: event.peerId,
-            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
-        )
-        let resolvedHostPeerId = resolveHostPeerId(
-            explicitHostPeerId: event.hostPeerId,
-            participants: participants,
-            currentHostPeerId: hostCid,
-            localPeerId: event.peerId
-        )
-        var payload: [String: JSONValue] = [
-            "maxParticipants": event.maxParticipants.map { .number(Double($0)) } ?? .null,
-            "participants": .array(participantsJSONValue(participants))
-        ]
-        if let resolvedHostPeerId {
-            payload["hostCid"] = .string(resolvedHostPeerId)
-        }
-        return SignalingMessage(
-            type: "joined",
-            rid: roomId,
-            cid: event.peerId,
-            payload: .object(payload)
-        )
-    }
-
-    private func roomStateMessageFromEvent(_ event: RoomStateEvent) -> SignalingMessage {
-        let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
-            localPeerId: clientId,
-            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
-        )
-        let resolvedHostPeerId = resolveHostPeerId(
-            explicitHostPeerId: event.hostPeerId,
-            participants: participants,
-            currentHostPeerId: hostCid,
-            localPeerId: clientId
-        )
-        var payload: [String: JSONValue] = [
-            "maxParticipants": event.maxParticipants.map { .number(Double($0)) } ?? .null,
-            "participants": .array(participantsJSONValue(participants))
-        ]
-        if let resolvedHostPeerId {
-            payload["hostCid"] = .string(resolvedHostPeerId)
-        }
-        return SignalingMessage(
-            type: "room_state",
-            rid: roomId,
-            payload: .object(payload)
-        )
-    }
-
-    private func signalingMessageFromPeerMessage(_ message: PeerMessage) -> SignalingMessage {
-        var payload = message.payload ?? [:]
-        if payload["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-            payload["from"] = .string(message.from)
-        }
-        return SignalingMessage(
-            type: message.type,
-            rid: roomId,
-            cid: message.from,
-            payload: .object(payload)
-        )
-    }
-
-    private func errorMessageFromEvent(_ event: ErrorEvent) -> SignalingMessage {
-        SignalingMessage(
-            type: "error",
-            rid: roomId,
-            payload: .object([
-                "code": .string(event.code),
-                "message": .string(event.message)
-            ])
-        )
-    }
-
-    private func participantsJSONValue(_ participants: [Participant]) -> [JSONValue] {
-        participants.map { participant in
-            var object: [String: JSONValue] = [
-                "cid": .string(participant.cid)
-            ]
-            if let joinedAt = participant.joinedAt {
-                object["joinedAt"] = .number(Double(joinedAt))
-            }
-            return .object(object)
-        }
-    }
-
-    private func resolveHostPeerId(
-        explicitHostPeerId: String?,
-        participants: [Participant],
-        currentHostPeerId: String?,
-        localPeerId: String?
-    ) -> String? {
-        let participantIds = Set(participants.map(\.cid))
-        if let explicitHostPeerId, participantIds.contains(explicitHostPeerId) {
-            return explicitHostPeerId
-        }
-        if let currentHostPeerId, participantIds.contains(currentHostPeerId) {
-            return currentHostPeerId
-        }
-        if let localPeerId, participantIds.contains(localPeerId) {
-            return localPeerId
-        }
-        return participants.first?.cid
-    }
+    // Adapter functions (joinedMessageFromEvent, roomStateMessageFromEvent,
+    // signalingMessageFromPeerMessage, errorMessageFromEvent, participantsJSONValue,
+    // resolveHostPeerId) removed — the router now accepts provider events directly.
 
     private func upsertParticipant(
         roomState: RoomState?,
@@ -1012,8 +908,10 @@ public final class SerenadaSession: ObservableObject {
     private func buildSubEngines() {
         signalingMessageRouter = SignalingMessageRouter(
             getClientId: { [weak self] in self?.clientId },
-            onJoined: { [weak self] cid, payload, rawPayload in self?.handleJoined(cid: cid, payload: payload, rawPayload: rawPayload) },
-            onRoomState: { [weak self] payload in self?.handleRoomState(payload: payload) },
+            getHostCid: { [weak self] in self?.hostCid },
+            getRoomId: { [weak self] in self?.roomId },
+            onJoined: { [weak self] cid, roomState, hint in self?.handleJoined(cid: cid, roomState: roomState, participantCountHint: hint) },
+            onRoomState: { [weak self] roomState, hint in self?.handleRoomState(roomState, participantCountHint: hint) },
             onRoomEnded: { [weak self] in self?.cleanupCall(reason: .remoteEnded, transitionToEnding: true) },
             onPong: {},
             onTurnRefreshed: { _ in },

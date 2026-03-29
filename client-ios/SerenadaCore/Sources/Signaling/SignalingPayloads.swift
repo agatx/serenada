@@ -55,6 +55,11 @@ struct ErrorPayload {
     let code: String?
     let message: String?
 
+    init(code: String?, message: String?) {
+        self.code = code
+        self.message = message
+    }
+
     init(from payload: JSONValue?) {
         guard let obj = payload?.objectValue else {
             code = nil; message = nil; return
@@ -86,6 +91,12 @@ struct ContentStatePayload {
     let fromCid: String?
     let active: Bool
     let contentType: String?
+
+    init(fromCid: String?, active: Bool, contentType: String?) {
+        self.fromCid = fromCid
+        self.active = active
+        self.contentType = contentType
+    }
 
     init(from payload: JSONValue?) {
         guard let obj = payload?.objectValue else {
