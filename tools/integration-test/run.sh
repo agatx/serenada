@@ -2,7 +2,7 @@
 #
 # Integration test runner for the Serenada signaling server.
 #
-# Starts the Go server on a random port, runs Node.js WebSocket tests,
+# Starts the Go server on a random port, runs Node.js signaling tests (WebSocket + SSE),
 # and tears everything down.
 #
 # Requirements: Go 1.24+, Node.js 18+
