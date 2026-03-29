@@ -3,6 +3,7 @@ package app.serenada.core
 import app.serenada.core.fakes.FakeSignalingProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -59,15 +60,31 @@ class SerenadaDiagnosticsTest {
                 )
             )
         }
-        val diagnostics = SerenadaDiagnostics(
+        var capturedIceServers: List<PeerConnection.IceServer>? = null
+        val diagnostics = SerenadaDiagnostics.createForTesting(
             config = SerenadaConfig(signalingProvider = provider),
             context = RuntimeEnvironment.getApplication(),
+            providerIceProbeRunner = { iceServers, turnsOnly, onCandidateLog ->
+                capturedIceServers = iceServers
+                onCandidateLog?.invoke("provider probe invoked (turnsOnly=$turnsOnly)")
+                IceProbeReport(
+                    stunPassed = false,
+                    turnPassed = false,
+                    logs = listOf("provider probe invoked"),
+                    iceServersSummary = iceServers.flatMap { it.urls }.joinToString(),
+                )
+            },
         )
 
         val report = diagnostics.runTurnProbe(turnsOnly = false)
 
-        assertTrue(report.turnPassed)
+        assertFalse(report.turnPassed)
         assertEquals(1, provider.getIceServersCalls)
+        assertEquals(
+            listOf("turn:turn.example.com:3478"),
+            capturedIceServers?.flatMap { it.urls },
+        )
         assertTrue(report.iceServersSummary.contains("turn:turn.example.com:3478"))
+        assertEquals(listOf("provider probe invoked"), report.logs)
     }
 }

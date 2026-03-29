@@ -8,6 +8,7 @@ import android.os.SystemClock
 import app.serenada.core.call.SignalingClient
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.diagnostics.runDiagnosticsIceCheck
+import app.serenada.core.diagnostics.runDiagnosticsIceCheckWithIceServers
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.buildHttpsUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -19,6 +20,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.webrtc.Camera2Enumerator
+import org.webrtc.PeerConnection
 import android.os.Handler
 import android.os.Looper
 import java.util.UUID
@@ -33,13 +35,20 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
+internal typealias ProviderIceProbeRunner = suspend (
+    iceServers: List<PeerConnection.IceServer>,
+    turnsOnly: Boolean,
+    onCandidateLog: ((String) -> Unit)?,
+) -> IceProbeReport
+
 /**
  * Pre-flight diagnostics utility. Checks device capabilities and server connectivity
  * without prompting for permissions.
  */
-class SerenadaDiagnostics(
+class SerenadaDiagnostics private constructor(
     private val config: SerenadaConfig,
     private val context: Context,
+    private val providerIceProbeRunner: ProviderIceProbeRunner,
 ) {
     private val appContext = context.applicationContext
     private val okHttpClient = OkHttpClient.Builder().build()
@@ -53,6 +62,28 @@ class SerenadaDiagnostics(
         // its network thread is ready by the time the user runs an ICE probe.
         Thread { app.serenada.core.diagnostics.warmUpPeerConnectionFactory(appContext) }.start()
     }
+
+    constructor(
+        config: SerenadaConfig,
+        context: Context,
+    ) : this(
+        config = config,
+        context = context,
+        providerIceProbeRunner = { iceServers: List<PeerConnection.IceServer>, turnsOnly: Boolean, onCandidateLog: ((String) -> Unit)? ->
+            val report = runDiagnosticsIceCheckWithIceServers(
+                context = context.applicationContext,
+                iceServers = iceServers,
+                turnsOnly = turnsOnly,
+                onLogLine = { line -> onCandidateLog?.invoke(line) },
+            )
+            IceProbeReport(
+                stunPassed = report.stun.state == app.serenada.core.diagnostics.DiagnosticsCheckState.Pass,
+                turnPassed = report.turn.state == app.serenada.core.diagnostics.DiagnosticsCheckState.Pass,
+                logs = report.logs,
+                iceServersSummary = report.iceServersSummary,
+            )
+        },
+    )
 
     /** Run all diagnostic checks and return a full report. */
     suspend fun runAll(): DiagnosticsReport = suspendCancellableCoroutine { continuation ->
@@ -158,26 +189,7 @@ class SerenadaDiagnostics(
                 (resolvedConfig.signalingProvider ?: throw IllegalStateException("Provide exactly one of serverHost or signalingProvider"))
                     .getIceServers()
             }
-            val filteredUrls = iceServers
-                .flatMap { server ->
-                    server.urls.mapNotNull { it }
-                }
-                .filter { url ->
-                    !turnsOnly || url.startsWith("turns:", ignoreCase = true)
-                }
-            val logs = mutableListOf<String>()
-            val summary = if (filteredUrls.isEmpty()) "n/a" else filteredUrls.joinToString()
-            val summaryLine = "Using provider ICE servers: $summary"
-            logs += summaryLine
-            onCandidateLog?.invoke(summaryLine)
-            IceProbeReport(
-                stunPassed = !turnsOnly && filteredUrls.any { it.startsWith("stun:", ignoreCase = true) },
-                turnPassed = filteredUrls.any {
-                    it.startsWith("turn:", ignoreCase = true) || it.startsWith("turns:", ignoreCase = true)
-                },
-                logs = logs,
-                iceServersSummary = summary,
-            )
+            providerIceProbeRunner(iceServers, turnsOnly, onCandidateLog)
         } catch (error: Throwable) {
             IceProbeReport(
                 stunPassed = false,
@@ -396,6 +408,20 @@ class SerenadaDiagnostics(
                     .onSuccess { continuation.resume(Unit) }
                     .onFailure { continuation.resumeWithException(it) }
             }
+        }
+    }
+
+    companion object {
+        internal fun createForTesting(
+            config: SerenadaConfig,
+            context: Context,
+            providerIceProbeRunner: ProviderIceProbeRunner,
+        ): SerenadaDiagnostics {
+            return SerenadaDiagnostics(
+                config = config,
+                context = context,
+                providerIceProbeRunner = providerIceProbeRunner,
+            )
         }
     }
 
