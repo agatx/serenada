@@ -186,4 +186,30 @@ describe('MediaEngine', () => {
             payload: { sdp: 'fake-offer-sdp-2' },
         });
     });
+
+    it('uses direct string ordering for offer ownership', async () => {
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const localeCompareSpy = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
+            throw new Error('should not be called');
+        });
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+
+        await vi.waitFor(() => {
+            expect(sentMessages).toContainEqual({
+                type: 'offer',
+                to: 'zeta',
+                payload: { sdp: 'fake-offer-sdp-1' },
+            });
+        });
+
+        localeCompareSpy.mockRestore();
+    });
 });

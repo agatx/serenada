@@ -773,6 +773,38 @@ describe('SerenadaSession', () => {
                 payload: { active: true, contentType: 'screenShare' },
             });
         });
+
+        it('continues processing signaling messages when an onPeerMessage listener throws', () => {
+            const logger = { log: vi.fn() };
+            harness = new TestSessionHarness({ config: { logger } });
+
+            harness.session.onPeerMessage(() => {
+                throw new Error('listener failed');
+            });
+
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'offer',
+                payload: { sdp: 'offer-sdp' },
+            });
+
+            expect(harness.media.processSignalingMessageCalls).toEqual([
+                {
+                    v: 1,
+                    type: 'offer',
+                    cid: 'peer-1',
+                    payload: {
+                        from: 'peer-1',
+                        sdp: 'offer-sdp',
+                    },
+                },
+            ]);
+            expect(logger.log).toHaveBeenCalledWith(
+                'error',
+                'Session',
+                'onPeerMessage listener failed for offer: listener failed',
+            );
+        });
     });
 
     // ---------------------------------------------------------------

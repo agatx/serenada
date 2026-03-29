@@ -41,7 +41,7 @@ export interface PeerMessage {
 }
 
 export interface RoomEndedEvent {
-    by: string;
+    by?: string;
     reason: string;
 }
 

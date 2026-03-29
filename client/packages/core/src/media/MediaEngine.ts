@@ -518,7 +518,7 @@ export class MediaEngine {
 
     private shouldIOffer(remoteCid: string): boolean {
         const myId = this.clientId;
-        return typeof myId === 'string' && myId.length > 0 && myId.localeCompare(remoteCid) < 0;
+        return typeof myId === 'string' && myId.length > 0 && myId < remoteCid;
     }
 
     private async createOfferTo(remoteCid: string, options?: { iceRestart?: boolean }): Promise<void> {

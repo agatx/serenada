@@ -239,6 +239,25 @@ describe('SerenadaServerProvider', () => {
         });
     });
 
+    it('omits roomEnded.by when neither payload nor room state provide an owner', () => {
+        const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
+        const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;
+        const roomEnded = vi.fn();
+
+        provider.on('roomEnded', roomEnded);
+
+        engine.emitMessage({
+            v: 1,
+            type: 'room_ended',
+            rid: 'room-1',
+            payload: {
+                reason: 'host ended',
+            },
+        });
+
+        expect(roomEnded).toHaveBeenCalledWith({ reason: 'host ended' });
+    });
+
     it('forwards sendToPeer and broadcast messages to the signaling engine', () => {
         const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
         const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;

@@ -1,4 +1,4 @@
-import { SignalingProviderEmitter, type JoinOptions, type RoomStateEvent, type SignalingProviderParticipant } from './SignalingProvider.js';
+import { SignalingProviderEmitter, type JoinOptions, type RoomEndedEvent, type RoomStateEvent, type SignalingProviderParticipant } from './SignalingProvider.js';
 import type { SerenadaLogger } from './types.js';
 import { SignalingEngine } from './signaling/SignalingEngine.js';
 import { parseErrorPayload, parseJoinedPayload, parseRoomStatePayload, parseTurnRefreshedPayload } from './signaling/payloads.js';
@@ -161,10 +161,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
                 break;
             case 'room_ended':
                 this.previousParticipants.clear();
-                this.emit('roomEnded', {
-                    by: roomEndedBy(message.payload) ?? this.currentHostPeerId ?? '',
-                    reason: roomEndedReason(message.payload) ?? 'room ended',
-                });
+                this.emitRoomEnded(message.payload);
                 break;
             case 'error': {
                 const error = parseErrorPayload(message.payload);
@@ -189,6 +186,17 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
                 this.emitPeerMessage(message);
                 break;
         }
+    }
+
+    private emitRoomEnded(payload: Record<string, unknown> | undefined): void {
+        const by = roomEndedBy(payload) ?? this.currentHostPeerId ?? undefined;
+        const event = {
+            reason: roomEndedReason(payload) ?? 'room ended',
+        } as RoomEndedEvent;
+        if (by) {
+            event.by = by;
+        }
+        this.emit('roomEnded', event);
     }
 
     private handleJoined(message: SignalingMessage): void {

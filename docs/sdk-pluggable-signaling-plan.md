@@ -235,7 +235,7 @@ interface PeerMessage {
 }
 
 interface RoomEndedEvent {
-  by: string
+  by?: string
   reason: string
 }
 

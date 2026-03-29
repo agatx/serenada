@@ -183,6 +183,10 @@ function toMediaSignalingMessage(message: PeerMessage): SignalingMessage {
     };
 }
 
+function isMediaSignalingMessageType(type: string): boolean {
+    return type === 'content_state' || type === 'offer' || type === 'answer' || type === 'ice';
+}
+
 /**
  * Represents an active call session. Created via {@link SerenadaCore.join} or
  * {@link SerenadaCore.createRoom}. Manages media, signaling, and call state.
@@ -525,11 +529,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.isInactive) {
             return;
         }
-        for (const listener of this.peerMessageListeners) {
-            listener(message);
-        }
-        if (message.type === 'content_state' || message.type === 'offer' || message.type === 'answer' || message.type === 'ice') {
+        if (isMediaSignalingMessageType(message.type)) {
             this.media.processSignalingMessage(toMediaSignalingMessage(message));
+        }
+        for (const listener of this.peerMessageListeners) {
+            try {
+                listener(message);
+            } catch (error) {
+                this.config.logger?.log('error', 'Session', `onPeerMessage listener failed for ${message.type}: ${formatError(error)}`);
+            }
         }
     };
 
