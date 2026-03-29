@@ -165,6 +165,9 @@ final class JoinFlowCoordinatorTests: XCTestCase {
         await waitForPendingSleeps(1)
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinRecoveryMs))
+        await waitUntil { [unowned self] in
+            self.ensureConnectionCount == 1
+        }
         XCTAssertEqual(recoveryCount, 0)
         XCTAssertEqual(ensureConnectionCount, 1, "Should re-ensure signaling connection")
     }
