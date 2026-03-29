@@ -35,7 +35,6 @@
 		60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */; };
 		6198802831401A13687DDCA9 /* FeedbackScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */; };
 		6D7CC8795CCE4899285777B4 /* SerenadaDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */; };
-
 		6E8767096E3E70790EB1CEE5 /* SessionNegotiationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */; };
 		6E92E404B6B3E0A636F21C56 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3529A15EA2C43DB2F91F46FC /* RootView.swift */; };
 		6EE2ED9D63185C2AA8581CFE /* L10nTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8656DA5A095E572174461E96 /* L10nTests.swift */; };

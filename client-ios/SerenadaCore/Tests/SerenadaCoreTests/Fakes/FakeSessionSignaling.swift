@@ -32,6 +32,10 @@ final class FakeSessionSignaling: SessionSignaling {
         recordPongCalls += 1
     }
 
+    func clearSentMessages() {
+        sentMessages.removeAll()
+    }
+
     func simulateOpen(activeTransport: String = "ws") {
         connected = true
         listener?.onOpen(activeTransport: activeTransport)

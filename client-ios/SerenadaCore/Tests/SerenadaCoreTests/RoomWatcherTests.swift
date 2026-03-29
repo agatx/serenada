@@ -178,7 +178,7 @@ final class RoomWatcherTests: XCTestCase {
             ["alpha"]
         )
 
-        signaling.sentMessages.removeAll()
+        signaling.clearSentMessages()
         try watcher.watchRooms(roomIds: ["alpha"], host: "two.example")
 
         XCTAssertEqual(signaling.closeCalls, 1)
