@@ -135,7 +135,7 @@ else
         check_pass "node_modules installed"
     elif command -v npm >/dev/null 2>&1 && [ -f "$CLIENT/package.json" ]; then
         log_info "node_modules missing — running npm ci..."
-        if (cd "$CLIENT" && npm ci --no-audit --no-fund >/dev/null 2>&1); then
+        if (cd "$CLIENT" && run_quiet npm ci --no-audit --no-fund); then
             check_pass "node_modules installed (auto)"
         else
             check_fail "node_modules missing and npm ci failed"
@@ -448,24 +448,29 @@ if best:
     print(best[2] + '\t' + best[3])
 " 2>/dev/null || true)
         if [ -n "$IOS_SIM_LINE" ]; then
-            IOS_SIM_ID="${IOS_SIM_LINE%%	*}"
-            IOS_SIM_NAME="${IOS_SIM_LINE#*	}"
+            IFS=$'\t' read -r IOS_SIM_ID IOS_SIM_NAME <<< "$IOS_SIM_LINE"
         fi
+    fi
+
+    # Fallback when python3 is unavailable: use name-based destination
+    if [ -z "$IOS_SIM_ID" ] && command -v xcrun >/dev/null 2>&1; then
+        IOS_SIM_NAME="iPhone 16"
     fi
 
     # Helper: query the current state of a simulator by UDID
     sim_state() {
         xcrun simctl list devices -j 2>/dev/null \
-            | python3 -c "
+            | python3 -c '
 import sys, json
 data = json.load(sys.stdin)
-for devices in data.get('devices', {}).values():
+target_udid = sys.argv[1] if len(sys.argv) > 1 else ""
+for devices in data.get("devices", {}).values():
     for d in devices:
-        if d.get('udid') == '$1':
-            print(d.get('state', 'Unknown'))
+        if d.get("udid") == target_udid:
+            print(d.get("state", "Unknown"))
             sys.exit(0)
-print('Unknown')
-" 2>/dev/null || echo "Unknown"
+print("Unknown")
+' "$1" 2>/dev/null || echo "Unknown"
     }
 
     # Helper: wait for a simulator to reach "Booted" state (polls every 2s, up to timeout)
@@ -500,6 +505,11 @@ print('Unknown')
                 check_warn "Simulator did not reach Booted state within 60s — builds may fail"
             fi
         fi
+    elif [ -n "$IOS_SIM_NAME" ]; then
+        # Fallback: no UDID resolved (python3 missing), use name-based destination
+        IOS_DEST="platform=iOS Simulator,name=$IOS_SIM_NAME"
+        IOS_HAS_SIM=true
+        check_pass "iOS Simulator destination ($IOS_SIM_NAME, name-based fallback)"
     else
         check_warn "No iOS Simulator found — skipping iOS build & tests"
     fi
