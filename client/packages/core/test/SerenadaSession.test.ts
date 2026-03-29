@@ -32,6 +32,7 @@ describe('SerenadaSession', () => {
         expect(harness.state.phase).toBe(expectedPhase);
         expect(harness.state.localParticipant).toBeNull();
         expect(harness.state.remoteParticipants).toHaveLength(0);
+        expect(harness.state.connectionStatus).toBe('disconnected');
         expect(harness.state.activeTransport).toBeNull();
         expect(harness.session.localStream).toBeNull();
         expect(harness.session.isSignalingConnected).toBe(false);

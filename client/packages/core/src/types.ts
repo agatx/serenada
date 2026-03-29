@@ -6,7 +6,7 @@ import type { RoomStatus, RoomStatuses } from './signaling/roomStatuses.js';
 export type CallPhase = 'idle' | 'awaitingPermissions' | 'joining' | 'waiting' | 'inCall' | 'ending' | 'error';
 
 /** Network connection status between the client and signaling server. */
-export type ConnectionStatus = 'connected' | 'recovering' | 'retrying';
+export type ConnectionStatus = 'connected' | 'recovering' | 'retrying' | 'disconnected';
 
 /** Active signaling transport, including custom provider-specific transport labels. */
 export type ActiveTransport = TransportKind | (string & {});
