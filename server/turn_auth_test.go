@@ -174,7 +174,7 @@ func TestHandleTurnCredentialsValidCallToken(t *testing.T) {
 	}
 }
 
-func TestHandleTurnCredentialsDiagnosticTokenShortTTL(t *testing.T) {
+func TestHandleTurnCredentialsDiagnosticTokenUsesShortCredentialTTL(t *testing.T) {
 	t.Setenv("TURN_TOKEN_SECRET", "test-secret-1234")
 	t.Setenv("TURN_SECRET", "coturn-secret")
 	t.Setenv("STUN_HOST", "stun.example.com")
@@ -197,8 +197,52 @@ func TestHandleTurnCredentialsDiagnosticTokenShortTTL(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&config); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if config.TTL != 5 {
-		t.Fatalf("expected TTL=5 for diagnostic token, got %d", config.TTL)
+	if config.TTL != diagnosticCredentialTTL {
+		t.Fatalf("expected TTL=%d for diagnostic token, got %d", diagnosticCredentialTTL, config.TTL)
+	}
+}
+
+func TestHandleTurnCredentialsCloudflareDiagnosticUsesMinimumTTL(t *testing.T) {
+	t.Setenv("TURN_TOKEN_SECRET", "test-secret-1234")
+	t.Setenv("CF_TURN_KEY_ID", "test-key-id")
+	t.Setenv("CF_TURN_API_TOKEN", "test-api-token")
+
+	mockCloudflareTURN(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]int
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		if body["ttl"] != diagnosticCredentialTTL {
+			t.Fatalf("expected Cloudflare diagnostic ttl=%d, got %d", diagnosticCredentialTTL, body["ttl"])
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp"],"username":"cf-user","credential":"cf-pass"}]}`)
+	}))
+
+	token, _, err := issueTurnToken(30*time.Second, turnTokenKindDiagnostic)
+	if err != nil {
+		t.Fatalf("issueTurnToken: %v", err)
+	}
+
+	handler := handleTurnCredentials()
+	req := httptest.NewRequest(http.MethodGet, "/api/turn-credentials?token="+token, nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var config TurnConfig
+	if err := json.NewDecoder(w.Body).Decode(&config); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if config.TTL != diagnosticCredentialTTL {
+		t.Fatalf("expected TTL=%d, got %d", diagnosticCredentialTTL, config.TTL)
+	}
+	if config.Username != "cf-user" || config.Password != "cf-pass" {
+		t.Fatalf("expected Cloudflare credentials, got %q/%q", config.Username, config.Password)
 	}
 }
 
@@ -314,7 +358,7 @@ func TestHandleTurnCredentialsCloudflareHappyPath(t *testing.T) {
 			t.Errorf("bad auth header: %s", r.Header.Get("Authorization"))
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"cf-user","credential":"cf-pass"}]}`)
+		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","stun:stun.cloudflare.com:53"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp","turn:turn.cloudflare.com:53?transport=udp","turn:turn.cloudflare.com:80?transport=tcp","turns:turn.cloudflare.com:443?transport=tcp"],"username":"cf-user","credential":"cf-pass"}]}`)
 	}))
 
 	token, _, err := issueTurnToken(10*time.Minute, turnTokenKindCall)
@@ -344,8 +388,23 @@ func TestHandleTurnCredentialsCloudflareHappyPath(t *testing.T) {
 	if result.TTL != 900 {
 		t.Fatalf("expected TTL=900, got %d", result.TTL)
 	}
-	if len(result.URIs) != 4 {
-		t.Fatalf("expected 4 Cloudflare URIs, got %d", len(result.URIs))
+	expectedURIs := []string{
+		"stun:stun.cloudflare.com:3478",
+		"stun:stun.cloudflare.com:53",
+		"turn:turn.cloudflare.com:3478?transport=udp",
+		"turn:turn.cloudflare.com:3478?transport=tcp",
+		"turns:turn.cloudflare.com:5349?transport=tcp",
+		"turn:turn.cloudflare.com:53?transport=udp",
+		"turn:turn.cloudflare.com:80?transport=tcp",
+		"turns:turn.cloudflare.com:443?transport=tcp",
+	}
+	if len(result.URIs) != len(expectedURIs) {
+		t.Fatalf("expected %d Cloudflare URIs, got %d", len(expectedURIs), len(result.URIs))
+	}
+	for i, uri := range expectedURIs {
+		if result.URIs[i] != uri {
+			t.Fatalf("expected URI %d to be %q, got %q", i, uri, result.URIs[i])
+		}
 	}
 }
 
@@ -436,7 +495,7 @@ func TestFetchCloudflareCredentialsSuccess(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp"],"username":"cf-user","credential":"cf-pass"}]}`)
+		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","stun:stun.cloudflare.com:53"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp","turn:turn.cloudflare.com:53?transport=udp","turn:turn.cloudflare.com:80?transport=tcp","turns:turn.cloudflare.com:443?transport=tcp"],"username":"cf-user","credential":"cf-pass"}]}`)
 	}))
 
 	config, err := fetchCloudflareCredentials(context.Background(), "any-key", "test-token", 900)
@@ -453,8 +512,29 @@ func TestFetchCloudflareCredentialsSuccess(t *testing.T) {
 	if config.TTL != 900 {
 		t.Fatalf("expected TTL 900, got %d", config.TTL)
 	}
-	if len(config.URIs) != 4 {
-		t.Fatalf("expected 4 URIs, got %d", len(config.URIs))
+	if len(config.URIs) != 8 {
+		t.Fatalf("expected 8 URIs, got %d", len(config.URIs))
+	}
+	if config.URIs[0] != "stun:stun.cloudflare.com:3478" {
+		t.Fatalf("expected first URI to be STUN, got %s", config.URIs[0])
+	}
+	if config.URIs[len(config.URIs)-1] != "turns:turn.cloudflare.com:443?transport=tcp" {
+		t.Fatalf("expected last URI to be turns:443, got %s", config.URIs[len(config.URIs)-1])
+	}
+}
+
+func TestFetchCloudflareCredentialsRejectsSTUNOnlyResponse(t *testing.T) {
+	mockCloudflareTURN(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","stun:stun.cloudflare.com:53"]}]}`)
+	}))
+
+	_, err := fetchCloudflareCredentials(context.Background(), "any-key", "test-token", 900)
+	if err == nil {
+		t.Fatal("expected error for STUN-only Cloudflare response")
+	}
+	if !strings.Contains(err.Error(), "no TURN URLs") {
+		t.Fatalf("expected no TURN URLs error, got %v", err)
 	}
 }
 

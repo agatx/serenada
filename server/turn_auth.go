@@ -29,6 +29,7 @@ const (
 	turnTokenVersion        = 1
 	turnTokenKindCall       = "call"
 	turnTokenKindDiagnostic = "diagnostic"
+	diagnosticCredentialTTL = 60
 )
 
 // Token claims no longer include IP for robustness
@@ -190,11 +191,50 @@ func fetchCloudflareCredentials(ctx context.Context, keyID, apiToken string, ttl
 		return nil, fmt.Errorf("cloudflare returned empty iceServers array")
 	}
 
-	entry := cfResp.IceServers[0]
+	uris := make([]string, 0, len(cfResp.IceServers))
+	seenURIs := make(map[string]struct{}, len(cfResp.IceServers))
+	var username string
+	var password string
+	hasTurnURI := false
+
+	for _, entry := range cfResp.IceServers {
+		if username == "" && entry.Username != "" {
+			username = entry.Username
+		}
+		if password == "" && entry.Credential != "" {
+			password = entry.Credential
+		}
+
+		for _, rawURI := range entry.URLs {
+			uri := strings.TrimSpace(rawURI)
+			if uri == "" {
+				continue
+			}
+			if _, exists := seenURIs[uri]; exists {
+				continue
+			}
+			seenURIs[uri] = struct{}{}
+			uris = append(uris, uri)
+			if strings.HasPrefix(uri, "turn:") || strings.HasPrefix(uri, "turns:") {
+				hasTurnURI = true
+			}
+		}
+	}
+
+	if len(uris) == 0 {
+		return nil, fmt.Errorf("cloudflare returned no ICE server URLs")
+	}
+	if !hasTurnURI {
+		return nil, fmt.Errorf("cloudflare returned no TURN URLs")
+	}
+	if username == "" || password == "" {
+		return nil, fmt.Errorf("cloudflare returned TURN URLs without credentials")
+	}
+
 	return &TurnConfig{
-		Username: entry.Username,
-		Password: entry.Credential,
-		URIs:     entry.URLs,
+		Username: username,
+		Password: password,
+		URIs:     uris,
 		TTL:      ttl,
 	}, nil
 }
@@ -265,7 +305,9 @@ func handleTurnCredentials() http.HandlerFunc {
 			isAuthorized = true
 		} else if validateTurnToken(token, turnTokenKindDiagnostic) {
 			isAuthorized = true
-			credentialTTL = 5
+			// Keep the diagnostic fetch token short-lived while returning
+			// provider credentials that Cloudflare will actually accept.
+			credentialTTL = diagnosticCredentialTTL
 		}
 
 		if !isAuthorized {
