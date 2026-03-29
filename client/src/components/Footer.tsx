@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Github, Activity, Download } from 'lucide-react';
+import { Github, Activity, Download, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../contexts/ToastContext';
+import { FeedbackDialog } from './FeedbackDialog';
 
 interface BeforeInstallPromptEvent extends Event {
     prompt: () => Promise<void>;
@@ -13,6 +14,7 @@ const Footer: React.FC = () => {
     const { showToast } = useToast();
     const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
     const [isStandalone, setIsStandalone] = useState(false);
+    const [showFeedback, setShowFeedback] = useState(false);
 
     useEffect(() => {
         const handler = (e: Event) => {
@@ -87,6 +89,11 @@ const Footer: React.FC = () => {
                     {t('footer_device_check')}
                 </a>
 
+                <button onClick={() => setShowFeedback(true)} className="footer-link">
+                    <MessageSquare className="icon" />
+                    {t('footer_feedback')}
+                </button>
+
                 {!isStandalone && (
                     <button onClick={handleInstall} className="footer-link">
                         <Download className="icon" />
@@ -98,6 +105,8 @@ const Footer: React.FC = () => {
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', opacity: 0.6 }}>
                 &copy; {new Date().getFullYear()} Serenada. {t('benefit_opensource_title')}
             </p>
+
+            <FeedbackDialog isOpen={showFeedback} onClose={() => setShowFeedback(false)} />
         </footer>
     );
 };

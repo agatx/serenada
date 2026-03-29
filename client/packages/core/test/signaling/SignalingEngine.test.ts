@@ -277,6 +277,29 @@ describe('auto-rejoin on reconnect', () => {
     });
 });
 
+describe('watch_rooms signaling', () => {
+    it('sends watch_rooms even when the watched room list is empty', () => {
+        const engine = createEngine(['ws']);
+        engine.connect();
+
+        const ws = lastTransport();
+        ws.simulateOpen();
+
+        engine.watchRooms([]);
+
+        expect(ws.sentMessages).toContainEqual({
+            v: 1,
+            type: 'watch_rooms',
+            rid: undefined,
+            cid: undefined,
+            to: undefined,
+            payload: { rids: [] },
+        });
+
+        engine.destroy();
+    });
+});
+
 // ---------------------------------------------------------------------------
 // 6. Join hard timeout
 // ---------------------------------------------------------------------------

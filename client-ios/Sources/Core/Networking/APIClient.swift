@@ -218,6 +218,30 @@ final class APIClient {
             throw APIError.http("Push notify failed")
         }
     }
+
+    func submitFeedback(host: String, message: String, locale: String, appVersion: String) async throws -> Int {
+        guard let url = buildURL(host: host, path: "/api/feedback") else {
+            throw APIError.invalidHost
+        }
+
+        struct FeedbackPayload: Encodable {
+            let message: String
+            let platform: String
+            let locale: String
+            let version: String
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(FeedbackPayload(
+            message: message, platform: "ios", locale: locale, version: appVersion
+        ))
+
+        let (_, response) = try await session.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        return statusCode
+    }
 }
 
 private struct PushSnapshotIDResponse: Codable {

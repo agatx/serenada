@@ -88,4 +88,107 @@ final class RoomWatcherTests: XCTestCase {
         XCTAssertEqual(signaling.closeCalls, 1)
         XCTAssertEqual(signaling.connectHosts, ["serenada.app", "serenada-app.ru"])
     }
+
+    func testFiltersDroppedRoomsFromBulkAndIncrementalUpdates() throws {
+        let signaling = FakeSessionSignaling()
+        let watcher = RoomWatcher(signalingClient: signaling)
+        let delegate = RecordingRoomWatcherDelegate()
+        watcher.delegate = delegate
+
+        try watcher.watchRooms(roomIds: ["alpha", "beta"], host: "one.example")
+        XCTAssertEqual(signaling.connectHosts, ["one.example"])
+
+        signaling.simulateOpen()
+        XCTAssertEqual(
+            signaling.sentMessages.last?.payload?.objectValue?["rids"]?.arrayValue?.compactMap(\.stringValue),
+            ["alpha", "beta"]
+        )
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "room_statuses",
+                payload: .object([
+                    "alpha": .object(["count": .number(1), "maxParticipants": .number(4)]),
+                    "gamma": .object(["count": .number(3), "maxParticipants": .number(4)]),
+                ])
+            )
+        )
+        XCTAssertEqual(watcher.currentStatuses, [
+            "alpha": RoomOccupancy(count: 1, maxParticipants: 4)
+        ])
+
+        try watcher.watchRooms(roomIds: ["beta"], host: "one.example")
+        XCTAssertEqual(
+            signaling.sentMessages.last?.payload?.objectValue?["rids"]?.arrayValue?.compactMap(\.stringValue),
+            ["beta"]
+        )
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "room_statuses",
+                payload: .object([
+                    "alpha": .object(["count": .number(4), "maxParticipants": .number(4)]),
+                    "beta": .object(["count": .number(2), "maxParticipants": .number(4)]),
+                ])
+            )
+        )
+        XCTAssertEqual(watcher.currentStatuses, [
+            "beta": RoomOccupancy(count: 2, maxParticipants: 4)
+        ])
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "room_status_update",
+                payload: .object([
+                    "rid": .string("alpha"),
+                    "count": .number(5),
+                    "maxParticipants": .number(4),
+                ])
+            )
+        )
+        XCTAssertEqual(watcher.currentStatuses, [
+            "beta": RoomOccupancy(count: 2, maxParticipants: 4)
+        ])
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "room_status_update",
+                payload: .object([
+                    "rid": .string("beta"),
+                    "count": .number(6),
+                    "maxParticipants": .number(4),
+                ])
+            )
+        )
+        XCTAssertEqual(watcher.currentStatuses, [
+            "beta": RoomOccupancy(count: 6, maxParticipants: 4)
+        ])
+        XCTAssertEqual(delegate.snapshots.last, watcher.currentStatuses)
+    }
+
+    func testHostChangeClosesAndReconnectsBeforeResubscribing() throws {
+        let signaling = FakeSessionSignaling()
+        let watcher = RoomWatcher(signalingClient: signaling)
+
+        try watcher.watchRooms(roomIds: ["alpha"], host: "one.example")
+        signaling.simulateOpen()
+        XCTAssertEqual(signaling.connectHosts, ["one.example"])
+        XCTAssertEqual(
+            signaling.sentMessages.last?.payload?.objectValue?["rids"]?.arrayValue?.compactMap(\.stringValue),
+            ["alpha"]
+        )
+
+        signaling.sentMessages.removeAll()
+        try watcher.watchRooms(roomIds: ["alpha"], host: "two.example")
+
+        XCTAssertEqual(signaling.closeCalls, 1)
+        XCTAssertEqual(signaling.connectHosts, ["one.example", "two.example"])
+        XCTAssertTrue(signaling.sentMessages.isEmpty)
+
+        signaling.simulateOpen()
+        XCTAssertEqual(
+            signaling.sentMessages.last?.payload?.objectValue?["rids"]?.arrayValue?.compactMap(\.stringValue),
+            ["alpha"]
+        )
+    }
 }

@@ -33,7 +33,9 @@
 		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
 		60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */; };
+		6198802831401A13687DDCA9 /* FeedbackScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */; };
 		6D7CC8795CCE4899285777B4 /* SerenadaDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */; };
+
 		6E8767096E3E70790EB1CEE5 /* SessionNegotiationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */; };
 		6E92E404B6B3E0A636F21C56 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3529A15EA2C43DB2F91F46FC /* RootView.swift */; };
 		6EE2ED9D63185C2AA8581CFE /* L10nTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8656DA5A095E572174461E96 /* L10nTests.swift */; };
@@ -162,6 +164,7 @@
 		41E34F50FDC1E2F064028B68 /* SessionTestHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTestHarness.swift; sourceTree = "<group>"; };
 		43E2F0452DE65337073894BF /* RecentCallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCallStore.swift; sourceTree = "<group>"; };
 		461DCF4D9C695C2B6051BF91 /* FakeMediaEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeMediaEngine.swift; sourceTree = "<group>"; };
+		47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackScreen.swift; sourceTree = "<group>"; };
 		4D4E0E538F82CE87BE4FDB24 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = SerenadaCallUI; sourceTree = SOURCE_ROOT; };
 		4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStoreTests.swift; sourceTree = "<group>"; };
 		53E3B13DA44022026D9F605D /* SavedRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStore.swift; sourceTree = "<group>"; };
@@ -429,6 +432,7 @@
 			children = (
 				96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */,
 				2D7AA70D76623801E762E2DB /* ErrorScreen.swift */,
+				47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */,
 				34F0B8DB451442FAB82D1D94 /* JoinScreen.swift */,
 				6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */,
 				018403014C9AEDF89B039618 /* SettingsScreen.swift */,
@@ -744,6 +748,7 @@
 				DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */,
 				46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */,
 				CAD139965FF8325D89A8113A /* ErrorScreen.swift in Sources */,
+				6198802831401A13687DDCA9 /* FeedbackScreen.swift in Sources */,
 				AD701F4DE41EA9DFCC2125CE /* JoinScreen.swift in Sources */,
 				A3E593BBB26536974F9B5152 /* JoinSnapshotFeature.swift in Sources */,
 				252529C96E5D4B8966096E25 /* JoinWithCodeScreen.swift in Sources */,

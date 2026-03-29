@@ -69,6 +69,19 @@ func joinPayload(rid string, capMax int, createMax int) []byte {
 	return b
 }
 
+func watchRoomsPayload(rids []string) []byte {
+	payloadBytes, _ := json.Marshal(map[string]interface{}{
+		"rids": rids,
+	})
+	msg := Message{
+		V:       1,
+		Type:    "watch_rooms",
+		Payload: payloadBytes,
+	}
+	b, _ := json.Marshal(msg)
+	return b
+}
+
 // legacyJoinPayload builds a join message without capabilities (legacy client).
 func legacyJoinPayload(rid string) []byte {
 	msg := Message{
@@ -518,6 +531,122 @@ func TestWatchRoomsIncludesMaxParticipants(t *testing.T) {
 	t.Fatal("did not receive room_statuses message")
 }
 
+func TestWatchRoomsReplacesPreviousSubscriptions(t *testing.T) {
+	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
+	ridA := mustTestRoomID(t)
+	ridB := mustTestRoomID(t)
+	hub := newHub(4)
+
+	watcher := fakeClient(hub)
+	hub.registerClient(watcher)
+	hub.handleMessage(watcher, watchRoomsPayload([]string{ridA}))
+	drainMessages(watcher)
+
+	hub.handleMessage(watcher, watchRoomsPayload([]string{ridB}))
+	msgs := drainMessages(watcher)
+	foundRoomStatuses := false
+	for _, msg := range msgs {
+		if msg.Type != "room_statuses" {
+			continue
+		}
+		foundRoomStatuses = true
+		var payload map[string]map[string]int
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_statuses payload: %v", err)
+		}
+		if _, ok := payload[ridA]; ok {
+			t.Fatalf("did not expect room_statuses payload to include previous room %s", ridA)
+		}
+		if _, ok := payload[ridB]; !ok {
+			t.Fatalf("expected room_statuses payload to include replacement room %s", ridB)
+		}
+	}
+	if !foundRoomStatuses {
+		t.Fatal("expected room_statuses message when replacing watched rooms")
+	}
+
+	participantA := fakeClient(hub)
+	hub.registerClient(participantA)
+	hub.handleMessage(participantA, joinPayload(ridA, 4, 4))
+
+	for _, msg := range drainMessages(watcher) {
+		if msg.Type == "room_status_update" {
+			var payload struct {
+				RID string `json:"rid"`
+			}
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				t.Fatalf("failed to parse room_status_update payload: %v", err)
+			}
+			if payload.RID == ridA {
+				t.Fatalf("did not expect room_status_update for unsubscribed room %s", ridA)
+			}
+		}
+	}
+
+	participantB := fakeClient(hub)
+	hub.registerClient(participantB)
+	hub.handleMessage(participantB, joinPayload(ridB, 4, 4))
+
+	for _, msg := range drainMessages(watcher) {
+		if msg.Type != "room_status_update" {
+			continue
+		}
+		var payload struct {
+			RID   string `json:"rid"`
+			Count int    `json:"count"`
+		}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_status_update payload: %v", err)
+		}
+		if payload.RID == ridB && payload.Count == 1 {
+			return
+		}
+	}
+
+	t.Fatalf("expected room_status_update for replacement room %s", ridB)
+}
+
+func TestWatchRoomsClearsSubscriptionsWithEmptyList(t *testing.T) {
+	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	watcher := fakeClient(hub)
+	hub.registerClient(watcher)
+	hub.handleMessage(watcher, watchRoomsPayload([]string{rid}))
+	drainMessages(watcher)
+
+	hub.handleMessage(watcher, watchRoomsPayload([]string{}))
+	msgs := drainMessages(watcher)
+	foundRoomStatuses := false
+	for _, msg := range msgs {
+		if msg.Type != "room_statuses" {
+			continue
+		}
+		foundRoomStatuses = true
+		var payload map[string]map[string]int
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_statuses payload: %v", err)
+		}
+		if len(payload) != 0 {
+			t.Fatalf("expected empty room_statuses payload after clearing subscriptions, got %+v", payload)
+		}
+	}
+	if !foundRoomStatuses {
+		t.Fatal("expected room_statuses message when clearing watched rooms")
+	}
+
+	participant := fakeClient(hub)
+	hub.registerClient(participant)
+	hub.handleMessage(participant, joinPayload(rid, 4, 4))
+
+	for _, msg := range drainMessages(watcher) {
+		if msg.Type == "room_status_update" {
+			t.Fatalf("did not expect room_status_update after clearing subscriptions: %+v", msg)
+		}
+	}
+}
+
 func TestRoomStatusUpdateIncludesMaxParticipants(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
@@ -525,15 +654,7 @@ func TestRoomStatusUpdateIncludesMaxParticipants(t *testing.T) {
 
 	watcher := fakeClient(hub)
 	hub.registerClient(watcher)
-	watchPayload, _ := json.Marshal(map[string]interface{}{
-		"rids": []string{rid},
-	})
-	watchMsg, _ := json.Marshal(Message{
-		V:       1,
-		Type:    "watch_rooms",
-		Payload: watchPayload,
-	})
-	hub.handleMessage(watcher, watchMsg)
+	hub.handleMessage(watcher, watchRoomsPayload([]string{rid}))
 	drainMessages(watcher)
 
 	participant := fakeClient(hub)

@@ -9,6 +9,7 @@ struct SettingsScreen: View {
     let isHdVideoExperimentalEnabled: Bool
     let areSavedRoomsShownFirst: Bool
     let areRoomInviteNotificationsEnabled: Bool
+    @Binding var showFeedback: Bool
     let appVersion: String
     let hostError: String?
     let isSaving: Bool
@@ -146,6 +147,20 @@ struct SettingsScreen: View {
                         Text(L10n.settingsInviteNotificationsInfo)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section(L10n.feedbackTitle) {
+                Button {
+                    showFeedback = true
+                } label: {
+                    HStack {
+                        Label(L10n.feedbackSendAction, systemImage: "envelope")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
                     }
                 }
             }

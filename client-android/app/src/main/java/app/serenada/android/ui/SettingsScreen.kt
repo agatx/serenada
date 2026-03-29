@@ -52,12 +52,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
+import androidx.compose.material3.AlertDialog
 import app.serenada.android.BuildConfig
 import app.serenada.android.R
 import app.serenada.android.data.SettingsStore
+import app.serenada.android.network.HostApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -106,6 +110,12 @@ fun SettingsScreen(
     var isPinging by remember { mutableStateOf(false) }
     var pingFailed by remember { mutableStateOf(false) }
     val appVersion = BuildConfig.VERSION_NAME.ifBlank { "-" }
+
+    var showFeedbackDialog by remember { mutableStateOf(false) }
+    var feedbackText by remember { mutableStateOf("") }
+    var isSendingFeedback by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val feedbackApiClient = remember { HostApiClient(OkHttpClient()) }
 
     Scaffold(
         topBar = {
@@ -356,6 +366,17 @@ fun SettingsScreen(
                     )
                 }
 
+                SettingsSection(
+                    title = stringResource(R.string.settings_feedback_title)
+                ) {
+                    OutlinedButton(
+                        onClick = { showFeedbackDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.settings_send_feedback))
+                    }
+                }
+
                 Text(
                     text = stringResource(R.string.settings_app_version, appVersion),
                     style = MaterialTheme.typography.bodySmall,
@@ -363,6 +384,93 @@ fun SettingsScreen(
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
             }
+        }
+
+        if (showFeedbackDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!isSendingFeedback) {
+                        showFeedbackDialog = false
+                        feedbackText = ""
+                    }
+                },
+                title = { Text(stringResource(R.string.settings_send_feedback)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = feedbackText,
+                            onValueChange = { if (it.length <= 2000) feedbackText = it },
+                            placeholder = { Text(stringResource(R.string.feedback_placeholder)) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            maxLines = 8
+                        )
+                        Text(
+                            text = "${feedbackText.length}/2000",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.End)
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            isSendingFeedback = true
+                            feedbackApiClient.submitFeedback(
+                                host = host,
+                                message = feedbackText.trim(),
+                                locale = selectedLanguage,
+                                appVersion = appVersion
+                            ) { result ->
+                                scope.launch(Dispatchers.Main) {
+                                    isSendingFeedback = false
+                                    result.fold(
+                                        onSuccess = { code ->
+                                            val msgRes = when {
+                                                code == 429 -> R.string.feedback_rate_limit
+                                                code in 200..299 -> R.string.feedback_success
+                                                else -> R.string.feedback_error
+                                            }
+                                            Toast.makeText(context, context.getString(msgRes), Toast.LENGTH_SHORT).show()
+                                            if (code in 200..299) {
+                                                showFeedbackDialog = false
+                                                feedbackText = ""
+                                            }
+                                        },
+                                        onFailure = {
+                                            Toast.makeText(context, context.getString(R.string.feedback_error), Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                }
+                            }
+                        },
+                        enabled = feedbackText.trim().isNotEmpty() && !isSendingFeedback
+                    ) {
+                        if (isSendingFeedback) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(stringResource(R.string.feedback_send))
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showFeedbackDialog = false
+                            feedbackText = ""
+                        },
+                        enabled = !isSendingFeedback
+                    ) {
+                        Text(stringResource(R.string.common_back))
+                    }
+                }
+            )
         }
     }
 }

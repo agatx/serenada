@@ -23,6 +23,8 @@ services:
       - INTERNAL_STATS_TOKEN=${INTERNAL_STATS_TOKEN}
       - CF_TURN_KEY_ID=${CF_TURN_KEY_ID}
       - CF_TURN_API_TOKEN=${CF_TURN_API_TOKEN}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     volumes:
       - ./server/data:/app/data
       - ./secrets:/app/secrets:ro

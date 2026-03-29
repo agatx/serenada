@@ -35,6 +35,7 @@ struct RootView: View {
     @State private var showSettings = false
     @State private var showJoinWithCode = false
     @State private var showDiagnostics = false
+    @State private var showFeedback = false
 
     var body: some View {
         let uiState = callManager.uiState
@@ -141,6 +142,7 @@ struct RootView: View {
                 showJoinWithCode = false
                 showSettings = false
                 showDiagnostics = false
+                showFeedback = false
                 settingsSaveInProgress = false
                 settingsHostError = nil
                 roomInput = ""
@@ -157,6 +159,7 @@ struct RootView: View {
                     isHdVideoExperimentalEnabled: callManager.isHdVideoExperimentalEnabled,
                     areSavedRoomsShownFirst: callManager.areSavedRoomsShownFirst,
                     areRoomInviteNotificationsEnabled: callManager.areRoomInviteNotificationsEnabled,
+                    showFeedback: $showFeedback,
                     appVersion: callManager.appVersion,
                     hostError: settingsHostError,
                     isSaving: settingsSaveInProgress,
@@ -185,6 +188,14 @@ struct RootView: View {
                 }
                 .navigationDestination(isPresented: $showDiagnostics) {
                     DiagnosticsScreen(host: hostInput)
+                }
+                .navigationDestination(isPresented: $showFeedback) {
+                    FeedbackScreen(
+                        host: hostInput,
+                        appVersion: callManager.appVersion,
+                        locale: callManager.selectedLanguage,
+                        onDismiss: { showFeedback = false }
+                    )
                 }
             }
         }
@@ -230,6 +241,7 @@ struct RootView: View {
         settingsHostError = nil
         settingsSaveInProgress = false
         showDiagnostics = false
+        showFeedback = false
         showSettings = false
     }
 

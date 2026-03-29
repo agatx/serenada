@@ -156,3 +156,11 @@
 "call_error_generic" = "Une erreur est survenue";
 "call_joining" = "Connexion...";
 "call_ended" = "Appel terminé";
+
+"feedback_title" = "Retour";
+"feedback_send_action" = "Envoyer un retour";
+"feedback_placeholder" = "Décrivez votre problème ou suggestion...";
+"feedback_send" = "Envoyer";
+"feedback_success" = "Merci pour votre retour !";
+"feedback_rate_limit" = "Veuillez patienter avant d'envoyer un autre retour.";
+"feedback_error" = "Échec de l'envoi. Veuillez réessayer.";

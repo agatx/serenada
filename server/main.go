@@ -15,6 +15,7 @@ func main() {
 	// Load .env from current directory or parent directory (for local dev)
 	_ = godotenv.Load()
 	_ = godotenv.Load("../.env")
+	refreshAllowedOriginsFromEnv()
 	rateLimitBypass = parseRateLimitBypass(os.Getenv("RATE_LIMIT_BYPASS_IPS"))
 
 	// Initialize signaling
@@ -32,6 +33,9 @@ func main() {
 	if err := InitPushService(); err != nil {
 		log.Fatal("Failed to init push service: ", err)
 	}
+
+	// Initialize Telegram feedback service
+	telegramService := initTelegramFromEnv()
 
 	// Simple CORS middleware for API
 	enableCors := func(h http.HandlerFunc) http.HandlerFunc {
@@ -81,6 +85,8 @@ func main() {
 	roomIDLimiter := NewIPLimiter(30.0/60.0, 10)
 	// Push: 10 requests per minute
 	pushLimiter := NewIPLimiter(10.0/60.0, 5)
+	// Feedback: 3 requests per minute
+	feedbackLimiter := NewIPLimiter(3.0/60.0, 3)
 
 	http.HandleFunc("/ws", rateLimitMiddleware(wsLimiter, func(w http.ResponseWriter, r *http.Request) {
 		if wsHang {
@@ -109,6 +115,9 @@ func main() {
 	http.HandleFunc("/api/push/notify", withTimeout(rateLimitMiddleware(pushLimiter, enableCors(handlePushNotify(hub))), 10*time.Second))
 	http.HandleFunc("/api/push/snapshot", withTimeout(rateLimitMiddleware(pushLimiter, enableCors(handlePushSnapshot)), 10*time.Second))
 	http.HandleFunc("/api/push/snapshot/", withTimeout(enableCors(handlePushSnapshot), 10*time.Second))
+
+	// Feedback Route
+	http.HandleFunc("/api/feedback", withTimeout(enableCors(rateLimitMiddleware(feedbackLimiter, handleFeedback(telegramService))), 10*time.Second))
 
 	http.HandleFunc("/device-check", withTimeout(handleDeviceCheck, 15*time.Second))
 

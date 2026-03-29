@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestParseRateLimitBypassAndContains(t *testing.T) {
@@ -47,5 +48,34 @@ func TestRateLimitMiddlewareBypass(t *testing.T) {
 
 	if hits != 3 {
 		t.Fatalf("expected handler hits=3, got %d", hits)
+	}
+}
+
+func TestIPLimiterPrunesIdleEntries(t *testing.T) {
+	base := time.Date(2026, time.March, 25, 12, 0, 0, 0, time.UTC)
+	limiter := NewIPLimiter(1, 1)
+	limiter.now = func() time.Time { return base }
+	limiter.lastPrunedAt = base.Add(-11 * time.Minute)
+
+	stale := NewSimpleTokenBucket(1, 1)
+	stale.lastSeen = base.Add(-31 * time.Minute)
+	fresh := NewSimpleTokenBucket(1, 1)
+	fresh.lastSeen = base.Add(-29 * time.Minute)
+
+	limiter.ips["stale"] = stale
+	limiter.ips["fresh"] = fresh
+
+	got := limiter.GetLimiter("fresh")
+	if got != fresh {
+		t.Fatalf("expected existing fresh limiter to be returned")
+	}
+	if _, ok := limiter.ips["stale"]; ok {
+		t.Fatalf("expected stale limiter entry to be pruned")
+	}
+	if _, ok := limiter.ips["fresh"]; !ok {
+		t.Fatalf("expected fresh limiter entry to remain")
+	}
+	if !fresh.lastSeen.Equal(base) {
+		t.Fatalf("expected fresh limiter lastSeen to refresh to %v, got %v", base, fresh.lastSeen)
 	}
 }

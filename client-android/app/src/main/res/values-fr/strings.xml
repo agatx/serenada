@@ -148,4 +148,12 @@
     <string name="settings_invites_title">Invitations</string>
     <string name="settings_invite_notifications">Notifications d\'invitation</string>
     <string name="settings_invite_notifications_info">Afficher les notifications quand vous êtes invité dans une salle enregistrée.</string>
+
+    <string name="settings_feedback_title">Retour</string>
+    <string name="settings_send_feedback">Envoyer un retour</string>
+    <string name="feedback_placeholder">Décrivez votre problème ou suggestion...</string>
+    <string name="feedback_success">Merci pour votre retour !</string>
+    <string name="feedback_rate_limit">Veuillez patienter avant d\'envoyer un autre retour.</string>
+    <string name="feedback_error">Échec de l\'envoi. Veuillez réessayer.</string>
+    <string name="feedback_send">Envoyer</string>
 </resources>

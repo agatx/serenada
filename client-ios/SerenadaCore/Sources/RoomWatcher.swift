@@ -126,7 +126,8 @@ public final class RoomWatcher {
 
     private func mergeStatusesPayload(payload: JSONValue?) {
         guard let payload = payload?.objectValue else { return }
-        for (rid, value) in payload {
+        let watchedSet = Set(watchedRoomIds)
+        for (rid, value) in payload where watchedSet.contains(rid) {
             if let status = parseOccupancy(value, fallback: statuses[rid]) {
                 statuses[rid] = status
             }
@@ -142,6 +143,7 @@ public final class RoomWatcher {
         else {
             return
         }
+        guard watchedRoomIds.contains(rid) else { return }
 
         statuses[rid] = RoomOccupancy(
             count: max(0, count),
