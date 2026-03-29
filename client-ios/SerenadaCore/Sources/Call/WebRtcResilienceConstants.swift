@@ -31,6 +31,7 @@ public enum WebRtcResilience {
 
     public static let turnFetchTimeoutMs = 2_000
     public static let turnRefreshTriggerRatio = 0.8
+    public static let iceFetchRetryDelaysMs = [0, 1_000, 2_000, 4_000]
 
     // MARK: - Snapshot
 

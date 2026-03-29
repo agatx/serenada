@@ -41,10 +41,11 @@ public struct CreateRoomResult {
 @MainActor
 public final class SerenadaCore {
     /// SDK version string.
-    public static let version = "0.2.0"
+    public static let version = "0.3.0"
 
     /// SDK configuration.
     public let config: SerenadaConfig
+    private let resolvedConfig: ResolvedSerenadaConfig
     /// Delegate for session lifecycle callbacks.
     public weak var delegate: SerenadaCoreDelegate?
     /// Optional logger for SDK diagnostics.
@@ -52,6 +53,11 @@ public final class SerenadaCore {
 
     public init(config: SerenadaConfig) {
         self.config = config
+        do {
+            self.resolvedConfig = try resolveSerenadaConfig(config)
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
     }
 
     /// Join an existing call by URL. Returns a session that begins connecting immediately.
@@ -60,29 +66,41 @@ public final class SerenadaCore {
         let target = DeepLinkParser.parseTarget(from: url)
         let serverHost = target?.host
             ?? DeepLinkParser.normalizeHostValue(authorityHost(from: url))
-            ?? config.serverHost
+            ?? resolvedConfig.serverHost
+        let sessionConfig: SerenadaConfig
+        if resolvedConfig.serverHost != nil {
+            sessionConfig = SerenadaConfig(
+                serverHost: serverHost,
+                signalingProvider: nil,
+                defaultAudioEnabled: config.defaultAudioEnabled,
+                defaultVideoEnabled: config.defaultVideoEnabled,
+                transports: config.transports
+            )
+        } else {
+            sessionConfig = config
+        }
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
-            serverHost: serverHost,
-            config: config,
+            config: sessionConfig,
             delegateProvider: { [weak self] in self?.delegate },
-            logger: logger
+            logger: logger,
+            initialSignalingProvider: createSignalingProvider(for: sessionConfig)
         )
         return session
     }
 
     /// Join an existing call by room ID. Returns a session that begins connecting immediately.
     public func join(roomId: String) -> SerenadaSession {
-        let url = buildRoomURL(host: config.serverHost, roomId: roomId)
+        let url = resolvedConfig.serverHost.flatMap { buildRoomURL(host: $0, roomId: roomId) }
 
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
-            serverHost: config.serverHost,
             config: config,
             delegateProvider: { [weak self] in self?.delegate },
-            logger: logger
+            logger: logger,
+            initialSignalingProvider: createSignalingProvider(for: config)
         )
         return session
     }
@@ -90,7 +108,7 @@ public final class SerenadaCore {
     /// Create a new room and immediately join it.
     public func createRoom() async throws -> CreateRoomResult {
         let apiClient = CoreAPIClient()
-        let serverHost = config.serverHost
+        let serverHost = try requireServerHost(config)
         let config = self.config
         let roomId = try await apiClient.createRoomId(host: serverHost)
         guard let url = buildRoomURL(host: serverHost, roomId: roomId) else {
@@ -100,10 +118,10 @@ public final class SerenadaCore {
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
-            serverHost: serverHost,
             config: config,
             delegateProvider: { [weak self] in self?.delegate },
-            logger: logger
+            logger: logger,
+            initialSignalingProvider: createSignalingProvider(for: config)
         )
         return CreateRoomResult(url: url, roomId: roomId, session: session)
     }
@@ -112,7 +130,7 @@ public final class SerenadaCore {
     /// Use this when you only need a room ID (e.g., for invite links).
     public func createRoomId() async throws -> String {
         let apiClient = CoreAPIClient()
-        return try await apiClient.createRoomId(host: config.serverHost)
+        return try await apiClient.createRoomId(host: requireServerHost(config))
     }
 
     private func buildRoomURL(host: String, roomId: String) -> URL? {
@@ -133,5 +151,26 @@ public final class SerenadaCore {
             return "\(host):\(port)"
         }
         return host
+    }
+
+    private func createSignalingProvider(for sessionConfig: SerenadaConfig) -> SignalingProvider {
+        let resolved: ResolvedSerenadaConfig
+        do {
+            resolved = try resolveSerenadaConfig(sessionConfig)
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
+        if let serverHost = resolved.serverHost {
+            return SerenadaServerProvider(
+                serverHost: serverHost,
+                apiClient: CoreAPIClient(),
+                transports: sessionConfig.transports,
+                logger: logger
+            )
+        }
+        guard let signalingProvider = resolved.signalingProvider else {
+            preconditionFailure("Provide exactly one of serverHost or signalingProvider")
+        }
+        return signalingProvider
     }
 }

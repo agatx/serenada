@@ -2,19 +2,22 @@ import Foundation
 @testable import SerenadaCore
 
 @MainActor
-final class FakeSignaling: SessionSignaling {
+final class FakeSessionSignaling: SessionSignaling {
     weak var listener: SignalingClientListener?
 
-    private(set) var connectCalls: [String] = []
+    private(set) var connectHosts: [String] = []
     private(set) var sentMessages: [SignalingMessage] = []
     private(set) var closeCalls = 0
-    private(set) var connected = false
+    private(set) var recordPongCalls = 0
+    var connected = false
 
     func connect(host: String) {
-        connectCalls.append(host)
+        connectHosts.append(host)
     }
 
-    func isConnected() -> Bool { connected }
+    func isConnected() -> Bool {
+        connected
+    }
 
     func send(_ message: SignalingMessage) {
         sentMessages.append(message)
@@ -25,13 +28,13 @@ final class FakeSignaling: SessionSignaling {
         connected = false
     }
 
-    func recordPong() {}
+    func recordPong() {
+        recordPongCalls += 1
+    }
 
-    // MARK: - Test Drivers
-
-    func simulateOpen(transport: String = "ws") {
+    func simulateOpen(activeTransport: String = "ws") {
         connected = true
-        listener?.onOpen(activeTransport: transport)
+        listener?.onOpen(activeTransport: activeTransport)
     }
 
     func simulateMessage(_ message: SignalingMessage) {
@@ -41,9 +44,5 @@ final class FakeSignaling: SessionSignaling {
     func simulateClosed(reason: String = "test") {
         connected = false
         listener?.onClosed(reason: reason)
-    }
-
-    func sentMessages(ofType type: String) -> [SignalingMessage] {
-        sentMessages.filter { $0.type == type }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 #if canImport(WebRTC)
-import WebRTC
+@preconcurrency import WebRTC
 #endif
 
 @MainActor
@@ -456,7 +456,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 sdpMLineIndex: candidate.sdpMLineIndex,
                 sdpMid: candidate.sdpMid
             )
-        )
+        ) { _ in }
 #endif
     }
 
@@ -607,7 +607,7 @@ private extension PeerConnectionSlot {
                     sdpMLineIndex: candidate.sdpMLineIndex,
                     sdpMid: candidate.sdpMid
                 )
-            )
+            ) { _ in }
         }
     }
 

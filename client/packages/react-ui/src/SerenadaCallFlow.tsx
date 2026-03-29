@@ -382,12 +382,15 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     useEffect(() => {
         if (!session) return;
-        return session.subscribeToMessages((message) => {
+        return session.onPeerMessage((message) => {
             if (message.type !== 'content_state') return;
-            const from = typeof message.payload?.from === 'string' ? message.payload.from : null;
-            if (!from) return;
-            const active = message.payload?.active === true;
-            const contentType = message.payload?.contentType;
+            const payload = message.payload && typeof message.payload === 'object' && !Array.isArray(message.payload)
+                ? message.payload as Record<string, unknown>
+                : null;
+            if (!payload) return;
+            const from = message.from;
+            const active = payload.active === true;
+            const contentType = payload.contentType;
 
             if (active && (contentType === 'screenShare' || contentType === 'worldCamera' || contentType === 'compositeCamera')) {
                 setRemoteContentState({ cid: from, contentType });

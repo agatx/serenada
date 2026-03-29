@@ -2,17 +2,16 @@ import type { RoomState, SignalingMessage } from '../signaling/types.js';
 import type { ConnectionStatus, SerenadaLogger } from '../types.js';
 import { parseOfferPayload, parseAnswerPayload, parseIceCandidatePayload } from '../signaling/payloads.js';
 import { formatError } from '../formatError.js';
+import { normalizeIceServers } from '../iceServers.js';
 import {
     OFFER_TIMEOUT_MS,
     ICE_RESTART_COOLDOWN_MS,
     NON_HOST_FALLBACK_DELAY_MS,
     NON_HOST_FALLBACK_MAX_ATTEMPTS,
     ICE_CANDIDATE_BUFFER_MAX,
-    TURN_FETCH_TIMEOUT_MS,
     CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
 } from '../constants.js';
-import { buildApiUrl } from '../serverUrls.js';
 import { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './localVideoRecovery.js';
 
 const DEFAULT_RTC_CONFIG: RTCConfiguration = {
@@ -38,7 +37,6 @@ interface PeerState {
 }
 
 export interface MediaEngineConfig {
-    serverHost: string;
     turnsOnly?: boolean;
     logger?: SerenadaLogger;
 }
@@ -71,10 +69,6 @@ export class MediaEngine {
     private onlineHandler: (() => void) | null = null;
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
-    private turnFetchController: AbortController | null = null;
-    private turnTokenInFlight: string | null = null;
-    private appliedTurnToken: string | null = null;
-    private serverHost: string;
     private turnsOnly: boolean;
     private logger?: SerenadaLogger;
 
@@ -89,7 +83,6 @@ export class MediaEngine {
         config: MediaEngineConfig,
         sendMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void,
     ) {
-        this.serverHost = config.serverHost;
         this.turnsOnly = config.turnsOnly ?? false;
         this.logger = config.logger;
         this.sendSignalingMessage = sendMessage;
@@ -122,22 +115,36 @@ export class MediaEngine {
         }
     }
 
-    updateTurnToken(token: string): void {
-        if (token === this.appliedTurnToken || token === this.turnTokenInFlight) {
+    setIceServers(iceServers: RTCIceServer[]): void {
+        const nextServers = this.normalizeIceServers(iceServers);
+        const nextConfig: RTCConfiguration = {
+            iceServers: nextServers.length > 0 ? nextServers : DEFAULT_RTC_CONFIG.iceServers,
+        };
+        if (this.turnsOnly) {
+            nextConfig.iceTransportPolicy = 'relay';
+        }
+
+        this.rtcConfig = nextConfig;
+        for (const [, peer] of this.peers) {
+            try {
+                peer.pc.setConfiguration(nextConfig);
+            } catch (error) {
+                this.logger?.log('warning', 'WebRTC', `Failed to update ICE config: ${formatError(error)}`);
+            }
+        }
+    }
+
+    handleSignalingReconnect(): void {
+        if (!this.isSignalingConnected) {
             return;
         }
-        this.turnFetchController?.abort();
-        this.turnFetchController = new AbortController();
-        this.turnTokenInFlight = token;
-        void this.fetchIceServers(token, this.turnFetchController.signal).then((applied) => {
-            if (applied) {
-                this.appliedTurnToken = token;
+        for (const [remoteCid] of this.peers) {
+            if (this.shouldIOffer(remoteCid)) {
+                this.scheduleIceRestart(remoteCid, 'signaling-reconnect', 0);
+            } else {
+                this.scheduleNonHostFallback(remoteCid);
             }
-        }).finally(() => {
-            if (this.turnTokenInFlight === token) {
-                this.turnTokenInFlight = null;
-            }
-        });
+        }
     }
 
     processSignalingMessage(msg: SignalingMessage): void {
@@ -352,10 +359,6 @@ export class MediaEngine {
         this.cleanupAllPeers();
         this.stopLocalMedia();
         this.removeEventListeners();
-        this.turnFetchController?.abort();
-        this.turnFetchController = null;
-        this.turnTokenInFlight = null;
-        this.appliedTurnToken = null;
         if (this.retryingTimer) { window.clearTimeout(this.retryingTimer); this.retryingTimer = null; }
     }
 
@@ -514,15 +517,8 @@ export class MediaEngine {
     }
 
     private shouldIOffer(remoteCid: string): boolean {
-        if (!this.roomState) return false;
         const myId = this.clientId;
-        if (!myId) return false;
-        const myP = this.roomState.participants?.find(p => p.cid === myId);
-        const theirP = this.roomState.participants?.find(p => p.cid === remoteCid);
-        if (!myP || !theirP) return false;
-        const myJoinedAt = myP.joinedAt ?? 0;
-        const theirJoinedAt = theirP.joinedAt ?? 0;
-        return myJoinedAt < theirJoinedAt || (myJoinedAt === theirJoinedAt && myId < remoteCid);
+        return typeof myId === 'string' && myId.length > 0 && myId < remoteCid;
     }
 
     private async createOfferTo(remoteCid: string, options?: { iceRestart?: boolean }): Promise<void> {
@@ -724,43 +720,8 @@ export class MediaEngine {
         }, CONNECTION_RETRYING_DELAY_MS);
     }
 
-    private async fetchIceServers(token: string, signal: AbortSignal): Promise<boolean> {
-        const fetchController = new AbortController();
-        const timeoutTimer = setTimeout(() => fetchController.abort(), TURN_FETCH_TIMEOUT_MS);
-        const onExternalAbort = () => fetchController.abort();
-        signal.addEventListener('abort', onExternalAbort);
-        try {
-            const apiUrl = buildApiUrl(this.serverHost, `/api/turn-credentials?token=${encodeURIComponent(token)}`);
-
-            const res = await fetch(apiUrl, { signal: fetchController.signal });
-
-            if (signal.aborted) return false;
-
-            if (res.ok) {
-                const data = await res.json();
-                const turnsOnly = this.turnsOnly;
-
-                const servers: RTCIceServer[] = [];
-                if (data.uris) {
-                    let uris = data.uris;
-                    if (turnsOnly) uris = uris.filter((u: string) => u.startsWith('turns:'));
-                    if (uris.length > 0) servers.push({ urls: uris, username: data.username, credential: data.password });
-                }
-
-                const config: RTCConfiguration = {
-                    iceServers: servers.length > 0 ? servers : DEFAULT_RTC_CONFIG.iceServers
-                };
-                if (turnsOnly) config.iceTransportPolicy = 'relay';
-                this.rtcConfig = config;
-                return true;
-            }
-        } catch (err) {
-            if (!signal.aborted) this.logger?.log('error', 'WebRTC', `Error fetching ICE servers: ${formatError(err)}`);
-        } finally {
-            clearTimeout(timeoutTimer);
-            signal.removeEventListener('abort', onExternalAbort);
-        }
-        return false;
+    private normalizeIceServers(iceServers: RTCIceServer[]): RTCIceServer[] {
+        return normalizeIceServers(iceServers, this.turnsOnly);
     }
 
     private applySpeechTrackHints(stream: MediaStream): void {

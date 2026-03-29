@@ -2,6 +2,7 @@ package app.serenada.core
 
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.WebRtcResilienceConstants
+import android.os.Looper
 import app.serenada.core.fakes.TestSessionFactory
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -17,6 +18,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
+import org.webrtc.PeerConnection
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -53,13 +55,28 @@ class SerenadaSessionContractTest {
         factory.grantPermissionsAndStart()
         factory.openSignaling()
 
-        val joinMessages = factory.fakeSignaling.sentMessages("join")
-        assertTrue("Should send join message", joinMessages.isNotEmpty())
+        assertTrue("Should request room join", factory.fakeProvider.joinCalls.isNotEmpty())
 
         factory.simulateJoinedResponse(cid = "my-cid")
 
         assertEquals(CallPhase.Waiting, factory.session.state.value.phase)
         assertEquals("my-cid", factory.session.state.value.localCid)
+    }
+
+    @Test
+    fun `joined without hostPeerId falls back to local participant`() {
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.fakeProvider.simulateJoined(
+            peerId = "my-cid",
+            participants = listOf("my-cid" to 1L),
+            hostPeerId = null,
+        )
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(CallPhase.Waiting, factory.session.state.value.phase)
+        assertTrue(factory.session.state.value.isHost)
     }
 
     // ── Join → Joined → InCall ──────────────────────────────────────
@@ -97,7 +114,7 @@ class SerenadaSessionContractTest {
         assertNotNull(factory.session.state.value.error)
         assertTrue(factory.session.state.value.error is CallError.RoomFull)
         assertTrue("Engine should be released", factory.fakeMedia.releaseCalls > 0)
-        assertTrue("Signaling should be closed", factory.fakeSignaling.closeCalls > 0)
+        assertTrue("Provider should be disconnected", factory.fakeProvider.disconnectCalls > 0)
     }
 
     // ── Room state update ───────────────────────────────────────────
@@ -119,6 +136,27 @@ class SerenadaSessionContractTest {
         assertEquals(1, factory.session.state.value.remoteParticipants.size)
     }
 
+    @Test
+    fun `incremental peer join and leave work without room_state snapshots`() {
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.simulateJoinedResponse(cid = "my-cid")
+        assertEquals(CallPhase.Waiting, factory.session.state.value.phase)
+
+        factory.fakeProvider.simulatePeerJoined(peerId = "remote-cid", joinedAt = 2L)
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(CallPhase.InCall, factory.session.state.value.phase)
+        assertEquals(listOf("remote-cid"), factory.session.state.value.remoteParticipants.map { it.cid })
+
+        factory.fakeProvider.simulatePeerLeft(peerId = "remote-cid", joinedAt = 2L)
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(CallPhase.Waiting, factory.session.state.value.phase)
+        assertTrue(factory.session.state.value.remoteParticipants.isEmpty())
+    }
+
     // ── Reconnect on close ──────────────────────────────────────────
 
     @Test
@@ -129,11 +167,61 @@ class SerenadaSessionContractTest {
         factory.simulateJoinedResponse(cid = "my-cid")
         assertEquals(CallPhase.Waiting, factory.session.state.value.phase)
 
-        factory.fakeSignaling.simulateClosed(reason = "connection lost")
+        factory.fakeProvider.simulateDisconnected(reason = "connection lost")
         ShadowLooper.idleMainLooper()
 
         assertNotEquals(CallPhase.Idle, factory.session.state.value.phase)
         assertFalse(factory.session.diagnostics.value.isSignalingConnected)
+    }
+
+    @Test
+    fun `self-managed reconnect rejoins with reconnect peer id`() {
+        factory.tearDown()
+        factory = TestSessionFactory(handlesReconnection = false)
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to 1L, "remote-cid" to 2L),
+            hostCid = "my-cid",
+        )
+        assertEquals(CallPhase.InCall, factory.session.state.value.phase)
+
+        factory.fakeProvider.simulateDisconnected(reason = "connection lost")
+        ShadowLooper.idleMainLooper()
+
+        Shadows.shadowOf(Looper.getMainLooper())
+            .idleFor(WebRtcResilienceConstants.RECONNECT_BACKOFF_BASE_MS, TimeUnit.MILLISECONDS)
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(2, factory.fakeProvider.connectCalls.size)
+
+        factory.fakeProvider.simulateConnected()
+        ShadowLooper.idleMainLooper()
+
+        val reconnectJoin = factory.fakeProvider.joinCalls.last()
+        assertEquals("test-room-id", reconnectJoin.first)
+        assertEquals("my-cid", reconnectJoin.second.reconnectPeerId)
+    }
+
+    @Test
+    fun `room ended resets session to idle`() {
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to 1L, "remote-cid" to 2L),
+            hostCid = "my-cid",
+        )
+        assertEquals(CallPhase.InCall, factory.session.state.value.phase)
+
+        factory.fakeProvider.simulateRoomEnded(by = "remote-cid", reason = "host ended")
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(CallPhase.Idle, factory.session.state.value.phase)
+        assertTrue(factory.session.state.value.remoteParticipants.isEmpty())
     }
 
     // ── Leave cleanup ───────────────────────────────────────────────
@@ -156,10 +244,9 @@ class SerenadaSessionContractTest {
         factory.session.leave()
         ShadowLooper.idleMainLooper()
 
-        val leaveMessages = factory.fakeSignaling.sentMessages("leave")
-        assertTrue("Should send leave message", leaveMessages.isNotEmpty())
+        assertTrue("Should call provider leaveRoom", factory.fakeProvider.leaveCalls > 0)
         assertEquals(CallPhase.Idle, factory.session.state.value.phase)
-        assertTrue("Signaling should be closed", factory.fakeSignaling.closeCalls > 0)
+        assertTrue("Provider should be disconnected", factory.fakeProvider.disconnectCalls > 0)
         assertTrue("Engine should be released", factory.fakeMedia.releaseCalls > releaseBefore)
         assertTrue("Audio should be deactivated", factory.fakeAudio.deactivateCalls > deactivateBefore)
     }
@@ -176,42 +263,94 @@ class SerenadaSessionContractTest {
         factory.session.end()
         ShadowLooper.idleMainLooper()
 
-        val endMessages = factory.fakeSignaling.sentMessages("end_room")
-        assertTrue("Should send end_room message", endMessages.isNotEmpty())
+        assertTrue("Should call provider endRoom", factory.fakeProvider.endCalls > 0)
+        assertTrue("Should still leave after end", factory.fakeProvider.leaveCalls > 0)
         assertEquals(CallPhase.Idle, factory.session.state.value.phase)
     }
 
     // ── TURN credential fetch ───────────────────────────────────────
 
     @Test
-    fun `joined with turnToken fetches TURN credentials and sets ICE servers`() {
+    fun `joined triggers initial ICE fetch and sets ICE servers`() {
+        factory.fakeProvider.enqueueIceServers(
+            Result.success(
+                listOf(
+                    org.webrtc.PeerConnection.IceServer.builder("turn:turn.example.com:3478")
+                        .setUsername("user")
+                        .setPassword("pass")
+                        .createIceServer()
+                )
+            )
+        )
         factory.grantPermissionsAndStart()
         factory.openSignaling()
 
-        factory.simulateJoinedResponse(cid = "my-cid", turnToken = "test-turn-token")
+        factory.simulateJoinedResponse(cid = "my-cid")
 
-        assertTrue(
-            "Should fetch TURN credentials",
-            factory.fakeAPI.fetchTurnCredentialsCalls.isNotEmpty()
-        )
-        val call = factory.fakeAPI.fetchTurnCredentialsCalls.first()
-        assertEquals("test-turn-token", call.second)
+        assertEquals(1, factory.fakeProvider.getIceServersCalls)
         assertTrue("ICE servers should be set", factory.fakeMedia.iceServersSet)
     }
 
     // ── TURN credential failure ─────────────────────────────────────
 
     @Test
-    fun `TURN fetch failure falls back to default STUN servers`() {
-        factory.fakeAPI.turnCredentialsResult =
-            Result.failure(RuntimeException("TURN fetch failed"))
-
+    fun `empty ICE server list falls back to default STUN servers`() {
+        factory.fakeProvider.enqueueIceServers(Result.success(emptyList()))
         factory.grantPermissionsAndStart()
         factory.openSignaling()
 
-        factory.simulateJoinedResponse(cid = "my-cid", turnToken = "bad-token")
+        factory.simulateJoinedResponse(cid = "my-cid")
 
         assertTrue("Default STUN servers should be applied", factory.fakeMedia.iceServersSet)
+    }
+
+    @Test
+    fun `iceServersChanged updates existing and future peer slots`() {
+        factory.fakeProvider.enqueueIceServers(
+            Result.success(
+                listOf(
+                    PeerConnection.IceServer.builder("turn:initial.example.com:3478")
+                        .setUsername("user")
+                        .setPassword("pass")
+                        .createIceServer()
+                )
+            )
+        )
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to 1L, "remote-a" to 2L),
+            hostCid = "my-cid",
+        )
+
+        val existingSlot = factory.fakeMedia.fakeSlots.getValue("remote-a")
+        assertTrue(existingSlot.appliedIceServerUrls.any { it == listOf("turn:initial.example.com:3478") })
+
+        factory.fakeProvider.simulateIceServersChanged(
+            listOf(
+                PeerConnection.IceServer.builder("turn:refreshed.example.com:3478")
+                    .setUsername("next-user")
+                    .setPassword("next-pass")
+                    .createIceServer()
+            )
+        )
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(
+            listOf("turn:refreshed.example.com:3478"),
+            existingSlot.appliedIceServerUrls.last()
+        )
+
+        factory.fakeProvider.simulatePeerJoined(peerId = "remote-b", joinedAt = 3L)
+        ShadowLooper.idleMainLooper()
+
+        val futureSlot = factory.fakeMedia.fakeSlots.getValue("remote-b")
+        assertEquals(
+            listOf("turn:refreshed.example.com:3478"),
+            futureSlot.appliedIceServerUrls.last()
+        )
     }
 
     // ── Join timeout ────────────────────────────────────────────────
@@ -242,8 +381,8 @@ class SerenadaSessionContractTest {
         factory.simulateJoinedResponse(cid = "my-cid")
         assertEquals(CallPhase.Waiting, factory.session.state.value.phase)
 
-        val connectCountBefore = factory.fakeSignaling.connectCalls.size
-        factory.fakeSignaling.simulateClosed(reason = "test-disconnect")
+        val connectCountBefore = factory.fakeProvider.connectCalls.size
+        factory.fakeProvider.simulateDisconnected(reason = "test-disconnect")
         ShadowLooper.idleMainLooper()
 
         // Advance past the base backoff
@@ -254,7 +393,7 @@ class SerenadaSessionContractTest {
 
         assertTrue(
             "Should reconnect after backoff",
-            factory.fakeSignaling.connectCalls.size > connectCountBefore
+            factory.fakeProvider.connectCalls.size > connectCountBefore
         )
     }
 
@@ -281,6 +420,6 @@ class SerenadaSessionContractTest {
         assertEquals(CallPhase.Joining, factory.session.state.value.phase)
         assertTrue("Media engine should start", factory.fakeMedia.startLocalMediaCalls > 0)
         assertTrue("Audio should be activated", factory.fakeAudio.activateCalls > 0)
-        assertTrue("Signaling should connect", factory.fakeSignaling.connectCalls.isNotEmpty())
+        assertTrue("Provider should connect", factory.fakeProvider.connectCalls.isNotEmpty())
     }
 }

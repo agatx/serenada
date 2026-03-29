@@ -37,6 +37,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
     override fun setIceServers(servers: List<PeerConnection.IceServer>) {
         _iceServers = servers
         iceServersSet = true
+        fakeSlots.values.forEach { it.setIceServers(servers) }
     }
 
     override fun hasIceServers(): Boolean = _iceServers != null
@@ -58,6 +59,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
             onSignalingStateChange = onSignalingStateChange,
         )
         fakeSlots[remoteCid] = slot
+        _iceServers?.let(slot::setIceServers)
         return slot
     }
 

@@ -23,7 +23,7 @@ public final class RoomWatcher {
     /// Delegate notified when room occupancy changes.
     public weak var delegate: RoomWatcherDelegate?
 
-    private let signalingClient: SignalingClient
+    private let signalingClient: SessionSignaling
     private var watchedRoomIds: [String] = []
     private var statuses: [String: RoomOccupancy] = [:]
     private var reconnectAttempts = 0
@@ -35,14 +35,25 @@ public final class RoomWatcher {
         self.signalingClient.listener = self
     }
 
+    internal init(signalingClient: SessionSignaling) {
+        self.signalingClient = signalingClient
+        self.signalingClient.listener = self
+    }
+
     /// Current occupancy statuses keyed by room ID.
     public var currentStatuses: [String: RoomOccupancy] {
         statuses
     }
 
     /// Start watching the given room IDs for occupancy changes.
-    public func watchRooms(roomIds: [String], host: String) {
-        self.host = host
+    public func watchRooms(roomIds: [String], host: String?) throws {
+        guard let resolvedHost = host?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty else {
+            throw APIError.invalidResponse("requires serverHost")
+        }
+        let hostChanged = self.host?.caseInsensitiveCompare(resolvedHost) != .orderedSame && self.host != nil
+        self.host = resolvedHost
         watchedRoomIds = roomIds
 
         let watchedSet = Set(watchedRoomIds)
@@ -50,6 +61,10 @@ public final class RoomWatcher {
 
         reconnectTask?.cancel()
         reconnectTask = nil
+
+        if hostChanged {
+            signalingClient.close()
+        }
 
         guard !watchedRoomIds.isEmpty else {
             if signalingClient.isConnected() {
@@ -61,7 +76,7 @@ public final class RoomWatcher {
         if signalingClient.isConnected() {
             sendWatchRooms()
         } else {
-            signalingClient.connect(host: host)
+            signalingClient.connect(host: resolvedHost)
         }
     }
 

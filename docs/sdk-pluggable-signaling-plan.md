@@ -1,7 +1,9 @@
 # SDK Pluggable Signaling Plan
 
-**Status:** Draft
+**Status:** Implemented
 **Date:** 2026-03-26
+
+Implementation landed across web, Android, and iOS on 2026-03-28. Final verification history is tracked in `docs/sdk-pluggable-signaling-execution-plan.md`.
 
 ## Goal
 
@@ -233,7 +235,7 @@ interface PeerMessage {
 }
 
 interface RoomEndedEvent {
-  by: string
+  by?: string
   reason: string
 }
 

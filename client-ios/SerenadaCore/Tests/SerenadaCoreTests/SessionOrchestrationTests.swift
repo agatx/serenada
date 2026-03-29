@@ -15,6 +15,30 @@ final class SessionOrchestrationTests: XCTestCase {
         harness = nil
     }
 
+    private func waitForIceServersSet(
+        attempts: Int = 8
+    ) async {
+        for _ in 0..<attempts {
+            if harness.fakeMedia.iceServersSet {
+                return
+            }
+            await harness.fakeClock.advance(byMs: 10)
+            await harness.yieldToMainActor()
+        }
+    }
+
+    private func waitUntil(
+        attempts: Int = 8,
+        condition: @escaping () -> Bool
+    ) async {
+        for _ in 0..<attempts {
+            if condition() {
+                return
+            }
+            await harness.yieldToMainActor()
+        }
+    }
+
     // MARK: - Test 1: Permission Gating
 
     func testPermissionGating() async {
@@ -35,7 +59,7 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertEqual(harness.session.state.phase, .joining)
         XCTAssertTrue(harness.fakeMedia.startLocalMediaCalls.count > 0, "Media engine should be started")
         XCTAssertTrue(harness.fakeAudio.activateCalls > 0, "Audio session should be activated")
-        XCTAssertTrue(harness.fakeSignaling.connectCalls.count > 0, "Signaling should connect")
+        XCTAssertGreaterThan(harness.fakeProvider.connectCalls, 0, "Provider should connect")
     }
 
     // MARK: - Test 2: Join -> Joined -> Waiting
@@ -44,9 +68,8 @@ final class SessionOrchestrationTests: XCTestCase {
         await harness.advancePastPermissions()
 
         harness.openSignaling()
-        // After open, a "join" message should have been sent (pending join room)
-        let joinMessages = harness.fakeSignaling.sentMessages(ofType: "join")
-        XCTAssertFalse(joinMessages.isEmpty, "Should send join message after signaling opens")
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.fakeProvider.joinCalls.first?.roomId, harness.session.roomId)
 
         // Simulate joined response with single participant (only self)
         harness.simulateJoinedResponse(cid: "my-cid")
@@ -54,6 +77,21 @@ final class SessionOrchestrationTests: XCTestCase {
 
         XCTAssertEqual(harness.session.state.phase, .waiting)
         XCTAssertEqual(harness.session.state.localParticipant.cid, "my-cid")
+    }
+
+    func testJoinJoinedWithoutHostPeerIdFallsBackToLocalHost() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+
+        harness.fakeProvider.simulateJoinedWithoutHost(
+            peerId: "my-cid",
+            participants: [SignalingProviderParticipant(peerId: "my-cid", joinedAt: 1)]
+        )
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.phase, .waiting)
+        XCTAssertEqual(harness.session.state.localParticipant.cid, "my-cid")
+        XCTAssertTrue(harness.session.state.localParticipant.isHost)
     }
 
     // MARK: - Test 3: Join -> Joined -> InCall
@@ -92,7 +130,7 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertNotNil(harness.session.state.error)
         // Resources should be cleaned up
         XCTAssertTrue(harness.fakeMedia.releaseCalls > 0, "Engine should be released on error")
-        XCTAssertTrue(harness.fakeSignaling.closeCalls > 0, "Signaling should be closed on error")
+        XCTAssertGreaterThan(harness.fakeProvider.disconnectCalls, 0, "Provider should be disconnected on error")
     }
 
     // MARK: - Test 5: Room State Update
@@ -120,6 +158,27 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertEqual(harness.session.state.remoteParticipants.count, 1)
     }
 
+    func testIncrementalPeerJoinAndLeaveWorkWithoutRoomStateSnapshots() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+
+        harness.simulateJoinedResponse(cid: "my-cid")
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .waiting)
+
+        harness.fakeProvider.simulatePeerJoined(peerId: "remote-cid", joinedAt: 2)
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.phase, .inCall)
+        XCTAssertEqual(harness.session.state.remoteParticipants.map(\.cid), ["remote-cid"])
+
+        harness.fakeProvider.simulatePeerLeft(peerId: "remote-cid", joinedAt: 2)
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.phase, .waiting)
+        XCTAssertTrue(harness.session.state.remoteParticipants.isEmpty)
+    }
+
     // MARK: - Test 6: Reconnect on Close
 
     func testReconnectOnClose() async {
@@ -131,7 +190,7 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertEqual(harness.session.state.phase, .waiting)
 
         // Signaling closes while in waiting state
-        harness.fakeSignaling.simulateClosed(reason: "connection lost")
+        harness.fakeProvider.simulateDisconnected(reason: "connection lost")
         await harness.yieldToMainActor()
 
         // Session should NOT go to idle -- it should remain in waiting and try to reconnect
@@ -163,12 +222,10 @@ final class SessionOrchestrationTests: XCTestCase {
         harness.session.leave()
         await harness.yieldToMainActor()
 
-        // "leave" message should have been sent
-        let leaveMessages = harness.fakeSignaling.sentMessages(ofType: "leave")
-        XCTAssertFalse(leaveMessages.isEmpty, "Should send leave message")
+        XCTAssertEqual(harness.fakeProvider.leaveCalls, 1, "Should send leave via provider")
 
         XCTAssertEqual(harness.session.state.phase, .idle)
-        XCTAssertTrue(harness.fakeSignaling.closeCalls > 0, "Signaling should be closed")
+        XCTAssertTrue(harness.fakeProvider.disconnectCalls > 0, "Provider should be disconnected")
         XCTAssertTrue(harness.fakeMedia.releaseCalls > releaseBefore, "Engine should be released")
         XCTAssertTrue(harness.fakeAudio.deactivateCalls > deactivateBefore, "Audio should be deactivated")
     }
@@ -185,48 +242,107 @@ final class SessionOrchestrationTests: XCTestCase {
         harness.session.end()
         await harness.yieldToMainActor()
 
-        let endMessages = harness.fakeSignaling.sentMessages(ofType: "end_room")
-        XCTAssertFalse(endMessages.isEmpty, "Should send end_room message")
+        XCTAssertEqual(harness.fakeProvider.endCalls, 1, "Should send end_room via provider")
         XCTAssertEqual(harness.session.state.phase, .idle)
     }
 
-    // MARK: - Test 9: TURN Credential Fetch
+    // MARK: - Test 9: ICE Server Fetch
 
-    func testTurnCredentialFetch() async {
+    func testIceServerFetch() async {
+        harness.fakeProvider.iceServerResults = [
+            .success([IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")])
+        ]
         await harness.advancePastPermissions()
         harness.openSignaling()
 
-        // Simulate joined with a TURN token
-        harness.simulateJoinedResponse(cid: "my-cid", turnToken: "test-turn-token")
+        harness.simulateJoinedResponse(cid: "my-cid")
         await harness.yieldToMainActor()
-        // Give async TURN fetch time to complete
+        await harness.fakeClock.advance(byMs: 100)
         await harness.yieldToMainActor()
-        // Advance clock past TURN fetch timeout
-        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.turnFetchTimeoutMs) + 100)
+        await waitForIceServersSet()
 
-        XCTAssertFalse(harness.fakeAPI.fetchTurnCredentialsCalls.isEmpty, "Should fetch TURN credentials")
-        let call = harness.fakeAPI.fetchTurnCredentialsCalls.first
-        XCTAssertEqual(call?.token, "test-turn-token")
+        XCTAssertEqual(harness.fakeProvider.getIceServersCallCount, 1, "Should fetch ICE servers from provider")
         XCTAssertTrue(harness.fakeMedia.iceServersSet, "ICE servers should be set on engine")
     }
 
-    // MARK: - Test 10: TURN Credential Failure
+    // MARK: - Test 10: Empty ICE Server List Falls Back To STUN
 
-    func testTurnCredentialFailure() async {
-        harness.fakeAPI.turnCredentialsResult = .failure(NSError(domain: "test", code: -1))
+    func testEmptyIceServerListFallsBackToDefaultStun() async {
+        harness.fakeProvider.iceServerResults = [.success([])]
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+        harness.simulateJoinedResponse(cid: "my-cid")
+        await harness.yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 100)
+        await harness.yieldToMainActor()
+        await waitForIceServersSet()
+        XCTAssertTrue(harness.fakeMedia.iceServersSet, "Default STUN servers should be applied when provider returns []")
+    }
 
+    func testIceServersChangedUpdatesExistingAndFuturePeerSlots() async {
+        harness.fakeProvider.iceServerResults = [
+            .success([IceServerConfig(urls: ["turn:initial.example.com:3478"], username: "user", credential: "pass")])
+        ]
         await harness.advancePastPermissions()
         harness.openSignaling()
 
-        harness.simulateJoinedResponse(cid: "my-cid", turnToken: "bad-token")
+        harness.simulateJoinedResponse(
+            cid: "my-cid",
+            participants: [
+                (cid: "my-cid", joinedAt: 1),
+                (cid: "remote-a", joinedAt: 2)
+            ],
+            hostCid: "my-cid"
+        )
         await harness.yieldToMainActor()
-        // Advance clock past TURN fetch timeout
-        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.turnFetchTimeoutMs) + 100)
+        await harness.fakeClock.advance(byMs: 100)
+        await harness.yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 100)
+        await harness.yieldToMainActor()
 
-        // Even on TURN failure, default STUN servers should be applied
-        // (the session calls applyDefaultIceServers() first in ensureIceSetupIfNeeded,
-        // then tries TURN asynchronously; TURN failure shouldn't prevent ICE setup)
-        XCTAssertTrue(harness.fakeMedia.iceServersSet, "Default STUN servers should be applied")
+        let existingSlot = harness.fakeMedia.fakeSlots["remote-a"]
+        XCTAssertEqual(existingSlot?.appliedIceServerUrls.last, ["turn:initial.example.com:3478"])
+
+        harness.fakeProvider.simulateIceServersChanged([
+            IceServerConfig(urls: ["turn:refreshed.example.com:3478"], username: "next-user", credential: "next-pass")
+        ])
+        await harness.yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 100)
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(existingSlot?.appliedIceServerUrls.last, ["turn:refreshed.example.com:3478"])
+
+        harness.fakeProvider.simulatePeerJoined(peerId: "remote-b", joinedAt: 3)
+        await harness.yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 100)
+        await harness.yieldToMainActor()
+
+        let futureSlot = harness.fakeMedia.fakeSlots["remote-b"]
+        XCTAssertEqual(futureSlot?.appliedIceServerUrls.last, ["turn:refreshed.example.com:3478"])
+    }
+
+    // MARK: - Test 11: ICE Server Retry Exhaustion
+
+    func testIceServerRetryExhaustionTransitionsToError() async {
+        harness.fakeProvider.iceServerResults = [
+            .failure(NSError(domain: "test", code: 1)),
+            .failure(NSError(domain: "test", code: 2)),
+            .failure(NSError(domain: "test", code: 3)),
+            .failure(NSError(domain: "test", code: 4))
+        ]
+
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+        harness.simulateJoinedResponse(cid: "my-cid")
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 10_000)
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.phase, .error)
+        XCTAssertNotNil(harness.session.state.error)
     }
 
     // MARK: - Timer Tests (via FakeSessionClock)
@@ -248,12 +364,12 @@ final class SessionOrchestrationTests: XCTestCase {
         // After advancePastPermissions, signaling connect is already triggered.
         // The kickstart timer should be a no-op (hasJoinSignalStarted is already true).
         await harness.advancePastPermissions()
-        let connectCallsBefore = harness.fakeSignaling.connectCalls.count
+        let connectCallsBefore = harness.fakeProvider.connectCalls
 
         // Advance past kickstart delay — should NOT trigger another connect
         await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.joinConnectKickstartMs))
 
-        XCTAssertEqual(harness.fakeSignaling.connectCalls.count, connectCallsBefore,
+        XCTAssertEqual(harness.fakeProvider.connectCalls, connectCallsBefore,
                         "Kickstart should be no-op since signaling already started")
     }
 
@@ -278,20 +394,68 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertEqual(harness.session.state.phase, .waiting)
 
         // Close signaling to trigger reconnect
-        harness.fakeSignaling.simulateClosed(reason: "test")
+        harness.fakeProvider.simulateDisconnected(reason: "test")
+        await harness.yieldToMainActor()
         await harness.yieldToMainActor()
 
-        let connectCallsBefore = harness.fakeSignaling.connectCalls.count
+        let connectCallsBefore = harness.fakeProvider.connectCalls
 
         // Before backoff elapses, should NOT reconnect
         await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.reconnectBackoffBaseMs) - 1)
-        XCTAssertEqual(harness.fakeSignaling.connectCalls.count, connectCallsBefore,
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.fakeProvider.connectCalls, connectCallsBefore,
                         "Should not reconnect before backoff")
 
         // After backoff elapses, should reconnect
         await harness.fakeClock.advance(byMs: 2)
-        XCTAssertTrue(harness.fakeSignaling.connectCalls.count > connectCallsBefore,
+        await harness.yieldToMainActor()
+        XCTAssertTrue(harness.fakeProvider.connectCalls > connectCallsBefore,
                        "Should reconnect after backoff")
+    }
+
+    func testReconnectWithoutProviderManagedReconnectionRejoinsWithReconnectPeerId() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+        harness.simulateJoinedResponse(cid: "my-cid")
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .waiting)
+
+        harness.fakeProvider.simulateDisconnected(reason: "connection lost")
+        await harness.yieldToMainActor()
+        await waitUntil { [self] in
+            harness.fakeClock.pendingSleepCount > 0
+        }
+
+        let connectCallsBefore = harness.fakeProvider.connectCalls
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.reconnectBackoffBaseMs) - 1)
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.fakeProvider.connectCalls, connectCallsBefore)
+
+        await harness.fakeClock.advance(byMs: 2)
+        await harness.yieldToMainActor()
+        XCTAssertGreaterThan(harness.fakeProvider.connectCalls, connectCallsBefore)
+
+        harness.fakeProvider.simulateConnected()
+        await waitUntil { [self] in
+            harness.fakeProvider.joinCalls.count > 1
+        }
+
+        XCTAssertEqual(harness.fakeProvider.joinCalls.last?.options.reconnectPeerId, "my-cid")
+    }
+
+    func testRoomEndedTransitionsSessionToEndingAndClearsRemoteState() async {
+        await harness.advanceToInCallWithTurn(
+            localCid: "my-cid",
+            remoteCid: "remote-cid",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        harness.fakeProvider.simulateRoomEnded(by: "remote-cid", reason: "host ended")
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.phase, .ending)
+        XCTAssertTrue(harness.session.state.remoteParticipants.isEmpty)
     }
 
     func testConnectionStatusRetryingDelay() async {
@@ -309,13 +473,15 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertEqual(harness.session.state.phase, .inCall)
 
         // Close signaling while in-call to trigger connection degraded
-        harness.fakeSignaling.simulateClosed(reason: "test")
+        harness.fakeProvider.simulateDisconnected(reason: "test")
+        await harness.yieldToMainActor()
         await harness.yieldToMainActor()
 
         XCTAssertEqual(harness.session.state.connectionStatus, .recovering)
 
         // Advance past the 10-second retrying delay
         await harness.fakeClock.advance(byMs: 10_000)
+        await harness.yieldToMainActor()
 
         XCTAssertEqual(harness.session.state.connectionStatus, .retrying)
     }

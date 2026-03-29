@@ -4,7 +4,7 @@ import Foundation
 @MainActor
 final class SessionTestHarness {
     let session: SerenadaSession
-    let fakeSignaling: FakeSignaling
+    let fakeProvider: FakeSignalingProvider
     let fakeAPI: FakeAPIClient
     let fakeAudio: FakeAudioController
     let fakeMedia: FakeMediaEngine
@@ -12,11 +12,11 @@ final class SessionTestHarness {
 
     init(
         roomId: String = "test-room-id",
-        serverHost: String = "test.serenada.app",
+        handlesReconnection: Bool = false,
         config: SerenadaConfig? = nil
     ) {
-        let resolvedConfig = config ?? SerenadaConfig(serverHost: serverHost)
-        self.fakeSignaling = FakeSignaling()
+        self.fakeProvider = FakeSignalingProvider(handlesReconnection: handlesReconnection)
+        let resolvedConfig = config ?? SerenadaConfig(signalingProvider: fakeProvider)
         self.fakeAPI = FakeAPIClient()
         self.fakeAudio = FakeAudioController()
         self.fakeMedia = FakeMediaEngine()
@@ -24,9 +24,8 @@ final class SessionTestHarness {
 
         self.session = SerenadaSession(
             roomId: roomId,
-            serverHost: serverHost,
             config: resolvedConfig,
-            signaling: fakeSignaling,
+            initialSignalingProvider: fakeProvider,
             apiClient: fakeAPI,
             audioController: fakeAudio,
             mediaEngine: fakeMedia,
@@ -45,85 +44,42 @@ final class SessionTestHarness {
     }
 
     func openSignaling(transport: String = "ws") {
-        fakeSignaling.simulateOpen(transport: transport)
+        fakeProvider.simulateConnected(transport: transport)
     }
 
     func simulateJoinedResponse(
         cid: String = "local-cid-1",
         participants: [(cid: String, joinedAt: Int)] = [],
-        hostCid: String? = nil,
-        turnToken: String? = nil
+        hostCid: String? = nil
     ) {
-        var payloadDict: [String: JSONValue] = [:]
-
         let resolvedHost = hostCid ?? cid
-        payloadDict["hostCid"] = .string(resolvedHost)
-
-        var participantList: [JSONValue] = []
-        if participants.isEmpty {
-            participantList.append(.object([
-                "cid": .string(cid),
-                "joinedAt": .number(1)
-            ]))
-        } else {
-            for p in participants {
-                participantList.append(.object([
-                    "cid": .string(p.cid),
-                    "joinedAt": .number(Double(p.joinedAt))
-                ]))
-            }
-        }
-        payloadDict["participants"] = .array(participantList)
-
-        if let turnToken {
-            payloadDict["turnToken"] = .string(turnToken)
-        }
-
-        let msg = SignalingMessage(
-            type: "joined",
-            rid: session.roomId,
-            cid: cid,
-            payload: .object(payloadDict)
+        let participantList = participants.isEmpty
+            ? [SignalingProviderParticipant(peerId: cid, joinedAt: 1)]
+            : participants.map { SignalingProviderParticipant(peerId: $0.cid, joinedAt: Int64($0.joinedAt)) }
+        fakeProvider.simulateJoined(
+            peerId: cid,
+            participants: participantList,
+            hostPeerId: resolvedHost
         )
-        fakeSignaling.simulateMessage(msg)
     }
 
     func simulateRoomState(
         participants: [(cid: String, joinedAt: Int)],
         hostCid: String
     ) {
-        var participantList: [JSONValue] = []
-        for p in participants {
-            participantList.append(.object([
-                "cid": .string(p.cid),
-                "joinedAt": .number(Double(p.joinedAt))
-            ]))
-        }
-
-        let msg = SignalingMessage(
-            type: "room_state",
-            rid: session.roomId,
-            payload: .object([
-                "hostCid": .string(hostCid),
-                "participants": .array(participantList)
-            ])
+        fakeProvider.simulateRoomState(
+            participants: participants.map { SignalingProviderParticipant(peerId: $0.cid, joinedAt: Int64($0.joinedAt)) },
+            hostPeerId: hostCid
         )
-        fakeSignaling.simulateMessage(msg)
     }
 
     func simulateError(code: String, message: String) {
-        let msg = SignalingMessage(
-            type: "error",
-            rid: session.roomId,
-            payload: .object([
-                "code": .string(code),
-                "message": .string(message)
-            ])
-        )
-        fakeSignaling.simulateMessage(msg)
+        fakeProvider.simulateError(code: code, message: message)
     }
 
     func yieldToMainActor() async {
+        await Task.yield()
+        await Task.yield()
         await Task.yield()
         await Task.yield()
     }
@@ -136,8 +92,9 @@ final class SessionTestHarness {
         remoteCid: String = "remote-cid-1",
         localJoinedAt: Int = 1,
         remoteJoinedAt: Int = 2,
-        turnToken: String = "test-turn-token"
+        iceServers: [IceServerConfig] = [IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")]
     ) async {
+        fakeProvider.iceServerResults = [.success(iceServers)]
         await advancePastPermissions()
         openSignaling()
         simulateJoinedResponse(
@@ -146,37 +103,33 @@ final class SessionTestHarness {
                 (cid: localCid, joinedAt: localJoinedAt),
                 (cid: remoteCid, joinedAt: remoteJoinedAt)
             ],
-            hostCid: localCid,
-            turnToken: turnToken
+            hostCid: localCid
         )
         await yieldToMainActor()
-        // Advance clock past TURN fetch timeout to let async TURN fetch complete
-        await fakeClock.advance(byMs: Int64(WebRtcResilience.turnFetchTimeoutMs) + 100)
+        await fakeClock.advance(byMs: 100)
         await yieldToMainActor()
     }
 
     func simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp") {
-        let msg = SignalingMessage(
+        fakeProvider.simulateMessage(
+            from: fromCid,
             type: "offer",
-            rid: session.roomId,
-            payload: .object([
+            payload: [
                 "from": .string(fromCid),
                 "sdp": .string(sdp)
-            ])
+            ]
         )
-        fakeSignaling.simulateMessage(msg)
     }
 
     func simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp") {
-        let msg = SignalingMessage(
+        fakeProvider.simulateMessage(
+            from: fromCid,
             type: "answer",
-            rid: session.roomId,
-            payload: .object([
+            payload: [
                 "from": .string(fromCid),
                 "sdp": .string(sdp)
-            ])
+            ]
         )
-        fakeSignaling.simulateMessage(msg)
     }
 
     func simulateIceCandidateFromRemote(
@@ -185,19 +138,18 @@ final class SessionTestHarness {
         sdpMid: String = "0",
         sdpMLineIndex: Int = 0
     ) {
-        let msg = SignalingMessage(
+        fakeProvider.simulateMessage(
+            from: fromCid,
             type: "ice",
-            rid: session.roomId,
-            payload: .object([
+            payload: [
                 "from": .string(fromCid),
                 "candidate": .object([
                     "candidate": .string(candidate),
                     "sdpMid": .string(sdpMid),
                     "sdpMLineIndex": .number(Double(sdpMLineIndex))
                 ])
-            ])
+            ]
         )
-        fakeSignaling.simulateMessage(msg)
     }
 
     func tearDown() {

@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Network
 #if canImport(WebRTC)
 import WebRTC
 #endif
@@ -85,6 +86,19 @@ public struct IceProbeReport: Equatable {
     }
 }
 
+private final class LockedContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didResume else { return false }
+        didResume = true
+        return true
+    }
+}
+
 // MARK: - SerenadaDiagnostics
 
 /// Pre-flight diagnostics utility. Checks device capabilities and server connectivity.
@@ -92,10 +106,16 @@ public struct IceProbeReport: Equatable {
 public final class SerenadaDiagnostics {
     private let config: SerenadaConfig
     private let apiClient: CoreAPIClient
+    private let resolvedConfig: ResolvedSerenadaConfig
 
     public init(config: SerenadaConfig) {
         self.config = config
         self.apiClient = CoreAPIClient()
+        do {
+            self.resolvedConfig = try resolveSerenadaConfig(config)
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
         #if canImport(WebRTC)
         // Eagerly warm up the shared RTCPeerConnectionFactory so its network
         // thread is ready by the time the user runs an ICE probe.
@@ -113,7 +133,9 @@ public final class SerenadaDiagnostics {
             report.microphone = checkMicrophoneSync()
             report.speaker = checkSpeakerSync()
             report.network = await checkNetworkAsync()
-            report.signaling = await checkSignalingAsync()
+            report.signaling = resolvedConfig.serverHost == nil
+                ? .skipped(reason: "requires serverHost")
+                : await checkSignalingAsync()
             report.turn = await checkTurnAsync()
             report.devices = enumerateDevices()
             completion(report)
@@ -121,41 +143,84 @@ public final class SerenadaDiagnostics {
     }
 
     /// Test server connectivity (room API, WebSocket, SSE, TURN credentials).
-    public func runConnectivityChecks() async -> ConnectivityReport {
+    ///
+    /// - Throws: An error when `serverHost` is unavailable or a required
+    ///   connectivity probe cannot be executed.
+    public func runConnectivityChecks() async throws -> ConnectivityReport {
+        guard let serverHost = resolvedConfig.serverHost else {
+            throw APIError.invalidResponse("requires serverHost")
+        }
         var report = ConnectivityReport()
-        // Fetch the diagnostic token once and reuse it for the TURN credentials check.
+        // Run independent probes concurrently. The diagnostic-token result is
+        // reused for the TURN credentials check that follows.
         var tokenForTurn: String?
-        report.roomApi = await runTimedCheck { try await self.apiClient.createRoomId(host: self.config.serverHost); return }
-        report.webSocket = await runTimedCheck { try await self.testWebSocket() }
-        report.sse = await runTimedCheck { try await self.testSse() }
-        report.diagnosticToken = await runTimedCheck { tokenForTurn = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost) }
+        async let roomApiResult = runTimedCheck {
+            _ = try await self.apiClient.createRoomId(host: serverHost)
+        }
+        async let webSocketResult = runTimedCheck { try await self.testWebSocket(host: serverHost) }
+        async let sseResult = runTimedCheck { try await self.testSse(host: serverHost) }
+        async let diagnosticTokenResult: (CheckOutcome, String?) = {
+            var token: String?
+            let outcome = await runTimedCheck { token = try await self.apiClient.fetchDiagnosticToken(host: serverHost) }
+            return (outcome, token)
+        }()
+
+        report.roomApi = await roomApiResult
+        report.webSocket = await webSocketResult
+        report.sse = await sseResult
+        let (dtOutcome, dtToken) = await diagnosticTokenResult
+        report.diagnosticToken = dtOutcome
+        tokenForTurn = dtToken
+
         report.turnCredentials = await runTimedCheck {
             let resolvedToken: String
             if let existing = tokenForTurn {
                 resolvedToken = existing
             } else {
-                resolvedToken = try await self.apiClient.fetchDiagnosticToken(host: self.config.serverHost)
+                resolvedToken = try await self.apiClient.fetchDiagnosticToken(host: serverHost)
             }
-            _ = try await self.apiClient.fetchTurnCredentials(host: self.config.serverHost, token: resolvedToken)
+            _ = try await self.apiClient.fetchTurnCredentials(host: serverHost, token: resolvedToken)
         }
         return report
     }
 
-    /// Probe ICE connectivity by gathering candidates against the configured TURN server.
-    public func runIceProbe(turnsOnly: Bool, onCandidateLog: ((String) -> Void)? = nil) async -> IceProbeReport {
+    /// Probe ICE connectivity by gathering candidates against the configured TURN server or provider ICE source.
+    public func runTurnProbe(turnsOnly: Bool, onCandidateLog: ((String) -> Void)? = nil) async -> IceProbeReport {
         do {
-            let token = try await apiClient.fetchDiagnosticToken(host: config.serverHost)
-            let credentials = try await apiClient.fetchTurnCredentials(host: config.serverHost, token: token)
-            let urls = turnsOnly ? credentials.uris.filter { $0.lowercased().hasPrefix("turns:") } : credentials.uris
-            return await gatherIceCandidates(urls: urls, username: credentials.username, credential: credentials.password, onCandidateLog: onCandidateLog)
+            let iceServers = try await resolveIceServers()
+            let filteredServers = iceServers.compactMap { server -> IceServerConfig? in
+                let urls = turnsOnly
+                    ? server.urls.filter { $0.lowercased().hasPrefix("turns:") }
+                    : server.urls
+                return urls.isEmpty ? nil : IceServerConfig(urls: urls, username: server.username, credential: server.credential)
+            }
+            guard !filteredServers.isEmpty else {
+                return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["No ICE servers"])
+            }
+            return await gatherIceCandidates(
+                iceServers: filteredServers,
+                onCandidateLog: onCandidateLog
+            )
         } catch {
             return IceProbeReport(stunPassed: false, turnPassed: false, logs: [error.localizedDescription])
         }
     }
 
+    /// Probe ICE connectivity (STUN/TURN) by gathering candidates with a real peer connection.
+    @available(*, deprecated, message: "Use runTurnProbe(turnsOnly:onCandidateLog:) instead.")
+    public func runIceProbe(turnsOnly: Bool, onCandidateLog: ((String) -> Void)? = nil) async -> IceProbeReport {
+        await runTurnProbe(turnsOnly: turnsOnly, onCandidateLog: onCandidateLog)
+    }
+
     /// Validate that the configured server host is reachable.
-    public func validateServerHost() async throws {
-        try await apiClient.validateServerHost(config.serverHost)
+    public func validateServerHost(host: String? = nil) async throws {
+        let normalizedHost = host?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        guard let resolvedHost = normalizedHost ?? resolvedConfig.serverHost else {
+            throw APIError.invalidResponse("requires serverHost")
+        }
+        try await apiClient.validateServerHost(resolvedHost)
     }
 
     // MARK: - Individual checks
@@ -205,8 +270,8 @@ public final class SerenadaDiagnostics {
 
     // MARK: - WebSocket / SSE tests
 
-    private func testWebSocket() async throws {
-        guard let parsed = EndpointHostParser.splitHostAndPort(from: config.serverHost) else {
+    private func testWebSocket(host: String) async throws {
+        guard let parsed = EndpointHostParser.splitHostAndPort(from: host) else {
             throw APIError.invalidHost
         }
         var components = URLComponents()
@@ -222,8 +287,8 @@ public final class SerenadaDiagnostics {
         task.cancel(with: .goingAway, reason: nil)
     }
 
-    private func testSse() async throws {
-        guard let parsed = EndpointHostParser.splitHostAndPort(from: config.serverHost) else {
+    private func testSse(host: String) async throws {
+        guard let parsed = EndpointHostParser.splitHostAndPort(from: host) else {
             throw APIError.invalidHost
         }
         let sid = "diag-\(UUID().uuidString)"
@@ -263,20 +328,20 @@ public final class SerenadaDiagnostics {
 
     // MARK: - ICE probing
 
-    private func gatherIceCandidates(urls: [String], username: String, credential: String, onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
+    private func gatherIceCandidates(iceServers: [IceServerConfig], onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
 #if canImport(WebRTC)
-        guard !urls.isEmpty else {
+        guard !iceServers.isEmpty else {
             return IceProbeReport(stunPassed: false, turnPassed: false, logs: ["No ICE servers"])
         }
         let probe = IceGatheringProbe()
-        var report = await probe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
+        var report = await probe.run(iceServers: iceServers, onCandidateLog: onCandidateLog)
         // Zero candidates (not even host) means the NetworkMonitor hadn't
         // enumerated interfaces yet — a transient race after the previous
         // PeerConnection was torn down.  Retry once; the monitor will be ready.
         if report.logs.isEmpty {
             onCandidateLog?("Zero candidates gathered — retrying (NetworkMonitor race)...")
             let retryProbe = IceGatheringProbe()
-            report = await retryProbe.run(urls: urls, username: username, credential: credential, onCandidateLog: onCandidateLog)
+            report = await retryProbe.run(iceServers: iceServers, onCandidateLog: onCandidateLog)
         }
         return report
 #else
@@ -320,26 +385,28 @@ public final class SerenadaDiagnostics {
     }
 
     private func checkNetworkAsync() async -> DiagnosticCheckResult {
-        guard let url = apiClient.buildHTTPSURL(host: config.serverHost, path: "/api/room-id") else {
-            return .unavailable(reason: "Invalid server host")
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 5
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
-                return .available
+        await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            let queue = DispatchQueue(label: "SerenadaDiagnostics.Network")
+            let gate = LockedContinuationGate()
+            monitor.pathUpdateHandler = { path in
+                guard gate.claim() else { return }
+                let result: DiagnosticCheckResult = path.status == .satisfied
+                    ? .available
+                    : .unavailable(reason: "No network connection")
+                continuation.resume(returning: result)
+                monitor.cancel()
             }
-            return .unavailable(reason: "Server unreachable")
-        } catch {
-            return .unavailable(reason: error.localizedDescription)
+            monitor.start(queue: queue)
         }
     }
 
     private func checkSignalingAsync() async -> SignalingCheckResult {
+        guard let serverHost = resolvedConfig.serverHost else {
+            return .skipped(reason: "requires serverHost")
+        }
         do {
-            try await apiClient.validateServerHost(config.serverHost)
+            try await apiClient.validateServerHost(serverHost)
             return .connected(transport: "https")
         } catch {
             return .failed(reason: error.localizedDescription)
@@ -347,7 +414,21 @@ public final class SerenadaDiagnostics {
     }
 
     private func checkTurnAsync() async -> TurnCheckResult {
-        guard let url = apiClient.buildHTTPSURL(host: config.serverHost, path: "/api/turn-credentials") else {
+        if resolvedConfig.serverHost == nil {
+            let start = CFAbsoluteTimeGetCurrent()
+            do {
+                guard let signalingProvider = resolvedConfig.signalingProvider else {
+                    return .unreachable(reason: "Provide exactly one of serverHost or signalingProvider")
+                }
+                _ = try await signalingProvider.getIceServers()
+                let latencyMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+                return .reachable(latencyMs: latencyMs)
+            } catch {
+                return .unreachable(reason: error.localizedDescription)
+            }
+        }
+        guard let serverHost = resolvedConfig.serverHost,
+              let url = apiClient.buildHTTPSURL(host: serverHost, path: "/api/turn-credentials") else {
             return .unreachable(reason: "Invalid server host")
         }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -369,6 +450,24 @@ public final class SerenadaDiagnostics {
         } catch {
             return .unreachable(reason: error.localizedDescription)
         }
+    }
+
+    private func resolveIceServers() async throws -> [IceServerConfig] {
+        if let serverHost = resolvedConfig.serverHost {
+            let token = try await apiClient.fetchDiagnosticToken(host: serverHost)
+            let credentials = try await apiClient.fetchTurnCredentials(host: serverHost, token: token)
+            return [
+                IceServerConfig(
+                    urls: credentials.uris,
+                    username: credentials.username,
+                    credential: credentials.password
+                )
+            ]
+        }
+        guard let signalingProvider = resolvedConfig.signalingProvider else {
+            throw APIError.invalidResponse("Provide exactly one of serverHost or signalingProvider")
+        }
+        return try await signalingProvider.getIceServers()
     }
 
     private func enumerateDevices() -> [DeviceInfo] {
@@ -425,24 +524,28 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
     private var finished = false
     private var onCandidateLog: ((String) -> Void)?
 
-    func run(urls: [String], username: String, credential: String, onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
+    func run(iceServers: [IceServerConfig], onCandidateLog: ((String) -> Void)?) async -> IceProbeReport {
         self.onCandidateLog = onCandidateLog
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
-            self.start(urls: urls, username: username, credential: credential)
+            Task { @MainActor [weak self] in
+                await self?.start(iceServers: iceServers)
+            }
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
-                await self?.finish()
+                self?.finish()
             }
         }
     }
 
-    private func start(urls: [String], username: String, credential: String) {
+    private func start(iceServers: [IceServerConfig]) async {
         Self.warmUpFactory()
         let factory = Self.sharedFactory!
 
         let config = RTCConfiguration()
-        config.iceServers = [RTCIceServer(urlStrings: urls, username: username, credential: credential)]
+        config.iceServers = iceServers.map {
+            RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
+        }
         config.sdpSemantics = .unifiedPlan
 
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
@@ -455,24 +558,17 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
         peerConnection = connection
         _ = connection.dataChannel(forLabel: "diag", configuration: RTCDataChannelConfiguration())
 
-        connection.offer(for: constraints) { [weak self] description, error in
-            guard let self else { return }
-            if let error {
-                self.logs.append("offer failed: \(error.localizedDescription)")
-                self.finish()
-                return
+        do {
+            let description = try await connection.offer(for: constraints)
+            do {
+                try await connection.setLocalDescription(description)
+            } catch {
+                logs.append("setLocalDescription failed: \(error.localizedDescription)")
+                finish()
             }
-            guard let description else {
-                self.logs.append("offer missing")
-                self.finish()
-                return
-            }
-            connection.setLocalDescription(description) { [weak self] setError in
-                if let setError {
-                    self?.logs.append("setLocalDescription failed: \(setError.localizedDescription)")
-                    self?.finish()
-                }
-            }
+        } catch {
+            logs.append("offer failed: \(error.localizedDescription)")
+            finish()
         }
     }
 
@@ -484,28 +580,35 @@ private final class IceGatheringProbe: NSObject, RTCPeerConnectionDelegate {
         continuation = nil
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        let sdp = candidate.sdp.lowercased()
-        if sdp.contains(" typ srflx") { hasSrflx = true }
-        if sdp.contains(" typ relay") { hasRelay = true }
-        logs.append(candidate.sdp)
-        onCandidateLog?(candidate.sdp)
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        let sdp = candidate.sdp
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let normalizedSdp = sdp.lowercased()
+            if normalizedSdp.contains(" typ srflx") { hasSrflx = true }
+            if normalizedSdp.contains(" typ relay") { hasRelay = true }
+            logs.append(sdp)
+            onCandidateLog?(sdp)
+        }
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
-        if newState == .complete { finish() }
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        guard newState == .complete else { return }
+        Task { @MainActor [weak self] in
+            self?.finish()
+        }
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
-    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+    nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
 }
 #endif

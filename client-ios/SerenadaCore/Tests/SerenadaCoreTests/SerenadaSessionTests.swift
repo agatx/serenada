@@ -32,13 +32,22 @@ final class SerenadaSessionTests: XCTestCase {
         let roomId = "YovflsGamCygX912gb26Jeaq8Es"
         let session = SerenadaSession(
             roomId: roomId,
-            serverHost: "serenada.app",
             config: SerenadaConfig(serverHost: "serenada.app")
         )
 
         XCTAssertEqual(session.state.phase, .joining)
         XCTAssertEqual(session.state.roomId, roomId)
 
+        session.cancelJoin()
+    }
+
+    func testProviderModeJoinByRoomIdHasNoRoomUrl() {
+        let provider = FakeSignalingProvider()
+        let core = SerenadaCore(config: SerenadaConfig(signalingProvider: provider))
+
+        let session = core.join(roomId: "provider-room")
+
+        XCTAssertNil(session.roomUrl)
         session.cancelJoin()
     }
 }

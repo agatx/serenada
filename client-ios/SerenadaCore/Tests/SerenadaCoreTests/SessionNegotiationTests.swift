@@ -15,10 +15,39 @@ final class SessionNegotiationTests: XCTestCase {
         harness = nil
     }
 
+    private func waitUntil(
+        attempts: Int = 32,
+        condition: () -> Bool
+    ) async {
+        for _ in 0..<attempts {
+            if condition() {
+                return
+            }
+            await harness.yieldToMainActor()
+        }
+    }
+
+    private func waitForIceRestartTask(
+        _ fakeSlot: FakePeerConnectionSlot?,
+        attempts: Int = 32
+    ) async {
+        await waitUntil(attempts: attempts) {
+            fakeSlot?.iceRestartTask != nil
+        }
+    }
+
+    private func waitForNonHostFallbackTask(
+        _ fakeSlot: FakePeerConnectionSlot?,
+        attempts: Int = 32
+    ) async {
+        await waitUntil(attempts: attempts) {
+            fakeSlot?.nonHostFallbackTask != nil
+        }
+    }
+
     // MARK: - Group 1: Offer/Answer Exchange
 
     func testHostSendsOffer() async throws {
-        // Local joinedAt=1 < remote joinedAt=2 → local is host and should offer
         await harness.advanceToInCallWithTurn(
             localCid: "local",
             remoteCid: "remote",
@@ -30,33 +59,32 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertNotNil(fakeSlot, "Slot should be created for remote peer")
         XCTAssertGreaterThan(fakeSlot?.createOfferCalls ?? 0, 0, "Host should create an offer")
 
-        let offerMessages = harness.fakeSignaling.sentMessages(ofType: "offer")
+        let offerMessages = harness.fakeProvider.sentPeerMessages(ofType: "offer")
         XCTAssertFalse(offerMessages.isEmpty, "Host should send offer message")
     }
 
     func testNonHostWaitsThenAnswers() async throws {
-        // Local joinedAt=2 > remote joinedAt=1 → local is non-host, should NOT offer
         await harness.advanceToInCallWithTurn(
-            localCid: "local",
-            remoteCid: "remote",
+            localCid: "zeta",
+            remoteCid: "alpha",
             localJoinedAt: 2,
             remoteJoinedAt: 1
         )
 
-        let offerMessages = harness.fakeSignaling.sentMessages(ofType: "offer")
+        let offerMessages = harness.fakeProvider.sentPeerMessages(ofType: "offer")
         XCTAssertTrue(offerMessages.isEmpty, "Non-host should not send offer proactively")
 
         // Simulate receiving an offer from the remote (host)
-        harness.simulateOfferFromRemote(fromCid: "remote")
+        harness.simulateOfferFromRemote(fromCid: "alpha")
         await harness.yieldToMainActor()
 
-        let fakeSlot = harness.fakeMedia.fakeSlots["remote"]
+        let fakeSlot = harness.fakeMedia.fakeSlots["alpha"]
         XCTAssertNotNil(fakeSlot)
         XCTAssertEqual(fakeSlot?.setRemoteDescriptionCalls.count, 1, "Should set remote description for offer")
         XCTAssertEqual(fakeSlot?.setRemoteDescriptionCalls.first?.type, .offer)
         XCTAssertGreaterThan(fakeSlot?.createAnswerCalls ?? 0, 0, "Should create answer")
 
-        let answerMessages = harness.fakeSignaling.sentMessages(ofType: "answer")
+        let answerMessages = harness.fakeProvider.sentPeerMessages(ofType: "answer")
         XCTAssertFalse(answerMessages.isEmpty, "Should send answer message")
     }
 
@@ -97,7 +125,9 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertNotNil(fakeSlot)
 
         harness.simulateIceCandidateFromRemote(fromCid: "remote", candidate: "candidate:test")
-        await harness.yieldToMainActor()
+        await waitUntil {
+            fakeSlot?.addedIceCandidates.count == 1
+        }
 
         XCTAssertEqual(fakeSlot?.addedIceCandidates.count, 1, "ICE candidate should be added to slot")
         XCTAssertEqual(fakeSlot?.addedIceCandidates.first?.candidate, "candidate:test")
@@ -144,7 +174,7 @@ final class SessionNegotiationTests: XCTestCase {
 
         // At this point ICE servers may or may not be set (default STUN gets applied).
         // Simulate an offer from remote before TURN completes
-        let answersBefore = harness.fakeSignaling.sentMessages(ofType: "answer").count
+        let answersBefore = harness.fakeProvider.sentPeerMessages(ofType: "answer").count
 
         // If ICE servers are not ready, the offer should be buffered
         // If they are ready (default STUN), it should be processed immediately
@@ -154,7 +184,7 @@ final class SessionNegotiationTests: XCTestCase {
         await harness.yieldToMainActor()
 
         // Either way, after yielding, the answer should eventually be sent
-        let answersAfter = harness.fakeSignaling.sentMessages(ofType: "answer").count
+        let answersAfter = harness.fakeProvider.sentPeerMessages(ofType: "answer").count
         XCTAssertGreaterThan(answersAfter, answersBefore, "Answer should be sent after offer processing")
     }
 
@@ -173,7 +203,7 @@ final class SessionNegotiationTests: XCTestCase {
 
         // Simulate connection DISCONNECTED
         fakeSlot?.simulateConnectionStateChange(.disconnected)
-        await harness.yieldToMainActor()
+        await waitForIceRestartTask(fakeSlot)
 
         // ICE restart should be scheduled (task set)
         XCTAssertNotNil(fakeSlot?.iceRestartTask, "ICE restart task should be scheduled on DISCONNECTED")
@@ -218,12 +248,17 @@ final class SessionNegotiationTests: XCTestCase {
 
         // Schedule an ICE restart
         fakeSlot?.simulateConnectionStateChange(.disconnected)
-        await harness.yieldToMainActor()
+        await waitForIceRestartTask(fakeSlot)
         XCTAssertNotNil(fakeSlot?.iceRestartTask, "ICE restart should be scheduled")
 
         // Simulate CONNECTED → should clear the restart task
         fakeSlot?.simulateConnectionStateChange(.connected)
-        await harness.yieldToMainActor()
+        for _ in 0..<8 {
+            if fakeSlot?.iceRestartTask == nil {
+                break
+            }
+            await harness.yieldToMainActor()
+        }
 
         XCTAssertNil(fakeSlot?.iceRestartTask, "ICE restart task should be cleared on CONNECTED")
         XCTAssertEqual(fakeSlot?.pendingIceRestart, false, "pendingIceRestart should be cleared on CONNECTED")
@@ -231,35 +266,82 @@ final class SessionNegotiationTests: XCTestCase {
 
     // MARK: - Group 6: shouldIOffer Logic
 
-    func testLowerJoinedAtOffers() async throws {
-        // local joinedAt=1 < remote joinedAt=2 → local offers
+    func testLexicographicallyLowerPeerIdOffers() async throws {
         await harness.advanceToInCallWithTurn(
-            localCid: "local",
-            remoteCid: "remote",
-            localJoinedAt: 1,
-            remoteJoinedAt: 2
+            localCid: "alpha",
+            remoteCid: "zeta",
+            localJoinedAt: 10,
+            remoteJoinedAt: 1
         )
 
-        let offerMessages = harness.fakeSignaling.sentMessages(ofType: "offer")
-        XCTAssertFalse(offerMessages.isEmpty, "Lower joinedAt should send offer")
+        let offerMessages = harness.fakeProvider.sentPeerMessages(ofType: "offer")
+        XCTAssertFalse(offerMessages.isEmpty, "Lower peer ID should send offer")
     }
 
-    func testHigherJoinedAtWaits() async throws {
-        // local joinedAt=2 > remote joinedAt=1 → local does NOT offer
+    func testLexicographicallyHigherPeerIdWaits() async throws {
         await harness.advanceToInCallWithTurn(
-            localCid: "local",
-            remoteCid: "remote",
+            localCid: "zeta",
+            remoteCid: "alpha",
+            localJoinedAt: 1,
+            remoteJoinedAt: 10
+        )
+
+        let offerMessages = harness.fakeProvider.sentPeerMessages(ofType: "offer")
+        XCTAssertTrue(offerMessages.isEmpty, "Higher peer ID should not send offer")
+    }
+
+    // MARK: - Group 7: Non-Host Fallback Recovery
+
+    func testNonHostFallbackOfferRetriesAfterOfferTimeout() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "zeta",
+            remoteCid: "alpha",
             localJoinedAt: 2,
             remoteJoinedAt: 1
         )
 
-        let offerMessages = harness.fakeSignaling.sentMessages(ofType: "offer")
-        XCTAssertTrue(offerMessages.isEmpty, "Higher joinedAt should not send offer")
+        let fakeSlot = harness.fakeMedia.fakeSlots["alpha"]
+        XCTAssertNotNil(fakeSlot)
+
+        await waitForNonHostFallbackTask(fakeSlot)
+        XCTAssertNotNil(fakeSlot?.nonHostFallbackTask, "Fallback timer should be scheduled for the non-host peer")
+        XCTAssertTrue(harness.fakeProvider.sentPeerMessages(ofType: "offer").isEmpty)
+
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.nonHostFallbackDelayMs) + 1)
+        await waitUntil {
+            (fakeSlot?.createOfferCalls ?? 0) >= 1
+        }
+
+        XCTAssertEqual(fakeSlot?.createOfferCalls, 1, "First fallback offer should be created after the delay")
+        XCTAssertEqual(fakeSlot?.nonHostFallbackAttempts, 1)
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, 1)
+        XCTAssertNotNil(fakeSlot?.offerTimeoutTask, "Fallback offer should arm the offer-timeout watchdog")
+        await harness.yieldToMainActor()
+
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.offerTimeoutMs) + 1)
+        await waitUntil {
+            (fakeSlot?.rollbackCalls ?? 0) >= 1 && fakeSlot?.nonHostFallbackTask != nil
+        }
+
+        XCTAssertEqual(fakeSlot?.rollbackCalls, 1, "Timed out fallback offers should roll back before retrying")
+        XCTAssertNotNil(fakeSlot?.nonHostFallbackTask, "Offer timeout should schedule the next fallback attempt")
+        await harness.yieldToMainActor()
+
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.nonHostFallbackDelayMs) + 1)
+        await waitUntil {
+            (fakeSlot?.createOfferCalls ?? 0) >= 2
+        }
+
+        XCTAssertEqual(fakeSlot?.createOfferCalls, 2, "Fallback should retry after the timeout path")
+        XCTAssertEqual(fakeSlot?.nonHostFallbackAttempts, 2)
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, 2)
     }
 
     // MARK: - Group 8: Signaling Reconnect
 
     func testSignalingReconnectDuringInCallTriggersIceRestart() async throws {
+        harness.tearDown()
+        harness = SessionTestHarness(handlesReconnection: true)
         await harness.advanceToInCallWithTurn(
             localCid: "local",
             remoteCid: "remote",
@@ -272,10 +354,10 @@ final class SessionNegotiationTests: XCTestCase {
         let offersBefore = fakeSlot?.createOfferCalls ?? 0
 
         // Simulate signaling disconnect + reconnect
-        harness.fakeSignaling.simulateClosed(reason: "test")
+        harness.fakeProvider.simulateDisconnected(reason: "test")
         await harness.yieldToMainActor()
 
-        harness.openSignaling()
+        harness.fakeProvider.simulateConnected()
         await harness.yieldToMainActor()
         // Give ICE restart task time to fire
         await harness.fakeClock.advance(byMs: 5000)
@@ -312,8 +394,7 @@ final class SessionNegotiationTests: XCTestCase {
                 (cid: "remote-a", joinedAt: 2),
                 (cid: "remote-b", joinedAt: 3)
             ],
-            hostCid: "local",
-            turnToken: "test-turn-token"
+            hostCid: "local"
         )
         await harness.yieldToMainActor()
         await harness.fakeClock.advance(byMs: 100)

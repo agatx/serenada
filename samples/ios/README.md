@@ -4,9 +4,11 @@ Minimal iOS host app demonstrating Serenada SDK integration with SwiftUI.
 
 ## What it does
 
-- Accepts a call URL and presents `SerenadaCallFlow`
+- Accepts a call URL and presents `SerenadaCallFlow` using built-in Serenada signaling
 - Creates a new room via `SerenadaCore.createRoom()`
 - Reuses the `SerenadaSession` returned by `createRoom()` so the sample does not double-join
+- Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
+- Shows incremental `peerJoined` events and peer-message delivery without Serenada transport
 - Runs as a standalone XcodeGen app inside this repository
 - Resolves `SerenadaCore` and `SerenadaCallUI` directly from local source in `client-ios/`
 
@@ -68,5 +70,16 @@ SerenadaCallFlow(url: callURL, config: .init(screenSharingEnabled: false, invite
 Task {
     let room = try await serenada.createRoom()
     SerenadaCallFlow(session: room.session, config: .init(screenSharingEnabled: false, inviteControlsEnabled: false))
+}
+```
+
+Provider mode uses the same SDK with an injected provider instead of `serverHost`:
+
+```swift
+let provider = SampleMockSignalingProvider()
+let providerCore = SerenadaCore(config: .init(signalingProvider: provider))
+let session = providerCore.join(roomId: "provider-demo-room")
+let unsubscribe = session.onPeerMessage { message in
+    print("provider message: \(message.type)")
 }
 ```

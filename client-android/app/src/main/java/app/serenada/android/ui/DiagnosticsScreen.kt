@@ -568,7 +568,7 @@ private suspend fun runIceCheck(
     turnsOnly: Boolean,
     onLogLine: (String) -> Unit = {}
 ): IceReport {
-    val report = diagnostics.runIceProbe(
+    val report = diagnostics.runTurnProbe(
         turnsOnly = turnsOnly,
         onCandidateLog = onLogLine,
     )

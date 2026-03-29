@@ -692,7 +692,11 @@ final class CallManager: ObservableObject {
         let watchedSet = Set(watchedRoomIds)
         roomStatuses = roomStatuses.filter { watchedSet.contains($0.key) }
 
-        roomWatcher.watchRooms(roomIds: watchedRoomIds, host: serverHost)
+        do {
+            try roomWatcher.watchRooms(roomIds: watchedRoomIds, host: serverHost)
+        } catch {
+            NSLog("CallManager failed to watch rooms for host %@: %@", serverHost, error.localizedDescription)
+        }
     }
 
     private func isCurrentServerHost(_ host: String?) -> Bool {

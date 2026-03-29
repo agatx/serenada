@@ -60,11 +60,29 @@ final class JoinFlowCoordinatorTests: XCTestCase {
         await Task.yield()
     }
 
+    private func waitUntil(
+        attempts: Int = 32,
+        condition: () -> Bool
+    ) async {
+        for _ in 0..<attempts {
+            if condition() {
+                return
+            }
+            await yieldToMainActor()
+        }
+    }
+
+    private func waitForPendingSleeps(_ expectedCount: Int, attempts: Int = 32) async {
+        await waitUntil(attempts: attempts) { [unowned self] in
+            self.clock.pendingSleepCount == expectedCount
+        }
+    }
+
     // MARK: - Join Timeout
 
     func testJoinTimeoutFires() async {
         coordinator.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinHardTimeoutMs))
         XCTAssertEqual(timeoutCount, 1)
@@ -72,7 +90,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
 
     func testJoinTimeoutDoesNotFireIfPhaseChanged() async {
         coordinator.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         phase = .inCall
         await clock.advance(byMs: Int64(WebRtcResilience.joinHardTimeoutMs))
@@ -81,7 +99,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
 
     func testJoinTimeoutDoesNotFireIfSerialChanged() async {
         coordinator.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         joinAttemptSerial = 2
         await clock.advance(byMs: Int64(WebRtcResilience.joinHardTimeoutMs))
@@ -90,7 +108,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
 
     func testJoinTimeoutDoesNotFireIfRoomIdChanged() async {
         coordinator.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         roomId = "room-2"
         await clock.advance(byMs: Int64(WebRtcResilience.joinHardTimeoutMs))
@@ -99,7 +117,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
 
     func testClearJoinTimeoutCancels() async {
         coordinator.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
         coordinator.clearJoinTimeout()
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinHardTimeoutMs))
@@ -110,7 +128,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
 
     func testKickstartFiresWhenJoinSignalNotStarted() async {
         coordinator.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinConnectKickstartMs))
         XCTAssertEqual(ensureConnectionCount, 1)
@@ -119,7 +137,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
     func testKickstartDoesNotFireWhenJoinSignalStarted() async {
         joinSignalStarted = true
         coordinator.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinConnectKickstartMs))
         XCTAssertEqual(ensureConnectionCount, 0)
@@ -131,7 +149,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
         signalingConnected = true
         joinAcknowledged = true
         coordinator.scheduleJoinRecovery(for: roomId)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinRecoveryMs))
         XCTAssertEqual(recoveryCount, 1)
@@ -144,9 +162,12 @@ final class JoinFlowCoordinatorTests: XCTestCase {
         joinAcknowledged = false
         phase = .joining
         coordinator.scheduleJoinRecovery(for: roomId)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinRecoveryMs))
+        await waitUntil { [unowned self] in
+            self.ensureConnectionCount == 1
+        }
         XCTAssertEqual(recoveryCount, 0)
         XCTAssertEqual(ensureConnectionCount, 1, "Should re-ensure signaling connection")
     }
@@ -155,7 +176,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
         signalingConnected = false
         joinAcknowledged = true
         coordinator.scheduleJoinRecovery(for: roomId)
-        await yieldToMainActor()
+        await waitForPendingSleeps(1)
 
         await clock.advance(byMs: Int64(WebRtcResilience.joinRecoveryMs))
         XCTAssertEqual(recoveryCount, 0)
@@ -167,7 +188,7 @@ final class JoinFlowCoordinatorTests: XCTestCase {
         coordinator.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
         coordinator.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
         coordinator.scheduleJoinRecovery(for: roomId)
-        await yieldToMainActor()
+        await waitForPendingSleeps(3)
 
         coordinator.clearAllTimers()
 

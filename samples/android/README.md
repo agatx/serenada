@@ -6,6 +6,8 @@ Minimal Android host app demonstrating Serenada SDK integration using `serenada-
 
 - Accepts a call URL and presents `SerenadaCallFlow` (URL-first path)
 - Creates a new room via `SerenadaCore.createRoom()` and reuses the returned session (session-first path)
+- Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
+- Shows incremental `peerJoined` events and peer-message delivery without Serenada server transport
 - Disables screen sharing and invite controls (these require app-specific service and push wiring)
 - Total integration: ~80 lines of Kotlin
 
@@ -64,6 +66,20 @@ scope.launch {
         config = SerenadaCallFlowConfig(screenSharingEnabled = false, inviteControlsEnabled = false),
         onDismiss = { /* navigate back */ },
     )
+}
+```
+
+Provider mode uses the same SDK entry point with a custom `SignalingProvider`:
+
+```kotlin
+val provider = SampleMockSignalingProvider()
+val providerCore = SerenadaCore(
+    config = SerenadaConfig(signalingProvider = provider),
+    context = this,
+)
+val session = providerCore.join(roomId = "provider-demo-room")
+session.onPeerMessage { message ->
+    println("provider message: ${message.type}")
 }
 ```
 

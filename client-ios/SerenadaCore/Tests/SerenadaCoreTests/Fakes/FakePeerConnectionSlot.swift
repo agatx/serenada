@@ -26,6 +26,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     private(set) var createAnswerCalls = 0
     private(set) var setRemoteDescriptionCalls: [(type: SessionDescriptionType, sdp: String)] = []
     private(set) var addedIceCandidates: [IceCandidatePayload] = []
+    private(set) var appliedIceServerUrls: [[String]] = []
     private(set) var rollbackCalls = 0
     private(set) var closePeerConnectionCalled = false
     private(set) var ensurePeerConnectionCalls = 0
@@ -100,6 +101,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     // MARK: - WebRTC Operations
 
     func setIceServers(_ servers: [IceServerConfig]) {
+        appliedIceServerUrls.append(servers.flatMap(\.urls))
         ready = true
     }
 
