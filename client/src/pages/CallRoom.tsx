@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
 import { SerenadaCallFlow } from '@serenada/react-ui';
@@ -11,6 +11,7 @@ import { saveCall } from '../utils/callHistory';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 import { markRoomJoined, saveRoom } from '../utils/savedRooms';
 import { getConfiguredServerHost } from '../utils/serverHost';
+import { parseTurnsOnly } from '../utils/turnsOnly';
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -206,11 +207,13 @@ function buildSerenadaCallStrings(
 const CallRoom: React.FC = () => {
     const { t } = useTranslation();
     const { roomId } = useParams<{ roomId: string }>();
+    const location = useLocation();
     const navigate = useNavigate();
     const { showToast } = useToast();
 
-    const urlParams = new URLSearchParams(window.location.search);
+    const urlParams = new URLSearchParams(location.search);
     const sharedName = urlParams.get('name');
+    const turnsOnly = useMemo(() => parseTurnsOnly(location.search), [location.search]);
 
     const [shouldJoin, setShouldJoin] = useState(false);
     const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
@@ -224,7 +227,11 @@ const CallRoom: React.FC = () => {
     const callStartTimeRef = useRef<number | null>(null);
     const pushNotifySentRef = useRef(false);
 
-    const core = useMemo(() => new SerenadaCore({ serverHost: getConfiguredServerHost(), logger: new ConsoleSerenadaLogger() }), []);
+    const core = useMemo(() => new SerenadaCore({
+        serverHost: getConfiguredServerHost(),
+        logger: new ConsoleSerenadaLogger(),
+        turnsOnly,
+    }), [turnsOnly]);
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
 
     const stopPreview = useCallback(() => {
@@ -276,7 +283,7 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         if (!roomId || !shouldJoin) return;
 
-        const callUrl = `${window.location.origin}/call/${roomId}`;
+        const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
         const nextSession = core.join(callUrl);
         callStartTimeRef.current = Date.now();
         setSession(nextSession);
@@ -285,7 +292,7 @@ const CallRoom: React.FC = () => {
             nextSession.destroy();
             setSession(null);
         };
-    }, [core, roomId, shouldJoin]);
+    }, [core, location.hash, location.pathname, location.search, roomId, shouldJoin]);
 
     useEffect(() => {
         if (!roomId) return;
