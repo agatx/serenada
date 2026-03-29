@@ -28,6 +28,23 @@ if (typeof globalThis.navigator === 'undefined') {
 describe('SerenadaSession', () => {
     let harness: TestSessionHarness;
 
+    function expectTerminalTeardown(expectedPhase: 'ending' | 'error' | 'idle'): void {
+        expect(harness.state.phase).toBe(expectedPhase);
+        expect(harness.state.localParticipant).toBeNull();
+        expect(harness.state.remoteParticipants).toHaveLength(0);
+        expect(harness.state.activeTransport).toBeNull();
+        expect(harness.session.localStream).toBeNull();
+        expect(harness.session.isSignalingConnected).toBe(false);
+        expect(harness.signaling.disconnectCalls).toBeGreaterThan(0);
+        expect(harness.media.cleanupAllPeersCalls).toBeGreaterThan(0);
+        expect(harness.media.stopLocalMediaCalls).toBeGreaterThan(0);
+        expect(harness.media.updateSignalingConnectedCalls.at(-1)).toBe(false);
+        expect(harness.media.updateRoomStateCalls.at(-1)).toEqual({
+            state: null,
+            clientId: null,
+        });
+    }
+
     beforeEach(() => {
         // Fake timers — SerenadaSession uses window.setTimeout for the ending timer
         vi.useFakeTimers();
@@ -120,10 +137,65 @@ describe('SerenadaSession', () => {
                 code: 'signalingTimeout',
                 message: 'Join timed out',
             });
+            expectTerminalTeardown('error');
 
             harness.signaling.emitConnected('ws');
 
             expect(harness.signaling.joinRoomCalls).toHaveLength(0);
+            expectTerminalTeardown('error');
+        });
+
+        it('times out a provider-managed join before signaling connects', async () => {
+            harness = new TestSessionHarness({ handlesReconnection: true, autoStart: true });
+
+            expect(harness.signaling.connectCalls).toBe(1);
+
+            await vi.advanceTimersByTimeAsync(JOIN_HARD_TIMEOUT_MS + 1);
+
+            expect(harness.state.error).toEqual({
+                code: 'signalingTimeout',
+                message: 'Join timed out',
+            });
+            expectTerminalTeardown('error');
+        });
+
+        it('times out a self-managed join after signaling connects but before joined', async () => {
+            harness = new TestSessionHarness({ handlesReconnection: false, autoStart: true });
+
+            harness.signaling.emitConnected('ws');
+            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: {} }]);
+
+            await vi.advanceTimersByTimeAsync(JOIN_HARD_TIMEOUT_MS + 1);
+
+            expect(harness.state.error).toEqual({
+                code: 'signalingTimeout',
+                message: 'Join timed out',
+            });
+            expectTerminalTeardown('error');
+
+            harness.signaling.emitJoined({
+                peerId: 'me',
+                participants: [{ peerId: 'me' }],
+                hostPeerId: 'me',
+            });
+
+            expect(harness.signaling.joinRoomCalls).toHaveLength(1);
+            expectTerminalTeardown('error');
+        });
+
+        it('times out a provider-managed join after signaling connects but before joined', async () => {
+            harness = new TestSessionHarness({ handlesReconnection: true, autoStart: true });
+
+            harness.signaling.emitConnected('ws');
+            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: {} }]);
+
+            await vi.advanceTimersByTimeAsync(JOIN_HARD_TIMEOUT_MS + 1);
+
+            expect(harness.state.error).toEqual({
+                code: 'signalingTimeout',
+                message: 'Join timed out',
+            });
+            expectTerminalTeardown('error');
         });
     });
 
@@ -413,6 +485,7 @@ describe('SerenadaSession', () => {
                 code: 'serverError',
                 message: 'attempt-4',
             });
+            expectTerminalTeardown('error');
         });
 
         it('forwards room state to media engine', () => {
@@ -436,35 +509,44 @@ describe('SerenadaSession', () => {
             harness = new TestSessionHarness();
             harness.simulateError('Connection refused');
 
-            expect(harness.state.phase).toBe('error');
             expect(harness.state.error).toEqual({
                 code: 'unknown',
                 message: 'Connection refused',
             });
+            expectTerminalTeardown('error');
         });
 
-        it('overwrites previous phase on error', async () => {
+        it('tears down the joined session on signaling error', async () => {
             harness = new TestSessionHarness();
-            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
             await vi.advanceTimersByTimeAsync(0);
             await harness.session.resumeJoin();
-            expect(harness.state.phase).toBe('waiting');
+            expect(harness.state.phase).toBe('inCall');
 
             harness.simulateError('Server crashed');
-            expect(harness.state.phase).toBe('error');
+            expect(harness.state.error).toEqual({
+                code: 'unknown',
+                message: 'Server crashed',
+            });
+            expectTerminalTeardown('error');
         });
 
-        it('clears error when signaling error is reset and room state arrives', async () => {
+        it('ignores later provider events after a terminal signaling error', async () => {
             harness = new TestSessionHarness();
             harness.simulateError('Temporary failure');
-            expect(harness.state.phase).toBe('error');
+            expectTerminalTeardown('error');
 
             harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
             await vi.advanceTimersByTimeAsync(0);
 
-            // Phase should recover to waiting or awaitingPermissions
-            expect(['waiting', 'awaitingPermissions']).toContain(harness.state.phase);
-            expect(harness.state.error).toBeNull();
+            expect(harness.state.error).toEqual({
+                code: 'unknown',
+                message: 'Temporary failure',
+            });
+            expectTerminalTeardown('error');
         });
     });
 
@@ -530,7 +612,7 @@ describe('SerenadaSession', () => {
     // Ending Screen
     // ---------------------------------------------------------------
     describe('ending screen', () => {
-        it('shows ending phase for 3 seconds then transitions to idle', async () => {
+        it('shows ending phase for 3 seconds then transitions to idle after roomEnded in call', async () => {
             harness = new TestSessionHarness();
             harness.simulateJoined({
                 clientId: 'me',
@@ -542,18 +624,18 @@ describe('SerenadaSession', () => {
 
             // Room ended — roomState cleared
             harness.simulateRoomEnded();
-            expect(harness.state.phase).toBe('ending');
+            expectTerminalTeardown('ending');
 
             // Advance 2.9 seconds — still ending
             vi.advanceTimersByTime(2900);
-            expect(harness.state.phase).toBe('ending');
+            expectTerminalTeardown('ending');
 
             // Advance past 3 seconds
             vi.advanceTimersByTime(200);
-            expect(harness.state.phase).toBe('idle');
+            expectTerminalTeardown('idle');
         });
 
-        it('shows ending when going from waiting to no roomState', async () => {
+        it('shows ending when roomEnded arrives while waiting', async () => {
             harness = new TestSessionHarness();
             harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
             await vi.advanceTimersByTimeAsync(0);
@@ -561,10 +643,10 @@ describe('SerenadaSession', () => {
             expect(harness.state.phase).toBe('waiting');
 
             harness.simulateRoomEnded();
-            expect(harness.state.phase).toBe('ending');
+            expectTerminalTeardown('ending');
 
             vi.advanceTimersByTime(3100);
-            expect(harness.state.phase).toBe('idle');
+            expectTerminalTeardown('idle');
         });
     });
 

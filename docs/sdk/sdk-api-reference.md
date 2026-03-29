@@ -38,6 +38,8 @@ Key contract rules:
 - `true`: the provider owns transport reconnect and the session treats `disconnected -> connected` as a transport blip.
 - `false` (default): the session performs its normal rejoin flow with `reconnectPeerId`.
 
+This flag only changes reconnect ownership after the session has already started joining. The SDK still enforces the initial join hard-timeout on all platforms, including when `handlesReconnection = true`.
+
 The built-in `SerenadaServerProvider` sets `handlesReconnection = true` on all platforms.
 
 ### Peer-message hooks

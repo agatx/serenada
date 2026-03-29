@@ -27,6 +27,7 @@ import {
     RECONNECT_BACKOFF_BASE_MS,
     RECONNECT_BACKOFF_CAP_MS,
     JOIN_HARD_TIMEOUT_MS,
+    ENDING_SCREEN_MS,
 } from './constants.js';
 import { formatError } from './formatError.js';
 import type { RoomState, SignalingMessage } from './signaling/types.js';
@@ -212,12 +213,17 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private reconnectRecoveryPending = false;
     private iceFetchGeneration = 0;
     private started = false;
+    private terminated = false;
 
     private isConnected = false;
     private activeTransport: ActiveTransport | null = null;
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
+
+    private get isInactive(): boolean {
+        return this._destroyed || this.terminated;
+    }
 
     onPermissionsRequired: ((permissions: MediaCapability[]) => void) | null = null;
 
@@ -260,6 +266,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
         this.bindProviderEvents();
         this.media.setOnChange(() => {
+            if (this.isInactive) {
+                return;
+            }
             this.rebuildState();
         });
 
@@ -300,6 +309,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /** Resume joining after media permissions have been granted. */
     async resumeJoin(): Promise<void> {
+        if (this.isInactive) {
+            return;
+        }
         this.permissionCheckDone = true;
         const stream = await this.media.startLocalMedia();
         if (stream) {
@@ -317,7 +329,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /** Leave the call gracefully. The other participant stays connected. */
     leave(): void {
-        if (this._destroyed) return;
+        if (this.isInactive) return;
         this.clearReconnectTimer();
         this.invalidateIceFetches();
         this.pendingJoinOptions = null;
@@ -333,7 +345,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /** End the call for all participants. */
     end(): void {
-        if (this._destroyed) return;
+        if (this.isInactive) return;
         this.signaling.endRoom();
         this.leave();
     }
@@ -378,10 +390,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this._destroyed = true;
         this.invalidateIceFetches();
         this.clearReconnectTimer();
-        if (this.endingTimer !== null) {
-            window.clearTimeout(this.endingTimer);
-            this.endingTimer = null;
-        }
+        this.clearEndingTimer();
         this.clearJoinTimeout();
         for (const unsubscribe of this.providerUnsubscribers) {
             unsubscribe();
@@ -426,14 +435,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private readonly handleConnected = (info: ConnectionInfo | undefined): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         const wasConnected = this.isConnected;
         this.isConnected = true;
         this.activeTransport = info?.transport ?? null;
         this.clearReconnectTimer();
-        this.clearJoinTimeout();
         this.reconnectAttempts = 0;
         this.media.updateSignalingConnected(true);
 
@@ -449,14 +457,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
     };
 
     private readonly handleDisconnected = (): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         const hadRoomState = this.roomState !== null;
         this.isConnected = false;
         this.activeTransport = null;
         this.joinInFlight = false;
-        this.clearJoinTimeout();
         this.media.updateSignalingConnected(false);
 
         if (this.handlesReconnection) {
@@ -470,7 +477,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     };
 
     private readonly handleJoined = (event: SignalingProviderEventMap['joined']): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         this.joinInFlight = false;
@@ -486,7 +493,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     };
 
     private readonly handleRoomStateUpdated = (event: RoomStateEvent): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         this.error = null;
@@ -496,7 +503,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     };
 
     private readonly handlePeerJoined = (event: PeerEvent): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         this.error = null;
@@ -506,7 +513,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     };
 
     private readonly handlePeerLeft = (event: PeerEvent): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         this.roomState = removeParticipant(this.roomState, event.peerId, this.clientId);
@@ -515,7 +522,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     };
 
     private readonly handlePeerMessage = (message: PeerMessage): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         for (const listener of this.peerMessageListeners) {
@@ -527,32 +534,21 @@ export class SerenadaSession implements SerenadaSessionHandle {
     };
 
     private readonly handleRoomEnded = (): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
-        this.clearReconnectTimer();
-        this.invalidateIceFetches();
-        this.pendingJoinOptions = null;
-        this.joinInFlight = false;
-        this.reconnectRecoveryPending = false;
-        this.error = null;
-        this.roomState = null;
-        this.media.updateRoomState(null, this.clientId);
-        this.rebuildState();
+        this.cleanupCall();
     };
 
     private readonly handleError = (event: SignalingErrorEvent): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
-        this.joinInFlight = false;
-        this.clearJoinTimeout();
-        this.error = event;
-        this.rebuildState();
+        this.failWithError(event);
     };
 
     private readonly handleIceServersChanged = (iceServers: RTCIceServer[]): void => {
-        if (this._destroyed) {
+        if (this.isInactive) {
             return;
         }
         this.media.setIceServers(iceServers);
@@ -585,11 +581,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (!this.isCurrentIceFetch(generation)) {
             return;
         }
-        this.error = {
+        this.failWithError({
             code: 'ICE_SERVER_FETCH_FAILED',
             message: formatError(lastError),
-        };
-        this.rebuildState();
+        });
     }
 
     private isCurrentIceFetch(generation: number): boolean {
@@ -607,34 +602,31 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private scheduleJoinTimeout(): void {
-        if (this._destroyed || this.handlesReconnection) {
+        if (this.isInactive) {
             return;
         }
         this.clearJoinTimeout();
-        this.joinTimeoutTimer = globalThis.setTimeout(() => {
+        this.joinTimeoutTimer = window.setTimeout(() => {
             this.joinTimeoutTimer = null;
-            if (this._destroyed || this.roomState || this.error || !this.pendingJoinOptions) {
+            if (this.isInactive || this.roomState || this.error || !this.pendingJoinOptions) {
                 return;
             }
-            this.pendingJoinOptions = null;
-            this.joinInFlight = false;
-            this.error = {
+            this.failWithError({
                 code: 'JOIN_TIMEOUT',
                 message: 'Join timed out',
-            };
-            this.rebuildState();
+            });
         }, JOIN_HARD_TIMEOUT_MS);
     }
 
     private clearJoinTimeout(): void {
         if (this.joinTimeoutTimer !== null) {
-            globalThis.clearTimeout(this.joinTimeoutTimer);
+            window.clearTimeout(this.joinTimeoutTimer);
             this.joinTimeoutTimer = null;
         }
     }
 
     private scheduleReconnect(): void {
-        if (this._destroyed || this.handlesReconnection || !this.started) {
+        if (this.isInactive || this.handlesReconnection || !this.started) {
             return;
         }
         if (!this.pendingJoinOptions && !this.roomState && !this.clientId) {
@@ -653,11 +645,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
             this.reconnectAttempts = attempt;
-            if (this._destroyed) {
+            if (this.isInactive) {
                 return;
             }
             this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined };
-            this.scheduleJoinTimeout();
             this.signaling.connect();
         }, delayMs);
     }
@@ -669,6 +660,80 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
     }
 
+    private clearEndingTimer(): void {
+        if (this.endingTimer !== null) {
+            window.clearTimeout(this.endingTimer);
+            this.endingTimer = null;
+        }
+    }
+
+    private resetSessionResources(): void {
+        this.clearReconnectTimer();
+        this.clearJoinTimeout();
+        this.clearEndingTimer();
+        this.invalidateIceFetches();
+        this.statsCollector.stop();
+
+        this.started = false;
+        this.isConnected = false;
+        this.activeTransport = null;
+        this.pendingJoinOptions = null;
+        this.joinInFlight = false;
+        this.reconnectRecoveryPending = false;
+        this.reconnectAttempts = 0;
+        this.roomState = null;
+        this.clientId = null;
+
+        this.media.updateRoomState(null, null);
+        this.media.updateSignalingConnected(false);
+        this.media.cleanupAllPeers();
+        this.media.stopLocalMedia();
+
+        this.signaling.disconnect();
+    }
+
+    private commitTerminalState(
+        phase: CallState['phase'],
+        error: CallState['error'] = null,
+    ): void {
+        this._state = {
+            phase,
+            roomId: this.roomId,
+            roomUrl: this.roomUrl,
+            localParticipant: null,
+            remoteParticipants: [],
+            connectionStatus: 'disconnected',
+            activeTransport: null,
+            requiredPermissions: null,
+            error,
+        };
+        this.notifyListeners();
+    }
+
+    private cleanupCall(): void {
+        this.terminated = true;
+        this.error = null;
+        this.resetSessionResources();
+        this.commitTerminalState('ending');
+        this.endingTimer = window.setTimeout(() => {
+            this.endingTimer = null;
+            if (this._destroyed) {
+                return;
+            }
+            this.commitTerminalState('idle');
+        }, ENDING_SCREEN_MS);
+    }
+
+    private failWithError(event: SignalingErrorEvent): void {
+        this.terminated = true;
+        this.error = event;
+        this.resetSessionResources();
+        this.commitTerminalState('error', {
+            code: mapErrorCode(event.code),
+            message: event.message,
+        });
+    }
+
     private setTrackEnabled(kind: 'audio' | 'video', enabled?: boolean): void {
         const stream = this.media.localStream;
         if (!stream) return;
@@ -678,7 +743,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private rebuildState(): void {
-        if (this._destroyed) return;
+        if (this.isInactive) return;
         const signalingState = this.roomState;
         const clientId = this.clientId;
 
@@ -687,16 +752,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.error) {
             phase = 'error';
         } else if (!signalingState && phase !== 'idle' && phase !== 'ending') {
-            if (this._state.phase === 'inCall' || this._state.phase === 'waiting') {
-                phase = 'ending';
-                if (this.endingTimer !== null) window.clearTimeout(this.endingTimer);
-                this.endingTimer = window.setTimeout(() => {
-                    this.endingTimer = null;
-                    if (this._destroyed) return;
-                    this._state = { ...this._state, phase: 'idle' };
-                    this.notifyListeners();
-                }, 3000);
-            } else if (this.isConnected && this._state.phase === 'joining') {
+            if (this.isConnected && this._state.phase === 'joining') {
                 phase = 'joining';
             }
         } else if (signalingState) {

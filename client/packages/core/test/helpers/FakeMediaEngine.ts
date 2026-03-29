@@ -22,6 +22,7 @@ export class FakeMediaEngine {
 
     // --- Call tracking ---
     startLocalMediaCalls = 0;
+    stopLocalMediaCalls = 0;
     cleanupAllPeersCalls = 0;
     destroyCalls = 0;
     handleSignalingReconnectCalls = 0;
@@ -54,6 +55,7 @@ export class FakeMediaEngine {
     }
 
     stopLocalMedia(): void {
+        this.stopLocalMediaCalls++;
         this.localStream = null;
     }
 
@@ -83,6 +85,7 @@ export class FakeMediaEngine {
 
     cleanupAllPeers(): void {
         this.cleanupAllPeersCalls++;
+        this.remoteStreams = new Map();
     }
 
     getPeerConnections(): RTCPeerConnection[] {

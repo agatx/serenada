@@ -25,6 +25,8 @@ Provider mode is best for integrators who already have their own peer-message de
 - `false` (default): the session owns reconnect and re-calls `joinRoom()` with `reconnectPeerId`.
 - `true`: the provider owns reconnect and should emit `disconnected` / `connected` around the interruption.
 
+This flag does not transfer initial join-timeout ownership to the provider. The SDK still enforces the initial join hard-timeout on every platform; `handlesReconnection` only affects reconnect behavior after the join attempt is already in progress.
+
 Only set `handlesReconnection = true` when your adapter already preserves identity and transport recovery semantics. The built-in `SerenadaServerProvider` does this on all platforms.
 
 ### ICE-server sourcing
