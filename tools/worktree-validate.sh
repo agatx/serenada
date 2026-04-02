@@ -413,47 +413,22 @@ else
         check_warn "xcodebuild not found"
     fi
 
-    # Resolve a simulator destination — try several iPhone models, prefer booted ones
+    # Resolve a simulator destination using the shared helper
     IOS_SIM_ID=""
     IOS_SIM_NAME=""
-    if command -v xcrun >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-        IOS_SIM_LINE=$(xcrun simctl list devices available -j 2>/dev/null \
-            | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-# Preferred device names in order — pick first available, preferring booted
-preferred = ['iPhone 16', 'iPhone 16 Pro', 'iPhone 15', 'iPhone 15 Pro', 'iPhone 14']
-best = None
-for runtime, devices in data.get('devices', {}).items():
-    if 'iOS' not in runtime:
-        continue
-    for d in devices:
-        if not d.get('isAvailable'):
-            continue
-        name = d.get('name', '')
-        try:
-            rank = preferred.index(name)
-        except ValueError:
-            # Accept any iPhone as a last resort
-            if 'iPhone' in name:
-                rank = len(preferred)
-            else:
-                continue
-        booted = 1 if d.get('state') != 'Booted' else 0
-        candidate = (rank, booted, d['udid'], name)
-        if best is None or candidate < best:
-            best = candidate
-if best:
-    # Tab-separated so shell can split udid from multi-word name
-    print(best[2] + '\t' + best[3])
-" 2>/dev/null || true)
+    IOS_SIM_OS=""
+    RESOLVE_SCRIPT="$SCRIPT_DIR/resolve-ios-simulator.sh"
+    if [ -x "$RESOLVE_SCRIPT" ]; then
+        IOS_SIM_LINE=$("$RESOLVE_SCRIPT" || true)
         if [ -n "$IOS_SIM_LINE" ]; then
-            IFS=$'\t' read -r IOS_SIM_ID IOS_SIM_NAME <<< "$IOS_SIM_LINE"
+            IOS_SIM_ID=$(echo "$IOS_SIM_LINE" | cut -f1)
+            IOS_SIM_NAME=$(echo "$IOS_SIM_LINE" | cut -f2)
+            IOS_SIM_OS=$(echo "$IOS_SIM_LINE" | cut -f3)
         fi
     fi
 
-    # Fallback when python3 is unavailable: use name-based destination
-    if [ -z "$IOS_SIM_ID" ] && command -v xcrun >/dev/null 2>&1; then
+    # Fallback when resolve script is unavailable: use name-based destination
+    if [ -z "$IOS_SIM_ID" ] && [ -z "$IOS_SIM_NAME" ] && command -v xcrun >/dev/null 2>&1; then
         IOS_SIM_NAME="iPhone 16"
     fi
 
