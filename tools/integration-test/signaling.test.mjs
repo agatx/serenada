@@ -713,6 +713,178 @@ await test("[SSE] POST to unknown sid returns 410", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Cross-Transport Tests (WS + SSE in same room)
+// ---------------------------------------------------------------------------
+
+await test("[Cross] Two-client signaling round-trip (WS + SSE)", async () => {
+  const roomId = await createRoom();
+
+  const clientA = await connectWS();
+  clientA.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+
+  const joinedA = await clientA.receive((m) => m.type === "joined");
+  assertEqual(joinedA.v, 1, "joined.v");
+  assert(joinedA.cid, "joined should have cid");
+  assertEqual(joinedA.payload.participants.length, 1, "should be 1 participant after first join");
+
+  const clientB = await connectSSE();
+  await clientB.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+
+  const joinedB = await clientB.receive((m) => m.type === "joined");
+  assertEqual(joinedB.v, 1, "joinedB.v");
+  assert(joinedB.cid !== joinedA.cid, "clients should have different cids");
+  assertEqual(joinedB.payload.participants.length, 2, "should be 2 participants after second join");
+
+  const roomStateA = await clientA.receive(
+    (m) => m.type === "room_state" && m.payload.participants.length === 2,
+  );
+  assertEqual(roomStateA.payload.participants.length, 2, "room_state should show 2 participants");
+
+  clientA.send({
+    type: "offer",
+    rid: roomId,
+    sid: joinedA.sid,
+    cid: joinedA.cid,
+    to: joinedB.cid,
+    payload: { sdp: "test-sdp-offer" },
+  });
+
+  const offerB = await clientB.receive((m) => m.type === "offer");
+  assertEqual(offerB.payload.sdp, "test-sdp-offer", "offer sdp should match");
+  assertEqual(offerB.payload.from, joinedA.cid, "offer.from should be clientA cid");
+
+  await clientB.send({
+    type: "answer",
+    rid: roomId,
+    sid: joinedB.sid,
+    cid: joinedB.cid,
+    to: joinedA.cid,
+    payload: { sdp: "test-sdp-answer" },
+  });
+
+  const answerA = await clientA.receive((m) => m.type === "answer");
+  assertEqual(answerA.payload.sdp, "test-sdp-answer", "answer sdp should match");
+  assertEqual(answerA.payload.from, joinedB.cid, "answer.from should be clientB cid");
+
+  clientA.send({ type: "leave", rid: roomId, sid: joinedA.sid, cid: joinedA.cid });
+
+  const roomStateB = await clientB.receive(
+    (m) => m.type === "room_state" && m.payload.participants.length === 1,
+  );
+  assertEqual(roomStateB.payload.participants[0].cid, joinedB.cid, "remaining participant should be clientB");
+
+  clientA.close();
+  clientB.close();
+});
+
+await test("[Cross] ICE candidate relay (WS -> SSE)", async () => {
+  const roomId = await createRoom();
+
+  const clientA = await connectWS();
+  clientA.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+  const joinedA = await clientA.receive((m) => m.type === "joined");
+
+  const clientB = await connectSSE();
+  await clientB.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+  const joinedB = await clientB.receive((m) => m.type === "joined");
+
+  await clientA.receive((m) => m.type === "room_state");
+
+  const iceCandidate = {
+    candidate: "candidate:1 1 UDP 2122252543 192.168.1.1 12345 typ host",
+    sdpMid: "0",
+    sdpMLineIndex: 0,
+  };
+
+  clientA.send({
+    type: "ice",
+    rid: roomId,
+    sid: joinedA.sid,
+    cid: joinedA.cid,
+    to: joinedB.cid,
+    payload: { candidate: iceCandidate },
+  });
+
+  const iceB = await clientB.receive((m) => m.type === "ice");
+  assertEqual(iceB.payload.from, joinedA.cid, "ice.from should be clientA");
+  assertEqual(iceB.payload.candidate.candidate, iceCandidate.candidate, "ice candidate should match");
+  assertEqual(iceB.payload.candidate.sdpMid, "0", "ice sdpMid should match");
+
+  clientA.close();
+  clientB.close();
+});
+
+await test("[Cross] ICE candidate relay (SSE -> WS)", async () => {
+  const roomId = await createRoom();
+
+  const clientA = await connectSSE();
+  await clientA.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+  const joinedA = await clientA.receive((m) => m.type === "joined");
+
+  const clientB = await connectWS();
+  clientB.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+  const joinedB = await clientB.receive((m) => m.type === "joined");
+
+  await clientA.receive((m) => m.type === "room_state");
+
+  const iceCandidate = {
+    candidate: "candidate:2 1 UDP 2122252543 10.0.0.1 54321 typ host",
+    sdpMid: "1",
+    sdpMLineIndex: 1,
+  };
+
+  await clientA.send({
+    type: "ice",
+    rid: roomId,
+    sid: joinedA.sid,
+    cid: joinedA.cid,
+    to: joinedB.cid,
+    payload: { candidate: iceCandidate },
+  });
+
+  const iceB = await clientB.receive((m) => m.type === "ice");
+  assertEqual(iceB.payload.from, joinedA.cid, "ice.from should be clientA");
+  assertEqual(iceB.payload.candidate.candidate, iceCandidate.candidate, "ice candidate should match");
+  assertEqual(iceB.payload.candidate.sdpMid, "1", "ice sdpMid should match");
+
+  clientA.close();
+  clientB.close();
+});
+
+await test("[Cross] Host end_room across transports", async () => {
+  const roomId = await createRoom();
+
+  const clientA = await connectWS();
+  clientA.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+  const joinedA = await clientA.receive((m) => m.type === "joined");
+
+  const clientB = await connectSSE();
+  await clientB.send({ type: "join", rid: roomId, payload: { capabilities: { maxParticipants: 2 } } });
+  await clientB.receive((m) => m.type === "joined");
+
+  await clientA.receive((m) => m.type === "room_state");
+  await clientB.receive((m) => m.type === "room_state");
+
+  clientA.send({
+    type: "end_room",
+    rid: roomId,
+    sid: joinedA.sid,
+    cid: joinedA.cid,
+    payload: { reason: "host_ended" },
+  });
+
+  const endedA = await clientA.receive((m) => m.type === "room_ended");
+  assertEqual(endedA.payload.reason, "host_ended", "room_ended.reason for A");
+  assertEqual(endedA.payload.by, joinedA.cid, "room_ended.by should be host");
+
+  const endedB = await clientB.receive((m) => m.type === "room_ended");
+  assertEqual(endedB.payload.reason, "host_ended", "room_ended.reason for B");
+
+  clientA.close();
+  clientB.close();
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

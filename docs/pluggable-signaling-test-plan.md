@@ -23,15 +23,16 @@ Added a `connectSSE()` helper alongside the existing `connectWS()` using Node.js
 - [x] Server sends keepalive ping (waits 13s, asserts `: ping` received)
 - [x] POST to unknown sid returns 410 Gone
 
-## 2. Cross-Transport Interop
+## 2. Cross-Transport Interop ✅ Implemented
 
-Not yet implemented. Client A on WebSocket, Client B on SSE, in the same room:
+> `tools/integration-test/signaling.test.mjs`
 
-- **Offer/answer relay across transports** — A (WS) sends offer, B (SSE) receives it and sends answer back
-- **ICE candidate relay across transports**
-- **room_state broadcast consistency** — both clients see the same participant list and room_state updates regardless of transport
+One WS client + one SSE client in the same room. Tests both directions of message relay.
 
-Most likely place for subtle bugs (e.g., message envelope differences between WS and SSE paths on the server). Low effort to add — both `connectWS()` and `connectSSE()` share the same interface.
+- [x] **Two-client signaling round-trip (WS + SSE)** — full offer/answer/leave cycle across transports
+- [x] **ICE candidate relay (WS → SSE)** — WS client sends ICE to SSE client
+- [x] **ICE candidate relay (SSE → WS)** — reverse direction
+- [x] **Host end_room across transports** — WS host ends room, SSE client receives room_ended
 
 ## 3. Transport Fallback Under Failure
 
@@ -114,7 +115,7 @@ Not yet implemented.
 | Priority | Area | Status | Effort | Value | Notes |
 |----------|------|--------|--------|-------|-------|
 | 1 | SSE parity (#1) | ✅ Done | Low | High | 9 tests in `signaling.test.mjs` |
-| 2 | Cross-transport (#2) | Not started | Low | High | Same harness, mix WS + SSE clients |
+| 2 | Cross-transport (#2) | ✅ Done | Low | High | 4 tests in `signaling.test.mjs` |
 | 3 | Loopback provider (#4) | ✅ Done | Medium | High | 8 web + 7 iOS + 8 Android tests |
 | 4 | Fallback (#3) | Not started | Medium | Medium | Needs server restart with env vars |
 | 5 | Reconnection (#5) | Not started | Medium | Medium | Needs timing control |
