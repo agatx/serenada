@@ -18,6 +18,8 @@ final class SignalingClient: SessionSignaling {
     private let sseTransport: SignalingTransport
     private var transports: [SignalingTransport] { [wsTransport, sseTransport] }
 
+    private let clock: SessionClock
+
     private var connected = false
     private var connecting = false
     private var pingTask: Task<Void, Never>?
@@ -31,13 +33,24 @@ final class SignalingClient: SessionSignaling {
     private var normalizedHost: String?
     private var closedByClient = false
     private var wsConsecutiveFailures = 0
-    private var lastPongAt: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+    private var lastPongAtMs: Int64 = 0
     private var missedPongs = 0
 
-    init(forceSseSignaling: Bool = false) {
+    init(
+        forceSseSignaling: Bool = false,
+        clock: SessionClock? = nil,
+        transportFactory: ((TransportKind) -> SignalingTransport)? = nil
+    ) {
+        self.clock = clock ?? LiveSessionClock()
         self.transportOrder = forceSseSignaling ? [.sse] : [.ws, .sse]
-        self.wsTransport = WebSocketSignalingTransport()
-        self.sseTransport = SseSignalingTransport()
+        self.lastPongAtMs = self.clock.nowMs()
+        if let factory = transportFactory {
+            self.wsTransport = factory(.ws)
+            self.sseTransport = factory(.sse)
+        } else {
+            self.wsTransport = WebSocketSignalingTransport()
+            self.sseTransport = SseSignalingTransport()
+        }
     }
 
     func connect(host: String) {
@@ -85,25 +98,24 @@ final class SignalingClient: SessionSignaling {
     }
 
     func recordPong() {
-        lastPongAt = CFAbsoluteTimeGetCurrent()
+        lastPongAtMs = clock.nowMs()
         missedPongs = 0
     }
 
     private func startPing() {
         stopPing()
-        lastPongAt = CFAbsoluteTimeGetCurrent()
+        lastPongAtMs = clock.nowMs()
         missedPongs = 0
         pingTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: WebRtcResilience.pingIntervalNs)
+                try? await self.clock.sleep(nanoseconds: WebRtcResilience.pingIntervalNs)
                 if Task.isCancelled { return }
                 if !self.connected { continue }
 
                 // Check for missed pongs
-                let pingTimeoutSeconds = Double(WebRtcResilience.pingIntervalMs) / 1000.0
-                let elapsed = CFAbsoluteTimeGetCurrent() - self.lastPongAt
-                if elapsed > pingTimeoutSeconds {
+                let elapsed = self.clock.nowMs() - self.lastPongAtMs
+                if elapsed > Int64(WebRtcResilience.pingIntervalMs) {
                     self.missedPongs += 1
                     if self.missedPongs >= WebRtcResilience.pongMissThreshold {
                         self.missedPongs = 0
@@ -129,7 +141,7 @@ final class SignalingClient: SessionSignaling {
 
         connectTimeoutTask = Task { [weak self] in
             guard let self else { return }
-            try? await Task.sleep(nanoseconds: WebRtcResilience.connectTimeoutNs)
+            try? await self.clock.sleep(nanoseconds: WebRtcResilience.connectTimeoutNs)
             guard !Task.isCancelled else { return }
             guard let kind = self.activeTransport else { return }
             guard self.isAttemptActive(attemptId: attemptId, kind: kind) else { return }
@@ -194,7 +206,7 @@ final class SignalingClient: SessionSignaling {
         connected = true
         transportConnectedOnce[kind] = true
         if kind == .ws { wsConsecutiveFailures = 0 }
-        lastPongAt = CFAbsoluteTimeGetCurrent()
+        lastPongAtMs = clock.nowMs()
         missedPongs = 0
 
         listener?.onOpen(activeTransport: kind.wireName)

@@ -34,12 +34,49 @@ One WS client + one SSE client in the same room. Tests both directions of messag
 - [x] **ICE candidate relay (SSE → WS)** — reverse direction
 - [x] **Host end_room across transports** — WS host ends room, SSE client receives room_ended
 
-## 3. Transport Fallback Under Failure
+## 3. Transport Fallback Under Failure ✅ Implemented
 
-Not yet implemented. Use the server's `BLOCK_WEBSOCKET=block` or `BLOCK_WEBSOCKET=hang` env var:
+Client SDK tests that verify the SignalingClient/SignalingEngine WS→SSE fallback logic using injected `FakeSignalingTransport` instances. Added a `transportFactory` parameter to `SignalingClient` on iOS and Android to enable transport injection.
 
-- **WS blocked -> SSE fallback** — start server with `BLOCK_WEBSOCKET=block`, run a full signaling round-trip confirming it works over SSE
-- **WS hang -> timeout -> SSE** — start server with `BLOCK_WEBSOCKET=hang`, verify client-side timeout triggers SSE fallback (requires a client-level test, not just the Node.js harness)
+### Web (already existed)
+> `client/packages/core/test/signaling/SignalingEngine.test.ts` — 11 tests
+
+- [x] WS never connected → SSE fallback
+- [x] WS drops with timeout → SSE
+- [x] WS unsupported → SSE
+- [x] Ping/pong heartbeat timeout + pong reset
+- [x] Exponential backoff (capped at 5s)
+- [x] Auto-rejoin on reconnect
+- [x] Join hard timeout
+- [x] Pending join buffered until open
+
+### iOS ✅
+> `client-ios/.../SignalingClientFallbackTests.swift` — 8 tests
+
+- [x] WS never connected → SSE fallback
+- [x] WS drops with timeout → SSE
+- [x] WS unsupported → SSE
+- [x] SSE connects successfully after WS fallback
+- [x] No fallback with single transport (SSE-only)
+- [x] Messages routed through active transport
+- [x] Force-closes after missed pong threshold
+- [x] Pong resets missed pong counter
+
+### Android ✅
+> `client-android/.../SignalingClientFallbackTest.kt` — 6 tests
+
+- [x] WS never connected → SSE fallback
+- [x] WS drops with timeout → SSE
+- [x] WS unsupported → SSE
+- [x] SSE connects successfully after WS fallback
+- [x] No fallback with single transport (SSE-only)
+- [x] Messages routed through active transport
+
+**Note:** Ping/pong tests are on web and iOS. Android's `SignalingClient` uses `System.currentTimeMillis()` which Robolectric's ShadowLooper doesn't advance.
+
+**Production changes:**
+- Added `transportFactory` parameter (defaults to nil) to `SignalingClient` on both iOS and Android
+- Refactored iOS `SignalingClient` to use `SessionClock` instead of `CFAbsoluteTimeGetCurrent()` / `Task.sleep` — enables time-controlled ping/pong tests via `FakeSessionClock`
 
 ## 4. Custom SignalingProvider (End-to-End with SDK) ✅ Implemented
 
@@ -117,7 +154,7 @@ Not yet implemented.
 | 1 | SSE parity (#1) | ✅ Done | Low | High | 9 tests in `signaling.test.mjs` |
 | 2 | Cross-transport (#2) | ✅ Done | Low | High | 4 tests in `signaling.test.mjs` |
 | 3 | Loopback provider (#4) | ✅ Done | Medium | High | 8 web + 7 iOS + 8 Android tests |
-| 4 | Fallback (#3) | Not started | Medium | Medium | Needs server restart with env vars |
+| 4 | Fallback (#3) | ✅ Done | Medium | Medium | 11 web + 8 iOS + 6 Android (client SDK tests) |
 | 5 | Reconnection (#5) | Not started | Medium | Medium | Needs timing control |
 | 6 | Stress (#6) | Not started | Medium | Medium | Concurrency edge cases |
 | 7 | Version gating (#7) | Not started | Low | Low | Simple config validation |

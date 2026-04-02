@@ -59,6 +59,7 @@
 		A3E593BBB26536974F9B5152 /* JoinSnapshotFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0824DD6CEC2DF4431D724B4D /* JoinSnapshotFeature.swift */; };
 		A943CC93EAF10E990017D277 /* SerenadaBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AD701F4DE41EA9DFCC2125CE /* JoinScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34F0B8DB451442FAB82D1D94 /* JoinScreen.swift */; };
+		AFCDC333087CBBB6BFF4566F /* FakeSignalingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9756E09068C1BAC5AAD3412 /* FakeSignalingTransport.swift */; };
 		B402B3581D8D647DC2D139A7 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
 		B896B31FAF7939AF63947C4C /* FakeSessionSignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC97F9BB82CE31EBF9C084B /* FakeSessionSignaling.swift */; };
 		BC3AE1438258D205BFE66CD2 /* SerenadaiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */; };
@@ -70,6 +71,7 @@
 		CB94D71B6D37742D4EAAC565 /* SessionOrchestrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */; };
 		CEEA0CFAF57BC2B4A48F8441 /* DeepLinkParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5BC48440A4DD113050C3E29 /* DeepLinkParserTests.swift */; };
 		D05E6EDD64E9A169FF7DAD21 /* SerenadaCoreProviderModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECF59DDD3EB32D08B6F0B913 /* SerenadaCoreProviderModeTests.swift */; };
+		D137590CDB7A1FC9C94D3F74 /* SignalingClientFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62ED85E9C29EE8FB7BC0806 /* SignalingClientFallbackTests.swift */; };
 		DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A48285CB0CBEE51504B0674B /* CallManager.swift */; };
 		E023D6932A1411B953694012 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
 		EE8328B7F79EEA681164E7ED /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 018403014C9AEDF89B039618 /* SettingsScreen.swift */; };
@@ -198,6 +200,8 @@
 		C03DA37A007DFCE3DA069244 /* CallScreenStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallScreenStateTests.swift; sourceTree = "<group>"; };
 		C1C9C837439E676ED7F04801 /* BroadcastShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastShared.swift; sourceTree = "<group>"; };
 		C5849DCA4B2F1D0DD0411242 /* PushSubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionManager.swift; sourceTree = "<group>"; };
+		C62ED85E9C29EE8FB7BC0806 /* SignalingClientFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingClientFallbackTests.swift; sourceTree = "<group>"; };
+		C9756E09068C1BAC5AAD3412 /* FakeSignalingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeSignalingTransport.swift; sourceTree = "<group>"; };
 		CC2247BFD0D693E4041DAF16 /* FakeAudioController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioController.swift; sourceTree = "<group>"; };
 		D0BE7FF0C166694E0F58114A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D5DEACDD78A7F800281C0FC6 /* CaptureResolutionSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureResolutionSelectionTests.swift; sourceTree = "<group>"; };
@@ -410,6 +414,7 @@
 				7830FA5A71601737755C721D /* SerenadaSessionTests.swift */,
 				8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */,
 				09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */,
+				C62ED85E9C29EE8FB7BC0806 /* SignalingClientFallbackTests.swift */,
 				1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */,
 				FD06F6B1E706207C4ED2D7DD /* SignalingPayloadsTests.swift */,
 				DA4E5581F6502FD66EEAB5CD /* Fakes */,
@@ -502,6 +507,7 @@
 				99B88E3237E25D45BB2BD9B4 /* FakeSessionClock.swift */,
 				BAC97F9BB82CE31EBF9C084B /* FakeSessionSignaling.swift */,
 				BB6EC0967F80C7CB8EB7E9E0 /* FakeSignalingProvider.swift */,
+				C9756E09068C1BAC5AAD3412 /* FakeSignalingTransport.swift */,
 			);
 			path = Fakes;
 			sourceTree = "<group>";
@@ -796,6 +802,7 @@
 				144C4C15F4B31D2E8AE8057A /* FakeSessionClock.swift in Sources */,
 				B896B31FAF7939AF63947C4C /* FakeSessionSignaling.swift in Sources */,
 				467581ED7FB87064203AA780 /* FakeSignalingProvider.swift in Sources */,
+				AFCDC333087CBBB6BFF4566F /* FakeSignalingTransport.swift in Sources */,
 				5153383FD16DC779F8EBA4B3 /* JoinFlowCoordinatorTests.swift in Sources */,
 				16ED701C50FCF1CF741D04F1 /* JoinRecoveryTests.swift in Sources */,
 				6EE2ED9D63185C2AA8581CFE /* L10nTests.swift in Sources */,
@@ -813,6 +820,7 @@
 				6E8767096E3E70790EB1CEE5 /* SessionNegotiationTests.swift in Sources */,
 				CB94D71B6D37742D4EAAC565 /* SessionOrchestrationTests.swift in Sources */,
 				90E4D65F01CB4CBE8E6CA6EF /* SessionTestHarness.swift in Sources */,
+				D137590CDB7A1FC9C94D3F74 /* SignalingClientFallbackTests.swift in Sources */,
 				60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */,
 				887A6F874A06A47C37E73A85 /* SignalingPayloadsTests.swift in Sources */,
 			);
