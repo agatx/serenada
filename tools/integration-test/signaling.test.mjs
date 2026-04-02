@@ -46,11 +46,16 @@ function connectWS() {
 
     ws.on("message", (data) => {
       const msg = JSON.parse(data.toString());
-      if (pending.length > 0) {
-        pending.shift().resolve(msg);
-      } else {
-        buffer.push(msg);
+      // Try to deliver to the first pending receiver whose predicate matches.
+      for (let i = 0; i < pending.length; i++) {
+        const entry = pending[i];
+        if (!entry.predicate || entry.predicate(msg)) {
+          pending.splice(i, 1);
+          entry.resolve(msg);
+          return;
+        }
       }
+      buffer.push(msg);
     });
 
     ws.on("close", () => {
@@ -81,19 +86,14 @@ function connectWS() {
         }
         return new Promise((resolve, reject) => {
           const timer = setTimeout(() => {
-            // Remove from pending.
             const idx = pending.indexOf(entry);
             if (idx !== -1) pending.splice(idx, 1);
             reject(new Error(`Timed out waiting for message (${ms}ms)`));
           }, ms);
 
           const entry = {
+            predicate,
             resolve: (msg) => {
-              if (predicate && !predicate(msg)) {
-                // Not matching — put back in buffer and stay pending.
-                buffer.push(msg);
-                return;
-              }
               clearTimeout(timer);
               resolve(msg);
             },
