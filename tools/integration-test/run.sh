@@ -25,6 +25,7 @@ export TURN_TOKEN_SECRET
 export ROOM_ID_ENV=test
 export ALLOWED_ORIGINS="*"
 export RATE_LIMIT_BYPASS_IPS="127.0.0.1,::1"
+export MAX_ROOM_PARTICIPANTS=10
 export PORT
 
 ROOM_ID_SECRET=$(openssl rand -hex 32)

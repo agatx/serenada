@@ -885,6 +885,194 @@ await test("[Cross] Host end_room across transports", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Stress Tests
+// ---------------------------------------------------------------------------
+
+await test("[Stress] Rapid join/leave cycling", async () => {
+  const COUNT = 10;
+  const roomId = await createRoom();
+  const clients = [];
+  const joinedInfos = [];
+
+  // Join 10 clients sequentially.
+  for (let i = 0; i < COUNT; i++) {
+    const c = await connectWS();
+    clients.push(c);
+    c.send({
+      type: "join",
+      rid: roomId,
+      payload: { capabilities: { maxParticipants: COUNT }, createMaxParticipants: COUNT },
+    });
+    const joined = await c.receive((m) => m.type === "joined", 10000);
+    joinedInfos.push(joined);
+  }
+
+  // The last joiner should see all participants in its joined payload.
+  assertEqual(
+    joinedInfos[COUNT - 1].payload.participants.length,
+    COUNT,
+    `last joiner should see ${COUNT} participants`,
+  );
+
+  // Verify all CIDs are unique.
+  const cids = new Set(joinedInfos.map((j) => j.cid));
+  assertEqual(cids.size, COUNT, "all CIDs should be unique");
+
+  // All leave, then close.
+  for (let i = 0; i < COUNT; i++) {
+    clients[i].send({
+      type: "leave",
+      rid: roomId,
+      sid: joinedInfos[i].sid,
+      cid: joinedInfos[i].cid,
+    });
+  }
+
+  // Give the server a moment to process all leaves, then close connections.
+  await new Promise((r) => setTimeout(r, 500));
+  for (const c of clients) c.close();
+});
+
+await test("[Stress] Concurrent rooms with no cross-leak", async () => {
+  const ROOM_COUNT = 20;
+
+  // Set up all rooms in parallel.
+  const rooms = await Promise.all(
+    Array.from({ length: ROOM_COUNT }, async (_, i) => {
+      const roomId = await createRoom();
+      const clientA = await connectWS();
+      const clientB = await connectWS();
+
+      clientA.send({
+        type: "join",
+        rid: roomId,
+        payload: { capabilities: { maxParticipants: 2 } },
+      });
+      const joinedA = await clientA.receive((m) => m.type === "joined", 10000);
+
+      clientB.send({
+        type: "join",
+        rid: roomId,
+        payload: { capabilities: { maxParticipants: 2 } },
+      });
+      const joinedB = await clientB.receive((m) => m.type === "joined", 10000);
+
+      // Wait for both to see 2 participants.
+      await clientA.receive(
+        (m) => m.type === "room_state" && m.payload.participants.length === 2,
+        10000,
+      );
+
+      return { roomId, clientA, clientB, joinedA, joinedB, index: i };
+    }),
+  );
+
+  // Each room's client A sends an offer with a room-unique SDP.
+  for (const r of rooms) {
+    r.clientA.send({
+      type: "offer",
+      rid: r.roomId,
+      sid: r.joinedA.sid,
+      cid: r.joinedA.cid,
+      to: r.joinedB.cid,
+      payload: { sdp: `offer-room-${r.index}` },
+    });
+  }
+
+  // Each room's client B receives the offer and verifies the SDP matches.
+  for (const r of rooms) {
+    const offer = await r.clientB.receive((m) => m.type === "offer", 10000);
+    assertEqual(offer.payload.sdp, `offer-room-${r.index}`, `room ${r.index} SDP should match`);
+  }
+
+  // Clean up.
+  for (const r of rooms) {
+    r.clientA.close();
+    r.clientB.close();
+  }
+});
+
+await test("[Stress] Mixed WS+SSE load in one room", async () => {
+  const roomId = await createRoom();
+
+  // Connect 2 WS + 2 SSE clients.
+  const ws1 = await connectWS();
+  const ws2 = await connectWS();
+  const sse1 = await connectSSE();
+  const sse2 = await connectSSE();
+  const allClients = [
+    { client: ws1, label: "ws-1" },
+    { client: ws2, label: "ws-2" },
+    { client: sse1, label: "sse-1" },
+    { client: sse2, label: "sse-2" },
+  ];
+
+  // Join all 4 clients.
+  const joinedInfos = [];
+  for (const { client, label } of allClients) {
+    const isSSE = label.startsWith("sse");
+    const sendFn = isSSE
+      ? (msg) => client.send(msg)
+      : (msg) => { client.send(msg); return Promise.resolve(); };
+    await sendFn({
+      type: "join",
+      rid: roomId,
+      payload: { capabilities: { maxParticipants: 4 }, createMaxParticipants: 4 },
+    });
+    const joined = await client.receive((m) => m.type === "joined", 10000);
+    joinedInfos.push({ ...joined, label });
+  }
+
+  // Wait for the first client to see all 4 participants.
+  await ws1.receive(
+    (m) => m.type === "room_state" && m.payload.participants.length === 4,
+    10000,
+  );
+
+  // Each client sends an offer to every other client with a unique SDP.
+  for (let i = 0; i < allClients.length; i++) {
+    const sender = allClients[i];
+    const senderInfo = joinedInfos[i];
+    for (let j = 0; j < allClients.length; j++) {
+      if (i === j) continue;
+      const receiverInfo = joinedInfos[j];
+      const isSSE = sender.label.startsWith("sse");
+      const sendFn = isSSE
+        ? (msg) => sender.client.send(msg)
+        : (msg) => { sender.client.send(msg); return Promise.resolve(); };
+      await sendFn({
+        type: "offer",
+        rid: roomId,
+        sid: senderInfo.sid,
+        cid: senderInfo.cid,
+        to: receiverInfo.cid,
+        payload: { sdp: `from-${sender.label}` },
+      });
+    }
+  }
+
+  // Each client should receive offers from the other 3.
+  for (let i = 0; i < allClients.length; i++) {
+    const receiver = allClients[i];
+    const expectedSenders = allClients
+      .filter((_, j) => j !== i)
+      .map((s) => `from-${s.label}`);
+
+    const receivedSdps = new Set();
+    for (let k = 0; k < expectedSenders.length; k++) {
+      const offer = await receiver.client.receive((m) => m.type === "offer", 10000);
+      receivedSdps.add(offer.payload.sdp);
+    }
+
+    for (const expected of expectedSenders) {
+      assert(receivedSdps.has(expected), `${receiver.label} should receive ${expected}`);
+    }
+  }
+
+  for (const { client } of allClients) client.close();
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

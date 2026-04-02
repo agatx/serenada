@@ -130,13 +130,15 @@ Not yet implemented.
 - **Provider with `handlesReconnection: false`** — simulate disconnect, verify session drives reconnection (calls `connect()` again with backoff)
 - **Reconnect with peer ID preservation** — disconnect client A, reconnect with `reconnectPeerId`, verify the peer slot is reused (not a new participant)
 
-## 6. Stress / Concurrency at the Server Level
+## 6. Stress / Concurrency at the Server Level ✅ Implemented
 
-Not yet implemented. Extend the existing Node.js integration test harness:
+> `tools/integration-test/signaling.test.mjs`
 
-- **Rapid join/leave cycling** — 10 clients join and leave a room in quick succession, verify room_state is always consistent and room cleans up
-- **Concurrent rooms** — 20 rooms active simultaneously, each with 2 clients doing offer/answer, verify no cross-room message leakage
-- **SSE + WS mixed load** — half the clients on WS, half on SSE, all in the same room, verify message ordering and completeness
+Set `MAX_ROOM_PARTICIPANTS=10` in `run.sh` to allow larger rooms.
+
+- [x] **Rapid join/leave cycling** — 10 WS clients join one room sequentially, verify last joiner sees all 10 participants, all CIDs unique, then all leave
+- [x] **Concurrent rooms with no cross-leak** — 20 rooms active simultaneously, each with 2 WS clients doing offer/answer with room-unique SDP, verify no cross-room message leakage
+- [x] **Mixed WS+SSE load** — 4 clients (2 WS + 2 SSE) in one room, each sends directed offers to every other client, every client verifies it received offers from all 3 others
 
 ## 7. Provider Version Gating
 
@@ -156,5 +158,5 @@ Not yet implemented.
 | 3 | Loopback provider (#4) | ✅ Done | Medium | High | 8 web + 7 iOS + 8 Android tests |
 | 4 | Fallback (#3) | ✅ Done | Medium | Medium | 11 web + 8 iOS + 6 Android (client SDK tests) |
 | 5 | Reconnection (#5) | Not started | Medium | Medium | Needs timing control |
-| 6 | Stress (#6) | Not started | Medium | Medium | Concurrency edge cases |
+| 6 | Stress (#6) | ✅ Done | Medium | Medium | 3 tests: 10-client room, 20 concurrent rooms, mixed transport |
 | 7 | Version gating (#7) | Not started | Low | Low | Simple config validation |
