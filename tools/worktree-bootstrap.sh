@@ -33,14 +33,15 @@ die() { log_error "$@"; exit 1; }
 
 # --- Resolve paths ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Find the main working tree (first entry from `git worktree list`)
+# Find the main working tree (source for copying gitignored files)
 MAIN_REPO="$(git -C "$SCRIPT_DIR" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
 if [ -z "$MAIN_REPO" ] || [ ! -d "$MAIN_REPO" ]; then
-    MAIN_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+    MAIN_REPO="$DEFAULT_ROOT"
 fi
 
-TARGET="${1:-$MAIN_REPO}"
+TARGET="${1:-$DEFAULT_ROOT}"
 ORIGINAL_TARGET="$TARGET"
 if [[ "$TARGET" != /* ]]; then
     TARGET="$(cd "$TARGET" 2>/dev/null && pwd || true)"
@@ -68,6 +69,17 @@ if [ "${SKIP_ENV:-}" != "1" ]; then
     elif [ -f "$TARGET/.env.example" ]; then
         log_info "Creating .env from .env.example"
         cp "$TARGET/.env.example" "$TARGET/.env"
+        # Replace placeholder secrets with random values so validate won't warn
+        if command -v openssl >/dev/null 2>&1; then
+            for key in TURN_SECRET TURN_TOKEN_SECRET ROOM_ID_SECRET; do
+                NEW_VAL=$(openssl rand -hex 32)
+                sed -i.bak "s/^${key}=dev-.*/${key}=${NEW_VAL}/" "$TARGET/.env"
+            done
+            rm -f "$TARGET/.env.bak"
+            log_ok ".env secrets generated"
+        else
+            log_warn ".env created but contains placeholder secrets (openssl not found)"
+        fi
         record "env:from-example"
     else
         log_warn "No .env or .env.example found"
@@ -241,4 +253,5 @@ if [ "$FAILURES" -gt 0 ]; then
     exit 1
 else
     log_ok "Bootstrap complete"
+    log_info "Verify with: SKIP_BUILD=1 SKIP_TEST=1 tools/worktree-validate.sh '${TARGET}'"
 fi
