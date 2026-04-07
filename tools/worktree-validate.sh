@@ -89,8 +89,8 @@ fi
 if [ "${SKIP_ENV:-}" = "1" ]; then
     check_skip ".env (SKIP_ENV=1)"
 elif [ -f "$TARGET/.env" ]; then
-    # Check for placeholder secrets
-    if grep -qE 'dev-secret|dev-room-id-secret|change-me' "$TARGET/.env" 2>/dev/null; then
+    # Check for placeholder secrets (ignore commented lines)
+    if grep -v '^\s*#' "$TARGET/.env" 2>/dev/null | grep -qE 'dev-secret|dev-room-id-secret|change-me'; then
         check_warn ".env exists but contains placeholder secrets"
     else
         check_pass ".env configured"

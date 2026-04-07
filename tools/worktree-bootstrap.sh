@@ -253,5 +253,5 @@ if [ "$FAILURES" -gt 0 ]; then
     exit 1
 else
     log_ok "Bootstrap complete"
-    log_info "Verify with: SKIP_BUILD=1 SKIP_TEST=1 tools/worktree-validate.sh $TARGET"
+    log_info "Verify with: SKIP_BUILD=1 SKIP_TEST=1 tools/worktree-validate.sh '${TARGET}'"
 fi
