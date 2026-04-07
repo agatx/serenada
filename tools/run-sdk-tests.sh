@@ -57,55 +57,27 @@ fi
 
 # ── iOS SDK ──────────────────────────────────────────────────────────
 if [[ "${SKIP_IOS:-}" != "1" ]]; then
-  # Pick the best available iPhone simulator, outputting "name|OS" so we can
-  # build a precise xcodebuild destination (avoids OS:latest mismatch).
-  IOS_DEST="${IOS_SIMULATOR_DEST:-}"
-  if [[ -z "$IOS_DEST" ]]; then
-    IOS_DEST=$(xcrun simctl list devices available -j 2>/dev/null \
-      | python3 -c "
-import sys, json, re
-
-data = json.load(sys.stdin)
-# Collect (name, os_version) for every available iPhone
-candidates = []
-for runtime, devices in data.get('devices', {}).items():
-    # runtime looks like 'com.apple.CoreSimulator.SimRuntime.iOS-18-4'
-    m = re.search(r'iOS[.-](\d+)[.-](\d+)', runtime)
-    if not m:
-        continue
-    os_ver = (int(m.group(1)), int(m.group(2)))
-    for d in devices:
-        name = d.get('name', '')
-        if name.startswith('iPhone') and d.get('isAvailable', False):
-            candidates.append((name, os_ver))
-
-if not candidates:
-    sys.exit(0)
-
-# Prefer the newest iPhone on the newest iOS runtime
-def sort_key(item):
-    name, os_ver = item
-    nums = [int(x) for x in re.findall(r'\d+', name)]
-    return (os_ver, nums)
-
-best = max(candidates, key=sort_key)
-print(f'{best[0]}|{best[1][0]}.{best[1][1]}')
-" 2>/dev/null || true)
-  fi
-  if [[ -z "$IOS_DEST" ]]; then
+  IOS_SIM_LINE=$("$REPO_ROOT/tools/resolve-ios-simulator.sh" || true)
+  if [[ -z "$IOS_SIM_LINE" ]]; then
     echo "  ⚠ No available iPhone simulator found — skipping iOS tests"
     skipped+=("iOS SDK (no simulator)")
   else
-    IOS_SIM_NAME="${IOS_DEST%%|*}"
-    IOS_SIM_OS="${IOS_DEST##*|}"
+    IOS_SIM_UDID=$(echo "$IOS_SIM_LINE" | cut -f1)
+    IOS_SIM_NAME=$(echo "$IOS_SIM_LINE" | cut -f2)
+    IOS_SIM_OS=$(echo "$IOS_SIM_LINE" | cut -f3)
     echo "  Using simulator: $IOS_SIM_NAME (iOS $IOS_SIM_OS)"
+    if [[ -n "$IOS_SIM_UDID" ]]; then
+      IOS_XCODE_DEST="platform=iOS Simulator,id=$IOS_SIM_UDID"
+    else
+      IOS_XCODE_DEST="platform=iOS Simulator,name=$IOS_SIM_NAME,OS=$IOS_SIM_OS"
+    fi
     run_suite "iOS SDK" bash -c "
       cd '$REPO_ROOT/client-ios' &&
       xcodegen generate -q 2>/dev/null &&
       xcodebuild test \
         -project SerenadaiOS.xcodeproj \
         -scheme SerenadaiOS \
-        -destination 'platform=iOS Simulator,name=$IOS_SIM_NAME,OS=$IOS_SIM_OS' \
+        -destination '$IOS_XCODE_DEST' \
         -only-testing:SerenadaiOSTests \
         -quiet
     "
