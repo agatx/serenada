@@ -12,6 +12,8 @@
 #   SKIP_IOS=1       Skip iOS client checks
 #   SKIP_BUILD=1     Skip compilation checks (only verify deps/structure)
 #   SKIP_TEST=1      Skip test execution
+#   SKIP_ENV=1       Skip .env checks
+#   SKIP_DOCKER=1    Skip Docker checks
 #   VERBOSE=1        Show command output
 
 set -euo pipefail
@@ -84,9 +86,11 @@ else
 fi
 
 # .env
-if [ -f "$TARGET/.env" ]; then
-    # Check for placeholder secrets
-    if grep -qE 'dev-secret|dev-room-id-secret|change-me' "$TARGET/.env" 2>/dev/null; then
+if [ "${SKIP_ENV:-}" = "1" ]; then
+    check_skip ".env (SKIP_ENV=1)"
+elif [ -f "$TARGET/.env" ]; then
+    # Check for placeholder secrets (ignore commented lines)
+    if grep -v '^\s*#' "$TARGET/.env" 2>/dev/null | grep -qE 'dev-secret|dev-room-id-secret|change-me'; then
         check_warn ".env exists but contains placeholder secrets"
     else
         check_pass ".env configured"
@@ -130,16 +134,9 @@ if [ "${SKIP_WEB:-}" = "1" ]; then
 else
     CLIENT="$TARGET/client"
 
-    # node_modules — auto-install if missing and npm is available
+    # node_modules
     if [ -d "$CLIENT/node_modules" ]; then
         check_pass "node_modules installed"
-    elif command -v npm >/dev/null 2>&1 && [ -f "$CLIENT/package.json" ]; then
-        log_info "node_modules missing — running npm ci..."
-        if (cd "$CLIENT" && run_quiet npm ci --no-audit --no-fund); then
-            check_pass "node_modules installed (auto)"
-        else
-            check_fail "node_modules missing and npm ci failed"
-        fi
     else
         check_fail "node_modules missing (run: cd client && npm install)"
     fi
@@ -313,6 +310,13 @@ else
         check_warn "Java not installed (needed for Gradle)"
     fi
 
+    # local.properties (gitignored — bootstrap copies from main repo)
+    if [ -f "$ANDROID/local.properties" ]; then
+        check_pass "local.properties present"
+    else
+        check_warn "local.properties missing (run: tools/worktree-bootstrap.sh)"
+    fi
+
     # Android SDK
     HAS_ANDROID_SDK=false
     if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ]; then
@@ -404,6 +408,14 @@ else
         fi
     else
         check_warn "WebRTC.xcframework not found"
+    fi
+
+    # GoogleService-Info.plist (gitignored — bootstrap copies from main repo)
+    PLIST_PATH="$IOS/Resources/GoogleService-Info.plist"
+    if [ -f "$PLIST_PATH" ]; then
+        check_pass "GoogleService-Info.plist present"
+    else
+        check_warn "GoogleService-Info.plist missing (push notifications won't work)"
     fi
 
     # xcodebuild
@@ -534,20 +546,24 @@ fi
 echo ""
 echo -e "${BOLD}--- Docker ---${NC}"
 
-if [ -f "$TARGET/docker-compose.yml" ]; then
-    check_pass "docker-compose.yml present"
+if [ "${SKIP_DOCKER:-}" = "1" ]; then
+    check_skip "Docker (SKIP_DOCKER=1)"
 else
-    check_warn "docker-compose.yml missing"
-fi
-
-if command -v docker >/dev/null 2>&1; then
-    if docker info >/dev/null 2>&1; then
-        check_pass "Docker daemon running"
+    if [ -f "$TARGET/docker-compose.yml" ]; then
+        check_pass "docker-compose.yml present"
     else
-        check_warn "Docker installed but daemon not running"
+        check_warn "docker-compose.yml missing"
     fi
-else
-    check_warn "Docker not installed"
+
+    if command -v docker >/dev/null 2>&1; then
+        if docker info >/dev/null 2>&1; then
+            check_pass "Docker daemon running"
+        else
+            check_warn "Docker installed but daemon not running"
+        fi
+    else
+        check_warn "Docker not installed"
+    fi
 fi
 
 # ============================================================
