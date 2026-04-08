@@ -366,7 +366,6 @@ private extension SerenadaServerProvider {
         turnManager?.cancelRefresh()
         currentRoomId = nil
         currentReconnectPeerId = nil
-        currentDisplayName = nil
         currentTurnToken = nil
         currentHostPeerId = nil
         previousParticipants = [:]

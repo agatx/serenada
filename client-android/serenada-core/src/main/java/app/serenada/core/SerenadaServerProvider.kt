@@ -249,12 +249,12 @@ internal class SerenadaServerProvider(
         val nextParticipants = participants.associateBy { it.peerId }
         for ((peerId, participant) in nextParticipants) {
             if (!previousParticipants.containsKey(peerId)) {
-                listener?.onPeerJoined(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt))
+                listener?.onPeerJoined(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName))
             }
         }
         for ((peerId, participant) in previousParticipants) {
             if (!nextParticipants.containsKey(peerId)) {
-                listener?.onPeerLeft(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt))
+                listener?.onPeerLeft(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName))
             }
         }
     }

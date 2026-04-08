@@ -435,8 +435,12 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		room.JoinedAt[cid] = time.Now().UnixMilli()
 	}
 
-	// Store display name (update on every join/reconnect so clients can change it)
+	// Update on every join so clients can change their name mid-session
 	if joinPayload.DisplayName != "" {
+		runes := []rune(joinPayload.DisplayName)
+		if len(runes) > 40 {
+			joinPayload.DisplayName = string(runes[:40])
+		}
 		room.DisplayNames[cid] = joinPayload.DisplayName
 	}
 
