@@ -89,7 +89,11 @@ struct SettingsScreen: View {
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
                     .onChange(of: displayName) { newValue in
-                        onDisplayNameChange(newValue)
+                        let clamped = String(newValue.prefix(40))
+                        if clamped != newValue {
+                            displayName = clamped
+                        }
+                        onDisplayNameChange(clamped)
                     }
             }
 

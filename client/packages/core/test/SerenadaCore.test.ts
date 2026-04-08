@@ -104,6 +104,7 @@ describe('SerenadaCore', () => {
             expect(session.state.roomUrl).toBe(url);
             session.destroy();
         });
+
     });
 
     describe('join({ roomId })', () => {

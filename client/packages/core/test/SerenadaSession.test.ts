@@ -118,6 +118,31 @@ describe('SerenadaSession', () => {
             expect(harness.state.localParticipant?.isHost).toBe(false);
         });
 
+        it('sets localParticipant.displayName when displayName is provided', () => {
+            harness = new TestSessionHarness({ displayName: 'Alice' });
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }],
+            });
+
+            expect(harness.state.localParticipant?.displayName).toBe('Alice');
+        });
+
+        it('sets remote participant displayName from room state', () => {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [
+                    { cid: 'me' },
+                    { cid: 'peer-1', displayName: 'Bob' },
+                ],
+            });
+
+            if (harness.state.phase === 'inCall') {
+                expect(harness.state.remoteParticipants[0].displayName).toBe('Bob');
+            }
+        });
+
         it('propagates activeTransport from signaling', () => {
             harness = new TestSessionHarness();
             harness.signaling.emitConnected('sse');

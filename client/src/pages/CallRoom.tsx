@@ -286,7 +286,7 @@ const CallRoom: React.FC = () => {
             turnsOnly,
         });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
-        const nextSession = core.join(callUrl, { displayName: getDisplayName() || undefined });
+        const nextSession = core.join(callUrl, { displayName: displayNameInput.trim() || undefined });
         callStartTimeRef.current = Date.now();
         setSession(nextSession);
 

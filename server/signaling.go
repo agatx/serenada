@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -435,13 +436,18 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		room.JoinedAt[cid] = time.Now().UnixMilli()
 	}
 
-	// Update on every join so clients can change their name mid-session
+	// Update on every join so clients can change or clear their name mid-session
 	if joinPayload.DisplayName != "" {
-		runes := []rune(joinPayload.DisplayName)
+		trimmed := strings.TrimSpace(joinPayload.DisplayName)
+		runes := []rune(trimmed)
 		if len(runes) > 40 {
-			joinPayload.DisplayName = string(runes[:40])
+			trimmed = string(runes[:40])
 		}
-		room.DisplayNames[cid] = joinPayload.DisplayName
+		if trimmed != "" {
+			room.DisplayNames[cid] = trimmed
+		} else {
+			delete(room.DisplayNames, cid)
+		}
 	}
 
 	if room.HostCID == "" {

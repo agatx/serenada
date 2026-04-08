@@ -56,7 +56,7 @@ Join a room and return a `SerenadaSession`. Accepts either a URL or a room ID:
 | `roomId` | `String` | A bare room ID (provider mode) |
 | `displayName` | `String` (optional) | Display name for the local participant, sent to peers on join |
 
-On web, `join()` accepts a URL string or an options object `{ url?, roomId?, displayName? }`. On Android and iOS, `url` and `roomId` are separate named parameters.
+On web, `join()` accepts a URL string with an optional second argument `{ displayName? }`, or an options object `{ roomId, displayName? }`. On Android and iOS, `url` and `roomId` are separate named parameters.
 
 ### `SignalingProvider`
 

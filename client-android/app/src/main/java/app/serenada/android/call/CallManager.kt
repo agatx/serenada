@@ -607,7 +607,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             try {
                 val core = createSdkCore(serverHost.value)
                 val created = core.createRoom()
-                val session = core.join(created.roomId, displayName = settingsStore.displayName.ifBlank { null })
+                val session = core.join(roomId = created.roomId, displayName = settingsStore.displayName.ifBlank { null })
                 beginSdkSession(session)
             } catch (error: Throwable) {
                 val fallback = appContext.getString(R.string.error_failed_create_room)
