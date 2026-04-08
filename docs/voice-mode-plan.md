@@ -6,10 +6,11 @@ Serenada currently supports only video calls. This change adds a voice-only call
 
 ## Design Decisions
 
-- **Room mode is immutable**: set by the creator's first join, never changes. No video in voice rooms.
+- **Room mode is immutable**: set by the creator's first join, never changes. Mode describes the room's *character*, not a hard media constraint.
+- **Audio-first, camera optional**: voice rooms skip camera permission on join, but any participant can opt-in to share their camera at any time. Other participants are never prompted.
 - **Separate capacity ceiling**: new env var `MAX_VOICE_ROOM_PARTICIPANTS` (default 8), independent of `MAX_ROOM_PARTICIPANTS` (default 4).
 - **Separate "Start Voice Call" button** on home/join screens (all platforms).
-- **Voice call UI**: minimal vertical participant list with mute indicators, no video views.
+- **Voice call UI**: minimal vertical scrollable participant list with mute indicators; participants sharing video get a dedicated video tile above the list (similar layout to the focused video in video calls, but with room participants list below). The person sharing a video is always the first in the list with an icon indicating that they are sharing a video. The list is sorted by the order in which participants joined the room. If multiple people share video, the first person who joined is always the first in the list, and the rest are sorted by the order in which they joined. You can switch video feeds by clicking on the participant's name in the list.
 - **Backward compatible**: old clients default to `"video"` mode; unknown `mode` field is ignored.
 
 ---
@@ -45,6 +46,7 @@ Serenada currently supports only video calls. This change adds a voice-only call
 - `joined` and `room_state` contain `"mode": "voice"`
 - Missing mode defaults to `"video"`
 - Second joiner cannot change mode
+- Video tracks are not blocked in voice rooms (server is media-agnostic)
 
 ---
 
@@ -75,8 +77,8 @@ Serenada currently supports only video calls. This change adds a voice-only call
 9. **SerenadaServerProvider.joinRoom**: forward `callMode` from options
 10. **SerenadaServerProvider** joined/roomState handlers: extract `mode` and pass as `callMode`
 11. **SerenadaSession**: accept `callMode` from config, update from joined response, include in `rebuildState()`
-12. **SerenadaSession permission check**: for voice mode, only require `['microphone']` (skip camera)
-13. **MediaEngine**: add `voiceOnly` flag; when true, `getUserMedia({ audio: constraints, video: false })`; no-op for flipCamera, startScreenShare, setCameraMode
+12. **SerenadaSession permission check**: for voice mode, only require `['microphone']` on join (skip camera)
+13. **MediaEngine**: voice mode: `getUserMedia({ audio, video: false })` on join; `enableCamera()` still works when called later (requests camera permission on demand); no-op for flipCamera/setCameraMode only when camera is off
 14. **SerenadaSessionHandle**: add `readonly callMode: CallMode` (derived from state)
 15. **Unsupported session** (SerenadaCore.ts:61): add `callMode: 'video'` to error state
 
@@ -98,12 +100,13 @@ Serenada currently supports only video calls. This change adds a voice-only call
    - Navigate to `/call/${roomId}?mode=voice`
 2. **CallRoom.tsx**: read `mode` query param, pass `callMode: 'voice'` to `SerenadaConfig`
 3. **SerenadaCallFlow.tsx** — when `callState.callMode === 'voice'`:
-   - Replace video grid/PIP with `VoiceCallParticipantList` component
+   - Default layout: `VoiceCallParticipantList` — vertical list with mute indicators and CID labels
+   - Participants sharing video: their list row expands to show an inline video tile
    - Show header: "Voice Call · N people"
-   - Show vertical list of participants: icon (mic/muted), CID label, "(you)" for local
-   - Controls: only mute toggle + end call (no camera, flip, screen share)
+   - Controls: mute toggle + end call + "Share Camera" button (world camera icon); no flip/screen share
+   - When local user shares camera: show local video preview above controls
    - Waiting screen: "Waiting for others to join..." with share/QR controls
-4. **i18n.ts**: add keys: `start_voice_call`, `voice_call_header`, `voice_call_waiting`
+4. **i18n.ts**: add keys: `start_voice_call`, `voice_call_header`, `voice_call_waiting`, `share_camera`
 
 ---
 
@@ -124,8 +127,8 @@ Serenada currently supports only video calls. This change adds a voice-only call
 2. Add `callMode` to config and state
 3. Include `"mode"` in join signaling payload
 4. Parse `"mode"` from `joined` and `room_state`
-5. Voice mode: only request `RECORD_AUDIO` permission (skip `CAMERA`)
-6. Voice mode: `WebRtcEngine` skips `VideoSource`, `VideoTrack`, `CameraCaptureController`
+5. Voice mode: only request `RECORD_AUDIO` permission on join (skip `CAMERA`)
+6. Voice mode: `WebRtcEngine` skips video source/track/capturer on join; `enableCamera()` requests `CAMERA` permission on demand and creates video track when called later
 
 ---
 
@@ -142,11 +145,11 @@ Serenada currently supports only video calls. This change adds a voice-only call
 2. **CallManager.kt**: accept and forward `callMode` parameter
 3. **CallUiState.kt**: add `callMode: CallMode = CallMode.VIDEO`
 4. **CallScreen.kt**: when `callMode == VOICE`:
-   - Replace `SurfaceViewRenderer` / video tiles with `VoiceCallParticipantList` composable
+   - Default: `VoiceCallParticipantList` composable — `LazyColumn` of participant rows with circle avatar + CID + mute icon
+   - Participants sharing video: row expands to show inline `SurfaceViewRenderer`
    - Header: "Voice Call · N people"
-   - Scrollable `LazyColumn` of participant rows: circle avatar + CID + mute icon
-   - Controls: mute + end call only
-   - Hide camera, flip, screen share, flash buttons
+   - Controls: mute + end call + "Share Camera" button; hide flip, screen share, flash
+   - When local user shares camera: show local camera preview above controls
 
 ---
 
@@ -162,7 +165,8 @@ Serenada currently supports only video calls. This change adds a voice-only call
 - `SerenadaSession.swift` — pass mode, update state, gate permissions/media
 - `Call/WebRtcEngine.swift` — voice-only: skip RTCVideoSource/Track/Capturer
 
-### Changes mirror web/Android SDK.
+### Changes mirror web/Android SDK:
+- Voice mode: only request microphone on join; camera permission requested on demand when participant opts in to share video
 
 ---
 
@@ -178,10 +182,11 @@ Serenada currently supports only video calls. This change adds a voice-only call
 1. **JoinScreen.swift**: add second button with mic icon for voice calls
 2. **CallManager.swift**: forward `callMode`
 3. **CallScreen.swift**: when `callMode == .voice`:
-   - Replace `RTCMTLVideoView` tiles with `VoiceCallParticipantList` SwiftUI view
+   - Default: `VoiceCallParticipantList` SwiftUI view — `ScrollView`/`List` of participant rows with circle + CID + mic status
+   - Participants sharing video: row expands to show inline `RTCMTLVideoView`
    - Header: "Voice Call · N people"
-   - `List` / `ScrollView` of participant rows: circle + CID + mic status
-   - Controls: mute + end call only
+   - Controls: mute + end call + "Share Camera" button; hide flip, screen share
+   - When local user shares camera: show local camera preview above controls
 
 ---
 
@@ -201,10 +206,13 @@ Serenada currently supports only video calls. This change adds a voice-only call
 3. **Web build**: `cd client && npm run build` — no type errors
 4. **Integration test**: `bash tools/integration-test/run.sh` — signaling integration passes
 5. **Manual web test**: start voice call from home page, verify:
-   - No camera permission requested
-   - List UI shown (not video)
+   - No camera permission requested on join
+   - List UI shown (not video grid)
    - Second participant sees voice mode
    - Up to 8 participants can join
-6. **Android/iOS**: build and verify voice call button, voice UI, no camera
+   - "Share Camera" button works: requests camera permission on demand, shows inline video tile
+   - Other participants see the video tile but are not prompted for camera
+   - Stopping camera returns to audio-only list row
+6. **Android/iOS**: build and verify voice call button, voice UI, no camera on join, optional camera sharing works
 7. **Resilience parity**: `node scripts/check-resilience-constants.mjs`
 8. **Version parity**: `node scripts/check-version-parity.mjs`
