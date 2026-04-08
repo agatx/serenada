@@ -30,7 +30,7 @@ import {
     ENDING_SCREEN_MS,
 } from './constants.js';
 import { formatError } from './formatError.js';
-import type { RoomState, SignalingMessage } from './signaling/types.js';
+import type { RoomParticipant, RoomState, SignalingMessage } from './signaling/types.js';
 
 interface SessionDependencies {
     media?: MediaEngine;
@@ -66,7 +66,7 @@ function mapErrorCode(serverCode: string): CallErrorCode {
     }
 }
 
-function toRoomParticipant(participant: { peerId: string; joinedAt?: number; displayName?: string }): { cid: string; joinedAt?: number; displayName?: string } {
+function toRoomParticipant(participant: { peerId: string; joinedAt?: number; displayName?: string }): RoomParticipant {
     return {
         cid: participant.peerId,
         joinedAt: participant.joinedAt,
@@ -75,10 +75,10 @@ function toRoomParticipant(participant: { peerId: string; joinedAt?: number; dis
 }
 
 function dedupeParticipants(
-    participants: Array<{ cid: string; joinedAt?: number; displayName?: string }>,
+    participants: RoomParticipant[],
     localPeerId: string | null,
-): Array<{ cid: string; joinedAt?: number; displayName?: string }> {
-    const deduped = new Map<string, { cid: string; joinedAt?: number; displayName?: string }>();
+): RoomParticipant[] {
+    const deduped = new Map<string, RoomParticipant>();
     for (const participant of participants) {
         if (participant.cid.length === 0) {
             continue;
@@ -92,7 +92,7 @@ function dedupeParticipants(
 }
 
 function resolveHostCid(
-    participants: Array<{ cid: string; joinedAt?: number; displayName?: string }>,
+    participants: RoomParticipant[],
     nextHostCid: string | null | undefined,
     localPeerId: string | null,
 ): string | null {
@@ -479,7 +479,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.handlesReconnection) {
             this.reconnectRecoveryPending = hadRoomState;
         } else {
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined };
+            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
             this.scheduleReconnect();
         }
 
@@ -662,7 +662,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             if (this.isInactive) {
                 return;
             }
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined };
+            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
             this.signaling.connect();
         }, delayMs);
     }

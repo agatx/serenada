@@ -1,6 +1,12 @@
+export type RoomParticipant = {
+    cid: string;
+    joinedAt?: number;
+    displayName?: string;
+};
+
 export type RoomState = {
     hostCid: string | null;
-    participants: { cid: string; joinedAt?: number; displayName?: string }[];
+    participants: RoomParticipant[];
     maxParticipants?: number;
 };
 

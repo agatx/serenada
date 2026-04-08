@@ -2,7 +2,7 @@ const STORAGE_KEY = 'serenada_display_name';
 
 export function getDisplayName(): string {
     try {
-        return localStorage.getItem(STORAGE_KEY) ?? '';
+        return (localStorage.getItem(STORAGE_KEY) ?? '').trim();
     } catch {
         return '';
     }
