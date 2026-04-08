@@ -74,6 +74,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
         this.previousParticipants.clear();
         this.signaling.joinRoom(roomId, {
             createMaxParticipants: options?.maxParticipants,
+            displayName: options?.displayName,
         });
     }
 
@@ -291,10 +292,11 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
     }
 }
 
-function mapParticipant(participant: { cid: string; joinedAt?: number }): SignalingProviderParticipant {
+function mapParticipant(participant: { cid: string; joinedAt?: number; displayName?: string }): SignalingProviderParticipant {
     return {
         peerId: participant.cid,
         joinedAt: participant.joinedAt,
+        displayName: participant.displayName,
     };
 }
 

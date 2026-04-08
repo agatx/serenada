@@ -14,11 +14,13 @@ data class ConnectionInfo(
 data class JoinOptions(
     val reconnectPeerId: String? = null,
     val maxParticipants: Int? = null,
+    val displayName: String? = null,
 )
 
 data class SignalingProviderParticipant(
     val peerId: String,
     val joinedAt: Long? = null,
+    val displayName: String? = null,
 )
 
 data class JoinedEvent(

@@ -83,6 +83,9 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         mutableStateOf(settingsStore.areRoomInviteNotificationsEnabled)
     val areRoomInviteNotificationsEnabled: State<Boolean> = _areRoomInviteNotificationsEnabled
 
+    private val _displayName = mutableStateOf(settingsStore.displayName)
+    val displayName: State<String> = _displayName
+
     private val _roomStatuses = mutableStateOf<Map<String, RoomOccupancy>>(emptyMap())
     val roomStatuses: State<Map<String, RoomOccupancy>> = _roomStatuses
 
@@ -351,6 +354,11 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         _areRoomInviteNotificationsEnabled.value = enabled
     }
 
+    fun updateDisplayName(name: String) {
+        settingsStore.displayName = name
+        _displayName.value = name
+    }
+
     fun updateRemoteVideoFitCover(isCover: Boolean) {
         settingsStore.isRemoteVideoFitCover = isCover
     }
@@ -597,8 +605,10 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         )
         scope.launch {
             try {
-                val created = createSdkCore(serverHost.value).createRoom()
-                beginSdkSession(created.session)
+                val core = createSdkCore(serverHost.value)
+                val created = core.createRoom()
+                val session = core.join(created.roomId, displayName = settingsStore.displayName.ifBlank { null })
+                beginSdkSession(session)
             } catch (error: Throwable) {
                 val fallback = appContext.getString(R.string.error_failed_create_room)
                 val message = error.message?.ifBlank { null } ?: fallback
@@ -628,7 +638,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             refreshSavedRooms()
         }
         val resolvedHost = normalizeHostValue(oneOffHost) ?: serverHost.value
-        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost)
+        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost, displayName = settingsStore.displayName.ifBlank { null })
         beginSdkSession(session, hostOverride = oneOffHost)
     }
 

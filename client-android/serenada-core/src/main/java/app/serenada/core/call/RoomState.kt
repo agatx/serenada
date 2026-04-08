@@ -8,5 +8,6 @@ internal data class RoomState(
 
 internal data class Participant(
     val cid: String,
-    val joinedAt: Long?
+    val joinedAt: Long?,
+    val displayName: String? = null,
 )

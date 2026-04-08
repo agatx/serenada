@@ -79,14 +79,17 @@ Task {
     do {
         let room = try await serenada.createRoom()
         let shareURL = room.url  // send to the other party
+        let session = serenada.join(url: room.url)  // join explicitly
         presentFullScreen {
-            SerenadaCallFlow(session: room.session, onDismiss: { dismiss() })
+            SerenadaCallFlow(session: session, onDismiss: { dismiss() })
         }
     } catch {
         print("Failed: \(error)")
     }
 }
 ```
+
+`createRoom()` returns `CreateRoomResult(url, roomId)` only. It does not join the room or create a session. Call `join()` with the returned URL to start the call.
 
 `createRoom()` is server mode only. In provider mode there is no Serenada room API, so join by your own room ID instead.
 

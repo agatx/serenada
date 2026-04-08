@@ -124,6 +124,7 @@ Join a room.
       "maxParticipants": 4
     },
     "createMaxParticipants": 4,
+    "displayName": "optional display name",
     "reconnectCid": "optionalPreviousClientId"
   }
 }
@@ -157,7 +158,7 @@ Acknowledges join success and provides room state.
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
     "participants": [
-      { "cid": "C-a1b2...", "joinedAt": 1735171200000 },
+      { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
       { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
     ],
     "turnToken": "T-abc123yz...",
@@ -169,7 +170,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, and `displayName` *(string, optional)*.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 
@@ -191,9 +192,9 @@ Sent when participants join/leave or host changes.
   "payload": {
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
-    "participants": [
-      { "cid": "C-a1b2...", "joinedAt": 1735171200000 },
-      { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
+    “participants”: [
+      { “cid”: “C-a1b2...”, “joinedAt”: 1735171200000, “displayName”: “Alice” },
+      { “cid”: “C-c3d4...”, “joinedAt”: 1735171215000 }
     ]
   }
 }

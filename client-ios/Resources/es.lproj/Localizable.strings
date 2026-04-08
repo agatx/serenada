@@ -15,6 +15,8 @@
 "settings_language_russian" = "Ruso";
 "settings_language_spanish" = "Español";
 "settings_language_french" = "Francés";
+"settings_display_name" = "Nombre para mostrar";
+"settings_display_name_placeholder" = "Tu nombre (opcional)";
 "settings_call_defaults" = "Valores por defecto de llamada";
 "settings_hd_video_experimental" = "Video HD (experimental)";
 "settings_hd_video_experimental_info" = "Activa modos de cámara de mayor calidad. Puede aumentar el uso de CPU.";

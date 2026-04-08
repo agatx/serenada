@@ -1,6 +1,6 @@
 export type RoomState = {
     hostCid: string | null;
-    participants: { cid: string; joinedAt?: number }[];
+    participants: { cid: string; joinedAt?: number; displayName?: string }[];
     maxParticipants?: number;
 };
 

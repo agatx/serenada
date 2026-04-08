@@ -178,7 +178,6 @@ private fun HomeScreen(
                                 .onSuccess { result ->
                                     isCreatingRoom = false
                                     lastCreatedRoomUrl = result.roomUrl
-                                    result.session.leave()
                                     onJoinUrl(result.roomUrl)
                                 }
                                 .onFailure { error ->

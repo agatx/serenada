@@ -72,8 +72,9 @@ type Message struct {
 }
 
 type Participant struct {
-	CID      string `json:"cid"`
-	JoinedAt int64  `json:"joinedAt,omitempty"`
+	CID         string `json:"cid"`
+	JoinedAt    int64  `json:"joinedAt,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type Hub struct {
@@ -92,7 +93,8 @@ type Room struct {
 	MaxParticipants          int              // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
 	RequestedMaxParticipants int              // creator's requested ceiling, clamped by creator capability and server ceiling
 	CapacityLocked           bool             // once true, MaxParticipants is final for the room lifetime
-	JoinedAt                 map[string]int64 // cid -> join timestamp (ms)
+	JoinedAt                 map[string]int64  // cid -> join timestamp (ms)
+	DisplayNames             map[string]string // cid -> display name
 	mu                       sync.Mutex
 }
 
@@ -288,6 +290,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		ReconnectCID          string `json:"reconnectCid"`
 		ReconnectToken        string `json:"reconnectToken"`
 		CreateMaxParticipants int    `json:"createMaxParticipants"`
+		DisplayName           string `json:"displayName"`
 		Capabilities          struct {
 			MaxParticipants int `json:"maxParticipants"`
 		} `json:"capabilities"`
@@ -338,6 +341,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			RequestedMaxParticipants: createMax,
 			CapacityLocked:           capacityLocked,
 			JoinedAt:                 make(map[string]int64),
+			DisplayNames:             make(map[string]string),
 		}
 		h.rooms[rid] = room
 	}
@@ -431,6 +435,11 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		room.JoinedAt[cid] = time.Now().UnixMilli()
 	}
 
+	// Store display name (update on every join/reconnect so clients can change it)
+	if joinPayload.DisplayName != "" {
+		room.DisplayNames[cid] = joinPayload.DisplayName
+	}
+
 	if room.HostCID == "" {
 		room.HostCID = cid
 	}
@@ -440,7 +449,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	// Send 'joined'
 	participants := []Participant{}
 	for _, id := range room.Participants {
-		participants = append(participants, Participant{CID: id, JoinedAt: room.JoinedAt[id]})
+		participants = append(participants, Participant{CID: id, JoinedAt: room.JoinedAt[id], DisplayName: room.DisplayNames[id]})
 	}
 	roomMaxParticipants := room.MaxParticipants
 
@@ -710,6 +719,7 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	room.mu.Lock()
 	delete(room.Participants, c)
 	delete(room.JoinedAt, c.cid)
+	delete(room.DisplayNames, c.cid)
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, c.cid, c.rid, len(room.Participants))
 
 	// Manage Host
@@ -753,7 +763,7 @@ func (h *Hub) broadcastRoomState(room *Room) {
 	room.mu.Lock()
 	participants := []Participant{}
 	for _, cid := range room.Participants {
-		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid]})
+		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid], DisplayName: room.DisplayNames[cid]})
 	}
 	hostCid := room.HostCID
 	rid := room.RID

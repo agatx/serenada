@@ -39,7 +39,7 @@ class SerenadaCore(
     /**
      * Join a call using a full URL (e.g., "https://serenada.app/call/ABC123").
      */
-    fun join(url: String): SerenadaSession {
+    fun join(url: String, displayName: String? = null): SerenadaSession {
         assertMainThread()
         val resolved = resolveRoomUrl(url)
         val roomId = resolved?.roomId ?: url
@@ -53,6 +53,7 @@ class SerenadaCore(
             okHttpClient = okHttpClient,
             initialSignalingProvider = createSignalingProvider(sessionConfig),
             logger = logger,
+            displayName = displayName,
         )
         session.start()
         return session
@@ -61,7 +62,7 @@ class SerenadaCore(
     /**
      * Join a call using a room ID.
      */
-    fun join(roomId: String, serverHost: String? = resolvedConfig.serverHost): SerenadaSession {
+    fun join(roomId: String, serverHost: String? = resolvedConfig.serverHost, displayName: String? = null): SerenadaSession {
         assertMainThread()
         val sessionConfig = sessionConfigFor(serverHost)
         val roomUrl = resolvedConfig.serverHost?.let { buildRoomUrl(serverHost ?: it, roomId) }
@@ -74,13 +75,14 @@ class SerenadaCore(
             okHttpClient = okHttpClient,
             initialSignalingProvider = createSignalingProvider(sessionConfig),
             logger = logger,
+            displayName = displayName,
         )
         session.start()
         return session
     }
 
     /**
-     * Create a new room and immediately join it.
+     * Create a new room. Returns the room URL and ID. Call [join] to start the call.
      */
     suspend fun createRoom(): CreateRoomResult {
         assertMainThread()
@@ -98,18 +100,7 @@ class SerenadaCore(
         }
 
         val roomUrl = buildRoomUrl(serverHost, roomId)
-        val session = SerenadaSession(
-            roomId = roomId,
-            roomUrl = roomUrl,
-            config = config,
-            context = context,
-            delegate = { delegate },
-            okHttpClient = okHttpClient,
-            initialSignalingProvider = createSignalingProvider(config),
-            logger = logger,
-        )
-        session.start()
-        return CreateRoomResult(roomId = roomId, roomUrl = roomUrl, session = session)
+        return CreateRoomResult(roomId = roomId, roomUrl = roomUrl)
     }
 
     /**
@@ -204,5 +195,4 @@ class SerenadaCore(
 data class CreateRoomResult(
     val roomId: String,
     val roomUrl: String,
-    val session: SerenadaSession,
 )

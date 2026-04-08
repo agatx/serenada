@@ -23,6 +23,7 @@ export type PeerConnectionState = 'new' | 'connecting' | 'connected' | 'disconne
 /** Remote participant in a call. */
 export interface Participant {
     cid: string;
+    displayName?: string;
     audioEnabled: boolean;
     videoEnabled: boolean;
     connectionState: PeerConnectionState;
@@ -31,6 +32,7 @@ export interface Participant {
 /** Local participant info including camera mode and host status. */
 export interface LocalParticipant {
     cid: string;
+    displayName?: string;
     audioEnabled: boolean;
     videoEnabled: boolean;
     cameraMode: CameraMode;
@@ -92,8 +94,6 @@ export interface SerenadaConfig {
 export interface CreateRoomResult {
     url: string;
     roomId: string;
-    /** Public app-facing session contract. Prefer this over the concrete class in host-app code. */
-    session: SerenadaSessionHandle;
 }
 
 /**

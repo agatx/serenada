@@ -181,14 +181,7 @@ describe('SerenadaCore', () => {
     });
 
     describe('createRoom', () => {
-        it('throws when WebRTC is not supported', async () => {
-            delete (globalThis as Record<string, unknown>).RTCPeerConnection;
-            const core = new SerenadaCore(testConfig);
-            await expect(core.createRoom()).rejects.toThrow('WebRTC is not supported');
-        });
-
-        it('creates a room and returns url, roomId, session', async () => {
-            (globalThis as Record<string, unknown>).RTCPeerConnection = class {};
+        it('creates a room and returns url and roomId', async () => {
             const mockFetch = vi.fn().mockResolvedValue({
                 ok: true,
                 json: async () => ({ roomId: 'NEW_ROOM_ID' }),
@@ -200,9 +193,7 @@ describe('SerenadaCore', () => {
 
             expect(result.roomId).toBe('NEW_ROOM_ID');
             expect(result.url).toBe('https://serenada.app/call/NEW_ROOM_ID');
-            expect(result.session).toBeDefined();
-            expect(result.session.state.phase).toBe('joining');
-            result.session.destroy();
+            expect(result).not.toHaveProperty('session');
         });
     });
 

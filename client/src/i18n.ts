@@ -91,7 +91,8 @@ const resources = {
             "feedback_submit": "Send",
             "feedback_success": "Thank you for your feedback!",
             "feedback_rate_limit": "Please wait before sending more feedback.",
-            "feedback_error": "Failed to send feedback. Please try again."
+            "feedback_error": "Failed to send feedback. Please try again.",
+            "display_name_placeholder": "Your name (optional)"
         }
     },
     ru: {
@@ -182,7 +183,8 @@ const resources = {
             "feedback_submit": "Отправить",
             "feedback_success": "Спасибо за ваш отзыв!",
             "feedback_rate_limit": "Подождите перед отправкой нового отзыва.",
-            "feedback_error": "Не удалось отправить отзыв. Попробуйте еще раз."
+            "feedback_error": "Не удалось отправить отзыв. Попробуйте еще раз.",
+            "display_name_placeholder": "Ваше имя (необязательно)"
         }
     },
     es: {
@@ -273,7 +275,8 @@ const resources = {
             "feedback_submit": "Enviar",
             "feedback_success": "¡Gracias por tus comentarios!",
             "feedback_rate_limit": "Espera antes de enviar más comentarios.",
-            "feedback_error": "No se pudo enviar. Inténtalo de nuevo."
+            "feedback_error": "No se pudo enviar. Inténtalo de nuevo.",
+            "display_name_placeholder": "Tu nombre (opcional)"
         }
     },
     fr: {
@@ -364,7 +367,8 @@ const resources = {
             "feedback_submit": "Envoyer",
             "feedback_success": "Merci pour votre retour !",
             "feedback_rate_limit": "Veuillez patienter avant d'envoyer un autre retour.",
-            "feedback_error": "Échec de l'envoi. Veuillez réessayer."
+            "feedback_error": "Échec de l'envoi. Veuillez réessayer.",
+            "display_name_placeholder": "Votre nom (facultatif)"
         }
     }
 };

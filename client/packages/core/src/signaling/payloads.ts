@@ -2,7 +2,7 @@ import type { RoomState } from './types.js';
 
 export interface JoinedPayload {
     hostCid: string | null;
-    participants: Array<{ cid: string; joinedAt?: number }>;
+    participants: Array<{ cid: string; joinedAt?: number; displayName?: string }>;
     turnToken?: string;
     turnTokenTTLMs?: number;
     reconnectToken?: string;
@@ -35,9 +35,9 @@ export interface IceCandidatePayload {
     candidate: RTCIceCandidateInit;
 }
 
-function parseParticipants(raw: unknown): Array<{ cid: string; joinedAt?: number }> | null {
+function parseParticipants(raw: unknown): Array<{ cid: string; joinedAt?: number; displayName?: string }> | null {
     if (!Array.isArray(raw)) return null;
-    const result: Array<{ cid: string; joinedAt?: number }> = [];
+    const result: Array<{ cid: string; joinedAt?: number; displayName?: string }> = [];
     for (const p of raw) {
         if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
         const rec = p as Record<string, unknown>;
@@ -45,6 +45,7 @@ function parseParticipants(raw: unknown): Array<{ cid: string; joinedAt?: number
         result.push({
             cid: rec.cid,
             joinedAt: typeof rec.joinedAt === 'number' ? rec.joinedAt : undefined,
+            displayName: typeof rec.displayName === 'string' && rec.displayName.trim() !== '' ? rec.displayName : undefined,
         });
     }
     return result;

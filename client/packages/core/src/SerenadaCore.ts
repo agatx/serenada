@@ -27,34 +27,30 @@ export class SerenadaCore {
     }
 
     /** Join an existing call by URL. Returns a session handle. */
-    join(url: string): SerenadaSessionHandle;
+    join(url: string, options?: { displayName?: string }): SerenadaSessionHandle;
     /** Join an existing call by room ID. Returns a session handle. */
-    join(options: { roomId: string }): SerenadaSessionHandle;
-    join(urlOrOptions: string | { roomId: string }): SerenadaSessionHandle {
+    join(options: { roomId: string; displayName?: string }): SerenadaSessionHandle;
+    join(urlOrOptions: string | { roomId: string; displayName?: string }, extraOptions?: { displayName?: string }): SerenadaSessionHandle {
         if (!SerenadaCore.isSupported()) {
             return this.createUnsupportedSession();
         }
         const signalingProvider = this.createSignalingProvider();
         if (typeof urlOrOptions === 'string') {
             const roomId = this.parseRoomIdFromUrl(urlOrOptions);
-            return new SerenadaSession(this.config, roomId, urlOrOptions, signalingProvider);
+            return new SerenadaSession(this.config, roomId, urlOrOptions, signalingProvider, { displayName: extraOptions?.displayName });
         }
         const roomUrl = this.resolvedConfig.serverHost
             ? buildRoomUrl(this.resolvedConfig.serverHost, urlOrOptions.roomId)
             : null;
-        return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl, signalingProvider);
+        return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl, signalingProvider, { displayName: urlOrOptions.displayName });
     }
 
-    /** Create a new room and immediately join it. Returns the room URL, ID, and session handle. */
+    /** Create a new room. Returns the room URL and ID. Call {@link join} to start the call. */
     async createRoom(): Promise<CreateRoomResult> {
-        if (!SerenadaCore.isSupported()) {
-            throw new Error('WebRTC is not supported in this environment');
-        }
         const serverHost = requireServerHost(this.config);
         const roomId = await createRoomId(serverHost);
         const url = buildRoomUrl(serverHost, roomId);
-        const session = new SerenadaSession(this.config, roomId, url, this.createSignalingProvider());
-        return { url, roomId, session };
+        return { url, roomId };
     }
 
     private createUnsupportedSession(): SerenadaSessionHandle {

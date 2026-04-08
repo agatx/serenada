@@ -55,6 +55,7 @@ fun SerenadaAppRoot(
     val savedRooms by callManager.savedRooms
     val areSavedRoomsShownFirst by callManager.areSavedRoomsShownFirst
     val areRoomInviteNotificationsEnabled by callManager.areRoomInviteNotificationsEnabled
+    val displayName by callManager.displayName
     val roomStatuses by callManager.roomStatuses
     val activeSession by callManager.sessionState
     val context = LocalContext.current
@@ -261,6 +262,7 @@ fun SerenadaAppRoot(
                     SettingsScreen(
                         host = hostInput,
                         selectedLanguage = selectedLanguage,
+                        displayName = displayName,
                         hostError = settingsHostError,
                         isSaving = settingsSaveInProgress,
 
@@ -269,6 +271,7 @@ fun SerenadaAppRoot(
                         isHdVideoExperimentalEnabled = callManager.isHdVideoExperimentalEnabled.value,
                         areSavedRoomsShownFirst = areSavedRoomsShownFirst,
                         areRoomInviteNotificationsEnabled = areRoomInviteNotificationsEnabled,
+                        onDisplayNameChange = { callManager.updateDisplayName(it) },
                         onDefaultCameraChange = { callManager.updateDefaultCamera(it) },
                         onDefaultMicrophoneChange = { callManager.updateDefaultMicrophone(it) },
                         onHdVideoExperimentalChange = { callManager.updateHdVideoExperimental(it) },

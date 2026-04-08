@@ -226,7 +226,7 @@ function HomeScreen({
     const handleCreateRoom = useCallback(async () => {
         const room = await builtInSerenada.createRoom()
         console.log('Share this URL:', room.url)
-        onJoin({ kind: 'built-in', url: room.url, session: room.session })
+        onJoin({ kind: 'built-in', url: room.url })
     }, [onJoin])
 
     return (

@@ -12,6 +12,7 @@ import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 import { markRoomJoined, saveRoom } from '../utils/savedRooms';
 import { getConfiguredServerHost } from '../utils/serverHost';
 import { parseTurnsOnly } from '../utils/turnsOnly';
+import { getDisplayName, setDisplayName } from '../utils/displayName';
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -222,16 +223,12 @@ const CallRoom: React.FC = () => {
     const [pushSupported, setPushSupported] = useState(false);
     const [vapidKey, setVapidKey] = useState<string | null>(null);
     const [isInviting, setIsInviting] = useState(false);
+    const [displayNameInput, setDisplayNameInput] = useState(getDisplayName);
 
     const previewVideoRef = useRef<HTMLVideoElement | null>(null);
     const callStartTimeRef = useRef<number | null>(null);
     const pushNotifySentRef = useRef(false);
 
-    const core = useMemo(() => new SerenadaCore({
-        serverHost: getConfiguredServerHost(),
-        logger: new ConsoleSerenadaLogger(),
-        turnsOnly,
-    }), [turnsOnly]);
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
 
     const stopPreview = useCallback(() => {
@@ -283,8 +280,13 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         if (!roomId || !shouldJoin) return;
 
+        const core = new SerenadaCore({
+            serverHost: getConfiguredServerHost(),
+            logger: new ConsoleSerenadaLogger(),
+            turnsOnly,
+        });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
-        const nextSession = core.join(callUrl);
+        const nextSession = core.join(callUrl, { displayName: getDisplayName() || undefined });
         callStartTimeRef.current = Date.now();
         setSession(nextSession);
 
@@ -292,7 +294,7 @@ const CallRoom: React.FC = () => {
             nextSession.destroy();
             setSession(null);
         };
-    }, [core, location.hash, location.pathname, location.search, roomId, shouldJoin]);
+    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, turnsOnly]);
 
     useEffect(() => {
         if (!roomId) return;
@@ -544,6 +546,21 @@ const CallRoom: React.FC = () => {
                         />
                         {!previewStream && <div className="video-placeholder">{t('camera_off')}</div>}
                     </div>
+
+                    <input
+                        type="text"
+                        className="display-name-input"
+                        placeholder={t('display_name_placeholder')}
+                        value={displayNameInput}
+                        onChange={(e) => {
+                            setDisplayNameInput(e.target.value);
+                            setDisplayName(e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleJoin(!!sharedName);
+                        }}
+                        maxLength={40}
+                    />
 
                     {sharedName ? (
                         <>

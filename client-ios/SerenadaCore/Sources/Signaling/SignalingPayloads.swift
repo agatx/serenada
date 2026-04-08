@@ -10,7 +10,8 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         guard let obj = value.objectValue else { continue }
         guard let cid = obj["cid"]?.stringValue, !cid.isEmpty else { continue }
         let joinedAt = obj["joinedAt"]?.intValue.map(Int64.init)
-        result.append(Participant(cid: cid, joinedAt: joinedAt))
+        let displayName = obj["displayName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        result.append(Participant(cid: cid, joinedAt: joinedAt, displayName: displayName))
     }
     return result
 }
