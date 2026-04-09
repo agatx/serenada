@@ -369,6 +369,8 @@ fun SerenadaAppRoot(
                             onRemoteVideoFitChanged = { isCover ->
                                 callManager.updateRemoteVideoFitCover(isCover)
                             },
+                            onStartScreenShare = { intent -> callManager.startScreenShare(intent) },
+                            onStopScreenShare = { callManager.stopScreenShare() },
                         )
                     }
                 }
