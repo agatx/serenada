@@ -105,6 +105,22 @@ describe('SerenadaCore', () => {
             session.destroy();
         });
 
+        it('passes displayName to provider joins when joining by URL', () => {
+            const provider = new FakeSignalingProvider();
+            const core = new SerenadaCore({ signalingProvider: provider });
+            const session = core.join('https://serenada.app/call/ROOM1', { displayName: 'Alice' });
+
+            provider.emitConnected();
+
+            expect(provider.joinRoomCalls).toEqual([
+                {
+                    roomId: 'ROOM1',
+                    options: { displayName: 'Alice' },
+                },
+            ]);
+            session.destroy();
+        });
+
     });
 
     describe('join({ roomId })', () => {
@@ -117,6 +133,22 @@ describe('SerenadaCore', () => {
             const session = core.join({ roomId: 'MY_ROOM' });
             expect(session.state.roomId).toBe('MY_ROOM');
             expect(session.state.roomUrl).toBe('https://serenada.app/call/MY_ROOM');
+            session.destroy();
+        });
+
+        it('passes displayName to provider joins when joining by roomId', () => {
+            const provider = new FakeSignalingProvider();
+            const core = new SerenadaCore({ signalingProvider: provider });
+            const session = core.join({ roomId: 'MY_ROOM', displayName: 'Alice' });
+
+            provider.emitConnected();
+
+            expect(provider.joinRoomCalls).toEqual([
+                {
+                    roomId: 'MY_ROOM',
+                    options: { displayName: 'Alice' },
+                },
+            ]);
             session.destroy();
         });
     });

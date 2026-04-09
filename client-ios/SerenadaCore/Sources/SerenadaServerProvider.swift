@@ -91,7 +91,9 @@ internal final class SerenadaServerProvider: SignalingProvider {
             joinAttemptSerial += 1
             currentMaxParticipants = options.maxParticipants ?? currentMaxParticipants
             currentReconnectPeerId = options.reconnectPeerId
-            currentDisplayName = options.displayName ?? currentDisplayName
+            if options.displayName != nil {
+                currentDisplayName = options.displayName
+            }
             if signaling.isConnected() {
                 pendingJoinRoomId = nil
                 sendJoin(roomId: roomId)
@@ -318,7 +320,7 @@ private extension SerenadaServerProvider {
         if let currentReconnectPeerId, !currentReconnectPeerId.isEmpty {
             joinPayload["reconnectCid"] = .string(currentReconnectPeerId)
         }
-        if let currentDisplayName, !currentDisplayName.isEmpty {
+        if let currentDisplayName {
             joinPayload["displayName"] = .string(currentDisplayName)
         }
         sendRawMessage(type: "join", rid: roomId, payload: joinPayload)

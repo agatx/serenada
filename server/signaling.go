@@ -92,9 +92,9 @@ type Room struct {
 	RID                      string
 	Participants             map[*Client]string // client -> cid
 	HostCID                  string
-	MaxParticipants          int              // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
-	RequestedMaxParticipants int              // creator's requested ceiling, clamped by creator capability and server ceiling
-	CapacityLocked           bool             // once true, MaxParticipants is final for the room lifetime
+	MaxParticipants          int               // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
+	RequestedMaxParticipants int               // creator's requested ceiling, clamped by creator capability and server ceiling
+	CapacityLocked           bool              // once true, MaxParticipants is final for the room lifetime
 	JoinedAt                 map[string]int64  // cid -> join timestamp (ms)
 	DisplayNames             map[string]string // cid -> display name
 	mu                       sync.Mutex
@@ -303,10 +303,10 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Parse join payload before acquiring locks
 	var joinPayload struct {
-		ReconnectCID          string `json:"reconnectCid"`
-		ReconnectToken        string `json:"reconnectToken"`
-		CreateMaxParticipants int    `json:"createMaxParticipants"`
-		DisplayName           string `json:"displayName"`
+		ReconnectCID          string  `json:"reconnectCid"`
+		ReconnectToken        string  `json:"reconnectToken"`
+		CreateMaxParticipants int     `json:"createMaxParticipants"`
+		DisplayName           *string `json:"displayName"`
 		Capabilities          struct {
 			MaxParticipants int `json:"maxParticipants"`
 		} `json:"capabilities"`
@@ -452,8 +452,8 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	// Update on every join so clients can change their name on reconnect
-	if joinPayload.DisplayName != "" {
-		trimmed := strings.TrimSpace(joinPayload.DisplayName)
+	if joinPayload.DisplayName != nil {
+		trimmed := strings.TrimSpace(*joinPayload.DisplayName)
 		runes := []rune(trimmed)
 		if len(runes) > maxDisplayNameLength {
 			trimmed = string(runes[:maxDisplayNameLength])

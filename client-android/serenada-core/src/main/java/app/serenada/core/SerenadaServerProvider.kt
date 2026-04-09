@@ -79,7 +79,9 @@ internal class SerenadaServerProvider(
         pendingJoinRoomId = roomId
         currentMaxParticipants = options.maxParticipants ?: currentMaxParticipants
         currentReconnectPeerId = options.reconnectPeerId
-        currentDisplayName = options.displayName ?: currentDisplayName
+        if (options.displayName != null) {
+            currentDisplayName = options.displayName
+        }
         if (signaling.isConnected()) {
             pendingJoinRoomId = null
             sendJoin(roomId)

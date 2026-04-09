@@ -146,7 +146,7 @@ export class SignalingEngine {
                 createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 4,
             };
             const displayName = options?.displayName ?? this.lastDisplayName;
-            if (displayName) {
+            if (displayName !== undefined) {
                 payload.displayName = displayName;
             }
             const reconnectCid = this.clientId || this.lastClientId;
