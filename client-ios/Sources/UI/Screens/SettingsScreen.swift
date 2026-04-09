@@ -2,7 +2,9 @@ import SwiftUI
 
 struct SettingsScreen: View {
     @Binding var host: String
+    @Binding var displayName: String
     @Binding var showDiagnostics: Bool
+    @FocusState private var isDisplayNameFocused: Bool
     let selectedLanguage: String
     let isDefaultCameraEnabled: Bool
     let isDefaultMicrophoneEnabled: Bool
@@ -19,6 +21,7 @@ struct SettingsScreen: View {
     let onHdVideoExperimentalChange: (Bool) -> Void
     let onSavedRoomsShownFirstChange: (Bool) -> Void
     let onRoomInviteNotificationsChange: (Bool) -> Void
+    let onDisplayNameChange: (String) -> Void
 
     private let languageOptions: [(String, String)] = [
         (AppConstants.languageAuto, L10n.settingsLanguageAuto),
@@ -29,6 +32,7 @@ struct SettingsScreen: View {
     ]
 
     var body: some View {
+        ScrollViewReader { proxy in
         Form {
             Section(L10n.settingsServerHost) {
                 Picker(L10n.settingsServerHost, selection: Binding(
@@ -80,6 +84,21 @@ struct SettingsScreen: View {
                 Text(L10n.settingsLanguageHelp)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            Section(L10n.settingsDisplayName) {
+                TextField(L10n.settingsDisplayNamePlaceholder, text: $displayName)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .focused($isDisplayNameFocused)
+                    .id("displayNameField")
+                    .onChange(of: displayName) { newValue in
+                        let clamped = String(newValue.prefix(40))
+                        if clamped != newValue {
+                            displayName = clamped
+                        }
+                        onDisplayNameChange(clamped)
+                    }
             }
 
             Section(L10n.settingsCallDefaults) {
@@ -183,6 +202,22 @@ struct SettingsScreen: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                isDisplayNameFocused = false
+            }
+        )
+        .onChange(of: isDisplayNameFocused) { focused in
+            if focused {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation {
+                        proxy.scrollTo("displayNameField", anchor: .center)
+                    }
+                }
+            }
+        }
+        } // ScrollViewReader
         .overlay {
             if isSaving {
                 ZStack {

@@ -21,19 +21,16 @@ public extension SerenadaCoreDelegate {
     func sessionDidEnd(_ session: SerenadaSession, reason: EndReason) {}
 }
 
-/// Result of creating a new room.
+/// Result of creating a new room. Call `join` to start the call.
 public struct CreateRoomResult {
     /// Full URL for the created room.
     public let url: URL
     /// Room identifier.
     public let roomId: String
-    /// The session that was created and joined.
-    public let session: SerenadaSession
 
-    public init(url: URL, roomId: String, session: SerenadaSession) {
+    public init(url: URL, roomId: String) {
         self.url = url
         self.roomId = roomId
-        self.session = session
     }
 }
 
@@ -61,7 +58,7 @@ public final class SerenadaCore {
     }
 
     /// Join an existing call by URL. Returns a session that begins connecting immediately.
-    public func join(url: URL) -> SerenadaSession {
+    public func join(url: URL, displayName: String? = nil) -> SerenadaSession {
         let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
         let target = DeepLinkParser.parseTarget(from: url)
         let serverHost = target?.host
@@ -85,13 +82,14 @@ public final class SerenadaCore {
             config: sessionConfig,
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
-            initialSignalingProvider: createSignalingProvider(for: sessionConfig)
+            initialSignalingProvider: createSignalingProvider(for: sessionConfig),
+            displayName: displayName
         )
         return session
     }
 
     /// Join an existing call by room ID. Returns a session that begins connecting immediately.
-    public func join(roomId: String) -> SerenadaSession {
+    public func join(roomId: String, displayName: String? = nil) -> SerenadaSession {
         let url = resolvedConfig.serverHost.flatMap { buildRoomURL(host: $0, roomId: roomId) }
 
         let session = SerenadaSession(
@@ -100,30 +98,21 @@ public final class SerenadaCore {
             config: config,
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
-            initialSignalingProvider: createSignalingProvider(for: config)
+            initialSignalingProvider: createSignalingProvider(for: config),
+            displayName: displayName
         )
         return session
     }
 
-    /// Create a new room and immediately join it.
+    /// Create a new room. Returns the room URL and ID. Call ``join(url:displayName:)`` or ``join(roomId:displayName:)`` to start the call.
     public func createRoom() async throws -> CreateRoomResult {
         let apiClient = CoreAPIClient()
         let serverHost = try requireServerHost(config)
-        let config = self.config
         let roomId = try await apiClient.createRoomId(host: serverHost)
         guard let url = buildRoomURL(host: serverHost, roomId: roomId) else {
             throw APIError.invalidResponse("Failed to build room URL")
         }
-
-        let session = SerenadaSession(
-            roomId: roomId,
-            roomUrl: url,
-            config: config,
-            delegateProvider: { [weak self] in self?.delegate },
-            logger: logger,
-            initialSignalingProvider: createSignalingProvider(for: config)
-        )
-        return CreateRoomResult(url: url, roomId: roomId, session: session)
+        return CreateRoomResult(url: url, roomId: roomId)
     }
 
     /// Create a room ID without starting a session.

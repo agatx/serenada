@@ -45,17 +45,30 @@ func drainMessages(c *Client) []Message {
 	}
 }
 
+type joinPayloadOptions struct {
+	ReconnectCID string
+	DisplayName  *string
+}
+
 // joinPayload builds a raw JSON join message with optional capabilities.
 func joinPayload(rid string, capMax int, createMax int) []byte {
+	return joinPayloadWithOptions(rid, capMax, createMax, joinPayloadOptions{})
+}
+
+func joinPayloadWithOptions(rid string, capMax int, createMax int, options joinPayloadOptions) []byte {
 	type caps struct {
 		MaxParticipants int `json:"maxParticipants,omitempty"`
 	}
 	payload := struct {
-		Capabilities          caps `json:"capabilities,omitempty"`
-		CreateMaxParticipants int  `json:"createMaxParticipants,omitempty"`
+		Capabilities          caps    `json:"capabilities,omitempty"`
+		CreateMaxParticipants int     `json:"createMaxParticipants,omitempty"`
+		ReconnectCID          string  `json:"reconnectCid,omitempty"`
+		DisplayName           *string `json:"displayName,omitempty"`
 	}{
 		Capabilities:          caps{MaxParticipants: capMax},
 		CreateMaxParticipants: createMax,
+		ReconnectCID:          options.ReconnectCID,
+		DisplayName:           options.DisplayName,
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -122,6 +135,50 @@ func TestLegacyClientCreates1v1Room(t *testing.T) {
 	}
 	if room.MaxParticipants != 2 {
 		t.Fatalf("expected room maxParticipants=2, got %d", room.MaxParticipants)
+	}
+}
+
+func TestReconnectJoinCanClearDisplayName(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	original := fakeClient(hub)
+	hub.registerClient(original)
+	initialDisplayName := "Alice"
+	hub.handleMessage(original, joinPayloadWithOptions(rid, 4, 4, joinPayloadOptions{
+		DisplayName: &initialDisplayName,
+	}))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if room == nil {
+		t.Fatal("expected room to exist")
+	}
+
+	room.mu.Lock()
+	originalCID := room.Participants[original]
+	if got := room.DisplayNames[originalCID]; got != initialDisplayName {
+		room.mu.Unlock()
+		t.Fatalf("expected initial display name %q, got %q", initialDisplayName, got)
+	}
+	room.mu.Unlock()
+
+	reconnected := fakeClient(hub)
+	hub.registerClient(reconnected)
+	clearedDisplayName := ""
+	hub.handleMessage(reconnected, joinPayloadWithOptions(rid, 4, 4, joinPayloadOptions{
+		ReconnectCID: originalCID,
+		DisplayName:  &clearedDisplayName,
+	}))
+
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	if got := room.Participants[reconnected]; got != originalCID {
+		t.Fatalf("expected reconnect to reuse CID %q, got %q", originalCID, got)
+	}
+	if _, ok := room.DisplayNames[originalCID]; ok {
+		t.Fatal("expected reconnect with empty displayName to clear the stored name")
 	}
 }
 

@@ -197,7 +197,7 @@ node scripts/check-version-parity.mjs
 
 All three native SDKs follow a **headless core + optional UI** pattern:
 
-- **`SerenadaCore`** — Entry point. `createRoom()` is async (`async throws` on iOS, `suspend` on Android). `join()` returns a `SerenadaSession`.
+- **`SerenadaCore`** — Entry point. `createRoom()` returns the room URL and ID (async on all platforms). Call `join()` afterward to start the call and get a `SerenadaSession`.
 - **`SerenadaSession`** — The active call session. Exposes two observable snapshots:
   - **`state`** (`CallState`) — App-facing call state: phase, local/remote participants, connection status, errors.
   - **`diagnostics`** (`CallDiagnostics`) — Low-level transport info: ICE/peer/signaling states, realtime stats, camera/flash state, feature degradations.

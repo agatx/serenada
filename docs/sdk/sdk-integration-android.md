@@ -100,7 +100,7 @@ scope.launch {
     runCatching { serenada.createRoom() }
         .onSuccess { room ->
             val shareUrl = room.roomUrl  // send to the other party
-            val session = room.session   // already joining
+            val session = serenada.join(url = room.roomUrl)  // join explicitly
             // Navigate to call screen with session
         }
         .onFailure { error ->
@@ -108,6 +108,8 @@ scope.launch {
         }
 }
 ```
+
+`createRoom()` returns `CreateRoomResult(roomUrl, roomId)` only. It does not join the room or create a session. Call `join()` with the returned URL to start the call.
 
 `SerenadaCore` and `SerenadaSession` must be used from the Android main thread. The SDK now fails fast if these entry points are invoked from a background thread.
 

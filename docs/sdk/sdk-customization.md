@@ -51,7 +51,7 @@ Host apps must still call public Android/iOS SDK entrypoints on the main thread 
 
 Provider mode does not expose Serenada server helpers. These APIs require `serverHost`:
 
-- `createRoom()`
+- `createRoom()` — returns `{ url, roomId }` only; call `join()` afterward to start the call
 - Native `createRoomId()`
 - `RoomWatcher`
 - `validateServerHost()`

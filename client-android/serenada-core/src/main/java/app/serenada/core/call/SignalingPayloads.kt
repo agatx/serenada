@@ -86,7 +86,11 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
         val p = optJSONObject(i) ?: continue
         val cid = p.optString("cid", "")
         if (cid.isNotBlank()) {
-            result.add(Participant(cid, p.optLong("joinedAt").takeIf { it > 0 }))
+            result.add(Participant(
+                cid = cid,
+                joinedAt = p.optLong("joinedAt").takeIf { it > 0 },
+                displayName = p.optString("displayName").ifBlank { null },
+            ))
         }
     }
     return result

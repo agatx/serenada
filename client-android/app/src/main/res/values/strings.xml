@@ -58,6 +58,8 @@
     <string name="settings_language_spanish">Spanish</string>
     <string name="settings_language_french">French</string>
     <string name="settings_language_help">Auto uses your device language. Unsupported languages fall back to English.</string>
+    <string name="settings_display_name">Display name</string>
+    <string name="settings_display_name_placeholder">Your name (optional)</string>
     <string name="settings_call_defaults">Call defaults</string>
     <string name="settings_hd_video_experimental">HD Video (experimental)</string>
     <string name="settings_hd_video_experimental_info">Enable higher-quality camera and composite modes. May increase CPU usage.</string>

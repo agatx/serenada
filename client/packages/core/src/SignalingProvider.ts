@@ -9,11 +9,13 @@ export interface ConnectionInfo {
 export interface JoinOptions {
     reconnectPeerId?: string;
     maxParticipants?: number;
+    displayName?: string;
 }
 
 export interface SignalingProviderParticipant {
     peerId: string;
     joinedAt?: number;
+    displayName?: string;
 }
 
 export interface JoinedEvent {
@@ -32,6 +34,7 @@ export interface RoomStateEvent {
 export interface PeerEvent {
     peerId: string;
     joinedAt?: number;
+    displayName?: string;
 }
 
 export interface PeerMessage {

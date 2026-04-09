@@ -70,6 +70,7 @@ import java.net.URL
 fun SettingsScreen(
     host: String,
     selectedLanguage: String,
+    displayName: String,
     isDefaultCameraEnabled: Boolean,
     isDefaultMicrophoneEnabled: Boolean,
     isHdVideoExperimentalEnabled: Boolean,
@@ -79,6 +80,7 @@ fun SettingsScreen(
     isSaving: Boolean,
     onHostChange: (String) -> Unit,
     onLanguageSelect: (String) -> Unit,
+    onDisplayNameChange: (String) -> Unit,
     onDefaultCameraChange: (Boolean) -> Unit,
     onDefaultMicrophoneChange: (Boolean) -> Unit,
     onHdVideoExperimentalChange: (Boolean) -> Unit,
@@ -308,6 +310,19 @@ fun SettingsScreen(
                             }
                         }
                     }
+                }
+
+                SettingsSection(
+                    title = stringResource(R.string.settings_display_name)
+                ) {
+                    OutlinedTextField(
+                        value = displayName,
+                        onValueChange = { if (it.length <= 40) onDisplayNameChange(it) },
+                        placeholder = { Text(stringResource(R.string.settings_display_name_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        singleLine = true
+                    )
                 }
 
                 SettingsSection(

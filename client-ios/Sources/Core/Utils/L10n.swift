@@ -73,6 +73,8 @@ enum L10n {
     static var settingsLanguageRussian: String { text("settings_language_russian") }
     static var settingsLanguageSpanish: String { text("settings_language_spanish") }
     static var settingsLanguageFrench: String { text("settings_language_french") }
+    static var settingsDisplayName: String { text("settings_display_name") }
+    static var settingsDisplayNamePlaceholder: String { text("settings_display_name_placeholder") }
     static var settingsCallDefaults: String { text("settings_call_defaults") }
     static var settingsCameraEnabled: String { text("camera_enabled") }
     static var settingsCameraEnabledInfo: String { text("camera_enabled_info") }

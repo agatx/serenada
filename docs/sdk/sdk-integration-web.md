@@ -69,9 +69,11 @@ function CallPage() {
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 
 const room = await serenada.createRoom()
-const shareUrl = room.url   // send to the other party
-const session = room.session // already joining
+const shareUrl = room.url     // send to the other party
+const session = serenada.join(room.url)  // join explicitly
 ```
+
+`createRoom()` returns `{ url, roomId }` only. It does not join the room or create a session. Call `join()` with the returned URL to start the call.
 
 `createRoom()` is server mode only. In provider mode there is no Serenada room API, so join by your own room ID instead.
 

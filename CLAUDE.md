@@ -162,7 +162,7 @@ Dependencies: gorilla/websocket, webpush-go, godotenv, modernc.org/sqlite.
 Monorepo with headless SDK + React UI layer + thin app shell. Built with React 19 + TypeScript + Vite.
 
 **Headless SDK** (`packages/core/`):
-- `src/SerenadaCore.ts` — entry point (join/createRoom), `isSupported()` static method for WebRTC capability detection
+- `src/SerenadaCore.ts` — entry point (`join()` returns session, `createRoom()` returns `{ url, roomId }`), `isSupported()` static method for WebRTC capability detection
 - `src/SerenadaSession.ts` — session state machine, pub/sub state distribution
 - `src/signaling/SignalingEngine.ts` — dual-transport signaling (WS + SSE)
 - `src/signaling/payloads.ts` — typed payload interfaces and parse functions
@@ -187,7 +187,7 @@ Routing: `/` → Home, `/call/:roomId` → CallRoom.
 Kotlin + Jetpack Compose + Material3. Three-module Gradle project.
 
 **Headless SDK** (`serenada-core/`):
-- `SerenadaCore.kt` — entry point (join/createRoom)
+- `SerenadaCore.kt` — entry point (`join()` returns session, `createRoom()` returns `CreateRoomResult(roomUrl, roomId)`)
 - `SerenadaSession.kt` — session state machine, StateFlow-based state
 - `SerenadaConfig.kt` / `SerenadaCoreDelegate.kt` — configuration and callbacks
 - `CallState.kt` / `CallStats.kt` — public state models
@@ -217,7 +217,7 @@ WebRTC: custom-built AAR from branch-heads/7559_173 in `app/libs/`, verified wit
 SwiftUI + Swift 5.10, project generated via XcodeGen (`project.yml`). Two SPM packages + host app.
 
 **Headless SDK** (`SerenadaCore/` — SPM package):
-- `Sources/SerenadaCore.swift` — entry point (join/createRoom)
+- `Sources/SerenadaCore.swift` — entry point (`join()` returns session, `createRoom()` returns `CreateRoomResult(url, roomId)`)
 - `Sources/SerenadaSession.swift` — session state machine, @Published state
 - `Sources/SerenadaConfig.swift` — configuration
 - `Sources/Models/` — CallState, CallStats, CallPhase, RemoteParticipant, etc.

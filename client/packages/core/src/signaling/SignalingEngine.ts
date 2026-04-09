@@ -71,6 +71,7 @@ export class SignalingEngine {
     private closedByDestroy = false;
     private connecting = false;
     private lastCreateMaxParticipants: number | undefined = undefined;
+    private lastDisplayName: string | undefined = undefined;
 
     // Logger
     private logger?: SerenadaLogger;
@@ -122,7 +123,7 @@ export class SignalingEngine {
         }
     }
 
-    joinRoom(roomId: string, options?: { createMaxParticipants?: number }): void {
+    joinRoom(roomId: string, options?: { createMaxParticipants?: number; displayName?: string }): void {
         this.logger?.log('debug', 'Signaling', `joinRoom call for ${roomId}`);
         this.error = null;
         this.clearJoinTimers();
@@ -135,12 +136,19 @@ export class SignalingEngine {
         if (options?.createMaxParticipants !== undefined) {
             this.lastCreateMaxParticipants = options.createMaxParticipants;
         }
+        if (options?.displayName !== undefined) {
+            this.lastDisplayName = options.displayName;
+        }
 
         if (this.transport && this.transport.isOpen()) {
             const payload: Record<string, unknown> = {
                 capabilities: { trickleIce: true, maxParticipants: 4 },
                 createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 4,
             };
+            const displayName = options?.displayName ?? this.lastDisplayName;
+            if (displayName !== undefined) {
+                payload.displayName = displayName;
+            }
             const reconnectCid = this.clientId || this.lastClientId;
             if (reconnectCid) {
                 payload.reconnectCid = reconnectCid;

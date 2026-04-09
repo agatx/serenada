@@ -131,6 +131,7 @@ public final class SerenadaSession: ObservableObject {
     private let clock: SessionClock
     private let config: SerenadaConfig
     private let resolvedConfig: ResolvedSerenadaConfig
+    private let displayName: String?
     private let delegateProvider: (() -> SerenadaCoreDelegate?)?
     private let logger: SerenadaLogger?
 
@@ -174,7 +175,8 @@ public final class SerenadaSession: ObservableObject {
         serverHost: String,
         config: SerenadaConfig,
         delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
-        logger: SerenadaLogger? = nil
+        logger: SerenadaLogger? = nil,
+        displayName: String? = nil
     ) {
         let sessionConfig = config.signalingProvider == nil
             ? SerenadaConfig(
@@ -188,7 +190,8 @@ public final class SerenadaSession: ObservableObject {
         self.init(
             roomId: roomId, roomUrl: roomUrl, config: sessionConfig,
             delegateProvider: delegateProvider, logger: logger,
-            initialSignalingProvider: nil, signaling: nil, apiClient: nil, audioController: nil, mediaEngine: nil, clock: nil
+            initialSignalingProvider: nil, signaling: nil, apiClient: nil, audioController: nil, mediaEngine: nil, clock: nil,
+            displayName: displayName
         )
     }
 
@@ -203,11 +206,13 @@ public final class SerenadaSession: ObservableObject {
         apiClient: SessionAPIClient? = nil,
         audioController: SessionAudioController? = nil,
         mediaEngine: SessionMediaEngine? = nil,
-        clock: SessionClock? = nil
+        clock: SessionClock? = nil,
+        displayName: String? = nil
     ) {
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.config = config
+        self.displayName = displayName
         self.delegateProvider = delegateProvider
         self.logger = logger
         self.clock = clock ?? LiveSessionClock()
@@ -251,6 +256,7 @@ public final class SerenadaSession: ObservableObject {
 
         internalPhase = .joining
         commitSnapshot { s, _ in
+            s.localParticipant.displayName = self.displayName
             s.localParticipant.audioEnabled = config.defaultAudioEnabled
             s.localParticipant.videoEnabled = config.defaultVideoEnabled
         }
@@ -402,7 +408,8 @@ public final class SerenadaSession: ObservableObject {
         participantCount = 0
         commitSnapshot { s, d in
             s.localParticipant = LocalParticipant(
-                cid: nil, audioEnabled: self.config.defaultAudioEnabled,
+                cid: nil, displayName: self.displayName,
+                audioEnabled: self.config.defaultAudioEnabled,
                 videoEnabled: self.config.defaultVideoEnabled, cameraMode: .selfie
             )
             s.remoteParticipants = []; s.connectionStatus = .connected
@@ -467,7 +474,7 @@ public final class SerenadaSession: ObservableObject {
         }
         signalingProvider.joinRoom(
             roomId,
-            options: JoinOptions(reconnectPeerId: reconnectCid, maxParticipants: 4)
+            options: JoinOptions(reconnectPeerId: reconnectCid, maxParticipants: 4, displayName: self.displayName)
         )
         joinFlowCoordinator?.scheduleJoinRecovery(for: roomId)
     }
@@ -637,7 +644,8 @@ public final class SerenadaSession: ObservableObject {
         let participants = roomState.participants.filter { $0.cid != clientId }.map { p in
             let slot = peerSlots[p.cid]
             return SerenadaRemoteParticipant(
-                cid: p.cid, audioEnabled: true,
+                cid: p.cid, displayName: p.displayName,
+                audioEnabled: true,
                 videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
                 connectionState: slot?.getConnectionState() ?? .new
             )
@@ -699,7 +707,7 @@ public final class SerenadaSession: ObservableObject {
         localPeerId: String?
     ) -> RoomState? {
         let participants = dedupeParticipants(
-            participants: (roomState?.participants ?? []) + [Participant(cid: event.peerId, joinedAt: event.joinedAt)],
+            participants: (roomState?.participants ?? []) + [Participant(cid: event.peerId, joinedAt: event.joinedAt, displayName: event.displayName)],
             localPeerId: localPeerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )

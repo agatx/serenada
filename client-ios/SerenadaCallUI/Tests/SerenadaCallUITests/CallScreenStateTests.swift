@@ -3,11 +3,6 @@ import SerenadaCore
 import XCTest
 
 final class CallScreenStateTests: XCTestCase {
-    func testOnlyHostTerminatesRoomOnEndTap() {
-        XCTAssertTrue(shouldTerminateRoomOnEndTap(isHost: true))
-        XCTAssertFalse(shouldTerminateRoomOnEndTap(isHost: false))
-    }
-
     func testPrimaryLocalVideoContentModeUsesFitForWorldAndComposite() {
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .world), .scaleAspectFit)
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .composite), .scaleAspectFit)

@@ -75,6 +75,7 @@ class SerenadaSession internal constructor(
     mediaEngine: SessionMediaEngine? = null,
     clock: SessionClock? = null,
     private val logger: SerenadaLogger? = null,
+    private val displayName: String? = null,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -142,7 +143,7 @@ class SerenadaSession internal constructor(
         joinRoom = { targetRoomId, reconnectPeerId ->
             signalingProvider.joinRoom(
                 targetRoomId,
-                JoinOptions(reconnectPeerId = reconnectPeerId, maxParticipants = 4),
+                JoinOptions(reconnectPeerId = reconnectPeerId, maxParticipants = 4, displayName = displayName),
             )
         },
         onJoinTimeout = {
@@ -934,11 +935,13 @@ class SerenadaSession internal constructor(
 
     private fun refreshRemoteParticipants() {
         val myCid = clientId
-        val orderedRemoteCids = currentRoomState?.participants?.map { it.cid }?.filter { it != myCid }
+        val roomParticipants = currentRoomState?.participants
+        val orderedRemoteCids = roomParticipants?.map { it.cid }?.filter { it != myCid }
             ?: peerSlots.keys.toList()
+        val displayNamesByCid = roomParticipants?.associate { it.cid to it.displayName } ?: emptyMap()
         val remoteParticipants = orderedRemoteCids.mapNotNull { cid ->
             val slot = peerSlots[cid] ?: return@mapNotNull null
-            RemoteParticipant(cid = cid, videoEnabled = slot.isRemoteVideoTrackEnabled(), connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
+            RemoteParticipant(cid = cid, displayName = displayNamesByCid[cid], videoEnabled = slot.isRemoteVideoTrackEnabled(), connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
         }
         val currentState = _state.value
         val currentDiagnostics = _diagnostics.value

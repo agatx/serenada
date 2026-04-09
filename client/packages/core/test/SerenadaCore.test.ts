@@ -104,6 +104,23 @@ describe('SerenadaCore', () => {
             expect(session.state.roomUrl).toBe(url);
             session.destroy();
         });
+
+        it('passes displayName to provider joins when joining by URL', () => {
+            const provider = new FakeSignalingProvider();
+            const core = new SerenadaCore({ signalingProvider: provider });
+            const session = core.join('https://serenada.app/call/ROOM1', { displayName: 'Alice' });
+
+            provider.emitConnected();
+
+            expect(provider.joinRoomCalls).toEqual([
+                {
+                    roomId: 'ROOM1',
+                    options: { displayName: 'Alice' },
+                },
+            ]);
+            session.destroy();
+        });
+
     });
 
     describe('join({ roomId })', () => {
@@ -116,6 +133,22 @@ describe('SerenadaCore', () => {
             const session = core.join({ roomId: 'MY_ROOM' });
             expect(session.state.roomId).toBe('MY_ROOM');
             expect(session.state.roomUrl).toBe('https://serenada.app/call/MY_ROOM');
+            session.destroy();
+        });
+
+        it('passes displayName to provider joins when joining by roomId', () => {
+            const provider = new FakeSignalingProvider();
+            const core = new SerenadaCore({ signalingProvider: provider });
+            const session = core.join({ roomId: 'MY_ROOM', displayName: 'Alice' });
+
+            provider.emitConnected();
+
+            expect(provider.joinRoomCalls).toEqual([
+                {
+                    roomId: 'MY_ROOM',
+                    options: { displayName: 'Alice' },
+                },
+            ]);
             session.destroy();
         });
     });
@@ -181,14 +214,7 @@ describe('SerenadaCore', () => {
     });
 
     describe('createRoom', () => {
-        it('throws when WebRTC is not supported', async () => {
-            delete (globalThis as Record<string, unknown>).RTCPeerConnection;
-            const core = new SerenadaCore(testConfig);
-            await expect(core.createRoom()).rejects.toThrow('WebRTC is not supported');
-        });
-
-        it('creates a room and returns url, roomId, session', async () => {
-            (globalThis as Record<string, unknown>).RTCPeerConnection = class {};
+        it('creates a room and returns url and roomId', async () => {
             const mockFetch = vi.fn().mockResolvedValue({
                 ok: true,
                 json: async () => ({ roomId: 'NEW_ROOM_ID' }),
@@ -200,9 +226,7 @@ describe('SerenadaCore', () => {
 
             expect(result.roomId).toBe('NEW_ROOM_ID');
             expect(result.url).toBe('https://serenada.app/call/NEW_ROOM_ID');
-            expect(result.session).toBeDefined();
-            expect(result.session.state.phase).toBe('joining');
-            result.session.destroy();
+            expect(result).not.toHaveProperty('session');
         });
     });
 

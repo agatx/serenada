@@ -81,7 +81,7 @@ final class SignalingMessageRouter {
 
     func processJoinedEvent(_ event: JoinedEvent) {
         let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
+            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName) },
             localPeerId: event.peerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
@@ -104,7 +104,7 @@ final class SignalingMessageRouter {
     func processRoomStateEvent(_ event: RoomStateEvent) {
         let localPeerId = getClientId()
         let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt) },
+            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName) },
             localPeerId: localPeerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )

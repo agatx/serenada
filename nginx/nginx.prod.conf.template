@@ -77,7 +77,14 @@ http {
         listen 80;
         ${IPV6_Run_HTTP}
         server_name ${DOMAIN};
-        return 301 https://$host$request_uri;
+
+        location /.well-known/acme-challenge/ {
+            root /var/www/certbot;
+        }
+
+        location / {
+            return 301 https://$host$request_uri;
+        }
     }
 
     server {

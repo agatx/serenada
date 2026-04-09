@@ -22,6 +22,8 @@ public enum SerenadaCallPhase: String, Equatable, Sendable {
 public struct LocalParticipant: Equatable {
     /// Client identifier assigned by the server.
     public var cid: String?
+    /// Display name shown to other participants.
+    public var displayName: String?
     /// Whether local audio is enabled.
     public var audioEnabled: Bool = true
     /// Whether local video is enabled.
@@ -33,8 +35,9 @@ public struct LocalParticipant: Equatable {
 
     public init() {}
 
-    public init(cid: String?, audioEnabled: Bool = true, videoEnabled: Bool = true, cameraMode: LocalCameraMode = .selfie, isHost: Bool = false) {
+    public init(cid: String?, displayName: String? = nil, audioEnabled: Bool = true, videoEnabled: Bool = true, cameraMode: LocalCameraMode = .selfie, isHost: Bool = false) {
         self.cid = cid
+        self.displayName = displayName
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.cameraMode = cameraMode
@@ -46,6 +49,8 @@ public struct LocalParticipant: Equatable {
 public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     /// Client identifier.
     public let cid: String
+    /// Display name of the remote participant.
+    public var displayName: String?
     /// Whether remote audio is enabled.
     public var audioEnabled: Bool
     /// Whether remote video is enabled.
@@ -55,8 +60,9 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
 
     public var id: String { cid }
 
-    public init(cid: String, audioEnabled: Bool = true, videoEnabled: Bool = true, connectionState: SerenadaPeerConnectionState = .new) {
+    public init(cid: String, displayName: String? = nil, audioEnabled: Bool = true, videoEnabled: Bool = true, connectionState: SerenadaPeerConnectionState = .new) {
         self.cid = cid
+        self.displayName = displayName
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.connectionState = connectionState

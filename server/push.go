@@ -292,15 +292,15 @@ func (s *PushService) Unsubscribe(roomID string, endpoint string) error {
 	return nil
 }
 
-func (s *PushService) SendNotificationToRoom(roomID string, excludeEndpoint string, snapshotID string) {
-	s.sendNotificationToRoom(roomID, excludeEndpoint, snapshotID, pushKindJoin)
+func (s *PushService) SendNotificationToRoom(roomID string, excludeEndpoint string, snapshotID string, displayName string) {
+	s.sendNotificationToRoom(roomID, excludeEndpoint, snapshotID, pushKindJoin, displayName)
 }
 
 func (s *PushService) SendInviteNotificationToRoom(roomID string, excludeEndpoint string) {
-	s.sendNotificationToRoom(roomID, excludeEndpoint, "", pushKindInvite)
+	s.sendNotificationToRoom(roomID, excludeEndpoint, "", pushKindInvite, "")
 }
 
-func (s *PushService) sendNotificationToRoom(roomID string, excludeEndpoint string, snapshotID string, kind string) {
+func (s *PushService) sendNotificationToRoom(roomID string, excludeEndpoint string, snapshotID string, kind string, displayName string) {
 	if err := validateRoomID(roomID); err != nil {
 		log.Printf("[PUSH] Skipping notifications for invalid room %q: %v", roomID, err)
 		return
@@ -347,11 +347,11 @@ func (s *PushService) sendNotificationToRoom(roomID string, excludeEndpoint stri
 	}
 
 	for _, target := range targets {
-		go s.sendOne(roomID, target, snapshotID, snapshotMeta, kind)
+		go s.sendOne(roomID, target, snapshotID, snapshotMeta, kind, displayName)
 	}
 }
 
-func getLocalizedMessage(locale string, kind string) (string, string) {
+func getLocalizedMessage(locale string, kind string, displayName string) (string, string) {
 	// Simple mapping, can be expanded
 	// Check prefix
 	lang := locale
@@ -371,6 +371,21 @@ func getLocalizedMessage(locale string, kind string) (string, string) {
 			return "Serenada", "Vous avez été invité dans une salle."
 		default:
 			return "Serenada", "You were invited to a room."
+		}
+	}
+
+	if displayName != "" {
+		switch lang {
+		case "ru":
+			return "Serenada", fmt.Sprintf("%s уже в вашем звонке!", displayName)
+		case "es":
+			return "Serenada", fmt.Sprintf("¡%s se unió a tu llamada!", displayName)
+		case "de":
+			return "Serenada", fmt.Sprintf("%s ist deinem Anruf beigetreten!", displayName)
+		case "fr":
+			return "Serenada", fmt.Sprintf("%s a rejoint votre appel !", displayName)
+		default:
+			return "Serenada", fmt.Sprintf("%s joined your call!", displayName)
 		}
 	}
 
@@ -427,8 +442,8 @@ func (s *PushService) sendOne(roomID string, target struct {
 	P256dh    string
 	Locale    string
 	Transport string
-}, snapshotID string, snapshotMeta *SnapshotMeta, kind string) {
-	title, body := getLocalizedMessage(target.Locale, kind)
+}, snapshotID string, snapshotMeta *SnapshotMeta, kind string, displayName string) {
+	title, body := getLocalizedMessage(target.Locale, kind, displayName)
 	host := configuredPushHost()
 
 	// Payload
@@ -771,7 +786,8 @@ func handlePushNotify(hub *Hub) http.HandlerFunc {
 			return
 		}
 
-		go pushService.SendNotificationToRoom(roomID, strings.TrimSpace(body.PushEndpoint), strings.TrimSpace(body.SnapshotID))
+		displayName := hub.GetClientDisplayName(roomID, cid)
+		go pushService.SendNotificationToRoom(roomID, strings.TrimSpace(body.PushEndpoint), strings.TrimSpace(body.SnapshotID), displayName)
 		w.WriteHeader(http.StatusOK)
 	}
 }

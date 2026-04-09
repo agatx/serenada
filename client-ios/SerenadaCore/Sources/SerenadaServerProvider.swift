@@ -16,6 +16,7 @@ internal final class SerenadaServerProvider: SignalingProvider {
     @MainActor private var currentRoomId: String?
     @MainActor private var currentMaxParticipants = 4
     @MainActor private var currentReconnectPeerId: String?
+    @MainActor private var currentDisplayName: String?
     @MainActor private var currentTurnToken: String?
     @MainActor private var reconnectToken: String?
     @MainActor private var clientId: String?
@@ -90,6 +91,9 @@ internal final class SerenadaServerProvider: SignalingProvider {
             joinAttemptSerial += 1
             currentMaxParticipants = options.maxParticipants ?? currentMaxParticipants
             currentReconnectPeerId = options.reconnectPeerId
+            if options.displayName != nil {
+                currentDisplayName = options.displayName
+            }
             if signaling.isConnected() {
                 pendingJoinRoomId = nil
                 sendJoin(roomId: roomId)
@@ -230,7 +234,7 @@ private extension SerenadaServerProvider {
 
         let participants = dedupeProviderParticipants(
             participants: (payload.participants ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt)
+                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName)
             },
             localPeerId: peerId
         )
@@ -256,10 +260,10 @@ private extension SerenadaServerProvider {
     func emitParticipantDiffs(nextParticipants: [SignalingProviderParticipant]) {
         let nextMap = Dictionary(uniqueKeysWithValues: nextParticipants.map { ($0.peerId, $0) })
         for (peerId, participant) in nextMap where previousParticipants[peerId] == nil {
-            delegate?.signalingProviderDidJoinPeer(PeerEvent(peerId: peerId, joinedAt: participant.joinedAt))
+            delegate?.signalingProviderDidJoinPeer(PeerEvent(peerId: peerId, joinedAt: participant.joinedAt, displayName: participant.displayName))
         }
         for (peerId, participant) in previousParticipants where nextMap[peerId] == nil {
-            delegate?.signalingProviderDidLeavePeer(PeerEvent(peerId: peerId, joinedAt: participant.joinedAt))
+            delegate?.signalingProviderDidLeavePeer(PeerEvent(peerId: peerId, joinedAt: participant.joinedAt, displayName: participant.displayName))
         }
     }
 
@@ -281,7 +285,7 @@ private extension SerenadaServerProvider {
         guard let object = payload?.objectValue else { return nil }
         let participants = dedupeProviderParticipants(
             participants: (parseParticipants(from: object["participants"]?.arrayValue) ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt)
+                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName)
             },
             localPeerId: clientId
         )
@@ -315,6 +319,9 @@ private extension SerenadaServerProvider {
         }
         if let currentReconnectPeerId, !currentReconnectPeerId.isEmpty {
             joinPayload["reconnectCid"] = .string(currentReconnectPeerId)
+        }
+        if let currentDisplayName {
+            joinPayload["displayName"] = .string(currentDisplayName)
         }
         sendRawMessage(type: "join", rid: roomId, payload: joinPayload)
     }

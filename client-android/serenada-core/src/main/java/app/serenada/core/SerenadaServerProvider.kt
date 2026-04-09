@@ -57,6 +57,7 @@ internal class SerenadaServerProvider(
     private var previousParticipants = linkedMapOf<String, SignalingProviderParticipant>()
     private var closedByClient = false
     private var pendingJoinRoomId: String? = null
+    private var currentDisplayName: String? = null
 
     override fun connect() {
         closedByClient = false
@@ -78,6 +79,9 @@ internal class SerenadaServerProvider(
         pendingJoinRoomId = roomId
         currentMaxParticipants = options.maxParticipants ?: currentMaxParticipants
         currentReconnectPeerId = options.reconnectPeerId
+        if (options.displayName != null) {
+            currentDisplayName = options.displayName
+        }
         if (signaling.isConnected()) {
             pendingJoinRoomId = null
             sendJoin(roomId)
@@ -209,7 +213,7 @@ internal class SerenadaServerProvider(
         currentTurnToken = payload.turnToken
         payload.turnTokenTTLMs?.let { scheduleTurnRefresh(it) } ?: clearTurnRefresh()
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt)
+            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName)
         }
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
             participants.forEach { put(it.peerId, it) }
@@ -228,7 +232,7 @@ internal class SerenadaServerProvider(
         val payload = message.payload.toRoomStatePayload() ?: return
         currentHostPeerId = payload.hostCid
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt)
+            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName)
         }
         emitParticipantDiffs(participants)
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
@@ -247,12 +251,12 @@ internal class SerenadaServerProvider(
         val nextParticipants = participants.associateBy { it.peerId }
         for ((peerId, participant) in nextParticipants) {
             if (!previousParticipants.containsKey(peerId)) {
-                listener?.onPeerJoined(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt))
+                listener?.onPeerJoined(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName))
             }
         }
         for ((peerId, participant) in previousParticipants) {
             if (!nextParticipants.containsKey(peerId)) {
-                listener?.onPeerLeft(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt))
+                listener?.onPeerLeft(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName))
             }
         }
     }
@@ -274,6 +278,7 @@ internal class SerenadaServerProvider(
                 }
             )
             put("createMaxParticipants", currentMaxParticipants)
+            currentDisplayName?.let { put("displayName", it) }
             reconnectToken?.let { put("reconnectToken", it) }
             currentReconnectPeerId?.let { put("reconnectCid", it) }
         }

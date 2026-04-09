@@ -30,12 +30,13 @@ import {
     ENDING_SCREEN_MS,
 } from './constants.js';
 import { formatError } from './formatError.js';
-import type { RoomState, SignalingMessage } from './signaling/types.js';
+import type { RoomParticipant, RoomState, SignalingMessage } from './signaling/types.js';
 
 interface SessionDependencies {
     media?: MediaEngine;
     statsCollector?: CallStatsCollector;
     autoStart?: boolean;
+    displayName?: string;
 }
 
 function mapErrorCode(serverCode: string): CallErrorCode {
@@ -65,18 +66,19 @@ function mapErrorCode(serverCode: string): CallErrorCode {
     }
 }
 
-function toRoomParticipant(participant: { peerId: string; joinedAt?: number }): { cid: string; joinedAt?: number } {
+function toRoomParticipant(participant: { peerId: string; joinedAt?: number; displayName?: string }): RoomParticipant {
     return {
         cid: participant.peerId,
         joinedAt: participant.joinedAt,
+        displayName: participant.displayName,
     };
 }
 
 function dedupeParticipants(
-    participants: Array<{ cid: string; joinedAt?: number }>,
+    participants: RoomParticipant[],
     localPeerId: string | null,
-): Array<{ cid: string; joinedAt?: number }> {
-    const deduped = new Map<string, { cid: string; joinedAt?: number }>();
+): RoomParticipant[] {
+    const deduped = new Map<string, RoomParticipant>();
     for (const participant of participants) {
         if (participant.cid.length === 0) {
             continue;
@@ -90,7 +92,7 @@ function dedupeParticipants(
 }
 
 function resolveHostCid(
-    participants: Array<{ cid: string; joinedAt?: number }>,
+    participants: RoomParticipant[],
     nextHostCid: string | null | undefined,
     localPeerId: string | null,
 ): string | null {
@@ -128,7 +130,7 @@ function upsertParticipant(
     }
     const participants = dedupeParticipants([
         ...(roomState?.participants ?? []),
-        { cid: event.peerId, joinedAt: event.joinedAt },
+        { cid: event.peerId, joinedAt: event.joinedAt, displayName: event.displayName },
     ], localPeerId);
     return {
         hostCid: resolveHostCid(participants, roomState?.hostCid ?? null, localPeerId),
@@ -199,6 +201,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly roomId: string;
     private readonly roomUrl: string | null;
     private readonly handlesReconnection: boolean;
+    private readonly displayName?: string;
 
     private _state: CallState;
     private stateListeners: Array<(state: CallState) => void> = [];
@@ -243,6 +246,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.roomUrl = roomUrl;
         this.signaling = signaling;
         this.handlesReconnection = signaling.capabilities?.handlesReconnection === true;
+        this.displayName = deps.displayName;
 
         this._state = {
             phase: 'joining',
@@ -410,7 +414,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.started = true;
-        this.pendingJoinOptions = {};
+        this.pendingJoinOptions = {
+            displayName: this.displayName,
+        };
         this.scheduleJoinTimeout();
         this.signaling.connect();
     }
@@ -473,7 +479,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.handlesReconnection) {
             this.reconnectRecoveryPending = hadRoomState;
         } else {
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined };
+            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
             this.scheduleReconnect();
         }
 
@@ -656,7 +662,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             if (this.isInactive) {
                 return;
             }
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined };
+            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
             this.signaling.connect();
         }, delayMs);
     }
@@ -782,6 +788,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
         const localParticipant = clientId ? {
             cid: clientId,
+            displayName: this.displayName,
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
             videoEnabled: videoTrack?.enabled ?? (this.config.defaultVideoEnabled !== false),
             cameraMode: (this.media.isScreenSharing
@@ -796,6 +803,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             .filter((participant) => participant.cid !== clientId)
             .map((participant) => ({
                 cid: participant.cid,
+                displayName: participant.displayName,
                 audioEnabled: true,
                 videoEnabled: true,
                 connectionState: this.media.connectionState,

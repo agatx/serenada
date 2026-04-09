@@ -18,6 +18,7 @@ export interface TestSessionOptions {
     roomUrl?: string | null;
     handlesReconnection?: boolean;
     autoStart?: boolean;
+    displayName?: string;
 }
 
 /**
@@ -49,6 +50,7 @@ export class TestSessionHarness {
             media: this.media as unknown as MediaEngine,
             statsCollector: new FakeStatsCollector() as unknown as CallStatsCollector,
             autoStart: options.autoStart ?? false,
+            displayName: options.displayName,
         });
 
         this.unsubscribe = this.session.subscribe((state) => {
@@ -62,7 +64,7 @@ export class TestSessionHarness {
 
     simulateJoined(opts: {
         clientId?: string;
-        participants?: { cid: string; joinedAt?: number }[];
+        participants?: { cid: string; joinedAt?: number; displayName?: string }[];
         hostCid?: string | null;
     } = {}): void {
         const clientId = opts.clientId ?? 'my-cid';
@@ -75,6 +77,7 @@ export class TestSessionHarness {
             participants: participants.map((participant) => ({
                 peerId: participant.cid,
                 joinedAt: participant.joinedAt,
+                displayName: participant.displayName,
             })),
             hostPeerId: hostCid ?? undefined,
         });

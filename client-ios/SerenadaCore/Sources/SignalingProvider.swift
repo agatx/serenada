@@ -21,20 +21,24 @@ public struct ConnectionInfo: Equatable, Sendable {
 public struct JoinOptions: Equatable, Sendable {
     public var reconnectPeerId: String?
     public var maxParticipants: Int?
+    public var displayName: String?
 
-    public init(reconnectPeerId: String? = nil, maxParticipants: Int? = nil) {
+    public init(reconnectPeerId: String? = nil, maxParticipants: Int? = nil, displayName: String? = nil) {
         self.reconnectPeerId = reconnectPeerId
         self.maxParticipants = maxParticipants
+        self.displayName = displayName
     }
 }
 
 public struct SignalingProviderParticipant: Equatable, Sendable {
     public let peerId: String
     public let joinedAt: Int64?
+    public let displayName: String?
 
-    public init(peerId: String, joinedAt: Int64? = nil) {
+    public init(peerId: String, joinedAt: Int64? = nil, displayName: String? = nil) {
         self.peerId = peerId
         self.joinedAt = joinedAt
+        self.displayName = displayName
     }
 }
 
@@ -76,10 +80,12 @@ public struct RoomStateEvent: Equatable, Sendable {
 public struct PeerEvent: Equatable, Sendable {
     public let peerId: String
     public let joinedAt: Int64?
+    public let displayName: String?
 
-    public init(peerId: String, joinedAt: Int64? = nil) {
+    public init(peerId: String, joinedAt: Int64? = nil, displayName: String? = nil) {
         self.peerId = peerId
         self.joinedAt = joinedAt
+        self.displayName = displayName
     }
 }
 

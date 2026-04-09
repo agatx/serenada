@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 )
 
 const maxMessageSize = 65536 // 64KB
+const maxDisplayNameLength = 40
 
 // TURN token TTL for call credentials: 15 minutes.
 // Clients proactively refresh at 80% of TTL (~12 min). Both Cloudflare and coturn
@@ -72,8 +74,9 @@ type Message struct {
 }
 
 type Participant struct {
-	CID      string `json:"cid"`
-	JoinedAt int64  `json:"joinedAt,omitempty"`
+	CID         string `json:"cid"`
+	JoinedAt    int64  `json:"joinedAt,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type Hub struct {
@@ -89,10 +92,11 @@ type Room struct {
 	RID                      string
 	Participants             map[*Client]string // client -> cid
 	HostCID                  string
-	MaxParticipants          int              // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
-	RequestedMaxParticipants int              // creator's requested ceiling, clamped by creator capability and server ceiling
-	CapacityLocked           bool             // once true, MaxParticipants is final for the room lifetime
-	JoinedAt                 map[string]int64 // cid -> join timestamp (ms)
+	MaxParticipants          int               // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
+	RequestedMaxParticipants int               // creator's requested ceiling, clamped by creator capability and server ceiling
+	CapacityLocked           bool              // once true, MaxParticipants is final for the room lifetime
+	JoinedAt                 map[string]int64  // cid -> join timestamp (ms)
+	DisplayNames             map[string]string // cid -> display name
 	mu                       sync.Mutex
 }
 
@@ -159,6 +163,20 @@ func (h *Hub) IsClientInRoom(roomID, cid string) bool {
 		}
 	}
 	return false
+}
+
+// GetClientDisplayName returns the display name for a client in a room.
+// Returns empty string if the room/client doesn't exist or has no display name.
+func (h *Hub) GetClientDisplayName(roomID, cid string) string {
+	h.mu.RLock()
+	room, exists := h.rooms[roomID]
+	h.mu.RUnlock()
+	if !exists {
+		return ""
+	}
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	return room.DisplayNames[cid]
 }
 
 func (h *Hub) replaceClient(oldClient, newClient *Client) {
@@ -285,9 +303,10 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Parse join payload before acquiring locks
 	var joinPayload struct {
-		ReconnectCID          string `json:"reconnectCid"`
-		ReconnectToken        string `json:"reconnectToken"`
-		CreateMaxParticipants int    `json:"createMaxParticipants"`
+		ReconnectCID          string  `json:"reconnectCid"`
+		ReconnectToken        string  `json:"reconnectToken"`
+		CreateMaxParticipants int     `json:"createMaxParticipants"`
+		DisplayName           *string `json:"displayName"`
 		Capabilities          struct {
 			MaxParticipants int `json:"maxParticipants"`
 		} `json:"capabilities"`
@@ -338,6 +357,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			RequestedMaxParticipants: createMax,
 			CapacityLocked:           capacityLocked,
 			JoinedAt:                 make(map[string]int64),
+			DisplayNames:             make(map[string]string),
 		}
 		h.rooms[rid] = room
 	}
@@ -431,6 +451,20 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		room.JoinedAt[cid] = time.Now().UnixMilli()
 	}
 
+	// Update on every join so clients can change their name on reconnect
+	if joinPayload.DisplayName != nil {
+		trimmed := strings.TrimSpace(*joinPayload.DisplayName)
+		runes := []rune(trimmed)
+		if len(runes) > maxDisplayNameLength {
+			trimmed = string(runes[:maxDisplayNameLength])
+		}
+		if trimmed != "" {
+			room.DisplayNames[cid] = trimmed
+		} else {
+			delete(room.DisplayNames, cid)
+		}
+	}
+
 	if room.HostCID == "" {
 		room.HostCID = cid
 	}
@@ -440,7 +474,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	// Send 'joined'
 	participants := []Participant{}
 	for _, id := range room.Participants {
-		participants = append(participants, Participant{CID: id, JoinedAt: room.JoinedAt[id]})
+		participants = append(participants, Participant{CID: id, JoinedAt: room.JoinedAt[id], DisplayName: room.DisplayNames[id]})
 	}
 	roomMaxParticipants := room.MaxParticipants
 
@@ -710,6 +744,7 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	room.mu.Lock()
 	delete(room.Participants, c)
 	delete(room.JoinedAt, c.cid)
+	delete(room.DisplayNames, c.cid)
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, c.cid, c.rid, len(room.Participants))
 
 	// Manage Host
@@ -753,7 +788,7 @@ func (h *Hub) broadcastRoomState(room *Room) {
 	room.mu.Lock()
 	participants := []Participant{}
 	for _, cid := range room.Participants {
-		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid]})
+		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid], DisplayName: room.DisplayNames[cid]})
 	}
 	hostCid := room.HostCID
 	rid := room.RID

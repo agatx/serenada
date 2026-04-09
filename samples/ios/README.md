@@ -5,8 +5,7 @@ Minimal iOS host app demonstrating Serenada SDK integration with SwiftUI.
 ## What it does
 
 - Accepts a call URL and presents `SerenadaCallFlow` using built-in Serenada signaling
-- Creates a new room via `SerenadaCore.createRoom()`
-- Reuses the `SerenadaSession` returned by `createRoom()` so the sample does not double-join
+- Creates a new room via `SerenadaCore.createRoom()` and joins explicitly with `join()`
 - Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
 - Shows incremental `peerJoined` events and peer-message delivery without Serenada transport
 - Runs as a standalone XcodeGen app inside this repository
@@ -66,10 +65,11 @@ let serenada = SerenadaCore(config: .init(serverHost: "serenada.app"))
 // 1. Join an existing invite link.
 SerenadaCallFlow(url: callURL, config: .init(screenSharingEnabled: false, inviteControlsEnabled: false))
 
-// 2. When you create a room, reuse the returned session.
+// 2. Create a room, then join explicitly.
 Task {
     let room = try await serenada.createRoom()
-    SerenadaCallFlow(session: room.session, config: .init(screenSharingEnabled: false, inviteControlsEnabled: false))
+    let session = serenada.join(url: room.url)
+    SerenadaCallFlow(session: session, config: .init(screenSharingEnabled: false, inviteControlsEnabled: false))
 }
 ```
 

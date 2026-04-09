@@ -13,6 +13,51 @@ All SDKs validate `SerenadaConfig` at construction time. Provide exactly one of:
 
 Provider mode keeps the same session/call APIs, but server-bound helpers are unavailable. `createRoom()`, native `createRoomId()`, `RoomWatcher`, `validateServerHost()`, and `runConnectivityChecks()` require `serverHost` and fail with `requires serverHost` when used in provider mode.
 
+### `createRoom()`
+
+Create a new room. Returns the room URL and ID. Call `join()` to start the call.
+
+`createRoom()` is an async operation (suspending on Android/iOS, `Promise` on web) that contacts the Serenada server to allocate a room. It returns a `CreateRoomResult` containing:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | `URL` / `String` | The shareable room URL (e.g. `https://serenada.app/call/abc123`) |
+| `roomId` | `String` | The room identifier extracted from the URL |
+
+`createRoom()` does **not** join the room or create a session. To start the call, pass the returned URL to `join()`:
+
+```typescript
+// Web
+const room = await serenada.createRoom()
+const session = serenada.join(room.url)
+```
+
+```kotlin
+// Android
+val room = serenada.createRoom()
+val session = serenada.join(url = room.roomUrl)
+```
+
+```swift
+// iOS
+let room = try await serenada.createRoom()
+let session = serenada.join(url: room.url)
+```
+
+`createRoom()` is server mode only. In provider mode there is no Serenada room API.
+
+### `join()`
+
+Join a room and return a `SerenadaSession`. Accepts either a URL or a room ID:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `url` | `URL` / `String` | A full room URL (e.g. `https://serenada.app/call/abc123`) |
+| `roomId` | `String` | A bare room ID (provider mode) |
+| `displayName` | `String` (optional) | Display name for the local participant, sent to peers on join |
+
+On web, `join()` accepts a URL string with an optional second argument `{ displayName? }`, or an options object `{ roomId, displayName? }`. On Android and iOS, `url` and `roomId` are separate named parameters.
+
 ### `SignalingProvider`
 
 The public provider contract is available on all three SDKs:

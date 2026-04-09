@@ -4,7 +4,7 @@
 
 **Scope:**
 - Room join/leave
-- Host-designation and host “end call” for all participants
+- Host-designation and host "end call" for all participants
 - Capability-aware room creation and admission
 - SDP offer/answer exchange
 - ICE candidate exchange (trickle ICE)
@@ -124,6 +124,7 @@ Join a room.
       "maxParticipants": 4
     },
     "createMaxParticipants": 4,
+    "displayName": "optional display name",
     "reconnectCid": "optionalPreviousClientId"
   }
 }
@@ -157,7 +158,7 @@ Acknowledges join success and provides room state.
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
     "participants": [
-      { "cid": "C-a1b2...", "joinedAt": 1735171200000 },
+      { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
       { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
     ],
     "turnToken": "T-abc123yz...",
@@ -169,7 +170,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, and `displayName` *(string, optional)*.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 
@@ -192,7 +193,7 @@ Sent when participants join/leave or host changes.
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
     "participants": [
-      { "cid": "C-a1b2...", "joinedAt": 1735171200000 },
+      { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
       { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
     ]
   }
@@ -200,7 +201,7 @@ Sent when participants join/leave or host changes.
 ```
 
 **Client behavior**
-- Update UI for “waiting for someone to join” vs “in call”.
+- Update UI for "waiting for someone to join" vs "in call".
 - Treat `maxParticipants` as the room's current effective capacity. It may increase from `2` to a higher locked value when the second participant joins a provisional room.
 - Treat `joinedAt` as informational only. It may be shown in UI, but clients must not depend on it for offer ownership.
 - If participant list shrinks to 1 during a call, treat as remote left.
@@ -481,7 +482,7 @@ Pushed whenever a watched room's participant count changes. `maxParticipants` is
 ## 5. WebRTC negotiation rules (mesh)
 
 ### 5.1 Roles for offer/answer
-To avoid “glare” (both sides sending offers), assign offer ownership per peer edge:
+To avoid "glare" (both sides sending offers), assign offer ownership per peer edge:
 
 - Compare peer IDs lexicographically.
 - The participant whose `cid` sorts first is the offerer for that pair.
@@ -638,7 +639,7 @@ Triggers a room invite push notification to subscribers of the room.
 
 ### Client
 - [ ] Connect WS/SSE, send `join` on call page
-- [ ] Show “Join Call” and only call `getUserMedia` after user gesture
+- [ ] Show "Join Call" and only call `getUserMedia` after user gesture
 - [ ] Implement deterministic per-peer offer ownership to avoid glare
 - [ ] Trickle ICE send/receive with queueing before remote SDP is set
 - [ ] Handle `room_state`, `room_ended`, and `error`
