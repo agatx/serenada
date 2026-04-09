@@ -296,11 +296,13 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
     }
 }
 
-function mapParticipant(participant: { cid: string; joinedAt?: number; displayName?: string }): SignalingProviderParticipant {
+function mapParticipant(participant: { cid: string; joinedAt?: number; displayName?: string; audioEnabled?: boolean; videoEnabled?: boolean }): SignalingProviderParticipant {
     return {
         peerId: participant.cid,
         joinedAt: participant.joinedAt,
         displayName: participant.displayName,
+        audioEnabled: participant.audioEnabled,
+        videoEnabled: participant.videoEnabled,
     };
 }
 

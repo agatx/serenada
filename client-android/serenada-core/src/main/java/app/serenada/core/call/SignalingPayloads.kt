@@ -120,6 +120,8 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
                 cid = cid,
                 joinedAt = p.optLong("joinedAt").takeIf { it > 0 },
                 displayName = p.optString("displayName").ifBlank { null },
+                audioEnabled = if (p.has("audioEnabled")) p.optBoolean("audioEnabled") else null,
+                videoEnabled = if (p.has("videoEnabled")) p.optBoolean("videoEnabled") else null,
             ))
         }
     }

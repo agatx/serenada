@@ -625,6 +625,7 @@ public final class SerenadaSession: ObservableObject {
             hostCid = roomState.hostCid
             updateParticipants(roomState)
         }
+        broadcastLocalMediaState()
     }
 
     fileprivate func handleProviderPeerLeft(_ event: PeerEvent) {
@@ -680,11 +681,11 @@ public final class SerenadaSession: ObservableObject {
         }
         let participants = roomState.participants.filter { $0.cid != clientId }.map { p in
             let slot = peerSlots[p.cid]
-            let mediaState = remoteMediaStates[p.cid]
+            let peerState = remoteMediaStates[p.cid]
             return SerenadaRemoteParticipant(
                 cid: p.cid, displayName: p.displayName,
-                audioEnabled: mediaState?.audioEnabled ?? true,
-                videoEnabled: mediaState?.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
+                audioEnabled: peerState?.audioEnabled ?? p.audioEnabled ?? true,
+                videoEnabled: peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
                 connectionState: slot?.getConnectionState() ?? .new
             )
         }

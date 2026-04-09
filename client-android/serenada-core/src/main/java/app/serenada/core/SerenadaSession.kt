@@ -432,6 +432,7 @@ class SerenadaSession internal constructor(
                     hostCid = roomState.hostCid
                     updateParticipants(roomState)
                 }
+                broadcastLocalMediaState()
             }
         }
 
@@ -977,13 +978,14 @@ class SerenadaSession internal constructor(
         val roomParticipants = currentRoomState?.participants
         val orderedRemoteCids = roomParticipants?.map { it.cid }?.filter { it != myCid }
             ?: peerSlots.keys.toList()
-        val displayNamesByCid = roomParticipants?.associate { it.cid to it.displayName } ?: emptyMap()
+        val participantsByCid = roomParticipants?.associateBy { it.cid } ?: emptyMap()
         val remoteParticipants = orderedRemoteCids.mapNotNull { cid ->
             val slot = peerSlots[cid] ?: return@mapNotNull null
-            val mediaState = remoteMediaStates[cid]
-            val audioEnabled = mediaState?.audioEnabled ?: true
-            val videoEnabled = mediaState?.videoEnabled ?: slot.isRemoteVideoTrackEnabled()
-            RemoteParticipant(cid = cid, displayName = displayNamesByCid[cid], audioEnabled = audioEnabled, videoEnabled = videoEnabled, connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
+            val participant = participantsByCid[cid]
+            val peerState = remoteMediaStates[cid]
+            val audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true
+            val videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled()
+            RemoteParticipant(cid = cid, displayName = participant?.displayName, audioEnabled = audioEnabled, videoEnabled = videoEnabled, connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
         }
         val currentState = _state.value
         val currentDiagnostics = _diagnostics.value

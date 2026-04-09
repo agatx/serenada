@@ -20,6 +20,7 @@ import type {
     SignalingProvider,
     SignalingProviderEventMap,
     SignalingProviderEventName,
+    SignalingProviderParticipant,
 } from './SignalingProvider.js';
 import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
@@ -67,11 +68,13 @@ function mapErrorCode(serverCode: string): CallErrorCode {
     }
 }
 
-function toRoomParticipant(participant: { peerId: string; joinedAt?: number; displayName?: string }): RoomParticipant {
+function toRoomParticipant(participant: SignalingProviderParticipant): RoomParticipant {
     return {
         cid: participant.peerId,
         joinedAt: participant.joinedAt,
         displayName: participant.displayName,
+        audioEnabled: participant.audioEnabled,
+        videoEnabled: participant.videoEnabled,
     };
 }
 
@@ -536,6 +539,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.roomState = upsertParticipant(this.roomState, event, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
+        this.broadcastLocalMediaState();
     };
 
     private readonly handlePeerLeft = (event: PeerEvent): void => {
@@ -863,12 +867,12 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const remoteParticipants = (signalingState?.participants ?? [])
             .filter((participant) => participant.cid !== clientId)
             .map((participant) => {
-                const remoteState = this.remoteMediaStates.get(participant.cid);
+                const peerState = this.remoteMediaStates.get(participant.cid);
                 return {
                     cid: participant.cid,
                     displayName: participant.displayName,
-                    audioEnabled: remoteState?.audioEnabled ?? true,
-                    videoEnabled: remoteState?.videoEnabled ?? defaultVideoEnabled,
+                    audioEnabled: peerState?.audioEnabled ?? participant.audioEnabled ?? true,
+                    videoEnabled: peerState?.videoEnabled ?? participant.videoEnabled ?? defaultVideoEnabled,
                     connectionState: this.media.connectionState,
                 };
             });

@@ -2,6 +2,8 @@ export type RoomParticipant = {
     cid: string;
     joinedAt?: number;
     displayName?: string;
+    audioEnabled?: boolean;
+    videoEnabled?: boolean;
 };
 
 export type RoomState = {

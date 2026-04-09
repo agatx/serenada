@@ -868,6 +868,20 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                 <button type="button" onClick={handleToggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
                     {isCameraOff ? <VideoOff size={22} /> : <Video size={22} />}
                 </button>
+                {!isCameraOff && hasMultipleCameras && (
+                    <button type="button" onClick={handleFlipCamera} className="btn-control" disabled={isScreenSharing}>
+                        <RotateCcw size={22} />
+                    </button>
+                )}
+                {!isCameraOff && showScreenShareControl && (
+                    <button
+                        type="button"
+                        onClick={handleToggleScreenShare}
+                        className={`btn-control ${isScreenSharing ? 'active-screen-share' : ''}`}
+                    >
+                        {isScreenSharing ? <ScreenShareOff size={22} /> : <ScreenShare size={22} />}
+                    </button>
+                )}
                 <button type="button" onClick={handleLeave} className="btn-control btn-leave">
                     <PhoneOff size={22} />
                 </button>
@@ -887,8 +901,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             {(p.displayName || p.cid).charAt(0).toUpperCase()}
                         </span>
                         <span className="voice-participant-info">
-                            <span className="voice-participant-name">{p.isLocal ? (resolveString('you', strings) || 'You') : (p.displayName || p.cid.slice(0, 8))}</span>
-                            {p.isLocal && p.displayName && <span className="voice-participant-you">{resolveString('you', strings) || 'You'}</span>}
+                            <span className="voice-participant-name">{p.isLocal ? (p.displayName || resolveString('you', strings) || 'You') : (p.displayName || p.cid.slice(0, 8))}</span>
+                            {p.isLocal && <span className="voice-participant-you">{resolveString('you', strings) || 'You'}</span>}
                         </span>
                         <span className="voice-participant-icons">
                             {p.videoEnabled && <Video size={15} />}

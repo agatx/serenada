@@ -74,9 +74,11 @@ type Message struct {
 }
 
 type Participant struct {
-	CID         string `json:"cid"`
-	JoinedAt    int64  `json:"joinedAt,omitempty"`
-	DisplayName string `json:"displayName,omitempty"`
+	CID          string `json:"cid"`
+	JoinedAt     int64  `json:"joinedAt,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
+	AudioEnabled *bool  `json:"audioEnabled,omitempty"`
+	VideoEnabled *bool  `json:"videoEnabled,omitempty"`
 }
 
 type Hub struct {
@@ -99,6 +101,8 @@ type Room struct {
 	Mode                     string            // "video" or "voice"; immutable after creation
 	JoinedAt                 map[string]int64  // cid -> join timestamp (ms)
 	DisplayNames             map[string]string // cid -> display name
+	AudioEnabled             map[string]*bool  // cid -> audio enabled (nil = unknown/default)
+	VideoEnabled             map[string]*bool  // cid -> video enabled (nil = unknown/default)
 	mu                       sync.Mutex
 }
 
@@ -281,9 +285,11 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 		h.handleWatchRooms(c, msg)
 	case "turn-refresh":
 		h.handleTurnRefresh(c, msg)
-	case "offer", "answer", "ice", "content_state", "participant_media_state":
+	case "offer", "answer", "ice", "content_state":
 		// log.Printf("[%s] Relay from %s to room %s", msg.Type, c.cid, c.rid) // verbose
 		h.handleRelay(c, msg)
+	case "participant_media_state":
+		h.handleMediaState(c, msg)
 	default:
 		log.Printf("[UNKNOWN] Unknown message type: %s", msg.Type)
 	}
@@ -376,6 +382,8 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			Mode:                     normalizedMode,
 			JoinedAt:                 make(map[string]int64),
 			DisplayNames:             make(map[string]string),
+			AudioEnabled:             make(map[string]*bool),
+			VideoEnabled:             make(map[string]*bool),
 		}
 		h.rooms[rid] = room
 	}
@@ -492,7 +500,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	// Send 'joined'
 	participants := []Participant{}
 	for _, id := range room.Participants {
-		participants = append(participants, Participant{CID: id, JoinedAt: room.JoinedAt[id], DisplayName: room.DisplayNames[id]})
+		participants = append(participants, Participant{CID: id, JoinedAt: room.JoinedAt[id], DisplayName: room.DisplayNames[id], AudioEnabled: room.AudioEnabled[id], VideoEnabled: room.VideoEnabled[id]})
 	}
 	roomMaxParticipants := room.MaxParticipants
 	roomMode := room.Mode
@@ -716,6 +724,41 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 	log.Printf("[RELAY] Client %s (CID: %s) relayed %s message to %d participants in room %s", c.sid, c.cid, msg.Type, relayedCount, c.rid)
 }
 
+func (h *Hub) handleMediaState(c *Client, msg Message) {
+	if c.rid == "" || c.cid == "" {
+		return
+	}
+	h.mu.RLock()
+	room, exists := h.rooms[c.rid]
+	h.mu.RUnlock()
+	if !exists {
+		return
+	}
+
+	var payload struct {
+		AudioEnabled *bool `json:"audioEnabled"`
+		VideoEnabled *bool `json:"videoEnabled"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	room.mu.Lock()
+	if _, ok := room.Participants[c]; !ok {
+		room.mu.Unlock()
+		return
+	}
+	if payload.AudioEnabled != nil {
+		room.AudioEnabled[c.cid] = payload.AudioEnabled
+	}
+	if payload.VideoEnabled != nil {
+		room.VideoEnabled[c.cid] = payload.VideoEnabled
+	}
+	room.mu.Unlock()
+
+	h.broadcastRoomState(room)
+}
+
 func (h *Hub) disconnectClient(c *Client) {
 	log.Printf("[DISCONNECT] Client %s disconnected", c.sid)
 	h.mu.Lock()
@@ -765,6 +808,8 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	delete(room.Participants, c)
 	delete(room.JoinedAt, c.cid)
 	delete(room.DisplayNames, c.cid)
+	delete(room.AudioEnabled, c.cid)
+	delete(room.VideoEnabled, c.cid)
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, c.cid, c.rid, len(room.Participants))
 
 	// Manage Host
@@ -808,7 +853,7 @@ func (h *Hub) broadcastRoomState(room *Room) {
 	room.mu.Lock()
 	participants := []Participant{}
 	for _, cid := range room.Participants {
-		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid], DisplayName: room.DisplayNames[cid]})
+		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid], DisplayName: room.DisplayNames[cid], AudioEnabled: room.AudioEnabled[cid], VideoEnabled: room.VideoEnabled[cid]})
 	}
 	hostCid := room.HostCID
 	rid := room.RID

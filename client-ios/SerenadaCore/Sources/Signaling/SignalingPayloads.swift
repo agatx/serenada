@@ -11,7 +11,9 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         guard let cid = obj["cid"]?.stringValue, !cid.isEmpty else { continue }
         let joinedAt = obj["joinedAt"]?.intValue.map(Int64.init)
         let displayName = obj["displayName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        result.append(Participant(cid: cid, joinedAt: joinedAt, displayName: displayName))
+        let audioEnabled = obj["audioEnabled"]?.boolValue
+        let videoEnabled = obj["videoEnabled"]?.boolValue
+        result.append(Participant(cid: cid, joinedAt: joinedAt, displayName: displayName, audioEnabled: audioEnabled, videoEnabled: videoEnabled))
     }
     return result
 }
