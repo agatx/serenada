@@ -396,6 +396,176 @@ const CALL_FLOW_CSS = `
   align-items: center;
   gap: 0.75rem;
 }
+
+/* ── Voice mode ─────────────────────────────────────────────── */
+
+[data-serenada-callflow].voice-mode .voice-call-container {
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(ellipse at 50% 20%, rgba(47, 129, 247, 0.10), transparent 60%),
+    radial-gradient(ellipse at 50% 90%, rgba(255, 255, 255, 0.03), transparent 40%),
+    #050608;
+}
+
+/* Centered layout (no video shared) */
+
+[data-serenada-callflow].voice-mode .voice-centered {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px 140px;
+}
+
+[data-serenada-callflow].voice-mode .voice-centered .voice-participant-list {
+  width: 100%;
+  max-width: 420px;
+}
+
+/* Spotlight + sidebar layout (someone sharing video) */
+/* Visual treatment matches .video-stage-tile from multi-party */
+
+[data-serenada-callflow].voice-mode.voice-has-video .voice-call-container {
+  flex-direction: column;
+}
+
+[data-serenada-callflow].voice-mode .voice-spotlight {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 12px;
+  margin-bottom: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 30%),
+    #111;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.35);
+}
+
+[data-serenada-callflow].voice-mode .voice-spotlight video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #060708;
+}
+
+[data-serenada-callflow].voice-mode .voice-sidebar {
+  flex: 0 0 auto;
+  max-height: 35vh;
+  overflow-y: auto;
+  padding: 8px 12px 140px;
+}
+
+/* Participant list */
+
+[data-serenada-callflow].voice-mode .voice-participant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+[data-serenada-callflow].voice-mode .voice-participant-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+  color: #fff;
+  cursor: default;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  text-align: left;
+  font: inherit;
+}
+
+[data-serenada-callflow].voice-mode .voice-participant-row.focused {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+[data-serenada-callflow].voice-mode .voice-avatar {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.10);
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+}
+
+[data-serenada-callflow].voice-mode .voice-participant-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+[data-serenada-callflow].voice-mode .voice-participant-name {
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-serenada-callflow].voice-mode .voice-participant-you {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+[data-serenada-callflow].voice-mode .voice-participant-icons {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+[data-serenada-callflow].voice-mode .voice-icon-muted {
+  color: rgba(218, 54, 51, 0.8);
+}
+
+@media (min-width: 768px) {
+  [data-serenada-callflow].voice-mode.voice-has-video .voice-call-container {
+    flex-direction: row;
+  }
+
+  [data-serenada-callflow].voice-mode .voice-spotlight {
+    margin: 16px 0 16px 16px;
+    border-radius: 12px;
+  }
+
+  [data-serenada-callflow].voice-mode .voice-sidebar {
+    flex: 0 0 280px;
+    max-height: none;
+    padding: 16px 16px 140px;
+    overflow-y: auto;
+  }
+
+  [data-serenada-callflow].voice-mode .voice-centered .voice-participant-list {
+    max-width: 480px;
+  }
+
+  [data-serenada-callflow].voice-mode .voice-avatar {
+    width: 48px;
+    height: 48px;
+    font-size: 20px;
+  }
+
+  [data-serenada-callflow].voice-mode .voice-participant-name {
+    font-size: 16px;
+  }
+}
 `;
 
 export function ensureCallFlowStyles(): void {
