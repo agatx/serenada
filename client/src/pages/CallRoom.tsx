@@ -332,8 +332,9 @@ const CallRoom: React.FC = () => {
 
         const unsubscribe = session.subscribe((state: CallState) => {
             if ((state.phase === 'waiting' || state.phase === 'inCall') && !pushNotifySentRef.current) {
-                pushNotifySentRef.current = true;
                 const localStream = session.localStream;
+                if (!localStream) return; // Media still loading — wait for next state update
+                pushNotifySentRef.current = true;
 
                 void (async () => {
                     try {
