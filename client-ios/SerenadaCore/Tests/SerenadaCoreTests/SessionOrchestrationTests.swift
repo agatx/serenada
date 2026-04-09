@@ -246,6 +246,32 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertEqual(harness.session.state.phase, .idle)
     }
 
+    // MARK: - Test 8b: Leave as host must not send end_room (regression)
+
+    func testLeaveAsHostDoesNotSendEndRoom() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+
+        harness.simulateJoinedResponse(
+            cid: "host-cid",
+            participants: [
+                (cid: "host-cid", joinedAt: 1),
+                (cid: "remote-cid", joinedAt: 2)
+            ],
+            hostCid: "host-cid"
+        )
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .inCall)
+        XCTAssertTrue(harness.session.state.localParticipant.isHost, "Local participant should be host")
+
+        harness.session.leave()
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeProvider.leaveCalls, 1, "Should send leave")
+        XCTAssertEqual(harness.fakeProvider.endCalls, 0, "leave() must never send end_room — even for the host")
+        XCTAssertEqual(harness.session.state.phase, .idle)
+    }
+
     // MARK: - Test 9: ICE Server Fetch
 
     func testIceServerFetch() async {
