@@ -231,6 +231,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private error: SignalingErrorEvent | null = null;
     private callMode: CallMode;
     private readonly remoteMediaStates = new Map<string, { audioEnabled: boolean; videoEnabled: boolean }>();
+    private isAcquiringCamera = false;
 
     private get isInactive(): boolean {
         return this._destroyed || this.terminated;
@@ -541,6 +542,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.isInactive) {
             return;
         }
+        this.remoteMediaStates.delete(event.peerId);
         this.roomState = removeParticipant(this.roomState, event.peerId, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
@@ -774,12 +776,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (kind === 'video') {
             const track = stream.getVideoTracks()[0];
             if (!track && (enabled ?? true)) {
-                // Lazy camera acquisition (voice mode or missing video track)
+                if (this.isAcquiringCamera) return;
+                this.isAcquiringCamera = true;
                 void this.media.startLocalVideo().then(() => {
                     this.broadcastLocalMediaState();
                     this.rebuildState();
                 }).catch((err) => {
                     this.config.logger?.log('error', 'Session', `Lazy camera start failed: ${formatError(err)}`);
+                }).finally(() => {
+                    this.isAcquiringCamera = false;
                 });
                 return;
             }

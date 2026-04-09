@@ -1360,7 +1360,7 @@ private fun VoiceModeBody(
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
     onTap: () -> Unit,
-    @Suppress("UNUSED_PARAMETER") strings: Map<SerenadaString, String>?,
+    strings: Map<SerenadaString, String>?,
 ) {
     val context = LocalContext.current
 
@@ -1500,7 +1500,7 @@ private fun VoiceModeBody(
                         // Participant name
                         Text(
                             text = when {
-                                participant.isLocal -> "You"
+                                participant.isLocal -> resolveString(SerenadaString.CallYou, strings)
                                 participant.displayName != null -> participant.displayName
                                 else -> participant.cid.take(8)
                             },

@@ -184,6 +184,7 @@ class SerenadaSession internal constructor(
                 updateParticipants(roomState)
             }
             loadInitialIceServers()
+            broadcastLocalMediaState()
         },
         onRoomStateUpdated = { roomState ->
             currentRoomState = roomState
@@ -436,6 +437,7 @@ class SerenadaSession internal constructor(
 
         override fun onPeerLeft(event: PeerEvent) {
             runOnMain {
+                remoteMediaStates.remove(event.peerId)
                 currentRoomState = removeParticipant(currentRoomState, event.peerId, clientId)
                 currentRoomState?.let { roomState ->
                     hostCid = roomState.hostCid

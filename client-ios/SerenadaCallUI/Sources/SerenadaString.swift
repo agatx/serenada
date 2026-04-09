@@ -33,6 +33,7 @@ public enum SerenadaString: String, CaseIterable {
     case callPermissionsRequired
     case callPermissionsCamera
     case callPermissionsMicrophone
+    case callYou
 }
 
 /// Default English strings for SerenadaCallUI.
@@ -67,6 +68,7 @@ public let serenadaDefaultStrings: [SerenadaString: String] = [
     .callPermissionsRequired: "Camera and microphone access are required",
     .callPermissionsCamera: "Camera",
     .callPermissionsMicrophone: "Microphone",
+    .callYou: "You",
 ]
 
 /// Resolves a string key, checking overrides first, then falling back to English defaults.

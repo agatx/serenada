@@ -684,7 +684,7 @@ struct CallScreenView: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     if isLocal {
-                        Text("You")
+                        Text(str(.callYou))
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.6))
                     }

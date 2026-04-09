@@ -628,6 +628,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func handleProviderPeerLeft(_ event: PeerEvent) {
+        remoteMediaStates.removeValue(forKey: event.peerId)
         currentRoomState = removeParticipant(roomState: currentRoomState, peerId: event.peerId, localPeerId: clientId)
         if let roomState = currentRoomState {
             hostCid = roomState.hostCid
