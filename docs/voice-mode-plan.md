@@ -9,7 +9,9 @@ Serenada currently supports only video calls. This change adds a voice-only call
 - **Room mode is immutable**: set by the creator's first join, never changes. Mode describes the room's *character*, not a hard media constraint.
 - **Audio-first, camera optional**: voice rooms skip camera permission on join, but any participant can opt-in to share their camera at any time. Other participants are never prompted.
 - **Separate capacity ceiling**: new env var `MAX_VOICE_ROOM_PARTICIPANTS` (default 8), independent of `MAX_ROOM_PARTICIPANTS` (default 4).
-- **Separate "Start Voice Call" button** on home/join screens (all platforms).
+- **Starting a call** is done by clicking on the ... icon on the right side of the Start call button and selecting "Start Voice Call" from the menu the pops up (the second option in the menu is "Start Video Call"). Effectively the Start call button becomes a segmented button with primary single click action starting a video call and the secondary button opening a menu. Button layout:
+[ (icon) Start call | ... ]
+
 - **Voice call UI**: minimal vertical scrollable participant list with mute indicators; participants sharing video get a dedicated video tile above the list (similar layout to the focused video in video calls, but with room participants list below). The person sharing a video is always the first in the list with an icon indicating that they are sharing a video. The list is sorted by the order in which participants joined the room. If multiple people share video, the first person who joined is always the first in the list, and the rest are sorted by the order in which they joined. You can switch video feeds by clicking on the participant's name in the list.
 - **Backward compatible**: old clients default to `"video"` mode; unknown `mode` field is ignored.
 
