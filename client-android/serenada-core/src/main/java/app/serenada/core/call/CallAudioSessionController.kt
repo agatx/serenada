@@ -18,6 +18,7 @@ import app.serenada.core.SerenadaLogger
 internal class CallAudioSessionController(
     context: Context,
     private val handler: Handler,
+    private val proximityMonitoringEnabled: Boolean,
     private val onProximityChanged: (Boolean) -> Unit,
     private val onAudioEnvironmentChanged: () -> Unit,
     private val logger: SerenadaLogger? = null,
@@ -78,7 +79,9 @@ internal class CallAudioSessionController(
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.isMicrophoneMute = false
             startAudioDeviceMonitoring()
-            startProximityMonitoring()
+            if (proximityMonitoringEnabled) {
+                startProximityMonitoring()
+            }
             applyCallAudioRouting()
             onAudioEnvironmentChanged()
         }.onSuccess {

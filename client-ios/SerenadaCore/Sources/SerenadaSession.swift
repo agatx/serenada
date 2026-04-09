@@ -184,7 +184,8 @@ public final class SerenadaSession: ObservableObject {
                 signalingProvider: nil,
                 defaultAudioEnabled: config.defaultAudioEnabled,
                 defaultVideoEnabled: config.defaultVideoEnabled,
-                transports: config.transports
+                transports: config.transports,
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled
             )
             : config
         self.init(
@@ -240,6 +241,7 @@ public final class SerenadaSession: ObservableObject {
         }
         self.providerDelegateProxy = SignalingProviderDelegateProxy(session: nil)
         self.callAudioSessionController = audioController ?? CallAudioSessionController(
+            proximityMonitoringEnabled: config.proximityMonitoringEnabled,
             onProximityChanged: { _ in }, onAudioEnvironmentChanged: {}, logger: logger
         )
         self.webRtcEngine = mediaEngine ?? WebRtcEngine(

@@ -16,6 +16,8 @@ data class SerenadaConfig(
     val isHdVideoExperimentalEnabled: Boolean = false,
     /** Preferred signaling transports in priority order (default: WS then SSE). */
     val transports: List<SerenadaTransport> = listOf(SerenadaTransport.WS, SerenadaTransport.SSE),
+    /** Whether the proximity sensor is used to switch audio to the earpiece and pause video (default false). */
+    val proximityMonitoringEnabled: Boolean = false,
 )
 
 /** Available signaling transport types. */

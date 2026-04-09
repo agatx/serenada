@@ -387,7 +387,8 @@ final class CallManager: ObservableObject {
             config: SerenadaConfig(
                 serverHost: host,
                 defaultAudioEnabled: settingsStore.isDefaultMicrophoneEnabled,
-                defaultVideoEnabled: settingsStore.isDefaultCameraEnabled
+                defaultVideoEnabled: settingsStore.isDefaultCameraEnabled,
+                proximityMonitoringEnabled: true
             )
         )
         core.logger = PrintSerenadaLogger()

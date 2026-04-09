@@ -71,7 +71,8 @@ public final class SerenadaCore {
                 signalingProvider: nil,
                 defaultAudioEnabled: config.defaultAudioEnabled,
                 defaultVideoEnabled: config.defaultVideoEnabled,
-                transports: config.transports
+                transports: config.transports,
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled
             )
         } else {
             sessionConfig = config
