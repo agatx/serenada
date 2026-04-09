@@ -39,6 +39,7 @@ data class RoomStateEvent(
 data class PeerEvent(
     val peerId: String,
     val joinedAt: Long? = null,
+    val displayName: String? = null,
 )
 
 data class PeerMessage(

@@ -164,6 +164,20 @@ func (h *Hub) IsClientInRoom(roomID, cid string) bool {
 	return false
 }
 
+// GetClientDisplayName returns the display name for a client in a room.
+// Returns empty string if the room/client doesn't exist or has no display name.
+func (h *Hub) GetClientDisplayName(roomID, cid string) string {
+	h.mu.RLock()
+	room, exists := h.rooms[roomID]
+	h.mu.RUnlock()
+	if !exists {
+		return ""
+	}
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	return room.DisplayNames[cid]
+}
+
 func (h *Hub) replaceClient(oldClient, newClient *Client) {
 	h.mu.Lock()
 	delete(h.clients, oldClient)

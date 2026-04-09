@@ -178,5 +178,5 @@ func TestPushServiceSendNotificationToRoomReturnsOnInvalidRoomID(t *testing.T) {
 		}
 	}()
 
-	service.SendNotificationToRoom("bad", "", "")
+	service.SendNotificationToRoom("bad", "", "", "")
 }
