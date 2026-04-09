@@ -377,7 +377,7 @@ func getLocalizedMessage(locale string, kind string, displayName string) (string
 	if displayName != "" {
 		switch lang {
 		case "ru":
-			return "Serenada", fmt.Sprintf("%s присоединился к вашему звонку!", displayName)
+			return "Serenada", fmt.Sprintf("%s уже в вашем звонке!", displayName)
 		case "es":
 			return "Serenada", fmt.Sprintf("¡%s se unió a tu llamada!", displayName)
 		case "de":

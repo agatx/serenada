@@ -17,6 +17,7 @@ import (
 )
 
 const maxMessageSize = 65536 // 64KB
+const maxDisplayNameLength = 40
 
 // TURN token TTL for call credentials: 15 minutes.
 // Clients proactively refresh at 80% of TTL (~12 min). Both Cloudflare and coturn
@@ -450,12 +451,12 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		room.JoinedAt[cid] = time.Now().UnixMilli()
 	}
 
-	// Update on every join so clients can change or clear their name mid-session
+	// Update on every join so clients can change their name on reconnect
 	if joinPayload.DisplayName != "" {
 		trimmed := strings.TrimSpace(joinPayload.DisplayName)
 		runes := []rune(trimmed)
-		if len(runes) > 40 {
-			trimmed = string(runes[:40])
+		if len(runes) > maxDisplayNameLength {
+			trimmed = string(runes[:maxDisplayNameLength])
 		}
 		if trimmed != "" {
 			room.DisplayNames[cid] = trimmed

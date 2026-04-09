@@ -573,6 +573,9 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         return "$host:$port"
     }
 
+    private val resolvedDisplayName: String?
+        get() = settingsStore.displayName.ifBlank { null }
+
     private fun resolveDeepLinkHostPolicy(host: String?): DeepLinkHostPolicy {
         val normalized = normalizeHostValue(host) ?: return DeepLinkHostPolicy()
         return if (isTrustedDeepLinkHost(normalized)) {
@@ -607,7 +610,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             try {
                 val core = createSdkCore(serverHost.value)
                 val created = core.createRoom()
-                val session = core.join(roomId = created.roomId, displayName = settingsStore.displayName.ifBlank { null })
+                val session = core.join(roomId = created.roomId, displayName = resolvedDisplayName)
                 beginSdkSession(session)
             } catch (error: Throwable) {
                 val fallback = appContext.getString(R.string.error_failed_create_room)
@@ -638,7 +641,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             refreshSavedRooms()
         }
         val resolvedHost = normalizeHostValue(oneOffHost) ?: serverHost.value
-        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost, displayName = settingsStore.displayName.ifBlank { null })
+        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost, displayName = resolvedDisplayName)
         beginSdkSession(session, hostOverride = oneOffHost)
     }
 

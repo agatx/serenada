@@ -584,7 +584,7 @@ public final class SerenadaSession: ObservableObject {
 
     fileprivate func handleProviderPeerJoined(_ event: PeerEvent) {
         currentError = nil
-        currentRoomState = upsertParticipant(roomState: currentRoomState, event: event, localPeerId: clientId, displayName: event.displayName)
+        currentRoomState = upsertParticipant(roomState: currentRoomState, event: event, localPeerId: clientId)
         if let roomState = currentRoomState {
             hostCid = roomState.hostCid
             updateParticipants(roomState)
@@ -704,11 +704,10 @@ public final class SerenadaSession: ObservableObject {
     private func upsertParticipant(
         roomState: RoomState?,
         event: PeerEvent,
-        localPeerId: String?,
-        displayName: String? = nil
+        localPeerId: String?
     ) -> RoomState? {
         let participants = dedupeParticipants(
-            participants: (roomState?.participants ?? []) + [Participant(cid: event.peerId, joinedAt: event.joinedAt, displayName: displayName)],
+            participants: (roomState?.participants ?? []) + [Participant(cid: event.peerId, joinedAt: event.joinedAt, displayName: event.displayName)],
             localPeerId: localPeerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
