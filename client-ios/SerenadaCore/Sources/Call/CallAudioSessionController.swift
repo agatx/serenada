@@ -7,6 +7,7 @@ internal final class CallAudioSessionController: SessionAudioController {
     private var onProximityChanged: (Bool) -> Void
     private var onAudioEnvironmentChanged: () -> Void
     private let logger: SerenadaLogger?
+    private let proximityMonitoringEnabled: Bool
 
     private let audioSession = AVAudioSession.sharedInstance()
 
@@ -15,10 +16,12 @@ internal final class CallAudioSessionController: SessionAudioController {
     private var isProximityNear = false
 
     public init(
+        proximityMonitoringEnabled: Bool,
         onProximityChanged: @escaping (Bool) -> Void,
         onAudioEnvironmentChanged: @escaping () -> Void,
         logger: SerenadaLogger? = nil
     ) {
+        self.proximityMonitoringEnabled = proximityMonitoringEnabled
         self.onProximityChanged = onProximityChanged
         self.onAudioEnvironmentChanged = onAudioEnvironmentChanged
         self.logger = logger
@@ -47,7 +50,9 @@ internal final class CallAudioSessionController: SessionAudioController {
             logger?.log(.error, tag: "Audio", "failed to activate audio session: \(error)")
         }
 
-        startMonitoring()
+        if proximityMonitoringEnabled {
+            startMonitoring()
+        }
         applyCallAudioRouting()
         onAudioEnvironmentChanged()
     }
@@ -95,6 +100,11 @@ internal final class CallAudioSessionController: SessionAudioController {
     }
 
     private func stopMonitoring() {
+        guard proximityMonitoringActive else {
+            isProximityNear = false
+            return
+        }
+
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: UIDevice.proximityStateDidChangeNotification, object: nil)
 

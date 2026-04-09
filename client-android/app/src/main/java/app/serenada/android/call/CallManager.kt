@@ -145,6 +145,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 defaultVideoEnabled = settingsStore.isDefaultCameraEnabled,
                 isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
                 transports = transports,
+                proximityMonitoringEnabled = true,
             ),
             context = appContext,
         )

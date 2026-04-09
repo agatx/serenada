@@ -23,19 +23,24 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     public var defaultVideoEnabled: Bool
     /// Preferred signaling transports in priority order. Defaults to `[.ws, .sse]`.
     public var transports: [SerenadaTransport]
+    /// Whether the proximity sensor is used to switch audio to the earpiece and pause video.
+    /// Defaults to `false`.
+    public var proximityMonitoringEnabled: Bool
 
     public init(
         serverHost: String? = nil,
         signalingProvider: SignalingProvider? = nil,
         defaultAudioEnabled: Bool = true,
         defaultVideoEnabled: Bool = true,
-        transports: [SerenadaTransport] = [.ws, .sse]
+        transports: [SerenadaTransport] = [.ws, .sse],
+        proximityMonitoringEnabled: Bool = false
     ) {
         self.serverHost = serverHost
         self.signalingProvider = signalingProvider
         self.defaultAudioEnabled = defaultAudioEnabled
         self.defaultVideoEnabled = defaultVideoEnabled
         self.transports = transports
+        self.proximityMonitoringEnabled = proximityMonitoringEnabled
     }
 
     public static func == (lhs: SerenadaConfig, rhs: SerenadaConfig) -> Bool {
@@ -43,6 +48,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
             && lhs.defaultAudioEnabled == rhs.defaultAudioEnabled
             && lhs.defaultVideoEnabled == rhs.defaultVideoEnabled
             && lhs.transports == rhs.transports
+            && lhs.proximityMonitoringEnabled == rhs.proximityMonitoringEnabled
             && haveSameProvider(lhs.signalingProvider, rhs.signalingProvider)
     }
 }

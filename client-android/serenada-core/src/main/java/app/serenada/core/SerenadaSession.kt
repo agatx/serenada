@@ -324,6 +324,7 @@ class SerenadaSession internal constructor(
     private val callAudioSessionController: SessionAudioController = audioController ?: CallAudioSessionController(
         context = appContext,
         handler = handler,
+        proximityMonitoringEnabled = config.proximityMonitoringEnabled,
         onProximityChanged = { near ->
             logger?.log(SerenadaLogLevel.DEBUG, "Session", "Proximity sensor changed: ${if (near) "NEAR" else "FAR"}")
         },
