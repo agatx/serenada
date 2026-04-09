@@ -384,7 +384,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         }
     }
 
-    fun saveRoom(roomId: String, name: String, host: String? = null) {
+    fun saveRoom(roomId: String, name: String, host: String? = null, callMode: CallMode? = null) {
         val cleanRoomId = roomId.trim()
         val cleanName = normalizeSavedRoomName(name) ?: return
         if (!isValidRoomId(cleanRoomId)) return
@@ -394,12 +394,18 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             ?: existingRoom?.host
             ?: recentHost
             ?: serverHost.value
+        val recentCallMode = _recentCalls.value.firstOrNull { it.roomId == cleanRoomId }?.callMode
+            ?.let { if (it == "voice") CallMode.VOICE else null }
+        val resolvedCallMode = callMode
+            ?: activeSession?.state?.value?.callMode
+            ?: recentCallMode
         savedRoomStore.saveRoom(
             SavedRoom(
                 roomId = cleanRoomId,
                 name = cleanName,
                 createdAt = System.currentTimeMillis(),
                 host = resolvedHost,
+                callMode = if (resolvedCallMode == CallMode.VOICE) "voice" else null,
             ),
         )
         refreshSavedRooms()
@@ -420,7 +426,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         refreshSavedRooms()
     }
 
-    fun createSavedRoomInviteLink(roomName: String, hostInput: String, onResult: (Result<String>) -> Unit) {
+    fun createSavedRoomInviteLink(
+        roomName: String,
+        hostInput: String,
+        callMode: CallMode = CallMode.VIDEO,
+        onResult: (Result<String>) -> Unit,
+    ) {
         val normalizedName = normalizeSavedRoomName(roomName)
         if (normalizedName == null) {
             handler.post {
@@ -449,8 +460,8 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             handler.post {
                 result
                     .onSuccess { roomId ->
-                        saveRoom(roomId, normalizedName, normalizedHost)
-                        val link = buildSavedRoomInviteLink(normalizedHost, roomId, normalizedName)
+                        saveRoom(roomId, normalizedName, normalizedHost, callMode)
+                        val link = buildSavedRoomInviteLink(normalizedHost, roomId, normalizedName, callMode)
                         onResult(Result.success(link))
                     }
                     .onFailure { onResult(Result.failure(it)) }
@@ -464,7 +475,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         if (deepLinkTarget.action == DeepLinkAction.SaveRoom) {
             hostPolicy.persistedHost?.let { updateServerHost(it) }
             val roomName = deepLinkTarget.savedRoomName ?: deepLinkTarget.roomId
-            saveRoom(deepLinkTarget.roomId, roomName, deepLinkTarget.host)
+            saveRoom(deepLinkTarget.roomId, roomName, deepLinkTarget.host, deepLinkTarget.callMode)
             return
         }
 
@@ -502,7 +513,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 hostPolicy.persistedHost?.let { updateServerHost(it) }
                 if (deepLinkTarget.action == DeepLinkAction.SaveRoom) {
                     val roomName = deepLinkTarget.savedRoomName ?: deepLinkTarget.roomId
-                    saveRoom(deepLinkTarget.roomId, roomName, deepLinkTarget.host)
+                    saveRoom(deepLinkTarget.roomId, roomName, deepLinkTarget.host, deepLinkTarget.callMode)
                 } else {
                     joinRoom(deepLinkTarget.roomId, hostPolicy.oneOffHost, deepLinkTarget.callMode)
                 }

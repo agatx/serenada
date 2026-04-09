@@ -42,6 +42,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -162,6 +164,7 @@ internal fun CallScreen(
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
     var pinnedParticipantId by rememberSaveable { mutableStateOf<String?>(null) }
+    var voiceTileCid by rememberSaveable { mutableStateOf<String?>(null) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var showRecoveringBadge by remember { mutableStateOf(false) }
@@ -374,11 +377,28 @@ internal fun CallScreen(
 
         val localModifier = if (isLocalLarge) mainModifier else pipVideoModifier
         val remoteModifier = if (isLocalLarge) pipVideoModifier else mainModifier
-        if (showPip) {
+        if (showPip && uiState.callMode != CallMode.VOICE) {
             Box(modifier = pipBackgroundModifier)
         }
 
-        if (isMultiParty) {
+        val isVoiceMode = uiState.callMode == CallMode.VOICE
+
+        if (isVoiceMode) {
+            VoiceModeBody(
+                uiState = uiState,
+                voiceTileCid = voiceTileCid,
+                onVoiceTileCidChanged = { voiceTileCid = it },
+                eglContext = eglContext,
+                localPipRenderer = localPipRenderer,
+                attachLocalSink = attachLocalSink,
+                detachLocalSink = detachLocalSink,
+                attachRemoteSinkForCid = attachRemoteSinkForCid,
+                detachRemoteSinkForCid = detachRemoteSinkForCid,
+                bottomPadding = animatedPipBottomPadding,
+                onTap = toggleControlsVisibility,
+                strings = strings,
+            )
+        } else if (isMultiParty) {
             MultiPartyStage(
                 modifier = Modifier.fillMaxSize(),
                 remoteParticipants = uiState.remoteParticipants,
@@ -524,7 +544,7 @@ internal fun CallScreen(
             }
         }
 
-        if (!isMultiParty && !uiState.localVideoEnabled) {
+        if (!isVoiceMode && !isMultiParty && !uiState.localVideoEnabled) {
             Box(modifier = localModifier) {
                 VideoPlaceholder(
                     text =
@@ -536,7 +556,8 @@ internal fun CallScreen(
         }
 
         val showRemotePlaceholder =
-            !isMultiParty &&
+            !isVoiceMode &&
+                    !isMultiParty &&
                     !uiState.remoteVideoEnabled &&
                     (uiState.phase == CallPhase.InCall ||
                             (uiState.phase == CallPhase.Waiting && isLocalLarge))
@@ -729,8 +750,6 @@ internal fun CallScreen(
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val isVoiceMode = uiState.callMode == CallMode.VOICE
-
                     // Order: Mute, Camera, Flip, Screen Share, End call
 
                     // Mute Button
@@ -1323,6 +1342,198 @@ private fun aspectRatioRendererEvents(
             if (prev == null || abs(prev - ratio) > deltaThreshold) {
                 current = ratio
                 onAspectRatioChanged(ratio)
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceModeBody(
+    uiState: CallUiState,
+    voiceTileCid: String?,
+    onVoiceTileCidChanged: (String?) -> Unit,
+    eglContext: EglBase.Context,
+    localPipRenderer: PipTextureRendererView,
+    attachLocalSink: (VideoSink) -> Unit,
+    detachLocalSink: (VideoSink) -> Unit,
+    attachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    bottomPadding: androidx.compose.ui.unit.Dp,
+    onTap: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") strings: Map<SerenadaString, String>?,
+) {
+    val context = LocalContext.current
+
+    // Build a list of all participants (local + remote) with video status
+    data class VoiceParticipant(
+        val cid: String,
+        val displayName: String?,
+        val audioEnabled: Boolean,
+        val videoEnabled: Boolean,
+        val isLocal: Boolean,
+    )
+
+    val allParticipants = remember(uiState.localCid, uiState.remoteParticipants, uiState.localAudioEnabled, uiState.localVideoEnabled) {
+        val local = uiState.localCid?.let { cid ->
+            VoiceParticipant(
+                cid = cid,
+                displayName = null, // Local user - shown as "You"
+                audioEnabled = uiState.localAudioEnabled,
+                videoEnabled = uiState.localVideoEnabled,
+                isLocal = true,
+            )
+        }
+        val remotes = uiState.remoteParticipants.map { p ->
+            VoiceParticipant(
+                cid = p.cid,
+                displayName = p.displayName,
+                audioEnabled = p.audioEnabled,
+                videoEnabled = p.videoEnabled,
+                isLocal = false,
+            )
+        }
+        listOfNotNull(local) + remotes
+    }
+
+    // Any participant sharing video?
+    val anyVideoEnabled = allParticipants.any { it.videoEnabled }
+
+    // Resolve which participant is shown in the dedicated video tile
+    val activeTileCid = remember(voiceTileCid, allParticipants) {
+        val requested = voiceTileCid
+        val requestedParticipant = allParticipants.firstOrNull { it.cid == requested }
+        if (requestedParticipant != null && requestedParticipant.videoEnabled) {
+            requested
+        } else {
+            // Auto-select first participant with video, preferring remote
+            allParticipants.firstOrNull { !it.isLocal && it.videoEnabled }?.cid
+                ?: allParticipants.firstOrNull { it.videoEnabled }?.cid
+        }
+    }
+
+    val tileParticipant = allParticipants.firstOrNull { it.cid == activeTileCid }
+    val isLocalInTile = tileParticipant?.isLocal == true
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = bottomPadding)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onTap() },
+    ) {
+        // Dedicated video tile (only visible when someone has camera on)
+        if (anyVideoEnabled && tileParticipant != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.45f)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF111111)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (isLocalInTile) {
+                    TextureVideoSurface(
+                        modifier = Modifier.fillMaxSize(),
+                        renderer = localPipRenderer,
+                        onAttach = attachLocalSink,
+                        onDetach = detachLocalSink,
+                        mirror = uiState.isFrontCamera,
+                        contentScale = ContentScale.Crop,
+                    )
+                } else if (activeTileCid != null) {
+                    val renderer = remember(activeTileCid) {
+                        PipTextureRendererView(context, "voice-tile-$activeTileCid").also {
+                            it.init(eglContext)
+                        }
+                    }
+                    DisposableEffect(renderer) {
+                        onDispose { renderer.release() }
+                    }
+                    TextureVideoSurface(
+                        modifier = Modifier.fillMaxSize(),
+                        renderer = renderer,
+                        onAttach = { sink -> attachRemoteSinkForCid(activeTileCid, sink) },
+                        onDetach = { sink -> detachRemoteSinkForCid(activeTileCid, sink) },
+                        mirror = false,
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+        }
+
+        // Participant list
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (anyVideoEnabled) Modifier.weight(0.55f)
+                    else Modifier.weight(1f)
+                )
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            contentPadding = PaddingValues(vertical = 8.dp),
+        ) {
+            items(allParticipants, key = { it.cid }) { participant ->
+                val isSelected = participant.cid == activeTileCid
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            if (participant.videoEnabled) {
+                                onVoiceTileCidChanged(participant.cid)
+                            }
+                        },
+                    color = if (isSelected) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.06f),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        // Participant name
+                        Text(
+                            text = when {
+                                participant.isLocal -> "You"
+                                participant.displayName != null -> participant.displayName
+                                else -> participant.cid.take(8)
+                            },
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                            modifier = Modifier.weight(1f),
+                        )
+
+                        // Status icons
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // Video indicator
+                            if (participant.videoEnabled) {
+                                Icon(
+                                    imageVector = Icons.Default.Videocam,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = Color.White.copy(alpha = 0.7f),
+                                )
+                            }
+                            // Mic indicator
+                            Icon(
+                                imageVector = if (participant.audioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = if (participant.audioEnabled) Color.White.copy(alpha = 0.7f) else Color.Red.copy(alpha = 0.8f),
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -84,8 +84,9 @@ export const getSavedRooms = (): SavedRoom[] => {
             const host = normalizeHost(item.host);
             const lastJoinedAt = typeof item.lastJoinedAt === 'number' && item.lastJoinedAt > 0 ? item.lastJoinedAt : undefined;
 
+            const mode = item.mode === 'voice' ? 'voice' as const : undefined;
             seenIds.add(roomId);
-            rooms.push({ roomId, name, createdAt, host: host || undefined, lastJoinedAt });
+            rooms.push({ roomId, name, createdAt, host: host || undefined, lastJoinedAt, mode });
 
             if (rooms.length >= MAX_SAVED_ROOMS) break;
         }
@@ -118,7 +119,8 @@ export const saveRoom = (room: SavedRoom): SaveRoomResult => {
             name: cleanName,
             createdAt: Math.max(1, room.createdAt),
             host: cleanHost || undefined,
-            lastJoinedAt: (room.lastJoinedAt || existing?.lastJoinedAt) || undefined
+            lastJoinedAt: (room.lastJoinedAt || existing?.lastJoinedAt) || undefined,
+            mode: room.mode || existing?.mode || undefined,
         };
         
         rooms.unshift(newRoom);
@@ -149,17 +151,16 @@ export const removeRoom = (roomId: string) => {
     }
 };
 
-export const markRoomJoined = (roomId: string, joinedAt: number = Date.now()): boolean => {
+export const markRoomJoined = (roomId: string, joinedAt: number = Date.now(), mode?: 'video' | 'voice'): boolean => {
     if (!roomId || !roomId.trim()) return false;
     try {
         const rooms = getSavedRooms();
         const index = rooms.findIndex(r => r.roomId === roomId);
         if (index === -1) return false;
-        
+
         const cleanJoinedAt = Math.max(1, joinedAt);
-        if (rooms[index].lastJoinedAt === cleanJoinedAt) return false;
-        
-        rooms[index] = { ...rooms[index], lastJoinedAt: cleanJoinedAt };
+        const updatedMode = mode === 'voice' ? 'voice' as const : rooms[index].mode;
+        rooms[index] = { ...rooms[index], lastJoinedAt: cleanJoinedAt, mode: updatedMode };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(rooms));
         return true;
     } catch (error) {

@@ -590,10 +590,14 @@ private func buildSavedRoomShareLink(for room: SavedRoom) -> String {
     components.scheme = "https"
     components.host = appLinkHost
     components.path = "/call/\(room.roomId)"
-    components.queryItems = [
+    var queryItems = [
         URLQueryItem(name: "host", value: resolvedHost),
         URLQueryItem(name: "name", value: room.name)
     ]
+    if room.callMode == "voice" {
+        queryItems.append(URLQueryItem(name: "mode", value: "voice"))
+    }
+    components.queryItems = queryItems
 
     return components.url?.absoluteString ?? "https://\(appLinkHost)/call/\(room.roomId)"
 }

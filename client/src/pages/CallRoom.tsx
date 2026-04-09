@@ -229,6 +229,7 @@ const CallRoom: React.FC = () => {
     const previewVideoRef = useRef<HTMLVideoElement | null>(null);
     const callStartTimeRef = useRef<number | null>(null);
     const pushNotifySentRef = useRef(false);
+    const resolvedModeRef = useRef(callMode);
 
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
 
@@ -333,6 +334,9 @@ const CallRoom: React.FC = () => {
         pushNotifySentRef.current = false;
 
         const unsubscribe = session.subscribe((state: CallState) => {
+            if (state.callMode) {
+                resolvedModeRef.current = state.callMode;
+            }
             if ((state.phase === 'waiting' || state.phase === 'inCall') && !pushNotifySentRef.current) {
                 const localStream = session.localStream;
                 if (!localStream) return; // Media still loading — wait for next state update
@@ -389,9 +393,9 @@ const CallRoom: React.FC = () => {
                     roomId,
                     startTime: callStartTimeRef.current,
                     duration: duration > 0 ? duration : 0,
-                    mode: callMode,
+                    mode: resolvedModeRef.current,
                 });
-                markRoomJoined(roomId, Date.now());
+                markRoomJoined(roomId, Date.now(), resolvedModeRef.current);
                 callStartTimeRef.current = null;
             }
         };
@@ -403,6 +407,7 @@ const CallRoom: React.FC = () => {
             roomId,
             name: sharedName,
             createdAt: Date.now(),
+            mode: resolvedModeRef.current === 'voice' ? 'voice' : undefined,
         });
         if (result === 'ok') {
             showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
@@ -437,9 +442,9 @@ const CallRoom: React.FC = () => {
                 roomId,
                 startTime: callStartTimeRef.current,
                 duration: duration > 0 ? duration : 0,
-                mode: callMode,
+                mode: resolvedModeRef.current,
             });
-            markRoomJoined(roomId, Date.now());
+            markRoomJoined(roomId, Date.now(), resolvedModeRef.current);
             callStartTimeRef.current = null;
         }
         navigate('/');

@@ -64,14 +64,14 @@
 - Receives FCM data message in `FirebaseMessagingService`.
 - Uses Android Keystore private key + `snapshotEphemeralPubKey` and HKDF salt to unwrap `snapshotKey`.
 - Fetches encrypted snapshot via `/api/push/snapshot/{id}` and decrypts locally.
-- Renders notification with `BigPictureStyle` and deep-links to `/call/{roomId}`.
+- Renders notification with `BigPictureStyle` and deep-links to `/call/{roomId}` (voice rooms use `/call/{roomId}?mode=voice`).
 - Invite notifications are shown only when the invited room is saved on device and the Settings toggle is enabled.
 
 ### Native iOS recipient
 - Receives FCM/APNs data in a Notification Service Extension (`SerenadaNotificationService`).
 - Uses local P-256 private key + `snapshotEphemeralPubKey` and HKDF salt to unwrap `snapshotKey`.
 - Fetches encrypted snapshot via `/api/push/snapshot/{id}` and decrypts locally.
-- Attaches the decrypted image to the notification and deep-links to `/call/{roomId}`.
+- Attaches the decrypted image to the notification and deep-links to `/call/{roomId}` (voice rooms use `/call/{roomId}?mode=voice`).
 - Invite notifications are shown only when the invited room is saved on device and the Settings toggle is enabled.
 
 ## Protocol details
@@ -179,7 +179,7 @@ Returns `200 OK` on success, `403 Forbidden` if the CID is not in the room.
   "title": "Serenada",
   "body": "Someone joined your call!",
   "host": "serenada.app",
-  "url": "/call/ROOM_ID",
+  "url": "/call/ROOM_ID?mode=voice",
   "snapshotId": "SNAP-...",
   "snapshotIv": "<base64>",
   "snapshotSalt": "<base64>",
@@ -197,9 +197,11 @@ Invite payload example:
   "title": "Serenada",
   "body": "You were invited to a room.",
   "host": "serenada.app",
-  "url": "/call/ROOM_ID"
+  "url": "/call/ROOM_ID?mode=voice"
 }
 ```
+
+The `url` field includes `?mode=voice` for voice rooms so deep-links open with the correct call mode. For video rooms, the mode param is omitted (default behavior).
 
 ## Data retention
 - Snapshots are encrypted and stored under `DATA_DIR/snapshots`.

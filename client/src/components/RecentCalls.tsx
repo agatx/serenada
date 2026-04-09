@@ -23,6 +23,7 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
     const [activeMenu, setActiveMenu] = useState<string | null>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+    const [selectedRoomMode, setSelectedRoomMode] = useState<'video' | 'voice' | undefined>(undefined);
     const { showToast } = useToast();
 
     React.useEffect(() => {
@@ -50,9 +51,10 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
         setActiveMenu(activeMenu === roomId ? null : roomId);
     };
 
-    const handleSaveClick = (e: React.MouseEvent, roomId: string) => {
+    const handleSaveClick = (e: React.MouseEvent, call: RecentCall) => {
         e.stopPropagation();
-        setSelectedRoomId(roomId);
+        setSelectedRoomId(call.roomId);
+        setSelectedRoomMode(call.mode);
         setDialogOpen(true);
         setActiveMenu(null);
     };
@@ -62,7 +64,8 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
             const result = saveRoom({
                 roomId: selectedRoomId,
                 name: newName,
-                createdAt: Date.now()
+                createdAt: Date.now(),
+                mode: selectedRoomMode,
             });
             if (result !== 'ok') {
                 showSaveRoomError(result);
@@ -71,7 +74,8 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
             showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
             try {
                 if (navigator.clipboard?.writeText) {
-                    const shareUrl = `${window.location.origin}/call/${selectedRoomId}?name=${encodeURIComponent(newName)}`;
+                    const modeParam = selectedRoomMode === 'voice' ? '&mode=voice' : '';
+                    const shareUrl = `${window.location.origin}/call/${selectedRoomId}?name=${encodeURIComponent(newName)}${modeParam}`;
                     await navigator.clipboard.writeText(shareUrl);
                 }
             } catch (err) {
@@ -178,7 +182,7 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
                                             {activeMenu === call.roomId && (
                                                 <div className="dropdown-menu">
                                                     {!savedRooms.some(r => r.roomId === call.roomId) && (
-                                                        <button onClick={(e) => handleSaveClick(e, call.roomId)}>
+                                                        <button onClick={(e) => handleSaveClick(e, call)}>
                                                             <BookmarkPlus size={14} /> {t('save_room') || 'Save'}
                                                         </button>
                                                     )}

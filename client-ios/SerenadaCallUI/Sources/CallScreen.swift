@@ -264,6 +264,7 @@ struct CallScreenView: View {
     @State private var showRecoveringBadge = false
     @State private var remoteTileAspectRatios: [String: CGFloat] = [:]
     @State private var pinnedParticipantId: String?
+    @State private var voiceModeFocusedCid: String?
 
     init(
         roomId: String,
@@ -326,6 +327,8 @@ struct CallScreenView: View {
             if uiState.phase == .waiting {
                 waitingMainSurface
                 smallLocalView
+            } else if uiState.callMode == .voice && uiState.phase == .inCall {
+                voiceModeLayout
             } else if isMultiParty {
                 MultiPartyStage(
                     remoteParticipants: uiState.remoteParticipants,
@@ -393,6 +396,9 @@ struct CallScreenView: View {
             if let pinned = pinnedParticipantId, pinned != uiState.localCid, !active.contains(pinned) {
                 pinnedParticipantId = nil
             }
+            if let focused = voiceModeFocusedCid, focused != uiState.localCid, !active.contains(focused) {
+                voiceModeFocusedCid = nil
+            }
         }
         .onChange(of: isPinchZoomEnabled) { enabled in
             if !enabled {
@@ -426,7 +432,9 @@ struct CallScreenView: View {
             showRecoveringBadge = true
         }
         .sheet(isPresented: $showShareSheet) {
-            ActivityView(items: ["https://\(serverHost)/call/\(roomId)"])
+            let baseUrl = "https://\(serverHost)/call/\(roomId)"
+            let shareUrl = uiState.callMode == .voice ? "\(baseUrl)?mode=voice" : baseUrl
+            ActivityView(items: [shareUrl])
         }
         .overlay(alignment: .topLeading) {
             VStack(spacing: 0) {
@@ -556,6 +564,152 @@ struct CallScreenView: View {
             }
     }
 
+    // MARK: - Voice mode layout
+
+    private var voiceModeLayout: some View {
+        let anyVideoEnabled = voiceModeAnyVideoEnabled
+        let focusedCid = voiceModeFocusedCid ?? voiceModeDefaultFocusedCid
+
+        return VStack(spacing: 0) {
+            if anyVideoEnabled, let cid = focusedCid {
+                voiceModeDedicatedTile(cid: cid)
+                    .frame(maxHeight: 280)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 52)
+            }
+
+            voiceModeParticipantList(focusedCid: focusedCid)
+                .padding(.top, anyVideoEnabled ? 12 : 60)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var voiceModeAnyVideoEnabled: Bool {
+        if uiState.localVideoEnabled { return true }
+        return uiState.remoteParticipants.contains { $0.videoEnabled }
+    }
+
+    private var voiceModeDefaultFocusedCid: String? {
+        if let remote = uiState.remoteParticipants.first(where: { $0.videoEnabled }) {
+            return remote.cid
+        }
+        if uiState.localVideoEnabled, let localCid = uiState.localCid {
+            return localCid
+        }
+        return nil
+    }
+
+    private func voiceModeDedicatedTile(cid: String) -> some View {
+        ZStack {
+            Color.black
+            if cid == uiState.localCid {
+                WebRTCVideoView(
+                    kind: .local,
+                    rendererProvider: rendererProvider,
+                    videoContentMode: .scaleAspectFit,
+                    isMirrored: uiState.isFrontCamera
+                )
+            } else {
+                WebRTCVideoView(
+                    kind: .remoteForCid(cid),
+                    rendererProvider: rendererProvider,
+                    videoContentMode: .scaleAspectFit
+                )
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.2), lineWidth: 1))
+    }
+
+    private func voiceModeParticipantList(focusedCid: String?) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                // Local participant row
+                if let localCid = uiState.localCid {
+                    voiceModeParticipantRow(
+                        cid: localCid,
+                        displayName: nil,
+                        isLocal: true,
+                        audioEnabled: uiState.localAudioEnabled,
+                        videoEnabled: uiState.localVideoEnabled,
+                        isFocused: focusedCid == localCid
+                    )
+                }
+
+                // Remote participant rows
+                ForEach(uiState.remoteParticipants) { participant in
+                    voiceModeParticipantRow(
+                        cid: participant.cid,
+                        displayName: participant.displayName,
+                        isLocal: false,
+                        audioEnabled: participant.audioEnabled,
+                        videoEnabled: participant.videoEnabled,
+                        isFocused: focusedCid == participant.cid
+                    )
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func voiceModeParticipantRow(
+        cid: String,
+        displayName: String?,
+        isLocal: Bool,
+        audioEnabled: Bool,
+        videoEnabled: Bool,
+        isFocused: Bool
+    ) -> some View {
+        Button {
+            if videoEnabled {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    voiceModeFocusedCid = cid
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(Color.white.opacity(0.15))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Text(String((displayName ?? cid).prefix(1)).uppercased())
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName ?? cid)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    if isLocal {
+                        Text("You")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+
+                Spacer()
+
+                if videoEnabled {
+                    Image(systemName: "video.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(isFocused ? .cyan : .white.opacity(0.6))
+                }
+
+                Image(systemName: audioEnabled ? "mic.fill" : "mic.slash.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(audioEnabled ? .white.opacity(0.7) : .red.opacity(0.8))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(isFocused ? Color.white.opacity(0.08) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
     private var overlays: some View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
@@ -651,7 +805,7 @@ struct CallScreenView: View {
                         .multilineTextAlignment(.center)
 
                     if config.inviteControlsEnabled {
-                        QRCodeImageView(text: "https://\(serverHost)/call/\(roomId)")
+                        QRCodeImageView(text: uiState.callMode == .voice ? "https://\(serverHost)/call/\(roomId)?mode=voice" : "https://\(serverHost)/call/\(roomId)")
                             .padding(.vertical, 6)
 
                         Button {

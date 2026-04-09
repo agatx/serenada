@@ -330,24 +330,28 @@ final class CallManager: ObservableObject {
             ?? recentHost
             ?? serverHost
 
+        let recentCallMode = recentCalls.first(where: { $0.roomId == normalizedRoomId })?.callMode
+        let activeCallMode: String? = activeSession?.state.callMode == .voice ? "voice" : recentCallMode
         let room = SavedRoom(
             roomId: normalizedRoomId,
             name: normalizedName,
             createdAt: Int64(Date().timeIntervalSince1970 * 1000),
             host: resolvedHost,
             lastJoinedAt: nil,
-            callMode: nil
+            callMode: activeCallMode
         )
         savedRoomStore.saveRoom(room)
         refreshSavedRooms()
     }
 
     func joinSavedRoom(_ room: SavedRoom) {
-        joinRoom(room.roomId, oneOffHost: hostOverrideOrNull(room.host))
+        let mode: CallMode = room.callMode == "voice" ? .voice : .video
+        joinRoom(room.roomId, oneOffHost: hostOverrideOrNull(room.host), callMode: mode)
     }
 
     func joinRecentCall(_ call: RecentCall) {
-        joinRoom(call.roomId, oneOffHost: hostOverrideOrNull(call.host))
+        let mode: CallMode = call.callMode == "voice" ? .voice : .video
+        joinRoom(call.roomId, oneOffHost: hostOverrideOrNull(call.host), callMode: mode)
     }
 
     func removeSavedRoom(roomId: String) {
@@ -459,6 +463,7 @@ final class CallManager: ObservableObject {
             RemoteParticipant(
                 cid: $0.cid,
                 displayName: $0.displayName,
+                audioEnabled: $0.audioEnabled,
                 videoEnabled: $0.videoEnabled,
                 connectionState: $0.connectionState
             )
@@ -727,7 +732,7 @@ final class CallManager: ObservableObject {
         DeepLinkParser.normalizeHostValue(host).flatMap { isCurrentServerHost($0) ? nil : $0 }
     }
 
-    private func buildSavedRoomInviteLink(host: String, roomId: String, roomName: String) -> String {
+    private func buildSavedRoomInviteLink(host: String, roomId: String, roomName: String, callMode: String? = nil) -> String {
         let normalizedHost = DeepLinkParser.normalizeHostValue(host) ?? host
         let appLinkHost = normalizedHost == AppConstants.ruHost ? AppConstants.ruHost : AppConstants.defaultHost
 
@@ -735,10 +740,14 @@ final class CallManager: ObservableObject {
         components.scheme = "https"
         components.host = appLinkHost
         components.path = "/call/\(roomId)"
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "host", value: normalizedHost),
             URLQueryItem(name: "name", value: roomName)
         ]
+        if callMode == "voice" {
+            queryItems.append(URLQueryItem(name: "mode", value: "voice"))
+        }
+        components.queryItems = queryItems
         return components.url?.absoluteString ?? "https://\(appLinkHost)/call/\(roomId)"
     }
 }
