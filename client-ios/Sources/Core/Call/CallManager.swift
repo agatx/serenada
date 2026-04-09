@@ -216,7 +216,7 @@ final class CallManager: ObservableObject {
             return
         }
 
-        joinRoom(roomId, oneOffHost: hostPolicy.oneOffHost)
+        joinRoom(roomId, oneOffHost: hostPolicy.oneOffHost, callMode: target.callMode ?? .video)
     }
 
     func joinFromInput(_ input: String) {
@@ -239,7 +239,7 @@ final class CallManager: ObservableObject {
                     host: target.host
                 )
             } else {
-                joinRoom(target.roomId, oneOffHost: hostPolicy.oneOffHost)
+                joinRoom(target.roomId, oneOffHost: hostPolicy.oneOffHost, callMode: target.callMode ?? .video)
             }
             return
         }
@@ -247,7 +247,7 @@ final class CallManager: ObservableObject {
         joinRoom(trimmed)
     }
 
-    func startNewCall() {
+    func startNewCall(callMode: CallMode = .video) {
         guard activeSession == nil else { return }
         guard uiState.phase == .idle else { return }
 
@@ -258,7 +258,7 @@ final class CallManager: ObservableObject {
         )
         uiState.statusMessage = L10n.callStatusCreatingRoom
 
-        let core = makeSerenadaCore(host: serverHost)
+        let core = makeSerenadaCore(host: serverHost, callMode: callMode)
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -274,7 +274,7 @@ final class CallManager: ObservableObject {
         }
     }
 
-    func joinRoom(_ roomId: String, oneOffHost: String? = nil) {
+    func joinRoom(_ roomId: String, oneOffHost: String? = nil, callMode: CallMode = .video) {
         let trimmed = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             uiState = CallUiState(phase: .error, errorMessage: L10n.errorInvalidRoomId)
@@ -286,7 +286,7 @@ final class CallManager: ObservableObject {
         }
 
         let targetHost = DeepLinkParser.normalizeHostValue(oneOffHost) ?? serverHost
-        let session = makeSerenadaCore(host: targetHost).join(roomId: trimmed, displayName: resolvedDisplayName)
+        let session = makeSerenadaCore(host: targetHost, callMode: callMode).join(roomId: trimmed, displayName: resolvedDisplayName)
         activateSession(session)
     }
 
@@ -335,7 +335,8 @@ final class CallManager: ObservableObject {
             name: normalizedName,
             createdAt: Int64(Date().timeIntervalSince1970 * 1000),
             host: resolvedHost,
-            lastJoinedAt: nil
+            lastJoinedAt: nil,
+            callMode: nil
         )
         savedRoomStore.saveRoom(room)
         refreshSavedRooms()
@@ -382,13 +383,14 @@ final class CallManager: ObservableObject {
         return name.isEmpty ? nil : name
     }
 
-    private func makeSerenadaCore(host: String) -> SerenadaCore {
+    private func makeSerenadaCore(host: String, callMode: CallMode = .video) -> SerenadaCore {
         let core = SerenadaCore(
             config: SerenadaConfig(
                 serverHost: host,
                 defaultAudioEnabled: settingsStore.isDefaultMicrophoneEnabled,
-                defaultVideoEnabled: settingsStore.isDefaultCameraEnabled,
-                proximityMonitoringEnabled: true
+                defaultVideoEnabled: callMode == .voice ? false : settingsStore.isDefaultCameraEnabled,
+                proximityMonitoringEnabled: true,
+                callMode: callMode
             )
         )
         core.logger = PrintSerenadaLogger()
@@ -476,6 +478,7 @@ final class CallManager: ObservableObject {
         next.isFlashEnabled = diagnostics.isFlashEnabled
         next.remoteContentCid = diagnostics.remoteContentParticipantId
         next.remoteContentType = diagnostics.remoteContentType
+        next.callMode = state.callMode
         uiState = next
 
         if state.phase == .error {
@@ -548,7 +551,8 @@ final class CallManager: ObservableObject {
                 roomId: session.roomId,
                 startTime: startTime,
                 durationSeconds: duration,
-                host: session.serverHost
+                host: session.serverHost,
+                callMode: session.state.callMode == .voice ? "voice" : nil
             )
         )
 
@@ -637,7 +641,7 @@ final class CallManager: ObservableObject {
             let host = serverHost
             let patched = calls.map { call in
                 call.host == nil
-                    ? RecentCall(roomId: call.roomId, startTime: call.startTime, durationSeconds: call.durationSeconds, host: host)
+                    ? RecentCall(roomId: call.roomId, startTime: call.startTime, durationSeconds: call.durationSeconds, host: host, callMode: call.callMode)
                     : call
             }
             for call in patched where calls.first(where: { $0.roomId == call.roomId })?.host == nil {
@@ -656,7 +660,7 @@ final class CallManager: ObservableObject {
             let host = serverHost
             let patched = rooms.map { room in
                 room.host == nil
-                    ? SavedRoom(roomId: room.roomId, name: room.name, createdAt: room.createdAt, host: host, lastJoinedAt: room.lastJoinedAt)
+                    ? SavedRoom(roomId: room.roomId, name: room.name, createdAt: room.createdAt, host: host, lastJoinedAt: room.lastJoinedAt, callMode: room.callMode)
                     : room
             }
             for room in patched where rooms.first(where: { $0.roomId == room.roomId })?.host == nil {

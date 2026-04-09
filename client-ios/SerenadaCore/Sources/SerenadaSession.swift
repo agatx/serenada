@@ -168,6 +168,8 @@ public final class SerenadaSession: ObservableObject {
     private var reconnectRecoveryPending = false
     private var iceFetchGeneration = 0
     private var reconnectTask: Task<Void, Never>?
+    private var callMode: CallMode = .video
+    private var remoteMediaStates: [String: (audioEnabled: Bool, videoEnabled: Bool)] = [:]
 
     public convenience init(
         roomId: String,
@@ -185,7 +187,8 @@ public final class SerenadaSession: ObservableObject {
                 defaultAudioEnabled: config.defaultAudioEnabled,
                 defaultVideoEnabled: config.defaultVideoEnabled,
                 transports: config.transports,
-                proximityMonitoringEnabled: config.proximityMonitoringEnabled
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled,
+                callMode: config.callMode
             )
             : config
         self.init(
@@ -251,6 +254,8 @@ public final class SerenadaSession: ObservableObject {
             logger: logger, isHdVideoExperimentalEnabled: false
         )
 
+        self.callMode = config.callMode
+
         providerDelegateProxy.session = self
         signalingProvider.delegate = providerDelegateProxy
         configureRuntimeBridges()
@@ -260,7 +265,8 @@ public final class SerenadaSession: ObservableObject {
         commitSnapshot { s, _ in
             s.localParticipant.displayName = self.displayName
             s.localParticipant.audioEnabled = config.defaultAudioEnabled
-            s.localParticipant.videoEnabled = config.defaultVideoEnabled
+            s.localParticipant.videoEnabled = self.callMode == .voice ? false : config.defaultVideoEnabled
+            s.callMode = self.callMode
         }
         startNetworkMonitoring()
 
@@ -295,12 +301,14 @@ public final class SerenadaSession: ObservableObject {
         let enabled = !state.localParticipant.audioEnabled
         webRtcEngine.toggleAudio(enabled)
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
+        broadcastLocalMediaState()
     }
 
     /// Toggle local video on or off.
     public func toggleVideo() {
         userPreferredVideoEnabled = !state.localParticipant.videoEnabled
         applyLocalVideoPreference()
+        broadcastLocalMediaState()
     }
 
     /// Cycle to the next camera mode (selfie -> world -> composite).
@@ -322,12 +330,14 @@ public final class SerenadaSession: ObservableObject {
     public func setAudioEnabled(_ enabled: Bool) {
         webRtcEngine.toggleAudio(enabled)
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
+        broadcastLocalMediaState()
     }
 
     /// Set local video enabled state.
     public func setVideoEnabled(_ enabled: Bool) {
         userPreferredVideoEnabled = enabled
         applyLocalVideoPreference()
+        broadcastLocalMediaState()
     }
 
     /// Start screen sharing via the broadcast upload extension.
@@ -412,16 +422,18 @@ public final class SerenadaSession: ObservableObject {
             s.localParticipant = LocalParticipant(
                 cid: nil, displayName: self.displayName,
                 audioEnabled: self.config.defaultAudioEnabled,
-                videoEnabled: self.config.defaultVideoEnabled, cameraMode: .selfie
+                videoEnabled: self.callMode == .voice ? false : self.config.defaultVideoEnabled, cameraMode: .selfie
             )
             s.remoteParticipants = []; s.connectionStatus = .connected
+            s.callMode = self.callMode
             d.activeTransport = nil; d.isSignalingConnected = false
             d.iceConnectionState = .new; d.peerConnectionState = .new; d.rtcSignalingState = .stable
             d.cameraZoomFactor = 1; d.isFlashAvailable = false; d.isFlashEnabled = false
             d.remoteContentParticipantId = nil; d.remoteContentType = nil; d.realtimeStats = .empty
         }
 
-        let required = JoinFlowCoordinator.missingPermissions()
+        let allRequired = JoinFlowCoordinator.missingPermissions()
+        let required = callMode == .voice ? allRequired.filter { $0 == .microphone } : allRequired
         if !required.isEmpty {
             currentRequiredPermissions = required
             internalPhase = .idle
@@ -437,7 +449,7 @@ public final class SerenadaSession: ObservableObject {
         guard state.phase == .joining || state.phase == .awaitingPermissions || internalPhase == .joining else { return }
 
         let shouldEnableAudio = config.defaultAudioEnabled
-        let shouldEnableVideo = config.defaultVideoEnabled
+        let shouldEnableVideo = callMode == .voice ? false : config.defaultVideoEnabled
         commitSnapshot { s, _ in
             s.localParticipant.audioEnabled = shouldEnableAudio
             s.localParticipant.videoEnabled = shouldEnableVideo
@@ -474,18 +486,22 @@ public final class SerenadaSession: ObservableObject {
             ensureSignalingConnection()
             return
         }
+        let modeAwareCapacity = callMode == .voice ? 8 : 4
         signalingProvider.joinRoom(
             roomId,
-            options: JoinOptions(reconnectPeerId: reconnectCid, maxParticipants: 4, displayName: self.displayName)
+            options: JoinOptions(reconnectPeerId: reconnectCid, maxParticipants: modeAwareCapacity, displayName: self.displayName, callMode: callMode)
         )
         joinFlowCoordinator?.scheduleJoinRecovery(for: roomId)
     }
 
     // MARK: - Signaling Message Handling
 
-    private func handleJoined(cid: String?, roomState: RoomState?, participantCountHint: Int?) {
+    private func handleJoined(cid: String?, roomState: RoomState?, participantCountHint: Int?, serverCallMode: CallMode?) {
         joinFlowCoordinator?.clearAllTimers()
         hasJoinAcknowledgedCurrentAttempt = true
+
+        if let serverCallMode { callMode = serverCallMode }
+        commitSnapshot { s, _ in s.callMode = self.callMode }
 
         if let cid { clientId = cid; reconnectCid = cid }
         commitSnapshot { s, _ in s.localParticipant.cid = self.clientId }
@@ -497,11 +513,17 @@ public final class SerenadaSession: ObservableObject {
             recoverFromJoiningIfNeeded(participantHint: participantCountHint)
         }
         loadInitialIceServers()
+
+        // Broadcast initial media state so remote participants know our state
+        broadcastLocalMediaState()
     }
 
-    private func handleRoomState(_ roomState: RoomState?, participantCountHint: Int?) {
+    private func handleRoomState(_ roomState: RoomState?, participantCountHint: Int?, serverCallMode: CallMode?) {
         joinFlowCoordinator?.clearAllTimers()
         hasJoinAcknowledgedCurrentAttempt = true
+
+        if let serverCallMode { callMode = serverCallMode }
+        commitSnapshot { s, _ in s.callMode = self.callMode }
 
         guard let roomState else {
             recoverFromJoiningIfNeeded(participantHint: participantCountHint)
@@ -526,6 +548,18 @@ public final class SerenadaSession: ObservableObject {
             d.remoteContentParticipantId = payload.active ? fromCid : nil
             d.remoteContentType = payload.contentType
         }
+    }
+
+    private func handleParticipantMediaState(cid: String, audioEnabled: Bool, videoEnabled: Bool) {
+        remoteMediaStates[cid] = (audioEnabled: audioEnabled, videoEnabled: videoEnabled)
+        refreshRemoteParticipants()
+    }
+
+    private func broadcastLocalMediaState() {
+        signalingMessageRouter?.broadcastMediaState(
+            audioEnabled: state.localParticipant.audioEnabled,
+            videoEnabled: state.localParticipant.videoEnabled
+        )
     }
 
     private func handleError(_ error: CallError) {
@@ -604,7 +638,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func handleProviderMessage(_ message: PeerMessage) {
-        guard ["content_state", "offer", "answer", "ice"].contains(message.type) else { return }
+        guard ["content_state", "participant_media_state", "offer", "answer", "ice"].contains(message.type) else { return }
         signalingMessageRouter?.processPeerMessage(message)
     }
 
@@ -645,10 +679,11 @@ public final class SerenadaSession: ObservableObject {
         }
         let participants = roomState.participants.filter { $0.cid != clientId }.map { p in
             let slot = peerSlots[p.cid]
+            let mediaState = remoteMediaStates[p.cid]
             return SerenadaRemoteParticipant(
                 cid: p.cid, displayName: p.displayName,
-                audioEnabled: true,
-                videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
+                audioEnabled: mediaState?.audioEnabled ?? true,
+                videoEnabled: mediaState?.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
                 connectionState: slot?.getConnectionState() ?? .new
             )
         }
@@ -818,7 +853,7 @@ public final class SerenadaSession: ObservableObject {
         callAudioSessionController.deactivate()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
-        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0
+        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
 
         reconnectTask?.cancel(); reconnectTask = nil
         joinFlowCoordinator?.clearAllTimers()
@@ -920,13 +955,14 @@ public final class SerenadaSession: ObservableObject {
             getClientId: { [weak self] in self?.clientId },
             getHostCid: { [weak self] in self?.hostCid },
             getRoomId: { [weak self] in self?.roomId },
-            onJoined: { [weak self] cid, roomState, hint in self?.handleJoined(cid: cid, roomState: roomState, participantCountHint: hint) },
-            onRoomState: { [weak self] roomState, hint in self?.handleRoomState(roomState, participantCountHint: hint) },
+            onJoined: { [weak self] cid, roomState, hint, mode in self?.handleJoined(cid: cid, roomState: roomState, participantCountHint: hint, serverCallMode: mode) },
+            onRoomState: { [weak self] roomState, hint, mode in self?.handleRoomState(roomState, participantCountHint: hint, serverCallMode: mode) },
             onRoomEnded: { [weak self] in self?.cleanupCall(reason: .remoteEnded, transitionToEnding: true) },
             onPong: {},
             onTurnRefreshed: { _ in },
             onSignalingPayload: { [weak self] message in self?.handleSignalingPayload(message) },
             onContentState: { [weak self] payload in self?.handleContentState(payload) },
+            onParticipantMediaState: { [weak self] cid, audioEnabled, videoEnabled in self?.handleParticipantMediaState(cid: cid, audioEnabled: audioEnabled, videoEnabled: videoEnabled) },
             onError: { [weak self] error in self?.handleError(error) },
             sendMessage: { [weak self] type, payload, to in self?.sendMessage(type: type, payload: payload, to: to) }
         )

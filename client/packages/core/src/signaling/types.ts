@@ -8,6 +8,7 @@ export type RoomState = {
     hostCid: string | null;
     participants: RoomParticipant[];
     maxParticipants?: number;
+    mode?: 'video' | 'voice';
 };
 
 export type SignalingMessage = {

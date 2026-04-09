@@ -32,6 +32,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Save
@@ -108,6 +109,7 @@ fun JoinScreen(
     onOpenJoinWithCode: () -> Unit,
     onOpenSettings: () -> Unit,
     onStartCall: () -> Unit,
+    onStartVoiceCall: () -> Unit = {},
     onJoinRecentCall: (RecentCall) -> Unit,
     onJoinSavedRoom: (SavedRoom) -> Unit,
     onRemoveRecentCall: (String) -> Unit,
@@ -323,29 +325,56 @@ fun JoinScreen(
                 Spacer(modifier = Modifier.height(120.dp))
             }
 
-            ExtendedFloatingActionButton(
-                onClick = {
-                    if (startCallEnabled) {
-                        onStartCall()
-                    }
-                },
-                expanded = true,
-                icon = {
-                    Icon(
-                        imageVector = Icons.Default.VideoCall,
-                        contentDescription = null
-                    )
-                },
-                text = { Text(stringResource(R.string.join_start_call)) },
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 20.dp, bottom = 20.dp)
-                    .semantics {
-                        if (!startCallEnabled) disabled()
+                    .padding(end = 20.dp, bottom = 20.dp),
+                horizontalAlignment = Alignment.End,
+            ) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        if (startCallEnabled) {
+                            onStartVoiceCall()
+                        }
                     },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
-            )
+                    expanded = true,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = null
+                        )
+                    },
+                    text = { Text(stringResource(R.string.join_start_voice_call)) },
+                    modifier = Modifier
+                        .semantics {
+                            if (!startCallEnabled) disabled()
+                        },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        if (startCallEnabled) {
+                            onStartCall()
+                        }
+                    },
+                    expanded = true,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.VideoCall,
+                            contentDescription = null
+                        )
+                    },
+                    text = { Text(stringResource(R.string.join_start_call)) },
+                    modifier = Modifier
+                        .semantics {
+                            if (!startCallEnabled) disabled()
+                        },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            }
 
             if (showBusyOverlay) {
                 Box(
@@ -1010,15 +1039,17 @@ private fun buildSavedRoomShareLink(room: SavedRoom): String {
     } else {
         SettingsStore.DEFAULT_HOST
     }
-    return Uri.Builder()
+    val builder = Uri.Builder()
         .scheme("https")
         .authority(appLinkHost)
         .appendPath("call")
         .appendPath(room.roomId)
         .appendQueryParameter("host", resolvedHost)
         .appendQueryParameter("name", room.name)
-        .build()
-        .toString()
+    if (room.callMode == "voice") {
+        builder.appendQueryParameter("mode", "voice")
+    }
+    return builder.build().toString()
 }
 
 private fun shareText(context: Context, text: String, chooserTitle: String) {

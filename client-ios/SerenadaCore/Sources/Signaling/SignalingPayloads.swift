@@ -27,11 +27,12 @@ struct JoinedPayload {
     let turnTokenTTLMs: Int?
     let reconnectToken: String?
     let participantCount: Int?
+    let callMode: CallMode?
 
     init(from payload: JSONValue?) {
         guard let obj = payload?.objectValue else {
             hostCid = nil; participants = nil; maxParticipants = nil; turnToken = nil
-            turnTokenTTLMs = nil; reconnectToken = nil; participantCount = nil
+            turnTokenTTLMs = nil; reconnectToken = nil; participantCount = nil; callMode = nil
             return
         }
 
@@ -40,6 +41,12 @@ struct JoinedPayload {
         turnToken = obj["turnToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         turnTokenTTLMs = obj["turnTokenTTLMs"]?.intValue
         reconnectToken = obj["reconnectToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let modeStr = obj["mode"]?.stringValue, modeStr == "voice" {
+            callMode = .voice
+        } else {
+            callMode = .video
+        }
 
         if let parsed = parseParticipants(from: obj["participants"]?.arrayValue) {
             participants = parsed

@@ -60,8 +60,8 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
         setActiveMenu(activeMenu === roomId ? null : roomId);
     };
 
-    const handleJoin = (roomId: string) => {
-        navigate(`/call/${roomId}`);
+    const handleJoin = (roomId: string, mode?: 'video' | 'voice') => {
+        navigate(mode === 'voice' ? `/call/${roomId}?mode=voice` : `/call/${roomId}`);
     };
 
     const handleRenameClick = (e: React.MouseEvent, room: SavedRoom) => {
@@ -110,7 +110,8 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
 
     const handleShareClick = async (e: React.MouseEvent, room: SavedRoom) => {
         e.stopPropagation();
-        const shareUrl = `${window.location.origin}/call/${room.roomId}?name=${encodeURIComponent(room.name)}`;
+        const modeParam = room.mode === 'voice' ? '&mode=voice' : '';
+        const shareUrl = `${window.location.origin}/call/${room.roomId}?name=${encodeURIComponent(room.name)}${modeParam}`;
         if (!navigator.clipboard?.writeText) {
             showToast('error', t('toast_link_copy_error') || 'Failed to copy link to clipboard');
             setActiveMenu(null);
@@ -154,7 +155,8 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
             showToast('success', t('saved_rooms_save_success') || 'Room saved successfully');
             try {
                 if (navigator.clipboard?.writeText) {
-                    const shareUrl = `${window.location.origin}/call/${selectedRoom.roomId}?name=${encodeURIComponent(newName)}`;
+                    const renameMode = selectedRoom.mode === 'voice' ? '&mode=voice' : '';
+                    const shareUrl = `${window.location.origin}/call/${selectedRoom.roomId}?name=${encodeURIComponent(newName)}${renameMode}`;
                     await navigator.clipboard.writeText(shareUrl);
                 }
             } catch (err) {
@@ -198,7 +200,7 @@ const SavedRooms: React.FC<SavedRoomsProps> = ({ rooms, roomStatuses, onRoomUpda
                                 <tr
                                     key={room.roomId}
                                     className="recent-call-row"
-                                    onClick={() => handleJoin(room.roomId)}
+                                    onClick={() => handleJoin(room.roomId, room.mode)}
                                 >
                                     <td>
                                         <div className="recent-call-date-cell">

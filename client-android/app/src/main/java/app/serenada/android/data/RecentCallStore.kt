@@ -9,7 +9,8 @@ data class RecentCall(
     val roomId: String,
     val startTime: Long,
     val durationSeconds: Int,
-    val host: String? = null
+    val host: String? = null,
+    val callMode: String? = null,
 )
 
 class RecentCallStore(context: Context) {
@@ -43,13 +44,15 @@ class RecentCallStore(context: Context) {
             val duration = item.optInt("duration", 0)
             if (startTime <= 0L) continue
             val host: String? = item.optString("host", null)?.ifBlank { null }
+            val callMode: String? = item.optString("callMode", null)?.ifBlank { null }
 
             calls.add(
                 RecentCall(
                     roomId = roomId,
                     startTime = startTime,
                     durationSeconds = duration.coerceAtLeast(0),
-                    host = host
+                    host = host,
+                    callMode = callMode,
                 )
             )
         }
@@ -79,6 +82,7 @@ class RecentCallStore(context: Context) {
                     put("startTime", call.startTime)
                     put("duration", call.durationSeconds)
                     call.host?.let { put("host", it) }
+                    call.callMode?.let { put("callMode", it) }
                 }
             )
         }

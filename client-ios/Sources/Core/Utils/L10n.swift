@@ -33,6 +33,7 @@ enum L10n {
     static var joinSubtitle: String { text("join_subtitle") }
     static var joinEnterCodeOrLink: String { text("join_enter_code_or_link") }
     static var joinStartCall: String { text("join_start_call") }
+    static var joinStartVoiceCall: String { text("join_start_voice_call") }
     static var joinSettings: String { text("join_settings") }
     static var joinWithCodeTitle: String { text("join_with_code_title") }
     static var joinWithCodeAction: String { text("join_with_code_action") }

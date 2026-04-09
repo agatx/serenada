@@ -12,7 +12,8 @@ data class SavedRoom(
     val name: String,
     val createdAt: Long,
     val host: String? = null,
-    val lastJoinedAt: Long? = null
+    val lastJoinedAt: Long? = null,
+    val callMode: String? = null,
 )
 
 class SavedRoomStore(context: Context) {
@@ -53,13 +54,15 @@ class SavedRoomStore(context: Context) {
             val createdAt = item.optLong("createdAt", 0L).coerceAtLeast(1L)
             val host = normalizeHost(item.opt("host")?.toString())
             val lastJoinedAt = item.optLong("lastJoinedAt", 0L).takeIf { it > 0L }
+            val callMode = item.optString("callMode", null)?.ifBlank { null }
             rooms.add(
                 SavedRoom(
                     roomId = roomId,
                     name = name,
                     createdAt = createdAt,
                     host = host,
-                    lastJoinedAt = lastJoinedAt
+                    lastJoinedAt = lastJoinedAt,
+                    callMode = callMode,
                 )
             )
         }
@@ -107,6 +110,7 @@ class SavedRoomStore(context: Context) {
                     put("createdAt", room.createdAt)
                     room.host?.let { put("host", it) }
                     room.lastJoinedAt?.let { put("lastJoinedAt", it) }
+                    room.callMode?.let { put("callMode", it) }
                 }
             )
         }

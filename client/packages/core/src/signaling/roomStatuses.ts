@@ -1,6 +1,7 @@
 export type RoomStatus = {
     count: number;
     maxParticipants?: number;
+    mode?: 'video' | 'voice';
 };
 
 export type RoomStatuses = Record<string, RoomStatus>;
@@ -37,7 +38,8 @@ function parseRoomStatus(value: unknown, fallbackMaxParticipants?: number): Room
 
     return {
         count,
-        maxParticipants: normalizeMaxParticipants(value.maxParticipants, fallbackMaxParticipants)
+        maxParticipants: normalizeMaxParticipants(value.maxParticipants, fallbackMaxParticipants),
+        mode: isRecord(value) && value.mode === 'voice' ? 'voice' : undefined,
     };
 }
 
@@ -68,12 +70,14 @@ export function mergeRoomStatusUpdatePayload(previous: RoomStatuses, payload: un
     }
 
     const maxParticipants = normalizeMaxParticipants(payload.maxParticipants, previous[rid]?.maxParticipants);
+    const mode = payload.mode === 'voice' ? 'voice' as const : previous[rid]?.mode;
 
     return {
         ...previous,
         [rid]: {
             count,
-            maxParticipants
+            maxParticipants,
+            mode,
         }
     };
 }

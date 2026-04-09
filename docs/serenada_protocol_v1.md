@@ -124,6 +124,7 @@ Join a room.
       "maxParticipants": 4
     },
     "createMaxParticipants": 4,
+    "mode": "video",
     "displayName": "optional display name",
     "reconnectCid": "optionalPreviousClientId"
   }
@@ -133,7 +134,8 @@ Join a room.
 **Server behavior**
 - Validate `rid` as a signed 27-character room token (generated via `/api/room-id`).
 - If room is empty, make this participant host.
-- If the room does not yet exist, clamp `createMaxParticipants` by the creator's `capabilities.maxParticipants` and the server ceiling, then create the room:
+- Normalize `mode`: only `"voice"` is special; missing or unknown values become `"video"`.
+- If the room does not yet exist, set `room.mode` from the normalized mode and clamp `createMaxParticipants` by the creator's `capabilities.maxParticipants` and the mode-specific server ceiling (`MAX_ROOM_PARTICIPANTS` for video, `MAX_VOICE_ROOM_PARTICIPANTS` for voice), then create the room:
   - if the clamped value is `2`, the room is immediately locked as 1:1
   - if the clamped value is greater than `2`, the room is created provisionally with effective `maxParticipants=2`
 - When a second distinct participant joins a provisional room, lock the room's final `maxParticipants` using the rule from section 3.
@@ -157,6 +159,7 @@ Acknowledges join success and provides room state.
   "payload": {
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
+    "mode": "video",
     "participants": [
       { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
       { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
@@ -170,6 +173,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
+- `mode` *(string)*: room mode — `"video"` or `"voice"`. Immutable after room creation. Voice rooms use a higher capacity ceiling (default 8).
 - `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, and `displayName` *(string, optional)*.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
@@ -192,6 +196,7 @@ Sent when participants join/leave or host changes.
   "payload": {
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
+    "mode": "video",
     "participants": [
       { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
       { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
@@ -456,7 +461,7 @@ Immediate response to `watch_rooms` with current room occupancy and, when the ro
   "v": 1,
   "type": "room_statuses",
   "payload": {
-    "AbC123": { "count": 1, "maxParticipants": 2 },
+    "AbC123": { "count": 1, "maxParticipants": 2, "mode": "video" },
     "XyZ789": { "count": 0 }
   }
 }
@@ -472,7 +477,24 @@ Pushed whenever a watched room's participant count changes. `maxParticipants` is
   "payload": {
     "rid": "AbC123",
     "count": 3,
-    "maxParticipants": 4
+    "maxParticipants": 4,
+    "mode": "video"
+  }
+}
+```
+
+#### `participant_media_state` (peer → peer, relayed by server)
+Peer control message carrying the sender's current audio/video enabled state. Broadcast to all peers after join and on each local audio/video toggle. Unknown message types are silently ignored by old clients.
+
+```json
+{
+  "v": 1,
+  "type": "participant_media_state",
+  "rid": "AbC123",
+  "cid": "C-a1b2...",
+  "payload": {
+    "audioEnabled": true,
+    "videoEnabled": false
   }
 }
 ```

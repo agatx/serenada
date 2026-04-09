@@ -1,5 +1,7 @@
 package app.serenada.core
 
+import app.serenada.core.call.CallMode
+
 /**
  * Configuration for the Serenada SDK.
  */
@@ -18,6 +20,8 @@ data class SerenadaConfig(
     val transports: List<SerenadaTransport> = listOf(SerenadaTransport.WS, SerenadaTransport.SSE),
     /** Whether the proximity sensor is used to switch audio to the earpiece and pause video (default false). */
     val proximityMonitoringEnabled: Boolean = false,
+    /** Call mode: VIDEO (default) or VOICE (audio-first with optional camera sharing). */
+    val callMode: CallMode = CallMode.VIDEO,
 )
 
 /** Available signaling transport types. */

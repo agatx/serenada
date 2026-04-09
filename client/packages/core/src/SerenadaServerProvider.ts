@@ -1,4 +1,4 @@
-import { SignalingProviderEmitter, type JoinOptions, type RoomEndedEvent, type RoomStateEvent, type SignalingProviderParticipant } from './SignalingProvider.js';
+import { SignalingProviderEmitter, type JoinedEvent, type JoinOptions, type RoomEndedEvent, type RoomStateEvent, type SignalingProviderParticipant } from './SignalingProvider.js';
 import type { SerenadaLogger } from './types.js';
 import { SignalingEngine } from './signaling/SignalingEngine.js';
 import { parseErrorPayload, parseJoinedPayload, parseRoomStatePayload, parseTurnRefreshedPayload } from './signaling/payloads.js';
@@ -75,6 +75,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
         this.signaling.joinRoom(roomId, {
             createMaxParticipants: options?.maxParticipants,
             displayName: options?.displayName,
+            callMode: options?.callMode,
         });
     }
 
@@ -184,6 +185,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             case 'answer':
             case 'ice':
             case 'content_state':
+            case 'participant_media_state':
                 this.emitPeerMessage(message);
                 break;
         }
@@ -210,11 +212,12 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             this.currentTurnToken = payload.turnToken;
         }
 
-        const event = {
+        const event: JoinedEvent = {
             peerId: message.cid,
             participants: payload.participants.map(mapParticipant),
             hostPeerId: payload.hostCid ?? undefined,
             maxParticipants: payload.maxParticipants,
+            callMode: payload.mode,
         };
 
         this.currentHostPeerId = event.hostPeerId ?? null;
@@ -236,6 +239,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             participants: payload.participants.map(mapParticipant),
             hostPeerId: payload.hostCid ?? undefined,
             maxParticipants: payload.maxParticipants,
+            callMode: payload.mode,
         };
 
         const nextMap = toParticipantMap(nextState.participants);

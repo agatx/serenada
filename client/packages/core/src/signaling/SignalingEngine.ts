@@ -72,6 +72,7 @@ export class SignalingEngine {
     private connecting = false;
     private lastCreateMaxParticipants: number | undefined = undefined;
     private lastDisplayName: string | undefined = undefined;
+    private lastCallMode: 'video' | 'voice' | undefined = undefined;
 
     // Logger
     private logger?: SerenadaLogger;
@@ -123,7 +124,7 @@ export class SignalingEngine {
         }
     }
 
-    joinRoom(roomId: string, options?: { createMaxParticipants?: number; displayName?: string }): void {
+    joinRoom(roomId: string, options?: { createMaxParticipants?: number; displayName?: string; callMode?: 'video' | 'voice' }): void {
         this.logger?.log('debug', 'Signaling', `joinRoom call for ${roomId}`);
         this.error = null;
         this.clearJoinTimers();
@@ -139,11 +140,17 @@ export class SignalingEngine {
         if (options?.displayName !== undefined) {
             this.lastDisplayName = options.displayName;
         }
+        if (options?.callMode !== undefined) {
+            this.lastCallMode = options.callMode;
+        }
 
         if (this.transport && this.transport.isOpen()) {
+            const effectiveMode = options?.callMode ?? this.lastCallMode ?? 'video';
+            const maxP = effectiveMode === 'voice' ? 8 : 4;
             const payload: Record<string, unknown> = {
-                capabilities: { trickleIce: true, maxParticipants: 4 },
-                createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 4,
+                capabilities: { trickleIce: true, maxParticipants: maxP },
+                createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? maxP,
+                mode: effectiveMode,
             };
             const displayName = options?.displayName ?? this.lastDisplayName;
             if (displayName !== undefined) {
@@ -258,6 +265,7 @@ export class SignalingEngine {
                     hostCid: joined.hostCid,
                     participants: joined.participants,
                     maxParticipants: joined.maxParticipants,
+                    mode: joined.mode,
                 };
                 if (joined.turnToken) {
                     this.turnToken = joined.turnToken;

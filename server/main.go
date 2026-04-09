@@ -25,8 +25,14 @@ func main() {
 			maxParticipants = n
 		}
 	}
-	log.Printf("Max room participants limit: %d", maxParticipants)
-	hub := newHub(maxParticipants)
+	maxVoiceParticipants := 8
+	if v := os.Getenv("MAX_VOICE_ROOM_PARTICIPANTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 2 {
+			maxVoiceParticipants = n
+		}
+	}
+	log.Printf("Max room participants limit: %d (video), %d (voice)", maxParticipants, maxVoiceParticipants)
+	hub := newHub(maxParticipants, maxVoiceParticipants)
 	go hub.run()
 
 	// Initialize Push Service

@@ -164,6 +164,7 @@ describe('SerenadaServerProvider', () => {
             ],
             hostPeerId: 'local-cid',
             maxParticipants: undefined,
+            callMode: 'video',
         });
         expect(peerJoined).toHaveBeenCalledWith({ peerId: 'peer-b', joinedAt: 3 });
         expect(peerLeft).toHaveBeenCalledWith({ peerId: 'peer-a', joinedAt: 2 });
@@ -174,6 +175,7 @@ describe('SerenadaServerProvider', () => {
             ],
             hostPeerId: 'peer-b',
             maxParticipants: undefined,
+            callMode: 'video',
         });
         expect(roomEnded).toHaveBeenCalledWith({ by: 'peer-b', reason: 'host ended' });
     });

@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Video, Zap, Shield, Lock, Smartphone, Code } from 'lucide-react';
+import { Video, Mic, ChevronDown, Zap, Shield, Lock, Smartphone, Code } from 'lucide-react';
 import RecentCalls from '../components/RecentCalls';
 import Footer from '../components/Footer';
 import { getRecentCalls } from '../utils/callHistory';
@@ -39,12 +39,15 @@ const Home: React.FC = () => {
     );
     const { roomStatuses } = useRoomStatusWatcher(watchedRoomIds);
 
-    const startCall = async () => {
+    const [menuOpen, setMenuOpen] = useState(false);
+    const menuRef = useRef<HTMLDivElement>(null);
+
+    const startCall = async (mode?: 'voice') => {
         if (isCreating) return;
         setIsCreating(true);
         try {
             const roomId = await createRoomId(getConfiguredServerHost());
-            navigate(`/call/${roomId}`);
+            navigate(mode === 'voice' ? `/call/${roomId}?mode=voice` : `/call/${roomId}`);
         } catch (err) {
             console.error('Failed to create room', err);
             showToast('error', t('toast_room_create_error'));
@@ -52,6 +55,17 @@ const Home: React.FC = () => {
             setIsCreating(false);
         }
     };
+
+    useEffect(() => {
+        if (!menuOpen) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+                setMenuOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [menuOpen]);
 
     const benefits = [
         { icon: <Zap className="benefit-icon" />, title: t('benefit_instant_title'), desc: t('benefit_instant_desc') },
@@ -70,10 +84,25 @@ const Home: React.FC = () => {
                     {t('app_subtitle_2')}
                 </p>
 
-                <button onClick={startCall} className="btn-primary btn-large" disabled={isCreating}>
-                    <Video className="icon" />
-                    {t('start_call')}
-                </button>
+                <div className="start-call-segmented" ref={menuRef}>
+                    <button onClick={() => startCall()} className="btn-primary btn-large segmented-main" disabled={isCreating}>
+                        <Video className="icon" />
+                        {t('start_call')}
+                    </button>
+                    <button className="btn-primary btn-large segmented-trigger" disabled={isCreating} onClick={() => setMenuOpen(!menuOpen)}>
+                        <ChevronDown size={16} />
+                    </button>
+                    {menuOpen && (
+                        <div className="segmented-dropdown">
+                            <button onClick={() => { setMenuOpen(false); startCall(); }}>
+                                <Video size={16} /> {t('start_video_call')}
+                            </button>
+                            <button onClick={() => { setMenuOpen(false); startCall('voice'); }}>
+                                <Mic size={16} /> {t('start_voice_call')}
+                            </button>
+                        </div>
+                    )}
+                </div>
 
                 <RecentCalls calls={recentCalls} roomStatuses={roomStatuses} savedRooms={savedRooms} onCallUpdate={loadData} />
                 <SavedRooms rooms={savedRooms} roomStatuses={roomStatuses} onRoomUpdate={loadData} />

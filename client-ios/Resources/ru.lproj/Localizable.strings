@@ -26,6 +26,7 @@
 "join_settings" = "Настройки";
 "join_subtitle" = "Приватные видеозвонки, без аккаунтов.";
 "join_start_call" = "Начать звонок";
+"join_start_voice_call" = "Голосовой звонок";
 "recent_calls_title" = "Недавние звонки";
 "recent_calls_at" = "в";
 "recent_calls_remove" = "Удалить";

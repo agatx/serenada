@@ -22,11 +22,13 @@ public struct JoinOptions: Equatable, Sendable {
     public var reconnectPeerId: String?
     public var maxParticipants: Int?
     public var displayName: String?
+    public var callMode: CallMode?
 
-    public init(reconnectPeerId: String? = nil, maxParticipants: Int? = nil, displayName: String? = nil) {
+    public init(reconnectPeerId: String? = nil, maxParticipants: Int? = nil, displayName: String? = nil, callMode: CallMode? = nil) {
         self.reconnectPeerId = reconnectPeerId
         self.maxParticipants = maxParticipants
         self.displayName = displayName
+        self.callMode = callMode
     }
 }
 
@@ -47,17 +49,20 @@ public struct JoinedEvent: Equatable, Sendable {
     public let participants: [SignalingProviderParticipant]
     public let hostPeerId: String?
     public let maxParticipants: Int?
+    public let callMode: CallMode?
 
     public init(
         peerId: String,
         participants: [SignalingProviderParticipant],
         hostPeerId: String? = nil,
-        maxParticipants: Int? = nil
+        maxParticipants: Int? = nil,
+        callMode: CallMode? = nil
     ) {
         self.peerId = peerId
         self.participants = participants
         self.hostPeerId = hostPeerId
         self.maxParticipants = maxParticipants
+        self.callMode = callMode
     }
 }
 
@@ -65,15 +70,18 @@ public struct RoomStateEvent: Equatable, Sendable {
     public let participants: [SignalingProviderParticipant]
     public let hostPeerId: String?
     public let maxParticipants: Int?
+    public let callMode: CallMode?
 
     public init(
         participants: [SignalingProviderParticipant],
         hostPeerId: String? = nil,
-        maxParticipants: Int? = nil
+        maxParticipants: Int? = nil,
+        callMode: CallMode? = nil
     ) {
         self.participants = participants
         self.hostPeerId = hostPeerId
         self.maxParticipants = maxParticipants
+        self.callMode = callMode
     }
 }
 

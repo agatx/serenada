@@ -1,5 +1,6 @@
 package app.serenada.core
 
+import app.serenada.core.call.CallMode
 import org.json.JSONObject
 import org.webrtc.PeerConnection
 
@@ -15,6 +16,7 @@ data class JoinOptions(
     val reconnectPeerId: String? = null,
     val maxParticipants: Int? = null,
     val displayName: String? = null,
+    val callMode: CallMode? = null,
 )
 
 data class SignalingProviderParticipant(
@@ -28,12 +30,14 @@ data class JoinedEvent(
     val participants: List<SignalingProviderParticipant>,
     val hostPeerId: String? = null,
     val maxParticipants: Int? = null,
+    val callMode: CallMode? = null,
 )
 
 data class RoomStateEvent(
     val participants: List<SignalingProviderParticipant>,
     val hostPeerId: String? = null,
     val maxParticipants: Int? = null,
+    val callMode: CallMode? = null,
 )
 
 data class PeerEvent(

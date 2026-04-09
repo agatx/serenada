@@ -189,7 +189,7 @@ describe('SerenadaSession', () => {
             harness = new TestSessionHarness({ handlesReconnection: false, autoStart: true });
 
             harness.signaling.emitConnected('ws');
-            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: {} }]);
+            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: { callMode: 'video' } }]);
 
             await vi.advanceTimersByTimeAsync(JOIN_HARD_TIMEOUT_MS + 1);
 
@@ -213,7 +213,7 @@ describe('SerenadaSession', () => {
             harness = new TestSessionHarness({ handlesReconnection: true, autoStart: true });
 
             harness.signaling.emitConnected('ws');
-            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: {} }]);
+            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: { callMode: 'video' } }]);
 
             await vi.advanceTimersByTimeAsync(JOIN_HARD_TIMEOUT_MS + 1);
 
@@ -706,7 +706,7 @@ describe('SerenadaSession', () => {
 
             expect(harness.signaling.connectCalls).toBe(1);
             harness.signaling.emitConnected('ws');
-            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: {} }]);
+            expect(harness.signaling.joinRoomCalls).toEqual([{ roomId: 'test-room-id', options: { callMode: 'video' } }]);
 
             harness.signaling.emitJoined({
                 peerId: 'me',
@@ -724,7 +724,7 @@ describe('SerenadaSession', () => {
             harness.signaling.emitConnected('ws');
             expect(harness.signaling.joinRoomCalls.at(-1)).toEqual({
                 roomId: 'test-room-id',
-                options: { reconnectPeerId: 'me' },
+                options: { reconnectPeerId: 'me', callMode: 'video' },
             });
         });
 

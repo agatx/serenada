@@ -8,13 +8,14 @@ final class SignalingMessageRouter {
     private let getRoomId: () -> String?
 
     // Callbacks for mutations
-    private let onJoined: (_ cid: String?, _ roomState: RoomState?, _ participantCountHint: Int?) -> Void
-    private let onRoomState: (_ roomState: RoomState?, _ participantCountHint: Int?) -> Void
+    private let onJoined: (_ cid: String?, _ roomState: RoomState?, _ participantCountHint: Int?, _ callMode: CallMode?) -> Void
+    private let onRoomState: (_ roomState: RoomState?, _ participantCountHint: Int?, _ callMode: CallMode?) -> Void
     private let onRoomEnded: () -> Void
     private let onPong: () -> Void
     private let onTurnRefreshed: (_ payload: JSONValue?) -> Void
     private let onSignalingPayload: (_ message: SignalingMessage) -> Void
     private let onContentState: (_ payload: ContentStatePayload) -> Void
+    private let onParticipantMediaState: (_ cid: String, _ audioEnabled: Bool, _ videoEnabled: Bool) -> Void
     private let onError: (_ error: CallError) -> Void
     private let sendMessage: (_ type: String, _ payload: JSONValue?, _ to: String?) -> Void
 
@@ -22,13 +23,14 @@ final class SignalingMessageRouter {
         getClientId: @escaping () -> String?,
         getHostCid: @escaping () -> String?,
         getRoomId: @escaping () -> String?,
-        onJoined: @escaping (_ cid: String?, _ roomState: RoomState?, _ participantCountHint: Int?) -> Void,
-        onRoomState: @escaping (_ roomState: RoomState?, _ participantCountHint: Int?) -> Void,
+        onJoined: @escaping (_ cid: String?, _ roomState: RoomState?, _ participantCountHint: Int?, _ callMode: CallMode?) -> Void,
+        onRoomState: @escaping (_ roomState: RoomState?, _ participantCountHint: Int?, _ callMode: CallMode?) -> Void,
         onRoomEnded: @escaping () -> Void,
         onPong: @escaping () -> Void,
         onTurnRefreshed: @escaping (_ payload: JSONValue?) -> Void,
         onSignalingPayload: @escaping (_ message: SignalingMessage) -> Void,
         onContentState: @escaping (_ payload: ContentStatePayload) -> Void,
+        onParticipantMediaState: @escaping (_ cid: String, _ audioEnabled: Bool, _ videoEnabled: Bool) -> Void,
         onError: @escaping (_ error: CallError) -> Void,
         sendMessage: @escaping (_ type: String, _ payload: JSONValue?, _ to: String?) -> Void
     ) {
@@ -42,6 +44,7 @@ final class SignalingMessageRouter {
         self.onTurnRefreshed = onTurnRefreshed
         self.onSignalingPayload = onSignalingPayload
         self.onContentState = onContentState
+        self.onParticipantMediaState = onParticipantMediaState
         self.onError = onError
         self.sendMessage = sendMessage
     }
@@ -53,11 +56,13 @@ final class SignalingMessageRouter {
         case "joined":
             let payload = JoinedPayload(from: message.payload)
             let roomState = parseRoomState(payload: message.payload, fallbackHostCid: nil)
-            onJoined(message.cid, roomState, payload.participantCount)
+            onJoined(message.cid, roomState, payload.participantCount, payload.callMode)
         case "room_state":
             let roomState = parseRoomState(payload: message.payload, fallbackHostCid: nil)
             let hint = Self.participantCountHint(payload: message.payload)
-            onRoomState(roomState, hint)
+            let modeStr = message.payload?.objectValue?["mode"]?.stringValue
+            let roomCallMode: CallMode? = modeStr == "voice" ? .voice : (modeStr == "video" ? .video : nil)
+            onRoomState(roomState, hint, roomCallMode)
         case "room_ended":
             onRoomEnded()
         case "pong":
@@ -69,6 +74,14 @@ final class SignalingMessageRouter {
         case "content_state":
             let payload = ContentStatePayload(from: message.payload)
             onContentState(payload)
+        case "participant_media_state":
+            if let obj = message.payload?.objectValue,
+               let fromCid = (obj["from"]?.stringValue ?? message.cid)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !fromCid.isEmpty {
+                let audioEnabled = obj["audioEnabled"]?.boolValue ?? true
+                let videoEnabled = obj["videoEnabled"]?.boolValue ?? false
+                onParticipantMediaState(fromCid, audioEnabled, videoEnabled)
+            }
         case "error":
             let payload = ErrorPayload(from: message.payload)
             onError(payload.toCallError())
@@ -98,7 +111,7 @@ final class SignalingMessageRouter {
             roomState = nil
         }
         let hint = participants.isEmpty ? nil : max(1, participants.count)
-        onJoined(event.peerId, roomState, hint)
+        onJoined(event.peerId, roomState, hint, event.callMode)
     }
 
     func processRoomStateEvent(_ event: RoomStateEvent) {
@@ -116,12 +129,13 @@ final class SignalingMessageRouter {
         )
         let hint = participants.isEmpty ? nil : max(1, participants.count)
         guard let host, !host.isEmpty else {
-            onRoomState(nil, hint)
+            onRoomState(nil, hint, event.callMode)
             return
         }
         onRoomState(
             RoomState(hostCid: host, participants: participants, maxParticipants: event.maxParticipants),
-            hint
+            hint,
+            event.callMode
         )
     }
 
@@ -132,6 +146,13 @@ final class SignalingMessageRouter {
             let active = message.payload?["active"]?.boolValue == true
             let contentType = active ? message.payload?["contentType"]?.stringValue : nil
             onContentState(ContentStatePayload(fromCid: fromCid, active: active, contentType: contentType))
+        case "participant_media_state":
+            let fromCid = message.payload?["from"]?.stringValue ?? message.from
+            let audioEnabled = message.payload?["audioEnabled"]?.boolValue ?? true
+            let videoEnabled = message.payload?["videoEnabled"]?.boolValue ?? false
+            if !fromCid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                onParticipantMediaState(fromCid, audioEnabled, videoEnabled)
+            }
         case "offer", "answer", "ice":
             var payload = message.payload ?? [:]
             if payload["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
@@ -154,6 +175,14 @@ final class SignalingMessageRouter {
     }
 
     // MARK: - Outbound Helpers
+
+    func broadcastMediaState(audioEnabled: Bool, videoEnabled: Bool) {
+        let payload: [String: JSONValue] = [
+            "audioEnabled": .bool(audioEnabled),
+            "videoEnabled": .bool(videoEnabled)
+        ]
+        sendMessage("participant_media_state", .object(payload), nil)
+    }
 
     func broadcastContentState(active: Bool, contentType: String? = nil) {
         var payload: [String: JSONValue] = ["active": .bool(active)]

@@ -225,21 +225,21 @@ internal final class WebRtcEngine: SessionMediaEngine {
     public func startLocalMedia(preferVideo: Bool = true) {
 #if canImport(WebRTC)
         guard let factory = peerConnectionFactory else { return }
-        guard localAudioTrack == nil && localVideoTrack == nil else { return }
+        guard localAudioTrack == nil else { return }
 
         localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
         localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
 
-        localVideoSource = factory.videoSource()
-        localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
-
-        cameraController.updateLocalVideoSource(localVideoSource)
-
         if preferVideo {
+            if localVideoTrack == nil {
+                localVideoSource = factory.videoSource()
+                localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
+                cameraController.updateLocalVideoSource(localVideoSource)
+            }
             let started = cameraController.restartVideoCapturer(source: .selfie)
             localVideoTrack?.isEnabled = started
         } else {
-            localVideoTrack?.isEnabled = false
+            // Voice mode: skip video source/track creation entirely
             cameraController.notifyCameraModeAndFlash()
         }
 
@@ -331,6 +331,15 @@ internal final class WebRtcEngine: SessionMediaEngine {
     @discardableResult
     public func toggleVideo(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)
+        // Lazy camera: create video source/track if they don't exist yet (voice mode start)
+        if enabled, localVideoTrack == nil, let factory = peerConnectionFactory {
+            localVideoSource = factory.videoSource()
+            localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
+            cameraController.updateLocalVideoSource(localVideoSource)
+            attachTrackToRegisteredRenderers()
+            peerSlots.forEach { $0.attachLocalTracks(audioTrack: localAudioTrack, videoTrack: localVideoTrack) }
+        }
+
         if enabled && !cameraController.hasActiveCapturer() && !screenShareController.isScreenSharing {
             let started = cameraController.restartVideoCapturer(source: cameraController.localCameraSource)
             if !started {

@@ -173,7 +173,7 @@ export class MediaEngine {
         }
     }
 
-    async startLocalMedia(): Promise<MediaStream | null> {
+    async startLocalMedia(options?: { videoEnabled?: boolean }): Promise<MediaStream | null> {
         const requestId = this.mediaRequestId + 1;
         this.mediaRequestId = requestId;
 
@@ -191,14 +191,19 @@ export class MediaEngine {
                 channelCount: { ideal: 1 },
                 sampleRate: { ideal: 48000 }
             };
+            const wantVideo = options?.videoEnabled !== false;
             let stream: MediaStream;
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: this.facingMode },
+                    video: wantVideo ? { facingMode: this.facingMode } : false,
                     audio: audioConstraints
                 });
             } catch {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                if (wantVideo) {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                } else {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+                }
             }
 
             if (this.destroyed || this.mediaRequestId !== requestId) {
@@ -208,7 +213,9 @@ export class MediaEngine {
 
             this.applySpeechTrackHints(stream);
             this.localStream = stream;
-            await this.detectCameras();
+            if (wantVideo) {
+                await this.detectCameras();
+            }
             this.requestingMedia = false;
 
             for (const [remoteCid, peer] of this.peers) {
@@ -229,6 +236,34 @@ export class MediaEngine {
             this.requestingMedia = false;
             return null;
         }
+    }
+
+    async startLocalVideo(): Promise<void> {
+        if (!this.localStream) return;
+        if (this.localStream.getVideoTracks().length > 0) return;
+        if (!navigator.mediaDevices?.getUserMedia) return;
+
+        const videoStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: this.facingMode },
+        });
+        const videoTrack = videoStream.getVideoTracks()[0];
+        if (!videoTrack || this.destroyed) {
+            videoStream.getTracks().forEach(t => t.stop());
+            return;
+        }
+
+        this.localStream.addTrack(videoTrack);
+        await this.detectCameras();
+
+        for (const [remoteCid, peer] of this.peers) {
+            peer.pc.addTrack(videoTrack, this.localStream);
+            if (peer.pc.signalingState === 'stable') {
+                void this.createOfferTo(remoteCid);
+            } else {
+                peer.pendingLocalTrackNegotiation = true;
+            }
+        }
+        this.notifyChange();
     }
 
     stopLocalMedia(): void {

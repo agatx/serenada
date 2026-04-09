@@ -15,6 +15,7 @@ internal final class SerenadaServerProvider: SignalingProvider {
     @MainActor private var reconnectTask: Task<Void, Never>?
     @MainActor private var currentRoomId: String?
     @MainActor private var currentMaxParticipants = 4
+    @MainActor private var currentCallMode: CallMode = .video
     @MainActor private var currentReconnectPeerId: String?
     @MainActor private var currentDisplayName: String?
     @MainActor private var currentTurnToken: String?
@@ -90,6 +91,7 @@ internal final class SerenadaServerProvider: SignalingProvider {
             pendingJoinRoomId = roomId
             joinAttemptSerial += 1
             currentMaxParticipants = options.maxParticipants ?? currentMaxParticipants
+            if let mode = options.callMode { currentCallMode = mode }
             currentReconnectPeerId = options.reconnectPeerId
             if options.displayName != nil {
                 currentDisplayName = options.displayName
@@ -196,7 +198,7 @@ extension SerenadaServerProvider: SignalingClientListener {
         case "turn-refreshed":
             currentTurnToken = SignalingMessageRouter.turnToken(from: message.payload)
             turnManager?.handleTurnRefreshed(payload: message.payload)
-        case "offer", "answer", "ice", "content_state":
+        case "offer", "answer", "ice", "content_state", "participant_media_state":
             emitPeerMessage(message)
         case "pong":
             signaling.recordPong()
@@ -232,6 +234,8 @@ private extension SerenadaServerProvider {
             turnManager?.cancelRefresh()
         }
 
+        if let mode = payload.callMode { currentCallMode = mode }
+
         let participants = dedupeProviderParticipants(
             participants: (payload.participants ?? []).map {
                 SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName)
@@ -244,7 +248,8 @@ private extension SerenadaServerProvider {
                 peerId: peerId,
                 participants: participants,
                 hostPeerId: payload.hostCid,
-                maxParticipants: payload.maxParticipants
+                maxParticipants: payload.maxParticipants,
+                callMode: payload.callMode
             )
         )
     }
@@ -252,6 +257,7 @@ private extension SerenadaServerProvider {
     func handleRoomState(_ message: SignalingMessage) {
         guard let event = roomStateEvent(from: message.payload) else { return }
         currentHostPeerId = event.hostPeerId
+        if let mode = event.callMode { currentCallMode = mode }
         emitParticipantDiffs(nextParticipants: event.participants)
         previousParticipants = Dictionary(uniqueKeysWithValues: event.participants.map { ($0.peerId, $0) })
         delegate?.signalingProviderDidUpdateRoomState(event)
@@ -296,24 +302,31 @@ private extension SerenadaServerProvider {
             hostPeerId = participants.first?.peerId
         }
         guard hostPeerId != nil || !participants.isEmpty else { return nil }
+        let modeStr = object["mode"]?.stringValue
+        let callMode: CallMode? = modeStr == "voice" ? .voice : (modeStr == "video" ? .video : nil)
         return RoomStateEvent(
             participants: participants,
             hostPeerId: hostPeerId,
-            maxParticipants: object["maxParticipants"]?.intValue
+            maxParticipants: object["maxParticipants"]?.intValue,
+            callMode: callMode
         )
     }
 
     func sendJoin(roomId: String) {
         currentRoomId = roomId
+        let modeAwareCapacity = currentCallMode == .voice ? 8 : currentMaxParticipants
         let payload: SignalingPayload = [
             "device": .string("ios"),
             "capabilities": .object([
                 "trickleIce": .bool(true),
-                "maxParticipants": .number(Double(currentMaxParticipants))
+                "maxParticipants": .number(Double(modeAwareCapacity))
             ]),
-            "createMaxParticipants": .number(Double(currentMaxParticipants))
+            "createMaxParticipants": .number(Double(modeAwareCapacity))
         ]
         var joinPayload = payload
+        if currentCallMode == .voice {
+            joinPayload["mode"] = .string("voice")
+        }
         if let reconnectToken, !reconnectToken.isEmpty {
             joinPayload["reconnectToken"] = .string(reconnectToken)
         }

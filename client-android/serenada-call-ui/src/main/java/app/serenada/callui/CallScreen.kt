@@ -85,6 +85,7 @@ import app.serenada.core.layout.UserLayoutPrefs
 import app.serenada.core.layout.clampStageTileAspectRatio
 import app.serenada.core.layout.computeLayout
 import app.serenada.core.layout.computeStageLayout
+import app.serenada.core.call.CallMode
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.ContentTypeWire
@@ -728,6 +729,8 @@ internal fun CallScreen(
                     horizontalArrangement = Arrangement.spacedBy(20.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val isVoiceMode = uiState.callMode == CallMode.VOICE
+
                     // Order: Mute, Camera, Flip, Screen Share, End call
 
                     // Mute Button
@@ -741,29 +744,31 @@ internal fun CallScreen(
                             else Color.Red
                     )
 
-                    // Video Toggle Button
+                    // Video Toggle Button (in voice mode: "Share Camera" toggle)
                     ControlButton(
                         onClick = onToggleVideo,
                         icon =
                             if (uiState.localVideoEnabled) Icons.Default.Videocam
                             else Icons.Default.VideocamOff,
                         backgroundColor =
-                            if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
-                                else Color.Red
+                            if (isVoiceMode && !uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
+                            else if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
+                            else Color.Red
                     )
 
-                    // Flip Camera
-                    ControlButton(
-                        onClick = onFlipCamera,
-                        icon = Icons.Default.FlipCameraIos,
-                        backgroundColor =
-                            if (uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f)
-                            else Color.White.copy(alpha = 0.2f),
-                        // Disabled visual appearance could be added here
-                    )
+                    // Flip Camera — hidden in voice mode when camera is not shared
+                    if (!isVoiceMode || uiState.localVideoEnabled) {
+                        ControlButton(
+                            onClick = onFlipCamera,
+                            icon = Icons.Default.FlipCameraIos,
+                            backgroundColor =
+                                if (uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f)
+                                else Color.White.copy(alpha = 0.2f),
+                        )
+                    }
 
-                    // Screen Share Button — only when enabled via config
-                    if (config.screenSharingEnabled) {
+                    // Screen Share Button — hidden in voice mode
+                    if (!isVoiceMode && config.screenSharingEnabled) {
                         ControlButton(
                             onClick = {
                                 if (uiState.isScreenSharing) {

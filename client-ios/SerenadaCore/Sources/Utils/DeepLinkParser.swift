@@ -10,12 +10,14 @@ public struct DeepLinkTarget: Equatable {
     public let roomId: String
     public let host: String?
     public let savedRoomName: String?
+    public let callMode: CallMode?
 
-    public init(action: DeepLinkAction, roomId: String, host: String?, savedRoomName: String?) {
+    public init(action: DeepLinkAction, roomId: String, host: String?, savedRoomName: String?, callMode: CallMode? = nil) {
         self.action = action
         self.roomId = roomId
         self.host = host
         self.savedRoomName = savedRoomName
+        self.callMode = callMode
     }
 }
 
@@ -52,12 +54,15 @@ public enum DeepLinkParser {
 
         let savedRoomName = normalizeSavedRoomName(components?.queryItems?.first { $0.name == "name" }?.value)
         let action: DeepLinkAction = savedRoomName == nil ? .join : .saveRoom
+        let modeParam = components?.queryItems?.first { $0.name == "mode" }?.value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let callMode: CallMode? = modeParam == "voice" ? .voice : nil
 
         return DeepLinkTarget(
             action: action,
             roomId: roomId,
             host: resolvedHost,
-            savedRoomName: savedRoomName
+            savedRoomName: savedRoomName,
+            callMode: callMode
         )
     }
 

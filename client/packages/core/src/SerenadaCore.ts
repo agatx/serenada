@@ -56,6 +56,7 @@ export class SerenadaCore {
     private createUnsupportedSession(): SerenadaSessionHandle {
         const errorState: CallState = {
             phase: 'error',
+            callMode: 'video',
             roomId: null,
             roomUrl: null,
             localParticipant: null,

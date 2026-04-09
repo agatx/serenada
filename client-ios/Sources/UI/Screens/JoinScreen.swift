@@ -13,6 +13,7 @@ struct JoinScreen: View {
     let onOpenJoinWithCode: () -> Void
     let onOpenSettings: () -> Void
     let onStartCall: () -> Void
+    let onStartVoiceCall: () -> Void
     let onJoinRecentCall: (RecentCall) -> Void
     let onJoinSavedRoom: (SavedRoom) -> Void
     let onRemoveRecentCall: (String) -> Void
@@ -47,19 +48,32 @@ struct JoinScreen: View {
                 }
             }
 
-            Button(action: onStartCall) {
-                HStack(spacing: 8) {
-                    Image(systemName: "video.fill")
-                    Text(L10n.joinStartCall)
+            HStack(spacing: 10) {
+                Button(action: onStartVoiceCall) {
+                    Image(systemName: "phone.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 48, height: 48)
+                        .background(isBusy ? Color.gray.opacity(0.5) : Color(.systemGreen))
+                        .foregroundStyle(.white)
+                        .clipShape(Circle())
                 }
-                .font(.system(size: 16, weight: .semibold))
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-                .background(isBusy ? Color.gray.opacity(0.5) : Color.accentColor)
-                .foregroundStyle(.white)
-                .clipShape(Capsule())
+                .disabled(isBusy)
+                .accessibilityLabel(L10n.joinStartVoiceCall)
+
+                Button(action: onStartCall) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "video.fill")
+                        Text(L10n.joinStartCall)
+                    }
+                    .font(.system(size: 16, weight: .semibold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .background(isBusy ? Color.gray.opacity(0.5) : Color.accentColor)
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+                }
+                .disabled(isBusy)
             }
-            .disabled(isBusy)
             .padding(.trailing, 20)
             .padding(.bottom, 20)
 

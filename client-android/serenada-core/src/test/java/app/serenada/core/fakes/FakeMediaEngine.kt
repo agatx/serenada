@@ -14,6 +14,8 @@ import org.webrtc.VideoTrack
 internal class FakeMediaEngine : SessionMediaEngine {
     var startLocalMediaCalls = 0
         private set
+    var startLocalAudioOnlyCalls = 0
+        private set
     var releaseCalls = 0
         private set
     val toggleAudioCalls = mutableListOf<Boolean>()
@@ -27,6 +29,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
     private var _iceServers: List<PeerConnection.IceServer>? = null
 
     override fun startLocalMedia() { startLocalMediaCalls++ }
+    override fun startLocalAudioOnly() { startLocalAudioOnlyCalls++ }
     override fun release() { releaseCalls++ }
     override fun toggleAudio(enabled: Boolean) { toggleAudioCalls.add(enabled) }
     override fun toggleVideo(enabled: Boolean) { toggleVideoCalls.add(enabled) }

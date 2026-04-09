@@ -2,6 +2,7 @@ import type { CallState } from '@serenada/core';
 
 export const IDLE_STATE: CallState = {
     phase: 'idle',
+    callMode: 'video',
     roomId: null,
     roomUrl: null,
     localParticipant: null,

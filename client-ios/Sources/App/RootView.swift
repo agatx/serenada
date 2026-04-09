@@ -77,6 +77,10 @@ struct RootView: View {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         callManager.startNewCall()
                     },
+                    onStartVoiceCall: {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        callManager.startNewCall(callMode: .voice)
+                    },
                     onJoinRecentCall: { call in
                         callManager.joinRecentCall(call)
                     },

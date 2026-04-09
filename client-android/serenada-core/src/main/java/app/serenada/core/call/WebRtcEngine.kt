@@ -223,6 +223,18 @@ internal class WebRtcEngine(
         }
     }
 
+    override fun startLocalAudioOnly() {
+        if (released) return
+        if (localAudioTrack != null) return
+        val audioConstraints = MediaConstraints()
+        audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+        localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
+        applyAudioTrackHints()
+        peerSlots.forEach { slot ->
+            slot.attachLocalTracks(localAudioTrack, null)
+        }
+    }
+
     fun stopLocalMedia() {
         cameraController.resetCameraState()
         screenShareController.reset()
@@ -275,6 +287,24 @@ internal class WebRtcEngine(
     }
 
     override fun toggleVideo(enabled: Boolean) {
+        if (enabled && localVideoTrack == null) {
+            // Lazy camera creation for voice mode: create video source + capturer + track on demand
+            if (released) return
+            cameraController.resetCameraState()
+            videoSource = peerConnectionFactory.createVideoSource(false)
+            cameraController.resetCameraSourceToSelfie()
+            if (!cameraController.restartVideoCapturer(CameraCaptureController.LocalCameraSource.SELFIE, videoSource)) {
+                logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "Lazy camera: no capturer available")
+                videoSource?.dispose()
+                videoSource = null
+                return
+            }
+            localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
+            localVideoTrack?.setEnabled(true)
+            localSinks.forEach { sink -> localVideoTrack?.addSink(sink) }
+            peerSlots.forEach { slot -> slot.attachLocalTracks(localAudioTrack, localVideoTrack) }
+            return
+        }
         localVideoTrack?.setEnabled(enabled)
     }
 

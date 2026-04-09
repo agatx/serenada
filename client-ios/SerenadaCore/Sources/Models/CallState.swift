@@ -121,6 +121,8 @@ public struct CallState: Equatable {
     public var requiredPermissions: [MediaCapability]?
     /// Current error, if the phase is `.error`.
     public var error: CallError?
+    /// Call mode — video or voice — as confirmed by the server.
+    public var callMode: CallMode = .video
 
     public init() {}
 }

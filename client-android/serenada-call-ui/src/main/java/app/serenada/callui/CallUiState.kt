@@ -1,5 +1,6 @@
 package app.serenada.callui
 
+import app.serenada.core.call.CallMode
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.LocalCameraMode
@@ -8,6 +9,7 @@ import app.serenada.core.call.RealtimeCallStats
 
 data class CallUiState(
     val phase: CallPhase = CallPhase.Idle,
+    val callMode: CallMode = CallMode.VIDEO,
     val roomId: String? = null,
     val localCid: String? = null,
     val statusMessageResId: Int? = null,

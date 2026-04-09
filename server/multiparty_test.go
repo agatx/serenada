@@ -48,11 +48,16 @@ func drainMessages(c *Client) []Message {
 type joinPayloadOptions struct {
 	ReconnectCID string
 	DisplayName  *string
+	Mode         string
 }
 
 // joinPayload builds a raw JSON join message with optional capabilities.
 func joinPayload(rid string, capMax int, createMax int) []byte {
 	return joinPayloadWithOptions(rid, capMax, createMax, joinPayloadOptions{})
+}
+
+func joinPayloadWithMode(rid string, capMax int, createMax int, mode string) []byte {
+	return joinPayloadWithOptions(rid, capMax, createMax, joinPayloadOptions{Mode: mode})
 }
 
 func joinPayloadWithOptions(rid string, capMax int, createMax int, options joinPayloadOptions) []byte {
@@ -64,11 +69,13 @@ func joinPayloadWithOptions(rid string, capMax int, createMax int, options joinP
 		CreateMaxParticipants int     `json:"createMaxParticipants,omitempty"`
 		ReconnectCID          string  `json:"reconnectCid,omitempty"`
 		DisplayName           *string `json:"displayName,omitempty"`
+		Mode                  string  `json:"mode,omitempty"`
 	}{
 		Capabilities:          caps{MaxParticipants: capMax},
 		CreateMaxParticipants: createMax,
 		ReconnectCID:          options.ReconnectCID,
 		DisplayName:           options.DisplayName,
+		Mode:                  options.Mode,
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -119,7 +126,7 @@ func mustTestRoomID(t *testing.T) string {
 func TestLegacyClientCreates1v1Room(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	c := fakeClient(hub)
 	hub.registerClient(c)
@@ -140,7 +147,7 @@ func TestLegacyClientCreates1v1Room(t *testing.T) {
 
 func TestReconnectJoinCanClearDisplayName(t *testing.T) {
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	original := fakeClient(hub)
 	hub.registerClient(original)
@@ -185,7 +192,7 @@ func TestReconnectJoinCanClearDisplayName(t *testing.T) {
 func TestNewClientCreatesGroupRoomProvisionallyAs1v1(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	c := fakeClient(hub)
 	hub.registerClient(c)
@@ -213,7 +220,7 @@ func TestNewClientCreatesGroupRoomProvisionallyAs1v1(t *testing.T) {
 func TestNewClientCanJoin1v1Room(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	// First client creates a 1:1 room (legacy)
 	c1 := fakeClient(hub)
@@ -241,7 +248,7 @@ func TestNewClientCanJoin1v1Room(t *testing.T) {
 func TestLegacySecondClientLocksRequestedGroupRoomTo1v1(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	c1 := fakeClient(hub)
 	hub.registerClient(c1)
@@ -281,7 +288,7 @@ func TestLegacySecondClientLocksRequestedGroupRoomTo1v1(t *testing.T) {
 func TestLegacyClientRejectedFromLockedGroupRoom(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	c1 := fakeClient(hub)
 	hub.registerClient(c1)
@@ -318,7 +325,7 @@ func TestLegacyClientRejectedFromLockedGroupRoom(t *testing.T) {
 func TestRoomFullEnforcesPerRoomCapacity(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	// Create a 1:1 room and fill it
 	c1 := fakeClient(hub)
@@ -358,7 +365,7 @@ func TestRoomFullEnforcesPerRoomCapacity(t *testing.T) {
 func TestGroupRoomAccepts4Participants(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	clients := make([]*Client, 4)
 	for i := 0; i < 4; i++ {
@@ -411,7 +418,7 @@ func TestGroupRoomAccepts4Participants(t *testing.T) {
 func TestRelayWithToFieldTargetsSpecificPeer(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	// Create 3-party room
 	clients := make([]*Client, 3)
@@ -480,7 +487,7 @@ func TestRelayWithToFieldTargetsSpecificPeer(t *testing.T) {
 func TestJoinedPayloadIncludesMaxParticipantsAndJoinedAt(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	c := fakeClient(hub)
 	hub.registerClient(c)
@@ -514,7 +521,7 @@ func TestJoinedPayloadIncludesMaxParticipantsAndJoinedAt(t *testing.T) {
 func TestCreateMaxParticipantsClampedToServerCeiling(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(3) // Server ceiling is 3
+	hub := newHub(3, 8) // Server ceiling is 3
 
 	c1 := fakeClient(hub)
 	hub.registerClient(c1)
@@ -546,7 +553,7 @@ func TestCreateMaxParticipantsClampedToServerCeiling(t *testing.T) {
 func TestWatchRoomsIncludesMaxParticipants(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	participant := fakeClient(hub)
 	hub.registerClient(participant)
@@ -592,7 +599,7 @@ func TestWatchRoomsReplacesPreviousSubscriptions(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	ridA := mustTestRoomID(t)
 	ridB := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	watcher := fakeClient(hub)
 	hub.registerClient(watcher)
@@ -607,7 +614,7 @@ func TestWatchRoomsReplacesPreviousSubscriptions(t *testing.T) {
 			continue
 		}
 		foundRoomStatuses = true
-		var payload map[string]map[string]int
+		var payload map[string]map[string]interface{}
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			t.Fatalf("failed to parse room_statuses payload: %v", err)
 		}
@@ -666,7 +673,7 @@ func TestWatchRoomsReplacesPreviousSubscriptions(t *testing.T) {
 func TestWatchRoomsClearsSubscriptionsWithEmptyList(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	watcher := fakeClient(hub)
 	hub.registerClient(watcher)
@@ -681,7 +688,7 @@ func TestWatchRoomsClearsSubscriptionsWithEmptyList(t *testing.T) {
 			continue
 		}
 		foundRoomStatuses = true
-		var payload map[string]map[string]int
+		var payload map[string]map[string]interface{}
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			t.Fatalf("failed to parse room_statuses payload: %v", err)
 		}
@@ -707,7 +714,7 @@ func TestWatchRoomsClearsSubscriptionsWithEmptyList(t *testing.T) {
 func TestRoomStatusUpdateIncludesMaxParticipants(t *testing.T) {
 	t.Setenv("ROOM_ID_SECRET", "test-room-id-secret")
 	rid := mustTestRoomID(t)
-	hub := newHub(4)
+	hub := newHub(4, 8)
 
 	watcher := fakeClient(hub)
 	hub.registerClient(watcher)
@@ -763,4 +770,289 @@ func TestRoomStatusUpdateIncludesMaxParticipants(t *testing.T) {
 		}
 	}
 	t.Fatal("expected room_status_update with locked maxParticipants=4 after second join")
+}
+
+// ── Voice mode tests ───────────────────────────────────────────────────────
+
+func TestVoiceRoomUsesVoiceCeiling(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	c := fakeClient(hub)
+	hub.registerClient(c)
+	hub.handleMessage(c, joinPayloadWithMode(rid, 8, 8, "voice"))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+
+	if room == nil {
+		t.Fatal("room was not created")
+	}
+	if room.Mode != "voice" {
+		t.Fatalf("expected room mode=voice, got %q", room.Mode)
+	}
+	if room.RequestedMaxParticipants != 8 {
+		t.Fatalf("expected requested maxParticipants=8, got %d", room.RequestedMaxParticipants)
+	}
+}
+
+func TestVoiceRoomAccepts8ParticipantsAndRejects9th(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	clients := make([]*Client, 9)
+	for i := 0; i < 9; i++ {
+		clients[i] = fakeClient(hub)
+		hub.registerClient(clients[i])
+		hub.handleMessage(clients[i], joinPayloadWithMode(rid, 8, 8, "voice"))
+		time.Sleep(5 * time.Millisecond)
+		drainMessages(clients[i])
+	}
+
+	// 9th client should have received ROOM_FULL
+	found := false
+	for _, msg := range drainMessages(clients[8]) {
+		if msg.Type == "error" {
+			var payload struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(msg.Payload, &payload); err == nil && payload.Code == "ROOM_FULL" {
+				found = true
+			}
+		}
+	}
+	// Also check messages that were already drained
+	if !found {
+		// Re-send join for 9th to trigger error (messages may have been in first drain)
+		hub.handleMessage(clients[8], joinPayloadWithMode(rid, 8, 8, "voice"))
+		time.Sleep(5 * time.Millisecond)
+		for _, msg := range drainMessages(clients[8]) {
+			if msg.Type == "error" {
+				var payload struct {
+					Code string `json:"code"`
+				}
+				if err := json.Unmarshal(msg.Payload, &payload); err == nil && payload.Code == "ROOM_FULL" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		hub.mu.RLock()
+		room := hub.rooms[rid]
+		hub.mu.RUnlock()
+		room.mu.Lock()
+		count := len(room.Participants)
+		room.mu.Unlock()
+		if count > 8 {
+			t.Fatalf("voice room should have at most 8 participants, got %d", count)
+		}
+	}
+}
+
+func TestJoinedPayloadContainsVoiceMode(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	c := fakeClient(hub)
+	hub.registerClient(c)
+	hub.handleMessage(c, joinPayloadWithMode(rid, 8, 8, "voice"))
+
+	for _, msg := range drainMessages(c) {
+		if msg.Type == "joined" {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				t.Fatalf("failed to parse joined payload: %v", err)
+			}
+			if payload["mode"] != "voice" {
+				t.Fatalf("expected mode=voice in joined payload, got %v", payload["mode"])
+			}
+			return
+		}
+	}
+	t.Fatal("did not receive joined message")
+}
+
+func TestRoomStateContainsVoiceMode(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	c1 := fakeClient(hub)
+	hub.registerClient(c1)
+	hub.handleMessage(c1, joinPayloadWithMode(rid, 8, 8, "voice"))
+	drainMessages(c1)
+
+	c2 := fakeClient(hub)
+	hub.registerClient(c2)
+	hub.handleMessage(c2, joinPayloadWithMode(rid, 8, 8, "voice"))
+
+	// c1 should receive room_state with mode
+	for _, msg := range drainMessages(c1) {
+		if msg.Type == "room_state" {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				t.Fatalf("failed to parse room_state payload: %v", err)
+			}
+			if payload["mode"] != "voice" {
+				t.Fatalf("expected mode=voice in room_state payload, got %v", payload["mode"])
+			}
+			return
+		}
+	}
+	t.Fatal("did not receive room_state message with mode")
+}
+
+func TestRoomStatusesContainVoiceMode(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	participant := fakeClient(hub)
+	hub.registerClient(participant)
+	hub.handleMessage(participant, joinPayloadWithMode(rid, 8, 8, "voice"))
+	drainMessages(participant)
+
+	watcher := fakeClient(hub)
+	hub.registerClient(watcher)
+	hub.handleMessage(watcher, watchRoomsPayload([]string{rid}))
+
+	for _, msg := range drainMessages(watcher) {
+		if msg.Type != "room_statuses" {
+			continue
+		}
+		var payload map[string]map[string]interface{}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_statuses payload: %v", err)
+		}
+		if payload[rid]["mode"] != "voice" {
+			t.Fatalf("expected mode=voice in room_statuses, got %v", payload[rid]["mode"])
+		}
+		return
+	}
+	t.Fatal("did not receive room_statuses message")
+}
+
+func TestRoomStatusUpdateContainsVoiceMode(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	watcher := fakeClient(hub)
+	hub.registerClient(watcher)
+	hub.handleMessage(watcher, watchRoomsPayload([]string{rid}))
+	drainMessages(watcher)
+
+	participant := fakeClient(hub)
+	hub.registerClient(participant)
+	hub.handleMessage(participant, joinPayloadWithMode(rid, 8, 8, "voice"))
+
+	for _, msg := range drainMessages(watcher) {
+		if msg.Type != "room_status_update" {
+			continue
+		}
+		var payload struct {
+			RID  string `json:"rid"`
+			Mode string `json:"mode"`
+		}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("failed to parse room_status_update payload: %v", err)
+		}
+		if payload.RID == rid && payload.Mode == "voice" {
+			return
+		}
+	}
+	t.Fatal("expected room_status_update with mode=voice")
+}
+
+func TestMissingModeDefaultsToVideo(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	c := fakeClient(hub)
+	hub.registerClient(c)
+	hub.handleMessage(c, joinPayload(rid, 4, 4))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+
+	if room == nil {
+		t.Fatal("room was not created")
+	}
+	if room.Mode != "video" {
+		t.Fatalf("expected room mode=video when no mode specified, got %q", room.Mode)
+	}
+
+	for _, msg := range drainMessages(c) {
+		if msg.Type == "joined" {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				t.Fatalf("failed to parse joined payload: %v", err)
+			}
+			if payload["mode"] != "video" {
+				t.Fatalf("expected mode=video in joined payload, got %v", payload["mode"])
+			}
+			return
+		}
+	}
+	t.Fatal("did not receive joined message")
+}
+
+func TestSecondJoinerCannotChangeMode(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	c1 := fakeClient(hub)
+	hub.registerClient(c1)
+	hub.handleMessage(c1, joinPayloadWithMode(rid, 8, 8, "voice"))
+	drainMessages(c1)
+
+	c2 := fakeClient(hub)
+	hub.registerClient(c2)
+	hub.handleMessage(c2, joinPayloadWithMode(rid, 8, 8, "video"))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+
+	if room.Mode != "voice" {
+		t.Fatalf("expected room mode to stay voice, got %q", room.Mode)
+	}
+
+	// Second joiner's joined payload should also say voice
+	for _, msg := range drainMessages(c2) {
+		if msg.Type == "joined" {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				t.Fatalf("failed to parse joined payload: %v", err)
+			}
+			if payload["mode"] != "voice" {
+				t.Fatalf("expected mode=voice in second joiner's joined payload, got %v", payload["mode"])
+			}
+			return
+		}
+	}
+	t.Fatal("did not receive joined message for second joiner")
+}
+
+func TestVideoRoomUsesVideoCeiling(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4, 8)
+
+	c := fakeClient(hub)
+	hub.registerClient(c)
+	hub.handleMessage(c, joinPayloadWithMode(rid, 4, 4, "video"))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+
+	if room == nil {
+		t.Fatal("room was not created")
+	}
+	if room.Mode != "video" {
+		t.Fatalf("expected room mode=video, got %q", room.Mode)
+	}
+	if room.RequestedMaxParticipants != 4 {
+		t.Fatalf("expected requested maxParticipants=4, got %d", room.RequestedMaxParticipants)
+	}
 }

@@ -33,6 +33,7 @@ public struct CallUiState: Equatable {
     public var isFlashEnabled: Bool = false
     public var remoteContentCid: String?
     public var remoteContentType: String?
+    public var callMode: CallMode = .video
 
     public var remoteVideoEnabled: Bool {
         remoteParticipants.first?.videoEnabled ?? false

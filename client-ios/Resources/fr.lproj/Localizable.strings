@@ -26,6 +26,7 @@
 "join_settings" = "Paramètres";
 "join_subtitle" = "Appels vidéo privés, sans compte.";
 "join_start_call" = "Démarrer l’appel";
+"join_start_voice_call" = "Appel vocal";
 "recent_calls_title" = "Vos appels récents";
 "recent_calls_at" = "à";
 "recent_calls_remove" = "Supprimer";

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
+import { BellRing, CheckSquare, Copy, Mic, Square } from 'lucide-react';
 import { SerenadaCallFlow } from '@serenada/react-ui';
 import type { SerenadaString } from '@serenada/react-ui';
 import { SerenadaCore, ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS } from '@serenada/core';
@@ -215,6 +215,7 @@ const CallRoom: React.FC = () => {
     const urlParams = new URLSearchParams(location.search);
     const sharedName = urlParams.get('name');
     const turnsOnly = useMemo(() => parseTurnsOnly(location.search), [location.search]);
+    const callMode = useMemo(() => urlParams.get('mode') === 'voice' ? 'voice' as const : 'video' as const, [location.search]);
 
     const [shouldJoin, setShouldJoin] = useState(false);
     const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
@@ -246,7 +247,7 @@ const CallRoom: React.FC = () => {
     }, [previewStream]);
 
     useEffect(() => {
-        if (!roomId || shouldJoin) {
+        if (!roomId || shouldJoin || callMode === 'voice') {
             stopPreview();
             return;
         }
@@ -275,7 +276,7 @@ const CallRoom: React.FC = () => {
             cancelled = true;
             activeStream?.getTracks().forEach((track) => track.stop());
         };
-    }, [roomId, shouldJoin, stopPreview]);
+    }, [roomId, shouldJoin, callMode, stopPreview]);
 
     useEffect(() => {
         if (!roomId || !shouldJoin) return;
@@ -284,6 +285,7 @@ const CallRoom: React.FC = () => {
             serverHost: getConfiguredServerHost(),
             logger: new ConsoleSerenadaLogger(),
             turnsOnly,
+            callMode,
         });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
         const nextSession = core.join(callUrl, { displayName: displayNameInput.trim() || undefined });
@@ -387,6 +389,7 @@ const CallRoom: React.FC = () => {
                     roomId,
                     startTime: callStartTimeRef.current,
                     duration: duration > 0 ? duration : 0,
+                    mode: callMode,
                 });
                 markRoomJoined(roomId, Date.now());
                 callStartTimeRef.current = null;
@@ -434,6 +437,7 @@ const CallRoom: React.FC = () => {
                 roomId,
                 startTime: callStartTimeRef.current,
                 duration: duration > 0 ? duration : 0,
+                mode: callMode,
             });
             markRoomJoined(roomId, Date.now());
             callStartTimeRef.current = null;
@@ -537,16 +541,23 @@ const CallRoom: React.FC = () => {
                         <h2>{t('ready_to_join')}</h2>
                     )}
 
-                    <div className="video-preview-container">
-                        <video
-                            ref={previewVideoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className="video-preview mirrored"
-                        />
-                        {!previewStream && <div className="video-placeholder">{t('camera_off')}</div>}
-                    </div>
+                    {callMode === 'voice' ? (
+                        <div className="video-preview-container audio-only-preview">
+                            <Mic size={48} className="audio-preview-icon" />
+                            <span>{t('audio_only_preview')}</span>
+                        </div>
+                    ) : (
+                        <div className="video-preview-container">
+                            <video
+                                ref={previewVideoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className="video-preview mirrored"
+                            />
+                            {!previewStream && <div className="video-placeholder">{t('camera_off')}</div>}
+                        </div>
+                    )}
 
                     <input
                         type="text"

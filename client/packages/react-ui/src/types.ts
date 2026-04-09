@@ -44,7 +44,9 @@ export type SerenadaString =
     | 'cancel'
     | 'debugPanel'
     | 'you'
-    | 'remote';
+    | 'remote'
+    | 'voiceCall'
+    | 'shareCamera';
 
 export const serenadaDefaultStrings: Record<SerenadaString, string> = {
     joiningCall: 'Joining call\u2026',
@@ -71,6 +73,8 @@ export const serenadaDefaultStrings: Record<SerenadaString, string> = {
     debugPanel: 'Debug',
     you: 'You',
     remote: 'Remote',
+    voiceCall: 'Voice Call',
+    shareCamera: 'Share Camera',
 };
 
 export function resolveString(

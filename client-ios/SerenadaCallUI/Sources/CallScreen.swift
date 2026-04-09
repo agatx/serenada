@@ -697,7 +697,8 @@ struct CallScreenView: View {
     }
 
     private var controlBar: some View {
-        HStack(spacing: 14) {
+        let isVoiceMode = uiState.callMode == .voice
+        return HStack(spacing: 14) {
             iconButton(system: uiState.localAudioEnabled ? "mic.fill" : "mic.slash.fill", accessibilityLabel: uiState.localAudioEnabled ? str(.callA11yMuteOn) : str(.callA11yMuteOff)) {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 onToggleAudio()
@@ -708,11 +709,13 @@ struct CallScreenView: View {
                 onToggleVideo()
             }
 
-            iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
-                onFlipCamera()
+            if !isVoiceMode || uiState.localVideoEnabled {
+                iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
+                    onFlipCamera()
+                }
             }
 
-            if config.screenSharingEnabled {
+            if config.screenSharingEnabled && !isVoiceMode {
                 if shouldUseBroadcastPicker(
                     isScreenSharing: uiState.isScreenSharing,
                     screenShareExtensionBundleId: screenShareExtensionBundleId

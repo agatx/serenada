@@ -4,6 +4,7 @@ export interface SavedRoom {
     createdAt: number;
     host?: string;
     lastJoinedAt?: number;
+    mode?: 'video' | 'voice';
 }
 
 export type SaveRoomResult = 'ok' | 'quota_exceeded' | 'error' | 'invalid_input';

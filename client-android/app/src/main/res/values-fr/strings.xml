@@ -68,6 +68,7 @@
     <string name="join_settings">Paramètres</string>
     <string name="join_subtitle">Appels vidéo privés, sans compte.</string>
     <string name="join_start_call">Démarrer l\'appel</string>
+    <string name="join_start_voice_call">Voix</string>
     <string name="join_with_code_title">Rejoindre avec un code</string>
     <string name="join_with_code_action">Rejoindre</string>
     <string name="join_with_code_hint">Saisissez le code ou le lien fourni par l\'organisateur</string>

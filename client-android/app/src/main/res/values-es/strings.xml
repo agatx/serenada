@@ -68,6 +68,7 @@
     <string name="join_settings">Ajustes</string>
     <string name="join_subtitle">Videollamadas privadas, sin cuentas.</string>
     <string name="join_start_call">Iniciar llamada</string>
+    <string name="join_start_voice_call">Voz</string>
     <string name="recent_calls_title">Tus llamadas recientes</string>
     <string name="recent_calls_at">a las</string>
     <string name="recent_calls_remove">Eliminar</string>

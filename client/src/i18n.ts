@@ -92,7 +92,12 @@ const resources = {
             "feedback_success": "Thank you for your feedback!",
             "feedback_rate_limit": "Please wait before sending more feedback.",
             "feedback_error": "Failed to send feedback. Please try again.",
-            "display_name_placeholder": "Your name (optional)"
+            "display_name_placeholder": "Your name (optional)",
+            "start_video_call": "Start Video Call",
+            "start_voice_call": "Start Voice Call",
+            "voice_call_header": "Voice Call",
+            "share_camera": "Share Camera",
+            "audio_only_preview": "Audio Only"
         }
     },
     ru: {
@@ -184,7 +189,12 @@ const resources = {
             "feedback_success": "Спасибо за ваш отзыв!",
             "feedback_rate_limit": "Подождите перед отправкой нового отзыва.",
             "feedback_error": "Не удалось отправить отзыв. Попробуйте еще раз.",
-            "display_name_placeholder": "Ваше имя (необязательно)"
+            "display_name_placeholder": "Ваше имя (необязательно)",
+            "start_video_call": "Видеозвонок",
+            "start_voice_call": "Голосовой звонок",
+            "voice_call_header": "Голосовой звонок",
+            "share_camera": "Включить камеру",
+            "audio_only_preview": "Только аудио"
         }
     },
     es: {
@@ -276,7 +286,12 @@ const resources = {
             "feedback_success": "¡Gracias por tus comentarios!",
             "feedback_rate_limit": "Espera antes de enviar más comentarios.",
             "feedback_error": "No se pudo enviar. Inténtalo de nuevo.",
-            "display_name_placeholder": "Tu nombre (opcional)"
+            "display_name_placeholder": "Tu nombre (opcional)",
+            "start_video_call": "Videollamada",
+            "start_voice_call": "Llamada de voz",
+            "voice_call_header": "Llamada de voz",
+            "share_camera": "Compartir cámara",
+            "audio_only_preview": "Solo audio"
         }
     },
     fr: {
@@ -368,7 +383,12 @@ const resources = {
             "feedback_success": "Merci pour votre retour !",
             "feedback_rate_limit": "Veuillez patienter avant d'envoyer un autre retour.",
             "feedback_error": "Échec de l'envoi. Veuillez réessayer.",
-            "display_name_placeholder": "Votre nom (facultatif)"
+            "display_name_placeholder": "Votre nom (facultatif)",
+            "start_video_call": "Appel vidéo",
+            "start_voice_call": "Appel vocal",
+            "voice_call_header": "Appel vocal",
+            "share_camera": "Partager la caméra",
+            "audio_only_preview": "Audio uniquement"
         }
     }
 };

@@ -11,6 +11,7 @@ import org.webrtc.VideoTrack
 
 internal interface SessionMediaEngine {
     fun startLocalMedia()
+    fun startLocalAudioOnly()
     fun release()
     fun toggleAudio(enabled: Boolean)
     fun toggleVideo(enabled: Boolean)

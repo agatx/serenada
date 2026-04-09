@@ -9,9 +9,11 @@ import android.net.NetworkRequest
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import app.serenada.core.call.CallMode
 import app.serenada.core.call.dedupeParticipants
 import app.serenada.core.call.resolveHostPeerId
 import app.serenada.core.call.ConnectionStatusTracker
+import app.serenada.core.call.RemoteMediaState
 import app.serenada.core.call.JoinFlowCoordinator
 import app.serenada.core.call.LiveSessionClock
 import app.serenada.core.call.PeerNegotiationEngine
@@ -118,6 +120,9 @@ class SerenadaSession internal constructor(
         }
     }
 
+    private var callMode: CallMode = config.callMode
+    private val remoteMediaStates = mutableMapOf<String, RemoteMediaState>()
+
     private var clientId: String? = null
     private var hostCid: String? = null
     private var currentRoomState: RoomState? = null
@@ -141,9 +146,15 @@ class SerenadaSession internal constructor(
         onPermissionCheckRequired = { startWithPermissionCheck() },
         connectProvider = { signalingProvider.connect() },
         joinRoom = { targetRoomId, reconnectPeerId ->
+            val maxP = if (callMode == CallMode.VOICE) 8 else 4
             signalingProvider.joinRoom(
                 targetRoomId,
-                JoinOptions(reconnectPeerId = reconnectPeerId, maxParticipants = 4, displayName = displayName),
+                JoinOptions(
+                    reconnectPeerId = reconnectPeerId,
+                    maxParticipants = maxP,
+                    displayName = displayName,
+                    callMode = callMode,
+                ),
             )
         },
         onJoinTimeout = {
@@ -193,6 +204,16 @@ class SerenadaSession internal constructor(
                     remoteContentType = contentType,
                 )
             )
+        },
+        onMediaStateReceived = { fromCid, audioEnabled, videoEnabled ->
+            remoteMediaStates[fromCid] = RemoteMediaState(audioEnabled = audioEnabled, videoEnabled = videoEnabled)
+            refreshRemoteParticipants()
+        },
+        onCallModeUpdated = { serverMode ->
+            if (callMode != serverMode) {
+                callMode = serverMode
+                updateState(_state.value.copy(callMode = callMode))
+            }
         },
         onTurnRefreshed = { _ -> },
         onSignalingPayload = { msg -> handleSignalingPayload(msg) },
@@ -426,7 +447,7 @@ class SerenadaSession internal constructor(
         override fun onMessage(message: PeerMessage) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${message.type}")
-                if (message.type == "content_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
+                if (message.type == "content_state" || message.type == "participant_media_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
                     signalingMessageRouter.processPeerMessage(message)
                 }
             }
@@ -476,6 +497,7 @@ class SerenadaSession internal constructor(
         val enabled = !_state.value.localAudioEnabled
         webRtcEngine.toggleAudio(enabled)
         updateState(_state.value.copy(localAudioEnabled = enabled))
+        broadcastLocalMediaState()
     }
 
     /** Toggle local video on or off. */
@@ -483,6 +505,7 @@ class SerenadaSession internal constructor(
         assertMainThread()
         userPreferredVideoEnabled = !_state.value.localVideoEnabled
         applyLocalVideoPreference()
+        broadcastLocalMediaState()
     }
 
     /** Cycle to the next camera mode (selfie -> world -> composite). */
@@ -692,13 +715,18 @@ class SerenadaSession internal constructor(
         recreateWebRtcEngineForNewCall()
         registerConnectivityListener()
 
+        val isVoiceMode = callMode == CallMode.VOICE
+        val defaultVideoEnabled = if (isVoiceMode) false else config.defaultVideoEnabled
+        userPreferredVideoEnabled = defaultVideoEnabled
+
         updateState(
             _state.value.copy(
                 phase = CallPhase.Joining,
+                callMode = callMode,
                 roomId = roomId,
                 error = null,
                 localAudioEnabled = config.defaultAudioEnabled,
-                localVideoEnabled = config.defaultVideoEnabled,
+                localVideoEnabled = defaultVideoEnabled,
                 remoteParticipants = emptyList(),
                 localCameraMode = LocalCameraMode.SELFIE,
                 connectionStatus = ConnectionStatus.Connected,
@@ -710,7 +738,11 @@ class SerenadaSession internal constructor(
 
         acquirePerformanceLocks()
         callAudioSessionController.activate()
-        webRtcEngine.startLocalMedia()
+        if (isVoiceMode) {
+            webRtcEngine.startLocalAudioOnly()
+        } else {
+            webRtcEngine.startLocalMedia()
+        }
 
         if (!config.defaultAudioEnabled) webRtcEngine.toggleAudio(false)
         applyLocalVideoPreference()
@@ -722,7 +754,11 @@ class SerenadaSession internal constructor(
     internal fun startWithPermissionCheck() {
         assertMainThread()
         awaitingPermissions = true
-        val permissions = listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE)
+        val permissions = if (callMode == CallMode.VOICE) {
+            listOf(MediaCapability.MICROPHONE)
+        } else {
+            listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE)
+        }
         updateState(
             _state.value.copy(
                 phase = CallPhase.AwaitingPermissions,
@@ -942,7 +978,10 @@ class SerenadaSession internal constructor(
         val displayNamesByCid = roomParticipants?.associate { it.cid to it.displayName } ?: emptyMap()
         val remoteParticipants = orderedRemoteCids.mapNotNull { cid ->
             val slot = peerSlots[cid] ?: return@mapNotNull null
-            RemoteParticipant(cid = cid, displayName = displayNamesByCid[cid], videoEnabled = slot.isRemoteVideoTrackEnabled(), connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
+            val mediaState = remoteMediaStates[cid]
+            val audioEnabled = mediaState?.audioEnabled ?: true
+            val videoEnabled = mediaState?.videoEnabled ?: slot.isRemoteVideoTrackEnabled()
+            RemoteParticipant(cid = cid, displayName = displayNamesByCid[cid], audioEnabled = audioEnabled, videoEnabled = videoEnabled, connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
         }
         val currentState = _state.value
         val currentDiagnostics = _diagnostics.value
@@ -976,6 +1015,11 @@ class SerenadaSession internal constructor(
         val nextDegradations = current.featureDegradations
             .filterNot { it.kind == degradation.kind } + degradation
         updateDiagnostics(current.copy(featureDegradations = nextDegradations))
+    }
+
+    private fun broadcastLocalMediaState() {
+        val state = _state.value
+        signalingMessageRouter.broadcastMediaState(state.localAudioEnabled, state.localVideoEnabled)
     }
 
     // --- Internal: Connection Status ---
@@ -1014,7 +1058,8 @@ class SerenadaSession internal constructor(
         webRtcStatsExecutor = null
         unregisterConnectivityListener()
         clientId = null; hostCid = null; currentRoomState = null; callStartTimeMs = null
-        pendingJoinRoom = null; pendingMessages.clear()
+        pendingJoinRoom = null; pendingMessages.clear(); remoteMediaStates.clear()
+        callMode = config.callMode
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
@@ -1049,7 +1094,12 @@ class SerenadaSession internal constructor(
     }
 
     private fun hasRequiredPermissions(): Boolean {
-        return REQUIRED_ANDROID_PERMISSIONS.all { permission ->
+        val permissions = if (callMode == CallMode.VOICE) {
+            VOICE_ANDROID_PERMISSIONS
+        } else {
+            VIDEO_ANDROID_PERMISSIONS
+        }
+        return permissions.all { permission ->
             appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
         }
     }
@@ -1057,8 +1107,11 @@ class SerenadaSession internal constructor(
     private companion object {
         const val TAG = "SerenadaSession"
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
-        val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
+        val VIDEO_ANDROID_PERMISSIONS = arrayOf(
             android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
+        )
+        val VOICE_ANDROID_PERMISSIONS = arrayOf(
             android.Manifest.permission.RECORD_AUDIO,
         )
     }

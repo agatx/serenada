@@ -316,6 +316,7 @@ private struct SessionFirstCallFlow: View {
         uiState.isFlashEnabled = diagnostics.isFlashEnabled
         uiState.remoteContentCid = diagnostics.remoteContentParticipantId
         uiState.remoteContentType = diagnostics.remoteContentType
+        uiState.callMode = state.callMode
         uiState.remoteParticipants = state.remoteParticipants.map { rp in
             RemoteParticipant(
                 cid: rp.cid,

@@ -147,7 +147,7 @@ const RecentCalls: React.FC<RecentCallsProps> = ({ calls, roomStatuses, savedRoo
                                 <tr
                                     key={`${call.roomId}-${index}`}
                                     className="recent-call-row"
-                                    onClick={() => navigate(`/call/${call.roomId}`)}
+                                    onClick={() => navigate(call.mode === 'voice' ? `/call/${call.roomId}?mode=voice` : `/call/${call.roomId}`)}
                                 >
                                     <td>
                                         <div className="recent-call-date-cell">

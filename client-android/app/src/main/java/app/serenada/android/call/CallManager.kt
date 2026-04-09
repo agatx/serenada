@@ -21,6 +21,7 @@ import app.serenada.android.push.PushSubscriptionManager
 import app.serenada.android.service.CallService
 import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallState
+import app.serenada.core.call.CallMode
 import app.serenada.core.RoomOccupancy
 import app.serenada.core.RoomWatcher
 import app.serenada.core.RoomWatcherDelegate
@@ -131,7 +132,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         refreshSavedRooms()
     }
 
-    private fun createSdkCore(host: String): SerenadaCore {
+    private fun createSdkCore(host: String, callMode: CallMode = CallMode.VIDEO): SerenadaCore {
         val transports =
             if (BuildConfig.FORCE_SSE_SIGNALING) {
                 listOf(SerenadaTransport.SSE)
@@ -142,10 +143,11 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             config = SerenadaConfig(
                 serverHost = host,
                 defaultAudioEnabled = settingsStore.isDefaultMicrophoneEnabled,
-                defaultVideoEnabled = settingsStore.isDefaultCameraEnabled,
+                defaultVideoEnabled = if (callMode == CallMode.VOICE) false else settingsStore.isDefaultCameraEnabled,
                 isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
                 transports = transports,
                 proximityMonitoringEnabled = true,
+                callMode = callMode,
             ),
             context = appContext,
         )
@@ -245,6 +247,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         updateState(
             previous.copy(
                 phase = state.phase,
+                callMode = state.callMode,
                 roomId = state.roomId ?: currentRoomId,
                 localCid = state.localCid,
                 statusMessageResId = statusMessageResId,
@@ -403,11 +406,13 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     }
 
     fun joinSavedRoom(room: SavedRoom) {
-        joinRoom(room.roomId, hostOverrideOrNull(room.host))
+        val mode = if (room.callMode == "voice") CallMode.VOICE else CallMode.VIDEO
+        joinRoom(room.roomId, hostOverrideOrNull(room.host), mode)
     }
 
     fun joinRecentCall(call: RecentCall) {
-        joinRoom(call.roomId, hostOverrideOrNull(call.host))
+        val mode = if (call.callMode == "voice") CallMode.VOICE else CallMode.VIDEO
+        joinRoom(call.roomId, hostOverrideOrNull(call.host), mode)
     }
 
     fun removeSavedRoom(roomId: String) {
@@ -474,7 +479,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             return
         }
         hostPolicy.persistedHost?.let { updateServerHost(it) }
-        joinRoom(roomId, hostPolicy.oneOffHost)
+        joinRoom(roomId, hostPolicy.oneOffHost, deepLinkTarget.callMode)
     }
 
     fun joinFromInput(input: String) {
@@ -499,7 +504,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                     val roomName = deepLinkTarget.savedRoomName ?: deepLinkTarget.roomId
                     saveRoom(deepLinkTarget.roomId, roomName, deepLinkTarget.host)
                 } else {
-                    joinRoom(deepLinkTarget.roomId, hostPolicy.oneOffHost)
+                    joinRoom(deepLinkTarget.roomId, hostPolicy.oneOffHost, deepLinkTarget.callMode)
                 }
                 return
             }
@@ -516,12 +521,14 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 savedRoomName != null -> DeepLinkAction.SaveRoom
                 else -> DeepLinkAction.Join
             }
+        val callMode = if (uri.getQueryParameter("mode") == "voice") CallMode.VOICE else CallMode.VIDEO
 
         return DeepLinkTarget(
             action = action,
             roomId = roomId,
             host = normalizeHostValue(uri.getQueryParameter("host")) ?: normalizeHostValue(uri.authority),
             savedRoomName = savedRoomName,
+            callMode = callMode,
         )
     }
 
@@ -529,7 +536,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         return uri.pathSegments.lastOrNull()?.takeIf { it.isNotBlank() }
     }
 
-    private fun buildSavedRoomInviteLink(host: String, roomId: String, roomName: String): String {
+    private fun buildSavedRoomInviteLink(host: String, roomId: String, roomName: String, callMode: CallMode? = null): String {
         val normalizedHost = normalizeHostValue(host) ?: host
         val appLinkHost =
             if (normalizedHost == SettingsStore.HOST_RU) {
@@ -537,15 +544,17 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             } else {
                 SettingsStore.DEFAULT_HOST
             }
-        return Uri.Builder()
+        val builder = Uri.Builder()
             .scheme("https")
             .authority(appLinkHost)
             .appendPath("call")
             .appendPath(roomId)
             .appendQueryParameter("host", normalizedHost)
             .appendQueryParameter("name", roomName)
-            .build()
-            .toString()
+        if (callMode == CallMode.VOICE) {
+            builder.appendQueryParameter("mode", "voice")
+        }
+        return builder.build().toString()
     }
 
     private fun normalizeHostValue(hostInput: String?): String? {
@@ -599,17 +608,18 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun isValidRoomId(roomId: String): Boolean = ROOM_ID_REGEX.matches(roomId)
 
-    fun startNewCall() {
+    fun startNewCall(callMode: CallMode = CallMode.VIDEO) {
         if (_uiState.value.phase != CallPhase.Idle || activeSession != null) return
         updateState(
             _uiState.value.copy(
                 phase = CallPhase.CreatingRoom,
+                callMode = callMode,
                 statusMessageResId = R.string.call_status_creating_room,
             ),
         )
         scope.launch {
             try {
-                val core = createSdkCore(serverHost.value)
+                val core = createSdkCore(serverHost.value, callMode)
                 val created = core.createRoom()
                 val session = core.join(roomId = created.roomId, displayName = resolvedDisplayName)
                 beginSdkSession(session)
@@ -627,7 +637,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         }
     }
 
-    fun joinRoom(roomId: String, oneOffHost: String? = null) {
+    fun joinRoom(roomId: String, oneOffHost: String? = null, callMode: CallMode = CallMode.VIDEO) {
         if (roomId.isBlank()) {
             updateState(
                 _uiState.value.copy(
@@ -642,7 +652,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             refreshSavedRooms()
         }
         val resolvedHost = normalizeHostValue(oneOffHost) ?: serverHost.value
-        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost, displayName = resolvedDisplayName)
+        val session = createSdkCore(resolvedHost, callMode).join(roomId, resolvedHost, displayName = resolvedDisplayName)
         beginSdkSession(session, hostOverride = oneOffHost)
     }
 
@@ -813,12 +823,14 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         val durationSeconds = ((System.currentTimeMillis() - startTime) / 1000L)
             .coerceAtLeast(0L)
             .toInt()
+        val mode = activeSession?.state?.value?.callMode
         recentCallStore.saveCall(
             RecentCall(
                 roomId = roomId,
                 startTime = startTime,
                 durationSeconds = durationSeconds,
                 host = currentSignalingHost(),
+                callMode = if (mode == CallMode.VOICE) "voice" else null,
             ),
         )
         callStartTimeMs = null
@@ -835,6 +847,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         val roomId: String,
         val host: String?,
         val savedRoomName: String?,
+        val callMode: CallMode = CallMode.VIDEO,
     )
 
     private data class DeepLinkHostPolicy(

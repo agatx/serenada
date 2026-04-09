@@ -26,6 +26,7 @@
 "join_settings" = "Configuración";
 "join_subtitle" = "Videollamadas privadas, sin cuentas.";
 "join_start_call" = "Iniciar llamada";
+"join_start_voice_call" = "Llamada de voz";
 "recent_calls_title" = "Tus llamadas recientes";
 "recent_calls_at" = "a las";
 "recent_calls_remove" = "Eliminar";

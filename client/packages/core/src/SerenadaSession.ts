@@ -1,6 +1,7 @@
 import type {
     ActiveTransport,
     CallErrorCode,
+    CallMode,
     CallState,
     CallStats,
     CameraMode,
@@ -108,7 +109,7 @@ function resolveHostCid(
 }
 
 function buildRoomState(
-    event: Pick<RoomStateEvent, 'participants' | 'hostPeerId' | 'maxParticipants'>,
+    event: Pick<RoomStateEvent, 'participants' | 'hostPeerId' | 'maxParticipants' | 'callMode'>,
     currentHostCid: string | null,
     localPeerId: string | null,
 ): RoomState {
@@ -117,6 +118,7 @@ function buildRoomState(
         hostCid: resolveHostCid(participants, event.hostPeerId ?? currentHostCid, localPeerId),
         participants,
         maxParticipants: event.maxParticipants,
+        mode: event.callMode,
     };
 }
 
@@ -227,6 +229,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
+    private callMode: CallMode;
+    private readonly remoteMediaStates = new Map<string, { audioEnabled: boolean; videoEnabled: boolean }>();
 
     private get isInactive(): boolean {
         return this._destroyed || this.terminated;
@@ -247,9 +251,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.signaling = signaling;
         this.handlesReconnection = signaling.capabilities?.handlesReconnection === true;
         this.displayName = deps.displayName;
+        this.callMode = config.callMode ?? 'video';
 
         this._state = {
             phase: 'joining',
+            callMode: this.callMode,
             roomId,
             roomUrl,
             localParticipant: null,
@@ -321,8 +327,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.permissionCheckDone = true;
-        const stream = await this.media.startLocalMedia();
+        const stream = await this.media.startLocalMedia({ videoEnabled: this.callMode !== 'voice' });
         if (stream) {
+            this.broadcastLocalMediaState();
             this.rebuildState();
         }
     }
@@ -416,6 +423,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.started = true;
         this.pendingJoinOptions = {
             displayName: this.displayName,
+            callMode: this.callMode,
         };
         this.scheduleJoinTimeout();
         this.signaling.connect();
@@ -479,7 +487,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.handlesReconnection) {
             this.reconnectRecoveryPending = hadRoomState;
         } else {
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
+            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName, callMode: this.callMode };
             this.scheduleReconnect();
         }
 
@@ -496,9 +504,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearJoinTimeout();
         this.error = null;
         this.clientId = event.peerId;
+        if (event.callMode) {
+            this.callMode = event.callMode;
+        }
         this.roomState = buildRoomState(event, null, event.peerId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
+        this.broadcastLocalMediaState();
         void this.fetchInitialIceServers();
     };
 
@@ -507,6 +519,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.error = null;
+        if (event.callMode) {
+            this.callMode = event.callMode;
+        }
         this.roomState = buildRoomState(event, this.roomState?.hostCid ?? null, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
@@ -537,6 +552,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         if (isMediaSignalingMessageType(message.type)) {
             this.media.processSignalingMessage(toMediaSignalingMessage(message));
+        }
+        if (message.type === 'participant_media_state') {
+            this.handleRemoteMediaState(message);
         }
         for (const listener of this.peerMessageListeners) {
             try {
@@ -662,7 +680,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             if (this.isInactive) {
                 return;
             }
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
+            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName, callMode: this.callMode };
             this.signaling.connect();
         }, delayMs);
     }
@@ -712,6 +730,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     ): void {
         this._state = {
             phase,
+            callMode: this.callMode,
             roomId: this.roomId,
             roomUrl: this.roomUrl,
             localParticipant: null,
@@ -751,8 +770,44 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private setTrackEnabled(kind: 'audio' | 'video', enabled?: boolean): void {
         const stream = this.media.localStream;
         if (!stream) return;
-        const track = kind === 'audio' ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
-        if (track) track.enabled = enabled ?? !track.enabled;
+
+        if (kind === 'video') {
+            const track = stream.getVideoTracks()[0];
+            if (!track && (enabled ?? true)) {
+                // Lazy camera acquisition (voice mode or missing video track)
+                void this.media.startLocalVideo().then(() => {
+                    this.broadcastLocalMediaState();
+                    this.rebuildState();
+                }).catch((err) => {
+                    this.config.logger?.log('error', 'Session', `Lazy camera start failed: ${formatError(err)}`);
+                });
+                return;
+            }
+            if (track) track.enabled = enabled ?? !track.enabled;
+        } else {
+            const track = stream.getAudioTracks()[0];
+            if (track) track.enabled = enabled ?? !track.enabled;
+        }
+        this.broadcastLocalMediaState();
+        this.rebuildState();
+    }
+
+    private broadcastLocalMediaState(): void {
+        const audioTrack = this.media.localStream?.getAudioTracks()[0];
+        const videoTrack = this.media.localStream?.getVideoTracks()[0];
+        this.signaling.broadcast('participant_media_state', {
+            audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
+            videoEnabled: videoTrack?.enabled ?? false,
+        });
+    }
+
+    private handleRemoteMediaState(message: PeerMessage): void {
+        const payload = message.payload as Record<string, unknown> | null;
+        if (!payload) return;
+        this.remoteMediaStates.set(message.from, {
+            audioEnabled: typeof payload.audioEnabled === 'boolean' ? payload.audioEnabled : true,
+            videoEnabled: typeof payload.videoEnabled === 'boolean' ? payload.videoEnabled : false,
+        });
         this.rebuildState();
     }
 
@@ -790,7 +845,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             cid: clientId,
             displayName: this.displayName,
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
-            videoEnabled: videoTrack?.enabled ?? (this.config.defaultVideoEnabled !== false),
+            videoEnabled: videoTrack?.enabled ?? (this.callMode === 'voice' ? false : this.config.defaultVideoEnabled !== false),
             cameraMode: (this.media.isScreenSharing
                 ? 'screenShare'
                 : this.media.facingMode === 'user'
@@ -799,18 +854,23 @@ export class SerenadaSession implements SerenadaSessionHandle {
             isHost: signalingState?.hostCid === clientId,
         } : null;
 
+        const defaultVideoEnabled = this.callMode === 'voice' ? false : true;
         const remoteParticipants = (signalingState?.participants ?? [])
             .filter((participant) => participant.cid !== clientId)
-            .map((participant) => ({
-                cid: participant.cid,
-                displayName: participant.displayName,
-                audioEnabled: true,
-                videoEnabled: true,
-                connectionState: this.media.connectionState,
-            }));
+            .map((participant) => {
+                const remoteState = this.remoteMediaStates.get(participant.cid);
+                return {
+                    cid: participant.cid,
+                    displayName: participant.displayName,
+                    audioEnabled: remoteState?.audioEnabled ?? true,
+                    videoEnabled: remoteState?.videoEnabled ?? defaultVideoEnabled,
+                    connectionState: this.media.connectionState,
+                };
+            });
 
         this._state = {
             phase,
+            callMode: this.callMode,
             roomId: this.roomId,
             roomUrl: this.roomUrl,
             localParticipant,
@@ -828,30 +888,37 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.permissionCheckDone || this.permissionCheckInFlight) return;
         this.permissionCheckInFlight = true;
 
+        const isVoice = this.callMode === 'voice';
         const permissionsNeeded: MediaCapability[] = [];
         try {
             if (navigator.permissions) {
-                const [cameraResult, micResult] = await Promise.all([
-                    navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
+                const queries: Promise<PermissionStatus | null>[] = [
                     navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
-                ]);
+                ];
+                if (!isVoice) {
+                    queries.push(navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null));
+                }
+                const results = await Promise.all(queries);
+                const micResult = results[0];
+                const cameraResult = isVoice ? null : results[1];
+
                 if (cameraResult?.state === 'denied') permissionsNeeded.push('camera');
                 if (micResult?.state === 'denied') permissionsNeeded.push('microphone');
 
-                if (cameraResult?.state === 'prompt' || micResult?.state === 'prompt') {
-                    const required: MediaCapability[] = [];
-                    if (cameraResult?.state === 'prompt') required.push('camera');
-                    if (micResult?.state === 'prompt') required.push('microphone');
+                const promptRequired: MediaCapability[] = [];
+                if (cameraResult?.state === 'prompt') promptRequired.push('camera');
+                if (micResult?.state === 'prompt') promptRequired.push('microphone');
+                if (promptRequired.length > 0) {
                     this.permissionCheckInFlight = false;
-                    this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: required };
+                    this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: promptRequired };
                     this.notifyListeners();
-                    this.onPermissionsRequired?.(required);
+                    this.onPermissionsRequired?.(promptRequired);
                     return;
                 }
             }
         } catch {
             this.permissionCheckInFlight = false;
-            const required: MediaCapability[] = ['camera', 'microphone'];
+            const required: MediaCapability[] = isVoice ? ['microphone'] : ['camera', 'microphone'];
             this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: required };
             this.notifyListeners();
             this.onPermissionsRequired?.(required);
@@ -868,7 +935,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
         this.permissionCheckDone = true;
         this.permissionCheckInFlight = false;
-        await this.media.startLocalMedia();
+        await this.media.startLocalMedia({ videoEnabled: !isVoice });
         this.rebuildState();
     }
 

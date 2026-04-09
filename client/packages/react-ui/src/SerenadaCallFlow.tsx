@@ -231,6 +231,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const [remoteVideoFit, setRemoteVideoFit] = useState<RemoteVideoFit>(() => getPersistedRemoteVideoFit());
     const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
     const [remoteContentState, setRemoteContentState] = useState<{ cid: string; contentType: ContentSource['type'] } | null>(null);
+    const [selectedVoiceParticipantId, setSelectedVoiceParticipantId] = useState<string | null>(null);
     const [remoteStageAspectRatios, setRemoteStageAspectRatios] = useState<Record<string, number>>({});
     const [stageViewportSize, setStageViewportSize] = useState(() => ({
         width: typeof window !== 'undefined' ? window.innerWidth : 0,
@@ -841,6 +842,81 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             {participantCount}
         </div>
     );
+
+    // Voice call UI
+    if (effectiveState.callMode === 'voice') {
+        const voiceVideoParticipants = effectiveState.remoteParticipants.filter(p => p.videoEnabled);
+        const activeVideoParticipant = voiceVideoParticipants.find(p => p.cid === selectedVoiceParticipantId) ?? voiceVideoParticipants[0] ?? null;
+        const activeVideoStream = activeVideoParticipant ? remoteStreams.get(activeVideoParticipant.cid) ?? null : null;
+
+        const voiceControlsBar = (
+            <div className="controls-bar" onPointerUp={(event) => { event.stopPropagation(); handleControlsInteraction(); }}>
+                <button type="button" onClick={handleToggleAudio} className={`btn-control ${isMuted ? 'active' : ''}`}>
+                    {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                </button>
+                <button type="button" onClick={handleToggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
+                    {isCameraOff ? <VideoOff size={22} /> : <Video size={22} />}
+                </button>
+                <button type="button" onClick={handleLeave} className="btn-control btn-leave">
+                    <PhoneOff size={22} />
+                </button>
+            </div>
+        );
+
+        return (
+            <div data-serenada-callflow="" className={`${rootClassName} voice-mode`} style={rootStyle} onPointerUp={handleScreenTap}>
+                {callProbe}
+                {overlayContent}
+                <div className="call-container voice-call-container">
+                    <div className="voice-call-header">
+                        {resolveString('voiceCall', strings) || 'Voice Call'} &middot; {participantCount} {participantCount === 1 ? 'person' : 'people'}
+                    </div>
+                    {activeVideoStream && (
+                        <div className="voice-video-tile">
+                            <VideoTile stream={activeVideoStream} videoFit="contain" />
+                        </div>
+                    )}
+                    {localParticipant?.videoEnabled && localStream && (
+                        <div className="voice-video-tile voice-local-video">
+                            <VideoTile stream={localStream} muted mirrored={shouldMirrorLocalVideo} />
+                        </div>
+                    )}
+                    <div className="voice-participant-list">
+                        {effectiveState.remoteParticipants.map((p) => (
+                            <div
+                                key={p.cid}
+                                className={`voice-participant-row ${p.cid === activeVideoParticipant?.cid ? 'active' : ''}`}
+                                onClick={() => p.videoEnabled ? setSelectedVoiceParticipantId(p.cid) : undefined}
+                            >
+                                <span className="voice-participant-name">{p.displayName || p.cid.slice(0, 8)}</span>
+                                <span className="voice-participant-icons">
+                                    {p.videoEnabled && <Video size={14} />}
+                                    {!p.audioEnabled && <MicOff size={14} />}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                    {showWaiting && effectiveState.phase === 'waiting' && (
+                        <div className="waiting-message">
+                            <div>{resolveString('waitingForOther', strings)}</div>
+                            {inviteControlsEnabled && shareUrl && (
+                                <div className="waiting-actions">
+                                    <div className="qr-code-container" aria-hidden={!shareUrl}>
+                                        <QRCode value={shareUrl} size={184} />
+                                    </div>
+                                    <button type="button" className="btn-small" onClick={handleCopy} onPointerUp={(event) => event.stopPropagation()}>
+                                        <Copy size={16} />
+                                        {copied ? resolveString('copied', strings) : resolveString('shareLink', strings)}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+                {voiceControlsBar}
+            </div>
+        );
+    }
 
     if (effectiveState.phase === 'inCall' && isMultiParty) {
         return (

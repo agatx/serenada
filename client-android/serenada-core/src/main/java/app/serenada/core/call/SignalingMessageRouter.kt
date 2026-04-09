@@ -8,6 +8,11 @@ import app.serenada.core.PeerMessage
 import app.serenada.core.RoomStateEvent
 import org.json.JSONObject
 
+internal data class RemoteMediaState(
+    val audioEnabled: Boolean = true,
+    val videoEnabled: Boolean = false,
+)
+
 /**
  * Routes inbound signaling messages to the appropriate handler.
  * Extracted from SerenadaSession to reduce its size; state ownership stays in the session.
@@ -24,6 +29,8 @@ internal class SignalingMessageRouter(
     private val onError: (CallError) -> Unit,
     private val onRoomEnded: () -> Unit,
     private val onContentStateReceived: (fromCid: String, active: Boolean, contentType: String?) -> Unit,
+    private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean, videoEnabled: Boolean) -> Unit,
+    private val onCallModeUpdated: (CallMode) -> Unit,
     private val onTurnRefreshed: (SignalingMessage) -> Unit,
     private val onSignalingPayload: (SignalingMessage) -> Unit,
     private val onPong: () -> Unit,
@@ -47,6 +54,7 @@ internal class SignalingMessageRouter(
             "turn-refreshed" -> onTurnRefreshed(msg)
             "offer", "answer", "ice" -> onSignalingPayload(msg)
             "content_state" -> handleContentState(msg)
+            "participant_media_state" -> handleMediaState(msg)
             "error" -> handleError(msg)
         }
     }
@@ -57,6 +65,14 @@ internal class SignalingMessageRouter(
             if (active && contentType != null) put("contentType", contentType)
         }
         sendMessage("content_state", payload, null)
+    }
+
+    fun broadcastMediaState(audioEnabled: Boolean, videoEnabled: Boolean) {
+        val payload = JSONObject().apply {
+            put("audioEnabled", audioEnabled)
+            put("videoEnabled", videoEnabled)
+        }
+        sendMessage("participant_media_state", payload, null)
     }
 
     // --- Direct-dispatch methods for provider events ---
@@ -76,6 +92,7 @@ internal class SignalingMessageRouter(
             RoomState(hostCid = hostPeerId, participants = participants, maxParticipants = event.maxParticipants)
         } else null
         onJoined(cid, roomState?.hostCid, roomState, null, null, null)
+        event.callMode?.let { onCallModeUpdated(it) }
     }
 
     fun processRoomStateEvent(event: RoomStateEvent) {
@@ -91,6 +108,7 @@ internal class SignalingMessageRouter(
         val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), localPeerId)
         if (hostPeerId.isNullOrBlank()) return
         onRoomStateUpdated(RoomState(hostCid = hostPeerId, participants = participants, maxParticipants = event.maxParticipants))
+        event.callMode?.let { onCallModeUpdated(it) }
     }
 
     fun processPeerMessage(message: PeerMessage) {
@@ -102,6 +120,13 @@ internal class SignalingMessageRouter(
                 val active = payload?.optBoolean("active") ?: false
                 val contentType = if (active) payload?.optString("contentType")?.ifBlank { null } else null
                 onContentStateReceived(fromCid, active, contentType)
+            }
+            "participant_media_state" -> {
+                val payload = message.payload
+                val fromCid = payload?.optString("from")?.ifBlank { null } ?: message.from
+                val audioEnabled = payload?.optBoolean("audioEnabled") ?: true
+                val videoEnabled = payload?.optBoolean("videoEnabled") ?: false
+                onMediaStateReceived(fromCid, audioEnabled, videoEnabled)
             }
             "offer", "answer", "ice" -> {
                 val base = message.payload ?: JSONObject()
@@ -147,19 +172,27 @@ internal class SignalingMessageRouter(
         val roomState = parseRoomState(msg.payload)
 
         onJoined(cid, roomState?.hostCid, roomState, turnToken, turnTTL, reconnectToken)
+        payload?.callMode?.let { onCallModeUpdated(it) }
     }
 
     private fun handleRoomState(msg: SignalingMessage) {
         clearJoinTimers()
         setJoinAcknowledged()
 
+        val parsed = msg.payload.toRoomStatePayload()
         val roomState = parseRoomState(msg.payload) ?: return
         onRoomStateUpdated(roomState)
+        parsed?.callMode?.let { onCallModeUpdated(it) }
     }
 
     private fun handleContentState(msg: SignalingMessage) {
         val payload = msg.payload.toContentStatePayload() ?: return
         onContentStateReceived(payload.fromCid, payload.active, payload.contentType)
+    }
+
+    private fun handleMediaState(msg: SignalingMessage) {
+        val payload = msg.payload.toMediaStatePayload() ?: return
+        onMediaStateReceived(payload.fromCid, payload.audioEnabled, payload.videoEnabled)
     }
 
     private fun handleError(msg: SignalingMessage) {

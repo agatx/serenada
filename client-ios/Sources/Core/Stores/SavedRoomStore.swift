@@ -28,7 +28,8 @@ final class SavedRoomStore {
             name: normalizedName,
             createdAt: max(1, room.createdAt),
             host: normalizedHost,
-            lastJoinedAt: validTimestamp(room.lastJoinedAt) ?? validTimestamp(existing?.lastJoinedAt)
+            lastJoinedAt: validTimestamp(room.lastJoinedAt) ?? validTimestamp(existing?.lastJoinedAt),
+            callMode: room.callMode ?? existing?.callMode
         )
         rooms.insert(entry, at: 0)
         persist(Array(rooms.prefix(maxSavedRooms)))
@@ -52,7 +53,8 @@ final class SavedRoomStore {
                     name: normalizedName,
                     createdAt: max(1, room.createdAt),
                     host: normalizeHostValue(room.host),
-                    lastJoinedAt: validTimestamp(room.lastJoinedAt)
+                    lastJoinedAt: validTimestamp(room.lastJoinedAt),
+                    callMode: room.callMode
                 )
             )
             if deduped.count >= maxSavedRooms {
@@ -95,7 +97,8 @@ final class SavedRoomStore {
             name: room.name,
             createdAt: room.createdAt,
             host: room.host,
-            lastJoinedAt: normalizedJoinedAt
+            lastJoinedAt: normalizedJoinedAt,
+            callMode: room.callMode
         )
         persist(rooms)
         return true

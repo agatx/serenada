@@ -1,12 +1,14 @@
 package app.serenada.core
 
 import android.os.Handler
+import app.serenada.core.call.CallMode
 import app.serenada.core.call.SessionSignaling
 import app.serenada.core.call.SignalingClient
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.call.toErrorPayload
 import app.serenada.core.call.toJoinedPayload
+import app.serenada.core.call.toMediaStatePayload
 import app.serenada.core.call.toRoomStatePayload
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
@@ -58,6 +60,7 @@ internal class SerenadaServerProvider(
     private var closedByClient = false
     private var pendingJoinRoomId: String? = null
     private var currentDisplayName: String? = null
+    private var currentCallMode: CallMode? = null
 
     override fun connect() {
         closedByClient = false
@@ -81,6 +84,9 @@ internal class SerenadaServerProvider(
         currentReconnectPeerId = options.reconnectPeerId
         if (options.displayName != null) {
             currentDisplayName = options.displayName
+        }
+        if (options.callMode != null) {
+            currentCallMode = options.callMode
         }
         if (signaling.isConnected()) {
             pendingJoinRoomId = null
@@ -199,7 +205,7 @@ internal class SerenadaServerProvider(
                         }
                 }
             }
-            "offer", "answer", "ice", "content_state" -> emitPeerMessage(message)
+            "offer", "answer", "ice", "content_state", "participant_media_state" -> emitPeerMessage(message)
             "pong" -> signaling.recordPong()
         }
     }
@@ -224,6 +230,7 @@ internal class SerenadaServerProvider(
                 participants = participants,
                 hostPeerId = payload.hostCid,
                 maxParticipants = payload.maxParticipants,
+                callMode = payload.callMode,
             )
         )
     }
@@ -243,6 +250,7 @@ internal class SerenadaServerProvider(
                 participants = participants,
                 hostPeerId = payload.hostCid,
                 maxParticipants = payload.maxParticipants,
+                callMode = payload.callMode,
             )
         )
     }
@@ -278,6 +286,9 @@ internal class SerenadaServerProvider(
                 }
             )
             put("createMaxParticipants", currentMaxParticipants)
+            if (currentCallMode == CallMode.VOICE) {
+                put("mode", "voice")
+            }
             currentDisplayName?.let { put("displayName", it) }
             reconnectToken?.let { put("reconnectToken", it) }
             currentReconnectPeerId?.let { put("reconnectCid", it) }
@@ -313,6 +324,7 @@ internal class SerenadaServerProvider(
         previousParticipants.clear()
         clientId = null
         reconnectToken = null
+        currentCallMode = null
     }
 
     private fun scheduleReconnect() {

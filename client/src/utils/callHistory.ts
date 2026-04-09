@@ -2,6 +2,7 @@ export interface RecentCall {
     roomId: string;
     startTime: number;
     duration: number; // in seconds
+    mode?: 'video' | 'voice';
 }
 
 const STORAGE_KEY = 'serenada_call_history';

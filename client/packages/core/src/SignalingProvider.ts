@@ -10,6 +10,7 @@ export interface JoinOptions {
     reconnectPeerId?: string;
     maxParticipants?: number;
     displayName?: string;
+    callMode?: 'video' | 'voice';
 }
 
 export interface SignalingProviderParticipant {
@@ -23,12 +24,14 @@ export interface JoinedEvent {
     participants: SignalingProviderParticipant[];
     hostPeerId?: string;
     maxParticipants?: number;
+    callMode?: 'video' | 'voice';
 }
 
 export interface RoomStateEvent {
     participants: SignalingProviderParticipant[];
     hostPeerId?: string;
     maxParticipants?: number;
+    callMode?: 'video' | 'voice';
 }
 
 export interface PeerEvent {

@@ -401,6 +401,10 @@ fun SerenadaAppRoot(
                             callManager.updateServerHost(hostInput)
                             runWithCallPermissions { callManager.startNewCall() }
                         },
+                        onStartVoiceCall = {
+                            callManager.updateServerHost(hostInput)
+                            runWithCallPermissions { callManager.startNewCall(app.serenada.core.call.CallMode.VOICE) }
+                        },
                         onJoinRecentCall = { call ->
                             runWithCallPermissions { callManager.joinRecentCall(call) }
                         },

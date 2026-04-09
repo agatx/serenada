@@ -15,12 +15,14 @@ internal data class JoinedPayload(
     val turnTokenTTLMs: Long?,
     val reconnectToken: String?,
     val maxParticipants: Int?,
+    val callMode: CallMode?,
 )
 
 internal data class RoomStatePayload(
     val hostCid: String?,
     val participants: List<Participant>,
     val maxParticipants: Int?,
+    val callMode: CallMode?,
 )
 
 internal data class ErrorPayload(
@@ -34,6 +36,12 @@ internal data class ContentStatePayload(
     val contentType: String?,
 )
 
+internal data class MediaStatePayload(
+    val fromCid: String,
+    val audioEnabled: Boolean,
+    val videoEnabled: Boolean,
+)
+
 // --- Extension parsers ---
 
 internal fun JSONObject?.toJoinedPayload(): JoinedPayload? {
@@ -45,6 +53,7 @@ internal fun JSONObject?.toJoinedPayload(): JoinedPayload? {
         turnTokenTTLMs = if (has("turnTokenTTLMs")) optLong("turnTokenTTLMs", 0).takeIf { it > 0 } else null,
         reconnectToken = optString("reconnectToken").ifBlank { null },
         maxParticipants = optInt("maxParticipants", 0).takeIf { it > 0 },
+        callMode = optString("mode").parseCallMode(),
     )
 }
 
@@ -54,6 +63,7 @@ internal fun JSONObject?.toRoomStatePayload(): RoomStatePayload? {
         hostCid = optString("hostCid").ifBlank { null },
         participants = optJSONArray("participants").toParticipantList(),
         maxParticipants = optInt("maxParticipants", 0).takeIf { it > 0 },
+        callMode = optString("mode").parseCallMode(),
     )
 }
 
@@ -77,7 +87,27 @@ internal fun JSONObject?.toContentStatePayload(): ContentStatePayload? {
     )
 }
 
+internal fun JSONObject?.toMediaStatePayload(): MediaStatePayload? {
+    this ?: return null
+    val fromCid = optString("from").ifBlank { return null }
+    val audioEnabled = if (has("audioEnabled")) optBoolean("audioEnabled", true) else true
+    val videoEnabled = if (has("videoEnabled")) optBoolean("videoEnabled", false) else false
+    return MediaStatePayload(
+        fromCid = fromCid,
+        audioEnabled = audioEnabled,
+        videoEnabled = videoEnabled,
+    )
+}
+
 // --- Helpers ---
+
+private fun String?.parseCallMode(): CallMode? {
+    return when (this) {
+        "voice" -> CallMode.VOICE
+        "video" -> CallMode.VIDEO
+        else -> null
+    }
+}
 
 internal fun JSONArray?.toParticipantList(): List<Participant> {
     this ?: return emptyList()

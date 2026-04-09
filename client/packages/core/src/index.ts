@@ -22,6 +22,7 @@ export function createSerenadaDiagnostics(config: SerenadaConfig): _SerenadaDiag
 // Public types
 export type {
     CallPhase,
+    CallMode,
     ConnectionStatus,
     ActiveTransport,
     CameraMode,

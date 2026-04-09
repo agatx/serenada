@@ -115,7 +115,7 @@ describe('SerenadaCore', () => {
             expect(provider.joinRoomCalls).toEqual([
                 {
                     roomId: 'ROOM1',
-                    options: { displayName: 'Alice' },
+                    options: { displayName: 'Alice', callMode: 'video' },
                 },
             ]);
             session.destroy();
@@ -146,7 +146,7 @@ describe('SerenadaCore', () => {
             expect(provider.joinRoomCalls).toEqual([
                 {
                     roomId: 'MY_ROOM',
-                    options: { displayName: 'Alice' },
+                    options: { displayName: 'Alice', callMode: 'video' },
                 },
             ]);
             session.destroy();

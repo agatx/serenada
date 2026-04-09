@@ -7,6 +7,7 @@ export interface JoinedPayload {
     turnTokenTTLMs?: number;
     reconnectToken?: string;
     maxParticipants?: number;
+    mode?: 'video' | 'voice';
 }
 
 export interface ErrorPayload {
@@ -62,6 +63,7 @@ export function parseJoinedPayload(raw: Record<string, unknown> | undefined): Jo
         turnTokenTTLMs: typeof raw.turnTokenTTLMs === 'number' ? raw.turnTokenTTLMs : undefined,
         reconnectToken: typeof raw.reconnectToken === 'string' ? raw.reconnectToken : undefined,
         maxParticipants: typeof raw.maxParticipants === 'number' ? raw.maxParticipants : undefined,
+        mode: raw.mode === 'voice' ? 'voice' : 'video',
     };
 }
 
@@ -73,6 +75,7 @@ export function parseRoomStatePayload(raw: Record<string, unknown> | undefined):
         hostCid: typeof raw.hostCid === 'string' ? raw.hostCid : null,
         participants,
         maxParticipants: typeof raw.maxParticipants === 'number' ? raw.maxParticipants : undefined,
+        mode: raw.mode === 'voice' ? 'voice' : 'video',
     };
 }
 

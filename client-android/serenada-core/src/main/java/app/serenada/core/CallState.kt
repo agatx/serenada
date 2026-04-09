@@ -1,5 +1,6 @@
 package app.serenada.core
 
+import app.serenada.core.call.CallMode
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.LocalCameraMode
@@ -12,6 +13,8 @@ import app.serenada.core.call.RemoteParticipant
 data class CallState(
     /** Current call lifecycle phase. */
     val phase: CallPhase = CallPhase.Idle,
+    /** Call mode: video or voice. */
+    val callMode: CallMode = CallMode.VIDEO,
     /** Room identifier for this call. */
     val roomId: String? = null,
     /** Local client identifier assigned by the server. */

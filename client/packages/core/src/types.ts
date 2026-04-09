@@ -14,6 +14,9 @@ export type ActiveTransport = TransportKind | (string & {});
 /** Camera mode: selfie (front), world (rear), composite (picture-in-picture), or screen share. */
 export type CameraMode = 'selfie' | 'world' | 'composite' | 'screenShare';
 
+/** Call mode: video (default) or voice (audio-only with optional camera sharing). */
+export type CallMode = 'video' | 'voice';
+
 /** Device media capability that may require user permission. */
 export type MediaCapability = 'camera' | 'microphone';
 
@@ -62,6 +65,7 @@ export interface CallError {
  */
 export interface CallState {
     phase: CallPhase;
+    callMode: CallMode;
     roomId: string | null;
     roomUrl: string | null;
     localParticipant: LocalParticipant | null;
@@ -88,6 +92,8 @@ export interface SerenadaConfig {
     turnsOnly?: boolean;
     /** Custom logger for SDK diagnostic output. */
     logger?: SerenadaLogger;
+    /** Call mode: 'video' (default) or 'voice' (audio-only with optional camera sharing). */
+    callMode?: CallMode;
 }
 
 /** Result of creating a new room via {@link SerenadaCore.createRoom}. */
