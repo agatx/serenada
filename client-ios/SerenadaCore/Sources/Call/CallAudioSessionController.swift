@@ -50,8 +50,9 @@ internal final class CallAudioSessionController: SessionAudioController {
             logger?.log(.error, tag: "Audio", "failed to activate audio session: \(error)")
         }
 
+        startAudioRouteMonitoring()
         if proximityMonitoringEnabled {
-            startMonitoring()
+            startProximityMonitoring()
         }
         applyCallAudioRouting()
         onAudioEnvironmentChanged()
@@ -59,12 +60,13 @@ internal final class CallAudioSessionController: SessionAudioController {
 
     public func deactivate() {
         guard audioSessionActive else {
-            stopMonitoring()
+            stopProximityMonitoring()
             return
         }
 
         audioSessionActive = false
-        stopMonitoring()
+        stopAudioRouteMonitoring()
+        stopProximityMonitoring()
 
         do {
             try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
@@ -77,15 +79,21 @@ internal final class CallAudioSessionController: SessionAudioController {
         proximityMonitoringActive && isProximityNear && !isScreenSharing && !isBluetoothHeadsetConnected()
     }
 
-    private func startMonitoring() {
-        guard !proximityMonitoringActive else { return }
-
+    private func startAudioRouteMonitoring() {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAudioRouteChange(_:)),
             name: AVAudioSession.routeChangeNotification,
             object: nil
         )
+    }
+
+    private func stopAudioRouteMonitoring() {
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
+    }
+
+    private func startProximityMonitoring() {
+        guard !proximityMonitoringActive else { return }
 
         UIDevice.current.isProximityMonitoringEnabled = true
         NotificationCenter.default.addObserver(
@@ -99,13 +107,12 @@ internal final class CallAudioSessionController: SessionAudioController {
         isProximityNear = UIDevice.current.proximityState
     }
 
-    private func stopMonitoring() {
+    private func stopProximityMonitoring() {
         guard proximityMonitoringActive else {
             isProximityNear = false
             return
         }
 
-        NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: UIDevice.proximityStateDidChangeNotification, object: nil)
 
         UIDevice.current.isProximityMonitoringEnabled = false
