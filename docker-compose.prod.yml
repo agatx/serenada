@@ -31,3 +31,7 @@ services:
       - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf
       - ./nginx/conf.d:/etc/nginx/conf.d
       - /etc/letsencrypt:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+
+volumes:
+  certbot-webroot:
