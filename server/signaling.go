@@ -734,9 +734,28 @@ func (h *Hub) handleMediaState(c *Client, msg Message) {
 	if payload.VideoEnabled != nil {
 		room.VideoEnabled[c.cid] = payload.VideoEnabled
 	}
-	room.mu.Unlock()
 
-	h.broadcastRoomState(room)
+	// Relay as peer message (like offer/answer/ice) instead of broadcasting
+	// room_state, which causes participant reordering and full UI rebuilds.
+	// The stored state is still included in joined/room_state for late joiners.
+	var rawPayload map[string]interface{}
+	if err := json.Unmarshal(msg.Payload, &rawPayload); err != nil {
+		rawPayload = make(map[string]interface{})
+	}
+	rawPayload["from"] = c.cid
+	newPayload, _ := json.Marshal(rawPayload)
+	relayMsg := Message{
+		V:       1,
+		Type:    msg.Type,
+		RID:     c.rid,
+		Payload: newPayload,
+	}
+	for client, cid := range room.Participants {
+		if cid != c.cid {
+			client.sendMessage(relayMsg)
+		}
+	}
+	room.mu.Unlock()
 }
 
 func (h *Hub) disconnectClient(c *Client) {

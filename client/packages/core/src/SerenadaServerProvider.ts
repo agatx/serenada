@@ -184,6 +184,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             case 'answer':
             case 'ice':
             case 'content_state':
+            case 'participant_media_state':
                 this.emitPeerMessage(message);
                 break;
         }
