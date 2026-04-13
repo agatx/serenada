@@ -24,6 +24,8 @@ data class CallState(
     val localAudioEnabled: Boolean = true,
     /** Whether local video is currently enabled. */
     val localVideoEnabled: Boolean = true,
+    /** Local participant display name, if set. */
+    val localDisplayName: String? = null,
     /** List of remote participants with their current state. */
     val remoteParticipants: List<RemoteParticipant> = emptyList(),
     /** Network connection status. */

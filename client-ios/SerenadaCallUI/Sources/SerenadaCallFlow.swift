@@ -301,6 +301,7 @@ private struct SessionFirstCallFlow: View {
         uiState.isHost = state.localParticipant.isHost
         uiState.localAudioEnabled = state.localParticipant.audioEnabled
         uiState.localVideoEnabled = state.localParticipant.videoEnabled
+        uiState.localDisplayName = state.localParticipant.displayName
         uiState.localCameraMode = state.localParticipant.cameraMode
         uiState.connectionStatus = mapConnectionStatus(state.connectionStatus)
         uiState.activeTransport = diagnostics.activeTransport

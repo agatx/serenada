@@ -48,9 +48,9 @@ func primaryLocalVideoContentMode(localCameraMode: LocalCameraMode) -> UIView.Co
 
 func pipBottomPadding(isLandscape: Bool, areControlsVisible: Bool) -> CGFloat {
     if isLandscape {
-        return areControlsVisible ? 92 : 24
+        return areControlsVisible ? 80 : 24
     }
-    return areControlsVisible ? 170 : 52
+    return areControlsVisible ? 140 : 52
 }
 
 enum DebugStatus {
@@ -333,6 +333,7 @@ struct CallScreenView: View {
                     localCid: uiState.localCid,
                     localVideoEnabled: uiState.localVideoEnabled,
                     localAudioEnabled: uiState.localAudioEnabled,
+                    localDisplayName: uiState.localDisplayName,
                     localMirror: uiState.isFrontCamera,
                     localCameraMode: uiState.localCameraMode,
                     isScreenSharing: uiState.isScreenSharing,
@@ -367,10 +368,9 @@ struct CallScreenView: View {
                         showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
                         placeholderText: str(.callLocalCameraOff)
                     )
-                    if !uiState.localAudioEnabled {
-                        MutedBadge().padding(6)
-                    }
+                    ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName)
                 }
+                .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallRemoteView
             } else {
                 ZStack(alignment: .bottomLeading) {
@@ -383,10 +383,9 @@ struct CallScreenView: View {
                         ),
                         placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil
                     )
-                    if uiState.remoteParticipants.first?.audioEnabled == false {
-                        MutedBadge().padding(6)
-                    }
+                    ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
                 }
+                .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallLocalView
             }
 
@@ -532,9 +531,7 @@ struct CallScreenView: View {
                 VideoPlaceholderTile(text: str(.callCameraOff), compact: true)
             }
 
-            if !uiState.localAudioEnabled {
-                MutedBadge()
-            }
+            ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName)
         }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -558,9 +555,7 @@ struct CallScreenView: View {
                 VideoPlaceholderTile(text: uiState.phase == .inCall ? str(.callVideoOff) : nil, compact: true)
             }
 
-            if uiState.remoteParticipants.first?.audioEnabled == false {
-                MutedBadge()
-            }
+            ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
         }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -873,6 +868,7 @@ private struct MultiPartyStage: View {
     let localCid: String?
     let localVideoEnabled: Bool
     let localAudioEnabled: Bool
+    let localDisplayName: String?
     let localMirror: Bool
     let localCameraMode: LocalCameraMode
     let isScreenSharing: Bool
@@ -908,7 +904,7 @@ private struct MultiPartyStage: View {
     var body: some View {
         GeometryReader { geometry in
             let availableWidth = geometry.size.width - outerPadding * 2
-            let availableHeight = max(0, geometry.size.height - (20 + bottomPadding + 12))
+            let availableHeight = max(0, geometry.size.height - (20 + bottomPadding + 4))
             let useComputedLayout = localCid != nil && (pinnedParticipantId != nil || hasContentSource)
 
             if useComputedLayout, let localCid {
@@ -950,7 +946,7 @@ private struct MultiPartyStage: View {
                 let layoutResult = computeLayout(scene: CallScene(
                     viewportWidth: geometry.size.width,
                     viewportHeight: geometry.size.height,
-                    safeAreaInsets: LayoutInsets(top: 20, bottom: bottomPadding + 12, left: 0, right: 0),
+                    safeAreaInsets: LayoutInsets(top: 20, bottom: bottomPadding + 4, left: 0, right: 0),
                     participants: participants,
                     localParticipantId: localCid,
                     activeSpeakerId: nil,
@@ -1044,20 +1040,12 @@ private struct MultiPartyStage: View {
                                 }
                             }
 
-                            // Muted badge
                             if !isContentTile {
-                                let tileAudioMuted = isLocal
-                                    ? !localAudioEnabled
-                                    : remoteParticipants.first(where: { $0.cid == tile.id })?.audioEnabled == false
-                                if tileAudioMuted {
-                                    VStack {
-                                        Spacer()
-                                        HStack {
-                                            MutedBadge().padding(6)
-                                            Spacer()
-                                        }
-                                    }
-                                }
+                                let tileRemote = isLocal ? nil : remoteParticipants.first(where: { $0.cid == tile.id })
+                                let tileAudioMuted = isLocal ? !localAudioEnabled : tileRemote?.audioEnabled == false
+                                let tileName = isLocal ? localDisplayName : tileRemote?.displayName
+                                ParticipantBadge(muted: tileAudioMuted, displayName: tileName)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                             }
                         }
                         .frame(width: tile.frame.width, height: tile.frame.height)
@@ -1136,11 +1124,12 @@ private struct MultiPartyStage: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal, outerPadding)
                     .padding(.top, 20)
-                    .padding(.bottom, bottomPadding + 12)
+                    .padding(.bottom, bottomPadding + 4)
 
                     MultiPartyLocalPip(
                         localVideoEnabled: localVideoEnabled,
                         localAudioEnabled: localAudioEnabled,
+                        localDisplayName: localDisplayName,
                         localMirror: localMirror,
                         cornerRadius: pipCornerRadius,
                         rendererProvider: rendererProvider,
@@ -1178,9 +1167,7 @@ private struct RemoteParticipantStageTile: View {
             if !participant.videoEnabled {
                 VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false)
             }
-            if participant.audioEnabled == false {
-                MutedBadge()
-            }
+            ParticipantBadge(muted: participant.audioEnabled == false, displayName: participant.displayName)
         }
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -1194,6 +1181,7 @@ private struct RemoteParticipantStageTile: View {
 private struct MultiPartyLocalPip: View {
     let localVideoEnabled: Bool
     let localAudioEnabled: Bool
+    let localDisplayName: String?
     let localMirror: Bool
     let cornerRadius: CGFloat
     let rendererProvider: CallRendererProvider
@@ -1212,9 +1200,7 @@ private struct MultiPartyLocalPip: View {
             } else {
                 VideoPlaceholderTile(text: resolveString(.callCameraOff, overrides: strings), compact: true)
             }
-            if !localAudioEnabled {
-                MutedBadge()
-            }
+            ParticipantBadge(muted: !localAudioEnabled, displayName: localDisplayName)
         }
         .frame(width: 100, height: 150)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -1249,14 +1235,30 @@ struct VideoPlaceholderTile: View {
     }
 }
 
-private struct MutedBadge: View {
+private struct ParticipantBadge: View {
+    var muted: Bool = false
+    var displayName: String? = nil
+
     var body: some View {
-        Image(systemName: "mic.slash.fill")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color(red: 0.94, green: 0.27, blue: 0.27))
-            .padding(6)
+        if muted || displayName != nil {
+            HStack(spacing: 4) {
+                if muted {
+                    Image(systemName: "mic.slash.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.94, green: 0.27, blue: 0.27))
+                }
+                if let name = displayName {
+                    Text(name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
             .background(Color.black.opacity(0.56))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .padding(6)
+        }
     }
 }

@@ -66,6 +66,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -329,7 +330,7 @@ internal fun CallScreen(
                         uiState.connectionState == "CONNECTED")
         val animatedPipBottomPadding by
         animateDpAsState(
-            targetValue = if (areControlsVisible) 160.dp else 48.dp,
+            targetValue = if (areControlsVisible) 130.dp else 48.dp,
             animationSpec = tween(durationMillis = controlsAnimationDuration),
             label = "pip_bottom_padding"
         )
@@ -341,8 +342,13 @@ internal fun CallScreen(
         val pipContentPadding = 2.5.dp
         val pipInnerCornerRadius =
             if (pipCornerRadius > pipContentPadding) pipCornerRadius - pipContentPadding else 0.dp
+        val mainVideoBottomPadding by animateDpAsState(
+            targetValue = if (areControlsVisible) 134.dp else 0.dp,
+            animationSpec = tween(durationMillis = controlsAnimationDuration),
+            label = "main_video_bottom_padding"
+        )
         val mainModifier =
-            Modifier.fillMaxSize().clickable(
+            Modifier.fillMaxWidth().fillMaxHeight().padding(bottom = mainVideoBottomPadding).clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) { toggleControlsVisibility() }
@@ -385,6 +391,7 @@ internal fun CallScreen(
                 localCid = uiState.localCid,
                 localVideoEnabled = uiState.localVideoEnabled,
                 localAudioEnabled = uiState.localAudioEnabled,
+                localDisplayName = uiState.localDisplayName,
                 localMirror = uiState.isFrontCamera && !uiState.isScreenSharing,
                 localCameraMode = uiState.localCameraMode,
                 isScreenSharing = uiState.isScreenSharing,
@@ -549,17 +556,21 @@ internal fun CallScreen(
             }
         }
 
-        // Muted badge on local tile (two-party view)
-        if (!isMultiParty && !uiState.localAudioEnabled) {
+        if (!isMultiParty) {
+            val remoteP = uiState.remoteParticipants.firstOrNull()
             Box(modifier = localModifier) {
-                MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
+                ParticipantBadge(
+                    modifier = Modifier.align(Alignment.BottomStart),
+                    muted = !uiState.localAudioEnabled,
+                    displayName = uiState.localDisplayName,
+                )
             }
-        }
-
-        // Muted badge on remote tile (two-party view)
-        if (!isMultiParty && uiState.remoteParticipants.firstOrNull()?.audioEnabled == false) {
             Box(modifier = remoteModifier) {
-                MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
+                ParticipantBadge(
+                    modifier = Modifier.align(Alignment.BottomStart),
+                    muted = remoteP?.audioEnabled == false,
+                    displayName = remoteP?.displayName,
+                )
             }
         }
 
@@ -1346,6 +1357,7 @@ private fun MultiPartyStage(
     localCid: String?,
     localVideoEnabled: Boolean,
     localAudioEnabled: Boolean,
+    localDisplayName: String?,
     localMirror: Boolean,
     localCameraMode: LocalCameraMode,
     isScreenSharing: Boolean,
@@ -1392,7 +1404,7 @@ private fun MultiPartyStage(
                 val fullWidthPx = with(density) { maxWidth.toPx() }
                 val fullHeightPx = with(density) { maxHeight.toPx() }
                 val topChromePx = with(density) { 20.dp.toPx() }
-                val bottomChromePx = with(density) { (bottomPadding + 12.dp).toPx() }
+                val bottomChromePx = with(density) { (bottomPadding + 4.dp).toPx() }
 
                 if (useComputedLayout && localCid != null) {
                 // Focus/content mode: use computeLayout for primary + filmstrip rendering
@@ -1597,12 +1609,11 @@ private fun MultiPartyStage(
                                     )
                                 }
                             }
-                            // Muted badge
-                            val tileAudioMuted = if (isContentTile) false
-                                else if (isLocal) !localAudioEnabled
-                                else remoteParticipants.find { it.cid == tile.id }?.audioEnabled == false
-                            if (tileAudioMuted) {
-                                MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
+                            if (!isContentTile) {
+                                val tileRemote = if (isLocal) null else remoteParticipants.find { it.cid == tile.id }
+                                val tileAudioMuted = if (isLocal) !localAudioEnabled else tileRemote?.audioEnabled == false
+                                val tileName = if (isLocal) localDisplayName else tileRemote?.displayName
+                                ParticipantBadge(modifier = Modifier.align(Alignment.BottomStart), muted = tileAudioMuted, displayName = tileName)
                             }
                             // Fit toggle on primary tile (bottom-end to avoid flashlight conflict)
                             if (tile.zOrder == 0) {
@@ -1650,7 +1661,7 @@ private fun MultiPartyStage(
                             start = outerPadding,
                             end = outerPadding,
                             top = 20.dp,
-                            bottom = bottomPadding + 12.dp
+                            bottom = bottomPadding + 4.dp
                         ),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -1695,9 +1706,7 @@ private fun MultiPartyStage(
                                         },
                                         strings = strings,
                                     )
-                                    if (participant.audioEnabled == false) {
-                                        MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
-                                    }
+                                    ParticipantBadge(modifier = Modifier.align(Alignment.BottomStart), muted = participant.audioEnabled == false, displayName = participant.displayName)
                                 }
                             }
                         }
@@ -1731,9 +1740,7 @@ private fun MultiPartyStage(
                         fontSize = 10.sp
                     )
                 }
-                if (!localAudioEnabled) {
-                    MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
-                }
+                ParticipantBadge(modifier = Modifier.align(Alignment.BottomStart), muted = !localAudioEnabled, displayName = localDisplayName)
             }
         }
     }
@@ -2131,20 +2138,38 @@ private fun VideoPlaceholder(text: String, fontSize: androidx.compose.ui.unit.Te
 }
 
 @Composable
-private fun MutedBadge(modifier: Modifier = Modifier) {
-    Box(
+private fun ParticipantBadge(
+    modifier: Modifier = Modifier,
+    muted: Boolean = false,
+    displayName: String? = null,
+) {
+    if (!muted && displayName == null) return
+    Row(
         modifier = modifier
             .padding(6.dp)
             .background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(8.dp))
-            .padding(6.dp),
-        contentAlignment = Alignment.Center
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Icon(
-            imageVector = Icons.Default.MicOff,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = Color(0xFFEF4444)
-        )
+        if (muted) {
+            Icon(
+                imageVector = Icons.Default.MicOff,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = Color(0xFFEF4444)
+            )
+        }
+        if (displayName != null) {
+            Text(
+                text = displayName,
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

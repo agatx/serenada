@@ -710,6 +710,7 @@ class SerenadaSession internal constructor(
                 error = null,
                 localAudioEnabled = config.defaultAudioEnabled,
                 localVideoEnabled = config.defaultVideoEnabled,
+                localDisplayName = displayName,
                 remoteParticipants = emptyList(),
                 localCameraMode = LocalCameraMode.SELFIE,
                 connectionStatus = ConnectionStatus.Connected,
