@@ -384,6 +384,7 @@ internal fun CallScreen(
                 remoteAspectRatios = remoteTileAspectRatios,
                 localCid = uiState.localCid,
                 localVideoEnabled = uiState.localVideoEnabled,
+                localAudioEnabled = uiState.localAudioEnabled,
                 localMirror = uiState.isFrontCamera && !uiState.isScreenSharing,
                 localCameraMode = uiState.localCameraMode,
                 isScreenSharing = uiState.isScreenSharing,
@@ -545,6 +546,20 @@ internal fun CallScreen(
                 else resolveString(SerenadaString.CallVideoOff, strings)
             Box(modifier = remoteModifier) {
                 VideoPlaceholder(text = text, fontSize = if (isLocalLarge) 10.sp else 16.sp)
+            }
+        }
+
+        // Muted badge on local tile (two-party view)
+        if (!isMultiParty && !uiState.localAudioEnabled) {
+            Box(modifier = localModifier) {
+                MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
+            }
+        }
+
+        // Muted badge on remote tile (two-party view)
+        if (!isMultiParty && uiState.remoteParticipants.firstOrNull()?.audioEnabled == false) {
+            Box(modifier = remoteModifier) {
+                MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
             }
         }
 
@@ -1330,6 +1345,7 @@ private fun MultiPartyStage(
     remoteAspectRatios: MutableMap<String, Float>,
     localCid: String?,
     localVideoEnabled: Boolean,
+    localAudioEnabled: Boolean,
     localMirror: Boolean,
     localCameraMode: LocalCameraMode,
     isScreenSharing: Boolean,
@@ -1581,6 +1597,13 @@ private fun MultiPartyStage(
                                     )
                                 }
                             }
+                            // Muted badge
+                            val tileAudioMuted = if (isContentTile) false
+                                else if (isLocal) !localAudioEnabled
+                                else remoteParticipants.find { it.cid == tile.id }?.audioEnabled == false
+                            if (tileAudioMuted) {
+                                MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
+                            }
                             // Fit toggle on primary tile (bottom-end to avoid flashlight conflict)
                             if (tile.zOrder == 0) {
                                 IconButton(
@@ -1672,6 +1695,9 @@ private fun MultiPartyStage(
                                         },
                                         strings = strings,
                                     )
+                                    if (participant.audioEnabled == false) {
+                                        MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
+                                    }
                                 }
                             }
                         }
@@ -1704,6 +1730,9 @@ private fun MultiPartyStage(
                         text = resolveString(SerenadaString.CallCameraOff, strings),
                         fontSize = 10.sp
                     )
+                }
+                if (!localAudioEnabled) {
+                    MutedBadge(modifier = Modifier.align(Alignment.BottomStart))
                 }
             }
         }
@@ -2098,6 +2127,24 @@ private fun VideoPlaceholder(text: String, fontSize: androidx.compose.ui.unit.Te
                 textAlign = TextAlign.Center
             )
         }
+    }
+}
+
+@Composable
+private fun MutedBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .padding(6.dp)
+            .background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(8.dp))
+            .padding(6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.MicOff,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = Color(0xFFEF4444)
+        )
     }
 }
 

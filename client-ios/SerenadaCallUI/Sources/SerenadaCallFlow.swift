@@ -319,6 +319,8 @@ private struct SessionFirstCallFlow: View {
         uiState.remoteParticipants = state.remoteParticipants.map { rp in
             RemoteParticipant(
                 cid: rp.cid,
+                displayName: rp.displayName,
+                audioEnabled: rp.audioEnabled,
                 videoEnabled: rp.videoEnabled,
                 connectionState: rp.connectionState
             )

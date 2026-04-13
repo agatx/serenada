@@ -336,6 +336,22 @@ const CALL_FLOW_CSS = `
   pointer-events: none;
 }
 
+[data-serenada-callflow] .muted-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.56);
+  color: #ef4444;
+  z-index: 5;
+  pointer-events: none;
+}
+
 [data-serenada-callflow] .debug-toggle-zone {
   position: absolute;
   top: 0;

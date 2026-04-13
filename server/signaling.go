@@ -833,7 +833,7 @@ func (h *Hub) broadcastRoomState(room *Room) {
 	room.mu.Lock()
 	participants := []Participant{}
 	for _, cid := range room.Participants {
-		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid], DisplayName: room.DisplayNames[cid]})
+		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid], DisplayName: room.DisplayNames[cid], AudioEnabled: room.AudioEnabled[cid], VideoEnabled: room.VideoEnabled[cid]})
 	}
 	hostCid := room.HostCID
 	rid := room.RID

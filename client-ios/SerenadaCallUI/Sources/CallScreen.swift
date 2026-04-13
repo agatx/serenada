@@ -332,6 +332,7 @@ struct CallScreenView: View {
                     remoteTileAspectRatios: $remoteTileAspectRatios,
                     localCid: uiState.localCid,
                     localVideoEnabled: uiState.localVideoEnabled,
+                    localAudioEnabled: uiState.localAudioEnabled,
                     localMirror: uiState.isFrontCamera,
                     localCameraMode: uiState.localCameraMode,
                     isScreenSharing: uiState.isScreenSharing,
@@ -359,23 +360,33 @@ struct CallScreenView: View {
                     }
                 )
             } else if showLocalAsPrimarySurface {
-                mainVideoSurface(
-                    kind: .local,
-                    videoContentMode: primaryLocalVideoContentMode(localCameraMode: uiState.localCameraMode),
-                    showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
-                    placeholderText: str(.callLocalCameraOff)
-                )
+                ZStack(alignment: .bottomLeading) {
+                    mainVideoSurface(
+                        kind: .local,
+                        videoContentMode: primaryLocalVideoContentMode(localCameraMode: uiState.localCameraMode),
+                        showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
+                        placeholderText: str(.callLocalCameraOff)
+                    )
+                    if !uiState.localAudioEnabled {
+                        MutedBadge().padding(6)
+                    }
+                }
                 smallRemoteView
             } else {
-                mainVideoSurface(
-                    kind: .remote,
-                    videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit,
-                    showPlaceholder: shouldShowRemoteVideoPlaceholder(
-                        phase: uiState.phase,
-                        remoteVideoEnabled: uiState.remoteVideoEnabled
-                    ),
-                    placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil
-                )
+                ZStack(alignment: .bottomLeading) {
+                    mainVideoSurface(
+                        kind: .remote,
+                        videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit,
+                        showPlaceholder: shouldShowRemoteVideoPlaceholder(
+                            phase: uiState.phase,
+                            remoteVideoEnabled: uiState.remoteVideoEnabled
+                        ),
+                        placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil
+                    )
+                    if uiState.remoteParticipants.first?.audioEnabled == false {
+                        MutedBadge().padding(6)
+                    }
+                }
                 smallLocalView
             }
 
@@ -508,7 +519,7 @@ struct CallScreenView: View {
     }
 
     private var smallLocalView: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             WebRTCVideoView(
                 kind: .local,
@@ -519,6 +530,10 @@ struct CallScreenView: View {
 
             if shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled) {
                 VideoPlaceholderTile(text: str(.callCameraOff), compact: true)
+            }
+
+            if !uiState.localAudioEnabled {
+                MutedBadge()
             }
         }
             .frame(width: 110, height: 160)
@@ -535,12 +550,16 @@ struct CallScreenView: View {
     }
 
     private var smallRemoteView: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             WebRTCVideoView(kind: .remote, rendererProvider: rendererProvider, videoContentMode: .scaleAspectFill)
 
             if shouldShowRemoteVideoPlaceholder(phase: uiState.phase, remoteVideoEnabled: uiState.remoteVideoEnabled) {
                 VideoPlaceholderTile(text: uiState.phase == .inCall ? str(.callVideoOff) : nil, compact: true)
+            }
+
+            if uiState.remoteParticipants.first?.audioEnabled == false {
+                MutedBadge()
             }
         }
             .frame(width: 110, height: 160)
@@ -853,6 +872,7 @@ private struct MultiPartyStage: View {
     @Binding var remoteTileAspectRatios: [String: CGFloat]
     let localCid: String?
     let localVideoEnabled: Bool
+    let localAudioEnabled: Bool
     let localMirror: Bool
     let localCameraMode: LocalCameraMode
     let isScreenSharing: Bool
@@ -1023,6 +1043,22 @@ private struct MultiPartyStage: View {
                                     }
                                 }
                             }
+
+                            // Muted badge
+                            if !isContentTile {
+                                let tileAudioMuted = isLocal
+                                    ? !localAudioEnabled
+                                    : remoteParticipants.first(where: { $0.cid == tile.id })?.audioEnabled == false
+                                if tileAudioMuted {
+                                    VStack {
+                                        Spacer()
+                                        HStack {
+                                            MutedBadge().padding(6)
+                                            Spacer()
+                                        }
+                                    }
+                                }
+                            }
                         }
                         .frame(width: tile.frame.width, height: tile.frame.height)
                         .clipShape(RoundedRectangle(cornerRadius: tile.cornerRadius))
@@ -1104,6 +1140,7 @@ private struct MultiPartyStage: View {
 
                     MultiPartyLocalPip(
                         localVideoEnabled: localVideoEnabled,
+                        localAudioEnabled: localAudioEnabled,
                         localMirror: localMirror,
                         cornerRadius: pipCornerRadius,
                         rendererProvider: rendererProvider,
@@ -1130,7 +1167,7 @@ private struct RemoteParticipantStageTile: View {
     let onVideoSizeChanged: (CGSize) -> Void
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             WebRTCVideoView(
                 kind: .remoteForCid(participant.cid),
@@ -1140,6 +1177,9 @@ private struct RemoteParticipantStageTile: View {
             )
             if !participant.videoEnabled {
                 VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false)
+            }
+            if participant.audioEnabled == false {
+                MutedBadge()
             }
         }
         .frame(width: size.width, height: size.height)
@@ -1153,13 +1193,14 @@ private struct RemoteParticipantStageTile: View {
 
 private struct MultiPartyLocalPip: View {
     let localVideoEnabled: Bool
+    let localAudioEnabled: Bool
     let localMirror: Bool
     let cornerRadius: CGFloat
     let rendererProvider: CallRendererProvider
     let strings: [SerenadaString: String]?
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             if localVideoEnabled {
                 WebRTCVideoView(
@@ -1170,6 +1211,9 @@ private struct MultiPartyLocalPip: View {
                 )
             } else {
                 VideoPlaceholderTile(text: resolveString(.callCameraOff, overrides: strings), compact: true)
+            }
+            if !localAudioEnabled {
+                MutedBadge()
             }
         }
         .frame(width: 100, height: 150)
@@ -1202,5 +1246,17 @@ struct VideoPlaceholderTile: View {
                 }
             }
         }
+    }
+}
+
+private struct MutedBadge: View {
+    var body: some View {
+        Image(systemName: "mic.slash.fill")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color(red: 0.94, green: 0.27, blue: 0.27))
+            .padding(6)
+            .background(Color.black.opacity(0.56))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(6)
     }
 }

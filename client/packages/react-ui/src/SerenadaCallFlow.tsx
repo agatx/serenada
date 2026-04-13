@@ -888,6 +888,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                         if (!stream) return null;
 
                                         const isPrimaryTile = tile.zOrder === 0;
+                                        const tileAudioMuted = isContentTile ? false
+                                            : isLocalTile ? isMuted
+                                            : effectiveState.remoteParticipants.find((p) => p.cid === tile.id)?.audioEnabled === false;
                                         return (
                                             <div key={tile.id} className="video-stage-tile" style={tileStyle}>
                                                 <VideoTile
@@ -918,6 +921,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                         {remoteVideoFit === 'cover' ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
                                                     </button>
                                                 )}
+                                                {tileAudioMuted && <div className="muted-badge"><MicOff size={16} /></div>}
                                             </div>
                                         );
                                     })}
@@ -929,18 +933,21 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                             {row.items.map((tile) => {
                                                 const stageTile = remoteStageTileMap.get(tile.cid);
                                                 if (!stageTile) return null;
+                                                const gridTileMuted = effectiveState.remoteParticipants.find((p) => p.cid === tile.cid)?.audioEnabled === false;
                                                 return (
-                                                    <VideoTile
-                                                        key={tile.cid}
-                                                        stream={stageTile.stream}
-                                                        tileStyle={{ width: `${tile.width}px`, height: `${tile.height}px` }}
-                                                        onAspectRatioChange={(ratio) => {
-                                                            setRemoteStageAspectRatios((prev) => (
-                                                                prev[tile.cid] === ratio ? prev : { ...prev, [tile.cid]: ratio }
-                                                            ));
-                                                        }}
-                                                        onClick={() => setPinnedParticipantId(tile.cid)}
-                                                    />
+                                                    <div key={tile.cid} style={{ position: 'relative', width: `${tile.width}px`, height: `${tile.height}px` }}>
+                                                        <VideoTile
+                                                            stream={stageTile.stream}
+                                                            tileStyle={{ width: '100%', height: '100%' }}
+                                                            onAspectRatioChange={(ratio) => {
+                                                                setRemoteStageAspectRatios((prev) => (
+                                                                    prev[tile.cid] === ratio ? prev : { ...prev, [tile.cid]: ratio }
+                                                                ));
+                                                            }}
+                                                            onClick={() => setPinnedParticipantId(tile.cid)}
+                                                        />
+                                                        {gridTileMuted && <div className="muted-badge"><MicOff size={16} /></div>}
+                                                    </div>
                                                 );
                                             })}
                                         </div>
@@ -971,6 +978,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                     style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
                                 />
                             )}
+                            {isMuted && <div className="muted-badge"><MicOff size={16} /></div>}
                         </div>
                     )}
                 </div>
@@ -1017,6 +1025,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                         </button>
                     )}
 
+                    {effectiveState.remoteParticipants[0]?.audioEnabled === false && (
+                        <div className="muted-badge"><MicOff size={16} /></div>
+                    )}
+
                     {waitingOverlay}
                 </div>
 
@@ -1042,6 +1054,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
                         />
                     )}
+                    {isMuted && <div className="muted-badge"><MicOff size={16} /></div>}
                 </div>
             </div>
             {controlsBar}
