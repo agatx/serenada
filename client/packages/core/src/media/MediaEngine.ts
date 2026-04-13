@@ -247,6 +247,28 @@ export class MediaEngine {
         this.notifyChange();
     }
 
+    async releaseVideoTrack(): Promise<void> {
+        if (this.isScreenSharing) return;
+        const currentTrack = this.localStream?.getVideoTracks()[0] ?? null;
+        if (!currentTrack) return;
+        await this.swapLocalVideoTrack(null, currentTrack);
+    }
+
+    async reacquireVideoTrack(): Promise<void> {
+        if (this.isScreenSharing) return;
+        if (this.localStream?.getVideoTracks()[0]) return;
+        if (this.cameraRecoveryInFlight || this.requestingMedia) return;
+        this.cameraRecoveryInFlight = true;
+        try {
+            const track = await this.acquireCameraTrack(this.facingMode, true);
+            await this.swapLocalVideoTrack(track, null);
+        } catch (err) {
+            this.logger?.log('error', 'Camera', `Failed to reacquire camera: ${formatError(err)}`);
+        } finally {
+            this.cameraRecoveryInFlight = false;
+        }
+    }
+
     async startScreenShare(): Promise<void> {
         if (this.isScreenSharing || !this.canScreenShare) return;
         if (!this.localStream) return;
@@ -773,7 +795,8 @@ export class MediaEngine {
     private async replaceVideoTrackOnAllPeers(newTrack: MediaStreamTrack | null): Promise<void> {
         await Promise.all(
             Array.from(this.peers.values()).map(async (peer) => {
-                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video')
+                    ?? peer.pc.getTransceivers().find(t => t.receiver.track?.kind === 'video')?.sender;
                 if (sender) {
                     try { await sender.replaceTrack(newTrack); }
                     catch (err) { this.logger?.log('warning', 'WebRTC', `Failed to replace track on peer: ${formatError(err)}`); }

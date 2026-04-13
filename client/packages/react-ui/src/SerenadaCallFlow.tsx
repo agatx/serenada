@@ -85,6 +85,9 @@ const VideoTile: React.FC<{
     pinned?: boolean;
     tileStyle?: React.CSSProperties;
     videoFit?: RemoteVideoFit;
+    videoEnabled?: boolean;
+    cameraOffLabel?: string;
+    compact?: boolean;
     onAspectRatioChange?: (ratio: number) => void;
     onClick?: () => void;
 }> = ({
@@ -95,6 +98,9 @@ const VideoTile: React.FC<{
     pinned = false,
     tileStyle,
     videoFit = 'cover',
+    videoEnabled,
+    cameraOffLabel,
+    compact = false,
     onAspectRatioChange,
     onClick,
 }) => {
@@ -159,6 +165,11 @@ const VideoTile: React.FC<{
                     transform: mirrored ? 'scaleX(-1)' : undefined,
                 }}
             />
+            {videoEnabled === false && (
+                <div className={`video-camera-off-overlay${compact ? ' compact' : ''}`}>
+                    <span className="video-camera-off-label">{cameraOffLabel}</span>
+                </div>
+            )}
             {label && <div className="video-grid-label">{label}</div>}
             {pinned && (
                 <div className="video-stage-pin-indicator" aria-hidden="true">
@@ -901,12 +912,15 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                         const tileRemote = isContentTile || isLocalTile ? undefined : effectiveState.remoteParticipants.find((p) => p.cid === tile.id);
                                         const tileAudioMuted = isContentTile ? false : isLocalTile ? isMuted : tileRemote?.audioEnabled === false;
                                         const tileDisplayName = isContentTile ? undefined : isLocalTile ? localParticipant?.displayName : tileRemote?.displayName;
+                                        const tileVideoEnabled = isContentTile ? true : isLocalTile ? localParticipant?.videoEnabled !== false : tileRemote?.videoEnabled;
                                         return (
                                             <div key={tile.id} className="video-stage-tile" style={tileStyle}>
                                                 <VideoTile
                                                     stream={stream}
                                                     tileStyle={{ width: '100%', height: '100%', borderRadius: 'inherit' }}
                                                     videoFit={tile.fit === 'contain' ? 'contain' : 'cover'}
+                                                    videoEnabled={tileVideoEnabled}
+                                                    cameraOffLabel={tileDisplayName ?? resolveString('cameraOff', strings)}
                                                     onAspectRatioChange={
                                                         isLocalTile || isContentTile ? undefined : (ratio) => {
                                                             setRemoteStageAspectRatios((prev) => (
@@ -949,6 +963,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                         <VideoTile
                                                             stream={stageTile.stream}
                                                             tileStyle={{ width: '100%', height: '100%' }}
+                                                            videoEnabled={gridRemote?.videoEnabled}
+                                                            cameraOffLabel={gridRemote?.displayName ?? resolveString('cameraOff', strings)}
                                                             onAspectRatioChange={(ratio) => {
                                                                 setRemoteStageAspectRatios((prev) => (
                                                                     prev[tile.cid] === ratio ? prev : { ...prev, [tile.cid]: ratio }
@@ -1024,6 +1040,14 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             className="video-remote"
                             style={{ objectFit: remoteVideoFit }}
                         />
+                    )}
+
+                    {remoteParticipant0?.videoEnabled === false && (
+                        <div className="video-camera-off-overlay">
+                            <span className="video-camera-off-label">
+                                {remoteParticipant0.displayName ?? resolveString('cameraOff', strings)}
+                            </span>
+                        </div>
                     )}
 
                     {remoteStream && (

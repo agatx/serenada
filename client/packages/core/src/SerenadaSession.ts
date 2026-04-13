@@ -231,6 +231,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
     private readonly remoteMediaStates = new Map<string, { audioEnabled: boolean; videoEnabled: boolean }>();
+    private userPreferredVideoEnabled: boolean;
 
     private get isInactive(): boolean {
         return this._destroyed || this.terminated;
@@ -251,6 +252,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.signaling = signaling;
         this.handlesReconnection = signaling.capabilities?.handlesReconnection === true;
         this.displayName = deps.displayName;
+        this.userPreferredVideoEnabled = config.defaultVideoEnabled !== false;
 
         this._state = {
             phase: 'joining',
@@ -762,18 +764,38 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private setTrackEnabled(kind: 'audio' | 'video', enabled?: boolean): void {
         const stream = this.media.localStream;
         if (!stream) return;
-        const track = kind === 'audio' ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
-        if (track) track.enabled = enabled ?? !track.enabled;
+        if (kind === 'video') {
+            const videoTrack = stream.getVideoTracks()[0];
+            const newEnabled = enabled ?? !(videoTrack?.enabled ?? this.userPreferredVideoEnabled);
+            this.userPreferredVideoEnabled = newEnabled;
+            if (newEnabled) {
+                void this.media.reacquireVideoTrack().then(() => {
+                    if (!this.isInactive) {
+                        this.broadcastLocalMediaState();
+                        this.rebuildState();
+                    }
+                });
+            } else {
+                void this.media.releaseVideoTrack().then(() => {
+                    if (!this.isInactive) {
+                        this.broadcastLocalMediaState();
+                        this.rebuildState();
+                    }
+                });
+            }
+        } else {
+            const track = stream.getAudioTracks()[0];
+            if (track) track.enabled = enabled ?? !track.enabled;
+        }
         this.broadcastLocalMediaState();
         this.rebuildState();
     }
 
     private broadcastLocalMediaState(): void {
         const audioTrack = this.media.localStream?.getAudioTracks()[0];
-        const videoTrack = this.media.localStream?.getVideoTracks()[0];
         this.signaling.broadcast('participant_media_state', {
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
-            videoEnabled: videoTrack?.enabled ?? false,
+            videoEnabled: this.userPreferredVideoEnabled,
         });
     }
 
@@ -815,13 +837,12 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
 
         const audioTrack = this.media.localStream?.getAudioTracks()[0];
-        const videoTrack = this.media.localStream?.getVideoTracks()[0];
 
         const localParticipant = clientId ? {
             cid: clientId,
             displayName: this.displayName,
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
-            videoEnabled: videoTrack?.enabled ?? (this.config.defaultVideoEnabled !== false),
+            videoEnabled: this.userPreferredVideoEnabled,
             cameraMode: (this.media.isScreenSharing
                 ? 'screenShare'
                 : this.media.facingMode === 'user'

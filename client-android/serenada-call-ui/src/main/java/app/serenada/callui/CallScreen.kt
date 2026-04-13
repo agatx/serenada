@@ -548,11 +548,17 @@ internal fun CallScreen(
                     (uiState.phase == CallPhase.InCall ||
                             (uiState.phase == CallPhase.Waiting && isLocalLarge))
         if (showRemotePlaceholder) {
+            val remoteP = uiState.remoteParticipants.firstOrNull()
             val text =
                 if (uiState.phase == CallPhase.Waiting) resolveString(SerenadaString.CallWaitingShort, strings)
                 else resolveString(SerenadaString.CallVideoOff, strings)
+            val nameToShow = if (uiState.phase == CallPhase.InCall) remoteP?.displayName else null
             Box(modifier = remoteModifier) {
-                VideoPlaceholder(text = text, fontSize = if (isLocalLarge) 10.sp else 16.sp)
+                VideoPlaceholder(
+                    text = text,
+                    fontSize = if (isLocalLarge) 10.sp else 16.sp,
+                    displayName = nameToShow,
+                )
             }
         }
 
@@ -1866,7 +1872,8 @@ private fun RemoteParticipantStageTile(
             Box(modifier = Modifier.fillMaxSize()) {
                 VideoPlaceholder(
                     text = resolveString(SerenadaString.CallVideoOff, strings),
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    displayName = participant.displayName,
                 )
             }
         }
@@ -2114,25 +2121,42 @@ private class RendererContainer(
 }
 
 @Composable
-private fun VideoPlaceholder(text: String, fontSize: androidx.compose.ui.unit.TextUnit = 16.sp) {
+private fun VideoPlaceholder(
+    text: String,
+    fontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
+    displayName: String? = null,
+) {
     Box(
         modifier = Modifier.fillMaxSize().background(Color(0xFF111111)),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Default.VideocamOff,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.3f),
-                modifier = Modifier.size(if (fontSize < 12.sp) 32.dp else 48.dp)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+        if (displayName != null) {
             Text(
-                text = text,
-                color = Color.White.copy(alpha = 0.5f),
-                fontSize = fontSize,
-                textAlign = TextAlign.Center
+                text = displayName,
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp),
             )
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.VideocamOff,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.3f),
+                    modifier = Modifier.size(if (fontSize < 12.sp) 32.dp else 48.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = text,
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = fontSize,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }

@@ -44,6 +44,7 @@ const CALL_FLOW_CSS = `
   align-items: center;
   justify-content: center;
   z-index: 1;
+  container-type: inline-size;
 }
 
 [data-serenada-callflow] .video-remote {
@@ -150,6 +151,7 @@ const CALL_FLOW_CSS = `
     #111;
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 18px 38px rgba(0, 0, 0, 0.35);
+  container-type: inline-size;
 }
 
 [data-serenada-callflow].multi-party-call .video-stage-remote {
@@ -179,6 +181,29 @@ const CALL_FLOW_CSS = `
   height: 100%;
   background: #111;
   color: rgba(255, 255, 255, 0.6);
+}
+
+[data-serenada-callflow] .video-camera-off-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111;
+  border-radius: inherit;
+  z-index: 1;
+}
+
+[data-serenada-callflow] .video-camera-off-label {
+  font-size: clamp(11px, 4cqi, 52px);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+  padding: 0 16px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-serenada-callflow] .video-stage-pin-indicator {

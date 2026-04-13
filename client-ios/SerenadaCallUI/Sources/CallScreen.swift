@@ -381,7 +381,8 @@ struct CallScreenView: View {
                             phase: uiState.phase,
                             remoteVideoEnabled: uiState.remoteVideoEnabled
                         ),
-                        placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil
+                        placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil,
+                        placeholderDisplayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
                     )
                     ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
                 }
@@ -494,7 +495,8 @@ struct CallScreenView: View {
         kind: WebRTCVideoView.Kind,
         videoContentMode: UIView.ContentMode = .scaleAspectFill,
         showPlaceholder: Bool,
-        placeholderText: String?
+        placeholderText: String?,
+        placeholderDisplayName: String? = nil
     ) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -507,7 +509,7 @@ struct CallScreenView: View {
                 .ignoresSafeArea()
 
             if showPlaceholder {
-                VideoPlaceholderTile(text: placeholderText, compact: false)
+                VideoPlaceholderTile(text: placeholderText, compact: false, displayName: placeholderDisplayName)
                     .ignoresSafeArea()
             }
         }
@@ -552,7 +554,11 @@ struct CallScreenView: View {
             WebRTCVideoView(kind: .remote, rendererProvider: rendererProvider, videoContentMode: .scaleAspectFill)
 
             if shouldShowRemoteVideoPlaceholder(phase: uiState.phase, remoteVideoEnabled: uiState.remoteVideoEnabled) {
-                VideoPlaceholderTile(text: uiState.phase == .inCall ? str(.callVideoOff) : nil, compact: true)
+                VideoPlaceholderTile(
+                    text: uiState.phase == .inCall ? str(.callVideoOff) : nil,
+                    compact: true,
+                    displayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
+                )
             }
 
             ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
@@ -996,7 +1002,7 @@ private struct MultiPartyStage: View {
                                     }
                                 )
                                 if !participant.videoEnabled {
-                                    VideoPlaceholderTile(text: str(.callVideoOff), compact: false)
+                                    VideoPlaceholderTile(text: str(.callVideoOff), compact: false, displayName: participant.displayName)
                                 }
                             }
 
@@ -1165,7 +1171,7 @@ private struct RemoteParticipantStageTile: View {
                 onVideoSizeChanged: onVideoSizeChanged
             )
             if !participant.videoEnabled {
-                VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false)
+                VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false, displayName: participant.displayName)
             }
             ParticipantBadge(muted: participant.audioEnabled == false, displayName: participant.displayName)
         }
@@ -1214,21 +1220,31 @@ private struct MultiPartyLocalPip: View {
 struct VideoPlaceholderTile: View {
     let text: String?
     let compact: Bool
+    var displayName: String? = nil
 
     var body: some View {
         ZStack {
             Color.black
-            VStack(spacing: compact ? 6 : 10) {
-                Image(systemName: "video.slash.fill")
-                    .font(.system(size: compact ? 20 : 34, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-
-                if let text, !text.isEmpty {
-                    Text(text)
-                        .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
+            if let name = displayName, !name.isEmpty {
+                Text(name)
+                    .font(compact ? .system(size: 13, weight: .semibold) : .system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, compact ? 6 : 16)
+            } else {
+                VStack(spacing: compact ? 6 : 10) {
+                    Image(systemName: "video.slash.fill")
+                        .font(.system(size: compact ? 20 : 34, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.9))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, compact ? 6 : 16)
+
+                    if let text, !text.isEmpty {
+                        Text(text)
+                            .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, compact ? 6 : 16)
+                    }
                 }
             }
         }

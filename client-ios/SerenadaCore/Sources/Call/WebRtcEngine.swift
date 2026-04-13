@@ -338,6 +338,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
                 return false
             }
         }
+        if !enabled && !screenShareController.isScreenSharing {
+            cameraController.stopAllCapturers()
+        }
         let effectiveEnabled = enabled && (cameraController.hasActiveCapturer() || screenShareController.isScreenSharing)
         localVideoTrack?.isEnabled = effectiveEnabled
         return effectiveEnabled
