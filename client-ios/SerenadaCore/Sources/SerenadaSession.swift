@@ -154,6 +154,7 @@ public final class SerenadaSession: ObservableObject {
     private var clientId: String?
     private var hostCid: String?
     private var currentRoomState: RoomState?
+    private var remoteMediaStates: [String: (audioEnabled: Bool, videoEnabled: Bool)] = [:]
     private var peerSlots: [String: any PeerConnectionSlotProtocol] = [:]
     private var pendingMessages: [SignalingMessage] = []
     private var pendingJoinRoom: String?
@@ -295,12 +296,14 @@ public final class SerenadaSession: ObservableObject {
         let enabled = !state.localParticipant.audioEnabled
         webRtcEngine.toggleAudio(enabled)
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
+        broadcastLocalMediaState()
     }
 
     /// Toggle local video on or off.
     public func toggleVideo() {
         userPreferredVideoEnabled = !state.localParticipant.videoEnabled
         applyLocalVideoPreference()
+        broadcastLocalMediaState()
     }
 
     /// Cycle to the next camera mode (selfie -> world -> composite).
@@ -322,6 +325,7 @@ public final class SerenadaSession: ObservableObject {
     public func setAudioEnabled(_ enabled: Bool) {
         webRtcEngine.toggleAudio(enabled)
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
+        broadcastLocalMediaState()
     }
 
     /// Set local video enabled state.
@@ -496,6 +500,7 @@ public final class SerenadaSession: ObservableObject {
         } else {
             recoverFromJoiningIfNeeded(participantHint: participantCountHint)
         }
+        broadcastLocalMediaState()
         loadInitialIceServers()
     }
 
@@ -518,6 +523,19 @@ public final class SerenadaSession: ObservableObject {
         )
         guard webRtcEngine.hasIceServers() else { pendingMessages.append(message); return }
         peerNegotiationEngine?.processSignalingPayload(message)
+    }
+
+    private func handleParticipantMediaState(_ payload: MediaStatePayload) {
+        guard let fromCid = payload.fromCid, !fromCid.isEmpty else { return }
+        remoteMediaStates[fromCid] = (audioEnabled: payload.audioEnabled, videoEnabled: payload.videoEnabled)
+        refreshRemoteParticipants()
+    }
+
+    private func broadcastLocalMediaState() {
+        signalingMessageRouter?.broadcastMediaState(
+            audioEnabled: state.localParticipant.audioEnabled,
+            videoEnabled: state.localParticipant.videoEnabled
+        )
     }
 
     private func handleContentState(_ payload: ContentStatePayload) {
@@ -591,9 +609,11 @@ public final class SerenadaSession: ObservableObject {
             hostCid = roomState.hostCid
             updateParticipants(roomState)
         }
+        broadcastLocalMediaState()
     }
 
     fileprivate func handleProviderPeerLeft(_ event: PeerEvent) {
+        remoteMediaStates.removeValue(forKey: event.peerId)
         currentRoomState = removeParticipant(roomState: currentRoomState, peerId: event.peerId, localPeerId: clientId)
         if let roomState = currentRoomState {
             hostCid = roomState.hostCid
@@ -604,7 +624,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func handleProviderMessage(_ message: PeerMessage) {
-        guard ["content_state", "offer", "answer", "ice"].contains(message.type) else { return }
+        guard ["content_state", "participant_media_state", "offer", "answer", "ice"].contains(message.type) else { return }
         signalingMessageRouter?.processPeerMessage(message)
     }
 
@@ -645,9 +665,10 @@ public final class SerenadaSession: ObservableObject {
         }
         let participants = roomState.participants.filter { $0.cid != clientId }.map { p in
             let slot = peerSlots[p.cid]
+            let peerState = remoteMediaStates[p.cid]
             return SerenadaRemoteParticipant(
                 cid: p.cid, displayName: p.displayName,
-                audioEnabled: true,
+                audioEnabled: peerState?.audioEnabled ?? p.audioEnabled ?? true,
                 videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
                 connectionState: slot?.getConnectionState() ?? .new
             )
@@ -818,7 +839,7 @@ public final class SerenadaSession: ObservableObject {
         callAudioSessionController.deactivate()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
-        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0
+        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
 
         reconnectTask?.cancel(); reconnectTask = nil
         joinFlowCoordinator?.clearAllTimers()
@@ -927,6 +948,7 @@ public final class SerenadaSession: ObservableObject {
             onTurnRefreshed: { _ in },
             onSignalingPayload: { [weak self] message in self?.handleSignalingPayload(message) },
             onContentState: { [weak self] payload in self?.handleContentState(payload) },
+            onParticipantMediaState: { [weak self] payload in self?.handleParticipantMediaState(payload) },
             onError: { [weak self] error in self?.handleError(error) },
             sendMessage: { [weak self] type, payload, to in self?.sendMessage(type: type, payload: payload, to: to) }
         )

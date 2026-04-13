@@ -16,6 +16,8 @@ export interface SignalingProviderParticipant {
     peerId: string;
     joinedAt?: number;
     displayName?: string;
+    audioEnabled?: boolean;
+    videoEnabled?: boolean;
 }
 
 export interface JoinedEvent {

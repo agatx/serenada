@@ -10,4 +10,6 @@ internal data class Participant(
     val cid: String,
     val joinedAt: Long?,
     val displayName: String? = null,
+    val audioEnabled: Boolean? = null,
+    val videoEnabled: Boolean? = null,
 )

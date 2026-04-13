@@ -19,6 +19,7 @@ import type {
     SignalingProvider,
     SignalingProviderEventMap,
     SignalingProviderEventName,
+    SignalingProviderParticipant,
 } from './SignalingProvider.js';
 import { MediaEngine } from './media/MediaEngine.js';
 import { CallStatsCollector } from './media/callStats.js';
@@ -66,11 +67,13 @@ function mapErrorCode(serverCode: string): CallErrorCode {
     }
 }
 
-function toRoomParticipant(participant: { peerId: string; joinedAt?: number; displayName?: string }): RoomParticipant {
+function toRoomParticipant(participant: SignalingProviderParticipant): RoomParticipant {
     return {
         cid: participant.peerId,
         joinedAt: participant.joinedAt,
         displayName: participant.displayName,
+        audioEnabled: participant.audioEnabled,
+        videoEnabled: participant.videoEnabled,
     };
 }
 
@@ -227,6 +230,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
+    private readonly remoteMediaStates = new Map<string, { audioEnabled: boolean; videoEnabled: boolean }>();
 
     private get isInactive(): boolean {
         return this._destroyed || this.terminated;
@@ -323,6 +327,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.permissionCheckDone = true;
         const stream = await this.media.startLocalMedia();
         if (stream) {
+            this.broadcastLocalMediaState();
             this.rebuildState();
         }
     }
@@ -499,6 +504,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.roomState = buildRoomState(event, null, event.peerId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
+        this.broadcastLocalMediaState();
         void this.fetchInitialIceServers();
     };
 
@@ -520,12 +526,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.roomState = upsertParticipant(this.roomState, event, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
+        this.broadcastLocalMediaState();
     };
 
     private readonly handlePeerLeft = (event: PeerEvent): void => {
         if (this.isInactive) {
             return;
         }
+        this.remoteMediaStates.delete(event.peerId);
         this.roomState = removeParticipant(this.roomState, event.peerId, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
@@ -537,6 +545,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         if (isMediaSignalingMessageType(message.type)) {
             this.media.processSignalingMessage(toMediaSignalingMessage(message));
+        }
+        if (message.type === 'participant_media_state') {
+            this.handleRemoteMediaState(message);
         }
         for (const listener of this.peerMessageListeners) {
             try {
@@ -753,6 +764,26 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (!stream) return;
         const track = kind === 'audio' ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
         if (track) track.enabled = enabled ?? !track.enabled;
+        this.broadcastLocalMediaState();
+        this.rebuildState();
+    }
+
+    private broadcastLocalMediaState(): void {
+        const audioTrack = this.media.localStream?.getAudioTracks()[0];
+        const videoTrack = this.media.localStream?.getVideoTracks()[0];
+        this.signaling.broadcast('participant_media_state', {
+            audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
+            videoEnabled: videoTrack?.enabled ?? false,
+        });
+    }
+
+    private handleRemoteMediaState(message: PeerMessage): void {
+        const payload = message.payload as Record<string, unknown> | null;
+        if (!payload) return;
+        this.remoteMediaStates.set(message.from, {
+            audioEnabled: typeof payload.audioEnabled === 'boolean' ? payload.audioEnabled : true,
+            videoEnabled: typeof payload.videoEnabled === 'boolean' ? payload.videoEnabled : false,
+        });
         this.rebuildState();
     }
 
@@ -801,13 +832,16 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
         const remoteParticipants = (signalingState?.participants ?? [])
             .filter((participant) => participant.cid !== clientId)
-            .map((participant) => ({
-                cid: participant.cid,
-                displayName: participant.displayName,
-                audioEnabled: true,
-                videoEnabled: true,
-                connectionState: this.media.connectionState,
-            }));
+            .map((participant) => {
+                const peerState = this.remoteMediaStates.get(participant.cid);
+                return {
+                    cid: participant.cid,
+                    displayName: participant.displayName,
+                    audioEnabled: peerState?.audioEnabled ?? participant.audioEnabled ?? true,
+                    videoEnabled: peerState?.videoEnabled ?? participant.videoEnabled ?? true,
+                    connectionState: this.media.connectionState,
+                };
+            });
 
         this._state = {
             phase,

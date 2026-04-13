@@ -11,7 +11,9 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         guard let cid = obj["cid"]?.stringValue, !cid.isEmpty else { continue }
         let joinedAt = obj["joinedAt"]?.intValue.map(Int64.init)
         let displayName = obj["displayName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        result.append(Participant(cid: cid, joinedAt: joinedAt, displayName: displayName))
+        let audioEnabled = obj["audioEnabled"]?.boolValue
+        let videoEnabled = obj["videoEnabled"]?.boolValue
+        result.append(Participant(cid: cid, joinedAt: joinedAt, displayName: displayName, audioEnabled: audioEnabled, videoEnabled: videoEnabled))
     }
     return result
 }
@@ -106,5 +108,21 @@ struct ContentStatePayload {
         fromCid = obj["from"]?.stringValue
         active = obj["active"]?.boolValue == true
         contentType = active ? obj["contentType"]?.stringValue : nil
+    }
+}
+
+/// Payload for "participant_media_state" message — remote participant's audio/video state.
+struct MediaStatePayload {
+    let fromCid: String?
+    let audioEnabled: Bool
+    let videoEnabled: Bool
+
+    init(from payload: JSONValue?) {
+        guard let obj = payload?.objectValue else {
+            fromCid = nil; audioEnabled = true; videoEnabled = false; return
+        }
+        fromCid = obj["from"]?.stringValue
+        audioEnabled = obj["audioEnabled"]?.boolValue ?? true
+        videoEnabled = obj["videoEnabled"]?.boolValue ?? false
     }
 }

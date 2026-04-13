@@ -170,7 +170,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, and `displayName` *(string, optional)*.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `audioEnabled` *(boolean, optional)*, and `videoEnabled` *(boolean, optional)*.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 
@@ -427,7 +427,40 @@ Client keepalive. Server ignores.
 
 ---
 
-### 4.12 Room Status Monitoring (WebSocket/SSE)
+### 4.12 `participant_media_state` (client → server → clients)
+
+Sent by a client to announce its current audio/video enabled state. The server stores the state per-participant and broadcasts an updated `room_state` to all participants.
+
+Clients should broadcast this message after joining, when a new peer joins, and whenever the local audio or video enabled state changes.
+
+```json
+{
+  "v": 1,
+  "type": "participant_media_state",
+  "rid": "AbC123",
+  "payload": {
+    "audioEnabled": true,
+    "videoEnabled": false
+  }
+}
+```
+
+**Fields in payload**
+- `audioEnabled` *(boolean, optional)*: whether the sender's audio is enabled.
+- `videoEnabled` *(boolean, optional)*: whether the sender's video is enabled.
+
+**Server behavior**
+- Stores the audio/video state in the room per-CID.
+- Broadcasts an updated `room_state` (which now includes `audioEnabled`/`videoEnabled` per participant) to all room participants.
+
+**Client behavior**
+- On receiving an updated `room_state`, use the `audioEnabled`/`videoEnabled` fields from the participant list.
+- Clients may also receive `participant_media_state` as a relayed peer message (with a `from` field). Direct peer messages take priority over room state values.
+- Unknown message types are silently ignored by older clients, ensuring backward compatibility.
+
+---
+
+### 4.13 Room Status Monitoring (WebSocket/SSE)
 
 Used to aggregate real-time occupancy for a list of rooms (e.g., recent calls list).
 Currently consumed by the React web home screen and the native Android/iOS home screen recent-calls UX.
