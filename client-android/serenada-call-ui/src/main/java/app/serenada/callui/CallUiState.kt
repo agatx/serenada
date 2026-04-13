@@ -12,6 +12,7 @@ data class CallUiState(
     val callMode: CallMode = CallMode.VIDEO,
     val roomId: String? = null,
     val localCid: String? = null,
+    val localDisplayName: String? = null,
     val statusMessageResId: Int? = null,
     val errorMessageResId: Int? = null,
     val errorMessageText: String? = null,

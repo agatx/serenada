@@ -176,7 +176,7 @@ class SerenadaSession internal constructor(
         getHostCid = { hostCid },
         onJoined = { cid, _, roomState, _, _, newReconnectToken ->
             clientId = cid
-            updateState(_state.value.copy(localCid = clientId))
+            updateState(_state.value.copy(localCid = clientId, localDisplayName = displayName))
             newReconnectToken?.let { reconnectToken = it }
             if (roomState != null) {
                 currentRoomState = roomState
@@ -1043,7 +1043,7 @@ class SerenadaSession internal constructor(
         updateState(_state.value.copy(phase = CallPhase.Ending))
         if (_diagnostics.value.isScreenSharing) webRtcEngine.stopScreenShare()
         resetResources()
-        updateState(CallState(phase = CallPhase.Idle))
+        updateState(CallState(phase = CallPhase.Idle, callMode = callMode))
         delegate?.invoke()?.onSessionEnded(this, reason)
     }
 

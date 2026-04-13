@@ -183,6 +183,82 @@ body {
   height: 24px;
 }
 
+/* Segmented start-call button */
+.start-call-segmented {
+  position: relative;
+  display: inline-flex;
+  border-radius: 50px;
+  margin-top: 1.5rem;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  z-index: 10;
+}
+
+.start-call-segmented .segmented-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 1.75rem;
+}
+
+.start-call-segmented .segmented-trigger {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 1rem 0.9rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.start-call-segmented .segmented-main:hover:not(:disabled),
+.start-call-segmented .segmented-trigger:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
+.start-call-segmented:hover .segmented-main:not(:disabled),
+.start-call-segmented:hover .segmented-trigger:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.start-call-segmented:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(47, 129, 247, 0.4);
+}
+
+.start-call-segmented .segmented-dropdown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  background: #1c2333;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.start-call-segmented .segmented-dropdown button {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 10px 14px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.15s;
+  width: 100%;
+}
+
+.start-call-segmented .segmented-dropdown button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .button-group {
   display: flex;
   flex-direction: column;

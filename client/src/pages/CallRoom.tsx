@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { BellRing, CheckSquare, Copy, Mic, Square } from 'lucide-react';
+import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
 import { SerenadaCallFlow } from '@serenada/react-ui';
 import type { SerenadaString } from '@serenada/react-ui';
 import { SerenadaCore, ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS } from '@serenada/core';
@@ -546,12 +546,7 @@ const CallRoom: React.FC = () => {
                         <h2>{t('ready_to_join')}</h2>
                     )}
 
-                    {callMode === 'voice' ? (
-                        <div className="video-preview-container audio-only-preview">
-                            <Mic size={48} className="audio-preview-icon" />
-                            <span>{t('audio_only_preview')}</span>
-                        </div>
-                    ) : (
+                    {callMode === 'voice' ? null : (
                         <div className="video-preview-container">
                             <video
                                 ref={previewVideoRef}

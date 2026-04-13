@@ -44,10 +44,10 @@ struct JoinedPayload {
         turnTokenTTLMs = obj["turnTokenTTLMs"]?.intValue
         reconnectToken = obj["reconnectToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let modeStr = obj["mode"]?.stringValue, modeStr == "voice" {
-            callMode = .voice
+        if let modeStr = obj["mode"]?.stringValue {
+            callMode = modeStr == "voice" ? .voice : .video
         } else {
-            callMode = .video
+            callMode = nil
         }
 
         if let parsed = parseParticipants(from: obj["participants"]?.arrayValue) {

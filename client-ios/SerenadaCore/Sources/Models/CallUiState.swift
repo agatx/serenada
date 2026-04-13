@@ -10,6 +10,7 @@ public struct CallUiState: Equatable {
     public var phase: CallPhase = .idle
     public var roomId: String?
     public var localCid: String?
+    public var localDisplayName: String?
     public var statusMessage: String?
     public var errorMessage: String?
     public var isHost: Bool = false

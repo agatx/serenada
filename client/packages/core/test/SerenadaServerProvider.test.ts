@@ -159,23 +159,23 @@ describe('SerenadaServerProvider', () => {
         expect(joined).toHaveBeenCalledWith({
             peerId: 'local-cid',
             participants: [
-                { peerId: 'local-cid', joinedAt: 1 },
-                { peerId: 'peer-a', joinedAt: 2 },
+                { peerId: 'local-cid', joinedAt: 1, displayName: undefined, audioEnabled: undefined, videoEnabled: undefined },
+                { peerId: 'peer-a', joinedAt: 2, displayName: undefined, audioEnabled: undefined, videoEnabled: undefined },
             ],
             hostPeerId: 'local-cid',
             maxParticipants: undefined,
-            callMode: 'video',
+            callMode: undefined,
         });
-        expect(peerJoined).toHaveBeenCalledWith({ peerId: 'peer-b', joinedAt: 3 });
-        expect(peerLeft).toHaveBeenCalledWith({ peerId: 'peer-a', joinedAt: 2 });
+        expect(peerJoined).toHaveBeenCalledWith({ peerId: 'peer-b', joinedAt: 3, displayName: undefined, audioEnabled: undefined, videoEnabled: undefined });
+        expect(peerLeft).toHaveBeenCalledWith({ peerId: 'peer-a', joinedAt: 2, displayName: undefined, audioEnabled: undefined, videoEnabled: undefined });
         expect(roomStateUpdated).toHaveBeenCalledWith({
             participants: [
-                { peerId: 'local-cid', joinedAt: 1 },
-                { peerId: 'peer-b', joinedAt: 3 },
+                { peerId: 'local-cid', joinedAt: 1, displayName: undefined, audioEnabled: undefined, videoEnabled: undefined },
+                { peerId: 'peer-b', joinedAt: 3, displayName: undefined, audioEnabled: undefined, videoEnabled: undefined },
             ],
             hostPeerId: 'peer-b',
             maxParticipants: undefined,
-            callMode: 'video',
+            callMode: undefined,
         });
         expect(roomEnded).toHaveBeenCalledWith({ by: 'peer-b', reason: 'host ended' });
     });

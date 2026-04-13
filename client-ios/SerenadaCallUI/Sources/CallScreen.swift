@@ -319,16 +319,17 @@ struct CallScreenView: View {
             isLocalLarge: isLocalLarge
         )
         let isPinchZoomEnabled = shouldEnablePinchZoom(showLocalAsPrimarySurface: showLocalAsPrimarySurface)
-        let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
+        let isVoiceMode = uiState.callMode == .voice
+        let shouldRunAutoHideTask = !isVoiceMode && areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
 
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if uiState.phase == .waiting {
+            if uiState.callMode == .voice && (uiState.phase == .waiting || uiState.phase == .inCall) {
+                voiceModeLayout
+            } else if uiState.phase == .waiting {
                 waitingMainSurface
                 smallLocalView
-            } else if uiState.callMode == .voice && uiState.phase == .inCall {
-                voiceModeLayout
             } else if isMultiParty {
                 MultiPartyStage(
                     remoteParticipants: uiState.remoteParticipants,
@@ -347,6 +348,7 @@ struct CallScreenView: View {
                     strings: strings,
                     onAdjustCameraZoom: onAdjustCameraZoom,
                     onTapBackground: {
+                        guard uiState.callMode != .voice else { return }
                         withAnimation(.easeInOut(duration: 0.2)) {
                             if areControlsVisible {
                                 areControlsVisible = false
@@ -416,6 +418,11 @@ struct CallScreenView: View {
                 areControlsVisible = false
             }
         }
+        .onChange(of: uiState.callMode) { mode in
+            if mode == .voice {
+                areControlsVisible = true
+            }
+        }
         .onChange(of: uiState.connectionStatus) { status in
             if status != .recovering {
                 showRecoveringBadge = false
@@ -461,6 +468,7 @@ struct CallScreenView: View {
         Color.clear
             .contentShape(Rectangle())
             .onTapGesture {
+                guard uiState.callMode != .voice else { return }
                 withAnimation(.easeInOut(duration: 0.2)) {
                     if areControlsVisible {
                         areControlsVisible = false
@@ -629,7 +637,7 @@ struct CallScreenView: View {
                 if let localCid = uiState.localCid {
                     voiceModeParticipantRow(
                         cid: localCid,
-                        displayName: nil,
+                        displayName: uiState.localDisplayName,
                         isLocal: true,
                         audioEnabled: uiState.localAudioEnabled,
                         videoEnabled: uiState.localVideoEnabled,
@@ -668,22 +676,25 @@ struct CallScreenView: View {
                 }
             }
         } label: {
+            let resolvedName = isLocal
+                ? (displayName ?? str(.callYou))
+                : (displayName ?? cid)
             HStack(spacing: 12) {
                 Circle()
                     .fill(Color.white.opacity(0.15))
                     .frame(width: 36, height: 36)
                     .overlay(
-                        Text(String((displayName ?? cid).prefix(1)).uppercased())
+                        Text(String(resolvedName.prefix(1)).uppercased())
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white)
                     )
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(displayName ?? cid)
+                    Text(resolvedName)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                    if isLocal {
+                    if isLocal && displayName != nil {
                         Text(str(.callYou))
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.6))

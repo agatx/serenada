@@ -26,7 +26,7 @@ describe('parseJoinedPayload', () => {
             turnTokenTTLMs: 60000,
             reconnectToken: 'rt',
             maxParticipants: 4,
-            mode: 'video',
+            mode: undefined,
         });
     });
 
@@ -63,7 +63,7 @@ describe('parseJoinedPayload', () => {
             turnTokenTTLMs: undefined,
             reconnectToken: undefined,
             maxParticipants: undefined,
-            mode: 'video',
+            mode: undefined,
         });
     });
 
@@ -80,7 +80,7 @@ describe('parseJoinedPayload', () => {
             turnTokenTTLMs: undefined,
             reconnectToken: undefined,
             maxParticipants: undefined,
-            mode: 'video',
+            mode: undefined,
         });
     });
 });
@@ -99,7 +99,7 @@ describe('parseRoomStatePayload', () => {
                 { cid: 'b', joinedAt: 200 },
             ],
             maxParticipants: 2,
-            mode: 'video',
+            mode: undefined,
         });
     });
 
@@ -125,7 +125,7 @@ describe('parseRoomStatePayload', () => {
             hostCid: null,
             participants: [],
             maxParticipants: undefined,
-            mode: 'video',
+            mode: undefined,
         });
     });
 });

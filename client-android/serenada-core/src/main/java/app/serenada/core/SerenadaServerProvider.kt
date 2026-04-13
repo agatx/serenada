@@ -219,7 +219,7 @@ internal class SerenadaServerProvider(
         currentTurnToken = payload.turnToken
         payload.turnTokenTTLMs?.let { scheduleTurnRefresh(it) } ?: clearTurnRefresh()
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName)
+            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName, audioEnabled = participant.audioEnabled, videoEnabled = participant.videoEnabled)
         }
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
             participants.forEach { put(it.peerId, it) }
@@ -239,7 +239,7 @@ internal class SerenadaServerProvider(
         val payload = message.payload.toRoomStatePayload() ?: return
         currentHostPeerId = payload.hostCid
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName)
+            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName, audioEnabled = participant.audioEnabled, videoEnabled = participant.videoEnabled)
         }
         emitParticipantDiffs(participants)
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {

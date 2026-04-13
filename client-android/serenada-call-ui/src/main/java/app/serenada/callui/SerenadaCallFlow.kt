@@ -309,6 +309,7 @@ private fun rememberCallUiState(
             phase = state.phase,
             roomId = state.roomId,
             localCid = state.localCid,
+            localDisplayName = state.localDisplayName,
             errorMessageText = state.error?.displayMessage,
             isHost = state.isHost,
             participantCount = state.participantCount,
@@ -329,6 +330,7 @@ private fun rememberCallUiState(
             isFlashEnabled = diagnostics.isFlashEnabled,
             remoteContentCid = diagnostics.remoteContentCid,
             remoteContentType = diagnostics.remoteContentType,
+            callMode = state.callMode,
         )
     }
 }

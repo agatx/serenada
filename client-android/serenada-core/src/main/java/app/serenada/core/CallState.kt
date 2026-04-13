@@ -19,6 +19,8 @@ data class CallState(
     val roomId: String? = null,
     /** Local client identifier assigned by the server. */
     val localCid: String? = null,
+    /** Display name of the local user, if provided at join time. */
+    val localDisplayName: String? = null,
     /** Whether the local user created this room. */
     val isHost: Boolean = false,
     /** Number of participants currently in the call. */

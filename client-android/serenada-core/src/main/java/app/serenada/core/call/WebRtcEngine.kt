@@ -205,12 +205,12 @@ internal class WebRtcEngine(
         cameraController.resetCameraSourceToSelfie()
         if (!cameraController.restartVideoCapturer(CameraCaptureController.LocalCameraSource.SELFIE, videoSource)) {
             logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available for ${CameraCaptureController.LocalCameraSource.SELFIE}")
+            // Camera failed but keep audio working — attach audio-only to peer slots
             videoSource?.dispose()
             videoSource = null
-            localAudioTrack?.setEnabled(false)
-            localAudioTrack = null
-            audioSource?.dispose()
-            audioSource = null
+            peerSlots.forEach { slot ->
+                slot.attachLocalTracks(localAudioTrack, null)
+            }
             return
         }
         localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
@@ -224,15 +224,7 @@ internal class WebRtcEngine(
     }
 
     override fun startLocalAudioOnly() {
-        if (released) return
-        if (localAudioTrack != null) return
-        val audioConstraints = MediaConstraints()
-        audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
-        localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
-        applyAudioTrackHints()
-        peerSlots.forEach { slot ->
-            slot.attachLocalTracks(localAudioTrack, null)
-        }
+        startLocalMedia()
     }
 
     fun stopLocalMedia() {

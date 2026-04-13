@@ -23,6 +23,8 @@ data class SignalingProviderParticipant(
     val peerId: String,
     val joinedAt: Long? = null,
     val displayName: String? = null,
+    val audioEnabled: Boolean? = null,
+    val videoEnabled: Boolean? = null,
 )
 
 data class JoinedEvent(

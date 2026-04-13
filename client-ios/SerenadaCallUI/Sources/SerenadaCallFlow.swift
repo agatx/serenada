@@ -298,6 +298,7 @@ private struct SessionFirstCallFlow: View {
         uiState.phase = mapPhase(state.phase)
         uiState.roomId = state.roomId
         uiState.localCid = state.localParticipant.cid
+        uiState.localDisplayName = state.localParticipant.displayName
         uiState.isHost = state.localParticipant.isHost
         uiState.localAudioEnabled = state.localParticipant.audioEnabled
         uiState.localVideoEnabled = state.localParticipant.videoEnabled

@@ -402,6 +402,8 @@ const CALL_FLOW_CSS = `
 [data-serenada-callflow].voice-mode .voice-call-container {
   display: flex;
   flex-direction: column;
+  padding-bottom: 100px;
+  overflow: visible;
   background:
     radial-gradient(ellipse at 50% 20%, rgba(47, 129, 247, 0.10), transparent 60%),
     radial-gradient(ellipse at 50% 90%, rgba(255, 255, 255, 0.03), transparent 40%),
@@ -412,10 +414,12 @@ const CALL_FLOW_CSS = `
 
 [data-serenada-callflow].voice-mode .voice-centered {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 60px 24px 140px;
+  overflow-y: auto;
+  padding: 60px 24px 24px;
 }
 
 [data-serenada-callflow].voice-mode .voice-centered .voice-participant-list {
@@ -457,7 +461,7 @@ const CALL_FLOW_CSS = `
   flex: 0 0 auto;
   max-height: 35vh;
   overflow-y: auto;
-  padding: 8px 12px 140px;
+  padding: 8px 12px 8px;
 }
 
 /* Participant list */
@@ -548,7 +552,7 @@ const CALL_FLOW_CSS = `
   [data-serenada-callflow].voice-mode .voice-sidebar {
     flex: 0 0 280px;
     max-height: none;
-    padding: 16px 16px 140px;
+    padding: 16px;
     overflow-y: auto;
   }
 

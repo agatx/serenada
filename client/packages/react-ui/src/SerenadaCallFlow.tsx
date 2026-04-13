@@ -451,8 +451,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         }
     }, []);
 
+    const isVoiceModeRef = useRef(effectiveState.callMode === 'voice');
+    isVoiceModeRef.current = effectiveState.callMode === 'voice';
+
     const scheduleIdleHide = useCallback(() => {
         if (!isControlsAutoHideEnabledRef.current) return;
+        if (isVoiceModeRef.current) return;
         clearIdleHide();
         idleTimeoutRef.current = window.setTimeout(() => {
             wereControlsLastHiddenByAutoHideRef.current = true;
@@ -469,6 +473,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             return;
         }
 
+        if (effectiveState.callMode === 'voice') {
+            clearIdleHide();
+            setAreControlsVisible(true);
+            return;
+        }
+
         isControlsAutoHideEnabledRef.current = true;
         wereControlsLastHiddenByAutoHideRef.current = false;
         setAreControlsVisible(true);
@@ -477,7 +487,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         return () => {
             clearIdleHide();
         };
-    }, [clearIdleHide, effectiveState.phase, scheduleIdleHide]);
+    }, [clearIdleHide, effectiveState.callMode, effectiveState.phase, scheduleIdleHide]);
 
     const handleControlsInteraction = useCallback(() => {
         setAreControlsVisible(true);
@@ -491,6 +501,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [clearIdleHide, scheduleIdleHide]);
 
     const handleScreenTap = useCallback(() => {
+        if (isVoiceModeRef.current) return;
         setAreControlsVisible((prev) => {
             const next = !prev;
             if (next) {
@@ -898,11 +909,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                         onClick={() => p.videoEnabled ? setSelectedVoiceParticipantId(p.cid) : undefined}
                     >
                         <span className="voice-avatar">
-                            {(p.displayName || p.cid).charAt(0).toUpperCase()}
+                            {(p.isLocal ? (p.displayName || resolveString('you', strings) || 'You') : (p.displayName || p.cid)).charAt(0).toUpperCase()}
                         </span>
                         <span className="voice-participant-info">
                             <span className="voice-participant-name">{p.isLocal ? (p.displayName || resolveString('you', strings) || 'You') : (p.displayName || p.cid.slice(0, 8))}</span>
-                            {p.isLocal && <span className="voice-participant-you">{resolveString('you', strings) || 'You'}</span>}
+                            {p.isLocal && p.displayName && <span className="voice-participant-you">{resolveString('you', strings) || 'You'}</span>}
                         </span>
                         <span className="voice-participant-icons">
                             {p.videoEnabled && <Video size={15} />}

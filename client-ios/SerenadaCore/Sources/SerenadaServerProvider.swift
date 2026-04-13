@@ -238,7 +238,7 @@ private extension SerenadaServerProvider {
 
         let participants = dedupeProviderParticipants(
             participants: (payload.participants ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName)
+                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled)
             },
             localPeerId: peerId
         )
@@ -291,7 +291,7 @@ private extension SerenadaServerProvider {
         guard let object = payload?.objectValue else { return nil }
         let participants = dedupeProviderParticipants(
             participants: (parseParticipants(from: object["participants"]?.arrayValue) ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName)
+                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled)
             },
             localPeerId: clientId
         )
