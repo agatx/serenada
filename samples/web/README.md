@@ -4,8 +4,10 @@ Minimal web host app demonstrating Serenada SDK integration with React.
 
 ## What it does
 
-- Accepts a call URL and renders `<SerenadaCallFlow>`
-- Creates a new room via `createSerenadaCore().createRoom()`
+- Accepts a call URL and renders `<SerenadaCallFlow>` using built-in Serenada signaling
+- Creates a new room via `createSerenadaCore({ serverHost }).createRoom()` and joins explicitly with `join()`
+- Starts a custom-provider demo backed by an in-memory `SignalingProvider`
+- Shows provider-mode incremental `peerJoined` events plus `onPeerMessage()` delivery without Serenada transport
 - Runs as a standalone Vite app inside this repository
 - Resolves `@serenada/core` and `@serenada/react-ui` directly from local source in `client/packages/`
 
@@ -48,10 +50,41 @@ const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 // 2a. Join an existing invite link by URL
 <SerenadaCallFlow url={callUrl} onDismiss={() => navigate('/')} />
 
-// 2b. When you create a room, reuse the returned session.
-// createRoom() already joins once, so passing only room.url would join twice.
+// 2b. Create a room, then join explicitly.
 const room = await serenada.createRoom()
-<SerenadaCallFlow url={room.url} session={room.session} onDismiss={() => navigate('/')} />
+const session = serenada.join(room.url)
+<SerenadaCallFlow session={session} onDismiss={() => navigate('/')} />
+```
+
+Provider mode uses the same SDK package with an injected provider instead of `serverHost`:
+
+```tsx
+import {
+  SignalingProviderEmitter,
+  createSerenadaCore,
+} from '@serenada/core'
+
+class DemoProvider extends SignalingProviderEmitter {
+  connect() { this.emit('connected', { transport: 'mock' }) }
+  disconnect() {}
+  joinRoom(roomId: string) {
+    this.emit('joined', {
+      peerId: 'sample-local',
+      participants: [{ peerId: 'sample-local', joinedAt: 1 }],
+    })
+  }
+  leaveRoom() {}
+  endRoom() {}
+  sendToPeer() {}
+  broadcast() {}
+  async getIceServers() { return [] }
+}
+
+const providerCore = createSerenadaCore({
+  signalingProvider: new DemoProvider(),
+})
+const session = providerCore.join({ roomId: 'provider-demo-room' })
+session.onPeerMessage((message) => console.log(message.type))
 ```
 
 ## Transport Visibility

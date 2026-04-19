@@ -3,10 +3,9 @@ package app.serenada.core.fakes
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaSession
 import app.serenada.core.call.SessionClock
-import app.serenada.core.call.SignalingMessage
 import okhttp3.OkHttpClient
-import org.json.JSONArray
 import org.json.JSONObject
+import org.webrtc.PeerConnection
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.shadows.ShadowLooper
@@ -18,11 +17,10 @@ internal class FakeSessionClock(private var currentTimeMs: Long = 0L) : SessionC
 
 internal class TestSessionFactory(
     val roomId: String = "test-room-id",
-    val serverHost: String = "test.serenada.app",
+    val handlesReconnection: Boolean = false,
     config: SerenadaConfig? = null,
 ) {
-    val fakeSignaling = FakeSignaling()
-    val fakeAPI = FakeAPIClient()
+    val fakeProvider = FakeSignalingProvider(handlesReconnection = handlesReconnection)
     val fakeAudio = FakeAudioController()
     val fakeMedia = FakeMediaEngine()
     val fakeClock = FakeSessionClock()
@@ -30,13 +28,11 @@ internal class TestSessionFactory(
     val session: SerenadaSession = SerenadaSession(
         roomId = roomId,
         roomUrl = null,
-        serverHost = serverHost,
-        config = config ?: SerenadaConfig(serverHost = serverHost),
+        config = config ?: SerenadaConfig(signalingProvider = fakeProvider),
         context = RuntimeEnvironment.getApplication(),
         delegate = null,
         okHttpClient = OkHttpClient(),
-        signaling = fakeSignaling,
-        apiClient = fakeAPI,
+        initialSignalingProvider = fakeProvider,
         audioController = fakeAudio,
         mediaEngine = fakeMedia,
         clock = fakeClock,
@@ -58,7 +54,7 @@ internal class TestSessionFactory(
     }
 
     fun openSignaling(transport: String = "ws") {
-        fakeSignaling.simulateOpen(transport)
+        fakeProvider.simulateConnected(transport)
         ShadowLooper.idleMainLooper()
     }
 
@@ -66,41 +62,18 @@ internal class TestSessionFactory(
         cid: String = "local-cid-1",
         participants: List<Pair<String, Long>> = emptyList(),
         hostCid: String? = null,
-        turnToken: String? = null,
     ) {
-        val payload = JSONObject()
         val resolvedHost = hostCid ?: cid
-        payload.put("hostCid", resolvedHost)
-
-        val participantsArray = JSONArray()
-        if (participants.isEmpty()) {
-            participantsArray.put(JSONObject().apply {
-                put("cid", cid)
-                put("joinedAt", 1L)
-            })
+        val resolvedParticipants = if (participants.isEmpty()) {
+            listOf(cid to 1L)
         } else {
-            for ((pCid, joinedAt) in participants) {
-                participantsArray.put(JSONObject().apply {
-                    put("cid", pCid)
-                    put("joinedAt", joinedAt)
-                })
-            }
+            participants
         }
-        payload.put("participants", participantsArray)
-
-        if (turnToken != null) {
-            payload.put("turnToken", turnToken)
-        }
-
-        val msg = SignalingMessage(
-            type = "joined",
-            rid = roomId,
-            sid = null,
-            cid = cid,
-            to = null,
-            payload = payload,
+        fakeProvider.simulateJoined(
+            peerId = cid,
+            participants = resolvedParticipants,
+            hostPeerId = resolvedHost,
         )
-        fakeSignaling.simulateMessage(msg)
         ShadowLooper.idleMainLooper()
     }
 
@@ -108,43 +81,15 @@ internal class TestSessionFactory(
         participants: List<Pair<String, Long>>,
         hostCid: String,
     ) {
-        val payload = JSONObject()
-        payload.put("hostCid", hostCid)
-        val participantsArray = JSONArray()
-        for ((cid, joinedAt) in participants) {
-            participantsArray.put(JSONObject().apply {
-                put("cid", cid)
-                put("joinedAt", joinedAt)
-            })
-        }
-        payload.put("participants", participantsArray)
-
-        val msg = SignalingMessage(
-            type = "room_state",
-            rid = roomId,
-            sid = null,
-            cid = null,
-            to = null,
-            payload = payload,
+        fakeProvider.simulateRoomStateUpdated(
+            participants = participants,
+            hostPeerId = hostCid,
         )
-        fakeSignaling.simulateMessage(msg)
         ShadowLooper.idleMainLooper()
     }
 
     fun simulateError(code: String, message: String) {
-        val payload = JSONObject().apply {
-            put("code", code)
-            put("message", message)
-        }
-        val msg = SignalingMessage(
-            type = "error",
-            rid = roomId,
-            sid = null,
-            cid = null,
-            to = null,
-            payload = payload,
-        )
-        fakeSignaling.simulateMessage(msg)
+        fakeProvider.simulateError(code = code, message = message)
         ShadowLooper.idleMainLooper()
     }
 
@@ -153,7 +98,7 @@ internal class TestSessionFactory(
             put("from", fromCid)
             put("sdp", sdp)
         }
-        fakeSignaling.simulateMessage(SignalingMessage("offer", roomId, null, null, null, payload))
+        fakeProvider.simulateMessage(from = fromCid, type = "offer", payload = payload)
         ShadowLooper.idleMainLooper()
     }
 
@@ -162,7 +107,7 @@ internal class TestSessionFactory(
             put("from", fromCid)
             put("sdp", sdp)
         }
-        fakeSignaling.simulateMessage(SignalingMessage("answer", roomId, null, null, null, payload))
+        fakeProvider.simulateMessage(from = fromCid, type = "answer", payload = payload)
         ShadowLooper.idleMainLooper()
     }
 
@@ -175,7 +120,7 @@ internal class TestSessionFactory(
                 put("sdpMLineIndex", 0)
             })
         }
-        fakeSignaling.simulateMessage(SignalingMessage("ice", roomId, null, null, null, payload))
+        fakeProvider.simulateMessage(from = fromCid, type = "ice", payload = payload)
         ShadowLooper.idleMainLooper()
     }
 
@@ -184,15 +129,20 @@ internal class TestSessionFactory(
         remoteCid: String = "remote-cid-1",
         localJoinedAt: Long = 1L,
         remoteJoinedAt: Long = 2L,
-        turnToken: String = "test-turn-token",
+        iceServers: List<PeerConnection.IceServer> = listOf(
+            PeerConnection.IceServer.builder("turn:turn.example.com:3478")
+                .setUsername("user")
+                .setPassword("pass")
+                .createIceServer()
+        ),
     ) {
+        fakeProvider.enqueueIceServers(Result.success(iceServers))
         grantPermissionsAndStart()
         openSignaling()
         simulateJoinedResponse(
             cid = localCid,
             participants = listOf(localCid to localJoinedAt, remoteCid to remoteJoinedAt),
             hostCid = localCid,
-            turnToken = turnToken,
         )
     }
 

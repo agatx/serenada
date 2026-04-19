@@ -82,6 +82,18 @@ class SettingsStore(context: Context) {
             prefs.edit().putBoolean(KEY_REMOTE_VIDEO_FIT_COVER, value).apply()
         }
 
+    var displayName: String
+        get() = prefs.getString(KEY_DISPLAY_NAME, "") ?: ""
+        set(value) {
+            val trimmed = value.trim()
+            val editor = prefs.edit()
+            if (trimmed.isNotBlank()) {
+                editor.putString(KEY_DISPLAY_NAME, trimmed)
+            } else {
+                editor.remove(KEY_DISPLAY_NAME)
+            }
+            editor.apply()
+        }
 
     companion object {
         const val DEFAULT_HOST = "serenada.app"
@@ -105,6 +117,7 @@ class SettingsStore(context: Context) {
         private const val KEY_SAVED_ROOMS_SHOWN_FIRST = "saved_rooms_shown_first"
         private const val KEY_ROOM_INVITE_NOTIFICATIONS_ENABLED = "room_invite_notifications_enabled"
         private const val KEY_REMOTE_VIDEO_FIT_COVER = "remote_video_fit_cover"
+        private const val KEY_DISPLAY_NAME = "display_name"
 
         fun normalizeLanguage(value: String?): String =
             when (value) {

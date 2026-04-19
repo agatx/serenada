@@ -1,8 +1,11 @@
 import type { SerenadaConfig, CallState, CreateRoomResult, SerenadaSessionHandle } from './types.js';
-import type { SignalingMessage } from './signaling/types.js';
 import { SerenadaSession } from './SerenadaSession.js';
 import { createRoomId } from './api/roomApi.js';
 import { buildRoomUrl } from './serverUrls.js';
+import type { ResolvedSerenadaConfig } from './configValidation.js';
+import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
+import { SerenadaServerProvider } from './SerenadaServerProvider.js';
+import type { PeerMessage, SignalingProvider } from './SignalingProvider.js';
 
 /**
  * Main entry point for the Serenada SDK.
@@ -10,10 +13,12 @@ import { buildRoomUrl } from './serverUrls.js';
  * {@link createRoom} to start a call.
  */
 export class SerenadaCore {
-    private config: SerenadaConfig;
+    private readonly config: SerenadaConfig;
+    private readonly resolvedConfig: ResolvedSerenadaConfig;
 
     constructor(config: SerenadaConfig) {
         this.config = config;
+        this.resolvedConfig = resolveSerenadaConfig(config);
     }
 
     /** Check if the current browser supports WebRTC calling. */
@@ -22,30 +27,30 @@ export class SerenadaCore {
     }
 
     /** Join an existing call by URL. Returns a session handle. */
-    join(url: string): SerenadaSessionHandle;
+    join(url: string, options?: { displayName?: string }): SerenadaSessionHandle;
     /** Join an existing call by room ID. Returns a session handle. */
-    join(options: { roomId: string }): SerenadaSessionHandle;
-    join(urlOrOptions: string | { roomId: string }): SerenadaSessionHandle {
+    join(options: { roomId: string; displayName?: string }): SerenadaSessionHandle;
+    join(urlOrOptions: string | { roomId: string; displayName?: string }, extraOptions?: { displayName?: string }): SerenadaSessionHandle {
         if (!SerenadaCore.isSupported()) {
             return this.createUnsupportedSession();
         }
+        const signalingProvider = this.createSignalingProvider();
         if (typeof urlOrOptions === 'string') {
             const roomId = this.parseRoomIdFromUrl(urlOrOptions);
-            return new SerenadaSession(this.config, roomId, urlOrOptions);
+            return new SerenadaSession(this.config, roomId, urlOrOptions, signalingProvider, { displayName: extraOptions?.displayName });
         }
-        const roomUrl = buildRoomUrl(this.config.serverHost, urlOrOptions.roomId);
-        return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl);
+        const roomUrl = this.resolvedConfig.serverHost
+            ? buildRoomUrl(this.resolvedConfig.serverHost, urlOrOptions.roomId)
+            : null;
+        return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl, signalingProvider, { displayName: urlOrOptions.displayName });
     }
 
-    /** Create a new room and immediately join it. Returns the room URL, ID, and session handle. */
+    /** Create a new room. Returns the room URL and ID. Call {@link join} to start the call. */
     async createRoom(): Promise<CreateRoomResult> {
-        if (!SerenadaCore.isSupported()) {
-            throw new Error('WebRTC is not supported in this environment');
-        }
-        const roomId = await createRoomId(this.config.serverHost);
-        const url = buildRoomUrl(this.config.serverHost, roomId);
-        const session = new SerenadaSession(this.config, roomId, url);
-        return { url, roomId, session };
+        const serverHost = requireServerHost(this.config);
+        const roomId = await createRoomId(serverHost);
+        const url = buildRoomUrl(serverHost, roomId);
+        return { url, roomId };
     }
 
     private createUnsupportedSession(): SerenadaSessionHandle {
@@ -66,7 +71,7 @@ export class SerenadaCore {
         return {
             get state() { return errorState; },
             subscribe(_cb: (state: CallState) => void) { return noop; },
-            subscribeToMessages(_cb: (message: SignalingMessage) => void) { return noop; },
+            onPeerMessage(_cb: (message: PeerMessage) => void) { return noop; },
             leave: noop,
             end: noop,
             toggleAudio: noop,
@@ -91,6 +96,17 @@ export class SerenadaCore {
             get rtcSignalingState(): RTCSignalingState { return 'closed'; },
             onPermissionsRequired: null,
         };
+    }
+
+    private createSignalingProvider(): SignalingProvider {
+        if (this.resolvedConfig.serverHost) {
+            return new SerenadaServerProvider({
+                serverHost: this.resolvedConfig.serverHost,
+                transports: this.config.transports,
+                logger: this.config.logger,
+            });
+        }
+        return this.resolvedConfig.signalingProvider as SignalingProvider;
     }
 
     private parseRoomIdFromUrl(url: string): string {

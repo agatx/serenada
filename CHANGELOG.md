@@ -4,6 +4,20 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] — 2026-03-28
+
+### Added
+- Pluggable signaling provider support across web, Android, and iOS SDKs
+- Built-in server-provider adapters on all SDK platforms to preserve the existing hosted signaling flow
+- Cross-platform provider-mode regression coverage for diagnostics, room watching, ICE refresh, and negotiation fallback recovery
+
+### Changed
+- SDK config now requires exactly one of built-in `serverHost` or custom `signalingProvider`
+- Offer ownership now uses lexicographic peer ID ordering on web, Android, and iOS
+- Web peer-message integration now uses `onPeerMessage()` instead of exposing `subscribeToMessages()`
+- Provider mode now gates server-only APIs and server-bound diagnostics with clear `requires serverHost` failures
+- iOS `SerenadaDiagnostics.runConnectivityChecks()` is now `async throws`, which is a source-compatible break for existing call sites
+
 ## [0.2.0] — 2026-03-23
 
 ### Added

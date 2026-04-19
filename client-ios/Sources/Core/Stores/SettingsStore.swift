@@ -12,6 +12,7 @@ final class SettingsStore {
         static let savedRoomsShownFirst = "saved_rooms_shown_first"
         static let roomInviteNotificationsEnabled = "room_invite_notifications_enabled"
         static let remoteVideoFitCover = "remote_video_fit_cover"
+        static let displayName = "display_name"
     }
 
     private let defaults: UserDefaults
@@ -114,6 +115,21 @@ final class SettingsStore {
         }
         set {
             defaults.set(newValue, forKey: Key.roomInviteNotificationsEnabled)
+        }
+    }
+
+    var displayName: String {
+        get {
+            let value = defaults.string(forKey: Key.displayName)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value ?? ""
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                defaults.removeObject(forKey: Key.displayName)
+            } else {
+                defaults.set(trimmed, forKey: Key.displayName)
+            }
         }
     }
 

@@ -48,9 +48,9 @@ func primaryLocalVideoContentMode(localCameraMode: LocalCameraMode) -> UIView.Co
 
 func pipBottomPadding(isLandscape: Bool, areControlsVisible: Bool) -> CGFloat {
     if isLandscape {
-        return areControlsVisible ? 92 : 24
+        return areControlsVisible ? 80 : 24
     }
-    return areControlsVisible ? 170 : 52
+    return areControlsVisible ? 140 : 52
 }
 
 enum DebugStatus {
@@ -332,6 +332,8 @@ struct CallScreenView: View {
                     remoteTileAspectRatios: $remoteTileAspectRatios,
                     localCid: uiState.localCid,
                     localVideoEnabled: uiState.localVideoEnabled,
+                    localAudioEnabled: uiState.localAudioEnabled,
+                    localDisplayName: uiState.localDisplayName,
                     localMirror: uiState.isFrontCamera,
                     localCameraMode: uiState.localCameraMode,
                     isScreenSharing: uiState.isScreenSharing,
@@ -359,23 +361,32 @@ struct CallScreenView: View {
                     }
                 )
             } else if showLocalAsPrimarySurface {
-                mainVideoSurface(
-                    kind: .local,
-                    videoContentMode: primaryLocalVideoContentMode(localCameraMode: uiState.localCameraMode),
-                    showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
-                    placeholderText: str(.callLocalCameraOff)
-                )
+                ZStack(alignment: .bottomLeading) {
+                    mainVideoSurface(
+                        kind: .local,
+                        videoContentMode: primaryLocalVideoContentMode(localCameraMode: uiState.localCameraMode),
+                        showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
+                        placeholderText: str(.callLocalCameraOff)
+                    )
+                    ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName)
+                }
+                .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallRemoteView
             } else {
-                mainVideoSurface(
-                    kind: .remote,
-                    videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit,
-                    showPlaceholder: shouldShowRemoteVideoPlaceholder(
-                        phase: uiState.phase,
-                        remoteVideoEnabled: uiState.remoteVideoEnabled
-                    ),
-                    placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil
-                )
+                ZStack(alignment: .bottomLeading) {
+                    mainVideoSurface(
+                        kind: .remote,
+                        videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit,
+                        showPlaceholder: shouldShowRemoteVideoPlaceholder(
+                            phase: uiState.phase,
+                            remoteVideoEnabled: uiState.remoteVideoEnabled
+                        ),
+                        placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil,
+                        placeholderDisplayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
+                    )
+                    ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
+                }
+                .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallLocalView
             }
 
@@ -484,7 +495,8 @@ struct CallScreenView: View {
         kind: WebRTCVideoView.Kind,
         videoContentMode: UIView.ContentMode = .scaleAspectFill,
         showPlaceholder: Bool,
-        placeholderText: String?
+        placeholderText: String?,
+        placeholderDisplayName: String? = nil
     ) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -497,7 +509,7 @@ struct CallScreenView: View {
                 .ignoresSafeArea()
 
             if showPlaceholder {
-                VideoPlaceholderTile(text: placeholderText, compact: false)
+                VideoPlaceholderTile(text: placeholderText, compact: false, displayName: placeholderDisplayName)
                     .ignoresSafeArea()
             }
         }
@@ -508,7 +520,7 @@ struct CallScreenView: View {
     }
 
     private var smallLocalView: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             WebRTCVideoView(
                 kind: .local,
@@ -520,6 +532,8 @@ struct CallScreenView: View {
             if shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled) {
                 VideoPlaceholderTile(text: str(.callCameraOff), compact: true)
             }
+
+            ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName)
         }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -535,13 +549,19 @@ struct CallScreenView: View {
     }
 
     private var smallRemoteView: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             WebRTCVideoView(kind: .remote, rendererProvider: rendererProvider, videoContentMode: .scaleAspectFill)
 
             if shouldShowRemoteVideoPlaceholder(phase: uiState.phase, remoteVideoEnabled: uiState.remoteVideoEnabled) {
-                VideoPlaceholderTile(text: uiState.phase == .inCall ? str(.callVideoOff) : nil, compact: true)
+                VideoPlaceholderTile(
+                    text: uiState.phase == .inCall ? str(.callVideoOff) : nil,
+                    compact: true,
+                    displayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
+                )
             }
+
+            ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
         }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -588,7 +608,8 @@ struct CallScreenView: View {
     }
 
     private var topStatus: some View {
-        VStack(spacing: 8) {
+        let autoHideOpacity: Double = uiState.phase == .waiting ? 1 : (areControlsVisible ? 1 : 0)
+        return VStack(spacing: 8) {
             HStack(spacing: 8) {
                 if uiState.phase == .inCall &&
                     (uiState.connectionStatus == .retrying || showRecoveringBadge) {
@@ -607,6 +628,7 @@ struct CallScreenView: View {
                     .padding(.vertical, 6)
                     .background(Color.black.opacity(0.45))
                     .clipShape(Capsule())
+                    .opacity(autoHideOpacity)
                 }
 
                 Spacer()
@@ -615,6 +637,7 @@ struct CallScreenView: View {
                     iconButton(system: uiState.isFlashEnabled ? "flashlight.on.fill" : "flashlight.off.fill", accessibilityLabel: uiState.isFlashEnabled ? str(.callA11yFlashlightOn) : str(.callA11yFlashlightOff)) {
                         onToggleFlashlight()
                     }
+                    .opacity(autoHideOpacity)
                 }
 
                 if uiState.phase == .waiting && config.inviteControlsEnabled {
@@ -693,7 +716,6 @@ struct CallScreenView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
-        .opacity(uiState.phase == .waiting ? 1 : (areControlsVisible ? 1 : 0))
     }
 
     private var controlBar: some View {
@@ -853,6 +875,8 @@ private struct MultiPartyStage: View {
     @Binding var remoteTileAspectRatios: [String: CGFloat]
     let localCid: String?
     let localVideoEnabled: Bool
+    let localAudioEnabled: Bool
+    let localDisplayName: String?
     let localMirror: Bool
     let localCameraMode: LocalCameraMode
     let isScreenSharing: Bool
@@ -888,7 +912,7 @@ private struct MultiPartyStage: View {
     var body: some View {
         GeometryReader { geometry in
             let availableWidth = geometry.size.width - outerPadding * 2
-            let availableHeight = max(0, geometry.size.height - (20 + bottomPadding + 12))
+            let availableHeight = max(0, geometry.size.height - (20 + bottomPadding + 4))
             let useComputedLayout = localCid != nil && (pinnedParticipantId != nil || hasContentSource)
 
             if useComputedLayout, let localCid {
@@ -930,7 +954,7 @@ private struct MultiPartyStage: View {
                 let layoutResult = computeLayout(scene: CallScene(
                     viewportWidth: geometry.size.width,
                     viewportHeight: geometry.size.height,
-                    safeAreaInsets: LayoutInsets(top: 20, bottom: bottomPadding + 12, left: 0, right: 0),
+                    safeAreaInsets: LayoutInsets(top: 20, bottom: bottomPadding + 4, left: 0, right: 0),
                     participants: participants,
                     localParticipantId: localCid,
                     activeSpeakerId: nil,
@@ -980,7 +1004,7 @@ private struct MultiPartyStage: View {
                                     }
                                 )
                                 if !participant.videoEnabled {
-                                    VideoPlaceholderTile(text: str(.callVideoOff), compact: false)
+                                    VideoPlaceholderTile(text: str(.callVideoOff), compact: false, displayName: participant.displayName)
                                 }
                             }
 
@@ -1022,6 +1046,14 @@ private struct MultiPartyStage: View {
                                         .padding(8)
                                     }
                                 }
+                            }
+
+                            if !isContentTile {
+                                let tileRemote = isLocal ? nil : remoteParticipants.first(where: { $0.cid == tile.id })
+                                let tileAudioMuted = isLocal ? !localAudioEnabled : tileRemote?.audioEnabled == false
+                                let tileName = isLocal ? localDisplayName : tileRemote?.displayName
+                                ParticipantBadge(muted: tileAudioMuted, displayName: tileName)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                             }
                         }
                         .frame(width: tile.frame.width, height: tile.frame.height)
@@ -1100,10 +1132,12 @@ private struct MultiPartyStage: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal, outerPadding)
                     .padding(.top, 20)
-                    .padding(.bottom, bottomPadding + 12)
+                    .padding(.bottom, bottomPadding + 4)
 
                     MultiPartyLocalPip(
                         localVideoEnabled: localVideoEnabled,
+                        localAudioEnabled: localAudioEnabled,
+                        localDisplayName: localDisplayName,
                         localMirror: localMirror,
                         cornerRadius: pipCornerRadius,
                         rendererProvider: rendererProvider,
@@ -1130,7 +1164,7 @@ private struct RemoteParticipantStageTile: View {
     let onVideoSizeChanged: (CGSize) -> Void
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             WebRTCVideoView(
                 kind: .remoteForCid(participant.cid),
@@ -1139,8 +1173,9 @@ private struct RemoteParticipantStageTile: View {
                 onVideoSizeChanged: onVideoSizeChanged
             )
             if !participant.videoEnabled {
-                VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false)
+                VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false, displayName: participant.displayName)
             }
+            ParticipantBadge(muted: participant.audioEnabled == false, displayName: participant.displayName)
         }
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -1153,13 +1188,15 @@ private struct RemoteParticipantStageTile: View {
 
 private struct MultiPartyLocalPip: View {
     let localVideoEnabled: Bool
+    let localAudioEnabled: Bool
+    let localDisplayName: String?
     let localMirror: Bool
     let cornerRadius: CGFloat
     let rendererProvider: CallRendererProvider
     let strings: [SerenadaString: String]?
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomLeading) {
             Color.black
             if localVideoEnabled {
                 WebRTCVideoView(
@@ -1171,6 +1208,7 @@ private struct MultiPartyLocalPip: View {
             } else {
                 VideoPlaceholderTile(text: resolveString(.callCameraOff, overrides: strings), compact: true)
             }
+            ParticipantBadge(muted: !localAudioEnabled, displayName: localDisplayName)
         }
         .frame(width: 100, height: 150)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -1184,23 +1222,61 @@ private struct MultiPartyLocalPip: View {
 struct VideoPlaceholderTile: View {
     let text: String?
     let compact: Bool
+    var displayName: String? = nil
 
     var body: some View {
         ZStack {
             Color.black
-            VStack(spacing: compact ? 6 : 10) {
-                Image(systemName: "video.slash.fill")
-                    .font(.system(size: compact ? 20 : 34, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-
-                if let text, !text.isEmpty {
-                    Text(text)
-                        .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
+            if let name = displayName, !name.isEmpty {
+                Text(name)
+                    .font(compact ? .system(size: 13, weight: .semibold) : .system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, compact ? 6 : 16)
+            } else {
+                VStack(spacing: compact ? 6 : 10) {
+                    Image(systemName: "video.slash.fill")
+                        .font(.system(size: compact ? 20 : 34, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.9))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, compact ? 6 : 16)
+
+                    if let text, !text.isEmpty {
+                        Text(text)
+                            .font(compact ? .caption2.weight(.semibold) : .subheadline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, compact ? 6 : 16)
+                    }
                 }
             }
+        }
+    }
+}
+
+private struct ParticipantBadge: View {
+    var muted: Bool = false
+    var displayName: String? = nil
+
+    var body: some View {
+        if muted || displayName != nil {
+            HStack(spacing: 4) {
+                if muted {
+                    Image(systemName: "mic.slash.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.94, green: 0.27, blue: 0.27))
+                }
+                if let name = displayName {
+                    Text(name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+            .background(Color.black.opacity(0.56))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(6)
         }
     }
 }

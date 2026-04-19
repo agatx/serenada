@@ -1,4 +1,61 @@
-# Serenada SDK — Feature Toggles, String Overrides & Theming
+# Serenada SDK — Custom Signaling, Feature Toggles, String Overrides & Theming
+
+## Custom Signaling Providers
+
+Serenada can run against the built-in Serenada signaling server or an injected `SignalingProvider`. Choose exactly one signaling mode per `SerenadaConfig`:
+
+- Built-in mode: `serverHost`
+- Provider mode: `signalingProvider`
+
+Provider mode is best for integrators who already have their own peer-message delivery and room membership system.
+
+### Provider contract expectations
+
+- `joined` is the required initial membership event.
+- `roomStateUpdated` is optional. Incremental `peerJoined` / `peerLeft` is sufficient.
+- `hostPeerId` is optional. UI and session layers tolerate it being absent.
+- `peerId` is the provider-facing identifier. Built-in `cid` mapping stays internal.
+- `getIceServers()` supplies the initial ICE server list.
+- `iceServersChanged` rotates ICE servers for both current and future peer connections.
+
+### Reconnection ownership
+
+`ProviderCapabilities.handlesReconnection` controls reconnect behavior:
+
+- `false` (default): the session owns reconnect and re-calls `joinRoom()` with `reconnectPeerId`.
+- `true`: the provider owns reconnect and should emit `disconnected` / `connected` around the interruption.
+
+This flag does not transfer initial join-timeout ownership to the provider. The SDK still enforces the initial join hard-timeout on every platform; `handlesReconnection` only affects reconnect behavior after the join attempt is already in progress.
+
+Only set `handlesReconnection = true` when your adapter already preserves identity and transport recovery semantics. The built-in `SerenadaServerProvider` does this on all platforms.
+
+### ICE-server sourcing
+
+Provider mode does not use Serenada's TURN token API. Your adapter owns ICE sourcing:
+
+- Return STUN/TURN configs from `getIceServers()`.
+- Reject/throw on failure so the session can retry.
+- Emit `iceServersChanged` when credentials rotate.
+
+`runTurnProbe()` also uses provider ICE servers in provider mode, so the same source feeds both diagnostics and live calls.
+
+### Threading and actor guarantees
+
+- Web: provider callbacks run on the normal single-threaded JS event loop.
+- Android: providers may invoke `listener` from any thread. The session marshals callbacks onto the main looper before mutating SDK state.
+- iOS: providers may invoke `delegate` off-actor. The session re-enters `MainActor` before mutating SDK state.
+
+Host apps must still call public Android/iOS SDK entrypoints on the main thread / `MainActor`.
+
+### Provider-mode restrictions
+
+Provider mode does not expose Serenada server helpers. These APIs require `serverHost`:
+
+- `createRoom()` — returns `{ url, roomId }` only; call `join()` afterward to start the call
+- Native `createRoomId()`
+- `RoomWatcher`
+- `validateServerHost()`
+- `runConnectivityChecks()`
 
 ## Feature Toggles
 

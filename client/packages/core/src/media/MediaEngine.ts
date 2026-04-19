@@ -2,17 +2,16 @@ import type { RoomState, SignalingMessage } from '../signaling/types.js';
 import type { ConnectionStatus, SerenadaLogger } from '../types.js';
 import { parseOfferPayload, parseAnswerPayload, parseIceCandidatePayload } from '../signaling/payloads.js';
 import { formatError } from '../formatError.js';
+import { normalizeIceServers } from '../iceServers.js';
 import {
     OFFER_TIMEOUT_MS,
     ICE_RESTART_COOLDOWN_MS,
     NON_HOST_FALLBACK_DELAY_MS,
     NON_HOST_FALLBACK_MAX_ATTEMPTS,
     ICE_CANDIDATE_BUFFER_MAX,
-    TURN_FETCH_TIMEOUT_MS,
     CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
 } from '../constants.js';
-import { buildApiUrl } from '../serverUrls.js';
 import { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './localVideoRecovery.js';
 
 const DEFAULT_RTC_CONFIG: RTCConfiguration = {
@@ -38,7 +37,6 @@ interface PeerState {
 }
 
 export interface MediaEngineConfig {
-    serverHost: string;
     turnsOnly?: boolean;
     logger?: SerenadaLogger;
 }
@@ -71,10 +69,6 @@ export class MediaEngine {
     private onlineHandler: (() => void) | null = null;
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
-    private turnFetchController: AbortController | null = null;
-    private turnTokenInFlight: string | null = null;
-    private appliedTurnToken: string | null = null;
-    private serverHost: string;
     private turnsOnly: boolean;
     private logger?: SerenadaLogger;
 
@@ -89,7 +83,6 @@ export class MediaEngine {
         config: MediaEngineConfig,
         sendMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void,
     ) {
-        this.serverHost = config.serverHost;
         this.turnsOnly = config.turnsOnly ?? false;
         this.logger = config.logger;
         this.sendSignalingMessage = sendMessage;
@@ -122,22 +115,36 @@ export class MediaEngine {
         }
     }
 
-    updateTurnToken(token: string): void {
-        if (token === this.appliedTurnToken || token === this.turnTokenInFlight) {
+    setIceServers(iceServers: RTCIceServer[]): void {
+        const nextServers = this.normalizeIceServers(iceServers);
+        const nextConfig: RTCConfiguration = {
+            iceServers: nextServers.length > 0 ? nextServers : DEFAULT_RTC_CONFIG.iceServers,
+        };
+        if (this.turnsOnly) {
+            nextConfig.iceTransportPolicy = 'relay';
+        }
+
+        this.rtcConfig = nextConfig;
+        for (const [, peer] of this.peers) {
+            try {
+                peer.pc.setConfiguration(nextConfig);
+            } catch (error) {
+                this.logger?.log('warning', 'WebRTC', `Failed to update ICE config: ${formatError(error)}`);
+            }
+        }
+    }
+
+    handleSignalingReconnect(): void {
+        if (!this.isSignalingConnected) {
             return;
         }
-        this.turnFetchController?.abort();
-        this.turnFetchController = new AbortController();
-        this.turnTokenInFlight = token;
-        void this.fetchIceServers(token, this.turnFetchController.signal).then((applied) => {
-            if (applied) {
-                this.appliedTurnToken = token;
+        for (const [remoteCid] of this.peers) {
+            if (this.shouldIOffer(remoteCid)) {
+                this.scheduleIceRestart(remoteCid, 'signaling-reconnect', 0);
+            } else {
+                this.scheduleNonHostFallback(remoteCid);
             }
-        }).finally(() => {
-            if (this.turnTokenInFlight === token) {
-                this.turnTokenInFlight = null;
-            }
-        });
+        }
     }
 
     processSignalingMessage(msg: SignalingMessage): void {
@@ -238,6 +245,28 @@ export class MediaEngine {
         this.facingMode = 'user';
         this.requestingMedia = false;
         this.notifyChange();
+    }
+
+    async releaseVideoTrack(): Promise<void> {
+        if (this.isScreenSharing) return;
+        const currentTrack = this.localStream?.getVideoTracks()[0] ?? null;
+        if (!currentTrack) return;
+        await this.swapLocalVideoTrack(null, currentTrack);
+    }
+
+    async reacquireVideoTrack(): Promise<void> {
+        if (this.isScreenSharing) return;
+        if (this.localStream?.getVideoTracks()[0]) return;
+        if (this.cameraRecoveryInFlight || this.requestingMedia) return;
+        this.cameraRecoveryInFlight = true;
+        try {
+            const track = await this.acquireCameraTrack(this.facingMode, true);
+            await this.swapLocalVideoTrack(track, null);
+        } catch (err) {
+            this.logger?.log('error', 'Camera', `Failed to reacquire camera: ${formatError(err)}`);
+        } finally {
+            this.cameraRecoveryInFlight = false;
+        }
     }
 
     async startScreenShare(): Promise<void> {
@@ -352,11 +381,81 @@ export class MediaEngine {
         this.cleanupAllPeers();
         this.stopLocalMedia();
         this.removeEventListeners();
-        this.turnFetchController?.abort();
-        this.turnFetchController = null;
-        this.turnTokenInFlight = null;
-        this.appliedTurnToken = null;
         if (this.retryingTimer) { window.clearTimeout(this.retryingTimer); this.retryingTimer = null; }
+    }
+
+    /**
+     * Inspects each peer connection's currently-selected ICE candidate pair
+     * and returns true only when at least one peer exists and every peer's
+     * local candidate is direct (host / srflx / prflx). Returns false when
+     * any peer is relaying through TURN, when any stats query fails, or when
+     * there are no peers (TURN may be needed for a future join).
+     *
+     * We identify the active pair via `RTCTransportStats.selectedCandidatePairId`,
+     * with a fallback to the nominated+succeeded pair. We do NOT accept any
+     * arbitrary succeeded pair: after an ICE failover the old pair stays
+     * present as "succeeded" for a while, so reading it would lie about the
+     * current active path and wrongly suppress TURN refresh while media is
+     * actually relaying.
+     *
+     * Used by the TURN refresh gate: if all active media flows are direct,
+     * refreshing TURN credentials over signaling is unnecessary upkeep. This
+     * lets a P2P call survive indefinite signaling outages.
+     */
+    async arePeerPathsAllDirect(): Promise<boolean> {
+        const activePeers = Array.from(this.peers.values())
+            .filter((peer) => peer.pc.connectionState !== 'closed' && peer.pc.connectionState !== 'failed');
+        if (activePeers.length === 0) return false;
+        const results = await Promise.all(activePeers.map(async (peer) => {
+            try {
+                return this.isPeerOnDirectPath(await peer.pc.getStats());
+            } catch {
+                return false;
+            }
+        }));
+        return results.every(Boolean);
+    }
+
+    private isPeerOnDirectPath(stats: RTCStatsReport): boolean {
+        // Preferred: resolve the active pair through the transport stat.
+        let selectedPairId: string | null = null;
+        for (const report of stats.values()) {
+            if (report.type !== 'transport') continue;
+            const id = (report as { selectedCandidatePairId?: string }).selectedCandidatePairId;
+            if (typeof id === 'string' && id !== '') {
+                selectedPairId = id;
+                break;
+            }
+        }
+
+        let activePair: RTCIceCandidatePairStats | null = null;
+        if (selectedPairId) {
+            const pair = stats.get(selectedPairId);
+            if (pair && pair.type === 'candidate-pair') {
+                activePair = pair as RTCIceCandidatePairStats;
+            }
+        }
+
+        // Fallback for browsers that don't populate selectedCandidatePairId:
+        // the nominated + succeeded pair is authoritative once ICE settles.
+        if (!activePair) {
+            for (const report of stats.values()) {
+                if (report.type !== 'candidate-pair') continue;
+                const pair = report as RTCIceCandidatePairStats;
+                if (pair.state !== 'succeeded') continue;
+                if (!pair.nominated) continue;
+                activePair = pair;
+                break;
+            }
+        }
+
+        if (!activePair) return false;
+        const localId = activePair.localCandidateId;
+        if (!localId) return false;
+        const local = stats.get(localId);
+        if (!local || local.type !== 'local-candidate') return false;
+        const candType = ((local as { candidateType?: string }).candidateType ?? '').toString();
+        return candType !== '' && candType !== 'relay';
     }
 
     // --- Private methods ---
@@ -514,15 +613,8 @@ export class MediaEngine {
     }
 
     private shouldIOffer(remoteCid: string): boolean {
-        if (!this.roomState) return false;
         const myId = this.clientId;
-        if (!myId) return false;
-        const myP = this.roomState.participants?.find(p => p.cid === myId);
-        const theirP = this.roomState.participants?.find(p => p.cid === remoteCid);
-        if (!myP || !theirP) return false;
-        const myJoinedAt = myP.joinedAt ?? 0;
-        const theirJoinedAt = theirP.joinedAt ?? 0;
-        return myJoinedAt < theirJoinedAt || (myJoinedAt === theirJoinedAt && myId < remoteCid);
+        return typeof myId === 'string' && myId.length > 0 && myId < remoteCid;
     }
 
     private async createOfferTo(remoteCid: string, options?: { iceRestart?: boolean }): Promise<void> {
@@ -724,43 +816,8 @@ export class MediaEngine {
         }, CONNECTION_RETRYING_DELAY_MS);
     }
 
-    private async fetchIceServers(token: string, signal: AbortSignal): Promise<boolean> {
-        const fetchController = new AbortController();
-        const timeoutTimer = setTimeout(() => fetchController.abort(), TURN_FETCH_TIMEOUT_MS);
-        const onExternalAbort = () => fetchController.abort();
-        signal.addEventListener('abort', onExternalAbort);
-        try {
-            const apiUrl = buildApiUrl(this.serverHost, `/api/turn-credentials?token=${encodeURIComponent(token)}`);
-
-            const res = await fetch(apiUrl, { signal: fetchController.signal });
-
-            if (signal.aborted) return false;
-
-            if (res.ok) {
-                const data = await res.json();
-                const turnsOnly = this.turnsOnly;
-
-                const servers: RTCIceServer[] = [];
-                if (data.uris) {
-                    let uris = data.uris;
-                    if (turnsOnly) uris = uris.filter((u: string) => u.startsWith('turns:'));
-                    if (uris.length > 0) servers.push({ urls: uris, username: data.username, credential: data.password });
-                }
-
-                const config: RTCConfiguration = {
-                    iceServers: servers.length > 0 ? servers : DEFAULT_RTC_CONFIG.iceServers
-                };
-                if (turnsOnly) config.iceTransportPolicy = 'relay';
-                this.rtcConfig = config;
-                return true;
-            }
-        } catch (err) {
-            if (!signal.aborted) this.logger?.log('error', 'WebRTC', `Error fetching ICE servers: ${formatError(err)}`);
-        } finally {
-            clearTimeout(timeoutTimer);
-            signal.removeEventListener('abort', onExternalAbort);
-        }
-        return false;
+    private normalizeIceServers(iceServers: RTCIceServer[]): RTCIceServer[] {
+        return normalizeIceServers(iceServers, this.turnsOnly);
     }
 
     private applySpeechTrackHints(stream: MediaStream): void {
@@ -812,7 +869,8 @@ export class MediaEngine {
     private async replaceVideoTrackOnAllPeers(newTrack: MediaStreamTrack | null): Promise<void> {
         await Promise.all(
             Array.from(this.peers.values()).map(async (peer) => {
-                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
+                const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video')
+                    ?? peer.pc.getTransceivers().find(t => t.receiver.track?.kind === 'video')?.sender;
                 if (sender) {
                     try { await sender.replaceTrack(newTrack); }
                     catch (err) { this.logger?.log('warning', 'WebRTC', `Failed to replace track on peer: ${formatError(err)}`); }

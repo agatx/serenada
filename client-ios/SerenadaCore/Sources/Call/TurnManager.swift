@@ -15,8 +15,15 @@ final class TurnManager {
 
     private var turnRefreshTask: Task<Void, Never>?
     private var turnTokenTTLMs: Int64?
+    // Absolute expiry timestamp (epoch ms) for the current TURN creds.
+    // Used by the skip path to compute remaining lifetime for recheck pacing.
+    private var turnTokenExpiresAtMs: Int64?
     private var hasInitializedIceSetupForAttempt = false
     private var lastTurnTokenForAttempt: String?
+
+    /// Returns `false` to skip this refresh cycle — typically because all
+    /// peers are on direct ICE paths and TURN credentials are unused.
+    var shouldRefreshGate: (() -> Bool)?
 
     init(
         clock: SessionClock,
@@ -79,6 +86,7 @@ final class TurnManager {
         hasInitializedIceSetupForAttempt = false
         lastTurnTokenForAttempt = nil
         turnTokenTTLMs = nil
+        turnTokenExpiresAtMs = nil
     }
 
     func cancelRefresh() {
@@ -143,10 +151,17 @@ final class TurnManager {
         onIceServersReady()
     }
 
-    private func scheduleTurnRefresh(ttlMs: Int64) {
+    private func scheduleTurnRefresh(ttlMs: Int64, delayOverrideMs: Int64? = nil) {
         cancelRefresh()
         guard ttlMs > 0 else { return }
-        let delayNs = UInt64(Double(ttlMs) * WebRtcResilience.turnRefreshTriggerRatio * 1_000_000)
+        // Record absolute expiry only on the initial schedule after fresh creds.
+        // Reschedules from the skip path don't reset it; they compute remaining
+        // lifetime against the original expiry.
+        if delayOverrideMs == nil {
+            turnTokenExpiresAtMs = Int64(Date().timeIntervalSince1970 * 1000) + ttlMs
+        }
+        let effectiveDelayMs = Double(delayOverrideMs ?? Int64(Double(ttlMs) * WebRtcResilience.turnRefreshTriggerRatio))
+        let delayNs = UInt64(effectiveDelayMs * 1_000_000)
 
         turnRefreshTask = Task { [weak self] in
             guard let clock = self?.clock else { return }
@@ -156,6 +171,22 @@ final class TurnManager {
             let phase = self.getPhase()
             guard phase == .waiting || phase == .inCall || phase == .joining else { return }
             guard self.isSignalingConnected() else { return }
+            if self.shouldRefreshGate?() == false {
+                // Reschedule at a fraction of the remaining lifetime so a late
+                // path failover to relay still has time to refresh before the
+                // credentials expire. `remaining * ratio` gives an exponential
+                // approach to expiry on repeat skips; once remaining hits zero
+                // we stop polling (direct path was confirmed through expiry).
+                if let ttl = self.turnTokenTTLMs, let expiresAt = self.turnTokenExpiresAtMs {
+                    let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+                    let remainingMs = expiresAt - nowMs
+                    if remainingMs > 0 {
+                        let recheckMs = max(1, Int64(Double(remainingMs) * WebRtcResilience.turnRefreshTriggerRatio))
+                        self.scheduleTurnRefresh(ttlMs: ttl, delayOverrideMs: recheckMs)
+                    }
+                }
+                return
+            }
             self.sendTurnRefresh()
         }
     }

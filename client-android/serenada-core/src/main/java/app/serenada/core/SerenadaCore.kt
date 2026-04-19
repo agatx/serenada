@@ -1,6 +1,7 @@
 package app.serenada.core
 
 import android.content.Context
+import android.os.Handler
 import android.os.Looper
 import app.serenada.core.network.CoreApiClient
 import kotlin.coroutines.resume
@@ -27,6 +28,7 @@ class SerenadaCore(
 
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
+    private val resolvedConfig = resolveSerenadaConfig(config)
 
     private fun assertMainThread() {
         check(Looper.myLooper() == Looper.getMainLooper()) {
@@ -37,19 +39,21 @@ class SerenadaCore(
     /**
      * Join a call using a full URL (e.g., "https://serenada.app/call/ABC123").
      */
-    fun join(url: String): SerenadaSession {
+    fun join(url: String, displayName: String? = null): SerenadaSession {
         assertMainThread()
         val resolved = resolveRoomUrl(url)
         val roomId = resolved?.roomId ?: url
+        val sessionConfig = sessionConfigFor(resolved?.serverHost)
         val session = SerenadaSession(
             roomId = roomId,
             roomUrl = resolved?.roomUrl ?: url,
-            serverHost = resolved?.serverHost ?: config.serverHost,
-            config = config,
+            config = sessionConfig,
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
+            initialSignalingProvider = createSignalingProvider(sessionConfig),
             logger = logger,
+            displayName = displayName,
         )
         session.start()
         return session
@@ -58,30 +62,33 @@ class SerenadaCore(
     /**
      * Join a call using a room ID.
      */
-    fun join(roomId: String, serverHost: String = config.serverHost): SerenadaSession {
+    fun join(roomId: String, serverHost: String? = resolvedConfig.serverHost, displayName: String? = null): SerenadaSession {
         assertMainThread()
-        val roomUrl = buildRoomUrl(serverHost, roomId)
+        val sessionConfig = sessionConfigFor(serverHost)
+        val roomUrl = resolvedConfig.serverHost?.let { buildRoomUrl(serverHost ?: it, roomId) }
         val session = SerenadaSession(
             roomId = roomId,
             roomUrl = roomUrl,
-            serverHost = serverHost,
-            config = config,
+            config = sessionConfig,
             context = context,
             delegate = { delegate },
             okHttpClient = okHttpClient,
+            initialSignalingProvider = createSignalingProvider(sessionConfig),
             logger = logger,
+            displayName = displayName,
         )
         session.start()
         return session
     }
 
     /**
-     * Create a new room and immediately join it.
+     * Create a new room. Returns the room URL and ID. Call [join] to start the call.
      */
     suspend fun createRoom(): CreateRoomResult {
         assertMainThread()
+        val serverHost = requireServerHost(config)
         val roomId = suspendCancellableCoroutine<String> { continuation ->
-            apiClient.createRoomId(config.serverHost) { result ->
+            apiClient.createRoomId(serverHost) { result ->
                 result
                     .onSuccess { resolvedRoomId ->
                         continuation.resume(resolvedRoomId)
@@ -92,19 +99,8 @@ class SerenadaCore(
             }
         }
 
-        val roomUrl = buildRoomUrl(config.serverHost, roomId)
-        val session = SerenadaSession(
-            roomId = roomId,
-            roomUrl = roomUrl,
-            serverHost = config.serverHost,
-            config = config,
-            context = context,
-            delegate = { delegate },
-            okHttpClient = okHttpClient,
-            logger = logger,
-        )
-        session.start()
-        return CreateRoomResult(roomId = roomId, roomUrl = roomUrl, session = session)
+        val roomUrl = buildRoomUrl(serverHost, roomId)
+        return CreateRoomResult(roomId = roomId, roomUrl = roomUrl)
     }
 
     /**
@@ -113,8 +109,9 @@ class SerenadaCore(
      */
     suspend fun createRoomId(): String {
         assertMainThread()
+        val serverHost = requireServerHost(config)
         return suspendCancellableCoroutine { continuation ->
-            apiClient.createRoomId(config.serverHost) { result ->
+            apiClient.createRoomId(serverHost) { result ->
                 result
                     .onSuccess { continuation.resume(it) }
                     .onFailure { continuation.resumeWithException(it) }
@@ -138,10 +135,11 @@ class SerenadaCore(
             )
         } catch (_: Exception) {
             val roomId = trimmed.split("/").lastOrNull()?.takeIf { it.isNotBlank() } ?: return null
+            val fallbackHost = resolvedConfig.serverHost ?: return null
             ResolvedRoomUrl(
                 roomId = roomId,
-                serverHost = config.serverHost,
-                roomUrl = buildRoomUrl(config.serverHost, roomId)
+                serverHost = fallbackHost,
+                roomUrl = buildRoomUrl(fallbackHost, roomId)
             )
         }
     }
@@ -164,13 +162,37 @@ class SerenadaCore(
         val roomUrl: String,
     )
 
+    private fun sessionConfigFor(serverHostOverride: String?): SerenadaConfig {
+        if (resolvedConfig.serverHost == null) {
+            return config
+        }
+        val serverHost = serverHostOverride?.trim()?.takeIf { it.isNotEmpty() } ?: resolvedConfig.serverHost
+        return config.copy(serverHost = serverHost, signalingProvider = null)
+    }
+
+    private fun createSignalingProvider(sessionConfig: SerenadaConfig): SignalingProvider {
+        val resolved = resolveSerenadaConfig(sessionConfig)
+        val serverHost = resolved.serverHost
+        return if (serverHost != null) {
+            SerenadaServerProvider(
+                serverHost = serverHost,
+                handler = Handler(Looper.getMainLooper()),
+                okHttpClient = okHttpClient,
+                apiClient = apiClient,
+                transports = sessionConfig.transports,
+                logger = logger,
+            )
+        } else {
+            resolved.signalingProvider ?: throw IllegalStateException("Provide exactly one of serverHost or signalingProvider")
+        }
+    }
+
     companion object {
-        const val VERSION = "0.1.0"
+        const val VERSION = "0.3.0"
     }
 }
 
 data class CreateRoomResult(
     val roomId: String,
     val roomUrl: String,
-    val session: SerenadaSession,
 )

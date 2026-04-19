@@ -3,11 +3,6 @@ import SerenadaCore
 import XCTest
 
 final class CallScreenStateTests: XCTestCase {
-    func testOnlyHostTerminatesRoomOnEndTap() {
-        XCTAssertTrue(shouldTerminateRoomOnEndTap(isHost: true))
-        XCTAssertFalse(shouldTerminateRoomOnEndTap(isHost: false))
-    }
-
     func testPrimaryLocalVideoContentModeUsesFitForWorldAndComposite() {
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .world), .scaleAspectFit)
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .composite), .scaleAspectFit)
@@ -77,9 +72,9 @@ final class CallScreenStateTests: XCTestCase {
     }
 
     func testPipBottomPaddingUsesLowerOffsetsInLandscape() {
-        XCTAssertEqual(pipBottomPadding(isLandscape: true, areControlsVisible: true), 92)
+        XCTAssertEqual(pipBottomPadding(isLandscape: true, areControlsVisible: true), 80)
         XCTAssertEqual(pipBottomPadding(isLandscape: true, areControlsVisible: false), 24)
-        XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: true), 170)
+        XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: true), 140)
         XCTAssertEqual(pipBottomPadding(isLandscape: false, areControlsVisible: false), 52)
     }
 

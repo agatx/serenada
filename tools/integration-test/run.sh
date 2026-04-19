@@ -2,7 +2,7 @@
 #
 # Integration test runner for the Serenada signaling server.
 #
-# Starts the Go server on a random port, runs Node.js WebSocket tests,
+# Starts the Go server on a random port, runs Node.js signaling tests (WebSocket + SSE),
 # and tears everything down.
 #
 # Requirements: Go 1.24+, Node.js 18+
@@ -25,6 +25,7 @@ export TURN_TOKEN_SECRET
 export ROOM_ID_ENV=test
 export ALLOWED_ORIGINS="*"
 export RATE_LIMIT_BYPASS_IPS="127.0.0.1,::1"
+export MAX_ROOM_PARTICIPANTS=10
 export PORT
 
 ROOM_ID_SECRET=$(openssl rand -hex 32)
@@ -48,16 +49,18 @@ SERVER_PID=""
 
 cleanup() {
   if [ -n "$SERVER_PID" ]; then
-    # Kill the process group (server + child go process)
+    # Kill the subshell and its entire process tree.
     kill $SERVER_PID 2>/dev/null || true
     pkill -P $SERVER_PID 2>/dev/null || true
+    # Also kill any process listening on our port (catches reparented go children).
+    lsof -ti "tcp:$PORT" 2>/dev/null | xargs kill 2>/dev/null || true
     wait $SERVER_PID 2>/dev/null || true
   fi
   [ -n "${DATA_DIR:-}" ] && rm -rf "$DATA_DIR"
 }
 trap cleanup EXIT
 
-(cd "$REPO_ROOT/server" && go run .) &
+(cd "$REPO_ROOT/server" && exec go run .) &
 SERVER_PID=$!
 
 # ── Wait for the server to become healthy ───────────────────────────────────

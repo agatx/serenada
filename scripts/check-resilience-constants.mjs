@@ -26,6 +26,9 @@ function parseTypeScript(src) {
     for (const m of src.matchAll(/export\s+const\s+([A-Z_]+)\s*=\s*([0-9.]+)/g)) {
         constants.set(m[1], parseFloat(m[2]));
     }
+    for (const m of src.matchAll(/export\s+const\s+([A-Z_]+)\s*=\s*\[([^\]]*)\]/g)) {
+        constants.set(m[1], parseNumericArray(m[2]));
+    }
     return constants;
 }
 
@@ -33,6 +36,9 @@ function parseKotlin(src) {
     const constants = new Map();
     for (const m of src.matchAll(/const\s+val\s+([A-Z_]+)\s*=\s*([0-9._]+)L?/g)) {
         constants.set(m[1], parseFloat(m[2].replace(/_/g, '')));
+    }
+    for (const m of src.matchAll(/val\s+([A-Z_]+)\s*=\s*longArrayOf\(([^)]*)\)/g)) {
+        constants.set(m[1], parseNumericArray(m[2]));
     }
     return constants;
 }
@@ -56,7 +62,32 @@ function parseSwift(src) {
         const upperName = swiftCamelToUpperSnake(name);
         constants.set(upperName, parseFloat(m[2].replace(/_/g, '')));
     }
+    for (const m of src.matchAll(/static\s+let\s+(\w+)\s*=\s*\[([^\]]*)\]/g)) {
+        const name = m[1];
+        if (name.endsWith('Ns')) continue;
+        const upperName = swiftCamelToUpperSnake(name);
+        constants.set(upperName, parseNumericArray(m[2]));
+    }
     return constants;
+}
+
+function parseNumericArray(raw) {
+    return raw
+        .split(',')
+        .map((entry) => entry.trim().replace(/_/g, '').replace(/L$/g, ''))
+        .filter((entry) => entry.length > 0)
+        .map((entry) => parseFloat(entry));
+}
+
+function valuesEqual(left, right) {
+    if (Array.isArray(left) || Array.isArray(right)) {
+        return JSON.stringify(left) === JSON.stringify(right);
+    }
+    return left === right;
+}
+
+function formatValue(value) {
+    return Array.isArray(value) ? JSON.stringify(value) : String(value);
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -93,12 +124,12 @@ for (const name of [...allNames].sort()) {
         continue;
     }
 
-    if (tsVal !== undefined && ktVal !== undefined && tsVal !== ktVal) {
-        fail(`${name}: TypeScript=${tsVal} vs Kotlin=${ktVal}`);
-    } else if (tsVal !== undefined && swVal !== undefined && tsVal !== swVal) {
-        fail(`${name}: TypeScript=${tsVal} vs Swift=${swVal}`);
-    } else if (ktVal !== undefined && swVal !== undefined && ktVal !== swVal) {
-        fail(`${name}: Kotlin=${ktVal} vs Swift=${swVal}`);
+    if (tsVal !== undefined && ktVal !== undefined && !valuesEqual(tsVal, ktVal)) {
+        fail(`${name}: TypeScript=${formatValue(tsVal)} vs Kotlin=${formatValue(ktVal)}`);
+    } else if (tsVal !== undefined && swVal !== undefined && !valuesEqual(tsVal, swVal)) {
+        fail(`${name}: TypeScript=${formatValue(tsVal)} vs Swift=${formatValue(swVal)}`);
+    } else if (ktVal !== undefined && swVal !== undefined && !valuesEqual(ktVal, swVal)) {
+        fail(`${name}: Kotlin=${formatValue(ktVal)} vs Swift=${formatValue(swVal)}`);
     } else {
         matchCount++;
     }

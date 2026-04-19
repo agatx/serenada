@@ -25,6 +25,31 @@ import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoSink
 
+/**
+ * Pre-built call flow that manages the full call lifecycle.
+ *
+ * Provide either a [url] (URL-first) or a [session] (session-first) to start a call.
+ * When a [url] is provided, the composable creates and owns the [SerenadaSession] internally.
+ * When a [session] is provided, the caller retains ownership and is responsible for its lifecycle.
+ *
+ * @param url Call URL to join. Mutually exclusive with [session].
+ * @param session An externally created [SerenadaSession]. Mutually exclusive with [url].
+ * @param config Feature flags controlling which UI controls are shown.
+ * @param theme Visual customisation (colors, shapes, typography).
+ * @param roomName Optional display name shown in the call UI.
+ * @param initialRemoteVideoFitCover Whether remote video defaults to cover (crop-to-fill) mode.
+ * @param strings Localized string overrides keyed by [SerenadaString].
+ * @param onShareLink Called when the user taps the share-link control. Pass `null` to hide it.
+ * @param onInviteToRoom Called when the user taps the invite control. Pass `null` to hide it.
+ * @param onRemoteVideoFitChanged Called when the user toggles remote video fit/fill mode.
+ * @param onStartScreenShare Called with the [MediaProjection][android.media.projection.MediaProjection]
+ *   consent intent when the user starts screen sharing. Use this to start a foreground service with
+ *   [FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION][android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION]
+ *   before the projection begins. When `null`, the session handles screen sharing directly.
+ * @param onStopScreenShare Called when the user stops screen sharing. Use this to downgrade the
+ *   foreground service type. When `null`, the session handles it directly.
+ * @param onDismiss Called when the call ends and the UI should be dismissed.
+ */
 @Composable
 fun SerenadaCallFlow(
     url: String? = null,
@@ -37,6 +62,8 @@ fun SerenadaCallFlow(
     onShareLink: (() -> Unit)? = null,
     onInviteToRoom: (() -> Unit)? = null,
     onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
+    onStartScreenShare: ((Intent) -> Unit)? = null,
+    onStopScreenShare: (() -> Unit)? = null,
     onDismiss: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -147,8 +174,8 @@ fun SerenadaCallFlow(
         onShareLink = onShareLink,
         onInviteToRoom = { onInviteToRoom?.invoke() },
         onRemoteVideoFitChanged = onRemoteVideoFitChanged,
-        onStartScreenShare = { intent -> activeSession.startScreenShare(intent) },
-        onStopScreenShare = { activeSession.stopScreenShare() },
+        onStartScreenShare = onStartScreenShare ?: { intent -> activeSession.startScreenShare(intent) },
+        onStopScreenShare = onStopScreenShare ?: { activeSession.stopScreenShare() },
         attachLocalRenderer = { renderer, events -> activeSession.attachLocalRenderer(renderer, events) },
         detachLocalRenderer = { renderer -> activeSession.detachLocalRenderer(renderer) },
         attachLocalSink = { sink -> activeSession.attachLocalSink(sink) },
@@ -163,6 +190,46 @@ fun SerenadaCallFlow(
     )
 }
 
+/**
+ * Low-level call flow composable that takes explicit state and callbacks.
+ *
+ * Use the higher-level [SerenadaCallFlow] overload (with [url] or [session]) for most
+ * integrations. This overload is for hosts that manage their own [SerenadaSession] and need
+ * full control over every callback and renderer attachment.
+ *
+ * @param uiState Current call UI state, typically derived from [CallState].
+ * @param roomId The room identifier for the active call.
+ * @param serverHost Signaling server host (e.g. `"serenada.app"`).
+ * @param eglContext Shared EGL context for WebRTC video rendering.
+ * @param roomName Optional display name shown in the call UI.
+ * @param rendererProvider Custom renderer provider for advanced rendering setups.
+ * @param initialRemoteVideoFitCover Whether remote video defaults to cover (crop-to-fill) mode.
+ * @param config Feature flags controlling which UI controls are shown.
+ * @param theme Visual customisation (colors, shapes, typography).
+ * @param strings Localized string overrides keyed by [SerenadaString].
+ * @param onToggleAudio Called when the user toggles the microphone.
+ * @param onToggleVideo Called when the user toggles the camera.
+ * @param onFlipCamera Called when the user cycles the camera mode.
+ * @param onToggleFlashlight Called when the user toggles the flashlight.
+ * @param onLocalPinchZoom Called with the scale factor when the user pinch-zooms the local video.
+ * @param onEndCall Called when the user taps the end-call button.
+ * @param onShareLink Called when the user taps the share-link control. Pass `null` to hide it.
+ * @param onInviteToRoom Called when the user taps the invite control.
+ * @param onRemoteVideoFitChanged Called when the user toggles remote video fit/fill mode.
+ * @param onStartScreenShare Called with the MediaProjection consent intent when screen sharing starts.
+ * @param onStopScreenShare Called when screen sharing stops.
+ * @param attachLocalRenderer Attaches a [SurfaceViewRenderer] for the local video track.
+ * @param detachLocalRenderer Detaches the local video renderer.
+ * @param attachLocalSink Attaches a [VideoSink] for the local video track.
+ * @param detachLocalSink Detaches the local video sink.
+ * @param attachRemoteRenderer Attaches a [SurfaceViewRenderer] for the remote video track.
+ * @param detachRemoteRenderer Detaches the remote video renderer.
+ * @param attachRemoteSinkForCid Attaches a [VideoSink] for a specific remote participant by CID.
+ * @param detachRemoteSinkForCid Detaches the video sink for a specific remote participant.
+ * @param attachRemoteSink Attaches a [VideoSink] for the remote video track.
+ * @param detachRemoteSink Detaches the remote video sink.
+ * @param onDismiss Called when the call ends and the UI should be dismissed.
+ */
 @Composable
 @Suppress("UNUSED_PARAMETER")
 fun SerenadaCallFlow(
@@ -247,6 +314,7 @@ private fun rememberCallUiState(
             participantCount = state.participantCount,
             localAudioEnabled = state.localAudioEnabled,
             localVideoEnabled = state.localVideoEnabled,
+            localDisplayName = state.localDisplayName,
             remoteParticipants = state.remoteParticipants,
             connectionStatus = state.connectionStatus,
             isSignalingConnected = diagnostics.isSignalingConnected,

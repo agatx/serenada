@@ -1,15 +1,5 @@
 import Foundation
 
-@MainActor
-protocol RoomWatcherSignalingClient: AnyObject {
-    var listener: SignalingClientListener? { get set }
-    func connect(host: String)
-    func isConnected() -> Bool
-    func send(_ message: SignalingMessage)
-    func close()
-    func recordPong()
-}
-
 /// Room occupancy info (participant count and max capacity).
 public struct RoomOccupancy: Equatable {
     public let count: Int
@@ -33,7 +23,7 @@ public final class RoomWatcher {
     /// Delegate notified when room occupancy changes.
     public weak var delegate: RoomWatcherDelegate?
 
-    private let signalingClient: any RoomWatcherSignalingClient
+    private let signalingClient: SessionSignaling
     private var watchedRoomIds: [String] = []
     private var statuses: [String: RoomOccupancy] = [:]
     private var reconnectAttempts = 0
@@ -45,7 +35,7 @@ public final class RoomWatcher {
         self.signalingClient.listener = self
     }
 
-    init(signalingClient: any RoomWatcherSignalingClient) {
+    internal init(signalingClient: SessionSignaling) {
         self.signalingClient = signalingClient
         self.signalingClient.listener = self
     }
@@ -56,9 +46,14 @@ public final class RoomWatcher {
     }
 
     /// Start watching the given room IDs for occupancy changes.
-    public func watchRooms(roomIds: [String], host: String) {
-        let hostChanged = self.host.map { $0.compare(host, options: .caseInsensitive) != .orderedSame } ?? false
-        self.host = host
+    public func watchRooms(roomIds: [String], host: String?) throws {
+        guard let resolvedHost = host?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty else {
+            throw APIError.invalidResponse("requires serverHost")
+        }
+        let hostChanged = self.host?.caseInsensitiveCompare(resolvedHost) != .orderedSame && self.host != nil
+        self.host = resolvedHost
         watchedRoomIds = roomIds
 
         let watchedSet = Set(watchedRoomIds)
@@ -81,7 +76,7 @@ public final class RoomWatcher {
         if signalingClient.isConnected() {
             sendWatchRooms()
         } else {
-            signalingClient.connect(host: host)
+            signalingClient.connect(host: resolvedHost)
         }
     }
 
@@ -216,5 +211,3 @@ extension RoomWatcher: SignalingClientListener {
         scheduleReconnect()
     }
 }
-
-extension SignalingClient: RoomWatcherSignalingClient {}

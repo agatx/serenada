@@ -2,13 +2,15 @@
  * @serenada/core — headless call engine.
  * Vanilla TypeScript — no React dependency.
  */
-export const SERENADA_CORE_VERSION = '0.2.0';
+export const SERENADA_CORE_VERSION = '0.4.0';
 
 // Public API
 export { SerenadaCore } from './SerenadaCore.js';
 export { SerenadaSession } from './SerenadaSession.js';
 export { SerenadaDiagnostics } from './SerenadaDiagnostics.js';
 export { RoomWatcher } from './RoomWatcher.js';
+export { SerenadaServerProvider } from './SerenadaServerProvider.js';
+export { SignalingProviderEmitter } from './SignalingProvider.js';
 
 // Factory functions (match documented API)
 import { SerenadaCore as _SerenadaCore } from './SerenadaCore.js';
@@ -21,6 +23,7 @@ export function createSerenadaDiagnostics(config: SerenadaConfig): _SerenadaDiag
 export type {
     CallPhase,
     ConnectionStatus,
+    ActiveTransport,
     CameraMode,
     MediaCapability,
     PeerConnectionState,
@@ -43,6 +46,21 @@ export type {
     SerenadaLogLevel,
     SerenadaLogger,
 } from './types.js';
+export type {
+    ProviderCapabilities,
+    ConnectionInfo,
+    JoinOptions,
+    SignalingProviderParticipant,
+    JoinedEvent,
+    RoomStateEvent,
+    PeerEvent,
+    PeerMessage,
+    RoomEndedEvent,
+    SignalingErrorEvent,
+    SignalingProviderEventMap,
+    SignalingProviderEventName,
+    SignalingProvider,
+} from './SignalingProvider.js';
 
 export { ConsoleSerenadaLogger } from './ConsoleLogger.js';
 
@@ -110,7 +128,7 @@ export {
     OFFER_TIMEOUT_MS, ICE_RESTART_COOLDOWN_MS,
     NON_HOST_FALLBACK_DELAY_MS, NON_HOST_FALLBACK_MAX_ATTEMPTS,
     ICE_CANDIDATE_BUFFER_MAX,
-    TURN_FETCH_TIMEOUT_MS, TURN_REFRESH_TRIGGER_RATIO,
+    TURN_FETCH_TIMEOUT_MS, TURN_REFRESH_TRIGGER_RATIO, ICE_FETCH_RETRY_DELAYS_MS,
     SNAPSHOT_PREPARE_TIMEOUT_MS,
     CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_RESUME_GAP_MS, LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,

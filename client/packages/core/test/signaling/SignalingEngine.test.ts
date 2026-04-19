@@ -376,4 +376,21 @@ describe('pending join', () => {
 
         engine.destroy();
     });
+
+    it('sends an explicit empty displayName when callers clear it', () => {
+        const engine = createEngine(['ws']);
+        engine.connect();
+        const ws = lastTransport();
+        ws.simulateOpen();
+
+        engine.joinRoom('room-clear', { displayName: '' });
+
+        const joins = ws.sentMessages.filter(m => m.type === 'join');
+        expect(joins).toHaveLength(1);
+        expect(joins[0].payload).toMatchObject({
+            displayName: '',
+        });
+
+        engine.destroy();
+    });
 });

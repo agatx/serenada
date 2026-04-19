@@ -229,6 +229,79 @@ suspend fun runDiagnosticsIceCheck(
     )
 }
 
+suspend fun runDiagnosticsIceCheckWithIceServers(
+    context: Context,
+    iceServers: List<PeerConnection.IceServer>,
+    turnsOnly: Boolean,
+    onIceServersSummary: (String) -> Unit = {},
+    onLogLine: (String) -> Unit = {},
+): DiagnosticsIceReport = withContext(Dispatchers.IO) {
+    val logs = Collections.synchronizedList(mutableListOf<String>())
+
+    fun log(message: String) {
+        val line = "[${System.currentTimeMillis() / 1000}] $message"
+        logs.add(line)
+        onLogLine(line)
+    }
+
+    log("Starting ICE test (turnsOnly=$turnsOnly)...")
+    log("Using provider ICE servers (${iceServers.size} configs).")
+
+    val allUris = iceServers.flatMap { server -> server.urls.mapNotNull { it } }
+    allUris.forEachIndexed { index, uri ->
+        log("ICE URI[$index]: ${describeIceServerUri(uri)}")
+    }
+
+    val compatibleServers = iceServers.flatMap { server ->
+        val username = server.username?.takeIf { it.isNotBlank() }
+        val password = server.password?.takeIf { it.isNotBlank() }
+        server.urls.mapNotNull { uri ->
+            uri?.takeIf { !turnsOnly || it.startsWith("turns:", ignoreCase = true) }?.let { compatibleUri ->
+                val builder = PeerConnection.IceServer.builder(compatibleUri)
+                username?.let(builder::setUsername)
+                password?.let(builder::setPassword)
+                builder.createIceServer()
+            }
+        }
+    }
+
+    val filteredUris = compatibleServers.flatMap { server -> server.urls.mapNotNull { it } }
+    if (filteredUris.isEmpty()) {
+        onIceServersSummary("n/a")
+        return@withContext DiagnosticsIceReport(
+            turnsOnly = turnsOnly,
+            stun = if (turnsOnly) {
+                DiagnosticsCheckResult(DiagnosticsCheckState.Warn, "Skipped (TURNS only)")
+            } else {
+                DiagnosticsCheckResult(DiagnosticsCheckState.Fail, "No ICE servers")
+            },
+            turn = DiagnosticsCheckResult(DiagnosticsCheckState.Fail, "No compatible ICE servers"),
+            iceServersSummary = "n/a",
+            logs = listOf("No compatible ICE servers for this mode."),
+        )
+    }
+
+    if (turnsOnly) {
+        log("Filtered for TURNS only: ${filteredUris.size}/${allUris.size} servers")
+    }
+    val iceServersSummary = filteredUris.joinToString()
+    onIceServersSummary(iceServersSummary)
+    log("ICE servers: $iceServersSummary")
+
+    var gather = runIceGathering(context, compatibleServers, turnsOnly, ::log)
+    if (gather.third == 0) {
+        log("Zero candidates gathered — retrying (NetworkMonitor race)...")
+        gather = runIceGathering(context, compatibleServers, turnsOnly, ::log)
+    }
+    DiagnosticsIceReport(
+        turnsOnly = turnsOnly,
+        stun = gather.first,
+        turn = gather.second,
+        iceServersSummary = iceServersSummary,
+        logs = logs.toList(),
+    )
+}
+
 private fun effectAvailability(isAvailable: Boolean): DiagnosticsCheckResult {
     return if (isAvailable) {
         DiagnosticsCheckResult(DiagnosticsCheckState.Pass, "Available")

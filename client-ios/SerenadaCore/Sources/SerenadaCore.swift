@@ -21,19 +21,16 @@ public extension SerenadaCoreDelegate {
     func sessionDidEnd(_ session: SerenadaSession, reason: EndReason) {}
 }
 
-/// Result of creating a new room.
+/// Result of creating a new room. Call `join` to start the call.
 public struct CreateRoomResult {
     /// Full URL for the created room.
     public let url: URL
     /// Room identifier.
     public let roomId: String
-    /// The session that was created and joined.
-    public let session: SerenadaSession
 
-    public init(url: URL, roomId: String, session: SerenadaSession) {
+    public init(url: URL, roomId: String) {
         self.url = url
         self.roomId = roomId
-        self.session = session
     }
 }
 
@@ -41,10 +38,11 @@ public struct CreateRoomResult {
 @MainActor
 public final class SerenadaCore {
     /// SDK version string.
-    public static let version = "0.2.0"
+    public static let version = "0.4.0"
 
     /// SDK configuration.
     public let config: SerenadaConfig
+    private let resolvedConfig: ResolvedSerenadaConfig
     /// Delegate for session lifecycle callbacks.
     public weak var delegate: SerenadaCoreDelegate?
     /// Optional logger for SDK diagnostics.
@@ -52,67 +50,77 @@ public final class SerenadaCore {
 
     public init(config: SerenadaConfig) {
         self.config = config
+        do {
+            self.resolvedConfig = try resolveSerenadaConfig(config)
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
     }
 
     /// Join an existing call by URL. Returns a session that begins connecting immediately.
-    public func join(url: URL) -> SerenadaSession {
+    public func join(url: URL, displayName: String? = nil) -> SerenadaSession {
         let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
         let target = DeepLinkParser.parseTarget(from: url)
         let serverHost = target?.host
             ?? DeepLinkParser.normalizeHostValue(authorityHost(from: url))
-            ?? config.serverHost
+            ?? resolvedConfig.serverHost
+        let sessionConfig: SerenadaConfig
+        if resolvedConfig.serverHost != nil {
+            sessionConfig = SerenadaConfig(
+                serverHost: serverHost,
+                signalingProvider: nil,
+                defaultAudioEnabled: config.defaultAudioEnabled,
+                defaultVideoEnabled: config.defaultVideoEnabled,
+                transports: config.transports,
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled
+            )
+        } else {
+            sessionConfig = config
+        }
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
-            serverHost: serverHost,
-            config: config,
+            config: sessionConfig,
             delegateProvider: { [weak self] in self?.delegate },
-            logger: logger
+            logger: logger,
+            initialSignalingProvider: createSignalingProvider(for: sessionConfig),
+            displayName: displayName
         )
         return session
     }
 
     /// Join an existing call by room ID. Returns a session that begins connecting immediately.
-    public func join(roomId: String) -> SerenadaSession {
-        let url = buildRoomURL(host: config.serverHost, roomId: roomId)
+    public func join(roomId: String, displayName: String? = nil) -> SerenadaSession {
+        let url = resolvedConfig.serverHost.flatMap { buildRoomURL(host: $0, roomId: roomId) }
 
         let session = SerenadaSession(
             roomId: roomId,
             roomUrl: url,
-            serverHost: config.serverHost,
             config: config,
             delegateProvider: { [weak self] in self?.delegate },
-            logger: logger
+            logger: logger,
+            initialSignalingProvider: createSignalingProvider(for: config),
+            displayName: displayName
         )
         return session
     }
 
-    /// Create a new room and immediately join it.
+    /// Create a new room. Returns the room URL and ID. Call ``join(url:displayName:)`` or ``join(roomId:displayName:)`` to start the call.
     public func createRoom() async throws -> CreateRoomResult {
         let apiClient = CoreAPIClient()
-        let serverHost = config.serverHost
-        let config = self.config
+        let serverHost = try requireServerHost(config)
         let roomId = try await apiClient.createRoomId(host: serverHost)
         guard let url = buildRoomURL(host: serverHost, roomId: roomId) else {
             throw APIError.invalidResponse("Failed to build room URL")
         }
-
-        let session = SerenadaSession(
-            roomId: roomId,
-            roomUrl: url,
-            serverHost: serverHost,
-            config: config,
-            delegateProvider: { [weak self] in self?.delegate },
-            logger: logger
-        )
-        return CreateRoomResult(url: url, roomId: roomId, session: session)
+        return CreateRoomResult(url: url, roomId: roomId)
     }
 
     /// Create a room ID without starting a session.
     /// Use this when you only need a room ID (e.g., for invite links).
     public func createRoomId() async throws -> String {
         let apiClient = CoreAPIClient()
-        return try await apiClient.createRoomId(host: config.serverHost)
+        return try await apiClient.createRoomId(host: requireServerHost(config))
     }
 
     private func buildRoomURL(host: String, roomId: String) -> URL? {
@@ -133,5 +141,26 @@ public final class SerenadaCore {
             return "\(host):\(port)"
         }
         return host
+    }
+
+    private func createSignalingProvider(for sessionConfig: SerenadaConfig) -> SignalingProvider {
+        let resolved: ResolvedSerenadaConfig
+        do {
+            resolved = try resolveSerenadaConfig(sessionConfig)
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
+        if let serverHost = resolved.serverHost {
+            return SerenadaServerProvider(
+                serverHost: serverHost,
+                apiClient: CoreAPIClient(),
+                transports: sessionConfig.transports,
+                logger: logger
+            )
+        }
+        guard let signalingProvider = resolved.signalingProvider else {
+            preconditionFailure("Provide exactly one of serverHost or signalingProvider")
+        }
+        return signalingProvider
     }
 }

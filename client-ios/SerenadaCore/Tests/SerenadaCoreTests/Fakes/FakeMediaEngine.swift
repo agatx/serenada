@@ -51,6 +51,7 @@ final class FakeMediaEngine: SessionMediaEngine {
     func setIceServers(_ servers: [IceServerConfig]) {
         _iceServers = servers
         iceServersSet = true
+        fakeSlots.values.forEach { $0.setIceServers(servers) }
     }
 
     func hasIceServers() -> Bool { _iceServers != nil }
@@ -72,6 +73,9 @@ final class FakeMediaEngine: SessionMediaEngine {
             onSignalingStateChange: onSignalingStateChange
         )
         fakeSlots[remoteCid] = slot
+        if let iceServers = _iceServers {
+            slot.setIceServers(iceServers)
+        }
         return slot
     }
 

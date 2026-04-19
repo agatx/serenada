@@ -13,6 +13,7 @@ final class CallManager: ObservableObject {
     @Published private(set) var isHdVideoExperimentalEnabled: Bool
     @Published private(set) var areSavedRoomsShownFirst: Bool
     @Published private(set) var areRoomInviteNotificationsEnabled: Bool
+    @Published private(set) var displayName: String
     @Published private(set) var appVersion: String
     @Published private(set) var recentCalls: [RecentCall] = []
     @Published private(set) var savedRooms: [SavedRoom] = []
@@ -73,6 +74,7 @@ final class CallManager: ObservableObject {
         self.isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled
         self.areSavedRoomsShownFirst = settingsStore.areSavedRoomsShownFirst
         self.areRoomInviteNotificationsEnabled = settingsStore.areRoomInviteNotificationsEnabled
+        self.displayName = settingsStore.displayName
         self.appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-"
 
         self.roomWatcher.delegate = self
@@ -161,6 +163,11 @@ final class CallManager: ObservableObject {
     func updateRoomInviteNotifications(_ enabled: Bool) {
         settingsStore.areRoomInviteNotificationsEnabled = enabled
         areRoomInviteNotificationsEnabled = enabled
+    }
+
+    func updateDisplayName(_ name: String) {
+        settingsStore.displayName = name
+        displayName = name
     }
 
     func inviteToCurrentRoom() async -> Result<Void, Error> {
@@ -256,7 +263,8 @@ final class CallManager: ObservableObject {
             guard let self else { return }
             do {
                 let created = try await core.createRoom()
-                self.activateSession(created.session)
+                let session = core.join(roomId: created.roomId, displayName: self.resolvedDisplayName)
+                self.activateSession(session)
             } catch {
                 self.uiState = CallUiState(
                     phase: .error,
@@ -278,7 +286,7 @@ final class CallManager: ObservableObject {
         }
 
         let targetHost = DeepLinkParser.normalizeHostValue(oneOffHost) ?? serverHost
-        let session = makeSerenadaCore(host: targetHost).join(roomId: trimmed)
+        let session = makeSerenadaCore(host: targetHost).join(roomId: trimmed, displayName: resolvedDisplayName)
         activateSession(session)
     }
 
@@ -369,12 +377,18 @@ final class CallManager: ObservableObject {
         }
     }
 
+    private var resolvedDisplayName: String? {
+        let name = settingsStore.displayName
+        return name.isEmpty ? nil : name
+    }
+
     private func makeSerenadaCore(host: String) -> SerenadaCore {
         let core = SerenadaCore(
             config: SerenadaConfig(
                 serverHost: host,
                 defaultAudioEnabled: settingsStore.isDefaultMicrophoneEnabled,
-                defaultVideoEnabled: settingsStore.isDefaultCameraEnabled
+                defaultVideoEnabled: settingsStore.isDefaultCameraEnabled,
+                proximityMonitoringEnabled: true
             )
         )
         core.logger = PrintSerenadaLogger()
@@ -442,6 +456,7 @@ final class CallManager: ObservableObject {
         next.remoteParticipants = state.remoteParticipants.map {
             RemoteParticipant(
                 cid: $0.cid,
+                displayName: $0.displayName,
                 videoEnabled: $0.videoEnabled,
                 connectionState: $0.connectionState
             )
@@ -692,7 +707,11 @@ final class CallManager: ObservableObject {
         let watchedSet = Set(watchedRoomIds)
         roomStatuses = roomStatuses.filter { watchedSet.contains($0.key) }
 
-        roomWatcher.watchRooms(roomIds: watchedRoomIds, host: serverHost)
+        do {
+            try roomWatcher.watchRooms(roomIds: watchedRoomIds, host: serverHost)
+        } catch {
+            NSLog("CallManager failed to watch rooms for host %@: %@", serverHost, error.localizedDescription)
+        }
     }
 
     private func isCurrentServerHost(_ host: String?) -> Bool {

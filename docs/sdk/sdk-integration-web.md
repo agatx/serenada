@@ -16,6 +16,8 @@ npm install @serenada/core @serenada/react-ui lucide-react
 
 `react`, `react-dom`, and `lucide-react` are peer dependencies of `@serenada/react-ui`.
 
+When you construct `SerenadaCore` directly, provide exactly one of `serverHost` or `signalingProvider`.
+
 For local development within the Serenada monorepo, both packages are configured as npm workspaces under `client/packages/`.
 
 ## Quick Start — URL-First (Simplest)
@@ -67,8 +69,48 @@ function CallPage() {
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 
 const room = await serenada.createRoom()
-const shareUrl = room.url   // send to the other party
-const session = room.session // already joining
+const shareUrl = room.url     // send to the other party
+const session = serenada.join(room.url)  // join explicitly
+```
+
+`createRoom()` returns `{ url, roomId }` only. It does not join the room or create a session. Call `join()` with the returned URL to start the call.
+
+`createRoom()` is server mode only. In provider mode there is no Serenada room API, so join by your own room ID instead.
+
+## Provider Mode (Custom Signaling)
+
+Provider mode is session-first: create a core with `signalingProvider`, then join by `roomId` and pass the session to your UI.
+
+```tsx
+import {
+    SignalingProviderEmitter,
+    createSerenadaCore,
+} from '@serenada/core'
+import { SerenadaCallFlow } from '@serenada/react-ui'
+
+class DemoProvider extends SignalingProviderEmitter {
+    connect() { this.emit('connected', { transport: 'mock' }) }
+    disconnect() {}
+    joinRoom(roomId: string) {
+        this.emit('joined', {
+            peerId: 'local-peer',
+            participants: [{ peerId: 'local-peer', joinedAt: 1 }],
+        })
+    }
+    leaveRoom() {}
+    endRoom() {}
+    sendToPeer() {}
+    broadcast() {}
+    async getIceServers() { return [] }
+}
+
+const core = createSerenadaCore({
+    signalingProvider: new DemoProvider(),
+})
+
+const session = core.join({ roomId: 'group-123' })
+
+<SerenadaCallFlow session={session} onDismiss={() => navigate('/')} />
 ```
 
 ## Core-Only Integration (No UI)
@@ -96,6 +138,10 @@ session.subscribe((state) => {
     }
 })
 
+session.onPeerMessage((message) => {
+    console.log(message.type, message.payload)
+})
+
 // Media controls
 session.toggleAudio()
 session.toggleVideo()
@@ -109,6 +155,8 @@ session.remoteStreams      // Map<cid, MediaStream>
 session.leave()   // local exit, room stays open
 session.end()     // terminates room for all
 ```
+
+If you use `SerenadaCallFlow` and also need peer-message hooks, create the session yourself, subscribe with `session.onPeerMessage(...)`, and pass that session into the component. The raw `subscribeToMessages()` transport hook is not public.
 
 ## React Hooks
 
@@ -188,6 +236,8 @@ unsubscribe()
 watcher.stop()
 ```
 
+`RoomWatcher` is built-in/server mode only. In provider mode it throws `requires serverHost`.
+
 ## Preflight Diagnostics
 
 Run device and network checks before a call:
@@ -209,6 +259,8 @@ report.turn.latencyMs      // optional, when TURN is reachable
 report.devices             // MediaDeviceInfo[]
 ```
 
+In provider mode, `runAll()` still returns device/network/TURN results, but signaling is reported as skipped because there is no Serenada server to probe.
+
 Diagnostics never call `getUserMedia()` — if a permission is missing, the check returns `notAuthorized`.
 
 ### Connectivity Checks
@@ -225,6 +277,8 @@ connectivity.diagnosticToken.status  // 'passed' | 'failed'
 connectivity.turnCredentials.status  // 'passed' | 'failed'
 ```
 
+`runConnectivityChecks()` requires `serverHost`. It is not available in provider mode.
+
 ### ICE Probing
 
 Verify STUN/TURN reachability with a real browser ICE gather:
@@ -239,6 +293,12 @@ iceReport.turnPassed
 iceReport.logs
 ```
 
+`runTurnProbe()` is the primary TURN/STUN probe and `runIceProbe()` is the compatibility alias:
+
+```typescript
+const turnReport = await diagnostics.runTurnProbe(false, console.log)
+```
+
 ### Server Validation
 
 Validate that a host is a reachable Serenada server:
@@ -246,6 +306,8 @@ Validate that a host is a reachable Serenada server:
 ```typescript
 await diagnostics.validateServerHost()
 ```
+
+`validateServerHost()` also requires `serverHost`.
 
 ## Logging
 

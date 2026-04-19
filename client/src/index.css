@@ -71,6 +71,35 @@ body {
   margin-bottom: 3rem;
 }
 
+.display-name-input {
+  width: 100%;
+  max-width: 300px;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--text-secondary);
+  border-radius: 50px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 1rem;
+  text-align: center;
+  margin-bottom: 0;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.display-name-input + .button-group,
+.display-name-input + .prejoin-invite-actions {
+  margin-top: 0.75rem;
+}
+
+.display-name-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.display-name-input:focus {
+  border-color: var(--primary-color);
+}
+
 .card {
   background: var(--surface-color);
   padding: 2rem;

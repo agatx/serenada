@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RoomWatcher } from '../../src/RoomWatcher';
 import type { RoomWatcherState } from '../../src/types';
 import type { SignalingEngine } from '../../src/signaling/SignalingEngine';
+import { FakeSignalingProvider } from '../helpers/FakeSignalingProvider.js';
 
 class FakeSignalingEngine {
     isConnected = false;
@@ -40,6 +41,12 @@ class FakeSignalingEngine {
 }
 
 describe('RoomWatcher', () => {
+    it('rejects provider mode with a requires serverHost error', () => {
+        expect(() => new RoomWatcher({
+            signalingProvider: new FakeSignalingProvider(),
+        })).toThrow('requires serverHost');
+    });
+
     it('connects once, filters statuses to watched rooms, and tears down cleanly', () => {
         const signaling = new FakeSignalingEngine();
         const watcher = new RoomWatcher(

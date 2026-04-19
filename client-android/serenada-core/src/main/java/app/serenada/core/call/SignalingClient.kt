@@ -11,6 +11,7 @@ internal class SignalingClient(
     initialListener: SessionSignaling.Listener? = null,
     private val forceSse: Boolean = false,
     private val logger: SerenadaLogger? = null,
+    transportFactory: ((TransportKind) -> SignalingTransport)? = null,
 ) : SessionSignaling {
     enum class TransportKind(val wireName: String) {
         WS("ws"),
@@ -31,8 +32,10 @@ internal class SignalingClient(
         TransportKind.SSE to false
     )
 
-    private val wsTransport = WebSocketSignalingTransport(okHttpClient, logger = logger)
-    private val sseTransport = SseSignalingTransport(okHttpClient, logger = logger)
+    private val wsTransport = transportFactory?.invoke(TransportKind.WS)
+        ?: WebSocketSignalingTransport(okHttpClient, logger = logger)
+    private val sseTransport = transportFactory?.invoke(TransportKind.SSE)
+        ?: SseSignalingTransport(okHttpClient, logger = logger)
     private val transports = listOf<SignalingTransport>(wsTransport, sseTransport)
 
     @Volatile private var connected = false

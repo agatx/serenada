@@ -1,12 +1,15 @@
+import type { SignalingProvider, PeerMessage } from './SignalingProvider.js';
 import type { TransportKind } from './signaling/transports/types.js';
-import type { SignalingMessage } from './signaling/types.js';
 import type { RoomStatus, RoomStatuses } from './signaling/roomStatuses.js';
 
 /** Current phase of the call lifecycle. */
 export type CallPhase = 'idle' | 'awaitingPermissions' | 'joining' | 'waiting' | 'inCall' | 'ending' | 'error';
 
 /** Network connection status between the client and signaling server. */
-export type ConnectionStatus = 'connected' | 'recovering' | 'retrying';
+export type ConnectionStatus = 'connected' | 'recovering' | 'retrying' | 'disconnected';
+
+/** Active signaling transport, including custom provider-specific transport labels. */
+export type ActiveTransport = TransportKind | (string & {});
 
 /** Camera mode: selfie (front), world (rear), composite (picture-in-picture), or screen share. */
 export type CameraMode = 'selfie' | 'world' | 'composite' | 'screenShare';
@@ -17,17 +20,30 @@ export type MediaCapability = 'camera' | 'microphone';
 /** WebRTC peer connection state. */
 export type PeerConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
 
+/**
+ * Signaling connection status of a remote participant as reported by the
+ * server. `'active'` means the participant is currently connected to the
+ * signaling server; `'suspended'` means their signaling transport dropped
+ * and the server is holding their slot open for reconnect — the peer
+ * connection to them is intentionally kept alive and UIs should surface a
+ * "reconnecting" indicator instead of rendering them as gone.
+ */
+export type ParticipantSignalingStatus = 'active' | 'suspended';
+
 /** Remote participant in a call. */
 export interface Participant {
     cid: string;
+    displayName?: string;
     audioEnabled: boolean;
     videoEnabled: boolean;
     connectionState: PeerConnectionState;
+    signalingStatus: ParticipantSignalingStatus;
 }
 
 /** Local participant info including camera mode and host status. */
 export interface LocalParticipant {
     cid: string;
+    displayName?: string;
     audioEnabled: boolean;
     videoEnabled: boolean;
     cameraMode: CameraMode;
@@ -62,7 +78,7 @@ export interface CallState {
     localParticipant: LocalParticipant | null;
     remoteParticipants: Participant[];
     connectionStatus: ConnectionStatus;
-    activeTransport: TransportKind | null;
+    activeTransport: ActiveTransport | null;
     requiredPermissions: MediaCapability[] | null;
     error: CallError | null;
 }
@@ -70,7 +86,9 @@ export interface CallState {
 /** SDK configuration passed to {@link SerenadaCore}. */
 export interface SerenadaConfig {
     /** Bare host or full origin, e.g. `serenada.app` or `http://qa-box:8080`. */
-    serverHost: string;
+    serverHost?: string;
+    /** Custom signaling provider. Provide exactly one of `serverHost` or `signalingProvider`. */
+    signalingProvider?: SignalingProvider;
     /** Whether the microphone is enabled when joining. Defaults to `true`. */
     defaultAudioEnabled?: boolean;
     /** Whether the camera is enabled when joining. Defaults to `true`. */
@@ -87,8 +105,6 @@ export interface SerenadaConfig {
 export interface CreateRoomResult {
     url: string;
     roomId: string;
-    /** Public app-facing session contract. Prefer this over the concrete class in host-app code. */
-    session: SerenadaSessionHandle;
 }
 
 /**
@@ -97,7 +113,7 @@ export interface CreateRoomResult {
  */
 export interface SerenadaSessionHandle {
     subscribe(callback: (state: CallState) => void): () => void;
-    subscribeToMessages(callback: (message: SignalingMessage) => void): () => void;
+    onPeerMessage(callback: (message: PeerMessage) => void): () => void;
     leave(): void;
     end(): void;
     toggleAudio(): void;

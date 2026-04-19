@@ -22,6 +22,74 @@ func resolveJoinRecoveryState(
     return JoinRecoveryState(phase: .waiting, participantCount: 1)
 }
 
+private final class SignalingProviderDelegateProxy: SignalingProviderDelegate {
+    weak var session: SerenadaSession?
+
+    init(session: SerenadaSession? = nil) {
+        self.session = session
+    }
+
+    func signalingProviderDidConnect(_ info: ConnectionInfo) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderConnected(info)
+        }
+    }
+
+    func signalingProviderDidDisconnect(reason: String?) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderDisconnected(reason: reason)
+        }
+    }
+
+    func signalingProviderDidJoin(_ event: JoinedEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderJoined(event)
+        }
+    }
+
+    func signalingProviderDidUpdateRoomState(_ event: RoomStateEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderRoomStateUpdated(event)
+        }
+    }
+
+    func signalingProviderDidJoinPeer(_ event: PeerEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderPeerJoined(event)
+        }
+    }
+
+    func signalingProviderDidLeavePeer(_ event: PeerEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderPeerLeft(event)
+        }
+    }
+
+    func signalingProviderDidReceiveMessage(_ message: PeerMessage) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderMessage(message)
+        }
+    }
+
+    func signalingProviderDidEndRoom(_ event: RoomEndedEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderRoomEnded(event)
+        }
+    }
+
+    func signalingProviderDidReceiveError(_ event: ErrorEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderError(event)
+        }
+    }
+
+    func signalingProviderDidChangeIceServers(_ iceServers: [IceServerConfig]) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderIceServersChanged(iceServers)
+        }
+    }
+}
+
 /// Represents an active call session. Created via ``SerenadaCore/join(url:)`` or ``SerenadaCore/createRoom()``.
 /// Publishes state via `@Published` properties for SwiftUI integration.
 @MainActor
@@ -36,7 +104,12 @@ public final class SerenadaSession: ObservableObject {
     /// Full URL for this room, if available.
     public let roomUrl: URL?
     /// Server host used for signaling.
-    public let serverHost: String
+    public var serverHost: String {
+        guard let serverHost = resolvedConfig.serverHost else {
+            preconditionFailure("requires serverHost")
+        }
+        return serverHost
+    }
     /// Bundle ID for the broadcast upload extension used in screen sharing.
     public var screenShareExtensionBundleId: String? {
         #if BROADCAST_EXTENSION
@@ -50,12 +123,15 @@ public final class SerenadaSession: ObservableObject {
     public var onPermissionsRequired: (([MediaCapability]) -> Void)?
 
     // Core dependencies
-    private let signalingClient: SessionSignaling
+    private let signalingProvider: SignalingProvider
+    private let providerDelegateProxy: SignalingProviderDelegateProxy
     private let webRtcEngine: SessionMediaEngine
     private let callAudioSessionController: SessionAudioController
     private let apiClient: SessionAPIClient
     private let clock: SessionClock
     private let config: SerenadaConfig
+    private let resolvedConfig: ResolvedSerenadaConfig
+    private let displayName: String?
     private let delegateProvider: (() -> SerenadaCoreDelegate?)?
     private let logger: SerenadaLogger?
 
@@ -63,7 +139,6 @@ public final class SerenadaSession: ObservableObject {
     private var signalingMessageRouter: SignalingMessageRouter?
     private var joinFlowCoordinator: JoinFlowCoordinator?
     private var peerNegotiationEngine: PeerNegotiationEngine?
-    private var turnManager: TurnManager?
     private var connectionStatusTracker: ConnectionStatusTracker?
     private var statsPoller: StatsPoller?
 
@@ -79,18 +154,20 @@ public final class SerenadaSession: ObservableObject {
     private var clientId: String?
     private var hostCid: String?
     private var currentRoomState: RoomState?
+    private var remoteMediaStates: [String: (audioEnabled: Bool?, videoEnabled: Bool?)] = [:]
     private var peerSlots: [String: any PeerConnectionSlotProtocol] = [:]
     private var pendingMessages: [SignalingMessage] = []
     private var pendingJoinRoom: String?
     private var joinAttemptSerial: Int64 = 0
     private var reconnectAttempts = 0
-    private var reconnectToken: String?
     private var reconnectCid: String?
     private var hasBegunJoin = false
     private var hasJoinSignalStartedForAttempt = false
     private var hasJoinAcknowledgedCurrentAttempt = false
     private var userPreferredVideoEnabled = true
     private var isVideoPausedByProximity = false
+    private var reconnectRecoveryPending = false
+    private var iceFetchGeneration = 0
     private var reconnectTask: Task<Void, Never>?
 
     public convenience init(
@@ -99,38 +176,73 @@ public final class SerenadaSession: ObservableObject {
         serverHost: String,
         config: SerenadaConfig,
         delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
-        logger: SerenadaLogger? = nil
+        logger: SerenadaLogger? = nil,
+        displayName: String? = nil
     ) {
+        let sessionConfig = config.signalingProvider == nil
+            ? SerenadaConfig(
+                serverHost: serverHost,
+                signalingProvider: nil,
+                defaultAudioEnabled: config.defaultAudioEnabled,
+                defaultVideoEnabled: config.defaultVideoEnabled,
+                transports: config.transports,
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled
+            )
+            : config
         self.init(
-            roomId: roomId, roomUrl: roomUrl, serverHost: serverHost, config: config,
+            roomId: roomId, roomUrl: roomUrl, config: sessionConfig,
             delegateProvider: delegateProvider, logger: logger,
-            signaling: nil, apiClient: nil, audioController: nil, mediaEngine: nil, clock: nil
+            initialSignalingProvider: nil, signaling: nil, apiClient: nil, audioController: nil, mediaEngine: nil, clock: nil,
+            displayName: displayName
         )
     }
 
     init(
         roomId: String,
         roomUrl: URL? = nil,
-        serverHost: String,
         config: SerenadaConfig,
         delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
         logger: SerenadaLogger? = nil,
+        initialSignalingProvider: SignalingProvider? = nil,
         signaling: SessionSignaling? = nil,
         apiClient: SessionAPIClient? = nil,
         audioController: SessionAudioController? = nil,
         mediaEngine: SessionMediaEngine? = nil,
-        clock: SessionClock? = nil
+        clock: SessionClock? = nil,
+        displayName: String? = nil
     ) {
         self.roomId = roomId
         self.roomUrl = roomUrl
-        self.serverHost = serverHost
         self.config = config
+        self.displayName = displayName
         self.delegateProvider = delegateProvider
         self.logger = logger
         self.clock = clock ?? LiveSessionClock()
-        self.signalingClient = signaling ?? SignalingClient(forceSseSignaling: !config.transports.contains(.ws))
         self.apiClient = apiClient ?? CoreAPIClient()
+        do {
+            self.resolvedConfig = try resolveSerenadaConfig(config)
+        } catch {
+            preconditionFailure(error.localizedDescription)
+        }
+        if let initialSignalingProvider {
+            self.signalingProvider = initialSignalingProvider
+        } else if let signalingProvider = resolvedConfig.signalingProvider {
+            self.signalingProvider = signalingProvider
+        } else if let serverHost = resolvedConfig.serverHost {
+            self.signalingProvider = SerenadaServerProvider(
+                serverHost: serverHost,
+                apiClient: self.apiClient,
+                signaling: signaling,
+                transports: config.transports,
+                clock: self.clock,
+                logger: logger
+            )
+        } else {
+            preconditionFailure("Provide exactly one of serverHost or signalingProvider")
+        }
+        self.providerDelegateProxy = SignalingProviderDelegateProxy(session: nil)
         self.callAudioSessionController = audioController ?? CallAudioSessionController(
+            proximityMonitoringEnabled: config.proximityMonitoringEnabled,
             onProximityChanged: { _ in }, onAudioEnvironmentChanged: {}, logger: logger
         )
         self.webRtcEngine = mediaEngine ?? WebRtcEngine(
@@ -140,12 +252,27 @@ public final class SerenadaSession: ObservableObject {
             logger: logger, isHdVideoExperimentalEnabled: false
         )
 
-        signalingClient.listener = self
+        providerDelegateProxy.session = self
+        signalingProvider.delegate = providerDelegateProxy
         configureRuntimeBridges()
         buildSubEngines()
 
+        // Skip periodic TURN refresh while every peer is on a direct ICE path —
+        // the credentials go unused and the call survives arbitrary-length
+        // signaling outages. A failover to relay triggers the next refresh.
+        // Gate returns `true` to allow the refresh, so direct paths must
+        // return `false` to skip; unknown (session deallocated) defaults to
+        // refreshing to avoid silently dropping credentials.
+        if let serverProvider = signalingProvider as? SerenadaServerProvider {
+            serverProvider.setTurnRefreshGate { [weak self] in
+                guard let self else { return true }
+                return !self.arePeerPathsAllDirect()
+            }
+        }
+
         internalPhase = .joining
         commitSnapshot { s, _ in
+            s.localParticipant.displayName = self.displayName
             s.localParticipant.audioEnabled = config.defaultAudioEnabled
             s.localParticipant.videoEnabled = config.defaultVideoEnabled
         }
@@ -165,14 +292,16 @@ public final class SerenadaSession: ObservableObject {
 
     /// Leave the call gracefully. The other participant stays connected.
     public func leave() {
-        if currentRoomState != nil || signalingClient.isConnected() { sendMessage(type: "leave") }
+        guard state.phase != .idle else { return }
+        if currentRoomState != nil || diagnostics.isSignalingConnected { signalingProvider.leaveRoom() }
         cleanupCall(reason: .localLeft, transitionToEnding: false)
     }
 
     /// End the call for all participants.
     public func end() {
-        if currentRoomState != nil || signalingClient.isConnected() { sendMessage(type: "end_room") }
-        cleanupCall(reason: .localLeft, transitionToEnding: false)
+        guard state.phase != .idle else { return }
+        signalingProvider.endRoom()
+        leave()
     }
 
     /// Toggle local audio on or off.
@@ -180,12 +309,14 @@ public final class SerenadaSession: ObservableObject {
         let enabled = !state.localParticipant.audioEnabled
         webRtcEngine.toggleAudio(enabled)
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
+        broadcastLocalMediaState()
     }
 
     /// Toggle local video on or off.
     public func toggleVideo() {
         userPreferredVideoEnabled = !state.localParticipant.videoEnabled
         applyLocalVideoPreference()
+        broadcastLocalMediaState()
     }
 
     /// Cycle to the next camera mode (selfie -> world -> composite).
@@ -207,6 +338,7 @@ public final class SerenadaSession: ObservableObject {
     public func setAudioEnabled(_ enabled: Bool) {
         webRtcEngine.toggleAudio(enabled)
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
+        broadcastLocalMediaState()
     }
 
     /// Set local video enabled state.
@@ -295,7 +427,8 @@ public final class SerenadaSession: ObservableObject {
         participantCount = 0
         commitSnapshot { s, d in
             s.localParticipant = LocalParticipant(
-                cid: nil, audioEnabled: self.config.defaultAudioEnabled,
+                cid: nil, displayName: self.displayName,
+                audioEnabled: self.config.defaultAudioEnabled,
                 videoEnabled: self.config.defaultVideoEnabled, cameraMode: .selfie
             )
             s.remoteParticipants = []; s.connectionStatus = .connected
@@ -343,62 +476,53 @@ public final class SerenadaSession: ObservableObject {
 
     private func ensureSignalingConnection() {
         hasJoinSignalStartedForAttempt = true
-        if signalingClient.isConnected() {
+        if diagnostics.isSignalingConnected {
             pendingJoinRoom = nil
             sendJoin(roomId: roomId)
             return
         }
         pendingJoinRoom = roomId
-        signalingClient.connect(host: serverHost)
+        signalingProvider.connect()
     }
 
     private func sendJoin(roomId: String) {
-        guard signalingClient.isConnected() else {
+        guard diagnostics.isSignalingConnected else {
             pendingJoinRoom = roomId
             ensureSignalingConnection()
             return
         }
-
-        var payload: [String: JSONValue] = [
-            "device": .string("ios"),
-            "capabilities": .object(["trickleIce": .bool(true), "maxParticipants": .number(4)]),
-            "createMaxParticipants": .number(4)
-        ]
-        if let reconnectCid { payload["reconnectCid"] = .string(reconnectCid) }
-        if let reconnectToken { payload["reconnectToken"] = .string(reconnectToken) }
-
-        signalingClient.send(SignalingMessage(type: "join", rid: roomId, payload: .object(payload)))
+        signalingProvider.joinRoom(
+            roomId,
+            options: JoinOptions(reconnectPeerId: reconnectCid, maxParticipants: 4, displayName: self.displayName)
+        )
         joinFlowCoordinator?.scheduleJoinRecovery(for: roomId)
     }
 
     // MARK: - Signaling Message Handling
 
-    private func handleJoined(cid: String?, payload: JoinedPayload, rawPayload: JSONValue?) {
+    private func handleJoined(cid: String?, roomState: RoomState?, participantCountHint: Int?) {
         joinFlowCoordinator?.clearAllTimers()
         hasJoinAcknowledgedCurrentAttempt = true
 
         if let cid { clientId = cid; reconnectCid = cid }
         commitSnapshot { s, _ in s.localParticipant.cid = self.clientId }
 
-        if let token = payload.reconnectToken, !token.isEmpty { reconnectToken = token }
-        if let ttl = payload.turnTokenTTLMs { turnManager?.handleJoinedTTL(ttlMs: Int64(ttl)) }
-        turnManager?.ensureIceSetupIfNeeded(turnToken: payload.turnToken)
-
-        if let roomState = signalingMessageRouter?.parseRoomState(payload: rawPayload, fallbackHostCid: hostCid) {
+        if let roomState {
             hostCid = roomState.hostCid
             updateParticipants(roomState)
         } else {
-            recoverFromJoiningIfNeeded(participantHint: payload.participantCount)
+            recoverFromJoiningIfNeeded(participantHint: participantCountHint)
         }
+        broadcastLocalMediaState()
+        loadInitialIceServers()
     }
 
-    private func handleRoomState(payload: JSONValue?) {
+    private func handleRoomState(_ roomState: RoomState?, participantCountHint: Int?) {
         joinFlowCoordinator?.clearAllTimers()
         hasJoinAcknowledgedCurrentAttempt = true
-        turnManager?.ensureIceSetupIfNeeded(turnToken: SignalingMessageRouter.turnToken(from: payload))
 
-        guard let roomState = signalingMessageRouter?.parseRoomState(payload: payload, fallbackHostCid: hostCid) else {
-            recoverFromJoiningIfNeeded(participantHint: SignalingMessageRouter.participantCountHint(payload: payload))
+        guard let roomState else {
+            recoverFromJoiningIfNeeded(participantHint: participantCountHint)
             return
         }
         hostCid = roomState.hostCid
@@ -412,6 +536,23 @@ public final class SerenadaSession: ObservableObject {
         )
         guard webRtcEngine.hasIceServers() else { pendingMessages.append(message); return }
         peerNegotiationEngine?.processSignalingPayload(message)
+    }
+
+    private func handleParticipantMediaState(_ payload: MediaStatePayload) {
+        guard let fromCid = payload.fromCid, !fromCid.isEmpty else { return }
+        let existing = remoteMediaStates[fromCid]
+        remoteMediaStates[fromCid] = (
+            audioEnabled: payload.audioEnabled ?? existing?.audioEnabled,
+            videoEnabled: payload.videoEnabled ?? existing?.videoEnabled
+        )
+        refreshRemoteParticipants()
+    }
+
+    private func broadcastLocalMediaState() {
+        signalingMessageRouter?.broadcastMediaState(
+            audioEnabled: state.localParticipant.audioEnabled,
+            videoEnabled: state.localParticipant.videoEnabled
+        )
     }
 
     private func handleContentState(_ payload: ContentStatePayload) {
@@ -428,6 +569,93 @@ public final class SerenadaSession: ObservableObject {
         resetResources()
         internalPhase = .error
         commitSnapshot()
+    }
+
+    // MARK: - Provider Events
+
+    fileprivate func handleProviderConnected(_ info: ConnectionInfo) {
+        let wasConnected = diagnostics.isSignalingConnected
+        reconnectAttempts = 0
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        commitSnapshot { _, d in
+            d.isSignalingConnected = true
+            d.activeTransport = info.transport
+        }
+        connectionStatusTracker?.update()
+        if let join = pendingJoinRoom {
+            pendingJoinRoom = nil
+            sendJoin(roomId: join)
+        } else if !wasConnected, signalingProvider.capabilities.handlesReconnection, reconnectRecoveryPending, currentRoomState != nil {
+            reconnectRecoveryPending = false
+            peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
+        }
+    }
+
+    fileprivate func handleProviderDisconnected(reason: String?) {
+        _ = reason
+        commitSnapshot { _, d in
+            d.isSignalingConnected = false
+            d.activeTransport = nil
+        }
+        connectionStatusTracker?.update()
+        let phase = state.phase
+        if phase == .joining || phase == .waiting || phase == .inCall {
+            if signalingProvider.capabilities.handlesReconnection {
+                reconnectRecoveryPending = currentRoomState != nil
+            } else {
+                scheduleReconnect()
+            }
+        }
+    }
+
+    fileprivate func handleProviderJoined(_ event: JoinedEvent) {
+        currentError = nil
+        signalingMessageRouter?.processJoinedEvent(event)
+    }
+
+    fileprivate func handleProviderRoomStateUpdated(_ event: RoomStateEvent) {
+        currentError = nil
+        signalingMessageRouter?.processRoomStateEvent(event)
+    }
+
+    fileprivate func handleProviderPeerJoined(_ event: PeerEvent) {
+        currentError = nil
+        currentRoomState = upsertParticipant(roomState: currentRoomState, event: event, localPeerId: clientId)
+        if let roomState = currentRoomState {
+            hostCid = roomState.hostCid
+            updateParticipants(roomState)
+        }
+        broadcastLocalMediaState()
+    }
+
+    fileprivate func handleProviderPeerLeft(_ event: PeerEvent) {
+        remoteMediaStates.removeValue(forKey: event.peerId)
+        currentRoomState = removeParticipant(roomState: currentRoomState, peerId: event.peerId, localPeerId: clientId)
+        if let roomState = currentRoomState {
+            hostCid = roomState.hostCid
+            updateParticipants(roomState)
+        } else {
+            refreshRemoteParticipants()
+        }
+    }
+
+    fileprivate func handleProviderMessage(_ message: PeerMessage) {
+        guard ["content_state", "participant_media_state", "offer", "answer", "ice"].contains(message.type) else { return }
+        signalingMessageRouter?.processPeerMessage(message)
+    }
+
+    fileprivate func handleProviderRoomEnded(_ event: RoomEndedEvent) {
+        _ = event
+        cleanupCall(reason: .remoteEnded, transitionToEnding: true)
+    }
+
+    fileprivate func handleProviderError(_ event: ErrorEvent) {
+        signalingMessageRouter?.processErrorEvent(event)
+    }
+
+    fileprivate func handleProviderIceServersChanged(_ iceServers: [IceServerConfig]) {
+        applyIceServers(iceServers)
     }
 
     // MARK: - Participants
@@ -447,6 +675,17 @@ public final class SerenadaSession: ObservableObject {
         connectionStatusTracker?.update()
     }
 
+    /// True only when at least one peer exists and every slot's last observed
+    /// candidate pair is direct. `nil` cached values (no stats yet) count as
+    /// "not confirmed direct" so the gate errs on the side of refreshing.
+    private func arePeerPathsAllDirect() -> Bool {
+        if peerSlots.isEmpty { return false }
+        for (_, slot) in peerSlots {
+            guard let direct = slot.isPathDirect(), direct else { return false }
+        }
+        return true
+    }
+
     private func refreshRemoteParticipants() {
         guard let roomState = currentRoomState else {
             commitSnapshot { s, _ in s.remoteParticipants = [] }
@@ -454,10 +693,13 @@ public final class SerenadaSession: ObservableObject {
         }
         let participants = roomState.participants.filter { $0.cid != clientId }.map { p in
             let slot = peerSlots[p.cid]
+            let peerState = remoteMediaStates[p.cid]
             return SerenadaRemoteParticipant(
-                cid: p.cid, audioEnabled: true,
-                videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
-                connectionState: slot?.getConnectionState() ?? .new
+                cid: p.cid, displayName: p.displayName,
+                audioEnabled: peerState?.audioEnabled ?? p.audioEnabled ?? true,
+                videoEnabled: peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
+                connectionState: slot?.getConnectionState() ?? .new,
+                signalingStatus: p.signalingStatus
             )
         }
         let activeCids = Set(participants.map(\.cid))
@@ -492,7 +734,12 @@ public final class SerenadaSession: ObservableObject {
     // MARK: - Messaging
 
     private func sendMessage(type: String, payload: JSONValue? = nil, to: String? = nil) {
-        signalingClient.send(SignalingMessage(type: type, rid: roomId, cid: clientId, to: to, payload: payload))
+        let objectPayload = payload?.objectValue
+        if let to {
+            signalingProvider.sendToPeer(to, type: type, payload: objectPayload)
+        } else {
+            signalingProvider.broadcast(type: type, payload: objectPayload)
+        }
     }
 
     private func flushPendingMessages() {
@@ -500,6 +747,93 @@ public final class SerenadaSession: ObservableObject {
         let pending = pendingMessages
         pendingMessages.removeAll()
         for message in pending { peerNegotiationEngine?.processSignalingPayload(message) }
+    }
+
+    // Adapter functions (joinedMessageFromEvent, roomStateMessageFromEvent,
+    // signalingMessageFromPeerMessage, errorMessageFromEvent, participantsJSONValue,
+    // resolveHostPeerId) removed — the router now accepts provider events directly.
+
+    private func upsertParticipant(
+        roomState: RoomState?,
+        event: PeerEvent,
+        localPeerId: String?
+    ) -> RoomState? {
+        let participants = dedupeParticipants(
+            participants: (roomState?.participants ?? []) + [Participant(cid: event.peerId, joinedAt: event.joinedAt, displayName: event.displayName)],
+            localPeerId: localPeerId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
+        )
+        let nextHost = roomState?.hostCid ?? localPeerId ?? participants.first?.cid
+        guard let nextHost else { return nil }
+        let resolvedHost = participants.contains(where: { $0.cid == nextHost }) ? nextHost : participants.first?.cid
+        guard let resolvedHost else { return nil }
+        return RoomState(hostCid: resolvedHost, participants: participants, maxParticipants: roomState?.maxParticipants)
+    }
+
+    private func removeParticipant(
+        roomState: RoomState?,
+        peerId: String,
+        localPeerId: String?
+    ) -> RoomState? {
+        guard let roomState else { return nil }
+        let participants = dedupeParticipants(
+            participants: roomState.participants.filter { $0.cid != peerId },
+            localPeerId: localPeerId,
+            makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
+        )
+        guard !participants.isEmpty else { return nil }
+        let nextHost: String
+        if roomState.hostCid != peerId, participants.contains(where: { $0.cid == roomState.hostCid }) {
+            nextHost = roomState.hostCid
+        } else if let localPeerId, participants.contains(where: { $0.cid == localPeerId }) {
+            nextHost = localPeerId
+        } else {
+            nextHost = participants[0].cid
+        }
+        return RoomState(hostCid: nextHost, participants: participants, maxParticipants: roomState.maxParticipants)
+    }
+
+    private func defaultIceServers() -> [IceServerConfig] {
+        [IceServerConfig(urls: ["stun:stun.l.google.com:19302"], username: nil, credential: nil)]
+    }
+
+    private func applyIceServers(_ iceServers: [IceServerConfig]) {
+        let resolvedIceServers = iceServers.isEmpty ? defaultIceServers() : iceServers
+        webRtcEngine.setIceServers(resolvedIceServers)
+        flushPendingMessages()
+        peerNegotiationEngine?.onIceServersReady()
+    }
+
+    private func loadInitialIceServers() {
+        iceFetchGeneration += 1
+        let fetchGeneration = iceFetchGeneration
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var lastError: Error?
+            for delayMs in WebRtcResilience.iceFetchRetryDelaysMs {
+                if delayMs > 0 {
+                    try? await clock.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                }
+                guard fetchGeneration == iceFetchGeneration else { return }
+                do {
+                    let iceServers = try await signalingProvider.getIceServers()
+                    guard fetchGeneration == iceFetchGeneration else { return }
+                    applyIceServers(iceServers)
+                    return
+                } catch {
+                    lastError = error
+                }
+            }
+
+            guard fetchGeneration == iceFetchGeneration else { return }
+            let message = lastError?.localizedDescription ?? "Failed to fetch ICE servers"
+            currentError = .serverError(message)
+            joinFlowCoordinator?.clearAllTimers()
+            resetResources()
+            internalPhase = .error
+            commitSnapshot()
+            delegateProvider?()?.sessionDidEnd(self, reason: .error(message))
+        }
     }
 
     // MARK: - Cleanup
@@ -527,26 +861,25 @@ public final class SerenadaSession: ObservableObject {
     private func resetResources() {
         statsPoller?.stop()
         peerNegotiationEngine?.resetAll()
-        signalingClient.close()
+        signalingProvider.disconnect()
         peerSlots.values.forEach { $0.closePeerConnection() }
         peerSlots.removeAll()
         webRtcEngine.release()
         callAudioSessionController.deactivate()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
-        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0
+        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
 
         reconnectTask?.cancel(); reconnectTask = nil
         joinFlowCoordinator?.clearAllTimers()
         connectionStatusTracker?.cancelTimer()
-        turnManager?.cancelRefresh()
+        iceFetchGeneration += 1
 
         userPreferredVideoEnabled = config.defaultVideoEnabled
         isVideoPausedByProximity = false
         hasJoinSignalStartedForAttempt = false
         hasJoinAcknowledgedCurrentAttempt = false
-        reconnectToken = nil
-        turnManager?.reset()
+        reconnectRecoveryPending = false
         participantCount = 0
 
         commitSnapshot { s, d in
@@ -579,9 +912,9 @@ public final class SerenadaSession: ObservableObject {
         reconnectTask = Task { [weak self] in
             guard let clock = self?.clock else { return }
             try? await clock.sleep(nanoseconds: UInt64(backoff) * 1_000_000)
-            guard !Task.isCancelled, let self, !self.signalingClient.isConnected() else { return }
+            guard !Task.isCancelled, let self, !self.diagnostics.isSignalingConnected else { return }
             self.pendingJoinRoom = self.roomId
-            self.signalingClient.connect(host: self.serverHost)
+            self.signalingProvider.connect()
         }
     }
 
@@ -635,13 +968,16 @@ public final class SerenadaSession: ObservableObject {
     private func buildSubEngines() {
         signalingMessageRouter = SignalingMessageRouter(
             getClientId: { [weak self] in self?.clientId },
-            onJoined: { [weak self] cid, payload, rawPayload in self?.handleJoined(cid: cid, payload: payload, rawPayload: rawPayload) },
-            onRoomState: { [weak self] payload in self?.handleRoomState(payload: payload) },
+            getHostCid: { [weak self] in self?.hostCid },
+            getRoomId: { [weak self] in self?.roomId },
+            onJoined: { [weak self] cid, roomState, hint in self?.handleJoined(cid: cid, roomState: roomState, participantCountHint: hint) },
+            onRoomState: { [weak self] roomState, hint in self?.handleRoomState(roomState, participantCountHint: hint) },
             onRoomEnded: { [weak self] in self?.cleanupCall(reason: .remoteEnded, transitionToEnding: true) },
-            onPong: { [weak self] in self?.signalingClient.recordPong() },
-            onTurnRefreshed: { [weak self] payload in self?.turnManager?.handleTurnRefreshed(payload: payload) },
+            onPong: {},
+            onTurnRefreshed: { _ in },
             onSignalingPayload: { [weak self] message in self?.handleSignalingPayload(message) },
             onContentState: { [weak self] payload in self?.handleContentState(payload) },
+            onParticipantMediaState: { [weak self] payload in self?.handleParticipantMediaState(payload) },
             onError: { [weak self] error in self?.handleError(error) },
             sendMessage: { [weak self] type, payload, to in self?.sendMessage(type: type, payload: payload, to: to) }
         )
@@ -661,20 +997,6 @@ public final class SerenadaSession: ObservableObject {
                     participantHint: hint ?? self?.currentRoomState?.participants.count, preferInCall: preferInCall
                 )
             }
-        )
-
-        turnManager = TurnManager(
-            clock: clock, serverHost: serverHost, apiClient: apiClient,
-            getJoinAttemptSerial: { [weak self] in self?.joinAttemptSerial ?? 0 },
-            getRoomId: { [weak self] in self?.roomId ?? "" },
-            getPhase: { [weak self] in self?.mapPhase(self?.internalPhase ?? .idle) ?? .idle },
-            isSignalingConnected: { [weak self] in self?.signalingClient.isConnected() ?? false },
-            setIceServers: { [weak self] servers in self?.webRtcEngine.setIceServers(servers) },
-            onIceServersReady: { [weak self] in
-                self?.flushPendingMessages()
-                self?.peerNegotiationEngine?.onIceServersReady()
-            },
-            sendTurnRefresh: { [weak self] in self?.sendMessage(type: "turn-refresh") }
         )
 
         connectionStatusTracker = ConnectionStatusTracker(
@@ -709,7 +1031,7 @@ public final class SerenadaSession: ObservableObject {
             getInternalPhase: { [weak self] in self?.internalPhase ?? .idle },
             getParticipantCount: { [weak self] in self?.participantCount ?? 0 },
             getCurrentRoomState: { [weak self] in self?.currentRoomState },
-            isSignalingConnected: { [weak self] in self?.signalingClient.isConnected() ?? false },
+            isSignalingConnected: { [weak self] in self?.diagnostics.isSignalingConnected ?? false },
             hasIceServers: { [weak self] in self?.webRtcEngine.hasIceServers() ?? false },
             getSlot: { [weak self] cid in self?.peerSlots[cid] },
             getAllSlots: { [weak self] in self?.peerSlots ?? [:] },
@@ -786,29 +1108,5 @@ public final class SerenadaSession: ObservableObject {
             }
         }
         pathMonitor.start(queue: pathMonitorQueue)
-    }
-}
-
-// MARK: - SignalingClientListener
-
-extension SerenadaSession: SignalingClientListener {
-    func onOpen(activeTransport: String) {
-        reconnectAttempts = 0
-        commitSnapshot { _, d in d.isSignalingConnected = true; d.activeTransport = activeTransport }
-        connectionStatusTracker?.update()
-        if let join = pendingJoinRoom { pendingJoinRoom = nil; sendJoin(roomId: join) }
-        if internalPhase == .inCall { peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect") }
-    }
-
-    func onMessage(_ message: SignalingMessage) {
-        signalingMessageRouter?.processMessage(message)
-    }
-
-    func onClosed(reason: String) {
-        _ = reason
-        commitSnapshot { _, d in d.isSignalingConnected = false; d.activeTransport = nil }
-        connectionStatusTracker?.update()
-        let phase = state.phase
-        if phase == .joining || phase == .waiting || phase == .inCall { scheduleReconnect() }
     }
 }

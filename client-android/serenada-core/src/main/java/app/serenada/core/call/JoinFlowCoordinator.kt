@@ -2,7 +2,6 @@ package app.serenada.core.call
 
 import android.os.Handler
 import android.os.Looper
-import org.json.JSONObject
 
 /**
  * Coordinates the join flow: permission check, signaling connection, join message,
@@ -20,14 +19,13 @@ internal class JoinFlowCoordinator(
     // Mutation callbacks
     private val onStartJoinInternal: () -> Unit,
     private val onPermissionCheckRequired: () -> Unit,
-    private val connectSignaling: (host: String) -> Unit,
-    private val sendSignalingMessage: (SignalingMessage) -> Unit,
+    private val connectProvider: () -> Unit,
+    private val joinRoom: (String, String?) -> Unit,
     private val onJoinTimeout: () -> Unit,
     private val onJoinRecovery: () -> Unit,
     // State writers
     private val setPendingJoinRoom: (String?) -> Unit,
-    private val getReconnectToken: () -> String?,
-    private val serverHost: String,
+    private val getReconnectPeerId: () -> String?,
 ) {
     // --- Join timer state (absorbed from JoinTimer) ---
     private var joinTimeoutRunnable: Runnable? = null
@@ -75,38 +73,16 @@ internal class JoinFlowCoordinator(
         hasJoinSignalStarted = true
         if (isSignalingConnected()) {
             setPendingJoinRoom(null)
-            sendJoin(roomId)
+            joinRoom(roomId, getReconnectPeerId())
             return
         }
         setPendingJoinRoom(roomId)
-        connectSignaling(serverHost)
+        connectProvider()
     }
 
     fun sendJoin(roomId: String) {
-        val buildPayload = {
-            JSONObject().apply {
-                put("device", "android")
-                put(
-                    "capabilities",
-                    JSONObject().apply {
-                        put("trickleIce", true)
-                        put("maxParticipants", 4)
-                    }
-                )
-                put("createMaxParticipants", 4)
-                getReconnectToken()?.let { put("reconnectToken", it) }
-            }
-        }
         if (!isSignalingConnected()) return
-        val msg = SignalingMessage(
-            type = "join",
-            rid = roomId,
-            sid = null,
-            cid = null,
-            to = null,
-            payload = buildPayload()
-        )
-        sendSignalingMessage(msg)
+        joinRoom(roomId, getReconnectPeerId())
         scheduleJoinRecovery(roomId)
     }
 
@@ -188,7 +164,7 @@ internal class JoinFlowCoordinator(
             if (isSignalingConnected()) return@Runnable
             if (getPhase() != CallPhase.Idle) {
                 setPendingJoinRoom(roomId)
-                connectSignaling(serverHost)
+                connectProvider()
             }
         }
         reconnectRunnable = runnable

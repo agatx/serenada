@@ -197,13 +197,32 @@ node scripts/check-version-parity.mjs
 
 All three native SDKs follow a **headless core + optional UI** pattern:
 
-- **`SerenadaCore`** — Entry point. `createRoom()` is async (`async throws` on iOS, `suspend` on Android). `join()` returns a `SerenadaSession`.
+- **`SerenadaCore`** — Entry point. `createRoom()` returns the room URL and ID (async on all platforms). Call `join()` afterward to start the call and get a `SerenadaSession`.
 - **`SerenadaSession`** — The active call session. Exposes two observable snapshots:
   - **`state`** (`CallState`) — App-facing call state: phase, local/remote participants, connection status, errors.
   - **`diagnostics`** (`CallDiagnostics`) — Low-level transport info: ICE/peer/signaling states, realtime stats, camera/flash state, feature degradations.
 - **`SerenadaCallFlow`** — Pre-built UI component (SwiftUI / Jetpack Compose / React) that consumes a session and renders the full call flow. Optional — you can build your own UI from `state` and `diagnostics`.
 
 Android enforces main-thread access on all public SDK entrypoints with fail-fast preconditions.
+
+### Signaling Modes
+
+All SDKs now support two signaling modes through the same `SerenadaConfig`, and they validate the choice at construction time:
+
+- Built-in Serenada signaling: set `serverHost`.
+- Custom signaling provider: set `signalingProvider`.
+
+Provide exactly one of `serverHost` or `signalingProvider`.
+
+In custom-provider mode:
+
+- `join()` still creates a normal `SerenadaSession`.
+- The built-in provider-facing identifier is `peerId`; built-in `cid` mapping stays internal.
+- `hostPeerId` and `roomStateUpdated` remain optional.
+- `runAll()` still works, and TURN probing uses provider-supplied ICE servers.
+- Server-only APIs require `serverHost`: `createRoom()`, native `createRoomId()`, `RoomWatcher`, `validateServerHost()`, and `runConnectivityChecks()`.
+
+On web, provider-delivered peer messages are exposed through `session.onPeerMessage(...)`. Raw Serenada transport envelopes are no longer part of the public SDK surface.
 
 ## Documentation
 

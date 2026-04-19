@@ -8,6 +8,10 @@ final class FakeSessionClock: SessionClock {
     private var pendingSleeps: [(id: UUID, deadlineMs: Int64, continuation: CheckedContinuation<Void, any Error>)] = []
     private var repeatingEntries: [RepeatingEntry] = []
 
+    var pendingSleepCount: Int {
+        pendingSleeps.count
+    }
+
     func nowMs() -> Int64 {
         currentTimeMs
     }

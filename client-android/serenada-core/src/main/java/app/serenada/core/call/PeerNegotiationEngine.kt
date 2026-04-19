@@ -241,11 +241,9 @@ internal class PeerNegotiationEngine(
     // --- Offer Logic ---
 
     private fun shouldIOffer(remoteCid: String, roomState: RoomState? = getCurrentRoomState()): Boolean {
-        val state = roomState ?: return false
         val myCid = getClientId() ?: return false
-        val myJoinedAt = state.participants.find { it.cid == myCid }?.joinedAt ?: 0L
-        val theirJoinedAt = state.participants.find { it.cid == remoteCid }?.joinedAt ?: 0L
-        return myJoinedAt < theirJoinedAt || (myJoinedAt == theirJoinedAt && myCid < remoteCid)
+        roomState ?: return false
+        return myCid < remoteCid
     }
 
     private fun canOffer(slot: PeerConnectionSlotProtocol): Boolean {

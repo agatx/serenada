@@ -28,6 +28,7 @@ struct RootView: View {
     @ObservedObject var callManager: CallManager
 
     @State private var hostInput = ""
+    @State private var displayNameInput = ""
     @State private var roomInput = ""
     @State private var settingsHostError: String?
     @State private var settingsSaveInProgress = false
@@ -68,6 +69,7 @@ struct RootView: View {
                     },
                     onOpenSettings: {
                         hostInput = callManager.serverHost
+                        displayNameInput = callManager.displayName
                         settingsHostError = nil
                         showSettings = true
                     },
@@ -127,6 +129,7 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.24), value: currentScreen)
         .onAppear {
             hostInput = callManager.serverHost
+            displayNameInput = callManager.displayName
         }
         .onChange(of: callManager.serverHost) { newHost in
             hostInput = newHost
@@ -152,6 +155,7 @@ struct RootView: View {
             NavigationStack {
                 SettingsScreen(
                     host: $hostInput,
+                    displayName: $displayNameInput,
                     showDiagnostics: $showDiagnostics,
                     selectedLanguage: callManager.selectedLanguage,
                     isDefaultCameraEnabled: callManager.isDefaultCameraEnabled,
@@ -168,7 +172,8 @@ struct RootView: View {
                     onDefaultMicrophoneChange: { callManager.updateDefaultMicrophone($0) },
                     onHdVideoExperimentalChange: { callManager.updateHdVideoExperimental($0) },
                     onSavedRoomsShownFirstChange: { callManager.updateSavedRoomsShownFirst($0) },
-                    onRoomInviteNotificationsChange: { callManager.updateRoomInviteNotifications($0) }
+                    onRoomInviteNotificationsChange: { callManager.updateRoomInviteNotifications($0) },
+                    onDisplayNameChange: { callManager.updateDisplayName($0) }
                 )
                 .navigationTitle(L10n.settingsTitle)
                 .navigationBarTitleDisplayMode(.inline)
@@ -238,6 +243,7 @@ struct RootView: View {
 
     private func closeSettings() {
         hostInput = callManager.serverHost
+        displayNameInput = callManager.displayName
         settingsHostError = nil
         settingsSaveInProgress = false
         showDiagnostics = false

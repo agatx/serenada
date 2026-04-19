@@ -3,10 +3,10 @@ import CoreImage
 import Foundation
 import UIKit
 #if canImport(WebRTC)
-import WebRTC
+@preconcurrency import WebRTC
 #endif
 
-internal struct IceServerConfig: Equatable {
+public struct IceServerConfig: Equatable, Sendable {
     public let urls: [String]
     public let username: String?
     public let credential: String?
@@ -337,6 +337,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
                 localVideoTrack?.isEnabled = false
                 return false
             }
+        }
+        if !enabled && !screenShareController.isScreenSharing {
+            cameraController.stopAllCapturers()
         }
         let effectiveEnabled = enabled && (cameraController.hasActiveCapturer() || screenShareController.isScreenSharing)
         localVideoTrack?.isEnabled = effectiveEnabled

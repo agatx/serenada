@@ -17,6 +17,7 @@ data class CallUiState(
     val participantCount: Int = 0,
     val localAudioEnabled: Boolean = true,
     val localVideoEnabled: Boolean = true,
+    val localDisplayName: String? = null,
     val remoteParticipants: List<RemoteParticipant> = emptyList(),
     val connectionStatus: ConnectionStatus = ConnectionStatus.Connected,
     val isSignalingConnected: Boolean = false,

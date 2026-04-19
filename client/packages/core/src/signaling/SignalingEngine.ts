@@ -71,6 +71,7 @@ export class SignalingEngine {
     private closedByDestroy = false;
     private connecting = false;
     private lastCreateMaxParticipants: number | undefined = undefined;
+    private lastDisplayName: string | undefined = undefined;
 
     // Logger
     private logger?: SerenadaLogger;
@@ -122,7 +123,7 @@ export class SignalingEngine {
         }
     }
 
-    joinRoom(roomId: string, options?: { createMaxParticipants?: number }): void {
+    joinRoom(roomId: string, options?: { createMaxParticipants?: number; displayName?: string }): void {
         this.logger?.log('debug', 'Signaling', `joinRoom call for ${roomId}`);
         this.error = null;
         this.clearJoinTimers();
@@ -135,12 +136,19 @@ export class SignalingEngine {
         if (options?.createMaxParticipants !== undefined) {
             this.lastCreateMaxParticipants = options.createMaxParticipants;
         }
+        if (options?.displayName !== undefined) {
+            this.lastDisplayName = options.displayName;
+        }
 
         if (this.transport && this.transport.isOpen()) {
             const payload: Record<string, unknown> = {
                 capabilities: { trickleIce: true, maxParticipants: 4 },
                 createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 4,
             };
+            const displayName = options?.displayName ?? this.lastDisplayName;
+            if (displayName !== undefined) {
+                payload.displayName = displayName;
+            }
             const reconnectCid = this.clientId || this.lastClientId;
             if (reconnectCid) {
                 payload.reconnectCid = reconnectCid;
@@ -201,6 +209,7 @@ export class SignalingEngine {
         this.roomState = null;
         this.turnToken = null;
         this.turnTokenTTLMs = null;
+        this.turnTokenExpiresAtMs = null;
         this.notifyStateChange();
     }
 
@@ -475,19 +484,59 @@ export class SignalingEngine {
         }, PING_INTERVAL_MS);
     }
 
-    private scheduleTurnRefresh(): void {
+    private turnRefreshGate: (() => Promise<boolean>) | null = null;
+    // Absolute timestamp (epoch ms) at which the current TURN credential expires.
+    // Set when TTL is installed; used to compute "remaining until expiry" so the
+    // skip-path reschedule has a real safety buffer on repeat skips.
+    private turnTokenExpiresAtMs: number | null = null;
+
+    setTurnRefreshGate(gate: (() => Promise<boolean>) | null): void {
+        this.turnRefreshGate = gate;
+    }
+
+    private scheduleTurnRefresh(delayOverrideMs?: number): void {
         this.clearTurnRefreshTimer();
         if (!this.isConnected || !this.turnTokenTTLMs || !this.currentRoomId) return;
+        if (delayOverrideMs === undefined) {
+            // Initial schedule after fresh creds: trigger at `ratio * TTL`.
+            this.turnTokenExpiresAtMs = Date.now() + this.turnTokenTTLMs;
+        }
 
-        const refreshDelay = this.turnTokenTTLMs * TURN_REFRESH_TRIGGER_RATIO;
+        const refreshDelay = delayOverrideMs ?? this.turnTokenTTLMs * TURN_REFRESH_TRIGGER_RATIO;
         this.logger?.log('debug', 'Signaling', `Scheduling TURN refresh in ${Math.round(refreshDelay / 1000)}s`);
         this.turnRefreshTimer = window.setTimeout(() => {
             this.turnRefreshTimer = null;
-            if (this.isConnected && this.currentRoomId) {
-                this.logger?.log('debug', 'Signaling', 'Sending turn-refresh request');
-                this.sendMessage('turn-refresh');
-            }
+            void this.maybeSendTurnRefresh();
         }, refreshDelay);
+    }
+
+    private async maybeSendTurnRefresh(): Promise<void> {
+        if (!this.isConnected || !this.currentRoomId) return;
+        if (this.turnRefreshGate) {
+            let shouldRefresh = true;
+            try {
+                shouldRefresh = await this.turnRefreshGate();
+            } catch { /* gate failure → default to refreshing */ }
+            if (!shouldRefresh) {
+                this.logger?.log('debug', 'Signaling', 'Skipping turn-refresh: all peer paths direct');
+                // Reschedule at a fraction of the remaining lifetime so a late
+                // path failover to relay still has time to refresh before the
+                // current credentials expire. Using `remaining * ratio` gives
+                // an exponential approach to expiry on repeat skips.
+                if (this.turnTokenExpiresAtMs !== null) {
+                    const remainingMs = this.turnTokenExpiresAtMs - Date.now();
+                    if (remainingMs > 0) {
+                        this.scheduleTurnRefresh(remainingMs * TURN_REFRESH_TRIGGER_RATIO);
+                    }
+                    // remainingMs <= 0 → creds already expired; stop polling.
+                    // A later relay transition is out of our hands; the call
+                    // was direct when signaling gave us a chance to refresh.
+                }
+                return;
+            }
+        }
+        this.logger?.log('debug', 'Signaling', 'Sending turn-refresh request');
+        this.sendMessage('turn-refresh');
     }
 
     private clearJoinTimers(): void {

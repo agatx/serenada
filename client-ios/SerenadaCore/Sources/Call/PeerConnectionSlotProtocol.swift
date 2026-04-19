@@ -56,6 +56,12 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func hasRemoteDescription() -> Bool
     func isRemoteVideoTrackEnabled() -> Bool
 
+    /// Last observed path type for the selected ICE candidate pair: `true`
+    /// for direct (host/srflx/prflx), `false` for relayed through TURN,
+    /// `nil` if no stats sample has been collected yet. Used by the TURN
+    /// refresh gate so a purely-P2P call can suppress refreshes.
+    func isPathDirect() -> Bool?
+
     // Renderer management
     func attachRemoteRenderer(_ renderer: AnyObject)
     func detachRemoteRenderer(_ renderer: AnyObject)

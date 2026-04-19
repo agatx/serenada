@@ -83,6 +83,9 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         mutableStateOf(settingsStore.areRoomInviteNotificationsEnabled)
     val areRoomInviteNotificationsEnabled: State<Boolean> = _areRoomInviteNotificationsEnabled
 
+    private val _displayName = mutableStateOf(settingsStore.displayName)
+    val displayName: State<String> = _displayName
+
     private val _roomStatuses = mutableStateOf<Map<String, RoomOccupancy>>(emptyMap())
     val roomStatuses: State<Map<String, RoomOccupancy>> = _roomStatuses
 
@@ -142,6 +145,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 defaultVideoEnabled = settingsStore.isDefaultCameraEnabled,
                 isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
                 transports = transports,
+                proximityMonitoringEnabled = true,
             ),
             context = appContext,
         )
@@ -349,6 +353,11 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     fun updateRoomInviteNotifications(enabled: Boolean) {
         settingsStore.areRoomInviteNotificationsEnabled = enabled
         _areRoomInviteNotificationsEnabled.value = enabled
+    }
+
+    fun updateDisplayName(name: String) {
+        settingsStore.displayName = name
+        _displayName.value = name
     }
 
     fun updateRemoteVideoFitCover(isCover: Boolean) {
@@ -565,6 +574,9 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         return "$host:$port"
     }
 
+    private val resolvedDisplayName: String?
+        get() = settingsStore.displayName.ifBlank { null }
+
     private fun resolveDeepLinkHostPolicy(host: String?): DeepLinkHostPolicy {
         val normalized = normalizeHostValue(host) ?: return DeepLinkHostPolicy()
         return if (isTrustedDeepLinkHost(normalized)) {
@@ -597,8 +609,10 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         )
         scope.launch {
             try {
-                val created = createSdkCore(serverHost.value).createRoom()
-                beginSdkSession(created.session)
+                val core = createSdkCore(serverHost.value)
+                val created = core.createRoom()
+                val session = core.join(roomId = created.roomId, displayName = resolvedDisplayName)
+                beginSdkSession(session)
             } catch (error: Throwable) {
                 val fallback = appContext.getString(R.string.error_failed_create_room)
                 val message = error.message?.ifBlank { null } ?: fallback
@@ -628,7 +642,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             refreshSavedRooms()
         }
         val resolvedHost = normalizeHostValue(oneOffHost) ?: serverHost.value
-        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost)
+        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost, displayName = resolvedDisplayName)
         beginSdkSession(session, hostOverride = oneOffHost)
     }
 

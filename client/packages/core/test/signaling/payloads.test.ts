@@ -123,6 +123,22 @@ describe('parseRoomStatePayload', () => {
             maxParticipants: undefined,
         });
     });
+
+    it('parses participant audioEnabled and videoEnabled', () => {
+        const result = parseRoomStatePayload({
+            hostCid: 'h',
+            participants: [
+                { cid: 'a', audioEnabled: true, videoEnabled: false },
+                { cid: 'b', audioEnabled: false, videoEnabled: true },
+                { cid: 'c' },
+            ],
+        });
+        expect(result?.participants).toEqual([
+            { cid: 'a', joinedAt: undefined, audioEnabled: true, videoEnabled: false },
+            { cid: 'b', joinedAt: undefined, audioEnabled: false, videoEnabled: true },
+            { cid: 'c', joinedAt: undefined },
+        ]);
+    });
 });
 
 describe('parseErrorPayload', () => {

@@ -27,6 +27,10 @@ export const ICE_CANDIDATE_BUFFER_MAX = 50;
 // TURN
 export const TURN_FETCH_TIMEOUT_MS = 2000;
 export const TURN_REFRESH_TRIGGER_RATIO = 0.8;
+export const ICE_FETCH_RETRY_DELAYS_MS = [0, 1000, 2000, 4000];
+
+// Session
+export const ENDING_SCREEN_MS = 3000;
 
 // Snapshot
 export const SNAPSHOT_PREPARE_TIMEOUT_MS = 2000;

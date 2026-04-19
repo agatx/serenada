@@ -1,6 +1,6 @@
 import Foundation
 
-enum JSONValue: Codable, Equatable {
+public enum JSONValue: Codable, Equatable, Sendable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -8,7 +8,7 @@ enum JSONValue: Codable, Equatable {
     case array([JSONValue])
     case null
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
@@ -27,7 +27,7 @@ enum JSONValue: Codable, Equatable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .string(let value):
@@ -45,32 +45,32 @@ enum JSONValue: Codable, Equatable {
         }
     }
 
-    var objectValue: [String: JSONValue]? {
+    public var objectValue: [String: JSONValue]? {
         guard case .object(let value) = self else { return nil }
         return value
     }
 
-    var arrayValue: [JSONValue]? {
+    public var arrayValue: [JSONValue]? {
         guard case .array(let value) = self else { return nil }
         return value
     }
 
-    var stringValue: String? {
+    public var stringValue: String? {
         guard case .string(let value) = self else { return nil }
         return value
     }
 
-    var intValue: Int? {
+    public var intValue: Int? {
         guard case .number(let value) = self else { return nil }
         return Int(value)
     }
 
-    var boolValue: Bool? {
+    public var boolValue: Bool? {
         guard case .bool(let value) = self else { return nil }
         return value
     }
 
-    static func from(any: Any) -> JSONValue {
+    public static func from(any: Any) -> JSONValue {
         switch any {
         case let value as String:
             return .string(value)
@@ -88,7 +88,7 @@ enum JSONValue: Codable, Equatable {
         }
     }
 
-    func asAny() -> Any {
+    public func asAny() -> Any {
         switch self {
         case .string(let value):
             return value

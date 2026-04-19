@@ -67,6 +67,16 @@ function isMobileBrowser(): boolean {
     return typeof navigator !== 'undefined' && MOBILE_BROWSER_RE.test(navigator.userAgent);
 }
 
+const ParticipantBadge: React.FC<{ muted?: boolean; displayName?: string }> = ({ muted, displayName }) => {
+    if (!muted && !displayName) return null;
+    return (
+        <div className="participant-badge">
+            {muted && <MicOff size={14} />}
+            {displayName && <span className="participant-badge-name">{displayName}</span>}
+        </div>
+    );
+};
+
 const VideoTile: React.FC<{
     stream: MediaStream;
     label?: string;
@@ -75,6 +85,9 @@ const VideoTile: React.FC<{
     pinned?: boolean;
     tileStyle?: React.CSSProperties;
     videoFit?: RemoteVideoFit;
+    videoEnabled?: boolean;
+    cameraOffLabel?: string;
+    compact?: boolean;
     onAspectRatioChange?: (ratio: number) => void;
     onClick?: () => void;
 }> = ({
@@ -85,6 +98,9 @@ const VideoTile: React.FC<{
     pinned = false,
     tileStyle,
     videoFit = 'cover',
+    videoEnabled,
+    cameraOffLabel,
+    compact = false,
     onAspectRatioChange,
     onClick,
 }) => {
@@ -149,6 +165,11 @@ const VideoTile: React.FC<{
                     transform: mirrored ? 'scaleX(-1)' : undefined,
                 }}
             />
+            {videoEnabled === false && (
+                <div className={`video-camera-off-overlay${compact ? ' compact' : ''}`}>
+                    <span className="video-camera-off-label">{cameraOffLabel}</span>
+                </div>
+            )}
             {label && <div className="video-grid-label">{label}</div>}
             {pinned && (
                 <div className="video-stage-pin-indicator" aria-hidden="true">
@@ -382,12 +403,15 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     useEffect(() => {
         if (!session) return;
-        return session.subscribeToMessages((message) => {
+        return session.onPeerMessage((message) => {
             if (message.type !== 'content_state') return;
-            const from = typeof message.payload?.from === 'string' ? message.payload.from : null;
-            if (!from) return;
-            const active = message.payload?.active === true;
-            const contentType = message.payload?.contentType;
+            const payload = message.payload && typeof message.payload === 'object' && !Array.isArray(message.payload)
+                ? message.payload as Record<string, unknown>
+                : null;
+            if (!payload) return;
+            const from = message.from;
+            const active = payload.active === true;
+            const contentType = payload.contentType;
 
             if (active && (contentType === 'screenShare' || contentType === 'worldCamera' || contentType === 'compositeCamera')) {
                 setRemoteContentState({ cid: from, contentType });
@@ -587,6 +611,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const remoteStageTileMap = useMemo(() => (
         new Map(remoteStageTiles.map((tile) => [tile.cid, tile]))
     ), [remoteStageTiles]);
+
+    const remoteParticipantMap = useMemo(() => (
+        new Map(effectiveState.remoteParticipants.map((p) => [p.cid, p]))
+    ), [effectiveState.remoteParticipants]);
 
     const remoteStageLayout = useMemo(() => (
         computeStageLayout(remoteStageTiles, stageViewportSize.width, stageViewportSize.height, STAGE_TILE_GAP_PX)
@@ -885,12 +913,18 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                         if (!stream) return null;
 
                                         const isPrimaryTile = tile.zOrder === 0;
+                                        const tileRemote = isContentTile || isLocalTile ? undefined : remoteParticipantMap.get(tile.id);
+                                        const tileAudioMuted = isContentTile ? false : isLocalTile ? isMuted : tileRemote?.audioEnabled === false;
+                                        const tileDisplayName = isContentTile ? undefined : isLocalTile ? localParticipant?.displayName : tileRemote?.displayName;
+                                        const tileVideoEnabled = isContentTile ? true : isLocalTile ? localParticipant?.videoEnabled !== false : tileRemote?.videoEnabled;
                                         return (
                                             <div key={tile.id} className="video-stage-tile" style={tileStyle}>
                                                 <VideoTile
                                                     stream={stream}
                                                     tileStyle={{ width: '100%', height: '100%', borderRadius: 'inherit' }}
                                                     videoFit={tile.fit === 'contain' ? 'contain' : 'cover'}
+                                                    videoEnabled={tileVideoEnabled}
+                                                    cameraOffLabel={tileDisplayName ?? resolveString('cameraOff', strings)}
                                                     onAspectRatioChange={
                                                         isLocalTile || isContentTile ? undefined : (ratio) => {
                                                             setRemoteStageAspectRatios((prev) => (
@@ -915,6 +949,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                         {remoteVideoFit === 'cover' ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
                                                     </button>
                                                 )}
+                                                <ParticipantBadge muted={tileAudioMuted} displayName={tileDisplayName} />
                                             </div>
                                         );
                                     })}
@@ -926,18 +961,23 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                             {row.items.map((tile) => {
                                                 const stageTile = remoteStageTileMap.get(tile.cid);
                                                 if (!stageTile) return null;
+                                                const gridRemote = remoteParticipantMap.get(tile.cid);
                                                 return (
-                                                    <VideoTile
-                                                        key={tile.cid}
-                                                        stream={stageTile.stream}
-                                                        tileStyle={{ width: `${tile.width}px`, height: `${tile.height}px` }}
-                                                        onAspectRatioChange={(ratio) => {
-                                                            setRemoteStageAspectRatios((prev) => (
-                                                                prev[tile.cid] === ratio ? prev : { ...prev, [tile.cid]: ratio }
-                                                            ));
-                                                        }}
-                                                        onClick={() => setPinnedParticipantId(tile.cid)}
-                                                    />
+                                                    <div key={tile.cid} style={{ position: 'relative', width: `${tile.width}px`, height: `${tile.height}px` }}>
+                                                        <VideoTile
+                                                            stream={stageTile.stream}
+                                                            tileStyle={{ width: '100%', height: '100%' }}
+                                                            videoEnabled={gridRemote?.videoEnabled}
+                                                            cameraOffLabel={gridRemote?.displayName ?? resolveString('cameraOff', strings)}
+                                                            onAspectRatioChange={(ratio) => {
+                                                                setRemoteStageAspectRatios((prev) => (
+                                                                    prev[tile.cid] === ratio ? prev : { ...prev, [tile.cid]: ratio }
+                                                                ));
+                                                            }}
+                                                            onClick={() => setPinnedParticipantId(tile.cid)}
+                                                        />
+                                                        <ParticipantBadge muted={gridRemote?.audioEnabled === false} displayName={gridRemote?.displayName} />
+                                                    </div>
                                                 );
                                             })}
                                         </div>
@@ -968,6 +1008,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                     style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
                                 />
                             )}
+                            <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} />
                         </div>
                     )}
                 </div>
@@ -975,6 +1016,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             </div>
         );
     }
+
+    const remoteParticipant0 = effectiveState.remoteParticipants[0];
 
     return (
         <div data-serenada-callflow="" className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
@@ -1003,6 +1046,14 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                         />
                     )}
 
+                    {remoteParticipant0?.videoEnabled === false && (
+                        <div className="video-camera-off-overlay">
+                            <span className="video-camera-off-label">
+                                {remoteParticipant0.displayName ?? resolveString('cameraOff', strings)}
+                            </span>
+                        </div>
+                    )}
+
                     {remoteStream && (
                         <button
                             type="button"
@@ -1013,6 +1064,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             {remoteVideoFit === 'cover' ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
                         </button>
                     )}
+
+                    <ParticipantBadge muted={remoteParticipant0?.audioEnabled === false} displayName={remoteParticipant0?.displayName} />
 
                     {waitingOverlay}
                 </div>
@@ -1039,6 +1092,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
                         />
                     )}
+                    <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} />
                 </div>
             </div>
             {controlsBar}

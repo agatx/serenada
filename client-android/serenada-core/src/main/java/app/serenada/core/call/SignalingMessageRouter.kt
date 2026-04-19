@@ -2,6 +2,10 @@ package app.serenada.core.call
 
 import android.os.Looper
 import app.serenada.core.CallError
+import app.serenada.core.ErrorEvent
+import app.serenada.core.JoinedEvent
+import app.serenada.core.PeerMessage
+import app.serenada.core.RoomStateEvent
 import org.json.JSONObject
 
 /**
@@ -10,6 +14,11 @@ import org.json.JSONObject
  *
  * Follows the closure-injection DI pattern established by [PeerNegotiationEngine].
  */
+internal data class RemoteMediaState(
+    val audioEnabled: Boolean? = null,
+    val videoEnabled: Boolean? = null,
+)
+
 internal class SignalingMessageRouter(
     // State readers
     private val getClientId: () -> String?,
@@ -20,6 +29,7 @@ internal class SignalingMessageRouter(
     private val onError: (CallError) -> Unit,
     private val onRoomEnded: () -> Unit,
     private val onContentStateReceived: (fromCid: String, active: Boolean, contentType: String?) -> Unit,
+    private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean?, videoEnabled: Boolean?) -> Unit,
     private val onTurnRefreshed: (SignalingMessage) -> Unit,
     private val onSignalingPayload: (SignalingMessage) -> Unit,
     private val onPong: () -> Unit,
@@ -53,6 +63,104 @@ internal class SignalingMessageRouter(
             if (active && contentType != null) put("contentType", contentType)
         }
         sendMessage("content_state", payload, null)
+    }
+
+    fun broadcastMediaState(audioEnabled: Boolean, videoEnabled: Boolean) {
+        val payload = JSONObject().apply {
+            put("audioEnabled", audioEnabled)
+            put("videoEnabled", videoEnabled)
+        }
+        sendMessage("participant_media_state", payload, null)
+    }
+
+    // --- Direct-dispatch methods for provider events ---
+
+    fun processJoinedEvent(event: JoinedEvent) {
+        assertMainThread()
+        clearJoinTimers()
+        setJoinAcknowledged()
+
+        val cid = event.peerId
+        val participants = dedupeParticipants(
+            event.participants.map { Participant(
+                cid = it.peerId,
+                joinedAt = it.joinedAt,
+                displayName = it.displayName,
+                audioEnabled = it.audioEnabled,
+                videoEnabled = it.videoEnabled,
+                signalingStatus = it.connectionStatus,
+            ) },
+            cid,
+        )
+        val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), cid)
+        val roomState = if (!hostPeerId.isNullOrBlank()) {
+            RoomState(hostCid = hostPeerId, participants = participants, maxParticipants = event.maxParticipants)
+        } else null
+        onJoined(cid, roomState?.hostCid, roomState, null, null, null)
+    }
+
+    fun processRoomStateEvent(event: RoomStateEvent) {
+        assertMainThread()
+        clearJoinTimers()
+        setJoinAcknowledged()
+
+        val localPeerId = getClientId()
+        val participants = dedupeParticipants(
+            event.participants.map { Participant(
+                cid = it.peerId,
+                joinedAt = it.joinedAt,
+                displayName = it.displayName,
+                audioEnabled = it.audioEnabled,
+                videoEnabled = it.videoEnabled,
+                signalingStatus = it.connectionStatus,
+            ) },
+            localPeerId,
+        )
+        val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), localPeerId)
+        if (hostPeerId.isNullOrBlank()) return
+        onRoomStateUpdated(RoomState(hostCid = hostPeerId, participants = participants, maxParticipants = event.maxParticipants))
+    }
+
+    fun processPeerMessage(message: PeerMessage) {
+        assertMainThread()
+        when (message.type) {
+            "content_state" -> {
+                val payload = message.payload
+                val fromCid = payload?.optString("from")?.ifBlank { null } ?: message.from
+                val active = payload?.optBoolean("active") ?: false
+                val contentType = if (active) payload?.optString("contentType")?.ifBlank { null } else null
+                onContentStateReceived(fromCid, active, contentType)
+            }
+            "participant_media_state" -> {
+                val parsed = message.payload.toMediaStatePayload() ?: return
+                onMediaStateReceived(parsed.fromCid, parsed.audioEnabled, parsed.videoEnabled)
+            }
+            "offer", "answer", "ice" -> {
+                val base = message.payload ?: JSONObject()
+                if (base.optString("from").isBlank()) base.put("from", message.from)
+                onSignalingPayload(SignalingMessage(
+                    type = message.type,
+                    rid = null,
+                    sid = null,
+                    cid = message.from,
+                    to = null,
+                    payload = base,
+                ))
+            }
+        }
+    }
+
+    fun processErrorEvent(event: ErrorEvent) {
+        assertMainThread()
+        val callError = when (event.code) {
+            "ROOM_CAPACITY_UNSUPPORTED", "ROOM_FULL" -> CallError.RoomFull
+            "CONNECTION_FAILED" -> CallError.ConnectionFailed
+            "JOIN_TIMEOUT" -> CallError.SignalingTimeout
+            "ROOM_ENDED" -> CallError.RoomEnded
+            else -> if (event.message.isNotBlank()) CallError.ServerError(event.message)
+            else CallError.Unknown("Unknown error")
+        }
+        onError(callError)
     }
 
     // --- Private handlers ---

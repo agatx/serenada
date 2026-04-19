@@ -1,10 +1,9 @@
 import type { CallState, SerenadaConfig } from '../../src/types.js';
 import type { RoomState } from '../../src/signaling/types.js';
-import type { SignalingEngine } from '../../src/signaling/SignalingEngine.js';
 import type { MediaEngine } from '../../src/media/MediaEngine.js';
 import type { CallStatsCollector } from '../../src/media/callStats.js';
 import { SerenadaSession } from '../../src/SerenadaSession.js';
-import { FakeSignalingEngine } from './FakeSignalingEngine.js';
+import { FakeSignalingProvider } from './FakeSignalingProvider.js';
 import { FakeMediaEngine } from './FakeMediaEngine.js';
 
 class FakeStatsCollector {
@@ -17,14 +16,17 @@ export interface TestSessionOptions {
     config?: Partial<SerenadaConfig>;
     roomId?: string;
     roomUrl?: string | null;
+    handlesReconnection?: boolean;
+    autoStart?: boolean;
+    displayName?: string;
 }
 
 /**
- * Creates a SerenadaSession wired to FakeSignalingEngine + FakeMediaEngine.
+ * Creates a SerenadaSession wired to FakeSignalingProvider + FakeMediaEngine.
  * Provides convenience methods to simulate signaling state changes.
  */
 export class TestSessionHarness {
-    readonly signaling: FakeSignalingEngine;
+    readonly signaling: FakeSignalingProvider;
     readonly media: FakeMediaEngine;
     readonly session: SerenadaSession;
     readonly stateHistory: CallState[] = [];
@@ -39,13 +41,16 @@ export class TestSessionHarness {
         const roomId = options.roomId ?? 'test-room-id';
         const roomUrl = options.roomUrl ?? 'https://serenada.app/call/test-room-id';
 
-        this.signaling = new FakeSignalingEngine();
+        this.signaling = new FakeSignalingProvider({
+            handlesReconnection: options.handlesReconnection ?? true,
+        });
         this.media = new FakeMediaEngine();
 
-        this.session = new SerenadaSession(config, roomId, roomUrl, {
-            signaling: this.signaling as unknown as SignalingEngine,
+        this.session = new SerenadaSession(config, roomId, roomUrl, this.signaling, {
             media: this.media as unknown as MediaEngine,
             statsCollector: new FakeStatsCollector() as unknown as CallStatsCollector,
+            autoStart: options.autoStart ?? false,
+            displayName: options.displayName,
         });
 
         this.unsubscribe = this.session.subscribe((state) => {
@@ -59,38 +64,47 @@ export class TestSessionHarness {
 
     simulateJoined(opts: {
         clientId?: string;
-        participants?: { cid: string; joinedAt?: number }[];
+        participants?: { cid: string; joinedAt?: number; displayName?: string }[];
         hostCid?: string | null;
     } = {}): void {
         const clientId = opts.clientId ?? 'my-cid';
         const participants = opts.participants ?? [{ cid: clientId }];
         const hostCid = opts.hostCid ?? clientId;
 
-        this.signaling.emit({
-            isConnected: true,
-            activeTransport: 'ws',
-            clientId,
-            roomState: { hostCid, participants },
+        this.signaling.emitConnected('ws');
+        this.signaling.emitJoined({
+            peerId: clientId,
+            participants: participants.map((participant) => ({
+                peerId: participant.cid,
+                joinedAt: participant.joinedAt,
+                displayName: participant.displayName,
+            })),
+            hostPeerId: hostCid ?? undefined,
         });
     }
 
     simulateRoomStateUpdate(roomState: RoomState): void {
-        this.signaling.emit({ roomState });
-    }
-
-    simulateError(message: string, code = 'UNKNOWN'): void {
-        this.signaling.emit({ error: { code, message } });
-    }
-
-    simulateDisconnect(): void {
-        this.signaling.emit({
-            isConnected: false,
-            activeTransport: null,
+        this.signaling.emitRoomStateUpdated({
+            hostPeerId: roomState.hostCid ?? undefined,
+            participants: roomState.participants.map((participant) => ({
+                peerId: participant.cid,
+                joinedAt: participant.joinedAt,
+                connectionStatus: participant.connectionStatus,
+            })),
+            maxParticipants: roomState.maxParticipants,
         });
     }
 
+    simulateError(message: string, code = 'UNKNOWN'): void {
+        this.signaling.emitError(code, message);
+    }
+
+    simulateDisconnect(): void {
+        this.signaling.emitDisconnected('test');
+    }
+
     simulateRoomEnded(): void {
-        this.signaling.emit({ roomState: null });
+        this.signaling.emitRoomEnded();
     }
 
     destroy(): void {

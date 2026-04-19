@@ -2,6 +2,7 @@ import type { RoomWatcherState, SerenadaConfig } from './types.js';
 import { resolveServerUrls } from './serverUrls.js';
 import { SignalingEngine, type SignalingEngineConfig } from './signaling/SignalingEngine.js';
 import type { RoomStatuses } from './signaling/roomStatuses.js';
+import { requireServerHost } from './configValidation.js';
 
 type RoomWatcherListener = (state: RoomWatcherState) => void;
 
@@ -23,7 +24,8 @@ export class RoomWatcher {
     private wasConnected = false;
 
     constructor(config: SerenadaConfig, dependencies: RoomWatcherDependencies = {}) {
-        const urls = resolveServerUrls(config.serverHost);
+        const serverHost = requireServerHost(config);
+        const urls = resolveServerUrls(serverHost);
         this.signaling = (dependencies.createSignalingEngine ?? ((engineConfig) => new SignalingEngine(engineConfig)))({
             wsUrl: urls.wsUrl,
             httpBaseUrl: urls.httpBaseUrl,

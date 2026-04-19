@@ -1,10 +1,6 @@
 import SerenadaCore
 import SwiftUI
 
-func shouldTerminateRoomOnEndTap(isHost: Bool) -> Bool {
-    isHost
-}
-
 /// The main entry point for the Serenada call UI flow.
 /// Handles the entire visual sequence from joining through call end.
 ///
@@ -255,11 +251,7 @@ private struct SessionFirstCallFlow: View {
                     onResetCameraZoom: { _ = session.resetCameraZoom() },
                     onToggleFlashlight: { _ = session.toggleFlashlight() },
                     onEndCall: {
-                        if shouldTerminateRoomOnEndTap(isHost: session.state.localParticipant.isHost) {
-                            session.end()
-                        } else {
-                            session.leave()
-                        }
+                        session.leave()
                         onCallEnded?(.localLeft)
                         onDismiss?()
                     },
@@ -309,6 +301,7 @@ private struct SessionFirstCallFlow: View {
         uiState.isHost = state.localParticipant.isHost
         uiState.localAudioEnabled = state.localParticipant.audioEnabled
         uiState.localVideoEnabled = state.localParticipant.videoEnabled
+        uiState.localDisplayName = state.localParticipant.displayName
         uiState.localCameraMode = state.localParticipant.cameraMode
         uiState.connectionStatus = mapConnectionStatus(state.connectionStatus)
         uiState.activeTransport = diagnostics.activeTransport
@@ -327,6 +320,8 @@ private struct SessionFirstCallFlow: View {
         uiState.remoteParticipants = state.remoteParticipants.map { rp in
             RemoteParticipant(
                 cid: rp.cid,
+                displayName: rp.displayName,
+                audioEnabled: rp.audioEnabled,
                 videoEnabled: rp.videoEnabled,
                 connectionState: rp.connectionState
             )

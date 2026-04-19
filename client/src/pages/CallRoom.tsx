@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
 import { SerenadaCallFlow } from '@serenada/react-ui';
@@ -11,6 +11,8 @@ import { saveCall } from '../utils/callHistory';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
 import { markRoomJoined, saveRoom } from '../utils/savedRooms';
 import { getConfiguredServerHost } from '../utils/serverHost';
+import { parseTurnsOnly } from '../utils/turnsOnly';
+import { getDisplayName, setDisplayName } from '../utils/displayName';
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -206,11 +208,13 @@ function buildSerenadaCallStrings(
 const CallRoom: React.FC = () => {
     const { t } = useTranslation();
     const { roomId } = useParams<{ roomId: string }>();
+    const location = useLocation();
     const navigate = useNavigate();
     const { showToast } = useToast();
 
-    const urlParams = new URLSearchParams(window.location.search);
+    const urlParams = new URLSearchParams(location.search);
     const sharedName = urlParams.get('name');
+    const turnsOnly = useMemo(() => parseTurnsOnly(location.search), [location.search]);
 
     const [shouldJoin, setShouldJoin] = useState(false);
     const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
@@ -219,12 +223,14 @@ const CallRoom: React.FC = () => {
     const [pushSupported, setPushSupported] = useState(false);
     const [vapidKey, setVapidKey] = useState<string | null>(null);
     const [isInviting, setIsInviting] = useState(false);
+    const [displayNameInput, setDisplayNameInput] = useState(getDisplayName);
 
     const previewVideoRef = useRef<HTMLVideoElement | null>(null);
     const callStartTimeRef = useRef<number | null>(null);
     const pushNotifySentRef = useRef(false);
+    const displayNameRef = useRef(displayNameInput);
+    displayNameRef.current = displayNameInput;
 
-    const core = useMemo(() => new SerenadaCore({ serverHost: getConfiguredServerHost(), logger: new ConsoleSerenadaLogger() }), []);
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
 
     const stopPreview = useCallback(() => {
@@ -276,8 +282,13 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         if (!roomId || !shouldJoin) return;
 
-        const callUrl = `${window.location.origin}/call/${roomId}`;
-        const nextSession = core.join(callUrl);
+        const core = new SerenadaCore({
+            serverHost: getConfiguredServerHost(),
+            logger: new ConsoleSerenadaLogger(),
+            turnsOnly,
+        });
+        const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
+        const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });
         callStartTimeRef.current = Date.now();
         setSession(nextSession);
 
@@ -285,7 +296,7 @@ const CallRoom: React.FC = () => {
             nextSession.destroy();
             setSession(null);
         };
-    }, [core, roomId, shouldJoin]);
+    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, turnsOnly]);
 
     useEffect(() => {
         if (!roomId) return;
@@ -323,8 +334,9 @@ const CallRoom: React.FC = () => {
 
         const unsubscribe = session.subscribe((state: CallState) => {
             if ((state.phase === 'waiting' || state.phase === 'inCall') && !pushNotifySentRef.current) {
-                pushNotifySentRef.current = true;
                 const localStream = session.localStream;
+                if (!localStream) return; // Media still loading — wait for next state update
+                pushNotifySentRef.current = true;
 
                 void (async () => {
                     try {
@@ -537,6 +549,21 @@ const CallRoom: React.FC = () => {
                         />
                         {!previewStream && <div className="video-placeholder">{t('camera_off')}</div>}
                     </div>
+
+                    <input
+                        type="text"
+                        className="display-name-input"
+                        placeholder={t('display_name_placeholder')}
+                        value={displayNameInput}
+                        onChange={(e) => {
+                            setDisplayNameInput(e.target.value);
+                            setDisplayName(e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleJoin(!!sharedName);
+                        }}
+                        maxLength={40}
+                    />
 
                     {sharedName ? (
                         <>

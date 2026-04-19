@@ -15,6 +15,8 @@
 "settings_language_russian" = "Русский";
 "settings_language_spanish" = "Испанский";
 "settings_language_french" = "Французский";
+"settings_display_name" = "Отображаемое имя";
+"settings_display_name_placeholder" = "Ваше имя (необязательно)";
 "settings_call_defaults" = "Параметры звонка";
 "settings_hd_video_experimental" = "HD видео (экспериментально)";
 "settings_hd_video_experimental_info" = "Включает более качественные режимы камеры. Может повысить нагрузку на CPU.";

@@ -9,14 +9,15 @@ import (
 
 func makeTestHubWithParticipant(roomID string, cid string) *Hub {
 	hub := newHub(4)
-	hub.rooms[roomID] = &Room{
+	client := &Client{}
+	room := &Room{
 		RID:             roomID,
 		MaxParticipants: 2,
-		JoinedAt:        map[string]int64{cid: 1},
-		Participants: map[*Client]string{
-			&Client{}: cid,
-		},
+		byCID:           make(map[string]*roomParticipant),
+		byClient:        make(map[*Client]string),
 	}
+	room.attachParticipant(cid, client, 1)
+	hub.rooms[roomID] = room
 	return hub
 }
 
@@ -92,6 +93,27 @@ func TestHandlePushNotifyRejectsUnauthorizedCID(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	handlePushNotify(makeTestHubWithParticipant(roomID, "cid-1"))(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected %d, got %d", http.StatusForbidden, rec.Code)
+	}
+}
+
+// TestHandlePushNotifyRejectsSuspendedCID guards against authorizing push-notify
+// for a participant whose slot is reserved in byCID but whose transport has
+// been detached (suspended). Only actively-attached participants should pass.
+func TestHandlePushNotifyRejectsSuspendedCID(t *testing.T) {
+	roomID := mustGenerateRoomID(t)
+	hub := makeTestHubWithParticipant(roomID, "cid-1")
+	room := hub.rooms[roomID]
+	room.mu.Lock()
+	room.detachClient(room.participantByCID("cid-1"))
+	room.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/push/notify?roomId="+roomID, strings.NewReader(`{"cid":"cid-1"}`))
+	rec := httptest.NewRecorder()
+
+	handlePushNotify(hub)(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected %d, got %d", http.StatusForbidden, rec.Code)
@@ -178,5 +200,5 @@ func TestPushServiceSendNotificationToRoomReturnsOnInvalidRoomID(t *testing.T) {
 		}
 	}()
 
-	service.SendNotificationToRoom("bad", "", "")
+	service.SendNotificationToRoom("bad", "", "", "")
 }

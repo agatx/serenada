@@ -275,6 +275,12 @@ internal class WebRtcEngine(
     }
 
     override fun toggleVideo(enabled: Boolean) {
+        if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
+            cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)
+        }
+        if (!enabled && !screenShareController.isScreenSharing) {
+            cameraController.disposeVideoCapturer()
+        }
         localVideoTrack?.setEnabled(enabled)
     }
 

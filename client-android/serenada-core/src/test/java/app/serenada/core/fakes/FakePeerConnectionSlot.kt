@@ -39,6 +39,7 @@ internal class FakePeerConnectionSlot(
     var createAnswerCalls = 0; private set
     val setRemoteDescriptionCalls = mutableListOf<Pair<SessionDescription.Type, String>>()
     val addedIceCandidates = mutableListOf<IceCandidate>()
+    val appliedIceServerUrls = mutableListOf<List<String>>()
     var rollbackCalls = 0; private set
     var closePeerConnectionCalled = false; private set
     var ensurePeerConnectionCalls = 0; private set
@@ -67,7 +68,9 @@ internal class FakePeerConnectionSlot(
     override fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
     // WebRTC operations
-    override fun setIceServers(servers: List<PeerConnection.IceServer>) {}
+    override fun setIceServers(servers: List<PeerConnection.IceServer>) {
+        appliedIceServerUrls += servers.map { it.urls }
+    }
     override fun ensurePeerConnection(): Boolean { ensurePeerConnectionCalls++; return true }
     override fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {}
     override fun closePeerConnection() { closePeerConnectionCalled = true }
@@ -116,11 +119,14 @@ internal class FakePeerConnectionSlot(
 
     // State queries
     override fun isReady(): Boolean = true
+    override fun isPathDirect(): Boolean? = pathDirectOverride
     override fun getConnectionState(): PeerConnection.PeerConnectionState = connectionState
     override fun getIceConnectionState(): PeerConnection.IceConnectionState = iceConnectionState
     override fun getSignalingState(): PeerConnection.SignalingState = signalingState
     override fun hasRemoteDescription(): Boolean = remoteDescriptionSet
     override fun isRemoteVideoTrackEnabled(): Boolean = false
+
+    var pathDirectOverride: Boolean? = null
 
     // Renderer/stats stubs
     override fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {}
