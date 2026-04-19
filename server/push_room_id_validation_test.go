@@ -9,14 +9,15 @@ import (
 
 func makeTestHubWithParticipant(roomID string, cid string) *Hub {
 	hub := newHub(4)
-	hub.rooms[roomID] = &Room{
+	client := &Client{}
+	room := &Room{
 		RID:             roomID,
 		MaxParticipants: 2,
-		JoinedAt:        map[string]int64{cid: 1},
-		Participants: map[*Client]string{
-			&Client{}: cid,
-		},
+		byCID:           make(map[string]*roomParticipant),
+		byClient:        make(map[*Client]string),
 	}
+	room.attachParticipant(cid, client, 1)
+	hub.rooms[roomID] = room
 	return hub
 }
 

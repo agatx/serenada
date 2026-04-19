@@ -47,6 +47,13 @@ internal class SerenadaServerProvider(
     private var reconnectAttempts = 0
     private var reconnectRunnable: Runnable? = null
     private var turnRefreshRunnable: Runnable? = null
+    // Gate returns false to skip this refresh cycle — typically because all
+    // peers are on direct ICE paths and TURN credentials are unused.
+    private var turnRefreshGate: (() -> Boolean)? = null
+
+    fun setTurnRefreshGate(gate: (() -> Boolean)?) {
+        turnRefreshGate = gate
+    }
     private var currentRoomId: String? = null
     private var currentMaxParticipants: Int = 4
     private var currentReconnectPeerId: String? = null
@@ -213,7 +220,14 @@ internal class SerenadaServerProvider(
         currentTurnToken = payload.turnToken
         payload.turnTokenTTLMs?.let { scheduleTurnRefresh(it) } ?: clearTurnRefresh()
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName, audioEnabled = participant.audioEnabled, videoEnabled = participant.videoEnabled)
+            SignalingProviderParticipant(
+                peerId = participant.cid,
+                joinedAt = participant.joinedAt,
+                displayName = participant.displayName,
+                audioEnabled = participant.audioEnabled,
+                videoEnabled = participant.videoEnabled,
+                connectionStatus = participant.signalingStatus,
+            )
         }
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
             participants.forEach { put(it.peerId, it) }
@@ -232,7 +246,14 @@ internal class SerenadaServerProvider(
         val payload = message.payload.toRoomStatePayload() ?: return
         currentHostPeerId = payload.hostCid
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName, audioEnabled = participant.audioEnabled, videoEnabled = participant.videoEnabled)
+            SignalingProviderParticipant(
+                peerId = participant.cid,
+                joinedAt = participant.joinedAt,
+                displayName = participant.displayName,
+                audioEnabled = participant.audioEnabled,
+                videoEnabled = participant.videoEnabled,
+                connectionStatus = participant.signalingStatus,
+            )
         }
         emitParticipantDiffs(participants)
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
@@ -337,14 +358,20 @@ internal class SerenadaServerProvider(
         reconnectRunnable = null
     }
 
-    private fun scheduleTurnRefresh(ttlMs: Long) {
+    private fun scheduleTurnRefresh(ttlMs: Long, delayOverrideMs: Long? = null) {
         clearTurnRefresh()
-        val delayMs = (ttlMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
+        val delayMs = delayOverrideMs ?: (ttlMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
         val runnable = Runnable {
             turnRefreshRunnable = null
-            if (signaling.isConnected() && currentRoomId != null) {
-                sendRawMessage(type = "turn-refresh")
+            if (!signaling.isConnected() || currentRoomId == null) return@Runnable
+            if (turnRefreshGate?.invoke() == false) {
+                // Poll at `(1 - ratio) * TTL` so a late path failover to
+                // relay still gets a refresh inside the credential lifetime.
+                val recheckMs = (ttlMs * (1.0 - WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO)).toLong()
+                scheduleTurnRefresh(ttlMs, delayOverrideMs = recheckMs)
+                return@Runnable
             }
+            sendRawMessage(type = "turn-refresh")
         }
         turnRefreshRunnable = runnable
         handler.postDelayed(runnable, delayMs)

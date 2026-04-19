@@ -69,6 +69,28 @@ final class SignalingPayloadsTests: XCTestCase {
         XCTAssertEqual(parsed.participants?[0].cid, "C-valid")
     }
 
+    func testJoinedPayloadParsesSuspendedConnectionStatus() {
+        let payload: JSONValue = .object([
+            "participants": .array([
+                .object(["cid": .string("C-me")]),
+                .object(["cid": .string("C-peer"), "connectionStatus": .string("suspended")]),
+            ]),
+        ])
+        let parsed = JoinedPayload(from: payload)
+        XCTAssertEqual(parsed.participants?[0].signalingStatus, .active, "missing status defaults to active")
+        XCTAssertEqual(parsed.participants?[1].signalingStatus, .suspended, "suspended wire value parsed")
+    }
+
+    func testJoinedPayloadUnknownConnectionStatusDefaultsToActive() {
+        let payload: JSONValue = .object([
+            "participants": .array([
+                .object(["cid": .string("C-peer"), "connectionStatus": .string("bogus")]),
+            ]),
+        ])
+        let parsed = JoinedPayload(from: payload)
+        XCTAssertEqual(parsed.participants?[0].signalingStatus, .active)
+    }
+
     // MARK: - ErrorPayload
 
     func testErrorPayloadFullParse() {

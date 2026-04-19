@@ -483,19 +483,44 @@ export class SignalingEngine {
         }, PING_INTERVAL_MS);
     }
 
-    private scheduleTurnRefresh(): void {
+    private turnRefreshGate: (() => Promise<boolean>) | null = null;
+
+    setTurnRefreshGate(gate: (() => Promise<boolean>) | null): void {
+        this.turnRefreshGate = gate;
+    }
+
+    private scheduleTurnRefresh(delayOverrideMs?: number): void {
         this.clearTurnRefreshTimer();
         if (!this.isConnected || !this.turnTokenTTLMs || !this.currentRoomId) return;
 
-        const refreshDelay = this.turnTokenTTLMs * TURN_REFRESH_TRIGGER_RATIO;
+        const refreshDelay = delayOverrideMs ?? this.turnTokenTTLMs * TURN_REFRESH_TRIGGER_RATIO;
         this.logger?.log('debug', 'Signaling', `Scheduling TURN refresh in ${Math.round(refreshDelay / 1000)}s`);
         this.turnRefreshTimer = window.setTimeout(() => {
             this.turnRefreshTimer = null;
-            if (this.isConnected && this.currentRoomId) {
-                this.logger?.log('debug', 'Signaling', 'Sending turn-refresh request');
-                this.sendMessage('turn-refresh');
-            }
+            void this.maybeSendTurnRefresh();
         }, refreshDelay);
+    }
+
+    private async maybeSendTurnRefresh(): Promise<void> {
+        if (!this.isConnected || !this.currentRoomId) return;
+        if (this.turnRefreshGate) {
+            let shouldRefresh = true;
+            try {
+                shouldRefresh = await this.turnRefreshGate();
+            } catch { /* gate failure → default to refreshing */ }
+            if (!shouldRefresh) {
+                this.logger?.log('debug', 'Signaling', 'Skipping turn-refresh: all peer paths direct');
+                // Poll at `(1 - ratio) * TTL` so a late path failover to relay
+                // still gets a refresh inside the credential's lifetime.
+                const remainingMs = this.turnTokenTTLMs
+                    ? this.turnTokenTTLMs * (1 - TURN_REFRESH_TRIGGER_RATIO)
+                    : undefined;
+                this.scheduleTurnRefresh(remainingMs);
+                return;
+            }
+        }
+        this.logger?.log('debug', 'Signaling', 'Sending turn-refresh request');
+        this.sendMessage('turn-refresh');
     }
 
     private clearJoinTimers(): void {

@@ -181,6 +181,46 @@ final class SerenadaServerProviderTests: XCTestCase {
         XCTAssertEqual(delegate.roomEndedEvents.last, RoomEndedEvent(by: "peer-b", reason: "host ended"))
     }
 
+    func testRoomStateForwardsSuspendedConnectionStatusToDelegate() {
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "joined",
+                rid: "room-1",
+                cid: "local-cid",
+                payload: .object([
+                    "hostCid": .string("local-cid"),
+                    "participants": .array([
+                        .object(["cid": .string("local-cid"), "joinedAt": .number(1)]),
+                        .object(["cid": .string("peer-a"), "joinedAt": .number(2)]),
+                    ]),
+                ])
+            )
+        )
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "room_state",
+                rid: "room-1",
+                payload: .object([
+                    "hostCid": .string("local-cid"),
+                    "participants": .array([
+                        .object(["cid": .string("local-cid"), "joinedAt": .number(1)]),
+                        .object([
+                            "cid": .string("peer-a"),
+                            "joinedAt": .number(2),
+                            "connectionStatus": .string("suspended"),
+                        ]),
+                    ]),
+                ])
+            )
+        )
+
+        let lastEvent = delegate.roomStateEvents.last
+        XCTAssertNotNil(lastEvent)
+        let peer = lastEvent?.participants.first(where: { $0.peerId == "peer-a" })
+        XCTAssertEqual(peer?.signalingStatus, .suspended, "suspended status must reach SignalingProviderParticipant; dropping it breaks the reconnecting UI")
+    }
+
     func testSendToPeerAndBroadcastForwardRawMessages() {
         provider.sendToPeer("peer-1", type: "offer", payload: ["sdp": .string("offer-sdp")])
         provider.broadcast(type: "content_state", payload: ["active": .bool(true)])

@@ -314,6 +314,30 @@ class SerenadaSession internal constructor(
             logger = logger,
         )
         signalingProvider.listener = buildProviderListener()
+
+        // Skip periodic TURN refresh while every peer is on a direct ICE path —
+        // the credentials go unused and the call survives arbitrary-length
+        // signaling outages. A failover to relay triggers the next refresh.
+        // Gate returns `true` to allow the refresh, so we negate the direct-
+        // path check: direct → `false` (skip), relay/unknown → `true` (refresh).
+        (signalingProvider as? SerenadaServerProvider)?.setTurnRefreshGate {
+            !arePeerPathsAllDirect()
+        }
+    }
+
+    /**
+     * True only when at least one peer exists and every slot's last observed
+     * candidate pair is direct. A null cached value (no stats yet) is treated
+     * as "not confirmed direct" so the gate errs on the side of refreshing.
+     */
+    private fun arePeerPathsAllDirect(): Boolean {
+        val slots = peerSlots.values
+        if (slots.isEmpty()) return false
+        for (slot in slots) {
+            val direct = slot.isPathDirect() ?: return false
+            if (!direct) return false
+        }
+        return true
     }
 
     /** Callback invoked when camera/microphone permissions are needed before joining. */
@@ -962,6 +986,7 @@ class SerenadaSession internal constructor(
                 audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true,
                 videoEnabled = slot.isRemoteVideoTrackEnabled(),
                 connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()),
+                signalingStatus = participant?.signalingStatus ?: ParticipantSignalingStatus.ACTIVE,
             )
         }
         val currentState = _state.value

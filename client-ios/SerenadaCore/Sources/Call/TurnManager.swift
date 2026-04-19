@@ -18,6 +18,10 @@ final class TurnManager {
     private var hasInitializedIceSetupForAttempt = false
     private var lastTurnTokenForAttempt: String?
 
+    /// Returns `false` to skip this refresh cycle — typically because all
+    /// peers are on direct ICE paths and TURN credentials are unused.
+    var shouldRefreshGate: (() -> Bool)?
+
     init(
         clock: SessionClock,
         serverHost: String,
@@ -143,10 +147,11 @@ final class TurnManager {
         onIceServersReady()
     }
 
-    private func scheduleTurnRefresh(ttlMs: Int64) {
+    private func scheduleTurnRefresh(ttlMs: Int64, delayOverrideMs: Int64? = nil) {
         cancelRefresh()
         guard ttlMs > 0 else { return }
-        let delayNs = UInt64(Double(ttlMs) * WebRtcResilience.turnRefreshTriggerRatio * 1_000_000)
+        let effectiveDelayMs = Double(delayOverrideMs ?? Int64(Double(ttlMs) * WebRtcResilience.turnRefreshTriggerRatio))
+        let delayNs = UInt64(effectiveDelayMs * 1_000_000)
 
         turnRefreshTask = Task { [weak self] in
             guard let clock = self?.clock else { return }
@@ -156,6 +161,15 @@ final class TurnManager {
             let phase = self.getPhase()
             guard phase == .waiting || phase == .inCall || phase == .joining else { return }
             guard self.isSignalingConnected() else { return }
+            if self.shouldRefreshGate?() == false {
+                // Poll at `(1 - ratio) * TTL` so a late path failover to
+                // relay still gets a refresh inside the credential lifetime.
+                if let ttl = self.turnTokenTTLMs {
+                    let recheckMs = Int64(Double(ttl) * (1.0 - WebRtcResilience.turnRefreshTriggerRatio))
+                    self.scheduleTurnRefresh(ttlMs: ttl, delayOverrideMs: recheckMs)
+                }
+                return
+            }
             self.sendTurnRefresh()
         }
     }

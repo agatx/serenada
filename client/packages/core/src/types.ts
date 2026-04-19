@@ -20,6 +20,16 @@ export type MediaCapability = 'camera' | 'microphone';
 /** WebRTC peer connection state. */
 export type PeerConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed' | 'closed';
 
+/**
+ * Signaling connection status of a remote participant as reported by the
+ * server. `'active'` means the participant is currently connected to the
+ * signaling server; `'suspended'` means their signaling transport dropped
+ * and the server is holding their slot open for reconnect — the peer
+ * connection to them is intentionally kept alive and UIs should surface a
+ * "reconnecting" indicator instead of rendering them as gone.
+ */
+export type ParticipantSignalingStatus = 'active' | 'suspended';
+
 /** Remote participant in a call. */
 export interface Participant {
     cid: string;
@@ -27,6 +37,7 @@ export interface Participant {
     audioEnabled: boolean;
     videoEnabled: boolean;
     connectionState: PeerConnectionState;
+    signalingStatus: ParticipantSignalingStatus;
 }
 
 /** Local participant info including camera mode and host status. */

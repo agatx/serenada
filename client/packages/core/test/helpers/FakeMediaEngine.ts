@@ -83,6 +83,11 @@ export class FakeMediaEngine {
         this.handleSignalingReconnectCalls++;
     }
 
+    allPathsDirect = false;
+    async arePeerPathsAllDirect(): Promise<boolean> {
+        return this.allPathsDirect;
+    }
+
     cleanupAllPeers(): void {
         this.cleanupAllPeersCalls++;
         this.remoteStreams = new Map();

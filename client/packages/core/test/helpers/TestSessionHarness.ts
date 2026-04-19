@@ -89,6 +89,7 @@ export class TestSessionHarness {
             participants: roomState.participants.map((participant) => ({
                 peerId: participant.cid,
                 joinedAt: participant.joinedAt,
+                connectionStatus: participant.connectionStatus,
             })),
             maxParticipants: roomState.maxParticipants,
         });

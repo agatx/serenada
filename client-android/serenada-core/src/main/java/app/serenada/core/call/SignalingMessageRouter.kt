@@ -82,7 +82,14 @@ internal class SignalingMessageRouter(
 
         val cid = event.peerId
         val participants = dedupeParticipants(
-            event.participants.map { Participant(cid = it.peerId, joinedAt = it.joinedAt, displayName = it.displayName, audioEnabled = it.audioEnabled, videoEnabled = it.videoEnabled) },
+            event.participants.map { Participant(
+                cid = it.peerId,
+                joinedAt = it.joinedAt,
+                displayName = it.displayName,
+                audioEnabled = it.audioEnabled,
+                videoEnabled = it.videoEnabled,
+                signalingStatus = it.connectionStatus,
+            ) },
             cid,
         )
         val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), cid)
@@ -99,7 +106,14 @@ internal class SignalingMessageRouter(
 
         val localPeerId = getClientId()
         val participants = dedupeParticipants(
-            event.participants.map { Participant(cid = it.peerId, joinedAt = it.joinedAt, displayName = it.displayName, audioEnabled = it.audioEnabled, videoEnabled = it.videoEnabled) },
+            event.participants.map { Participant(
+                cid = it.peerId,
+                joinedAt = it.joinedAt,
+                displayName = it.displayName,
+                audioEnabled = it.audioEnabled,
+                videoEnabled = it.videoEnabled,
+                signalingStatus = it.connectionStatus,
+            ) },
             localPeerId,
         )
         val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), localPeerId)
