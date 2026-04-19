@@ -15,8 +15,8 @@ import org.json.JSONObject
  * Follows the closure-injection DI pattern established by [PeerNegotiationEngine].
  */
 internal data class RemoteMediaState(
-    val audioEnabled: Boolean = true,
-    val videoEnabled: Boolean = false,
+    val audioEnabled: Boolean? = null,
+    val videoEnabled: Boolean? = null,
 )
 
 internal class SignalingMessageRouter(
@@ -29,7 +29,7 @@ internal class SignalingMessageRouter(
     private val onError: (CallError) -> Unit,
     private val onRoomEnded: () -> Unit,
     private val onContentStateReceived: (fromCid: String, active: Boolean, contentType: String?) -> Unit,
-    private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean, videoEnabled: Boolean) -> Unit,
+    private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean?, videoEnabled: Boolean?) -> Unit,
     private val onTurnRefreshed: (SignalingMessage) -> Unit,
     private val onSignalingPayload: (SignalingMessage) -> Unit,
     private val onPong: () -> Unit,

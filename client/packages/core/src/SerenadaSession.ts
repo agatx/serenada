@@ -231,7 +231,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
-    private readonly remoteMediaStates = new Map<string, { audioEnabled: boolean; videoEnabled: boolean }>();
+    private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean }>();
     private userPreferredVideoEnabled: boolean;
 
     private get isInactive(): boolean {
@@ -362,6 +362,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.media.cleanupAllPeers();
         this.statsCollector.stop();
         this.roomState = null;
+        this.remoteMediaStates.clear();
         this._state = { ...this._state, phase: 'idle' };
         this.notifyListeners();
         this.destroy();
@@ -719,6 +720,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.reconnectAttempts = 0;
         this.roomState = null;
         this.clientId = null;
+        this.remoteMediaStates.clear();
 
         this.media.updateRoomState(null, null);
         this.media.updateSignalingConnected(false);
@@ -777,43 +779,44 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const videoTrack = stream.getVideoTracks()[0];
             const newEnabled = enabled ?? !(videoTrack?.enabled ?? this.userPreferredVideoEnabled);
             this.userPreferredVideoEnabled = newEnabled;
-            if (newEnabled) {
-                void this.media.reacquireVideoTrack().then(() => {
-                    if (!this.isInactive) {
-                        this.broadcastLocalMediaState();
-                        this.rebuildState();
-                    }
-                });
-            } else {
-                void this.media.releaseVideoTrack().then(() => {
-                    if (!this.isInactive) {
-                        this.broadcastLocalMediaState();
-                        this.rebuildState();
-                    }
-                });
-            }
+            const swap = newEnabled ? this.media.reacquireVideoTrack() : this.media.releaseVideoTrack();
+            void swap.then(() => {
+                if (!this.isInactive) {
+                    this.broadcastLocalMediaState();
+                    this.rebuildState();
+                }
+            });
+            this.rebuildState();
         } else {
             const track = stream.getAudioTracks()[0];
             if (track) track.enabled = enabled ?? !track.enabled;
+            this.broadcastLocalMediaState();
+            this.rebuildState();
         }
-        this.broadcastLocalMediaState();
-        this.rebuildState();
     }
 
     private broadcastLocalMediaState(): void {
-        const audioTrack = this.media.localStream?.getAudioTracks()[0];
+        const stream = this.media.localStream;
+        const audioTrack = stream?.getAudioTracks()[0];
+        const videoTrack = stream?.getVideoTracks()[0];
+        // Audio: track is always present once media starts; we toggle the
+        // `enabled` flag in place. Video: track may be absent (released to free
+        // the camera) — derive from track presence so we never advertise
+        // camera-on while reacquire is pending or has failed. Pre-media-start
+        // (no stream) we fall back to the user's stated preference.
         this.signaling.broadcast('participant_media_state', {
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
-            videoEnabled: this.userPreferredVideoEnabled,
+            videoEnabled: stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled,
         });
     }
 
     private handleRemoteMediaState(message: PeerMessage): void {
         const payload = message.payload as Record<string, unknown> | null;
         if (!payload) return;
+        const existing = this.remoteMediaStates.get(message.from);
         this.remoteMediaStates.set(message.from, {
-            audioEnabled: typeof payload.audioEnabled === 'boolean' ? payload.audioEnabled : true,
-            videoEnabled: typeof payload.videoEnabled === 'boolean' ? payload.videoEnabled : false,
+            audioEnabled: typeof payload.audioEnabled === 'boolean' ? payload.audioEnabled : existing?.audioEnabled,
+            videoEnabled: typeof payload.videoEnabled === 'boolean' ? payload.videoEnabled : existing?.videoEnabled,
         });
         this.rebuildState();
     }
@@ -845,13 +848,18 @@ export class SerenadaSession implements SerenadaSessionHandle {
             }
         }
 
-        const audioTrack = this.media.localStream?.getAudioTracks()[0];
+        const stream = this.media.localStream;
+        const audioTrack = stream?.getAudioTracks()[0];
+        const videoTrack = stream?.getVideoTracks()[0];
 
         const localParticipant = clientId ? {
             cid: clientId,
             displayName: this.displayName,
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
-            videoEnabled: this.userPreferredVideoEnabled,
+            // Mirror broadcast: derive from real track presence/state so the
+            // local UI matches what peers see. Pre-media-start (no stream),
+            // fall back to the user's preference.
+            videoEnabled: stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled,
             cameraMode: (this.media.isScreenSharing
                 ? 'screenShare'
                 : this.media.facingMode === 'user'

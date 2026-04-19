@@ -154,7 +154,7 @@ public final class SerenadaSession: ObservableObject {
     private var clientId: String?
     private var hostCid: String?
     private var currentRoomState: RoomState?
-    private var remoteMediaStates: [String: (audioEnabled: Bool, videoEnabled: Bool)] = [:]
+    private var remoteMediaStates: [String: (audioEnabled: Bool?, videoEnabled: Bool?)] = [:]
     private var peerSlots: [String: any PeerConnectionSlotProtocol] = [:]
     private var pendingMessages: [SignalingMessage] = []
     private var pendingJoinRoom: String?
@@ -540,7 +540,11 @@ public final class SerenadaSession: ObservableObject {
 
     private func handleParticipantMediaState(_ payload: MediaStatePayload) {
         guard let fromCid = payload.fromCid, !fromCid.isEmpty else { return }
-        remoteMediaStates[fromCid] = (audioEnabled: payload.audioEnabled, videoEnabled: payload.videoEnabled)
+        let existing = remoteMediaStates[fromCid]
+        remoteMediaStates[fromCid] = (
+            audioEnabled: payload.audioEnabled ?? existing?.audioEnabled,
+            videoEnabled: payload.videoEnabled ?? existing?.videoEnabled
+        )
         refreshRemoteParticipants()
     }
 
@@ -693,7 +697,7 @@ public final class SerenadaSession: ObservableObject {
             return SerenadaRemoteParticipant(
                 cid: p.cid, displayName: p.displayName,
                 audioEnabled: peerState?.audioEnabled ?? p.audioEnabled ?? true,
-                videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
+                videoEnabled: peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
                 connectionState: slot?.getConnectionState() ?? .new,
                 signalingStatus: p.signalingStatus
             )

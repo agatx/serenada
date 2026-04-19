@@ -885,20 +885,38 @@ describe('SerenadaSession', () => {
             harness = new TestSessionHarness({
                 config: { serverHost: 'localhost', defaultAudioEnabled: false, defaultVideoEnabled: false },
             });
+            // Pre-media-start: no local stream yet, so fields fall back to config defaults.
+            harness.media.startLocalMediaResult = null;
 
             harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
 
-            // No local stream → uses config defaults
             expect(harness.state.localParticipant?.audioEnabled).toBe(false);
             expect(harness.state.localParticipant?.videoEnabled).toBe(false);
         });
 
         it('defaults audioEnabled/videoEnabled to true when not specified', () => {
             harness = new TestSessionHarness();
+            harness.media.startLocalMediaResult = null;
             harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
 
             expect(harness.state.localParticipant?.audioEnabled).toBe(true);
             expect(harness.state.localParticipant?.videoEnabled).toBe(true);
+        });
+
+        it('local videoEnabled reflects track presence once media has started', () => {
+            harness = new TestSessionHarness();
+            // Stream exists but with no video track (e.g., camera released or
+            // reacquire failed). Local UI must mirror the broadcast and report
+            // false rather than continuing to render the user's intent.
+            harness.media.startLocalMediaResult = {
+                getAudioTracks: () => [{ enabled: true } as MediaStreamTrack],
+                getVideoTracks: () => [],
+            } as unknown as MediaStream;
+
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+
+            expect(harness.state.localParticipant?.audioEnabled).toBe(true);
+            expect(harness.state.localParticipant?.videoEnabled).toBe(false);
         });
     });
 });

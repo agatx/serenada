@@ -450,7 +450,7 @@ Client keepalive. Server ignores.
 
 ### 4.12 `participant_media_state` (client → server → clients)
 
-Sent by a client to announce its current audio/video enabled state. The server stores the state per-participant and broadcasts an updated `room_state` to all participants.
+Sent by a client to announce its current audio/video enabled state. The server stores the state per-participant and relays the message to other room participants as a peer message (see **Server behavior** below).
 
 Clients should broadcast this message after joining, when a new peer joins, and whenever the local audio or video enabled state changes.
 
@@ -471,12 +471,12 @@ Clients should broadcast this message after joining, when a new peer joins, and 
 - `videoEnabled` *(boolean, optional)*: whether the sender's video is enabled.
 
 **Server behavior**
-- Stores the audio/video state in the room per-CID.
-- Broadcasts an updated `room_state` (which now includes `audioEnabled`/`videoEnabled` per participant) to all room participants.
+- Stores the audio/video state in the room per-CID so late joiners receive the latest values via the participant list in `joined`/`room_state`.
+- Relays the message to other room participants as a peer message (with a `from` field) instead of broadcasting `room_state`. This avoids participant reordering and full UI rebuilds on every toggle.
 
 **Client behavior**
-- On receiving an updated `room_state`, use the `audioEnabled`/`videoEnabled` fields from the participant list.
-- Clients may also receive `participant_media_state` as a relayed peer message (with a `from` field). Direct peer messages take priority over room state values.
+- On receiving a relayed `participant_media_state`, update the cached audio/video state for the sender. Only fields present in the payload should be updated; missing fields leave the previous value intact.
+- The participant list in `joined`/`room_state` carries `audioEnabled`/`videoEnabled` for late joiners; relayed peer messages take priority over those values for already-known participants.
 - Unknown message types are silently ignored by older clients, ensuring backward compatibility.
 
 ---

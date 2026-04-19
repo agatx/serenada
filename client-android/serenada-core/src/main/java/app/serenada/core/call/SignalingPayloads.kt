@@ -37,8 +37,8 @@ internal data class ContentStatePayload(
 
 internal data class MediaStatePayload(
     val fromCid: String,
-    val audioEnabled: Boolean,
-    val videoEnabled: Boolean,
+    val audioEnabled: Boolean?,
+    val videoEnabled: Boolean?,
 )
 
 // --- Extension parsers ---
@@ -89,8 +89,8 @@ internal fun JSONObject?.toMediaStatePayload(): MediaStatePayload? {
     val fromCid = optString("from").ifBlank { return null }
     return MediaStatePayload(
         fromCid = fromCid,
-        audioEnabled = if (has("audioEnabled")) optBoolean("audioEnabled", true) else true,
-        videoEnabled = if (has("videoEnabled")) optBoolean("videoEnabled", false) else false,
+        audioEnabled = if (has("audioEnabled")) optBoolean("audioEnabled") else null,
+        videoEnabled = if (has("videoEnabled")) optBoolean("videoEnabled") else null,
     )
 }
 

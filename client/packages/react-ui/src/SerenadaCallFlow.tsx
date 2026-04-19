@@ -612,6 +612,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         new Map(remoteStageTiles.map((tile) => [tile.cid, tile]))
     ), [remoteStageTiles]);
 
+    const remoteParticipantMap = useMemo(() => (
+        new Map(effectiveState.remoteParticipants.map((p) => [p.cid, p]))
+    ), [effectiveState.remoteParticipants]);
+
     const remoteStageLayout = useMemo(() => (
         computeStageLayout(remoteStageTiles, stageViewportSize.width, stageViewportSize.height, STAGE_TILE_GAP_PX)
     ), [remoteStageTiles, stageViewportSize.height, stageViewportSize.width]);
@@ -909,7 +913,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                         if (!stream) return null;
 
                                         const isPrimaryTile = tile.zOrder === 0;
-                                        const tileRemote = isContentTile || isLocalTile ? undefined : effectiveState.remoteParticipants.find((p) => p.cid === tile.id);
+                                        const tileRemote = isContentTile || isLocalTile ? undefined : remoteParticipantMap.get(tile.id);
                                         const tileAudioMuted = isContentTile ? false : isLocalTile ? isMuted : tileRemote?.audioEnabled === false;
                                         const tileDisplayName = isContentTile ? undefined : isLocalTile ? localParticipant?.displayName : tileRemote?.displayName;
                                         const tileVideoEnabled = isContentTile ? true : isLocalTile ? localParticipant?.videoEnabled !== false : tileRemote?.videoEnabled;
@@ -957,7 +961,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                             {row.items.map((tile) => {
                                                 const stageTile = remoteStageTileMap.get(tile.cid);
                                                 if (!stageTile) return null;
-                                                const gridRemote = effectiveState.remoteParticipants.find((p) => p.cid === tile.cid);
+                                                const gridRemote = remoteParticipantMap.get(tile.cid);
                                                 return (
                                                     <div key={tile.cid} style={{ position: 'relative', width: `${tile.width}px`, height: `${tile.height}px` }}>
                                                         <VideoTile

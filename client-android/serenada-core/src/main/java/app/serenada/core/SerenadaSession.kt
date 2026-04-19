@@ -198,7 +198,11 @@ class SerenadaSession internal constructor(
             )
         },
         onMediaStateReceived = { fromCid, audioEnabled, videoEnabled ->
-            remoteMediaStates[fromCid] = RemoteMediaState(audioEnabled = audioEnabled, videoEnabled = videoEnabled)
+            val existing = remoteMediaStates[fromCid]
+            remoteMediaStates[fromCid] = RemoteMediaState(
+                audioEnabled = audioEnabled ?: existing?.audioEnabled,
+                videoEnabled = videoEnabled ?: existing?.videoEnabled,
+            )
             refreshRemoteParticipants()
         },
         onTurnRefreshed = { _ -> },
@@ -984,7 +988,7 @@ class SerenadaSession internal constructor(
                 cid = cid,
                 displayName = participant?.displayName,
                 audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true,
-                videoEnabled = slot.isRemoteVideoTrackEnabled(),
+                videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled(),
                 connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()),
                 signalingStatus = participant?.signalingStatus ?: ParticipantSignalingStatus.ACTIVE,
             )

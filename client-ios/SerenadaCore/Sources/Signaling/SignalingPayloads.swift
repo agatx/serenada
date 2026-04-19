@@ -121,17 +121,19 @@ struct ContentStatePayload {
 }
 
 /// Payload for "participant_media_state" message — remote participant's audio/video state.
+/// Fields are optional per the protocol: missing fields mean "no change", and the
+/// consumer should preserve the previously cached value rather than overwriting.
 struct MediaStatePayload {
     let fromCid: String?
-    let audioEnabled: Bool
-    let videoEnabled: Bool
+    let audioEnabled: Bool?
+    let videoEnabled: Bool?
 
     init(from payload: JSONValue?) {
         guard let obj = payload?.objectValue else {
-            fromCid = nil; audioEnabled = true; videoEnabled = false; return
+            fromCid = nil; audioEnabled = nil; videoEnabled = nil; return
         }
         fromCid = obj["from"]?.stringValue
-        audioEnabled = obj["audioEnabled"]?.boolValue ?? true
-        videoEnabled = obj["videoEnabled"]?.boolValue ?? false
+        audioEnabled = obj["audioEnabled"]?.boolValue
+        videoEnabled = obj["videoEnabled"]?.boolValue
     }
 }
