@@ -57,15 +57,29 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     public var videoEnabled: Bool
     /// WebRTC peer connection state for this participant.
     public var connectionState: SerenadaPeerConnectionState
+    /// Signaling transport status as reported by the server. `.suspended`
+    /// means the participant's signaling transport dropped and the server
+    /// is holding their slot open for reconnect — the peer connection to
+    /// them is intentionally kept alive. UIs should show a "reconnecting"
+    /// indicator instead of rendering them as gone.
+    public var signalingStatus: ParticipantSignalingStatus
 
     public var id: String { cid }
 
-    public init(cid: String, displayName: String? = nil, audioEnabled: Bool = true, videoEnabled: Bool = true, connectionState: SerenadaPeerConnectionState = .new) {
+    public init(
+        cid: String,
+        displayName: String? = nil,
+        audioEnabled: Bool = true,
+        videoEnabled: Bool = true,
+        connectionState: SerenadaPeerConnectionState = .new,
+        signalingStatus: ParticipantSignalingStatus = .active
+    ) {
         self.cid = cid
         self.displayName = displayName
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.connectionState = connectionState
+        self.signalingStatus = signalingStatus
     }
 }
 

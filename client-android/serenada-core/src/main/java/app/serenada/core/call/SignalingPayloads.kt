@@ -1,5 +1,6 @@
 package app.serenada.core.call
 
+import app.serenada.core.ParticipantSignalingStatus
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -102,12 +103,20 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
         val p = optJSONObject(i) ?: continue
         val cid = p.optString("cid", "")
         if (cid.isNotBlank()) {
+            val statusString = p.optString("connectionStatus").ifBlank { null }
+            // Unknown status values fall back to ACTIVE for forward compat.
+            val status = if (statusString == "suspended") {
+                ParticipantSignalingStatus.SUSPENDED
+            } else {
+                ParticipantSignalingStatus.ACTIVE
+            }
             result.add(Participant(
                 cid = cid,
                 joinedAt = p.optLong("joinedAt").takeIf { it > 0 },
                 displayName = p.optString("displayName").ifBlank { null },
                 audioEnabled = if (p.has("audioEnabled")) p.optBoolean("audioEnabled") else null,
                 videoEnabled = if (p.has("videoEnabled")) p.optBoolean("videoEnabled") else null,
+                signalingStatus = status,
             ))
         }
     }

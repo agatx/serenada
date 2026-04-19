@@ -13,7 +13,16 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         let displayName = obj["displayName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let audioEnabled = obj["audioEnabled"]?.boolValue
         let videoEnabled = obj["videoEnabled"]?.boolValue
-        result.append(Participant(cid: cid, joinedAt: joinedAt, displayName: displayName, audioEnabled: audioEnabled, videoEnabled: videoEnabled))
+        // Unknown status values fall back to .active per protocol spec.
+        let signalingStatus: ParticipantSignalingStatus = (obj["connectionStatus"]?.stringValue == "suspended") ? .suspended : .active
+        result.append(Participant(
+            cid: cid,
+            joinedAt: joinedAt,
+            displayName: displayName,
+            audioEnabled: audioEnabled,
+            videoEnabled: videoEnabled,
+            signalingStatus: signalingStatus
+        ))
     }
     return result
 }

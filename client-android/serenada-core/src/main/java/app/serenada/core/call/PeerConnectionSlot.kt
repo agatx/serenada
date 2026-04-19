@@ -125,6 +125,8 @@ internal class PeerConnectionSlot(
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()
     private var lastRealtimeStatsSample: RealtimeStatsSample? = null
+    // Written from the stats executor thread, read from the provider handler.
+    @Volatile private var lastPathIsDirect: Boolean? = null
     private val freezeSamples = mutableListOf<FreezeSample>()
     private val remoteBlackFrameAnalyzer = RemoteBlackFrameAnalyzer()
     private val remoteVideoStateSink = VideoSink { frame ->
@@ -419,6 +421,8 @@ internal class PeerConnectionSlot(
 
     override fun isReady(): Boolean = peerConnection != null
 
+    override fun isPathDirect(): Boolean? = lastPathIsDirect
+
     override fun getConnectionState(): PeerConnection.PeerConnectionState =
         peerConnection?.connectionState() ?: PeerConnection.PeerConnectionState.NEW
 
@@ -649,6 +653,12 @@ internal class PeerConnectionSlot(
         val localProtocol = memberString(localCandidate, "protocol")
         val remoteProtocol = memberString(remoteCandidate, "protocol")
         val isRelay = localCandidateType == "relay" || remoteCandidateType == "relay"
+        // Cache for isPathDirect(): null stays null while candidate types are
+        // unknown so the TURN refresh gate errs on the side of refreshing.
+        if (localCandidateType != null || remoteCandidateType != null) {
+            val direct = !isRelay
+            if (lastPathIsDirect != direct) lastPathIsDirect = direct
+        }
         val transportPath =
             if (localCandidateType != null || remoteCandidateType != null) {
                 "${if (isRelay) "TURN relay" else "Direct"} (${localCandidateType ?: "n/a"} -> ${remoteCandidateType ?: "n/a"}, ${localProtocol ?: remoteProtocol ?: "n/a"})"

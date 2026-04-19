@@ -525,6 +525,50 @@ describe('SerenadaSession', () => {
             expect(last.state).toEqual(roomState);
             expect(last.clientId).toBe('me');
         });
+
+        it('installs a TURN refresh gate that returns false when all peer paths are direct', async () => {
+            harness = new TestSessionHarness();
+            const gate = harness.signaling.turnRefreshGate;
+            expect(gate).toBeTypeOf('function');
+            if (!gate) return;
+
+            // All peers direct → gate must say "skip" (return false).
+            harness.media.allPathsDirect = true;
+            await expect(gate()).resolves.toBe(false);
+
+            // Any peer on relay (or no stats yet) → gate must say "refresh"
+            // (return true) so credentials don't silently expire while a TURN
+            // path is actually in use — an inverted gate is catastrophic.
+            harness.media.allPathsDirect = false;
+            await expect(gate()).resolves.toBe(true);
+        });
+
+        it('propagates suspended connectionStatus through to remoteParticipants.signalingStatus', async () => {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+
+            harness.simulateRoomStateUpdate({
+                hostCid: 'me',
+                participants: [
+                    { cid: 'me' },
+                    { cid: 'peer-1', connectionStatus: 'suspended' },
+                ],
+            });
+
+            const peer = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
+            expect(peer).toBeDefined();
+            expect(peer?.signalingStatus).toBe('suspended');
+
+            // And the reverse transition back to active clears the flag.
+            harness.simulateRoomStateUpdate({
+                hostCid: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            const peerAfter = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
+            expect(peerAfter?.signalingStatus).toBe('active');
+        });
     });
 
     // ---------------------------------------------------------------

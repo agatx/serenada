@@ -171,6 +171,8 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     // MARK: - State Queries
 
     func isReady() -> Bool { ready }
+    var pathDirectOverride: Bool?
+    func isPathDirect() -> Bool? { pathDirectOverride }
     func getConnectionState() -> SerenadaPeerConnectionState { connectionState }
     func getIceConnectionState() -> String { iceConnectionState }
     func getSignalingState() -> String { signalingState }

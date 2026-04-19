@@ -232,6 +232,53 @@ class SerenadaServerProviderTest {
     }
 
     @Test
+    fun `room_state forwards suspended connectionStatus to delegate`() {
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "local-cid",
+                to = null,
+                payload = JSONObject().apply {
+                    put("hostCid", "local-cid")
+                    put(
+                        "participants",
+                        JSONArray()
+                            .put(participantJson("local-cid", 1L))
+                            .put(participantJson("peer-a", 2L))
+                    )
+                },
+            )
+        )
+
+        signaling.receive(
+            SignalingMessage(
+                type = "room_state",
+                rid = "room-1",
+                sid = null,
+                cid = null,
+                to = null,
+                payload = JSONObject().apply {
+                    put("hostCid", "local-cid")
+                    put(
+                        "participants",
+                        JSONArray()
+                            .put(participantJson("local-cid", 1L))
+                            .put(participantJson("peer-a", 2L).apply { put("connectionStatus", "suspended") })
+                    )
+                },
+            )
+        )
+
+        val lastEvent = listener.roomStateEvents.last()
+        val peer = lastEvent.participants.firstOrNull { it.peerId == "peer-a" }
+        // If this fails, the suspended status is being dropped at the provider
+        // boundary and the reconnecting UI cannot render.
+        assertEquals(ParticipantSignalingStatus.SUSPENDED, peer?.connectionStatus)
+    }
+
+    @Test
     fun `sendToPeer and broadcast forward raw messages`() {
         provider.sendToPeer(
             peerId = "peer-1",

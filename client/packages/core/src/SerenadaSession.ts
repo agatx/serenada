@@ -74,6 +74,7 @@ function toRoomParticipant(participant: SignalingProviderParticipant): RoomParti
         displayName: participant.displayName,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
+        connectionStatus: participant.connectionStatus,
     };
 }
 
@@ -285,6 +286,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
             }
             this.rebuildState();
         });
+
+        // Skip periodic TURN refresh while every peer is on a direct ICE
+        // path — the credentials go unused and the call can continue
+        // through arbitrary-length signaling outages. A path that falls
+        // back to relay causes the next cycle to refresh normally.
+        signaling.setTurnRefreshGate?.(
+            () => this.media.arePeerPathsAllDirect().then((direct) => !direct),
+        );
 
         if (deps.autoStart !== false) {
             this.start();
@@ -861,6 +870,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                     audioEnabled: peerState?.audioEnabled ?? participant.audioEnabled ?? true,
                     videoEnabled: peerState?.videoEnabled ?? participant.videoEnabled ?? true,
                     connectionState: this.media.connectionState,
+                    signalingStatus: participant.connectionStatus ?? 'active',
                 };
             });
 

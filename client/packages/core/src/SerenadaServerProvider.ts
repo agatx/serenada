@@ -2,7 +2,7 @@ import { SignalingProviderEmitter, type JoinOptions, type RoomEndedEvent, type R
 import type { SerenadaLogger } from './types.js';
 import { SignalingEngine } from './signaling/SignalingEngine.js';
 import { parseErrorPayload, parseJoinedPayload, parseRoomStatePayload, parseTurnRefreshedPayload } from './signaling/payloads.js';
-import type { SignalingMessage } from './signaling/types.js';
+import type { RoomParticipant, SignalingMessage } from './signaling/types.js';
 import type { TransportKind } from './signaling/transports/types.js';
 import { TURN_FETCH_TIMEOUT_MS } from './constants.js';
 import { formatError } from './formatError.js';
@@ -95,6 +95,16 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
 
     broadcast(type: string, payload: unknown): void {
         this.signaling.sendMessage(type, toRecordPayload(payload));
+    }
+
+    /**
+     * Install (or clear) a gate consulted before each periodic TURN refresh.
+     * The gate returns false to skip the refresh — used by the session to
+     * suppress refreshes while every peer is on a direct ICE path, so the
+     * call remains independent of signaling for the refresh cadence.
+     */
+    setTurnRefreshGate(gate: (() => Promise<boolean>) | null): void {
+        this.signaling.setTurnRefreshGate(gate);
     }
 
     async getIceServers(): Promise<RTCIceServer[]> {
@@ -293,13 +303,14 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
     }
 }
 
-function mapParticipant(participant: { cid: string; joinedAt?: number; displayName?: string; audioEnabled?: boolean; videoEnabled?: boolean }): SignalingProviderParticipant {
+function mapParticipant(participant: RoomParticipant): SignalingProviderParticipant {
     return {
         peerId: participant.cid,
         joinedAt: participant.joinedAt,
         displayName: participant.displayName,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
+        connectionStatus: participant.connectionStatus,
     };
 }
 

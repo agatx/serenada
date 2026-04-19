@@ -257,6 +257,19 @@ public final class SerenadaSession: ObservableObject {
         configureRuntimeBridges()
         buildSubEngines()
 
+        // Skip periodic TURN refresh while every peer is on a direct ICE path —
+        // the credentials go unused and the call survives arbitrary-length
+        // signaling outages. A failover to relay triggers the next refresh.
+        // Gate returns `true` to allow the refresh, so direct paths must
+        // return `false` to skip; unknown (session deallocated) defaults to
+        // refreshing to avoid silently dropping credentials.
+        if let serverProvider = signalingProvider as? SerenadaServerProvider {
+            serverProvider.setTurnRefreshGate { [weak self] in
+                guard let self else { return true }
+                return !self.arePeerPathsAllDirect()
+            }
+        }
+
         internalPhase = .joining
         commitSnapshot { s, _ in
             s.localParticipant.displayName = self.displayName
@@ -658,6 +671,17 @@ public final class SerenadaSession: ObservableObject {
         connectionStatusTracker?.update()
     }
 
+    /// True only when at least one peer exists and every slot's last observed
+    /// candidate pair is direct. `nil` cached values (no stats yet) count as
+    /// "not confirmed direct" so the gate errs on the side of refreshing.
+    private func arePeerPathsAllDirect() -> Bool {
+        if peerSlots.isEmpty { return false }
+        for (_, slot) in peerSlots {
+            guard let direct = slot.isPathDirect(), direct else { return false }
+        }
+        return true
+    }
+
     private func refreshRemoteParticipants() {
         guard let roomState = currentRoomState else {
             commitSnapshot { s, _ in s.remoteParticipants = [] }
@@ -670,7 +694,8 @@ public final class SerenadaSession: ObservableObject {
                 cid: p.cid, displayName: p.displayName,
                 audioEnabled: peerState?.audioEnabled ?? p.audioEnabled ?? true,
                 videoEnabled: slot?.isRemoteVideoTrackEnabled() ?? false,
-                connectionState: slot?.getConnectionState() ?? .new
+                connectionState: slot?.getConnectionState() ?? .new,
+                signalingStatus: p.signalingStatus
             )
         }
         let activeCids = Set(participants.map(\.cid))

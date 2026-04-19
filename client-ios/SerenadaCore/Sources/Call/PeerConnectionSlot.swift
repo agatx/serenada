@@ -146,6 +146,13 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private var pendingRemoteIceCandidates: [IceCandidatePayload] = []
     private var remoteRenderers: [WeakRendererBox] = []
     private var lastRealtimeStatsSample: RealtimeStatsSample?
+    // Written from the stats callback queue, read from the main actor gate.
+    private let pathDirectLock = NSLock()
+    private var lastPathIsDirectBacking: Bool?
+    private var lastPathIsDirectValue: Bool? {
+        get { pathDirectLock.lock(); defer { pathDirectLock.unlock() }; return lastPathIsDirectBacking }
+        set { pathDirectLock.lock(); lastPathIsDirectBacking = newValue; pathDirectLock.unlock() }
+    }
     private var freezeSamples: [FreezeSample] = []
 #endif
 
@@ -545,6 +552,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
+    public func isPathDirect() -> Bool? { lastPathIsDirectValue }
+
     public func getIceConnectionState() -> String {
 #if canImport(WebRTC)
         guard let peerConnection else { return "NEW" }
@@ -693,6 +702,12 @@ private extension PeerConnectionSlot {
         let localProtocol = memberString(localCandidate, key: "protocol")
         let remoteProtocol = memberString(remoteCandidate, key: "protocol")
         let isRelay = localCandidateType == "relay" || remoteCandidateType == "relay"
+        // Cache path type for the TURN refresh gate. Stays nil until we have
+        // a candidate type so the gate errs on the side of refreshing.
+        if localCandidateType != nil || remoteCandidateType != nil {
+            let direct = !isRelay
+            if lastPathIsDirectValue != direct { lastPathIsDirectValue = direct }
+        }
         let transportPath: String? = {
             guard localCandidateType != nil || remoteCandidateType != nil else { return nil }
             return "\(isRelay ? "TURN relay" : "Direct") (\(localCandidateType ?? "n/a") -> \(remoteCandidateType ?? "n/a"), \(localProtocol ?? remoteProtocol ?? "n/a"))"

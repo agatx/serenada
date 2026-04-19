@@ -384,6 +384,80 @@ export class MediaEngine {
         if (this.retryingTimer) { window.clearTimeout(this.retryingTimer); this.retryingTimer = null; }
     }
 
+    /**
+     * Inspects each peer connection's currently-selected ICE candidate pair
+     * and returns true only when at least one peer exists and every peer's
+     * local candidate is direct (host / srflx / prflx). Returns false when
+     * any peer is relaying through TURN, when any stats query fails, or when
+     * there are no peers (TURN may be needed for a future join).
+     *
+     * We identify the active pair via `RTCTransportStats.selectedCandidatePairId`,
+     * with a fallback to the nominated+succeeded pair. We do NOT accept any
+     * arbitrary succeeded pair: after an ICE failover the old pair stays
+     * present as "succeeded" for a while, so reading it would lie about the
+     * current active path and wrongly suppress TURN refresh while media is
+     * actually relaying.
+     *
+     * Used by the TURN refresh gate: if all active media flows are direct,
+     * refreshing TURN credentials over signaling is unnecessary upkeep. This
+     * lets a P2P call survive indefinite signaling outages.
+     */
+    async arePeerPathsAllDirect(): Promise<boolean> {
+        const activePeers = Array.from(this.peers.values())
+            .filter((peer) => peer.pc.connectionState !== 'closed' && peer.pc.connectionState !== 'failed');
+        if (activePeers.length === 0) return false;
+        const results = await Promise.all(activePeers.map(async (peer) => {
+            try {
+                return this.isPeerOnDirectPath(await peer.pc.getStats());
+            } catch {
+                return false;
+            }
+        }));
+        return results.every(Boolean);
+    }
+
+    private isPeerOnDirectPath(stats: RTCStatsReport): boolean {
+        // Preferred: resolve the active pair through the transport stat.
+        let selectedPairId: string | null = null;
+        for (const report of stats.values()) {
+            if (report.type !== 'transport') continue;
+            const id = (report as { selectedCandidatePairId?: string }).selectedCandidatePairId;
+            if (typeof id === 'string' && id !== '') {
+                selectedPairId = id;
+                break;
+            }
+        }
+
+        let activePair: RTCIceCandidatePairStats | null = null;
+        if (selectedPairId) {
+            const pair = stats.get(selectedPairId);
+            if (pair && pair.type === 'candidate-pair') {
+                activePair = pair as RTCIceCandidatePairStats;
+            }
+        }
+
+        // Fallback for browsers that don't populate selectedCandidatePairId:
+        // the nominated + succeeded pair is authoritative once ICE settles.
+        if (!activePair) {
+            for (const report of stats.values()) {
+                if (report.type !== 'candidate-pair') continue;
+                const pair = report as RTCIceCandidatePairStats;
+                if (pair.state !== 'succeeded') continue;
+                if (!pair.nominated) continue;
+                activePair = pair;
+                break;
+            }
+        }
+
+        if (!activePair) return false;
+        const localId = activePair.localCandidateId;
+        if (!localId) return false;
+        const local = stats.get(localId);
+        if (!local || local.type !== 'local-candidate') return false;
+        const candType = ((local as { candidateType?: string }).candidateType ?? '').toString();
+        return candType !== '' && candType !== 'relay';
+    }
+
     // --- Private methods ---
 
     private syncPeers(): void {

@@ -1,5 +1,7 @@
 package app.serenada.core.call
 
+import app.serenada.core.ParticipantSignalingStatus
+
 internal data class RoomState(
     val hostCid: String,
     val participants: List<Participant>,
@@ -12,4 +14,5 @@ internal data class Participant(
     val displayName: String? = null,
     val audioEnabled: Boolean? = null,
     val videoEnabled: Boolean? = null,
+    val signalingStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE,
 )
