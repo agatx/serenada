@@ -608,7 +608,8 @@ struct CallScreenView: View {
     }
 
     private var topStatus: some View {
-        VStack(spacing: 8) {
+        let autoHideOpacity: Double = uiState.phase == .waiting ? 1 : (areControlsVisible ? 1 : 0)
+        return VStack(spacing: 8) {
             HStack(spacing: 8) {
                 if uiState.phase == .inCall &&
                     (uiState.connectionStatus == .retrying || showRecoveringBadge) {
@@ -627,6 +628,7 @@ struct CallScreenView: View {
                     .padding(.vertical, 6)
                     .background(Color.black.opacity(0.45))
                     .clipShape(Capsule())
+                    .opacity(autoHideOpacity)
                 }
 
                 Spacer()
@@ -635,6 +637,7 @@ struct CallScreenView: View {
                     iconButton(system: uiState.isFlashEnabled ? "flashlight.on.fill" : "flashlight.off.fill", accessibilityLabel: uiState.isFlashEnabled ? str(.callA11yFlashlightOn) : str(.callA11yFlashlightOff)) {
                         onToggleFlashlight()
                     }
+                    .opacity(autoHideOpacity)
                 }
 
                 if uiState.phase == .waiting && config.inviteControlsEnabled {
@@ -713,7 +716,6 @@ struct CallScreenView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
-        .opacity(uiState.phase == .waiting ? 1 : (areControlsVisible ? 1 : 0))
     }
 
     private var controlBar: some View {
