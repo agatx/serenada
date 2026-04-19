@@ -251,16 +251,28 @@ func (r *Room) snapshotParticipants() []Participant {
 }
 
 // transferHostIfNeeded reassigns HostCID to any remaining participant when the
-// departing CID was the host. Returns the new host CID (empty string if the
-// room is now empty). Logs the transition when a new host is chosen.
+// departing CID was the host. Prefers an actively-connected participant (one
+// with an attached transport) so host privileges aren't silently held by a
+// suspended participant whose reconnect may never arrive — otherwise live
+// participants could be unable to `end_room` until the suspended user hard-
+// evicts. Falls back to any remaining participant only if all are suspended.
+// Returns the new host CID (empty string if the room is now empty).
 func (r *Room) transferHostIfNeeded(departingCID string) string {
 	if r.HostCID != departingCID {
 		return r.HostCID
 	}
 	newHost := ""
-	for remainingCID := range r.byCID {
-		newHost = remainingCID
+	// Prefer an active participant (one currently attached via a live *Client).
+	for _, activeCID := range r.byClient {
+		newHost = activeCID
 		break
+	}
+	// Fall back to any remaining participant if every survivor is suspended.
+	if newHost == "" {
+		for remainingCID := range r.byCID {
+			newHost = remainingCID
+			break
+		}
 	}
 	r.HostCID = newHost
 	if newHost != "" {
@@ -557,11 +569,15 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			if existing.Client != nil {
 				// Case (b): active ghost. Detach the old Client from the
 				// participant record and mark it for hub-level cleanup.
+				// Note: we deliberately do NOT mutate ghostToEvict.cid/.rid
+				// here — those fields are read by other goroutines (SSE
+				// stale-eviction scan, logging) without synchronization, so
+				// mutating them after join would race. The room indexes are
+				// the source of truth for membership, and the ghost is about
+				// to be fully cleaned up by cleanupEvictedClient.
 				ghostToEvict = existing.Client
 				log.Printf("[JOIN] Reconnection detected for CID %s. Evicting ghost client %s", reconnectCID, ghostToEvict.sid)
 				delete(room.byClient, ghostToEvict)
-				ghostToEvict.cid = ""
-				ghostToEvict.rid = ""
 				existing.Client = nil
 			} else {
 				log.Printf("[JOIN] Reconnection detected for CID %s. Reattaching suspended participant", reconnectCID)
@@ -605,8 +621,10 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 					h.hardEvictSuspended(room, reconnectCID)
 				})
 			}
-			c.cid = ""
-			c.rid = ""
+			// Do not clear c.cid / c.rid: other goroutines read them without
+			// synchronization. The room indexes (byCID / byClient) are the
+			// source of truth for membership; the stale fields on this client
+			// are harmless because handleMessage bails early via isClientActive.
 			ghostToCleanup = ghostToEvict
 		}
 		activeClientsSnapshot := room.activeClients()
@@ -719,7 +737,12 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 }
 
 func (h *Hub) handleTurnRefresh(c *Client, msg Message) {
-	if c.rid == "" {
+	// c.rid / c.cid alone aren't sufficient: a socket whose reconnect was
+	// rejected (ROOM_CAPACITY_UNSUPPORTED) keeps its stale fields so the
+	// attached room indexes stay race-free, but the socket is no longer a
+	// real participant. Require that this client is still the attached
+	// transport for its claimed CID before issuing fresh credentials.
+	if !h.isActiveParticipant(c) {
 		c.sendError(msg.RID, "NOT_IN_ROOM", "Must be in a room to refresh TURN credentials")
 		return
 	}
@@ -747,6 +770,27 @@ func (h *Hub) handleTurnRefresh(c *Client, msg Message) {
 	log.Printf("[TURN-REFRESH] Refreshed TURN credentials for client %s (CID: %s) in room %s", c.sid, c.cid, c.rid)
 }
 
+// isActiveParticipant returns true iff c is the transport currently attached
+// to a participant in c.rid. Protects handlers against stale c.rid / c.cid
+// fields left behind on a rejected reconnect socket — those fields are kept
+// as-is on purpose to avoid a data race (other goroutines read them without
+// synchronization), but authorization must come from the room index, not the
+// client's own fields.
+func (h *Hub) isActiveParticipant(c *Client) bool {
+	if c.rid == "" || c.cid == "" {
+		return false
+	}
+	h.mu.RLock()
+	room, exists := h.rooms[c.rid]
+	h.mu.RUnlock()
+	if !exists {
+		return false
+	}
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	return room.byClient[c] == c.cid
+}
+
 func (h *Hub) handleLeave(c *Client, msg Message) {
 	if c.rid == "" {
 		return
@@ -771,10 +815,15 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 
 	room.mu.Lock()
 
-	if room.HostCID != c.cid {
+	// c.cid alone is not sufficient for authorization: a rejected-reconnect
+	// socket keeps its stale c.cid pointing at the host's CID, but is no
+	// longer the attached transport for that participant. Require BOTH that
+	// c is currently attached AND that the attached participant is the host.
+	attachedCID := room.byClient[c]
+	if attachedCID == "" || room.HostCID != attachedCID {
 		room.mu.Unlock()
 		c.sendError(rid, "NOT_HOST", "Only host can end room")
-		log.Printf("[END_ROOM] Client %s (CID: %s) tried to end room %s but is not host (Host: %s)", c.sid, c.cid, rid, room.HostCID)
+		log.Printf("[END_ROOM] Client %s (CID: %s, attachedCID: %q) tried to end room %s but is not the attached host (Host: %s)", c.sid, c.cid, attachedCID, rid, room.HostCID)
 		return
 	}
 
@@ -1022,10 +1071,9 @@ func (h *Hub) suspendClientInRoom(c *Client) {
 	activeCount := len(room.byClient)
 	room.mu.Unlock()
 
-	// Clear transient fields on the Client so stale handler callbacks can't
-	// resurrect it. (The Client struct itself is garbage after send close.)
-	c.rid = ""
-	c.cid = ""
+	// Do not clear c.cid / c.rid: other goroutines read them without
+	// synchronization. Membership is determined from room.byClient, from
+	// which we've already detached, so stale Client fields are benign.
 
 	// Broadcast updated room_state so peers see connectionStatus="suspended"
 	// for this CID. Skip if no one is listening.
@@ -1076,6 +1124,13 @@ func (h *Hub) hardEvictSuspended(room *Room, cid string) {
 
 // removeClientFromRoom is called for EXPLICIT departures (leave). The
 // participant record is removed immediately (no suspend window).
+//
+// Guarded against stale-socket races: during a reconnect, handleJoin evicts
+// the old *Client from the room and reattaches the CID to a new *Client
+// before deferred ghost cleanup runs. A late `leave` that reaches the old
+// socket during that window must NOT remove the freshly-reattached
+// participant and tear down the call. We only remove the record if the
+// participant is still attached to THIS client.
 func (h *Hub) removeClientFromRoom(c *Client) {
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) being removed from room %s", c.sid, c.cid, c.rid)
 	h.mu.Lock()
@@ -1090,15 +1145,20 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	rid := c.rid
 	cid := c.cid
 	room.mu.Lock()
+	p := room.participantByCID(cid)
+	if p == nil || p.Client != c {
+		// Already reattached to a new client, already evicted, or never
+		// belonged to us. Nothing to do here.
+		room.mu.Unlock()
+		log.Printf("[REMOVE_FROM_ROOM] Skipping removal for client %s (CID: %s) — not the currently-attached transport", c.sid, cid)
+		return
+	}
 	room.removeParticipant(cid)
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, cid, rid, room.participantCount())
 	room.transferHostIfNeeded(cid)
 
 	isEmpty := room.participantCount() == 0
 	room.mu.Unlock()
-
-	c.rid = ""
-	c.cid = ""
 
 	if isEmpty {
 		log.Printf("[REMOVE_FROM_ROOM] Room %s is now empty. Deleting room.", rid)

@@ -209,6 +209,7 @@ export class SignalingEngine {
         this.roomState = null;
         this.turnToken = null;
         this.turnTokenTTLMs = null;
+        this.turnTokenExpiresAtMs = null;
         this.notifyStateChange();
     }
 
@@ -484,6 +485,10 @@ export class SignalingEngine {
     }
 
     private turnRefreshGate: (() => Promise<boolean>) | null = null;
+    // Absolute timestamp (epoch ms) at which the current TURN credential expires.
+    // Set when TTL is installed; used to compute "remaining until expiry" so the
+    // skip-path reschedule has a real safety buffer on repeat skips.
+    private turnTokenExpiresAtMs: number | null = null;
 
     setTurnRefreshGate(gate: (() => Promise<boolean>) | null): void {
         this.turnRefreshGate = gate;
@@ -492,6 +497,10 @@ export class SignalingEngine {
     private scheduleTurnRefresh(delayOverrideMs?: number): void {
         this.clearTurnRefreshTimer();
         if (!this.isConnected || !this.turnTokenTTLMs || !this.currentRoomId) return;
+        if (delayOverrideMs === undefined) {
+            // Initial schedule after fresh creds: trigger at `ratio * TTL`.
+            this.turnTokenExpiresAtMs = Date.now() + this.turnTokenTTLMs;
+        }
 
         const refreshDelay = delayOverrideMs ?? this.turnTokenTTLMs * TURN_REFRESH_TRIGGER_RATIO;
         this.logger?.log('debug', 'Signaling', `Scheduling TURN refresh in ${Math.round(refreshDelay / 1000)}s`);
@@ -510,12 +519,19 @@ export class SignalingEngine {
             } catch { /* gate failure → default to refreshing */ }
             if (!shouldRefresh) {
                 this.logger?.log('debug', 'Signaling', 'Skipping turn-refresh: all peer paths direct');
-                // Poll at `(1 - ratio) * TTL` so a late path failover to relay
-                // still gets a refresh inside the credential's lifetime.
-                const remainingMs = this.turnTokenTTLMs
-                    ? this.turnTokenTTLMs * (1 - TURN_REFRESH_TRIGGER_RATIO)
-                    : undefined;
-                this.scheduleTurnRefresh(remainingMs);
+                // Reschedule at a fraction of the remaining lifetime so a late
+                // path failover to relay still has time to refresh before the
+                // current credentials expire. Using `remaining * ratio` gives
+                // an exponential approach to expiry on repeat skips.
+                if (this.turnTokenExpiresAtMs !== null) {
+                    const remainingMs = this.turnTokenExpiresAtMs - Date.now();
+                    if (remainingMs > 0) {
+                        this.scheduleTurnRefresh(remainingMs * TURN_REFRESH_TRIGGER_RATIO);
+                    }
+                    // remainingMs <= 0 → creds already expired; stop polling.
+                    // A later relay transition is out of our hands; the call
+                    // was direct when signaling gave us a chance to refresh.
+                }
                 return;
             }
         }

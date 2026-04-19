@@ -47,6 +47,9 @@ internal class SerenadaServerProvider(
     private var reconnectAttempts = 0
     private var reconnectRunnable: Runnable? = null
     private var turnRefreshRunnable: Runnable? = null
+    // Absolute expiry timestamp (wall clock ms) for the current TURN creds.
+    // Used by the skip path to compute remaining lifetime for recheck pacing.
+    private var turnTokenExpiresAtMs: Long = 0
     // Gate returns false to skip this refresh cycle — typically because all
     // peers are on direct ICE paths and TURN credentials are unused.
     private var turnRefreshGate: (() -> Boolean)? = null
@@ -360,15 +363,27 @@ internal class SerenadaServerProvider(
 
     private fun scheduleTurnRefresh(ttlMs: Long, delayOverrideMs: Long? = null) {
         clearTurnRefresh()
+        // Record absolute expiry only on the initial schedule after fresh creds.
+        // Reschedules from the skip path don't reset it; they compute remaining
+        // lifetime against the original expiry.
+        if (delayOverrideMs == null) {
+            turnTokenExpiresAtMs = System.currentTimeMillis() + ttlMs
+        }
         val delayMs = delayOverrideMs ?: (ttlMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
         val runnable = Runnable {
             turnRefreshRunnable = null
             if (!signaling.isConnected() || currentRoomId == null) return@Runnable
             if (turnRefreshGate?.invoke() == false) {
-                // Poll at `(1 - ratio) * TTL` so a late path failover to
-                // relay still gets a refresh inside the credential lifetime.
-                val recheckMs = (ttlMs * (1.0 - WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO)).toLong()
-                scheduleTurnRefresh(ttlMs, delayOverrideMs = recheckMs)
+                // Reschedule at a fraction of the remaining lifetime so a late
+                // path failover to relay still has time to refresh before the
+                // credentials expire. `remaining * ratio` gives an exponential
+                // approach to expiry on repeat skips; once remaining hits zero
+                // we stop polling (direct path was confirmed through expiry).
+                val remainingMs = turnTokenExpiresAtMs - System.currentTimeMillis()
+                if (remainingMs > 0) {
+                    val recheckMs = (remainingMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
+                    scheduleTurnRefresh(ttlMs, delayOverrideMs = recheckMs)
+                }
                 return@Runnable
             }
             sendRawMessage(type = "turn-refresh")

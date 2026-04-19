@@ -987,6 +987,250 @@ func TestHardEvictionRemovesParticipantAfterSuspendWindow(t *testing.T) {
 	}
 }
 
+// TestRejectedReconnectSocketCannotEndRoom verifies that a socket whose
+// reconnect was rejected (ROOM_CAPACITY_UNSUPPORTED) cannot subsequently
+// tear down the live room by sending `end_room` — even though its stale
+// c.cid still matches room.HostCID. Authorization must come from the room's
+// attached-transport index (room.byClient), not from the client's own
+// fields which are deliberately left as-is after rejection to avoid a data
+// race with other goroutines that read them.
+func TestRejectedReconnectSocketCannotEndRoom(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	// Host joins with group capability (max=4) and locks the room at 4 with
+	// a second capable participant.
+	host := fakeClient(hub)
+	hub.registerClient(host)
+	hostCID := joinAndCaptureCID(t, hub, host, rid)
+
+	peer := fakeClient(hub)
+	hub.registerClient(peer)
+	joinAndCaptureCID(t, hub, peer, rid)
+	drainMessages(host)
+	drainMessages(peer)
+
+	// Host's transport drops; participant becomes suspended.
+	hub.disconnectClient(host)
+	drainMessages(peer)
+
+	// Host tries to reconnect but this time the client can only handle 1:1
+	// (capability < room.MaxParticipants=4) — reject. Per the rejection undo
+	// path, the socket's c.cid/c.rid are deliberately left stale to avoid a
+	// data race with other goroutines that read them without synchronization.
+	rejected := fakeClient(hub)
+	hub.registerClient(rejected)
+	hub.handleMessage(rejected, joinPayloadWithOptions(rid, 2, 2, joinPayloadOptions{
+		ReconnectCID: hostCID,
+	}))
+	// Confirm the rejection actually happened (precondition for this test).
+	var sawReject bool
+	for _, m := range drainMessages(rejected) {
+		if m.Type == "error" {
+			var p struct{ Code string `json:"code"` }
+			if err := json.Unmarshal(m.Payload, &p); err == nil && p.Code == "ROOM_CAPACITY_UNSUPPORTED" {
+				sawReject = true
+			}
+		}
+	}
+	if !sawReject {
+		t.Fatal("precondition: reconnect should have been rejected with ROOM_CAPACITY_UNSUPPORTED")
+	}
+
+	// Simulate the rejected socket's stale c.cid/c.rid (what the undo path
+	// preserves on purpose to avoid the data race).
+	rejected.cid = hostCID
+	rejected.rid = rid
+
+	// The rejected socket tries to end the room.
+	endMsg, _ := json.Marshal(Message{V: 1, Type: "end_room", RID: rid})
+	hub.handleMessage(rejected, endMsg)
+
+	// Room must still exist and the attached peer must still be a participant.
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if room == nil {
+		t.Fatal("rejected reconnect socket ended the live room — authorization bypass")
+	}
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	if room.participantCount() == 0 {
+		t.Fatal("live peer was removed by unauthorized end_room")
+	}
+	// The rejected socket should have received a NOT_HOST error.
+	var sawNotHost bool
+	for _, m := range drainMessages(rejected) {
+		if m.Type == "error" {
+			var p struct{ Code string `json:"code"` }
+			if err := json.Unmarshal(m.Payload, &p); err == nil && p.Code == "NOT_HOST" {
+				sawNotHost = true
+			}
+		}
+	}
+	if !sawNotHost {
+		t.Fatal("expected NOT_HOST error to rejected socket's end_room attempt")
+	}
+}
+
+// TestRejectedReconnectSocketCannotMintTurnCredentials verifies that a
+// socket whose reconnect was rejected cannot keep pulling fresh TURN
+// credentials via turn-refresh. Attachment must be verified via the room
+// index, not just c.rid != "".
+func TestRejectedReconnectSocketCannotMintTurnCredentials(t *testing.T) {
+	t.Setenv("TURN_SECRET", "x")
+	t.Setenv("TURN_TOKEN_SECRET", "x")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	host := fakeClient(hub)
+	hub.registerClient(host)
+	hostCID := joinAndCaptureCID(t, hub, host, rid)
+
+	peer := fakeClient(hub)
+	hub.registerClient(peer)
+	joinAndCaptureCID(t, hub, peer, rid)
+	drainMessages(host)
+	drainMessages(peer)
+
+	hub.disconnectClient(host)
+	drainMessages(peer)
+
+	rejected := fakeClient(hub)
+	hub.registerClient(rejected)
+	hub.handleMessage(rejected, joinPayloadWithOptions(rid, 2, 2, joinPayloadOptions{
+		ReconnectCID: hostCID,
+	}))
+	drainMessages(rejected)
+	rejected.cid = hostCID
+	rejected.rid = rid
+
+	refreshMsg, _ := json.Marshal(Message{V: 1, Type: "turn-refresh", RID: rid})
+	hub.handleMessage(rejected, refreshMsg)
+
+	var sawToken, sawNotInRoom bool
+	for _, m := range drainMessages(rejected) {
+		if m.Type == "turn-refreshed" {
+			sawToken = true
+		}
+		if m.Type == "error" {
+			var p struct{ Code string `json:"code"` }
+			if err := json.Unmarshal(m.Payload, &p); err == nil && p.Code == "NOT_IN_ROOM" {
+				sawNotInRoom = true
+			}
+		}
+	}
+	if sawToken {
+		t.Fatal("rejected reconnect socket was issued TURN credentials despite no active attachment")
+	}
+	if !sawNotInRoom {
+		t.Fatal("expected NOT_IN_ROOM error for turn-refresh from detached socket")
+	}
+}
+
+// TestLateLeaveFromStaleSocketDoesNotRemoveReattachedParticipant verifies
+// that a `leave` arriving from the OLD socket after a reconnect has already
+// swapped the participant to a NEW client does not tear down the live
+// participant. Without the `p.Client == c` guard in removeClientFromRoom,
+// the stale leave would delete the freshly-reattached record and end the
+// call unexpectedly.
+func TestLateLeaveFromStaleSocketDoesNotRemoveReattachedParticipant(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	old := fakeClient(hub)
+	hub.registerClient(old)
+	aCID := joinAndCaptureCID(t, hub, old, rid)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	joinAndCaptureCID(t, hub, b, rid)
+	drainMessages(b)
+
+	// New client reclaims aCID via reconnect. Old socket is still registered
+	// (its transport hasn't been fully cleaned up yet).
+	newA := fakeClient(hub)
+	hub.registerClient(newA)
+	hub.handleMessage(newA, joinPayloadWithOptions(rid, 4, 4, joinPayloadOptions{
+		ReconnectCID: aCID,
+	}))
+	drainMessages(newA)
+	drainMessages(b)
+
+	// At this point the room participant for aCID is attached to newA.
+	// Simulate a late `leave` arriving from the old socket (which still has
+	// stale c.cid/c.rid pointing at this room).
+	old.cid = aCID
+	old.rid = rid
+	leaveMsg, _ := json.Marshal(Message{V: 1, Type: "leave", RID: rid})
+	hub.handleMessage(old, leaveMsg)
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if room == nil {
+		t.Fatal("room was deleted by stale leave — reattached participant was torn down")
+	}
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	p := room.participantByCID(aCID)
+	if p == nil {
+		t.Fatal("reattached participant was removed by stale leave from old socket")
+	}
+	if p.Client != newA {
+		t.Fatalf("expected new client attached to aCID, got %v", p.Client)
+	}
+}
+
+// TestHostTransferPrefersActiveOverSuspended verifies that when the host
+// departs, the new host is chosen from the ACTIVE participants — not a
+// suspended one that might never reconnect, leaving live participants
+// unable to exercise host privileges like end_room.
+func TestHostTransferPrefersActiveOverSuspended(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	host := fakeClient(hub)
+	hub.registerClient(host)
+	hostCID := joinAndCaptureCID(t, hub, host, rid)
+
+	suspended := fakeClient(hub)
+	hub.registerClient(suspended)
+	joinAndCaptureCID(t, hub, suspended, rid)
+
+	active := fakeClient(hub)
+	hub.registerClient(active)
+	activeCID := joinAndCaptureCID(t, hub, active, rid)
+
+	// Suspend one of the non-host participants; host role should go to the
+	// active peer when the host leaves.
+	hub.disconnectClient(suspended)
+	drainMessages(host)
+	drainMessages(active)
+
+	// Host leaves.
+	leaveMsg, _ := json.Marshal(Message{V: 1, Type: "leave", RID: rid})
+	hub.handleMessage(host, leaveMsg)
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	if room.HostCID == hostCID {
+		t.Fatalf("expected host to transfer from %q, but it stayed", hostCID)
+	}
+	if room.HostCID == "" {
+		t.Fatal("expected new host to be assigned after host leaves a non-empty room")
+	}
+	if p := room.participantByCID(room.HostCID); p == nil || p.Client == nil {
+		t.Fatalf("expected new host %q to be an active (attached) participant, got suspended", room.HostCID)
+	}
+	if room.HostCID != activeCID {
+		t.Fatalf("expected host transfer to active peer %q, got %q", activeCID, room.HostCID)
+	}
+}
+
 // TestRejectedReconnectRestoresSuspendedStateAndRearmsTimer verifies that
 // when a reconnect reattaches a suspended participant and then fails the
 // capacity check (ROOM_CAPACITY_UNSUPPORTED), the undo path leaves the
