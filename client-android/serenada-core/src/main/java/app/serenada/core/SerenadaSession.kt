@@ -16,6 +16,7 @@ import app.serenada.core.call.JoinFlowCoordinator
 import app.serenada.core.call.LiveSessionClock
 import app.serenada.core.call.PeerNegotiationEngine
 import app.serenada.core.call.SessionClock
+import app.serenada.core.call.RemoteMediaState
 import app.serenada.core.call.SignalingMessageRouter
 import app.serenada.core.call.StatsPoller
 import app.serenada.core.call.CallAudioSessionController
@@ -121,6 +122,7 @@ class SerenadaSession internal constructor(
     private var clientId: String? = null
     private var hostCid: String? = null
     private var currentRoomState: RoomState? = null
+    private val remoteMediaStates = mutableMapOf<String, RemoteMediaState>()
     private var callStartTimeMs: Long? = null
     private var pendingJoinRoom: String? = null
     private val connectionStatusTracker = ConnectionStatusTracker(
@@ -172,6 +174,7 @@ class SerenadaSession internal constructor(
                 hostCid = roomState.hostCid
                 updateParticipants(roomState)
             }
+            broadcastLocalMediaState()
             loadInitialIceServers()
         },
         onRoomStateUpdated = { roomState ->
@@ -193,6 +196,14 @@ class SerenadaSession internal constructor(
                     remoteContentType = contentType,
                 )
             )
+        },
+        onMediaStateReceived = { fromCid, audioEnabled, videoEnabled ->
+            val existing = remoteMediaStates[fromCid]
+            remoteMediaStates[fromCid] = RemoteMediaState(
+                audioEnabled = audioEnabled ?: existing?.audioEnabled,
+                videoEnabled = videoEnabled ?: existing?.videoEnabled,
+            )
+            refreshRemoteParticipants()
         },
         onTurnRefreshed = { _ -> },
         onSignalingPayload = { msg -> handleSignalingPayload(msg) },
@@ -307,6 +318,30 @@ class SerenadaSession internal constructor(
             logger = logger,
         )
         signalingProvider.listener = buildProviderListener()
+
+        // Skip periodic TURN refresh while every peer is on a direct ICE path —
+        // the credentials go unused and the call survives arbitrary-length
+        // signaling outages. A failover to relay triggers the next refresh.
+        // Gate returns `true` to allow the refresh, so we negate the direct-
+        // path check: direct → `false` (skip), relay/unknown → `true` (refresh).
+        (signalingProvider as? SerenadaServerProvider)?.setTurnRefreshGate {
+            !arePeerPathsAllDirect()
+        }
+    }
+
+    /**
+     * True only when at least one peer exists and every slot's last observed
+     * candidate pair is direct. A null cached value (no stats yet) is treated
+     * as "not confirmed direct" so the gate errs on the side of refreshing.
+     */
+    private fun arePeerPathsAllDirect(): Boolean {
+        val slots = peerSlots.values
+        if (slots.isEmpty()) return false
+        for (slot in slots) {
+            val direct = slot.isPathDirect() ?: return false
+            if (!direct) return false
+        }
+        return true
     }
 
     /** Callback invoked when camera/microphone permissions are needed before joining. */
@@ -410,11 +445,13 @@ class SerenadaSession internal constructor(
                     hostCid = roomState.hostCid
                     updateParticipants(roomState)
                 }
+                broadcastLocalMediaState()
             }
         }
 
         override fun onPeerLeft(event: PeerEvent) {
             runOnMain {
+                remoteMediaStates.remove(event.peerId)
                 currentRoomState = removeParticipant(currentRoomState, event.peerId, clientId)
                 currentRoomState?.let { roomState ->
                     hostCid = roomState.hostCid
@@ -426,7 +463,7 @@ class SerenadaSession internal constructor(
         override fun onMessage(message: PeerMessage) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${message.type}")
-                if (message.type == "content_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
+                if (message.type == "content_state" || message.type == "participant_media_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
                     signalingMessageRouter.processPeerMessage(message)
                 }
             }
@@ -476,6 +513,7 @@ class SerenadaSession internal constructor(
         val enabled = !_state.value.localAudioEnabled
         webRtcEngine.toggleAudio(enabled)
         updateState(_state.value.copy(localAudioEnabled = enabled))
+        broadcastLocalMediaState()
     }
 
     /** Toggle local video on or off. */
@@ -483,6 +521,7 @@ class SerenadaSession internal constructor(
         assertMainThread()
         userPreferredVideoEnabled = !_state.value.localVideoEnabled
         applyLocalVideoPreference()
+        broadcastLocalMediaState()
     }
 
     /** Cycle to the next camera mode (selfie -> world -> composite). */
@@ -699,6 +738,7 @@ class SerenadaSession internal constructor(
                 error = null,
                 localAudioEnabled = config.defaultAudioEnabled,
                 localVideoEnabled = config.defaultVideoEnabled,
+                localDisplayName = displayName,
                 remoteParticipants = emptyList(),
                 localCameraMode = LocalCameraMode.SELFIE,
                 connectionStatus = ConnectionStatus.Connected,
@@ -939,10 +979,19 @@ class SerenadaSession internal constructor(
         val roomParticipants = currentRoomState?.participants
         val orderedRemoteCids = roomParticipants?.map { it.cid }?.filter { it != myCid }
             ?: peerSlots.keys.toList()
-        val displayNamesByCid = roomParticipants?.associate { it.cid to it.displayName } ?: emptyMap()
+        val participantsByCid = roomParticipants?.associateBy { it.cid } ?: emptyMap()
         val remoteParticipants = orderedRemoteCids.mapNotNull { cid ->
             val slot = peerSlots[cid] ?: return@mapNotNull null
-            RemoteParticipant(cid = cid, displayName = displayNamesByCid[cid], videoEnabled = slot.isRemoteVideoTrackEnabled(), connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()))
+            val participant = participantsByCid[cid]
+            val peerState = remoteMediaStates[cid]
+            RemoteParticipant(
+                cid = cid,
+                displayName = participant?.displayName,
+                audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true,
+                videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled(),
+                connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()),
+                signalingStatus = participant?.signalingStatus ?: ParticipantSignalingStatus.ACTIVE,
+            )
         }
         val currentState = _state.value
         val currentDiagnostics = _diagnostics.value
@@ -989,6 +1038,13 @@ class SerenadaSession internal constructor(
     private fun startRemoteVideoStatePolling() { statsPoller.start() }
     private fun stopRemoteVideoStatePolling() { statsPoller.stop() }
 
+    private fun broadcastLocalMediaState() {
+        signalingMessageRouter.broadcastMediaState(
+            audioEnabled = _state.value.localAudioEnabled,
+            videoEnabled = _state.value.localVideoEnabled,
+        )
+    }
+
     // --- Internal: Cleanup ---
 
     private fun cleanupCall(reason: EndReason) {
@@ -1014,7 +1070,7 @@ class SerenadaSession internal constructor(
         webRtcStatsExecutor = null
         unregisterConnectivityListener()
         clientId = null; hostCid = null; currentRoomState = null; callStartTimeMs = null
-        pendingJoinRoom = null; pendingMessages.clear()
+        pendingJoinRoom = null; pendingMessages.clear(); remoteMediaStates.clear()
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false

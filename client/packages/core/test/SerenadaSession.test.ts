@@ -525,6 +525,50 @@ describe('SerenadaSession', () => {
             expect(last.state).toEqual(roomState);
             expect(last.clientId).toBe('me');
         });
+
+        it('installs a TURN refresh gate that returns false when all peer paths are direct', async () => {
+            harness = new TestSessionHarness();
+            const gate = harness.signaling.turnRefreshGate;
+            expect(gate).toBeTypeOf('function');
+            if (!gate) return;
+
+            // All peers direct → gate must say "skip" (return false).
+            harness.media.allPathsDirect = true;
+            await expect(gate()).resolves.toBe(false);
+
+            // Any peer on relay (or no stats yet) → gate must say "refresh"
+            // (return true) so credentials don't silently expire while a TURN
+            // path is actually in use — an inverted gate is catastrophic.
+            harness.media.allPathsDirect = false;
+            await expect(gate()).resolves.toBe(true);
+        });
+
+        it('propagates suspended connectionStatus through to remoteParticipants.signalingStatus', async () => {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+
+            harness.simulateRoomStateUpdate({
+                hostCid: 'me',
+                participants: [
+                    { cid: 'me' },
+                    { cid: 'peer-1', connectionStatus: 'suspended' },
+                ],
+            });
+
+            const peer = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
+            expect(peer).toBeDefined();
+            expect(peer?.signalingStatus).toBe('suspended');
+
+            // And the reverse transition back to active clears the flag.
+            harness.simulateRoomStateUpdate({
+                hostCid: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            const peerAfter = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
+            expect(peerAfter?.signalingStatus).toBe('active');
+        });
     });
 
     // ---------------------------------------------------------------
@@ -841,20 +885,38 @@ describe('SerenadaSession', () => {
             harness = new TestSessionHarness({
                 config: { serverHost: 'localhost', defaultAudioEnabled: false, defaultVideoEnabled: false },
             });
+            // Pre-media-start: no local stream yet, so fields fall back to config defaults.
+            harness.media.startLocalMediaResult = null;
 
             harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
 
-            // No local stream → uses config defaults
             expect(harness.state.localParticipant?.audioEnabled).toBe(false);
             expect(harness.state.localParticipant?.videoEnabled).toBe(false);
         });
 
         it('defaults audioEnabled/videoEnabled to true when not specified', () => {
             harness = new TestSessionHarness();
+            harness.media.startLocalMediaResult = null;
             harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
 
             expect(harness.state.localParticipant?.audioEnabled).toBe(true);
             expect(harness.state.localParticipant?.videoEnabled).toBe(true);
+        });
+
+        it('local videoEnabled reflects track presence once media has started', () => {
+            harness = new TestSessionHarness();
+            // Stream exists but with no video track (e.g., camera released or
+            // reacquire failed). Local UI must mirror the broadcast and report
+            // false rather than continuing to render the user's intent.
+            harness.media.startLocalMediaResult = {
+                getAudioTracks: () => [{ enabled: true } as MediaStreamTrack],
+                getVideoTracks: () => [],
+            } as unknown as MediaStream;
+
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+
+            expect(harness.state.localParticipant?.audioEnabled).toBe(true);
+            expect(harness.state.localParticipant?.videoEnabled).toBe(false);
         });
     });
 });

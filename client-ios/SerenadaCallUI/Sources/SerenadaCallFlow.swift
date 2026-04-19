@@ -301,6 +301,7 @@ private struct SessionFirstCallFlow: View {
         uiState.isHost = state.localParticipant.isHost
         uiState.localAudioEnabled = state.localParticipant.audioEnabled
         uiState.localVideoEnabled = state.localParticipant.videoEnabled
+        uiState.localDisplayName = state.localParticipant.displayName
         uiState.localCameraMode = state.localParticipant.cameraMode
         uiState.connectionStatus = mapConnectionStatus(state.connectionStatus)
         uiState.activeTransport = diagnostics.activeTransport
@@ -319,6 +320,8 @@ private struct SessionFirstCallFlow: View {
         uiState.remoteParticipants = state.remoteParticipants.map { rp in
             RemoteParticipant(
                 cid: rp.cid,
+                displayName: rp.displayName,
+                audioEnabled: rp.audioEnabled,
                 videoEnabled: rp.videoEnabled,
                 connectionState: rp.connectionState
             )

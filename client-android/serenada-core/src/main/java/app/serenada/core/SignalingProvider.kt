@@ -17,10 +17,21 @@ data class JoinOptions(
     val displayName: String? = null,
 )
 
+/**
+ * Wire-level status values for a remote participant's signaling transport.
+ * The server uses "suspended" to indicate a participant whose transport
+ * dropped but whose room slot is being held open for reconnect. "active" is
+ * the default for participants with a live transport attached.
+ */
+enum class ParticipantSignalingStatus { ACTIVE, SUSPENDED }
+
 data class SignalingProviderParticipant(
     val peerId: String,
     val joinedAt: Long? = null,
     val displayName: String? = null,
+    val audioEnabled: Boolean? = null,
+    val videoEnabled: Boolean? = null,
+    val connectionStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE,
 )
 
 data class JoinedEvent(

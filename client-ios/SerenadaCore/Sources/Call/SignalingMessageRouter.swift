@@ -15,6 +15,7 @@ final class SignalingMessageRouter {
     private let onTurnRefreshed: (_ payload: JSONValue?) -> Void
     private let onSignalingPayload: (_ message: SignalingMessage) -> Void
     private let onContentState: (_ payload: ContentStatePayload) -> Void
+    private let onParticipantMediaState: (_ payload: MediaStatePayload) -> Void
     private let onError: (_ error: CallError) -> Void
     private let sendMessage: (_ type: String, _ payload: JSONValue?, _ to: String?) -> Void
 
@@ -29,6 +30,7 @@ final class SignalingMessageRouter {
         onTurnRefreshed: @escaping (_ payload: JSONValue?) -> Void,
         onSignalingPayload: @escaping (_ message: SignalingMessage) -> Void,
         onContentState: @escaping (_ payload: ContentStatePayload) -> Void,
+        onParticipantMediaState: @escaping (_ payload: MediaStatePayload) -> Void,
         onError: @escaping (_ error: CallError) -> Void,
         sendMessage: @escaping (_ type: String, _ payload: JSONValue?, _ to: String?) -> Void
     ) {
@@ -42,6 +44,7 @@ final class SignalingMessageRouter {
         self.onTurnRefreshed = onTurnRefreshed
         self.onSignalingPayload = onSignalingPayload
         self.onContentState = onContentState
+        self.onParticipantMediaState = onParticipantMediaState
         self.onError = onError
         self.sendMessage = sendMessage
     }
@@ -81,7 +84,7 @@ final class SignalingMessageRouter {
 
     func processJoinedEvent(_ event: JoinedEvent) {
         let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName) },
+            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus) },
             localPeerId: event.peerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
@@ -104,7 +107,7 @@ final class SignalingMessageRouter {
     func processRoomStateEvent(_ event: RoomStateEvent) {
         let localPeerId = getClientId()
         let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName) },
+            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus) },
             localPeerId: localPeerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
@@ -132,6 +135,9 @@ final class SignalingMessageRouter {
             let active = message.payload?["active"]?.boolValue == true
             let contentType = active ? message.payload?["contentType"]?.stringValue : nil
             onContentState(ContentStatePayload(fromCid: fromCid, active: active, contentType: contentType))
+        case "participant_media_state":
+            let payload = MediaStatePayload(from: message.payload.map { .object($0) })
+            onParticipantMediaState(payload)
         case "offer", "answer", "ice":
             var payload = message.payload ?? [:]
             if payload["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
@@ -161,6 +167,14 @@ final class SignalingMessageRouter {
             payload["contentType"] = .string(contentType)
         }
         sendMessage("content_state", .object(payload), nil)
+    }
+
+    func broadcastMediaState(audioEnabled: Bool, videoEnabled: Bool) {
+        let payload: [String: JSONValue] = [
+            "audioEnabled": .bool(audioEnabled),
+            "videoEnabled": .bool(videoEnabled),
+        ]
+        sendMessage("participant_media_state", .object(payload), nil)
     }
 
     // MARK: - Parsing Helpers

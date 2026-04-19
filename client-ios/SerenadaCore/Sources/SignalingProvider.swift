@@ -34,11 +34,24 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
     public let peerId: String
     public let joinedAt: Int64?
     public let displayName: String?
+    public let audioEnabled: Bool?
+    public let videoEnabled: Bool?
+    public let signalingStatus: ParticipantSignalingStatus
 
-    public init(peerId: String, joinedAt: Int64? = nil, displayName: String? = nil) {
+    public init(
+        peerId: String,
+        joinedAt: Int64? = nil,
+        displayName: String? = nil,
+        audioEnabled: Bool? = nil,
+        videoEnabled: Bool? = nil,
+        signalingStatus: ParticipantSignalingStatus = .active
+    ) {
         self.peerId = peerId
         self.joinedAt = joinedAt
         self.displayName = displayName
+        self.audioEnabled = audioEnabled
+        self.videoEnabled = videoEnabled
+        self.signalingStatus = signalingStatus
     }
 }
 

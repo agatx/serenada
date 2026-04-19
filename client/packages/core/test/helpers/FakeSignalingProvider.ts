@@ -65,6 +65,11 @@ export class FakeSignalingProvider extends SignalingProviderEmitter {
         this.emit('disconnected', reason);
     }
 
+    turnRefreshGate: (() => Promise<boolean>) | null = null;
+    setTurnRefreshGate(gate: (() => Promise<boolean>) | null): void {
+        this.turnRefreshGate = gate;
+    }
+
     emitJoined(event: {
         peerId: string;
         participants: Array<{ peerId: string; joinedAt?: number }>;

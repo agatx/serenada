@@ -11,7 +11,18 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         guard let cid = obj["cid"]?.stringValue, !cid.isEmpty else { continue }
         let joinedAt = obj["joinedAt"]?.intValue.map(Int64.init)
         let displayName = obj["displayName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        result.append(Participant(cid: cid, joinedAt: joinedAt, displayName: displayName))
+        let audioEnabled = obj["audioEnabled"]?.boolValue
+        let videoEnabled = obj["videoEnabled"]?.boolValue
+        // Unknown status values fall back to .active per protocol spec.
+        let signalingStatus: ParticipantSignalingStatus = (obj["connectionStatus"]?.stringValue == "suspended") ? .suspended : .active
+        result.append(Participant(
+            cid: cid,
+            joinedAt: joinedAt,
+            displayName: displayName,
+            audioEnabled: audioEnabled,
+            videoEnabled: videoEnabled,
+            signalingStatus: signalingStatus
+        ))
     }
     return result
 }
@@ -106,5 +117,23 @@ struct ContentStatePayload {
         fromCid = obj["from"]?.stringValue
         active = obj["active"]?.boolValue == true
         contentType = active ? obj["contentType"]?.stringValue : nil
+    }
+}
+
+/// Payload for "participant_media_state" message — remote participant's audio/video state.
+/// Fields are optional per the protocol: missing fields mean "no change", and the
+/// consumer should preserve the previously cached value rather than overwriting.
+struct MediaStatePayload {
+    let fromCid: String?
+    let audioEnabled: Bool?
+    let videoEnabled: Bool?
+
+    init(from payload: JSONValue?) {
+        guard let obj = payload?.objectValue else {
+            fromCid = nil; audioEnabled = nil; videoEnabled = nil; return
+        }
+        fromCid = obj["from"]?.stringValue
+        audioEnabled = obj["audioEnabled"]?.boolValue
+        videoEnabled = obj["videoEnabled"]?.boolValue
     }
 }

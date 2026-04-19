@@ -170,7 +170,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, and `displayName` *(string, optional)*.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, and `connectionStatus` *(string, optional)*. See section 4.3 for the meaning of `connectionStatus`.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 
@@ -182,7 +182,8 @@ Acknowledges join success and provides room state.
 ---
 
 ### 4.3 `room_state` (server → client)
-Sent when participants join/leave or host changes.
+Sent when participants join/leave, host changes, or a participant's transport
+state transitions between connected and suspended.
 
 ```json
 {
@@ -194,17 +195,37 @@ Sent when participants join/leave or host changes.
     "maxParticipants": 4,
     "participants": [
       { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
-      { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
+      { "cid": "C-c3d4...", "joinedAt": 1735171215000, "connectionStatus": "suspended" }
     ]
   }
 }
 ```
 
+**Participant `connectionStatus`**
+
+Each participant entry may carry an optional `connectionStatus` field. Values:
+
+- **Absent / `"active"`**: participant's signaling transport is currently
+  attached. Peers should treat the participant as normally present.
+- **`"suspended"`**: the participant's signaling transport dropped (network
+  blip, app backgrounded, TCP reset, etc.) but the server is holding the
+  participant's slot open for reconnect. Established WebRTC peer connections
+  to this participant MUST NOT be torn down. Clients may display a
+  "reconnecting" indicator. The participant's slot is released only after a
+  server-side hard-eviction window elapses, at which point the participant
+  will be absent from the next `room_state` broadcast.
+
+Unknown `connectionStatus` values must be treated as `"active"` for forward
+compatibility.
+
 **Client behavior**
 - Update UI for "waiting for someone to join" vs "in call".
 - Treat `maxParticipants` as the room's current effective capacity. It may increase from `2` to a higher locked value when the second participant joins a provisional room.
 - Treat `joinedAt` as informational only. It may be shown in UI, but clients must not depend on it for offer ownership.
-- If participant list shrinks to 1 during a call, treat as remote left.
+- On `connectionStatus="suspended"` for a peer: keep the existing peer connection alive; do not close tracks or release slots. Optionally surface a "reconnecting" UI state.
+- On a peer transitioning from `"suspended"` back to active: do not renegotiate proactively; the returning peer is responsible for triggering an ICE restart if the path has decayed.
+- If a participant disappears entirely (absent from the participants list): treat as remote left and clean up the peer connection.
+- If the participant list shrinks to 1 during a call, treat as remote left.
 
 ---
 
@@ -427,7 +448,40 @@ Client keepalive. Server ignores.
 
 ---
 
-### 4.12 Room Status Monitoring (WebSocket/SSE)
+### 4.12 `participant_media_state` (client → server → clients)
+
+Sent by a client to announce its current audio/video enabled state. The server stores the state per-participant and relays the message to other room participants as a peer message (see **Server behavior** below).
+
+Clients should broadcast this message after joining, when a new peer joins, and whenever the local audio or video enabled state changes.
+
+```json
+{
+  "v": 1,
+  "type": "participant_media_state",
+  "rid": "AbC123",
+  "payload": {
+    "audioEnabled": true,
+    "videoEnabled": false
+  }
+}
+```
+
+**Fields in payload**
+- `audioEnabled` *(boolean, optional)*: whether the sender's audio is enabled.
+- `videoEnabled` *(boolean, optional)*: whether the sender's video is enabled.
+
+**Server behavior**
+- Stores the audio/video state in the room per-CID so late joiners receive the latest values via the participant list in `joined`/`room_state`.
+- Relays the message to other room participants as a peer message (with a `from` field) instead of broadcasting `room_state`. This avoids participant reordering and full UI rebuilds on every toggle.
+
+**Client behavior**
+- On receiving a relayed `participant_media_state`, update the cached audio/video state for the sender. Only fields present in the payload should be updated; missing fields leave the previous value intact.
+- The participant list in `joined`/`room_state` carries `audioEnabled`/`videoEnabled` for late joiners; relayed peer messages take priority over those values for already-known participants.
+- Unknown message types are silently ignored by older clients, ensuring backward compatibility.
+
+---
+
+### 4.13 Room Status Monitoring (WebSocket/SSE)
 
 Used to aggregate real-time occupancy for a list of rooms (e.g., recent calls list).
 Currently consumed by the React web home screen and the native Android/iOS home screen recent-calls UX.
@@ -544,8 +598,19 @@ For `offer`, `answer`, `ice`:
 - Reject clients that do not support a locked group room with `ROOM_CAPACITY_UNSUPPORTED`.
 
 ### 7.4 Cleanup
-- On socket disconnect: treat as `leave`.
-- If room becomes empty: delete room.
+- On socket disconnect: **do not** treat as `leave`. The server must suspend
+  the participant — detach the transport but keep the CID-keyed record in
+  the room — so established WebRTC peer connections between clients are not
+  torn down. Broadcast an updated `room_state` with
+  `connectionStatus="suspended"` for that participant. If the client
+  reconnects with a matching `reconnectCid` (see 4.1) within the
+  implementation-defined hard-eviction window, the server reattaches the new
+  transport to the existing record. If the window expires, the server
+  removes the participant and broadcasts a final `room_state` so peers tear
+  down. The recommended hard-eviction window is at least 10 minutes.
+- On explicit `leave` or `end_room`: remove the participant immediately (no
+  suspend window).
+- If room becomes empty (including after hard eviction): delete room.
 
 ---
 

@@ -74,4 +74,13 @@ internal interface PeerConnectionSlotProtocol {
     fun detachRemoteSink(sink: VideoSink)
     fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit)
     fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy)
+
+    /**
+     * Returns the last observed path type for the selected candidate pair:
+     * true if direct (host/srflx/prflx), false if relayed through TURN, null
+     * if no stats sample has been collected yet. Updated by the stats poller
+     * on each WebRTC stats cycle. Used by the TURN refresh gate to decide
+     * whether the credentials can be allowed to expire without impact.
+     */
+    fun isPathDirect(): Boolean?
 }

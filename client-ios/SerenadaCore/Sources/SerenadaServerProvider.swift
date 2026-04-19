@@ -64,6 +64,12 @@ internal final class SerenadaServerProvider: SignalingProvider {
         }
     }
 
+    /// Gate returns `false` to skip a scheduled TURN refresh — see TurnManager.
+    @MainActor
+    func setTurnRefreshGate(_ gate: (() -> Bool)?) {
+        turnManager?.shouldRefreshGate = gate
+    }
+
     func connect() {
         precondition(Thread.isMainThread, "SerenadaServerProvider.connect() must be called on the main thread")
         MainActor.assumeIsolated {
@@ -196,7 +202,7 @@ extension SerenadaServerProvider: SignalingClientListener {
         case "turn-refreshed":
             currentTurnToken = SignalingMessageRouter.turnToken(from: message.payload)
             turnManager?.handleTurnRefreshed(payload: message.payload)
-        case "offer", "answer", "ice", "content_state":
+        case "offer", "answer", "ice", "content_state", "participant_media_state":
             emitPeerMessage(message)
         case "pong":
             signaling.recordPong()
@@ -234,7 +240,7 @@ private extension SerenadaServerProvider {
 
         let participants = dedupeProviderParticipants(
             participants: (payload.participants ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName)
+                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus)
             },
             localPeerId: peerId
         )
@@ -285,7 +291,7 @@ private extension SerenadaServerProvider {
         guard let object = payload?.objectValue else { return nil }
         let participants = dedupeProviderParticipants(
             participants: (parseParticipants(from: object["participants"]?.arrayValue) ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName)
+                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus)
             },
             localPeerId: clientId
         )

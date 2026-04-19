@@ -47,6 +47,16 @@ internal class SerenadaServerProvider(
     private var reconnectAttempts = 0
     private var reconnectRunnable: Runnable? = null
     private var turnRefreshRunnable: Runnable? = null
+    // Absolute expiry timestamp (wall clock ms) for the current TURN creds.
+    // Used by the skip path to compute remaining lifetime for recheck pacing.
+    private var turnTokenExpiresAtMs: Long = 0
+    // Gate returns false to skip this refresh cycle — typically because all
+    // peers are on direct ICE paths and TURN credentials are unused.
+    private var turnRefreshGate: (() -> Boolean)? = null
+
+    fun setTurnRefreshGate(gate: (() -> Boolean)?) {
+        turnRefreshGate = gate
+    }
     private var currentRoomId: String? = null
     private var currentMaxParticipants: Int = 4
     private var currentReconnectPeerId: String? = null
@@ -199,7 +209,7 @@ internal class SerenadaServerProvider(
                         }
                 }
             }
-            "offer", "answer", "ice", "content_state" -> emitPeerMessage(message)
+            "offer", "answer", "ice", "content_state", "participant_media_state" -> emitPeerMessage(message)
             "pong" -> signaling.recordPong()
         }
     }
@@ -213,7 +223,14 @@ internal class SerenadaServerProvider(
         currentTurnToken = payload.turnToken
         payload.turnTokenTTLMs?.let { scheduleTurnRefresh(it) } ?: clearTurnRefresh()
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName)
+            SignalingProviderParticipant(
+                peerId = participant.cid,
+                joinedAt = participant.joinedAt,
+                displayName = participant.displayName,
+                audioEnabled = participant.audioEnabled,
+                videoEnabled = participant.videoEnabled,
+                connectionStatus = participant.signalingStatus,
+            )
         }
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
             participants.forEach { put(it.peerId, it) }
@@ -232,7 +249,14 @@ internal class SerenadaServerProvider(
         val payload = message.payload.toRoomStatePayload() ?: return
         currentHostPeerId = payload.hostCid
         val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(peerId = participant.cid, joinedAt = participant.joinedAt, displayName = participant.displayName)
+            SignalingProviderParticipant(
+                peerId = participant.cid,
+                joinedAt = participant.joinedAt,
+                displayName = participant.displayName,
+                audioEnabled = participant.audioEnabled,
+                videoEnabled = participant.videoEnabled,
+                connectionStatus = participant.signalingStatus,
+            )
         }
         emitParticipantDiffs(participants)
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
@@ -337,14 +361,32 @@ internal class SerenadaServerProvider(
         reconnectRunnable = null
     }
 
-    private fun scheduleTurnRefresh(ttlMs: Long) {
+    private fun scheduleTurnRefresh(ttlMs: Long, delayOverrideMs: Long? = null) {
         clearTurnRefresh()
-        val delayMs = (ttlMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
+        // Record absolute expiry only on the initial schedule after fresh creds.
+        // Reschedules from the skip path don't reset it; they compute remaining
+        // lifetime against the original expiry.
+        if (delayOverrideMs == null) {
+            turnTokenExpiresAtMs = System.currentTimeMillis() + ttlMs
+        }
+        val delayMs = delayOverrideMs ?: (ttlMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
         val runnable = Runnable {
             turnRefreshRunnable = null
-            if (signaling.isConnected() && currentRoomId != null) {
-                sendRawMessage(type = "turn-refresh")
+            if (!signaling.isConnected() || currentRoomId == null) return@Runnable
+            if (turnRefreshGate?.invoke() == false) {
+                // Reschedule at a fraction of the remaining lifetime so a late
+                // path failover to relay still has time to refresh before the
+                // credentials expire. `remaining * ratio` gives an exponential
+                // approach to expiry on repeat skips; once remaining hits zero
+                // we stop polling (direct path was confirmed through expiry).
+                val remainingMs = turnTokenExpiresAtMs - System.currentTimeMillis()
+                if (remainingMs > 0) {
+                    val recheckMs = (remainingMs * WebRtcResilienceConstants.TURN_REFRESH_TRIGGER_RATIO).toLong()
+                    scheduleTurnRefresh(ttlMs, delayOverrideMs = recheckMs)
+                }
+                return@Runnable
             }
+            sendRawMessage(type = "turn-refresh")
         }
         turnRefreshRunnable = runnable
         handler.postDelayed(runnable, delayMs)

@@ -44,6 +44,7 @@ const CALL_FLOW_CSS = `
   align-items: center;
   justify-content: center;
   z-index: 1;
+  container-type: inline-size;
 }
 
 [data-serenada-callflow] .video-remote {
@@ -150,6 +151,7 @@ const CALL_FLOW_CSS = `
     #111;
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 18px 38px rgba(0, 0, 0, 0.35);
+  container-type: inline-size;
 }
 
 [data-serenada-callflow].multi-party-call .video-stage-remote {
@@ -179,6 +181,29 @@ const CALL_FLOW_CSS = `
   height: 100%;
   background: #111;
   color: rgba(255, 255, 255, 0.6);
+}
+
+[data-serenada-callflow] .video-camera-off-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111;
+  border-radius: inherit;
+  z-index: 1;
+}
+
+[data-serenada-callflow] .video-camera-off-label {
+  font-size: clamp(11px, 4cqi, 52px);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+  padding: 0 16px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-serenada-callflow] .video-stage-pin-indicator {
@@ -334,6 +359,32 @@ const CALL_FLOW_CSS = `
 [data-serenada-callflow].controls-hidden .btn-zoom {
   opacity: 0;
   pointer-events: none;
+}
+
+[data-serenada-callflow] .participant-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.56);
+  color: #ef4444;
+  z-index: 5;
+  pointer-events: none;
+  max-width: calc(100% - 12px);
+}
+
+[data-serenada-callflow] .participant-badge-name {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 [data-serenada-callflow] .debug-toggle-zone {

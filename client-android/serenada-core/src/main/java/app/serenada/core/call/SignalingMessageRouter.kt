@@ -14,6 +14,11 @@ import org.json.JSONObject
  *
  * Follows the closure-injection DI pattern established by [PeerNegotiationEngine].
  */
+internal data class RemoteMediaState(
+    val audioEnabled: Boolean? = null,
+    val videoEnabled: Boolean? = null,
+)
+
 internal class SignalingMessageRouter(
     // State readers
     private val getClientId: () -> String?,
@@ -24,6 +29,7 @@ internal class SignalingMessageRouter(
     private val onError: (CallError) -> Unit,
     private val onRoomEnded: () -> Unit,
     private val onContentStateReceived: (fromCid: String, active: Boolean, contentType: String?) -> Unit,
+    private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean?, videoEnabled: Boolean?) -> Unit,
     private val onTurnRefreshed: (SignalingMessage) -> Unit,
     private val onSignalingPayload: (SignalingMessage) -> Unit,
     private val onPong: () -> Unit,
@@ -59,6 +65,14 @@ internal class SignalingMessageRouter(
         sendMessage("content_state", payload, null)
     }
 
+    fun broadcastMediaState(audioEnabled: Boolean, videoEnabled: Boolean) {
+        val payload = JSONObject().apply {
+            put("audioEnabled", audioEnabled)
+            put("videoEnabled", videoEnabled)
+        }
+        sendMessage("participant_media_state", payload, null)
+    }
+
     // --- Direct-dispatch methods for provider events ---
 
     fun processJoinedEvent(event: JoinedEvent) {
@@ -68,7 +82,14 @@ internal class SignalingMessageRouter(
 
         val cid = event.peerId
         val participants = dedupeParticipants(
-            event.participants.map { Participant(cid = it.peerId, joinedAt = it.joinedAt, displayName = it.displayName) },
+            event.participants.map { Participant(
+                cid = it.peerId,
+                joinedAt = it.joinedAt,
+                displayName = it.displayName,
+                audioEnabled = it.audioEnabled,
+                videoEnabled = it.videoEnabled,
+                signalingStatus = it.connectionStatus,
+            ) },
             cid,
         )
         val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), cid)
@@ -85,7 +106,14 @@ internal class SignalingMessageRouter(
 
         val localPeerId = getClientId()
         val participants = dedupeParticipants(
-            event.participants.map { Participant(cid = it.peerId, joinedAt = it.joinedAt, displayName = it.displayName) },
+            event.participants.map { Participant(
+                cid = it.peerId,
+                joinedAt = it.joinedAt,
+                displayName = it.displayName,
+                audioEnabled = it.audioEnabled,
+                videoEnabled = it.videoEnabled,
+                signalingStatus = it.connectionStatus,
+            ) },
             localPeerId,
         )
         val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), localPeerId)
@@ -102,6 +130,10 @@ internal class SignalingMessageRouter(
                 val active = payload?.optBoolean("active") ?: false
                 val contentType = if (active) payload?.optString("contentType")?.ifBlank { null } else null
                 onContentStateReceived(fromCid, active, contentType)
+            }
+            "participant_media_state" -> {
+                val parsed = message.payload.toMediaStatePayload() ?: return
+                onMediaStateReceived(parsed.fromCid, parsed.audioEnabled, parsed.videoEnabled)
             }
             "offer", "answer", "ice" -> {
                 val base = message.payload ?: JSONObject()

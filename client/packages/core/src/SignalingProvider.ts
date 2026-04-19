@@ -1,3 +1,5 @@
+import type { ParticipantConnectionStatus } from './signaling/types.js';
+
 export interface ProviderCapabilities {
     handlesReconnection?: boolean;
 }
@@ -16,6 +18,10 @@ export interface SignalingProviderParticipant {
     peerId: string;
     joinedAt?: number;
     displayName?: string;
+    audioEnabled?: boolean;
+    videoEnabled?: boolean;
+    // Wire-reported signaling transport status. Absent = active.
+    connectionStatus?: ParticipantConnectionStatus;
 }
 
 export interface JoinedEvent {
@@ -79,6 +85,12 @@ export interface SignalingProvider {
     sendToPeer(peerId: string, type: string, payload: unknown): void;
     broadcast(type: string, payload: unknown): void;
     getIceServers(): Promise<RTCIceServer[]>;
+    /**
+     * Optional hook: install a gate that returns `false` to skip a scheduled
+     * TURN-credential refresh. Providers without periodic refresh (e.g.,
+     * loopback/test) may omit this.
+     */
+    setTurnRefreshGate?(gate: (() => Promise<boolean>) | null): void;
     on<K extends SignalingProviderEventName>(
         event: K,
         cb: (data: SignalingProviderEventMap[K]) => void,

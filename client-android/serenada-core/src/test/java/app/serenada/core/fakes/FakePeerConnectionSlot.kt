@@ -119,11 +119,14 @@ internal class FakePeerConnectionSlot(
 
     // State queries
     override fun isReady(): Boolean = true
+    override fun isPathDirect(): Boolean? = pathDirectOverride
     override fun getConnectionState(): PeerConnection.PeerConnectionState = connectionState
     override fun getIceConnectionState(): PeerConnection.IceConnectionState = iceConnectionState
     override fun getSignalingState(): PeerConnection.SignalingState = signalingState
     override fun hasRemoteDescription(): Boolean = remoteDescriptionSet
     override fun isRemoteVideoTrackEnabled(): Boolean = false
+
+    var pathDirectOverride: Boolean? = null
 
     // Renderer/stats stubs
     override fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {}

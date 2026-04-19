@@ -46,6 +46,11 @@ function parseParticipants(raw: unknown): RoomParticipant[] | null {
             cid: rec.cid,
             joinedAt: typeof rec.joinedAt === 'number' ? rec.joinedAt : undefined,
             displayName: typeof rec.displayName === 'string' && rec.displayName.trim() !== '' ? rec.displayName : undefined,
+            audioEnabled: typeof rec.audioEnabled === 'boolean' ? rec.audioEnabled : undefined,
+            videoEnabled: typeof rec.videoEnabled === 'boolean' ? rec.videoEnabled : undefined,
+            // Only the recognized status value is forwarded; absent/unknown
+            // is left undefined and treated as active downstream.
+            connectionStatus: rec.connectionStatus === 'suspended' ? 'suspended' : undefined,
         });
     }
     return result;

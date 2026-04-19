@@ -1,7 +1,15 @@
+export type ParticipantConnectionStatus = 'active' | 'suspended';
+
 export type RoomParticipant = {
     cid: string;
     joinedAt?: number;
     displayName?: string;
+    audioEnabled?: boolean;
+    videoEnabled?: boolean;
+    // Absent = active. 'suspended' means the server is holding the slot
+    // open across a signaling drop — peers MUST keep the existing peer
+    // connection alive until the participant returns or is fully removed.
+    connectionStatus?: ParticipantConnectionStatus;
 };
 
 export type RoomState = {

@@ -1,5 +1,6 @@
 package app.serenada.core.call
 
+import app.serenada.core.ParticipantSignalingStatus
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -32,6 +33,12 @@ internal data class ContentStatePayload(
     val fromCid: String,
     val active: Boolean,
     val contentType: String?,
+)
+
+internal data class MediaStatePayload(
+    val fromCid: String,
+    val audioEnabled: Boolean?,
+    val videoEnabled: Boolean?,
 )
 
 // --- Extension parsers ---
@@ -77,6 +84,16 @@ internal fun JSONObject?.toContentStatePayload(): ContentStatePayload? {
     )
 }
 
+internal fun JSONObject?.toMediaStatePayload(): MediaStatePayload? {
+    this ?: return null
+    val fromCid = optString("from").ifBlank { return null }
+    return MediaStatePayload(
+        fromCid = fromCid,
+        audioEnabled = if (has("audioEnabled")) optBoolean("audioEnabled") else null,
+        videoEnabled = if (has("videoEnabled")) optBoolean("videoEnabled") else null,
+    )
+}
+
 // --- Helpers ---
 
 internal fun JSONArray?.toParticipantList(): List<Participant> {
@@ -86,10 +103,20 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
         val p = optJSONObject(i) ?: continue
         val cid = p.optString("cid", "")
         if (cid.isNotBlank()) {
+            val statusString = p.optString("connectionStatus").ifBlank { null }
+            // Unknown status values fall back to ACTIVE for forward compat.
+            val status = if (statusString == "suspended") {
+                ParticipantSignalingStatus.SUSPENDED
+            } else {
+                ParticipantSignalingStatus.ACTIVE
+            }
             result.add(Participant(
                 cid = cid,
                 joinedAt = p.optLong("joinedAt").takeIf { it > 0 },
                 displayName = p.optString("displayName").ifBlank { null },
+                audioEnabled = if (p.has("audioEnabled")) p.optBoolean("audioEnabled") else null,
+                videoEnabled = if (p.has("videoEnabled")) p.optBoolean("videoEnabled") else null,
+                signalingStatus = status,
             ))
         }
     }

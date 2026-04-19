@@ -25,6 +25,21 @@ const maxDisplayNameLength = 40
 // use a shorter TTL (5 seconds).
 const turnTokenTTL = 15 * time.Minute
 
+// suspendHardEvictionTimeout is how long a participant record is preserved after
+// its signaling transport drops. During this window the participant stays in the
+// room (marked ConnectionStatus="suspended") so that existing peer connections
+// are NOT torn down, and the client can reconnect-with-CID to reclaim its spot.
+// Established media continues to flow independent of signaling. After this
+// timeout the record is evicted and peers tear down.
+const suspendHardEvictionTimeout = 10 * time.Minute
+
+// ConnectionStatus values broadcast in room_state/joined participant entries.
+// Omitted when "active" (backward compatible with older clients).
+const (
+	connectionStatusActive    = "active"
+	connectionStatusSuspended = "suspended"
+)
+
 // issueReconnectToken generates an HMAC proof that allows a client to reclaim
 // its CID on reconnect. Format: hex(HMAC-SHA256(secret, cid|rid)).
 // The token is bound to (cid, rid) — NOT session id — because the session id
@@ -73,10 +88,35 @@ type Message struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
+// Participant is the wire-format entry broadcast to clients in joined/room_state.
 type Participant struct {
-	CID         string `json:"cid"`
-	JoinedAt    int64  `json:"joinedAt,omitempty"`
-	DisplayName string `json:"displayName,omitempty"`
+	CID              string `json:"cid"`
+	JoinedAt         int64  `json:"joinedAt,omitempty"`
+	DisplayName      string `json:"displayName,omitempty"`
+	AudioEnabled     *bool  `json:"audioEnabled,omitempty"`
+	VideoEnabled     *bool  `json:"videoEnabled,omitempty"`
+	ConnectionStatus string `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
+}
+
+// roomParticipant is the server-side stable participant record keyed by CID.
+// Identity (CID + metadata) is decoupled from the current live transport
+// (Client) so that a transport drop does NOT remove the participant from the
+// room — it just detaches Client and marks the record suspended until either a
+// reconnect reattaches a new Client or hardEvictionTimer fires.
+type roomParticipant struct {
+	CID          string
+	JoinedAt     int64
+	DisplayName  string
+	AudioEnabled *bool
+	VideoEnabled *bool
+	// Client is the currently attached transport. Nil when suspended.
+	Client *Client
+	// SuspendedAt is the unix-nano timestamp at which Client was last detached.
+	// Zero when the participant is active.
+	SuspendedAt int64
+	// hardEvictionTimer fires after suspendHardEvictionTimeout if the participant
+	// has not reattached. It calls hardEvictSuspended to remove the record.
+	hardEvictionTimer *time.Timer
 }
 
 type Hub struct {
@@ -89,15 +129,156 @@ type Hub struct {
 }
 
 type Room struct {
-	RID                      string
-	Participants             map[*Client]string // client -> cid
+	RID string
+	// byCID is the primary, stable participant index. Entries may be suspended
+	// (Client == nil) — those participants still count toward room occupancy
+	// and are included in room_state broadcasts with ConnectionStatus="suspended".
+	byCID map[string]*roomParticipant
+	// byClient is a reverse index for active (non-suspended) participants only.
+	// Suspended participants are absent from this map. It exists so that relay
+	// handlers can quickly resolve the sender's CID from the receiving *Client.
+	byClient                 map[*Client]string
 	HostCID                  string
-	MaxParticipants          int               // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
-	RequestedMaxParticipants int               // creator's requested ceiling, clamped by creator capability and server ceiling
-	CapacityLocked           bool              // once true, MaxParticipants is final for the room lifetime
-	JoinedAt                 map[string]int64  // cid -> join timestamp (ms)
-	DisplayNames             map[string]string // cid -> display name
+	MaxParticipants          int  // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
+	RequestedMaxParticipants int  // creator's requested ceiling, clamped by creator capability and server ceiling
+	CapacityLocked           bool // once true, MaxParticipants is final for the room lifetime
 	mu                       sync.Mutex
+}
+
+// Room helper methods. All assume the caller holds room.mu unless noted.
+
+// participantCount returns the total number of participants in the room,
+// including suspended ones. Used for capacity enforcement — suspended
+// participants still hold their slot until hard eviction.
+func (r *Room) participantCount() int { return len(r.byCID) }
+
+// cidForClient resolves a live *Client to its CID in this room.
+// Returns "" if the client is not currently attached to any participant
+// (e.g., never joined or already detached via suspend).
+func (r *Room) cidForClient(c *Client) string { return r.byClient[c] }
+
+// participantByCID returns the participant record for the given CID, or nil
+// if no participant with that CID exists in the room.
+func (r *Room) participantByCID(cid string) *roomParticipant { return r.byCID[cid] }
+
+// activeClients returns the list of currently-attached (non-suspended)
+// *Client pointers in arbitrary order. Useful for broadcast/relay iteration.
+func (r *Room) activeClients() []*Client {
+	out := make([]*Client, 0, len(r.byClient))
+	for client := range r.byClient {
+		out = append(out, client)
+	}
+	return out
+}
+
+// attachParticipant inserts a new active participant for (cid, client) and
+// stamps JoinedAt. Called only during a fresh join (not a reconnect).
+func (r *Room) attachParticipant(cid string, client *Client, joinedAtMs int64) *roomParticipant {
+	p := &roomParticipant{
+		CID:      cid,
+		JoinedAt: joinedAtMs,
+		Client:   client,
+	}
+	r.byCID[cid] = p
+	r.byClient[client] = cid
+	return p
+}
+
+// reattachClient transitions a suspended participant back to active by
+// attaching a new live *Client. Caller must ensure the old Client pointer
+// was previously detached via detachClient or evictClient.
+func (r *Room) reattachClient(p *roomParticipant, client *Client) {
+	p.Client = client
+	p.SuspendedAt = 0
+	if p.hardEvictionTimer != nil {
+		p.hardEvictionTimer.Stop()
+		p.hardEvictionTimer = nil
+	}
+	r.byClient[client] = p.CID
+}
+
+// detachClient detaches the attached *Client from the participant record
+// without removing the record from the room. Subsequent broadcasts will
+// emit ConnectionStatus="suspended" for this participant. Caller must NOT
+// call this on a participant whose Client is already nil.
+func (r *Room) detachClient(p *roomParticipant) {
+	if p == nil || p.Client == nil {
+		return
+	}
+	delete(r.byClient, p.Client)
+	p.Client = nil
+	p.SuspendedAt = time.Now().UnixNano()
+}
+
+// removeParticipant fully removes a participant record from the room,
+// including any suspend timer. Returns the Client that was attached (if any)
+// so the caller can perform hub-level cleanup outside the room lock.
+func (r *Room) removeParticipant(cid string) *Client {
+	p := r.byCID[cid]
+	if p == nil {
+		return nil
+	}
+	if p.hardEvictionTimer != nil {
+		p.hardEvictionTimer.Stop()
+		p.hardEvictionTimer = nil
+	}
+	oldClient := p.Client
+	if oldClient != nil {
+		delete(r.byClient, oldClient)
+	}
+	delete(r.byCID, cid)
+	return oldClient
+}
+
+// snapshotParticipants returns wire-format Participant entries for all
+// participants in the room. Suspended entries carry ConnectionStatus="suspended".
+func (r *Room) snapshotParticipants() []Participant {
+	out := make([]Participant, 0, len(r.byCID))
+	for _, p := range r.byCID {
+		entry := Participant{
+			CID:          p.CID,
+			JoinedAt:     p.JoinedAt,
+			DisplayName:  p.DisplayName,
+			AudioEnabled: p.AudioEnabled,
+			VideoEnabled: p.VideoEnabled,
+		}
+		if p.Client == nil {
+			entry.ConnectionStatus = connectionStatusSuspended
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// transferHostIfNeeded reassigns HostCID to any remaining participant when the
+// departing CID was the host. Prefers an actively-connected participant (one
+// with an attached transport) so host privileges aren't silently held by a
+// suspended participant whose reconnect may never arrive — otherwise live
+// participants could be unable to `end_room` until the suspended user hard-
+// evicts. Falls back to any remaining participant only if all are suspended.
+// Returns the new host CID (empty string if the room is now empty).
+func (r *Room) transferHostIfNeeded(departingCID string) string {
+	if r.HostCID != departingCID {
+		return r.HostCID
+	}
+	newHost := ""
+	// Prefer an active participant (one currently attached via a live *Client).
+	for _, activeCID := range r.byClient {
+		newHost = activeCID
+		break
+	}
+	// Fall back to any remaining participant if every survivor is suspended.
+	if newHost == "" {
+		for remainingCID := range r.byCID {
+			newHost = remainingCID
+			break
+		}
+	}
+	r.HostCID = newHost
+	if newHost != "" {
+		log.Printf("[HOST_TRANSFER] Host %s left room %s. New host: %s", departingCID, r.RID, newHost)
+	}
+	return newHost
 }
 
 type Client struct {
@@ -157,12 +338,7 @@ func (h *Hub) IsClientInRoom(roomID, cid string) bool {
 	}
 	room.mu.Lock()
 	defer room.mu.Unlock()
-	for _, clientCID := range room.Participants {
-		if clientCID == cid {
-			return true
-		}
-	}
-	return false
+	return room.participantByCID(cid) != nil
 }
 
 // GetClientDisplayName returns the display name for a client in a room.
@@ -176,7 +352,10 @@ func (h *Hub) GetClientDisplayName(roomID, cid string) string {
 	}
 	room.mu.Lock()
 	defer room.mu.Unlock()
-	return room.DisplayNames[cid]
+	if p := room.participantByCID(cid); p != nil {
+		return p.DisplayName
+	}
+	return ""
 }
 
 func (h *Hub) replaceClient(oldClient, newClient *Client) {
@@ -198,9 +377,13 @@ func (h *Hub) replaceClient(oldClient, newClient *Client) {
 		h.mu.RUnlock()
 		if room != nil {
 			room.mu.Lock()
-			if cid, ok := room.Participants[oldClient]; ok {
-				delete(room.Participants, oldClient)
-				room.Participants[newClient] = cid
+			if cid := room.cidForClient(oldClient); cid != "" {
+				p := room.participantByCID(cid)
+				delete(room.byClient, oldClient)
+				if p != nil {
+					p.Client = newClient
+				}
+				room.byClient[newClient] = cid
 				newClient.cid = cid
 				newClient.rid = oldClient.rid
 			}
@@ -278,6 +461,8 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 	case "offer", "answer", "ice", "content_state":
 		// log.Printf("[%s] Relay from %s to room %s", msg.Type, c.cid, c.rid) // verbose
 		h.handleRelay(c, msg)
+	case "participant_media_state":
+		h.handleMediaState(c, msg)
 	default:
 		log.Printf("[UNKNOWN] Unknown message type: %s", msg.Type)
 	}
@@ -352,12 +537,11 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		log.Printf("[JOIN] Creating new room %s (maxParticipants=%d requestedMaxParticipants=%d locked=%t)", rid, roomMaxParticipants, createMax, capacityLocked)
 		room = &Room{
 			RID:                      rid,
-			Participants:             make(map[*Client]string),
+			byCID:                    make(map[string]*roomParticipant),
+			byClient:                 make(map[*Client]string),
 			MaxParticipants:          roomMaxParticipants,
 			RequestedMaxParticipants: createMax,
 			CapacityLocked:           capacityLocked,
-			JoinedAt:                 make(map[string]int64),
-			DisplayNames:             make(map[string]string),
 		}
 		h.rooms[rid] = room
 	}
@@ -366,10 +550,14 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	room.mu.Lock()
 	reusedCID := false
 
-	// Single-pass ghost eviction: find ghost client with reconnectCID, mark for removal under room lock
+	// Reconnect path: a client presenting reconnectCid wants to reclaim an
+	// existing participant slot. Two cases:
+	//   (a) Suspended participant (Client == nil): the previous transport
+	//       already detached; simply reattach the new Client. No ghost cleanup.
+	//   (b) Active ghost (Client != nil): the previous transport is still
+	//       attached (race on fast reconnect). Detach and clean up hub state.
 	var ghostToEvict *Client
 	if reconnectCID != "" {
-		// Validate reconnectToken if provided (backwards compatible: legacy clients without token still allowed)
 		if reconnectToken != "" && !validateReconnectToken(reconnectToken, reconnectCID, rid) {
 			room.mu.Unlock()
 			log.Printf("[JOIN] Invalid reconnectToken for CID %s from client %s", reconnectCID, c.sid)
@@ -377,26 +565,36 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			return
 		}
 
-		for client, cid := range room.Participants {
-			if cid == reconnectCID {
-				ghostToEvict = client
-				break
+		if existing := room.participantByCID(reconnectCID); existing != nil {
+			if existing.Client != nil {
+				// Case (b): active ghost. Detach the old Client from the
+				// participant record and mark it for hub-level cleanup.
+				// Note: we deliberately do NOT mutate ghostToEvict.cid/.rid
+				// here — those fields are read by other goroutines (SSE
+				// stale-eviction scan, logging) without synchronization, so
+				// mutating them after join would race. The room indexes are
+				// the source of truth for membership, and the ghost is about
+				// to be fully cleaned up by cleanupEvictedClient.
+				ghostToEvict = existing.Client
+				log.Printf("[JOIN] Reconnection detected for CID %s. Evicting ghost client %s", reconnectCID, ghostToEvict.sid)
+				delete(room.byClient, ghostToEvict)
+				existing.Client = nil
+			} else {
+				log.Printf("[JOIN] Reconnection detected for CID %s. Reattaching suspended participant", reconnectCID)
 			}
-		}
-		if ghostToEvict != nil {
-			log.Printf("[JOIN] Reconnection detected for CID %s. Evicting ghost client %s", reconnectCID, ghostToEvict.sid)
-			// Remove ghost from room under room lock (atomic)
-			delete(room.Participants, ghostToEvict)
-			ghostToEvict.cid = ""
-			ghostToEvict.rid = ""
+			// Reattach the new client to the existing participant record.
+			// Note: room.HostCID is intentionally left unchanged so that the
+			// host assignment is preserved across reconnects.
+			room.reattachClient(existing, c)
+			c.cid = existing.CID
+			c.rid = rid
 			reusedCID = true
-			// Note: room.HostCID is intentionally left unchanged so that
-			// the host assignment is preserved across reconnects via the
-			// reused client ID (reconnectCID).
 		}
 	}
 
-	if !room.CapacityLocked && len(room.Participants) == 1 {
+	// Lock capacity on second distinct participant. Suspended participants
+	// count toward occupancy, so a reconnect doesn't trigger this branch.
+	if !room.CapacityLocked && !reusedCID && room.participantCount() == 1 {
 		lockedMaxParticipants := room.RequestedMaxParticipants
 		if lockedMaxParticipants < 2 {
 			lockedMaxParticipants = 2
@@ -411,58 +609,80 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Reject clients that don't support this room's capacity once it's finalized.
 	if clientMaxParticipants < room.MaxParticipants {
+		// Undo the reconnect reattach: re-arm the hard-eviction timer
+		// (reattachClient stopped it, so the slot would wedge otherwise)
+		// and clean up any ghost we evicted since the normal cleanup path
+		// below is skipped when we return early.
+		var ghostToCleanup *Client
+		if reusedCID {
+			if p := room.participantByCID(reconnectCID); p != nil && p.Client == c {
+				room.detachClient(p)
+				p.hardEvictionTimer = time.AfterFunc(suspendHardEvictionTimeout, func() {
+					h.hardEvictSuspended(room, reconnectCID)
+				})
+			}
+			// Do not clear c.cid / c.rid: other goroutines read them without
+			// synchronization. The room indexes (byCID / byClient) are the
+			// source of truth for membership; the stale fields on this client
+			// are harmless because handleMessage bails early via isClientActive.
+			ghostToCleanup = ghostToEvict
+		}
+		activeClientsSnapshot := room.activeClients()
 		room.mu.Unlock()
+		if ghostToCleanup != nil {
+			h.cleanupEvictedClient(ghostToCleanup)
+		}
+		// If the ghost was active and we just rolled back to suspended, peers
+		// were previously seeing this participant as active. Broadcast so they
+		// see the suspended status without waiting for the next trigger.
+		if ghostToCleanup != nil && len(activeClientsSnapshot) > 0 {
+			h.broadcastRoomState(room)
+		}
 		log.Printf("[JOIN] Client %s (cap=%d) cannot join room %s (maxParticipants=%d)", c.sid, clientMaxParticipants, rid, room.MaxParticipants)
 		c.sendError(rid, "ROOM_CAPACITY_UNSUPPORTED", "This client does not support group calls")
 		return
 	}
 
-	// Room full check (after ghost eviction / capacity negotiation)
-	if len(room.Participants) >= room.MaxParticipants {
+	// Room full check. Only applies to fresh joins — a reconnect has already
+	// slotted back into its existing record without increasing the count.
+	if !reusedCID && room.participantCount() >= room.MaxParticipants {
 		room.mu.Unlock()
-		log.Printf("[JOIN] Room %s is full (%d/%d)", rid, len(room.Participants), room.MaxParticipants)
+		log.Printf("[JOIN] Room %s is full (%d/%d)", rid, room.participantCount(), room.MaxParticipants)
 		c.sendError(rid, "ROOM_FULL", "Room is full")
 		return
 	}
 
-	// Deferred hub-level cleanup of ghost outside room lock to avoid deadlock
+	// Deferred hub-level cleanup of ghost outside room lock to avoid deadlock.
+	// The participant record has already been reassigned to the new client, so
+	// we don't need a second capacity check after cleanup.
 	if ghostToEvict != nil {
 		room.mu.Unlock()
 		h.cleanupEvictedClient(ghostToEvict)
 		room.mu.Lock()
-		if len(room.Participants) >= room.MaxParticipants {
-			room.mu.Unlock()
-			log.Printf("[JOIN] Room %s is full after ghost cleanup (%d/%d)", rid, len(room.Participants), room.MaxParticipants)
-			c.sendError(rid, "ROOM_FULL", "Room is full")
-			return
-		}
 	}
 
-	cid := generateID("C-")
-	if reusedCID && reconnectCID != "" {
+	var (
+		cid string
+		p   *roomParticipant
+	)
+	if reusedCID {
 		cid = reconnectCID
-	}
-	c.cid = cid
-	c.rid = rid
-	room.Participants[c] = cid
-
-	// Track stable join time (preserve on reconnect)
-	if _, hasJoinTime := room.JoinedAt[cid]; !hasJoinTime {
-		room.JoinedAt[cid] = time.Now().UnixMilli()
+		p = room.participantByCID(cid)
+	} else {
+		cid = generateID("C-")
+		c.cid = cid
+		c.rid = rid
+		p = room.attachParticipant(cid, c, time.Now().UnixMilli())
 	}
 
-	// Update on every join so clients can change their name on reconnect
-	if joinPayload.DisplayName != nil {
+	// Update display name on every join (including reconnect) so users can rename.
+	if joinPayload.DisplayName != nil && p != nil {
 		trimmed := strings.TrimSpace(*joinPayload.DisplayName)
 		runes := []rune(trimmed)
 		if len(runes) > maxDisplayNameLength {
 			trimmed = string(runes[:maxDisplayNameLength])
 		}
-		if trimmed != "" {
-			room.DisplayNames[cid] = trimmed
-		} else {
-			delete(room.DisplayNames, cid)
-		}
+		p.DisplayName = trimmed
 	}
 
 	if room.HostCID == "" {
@@ -471,11 +691,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	log.Printf("[JOIN] Client %s assigned CID %s in room %s (maxParticipants=%d). Host: %s", c.sid, cid, rid, room.MaxParticipants, room.HostCID)
 
-	// Send 'joined'
-	participants := []Participant{}
-	for _, id := range room.Participants {
-		participants = append(participants, Participant{CID: id, JoinedAt: room.JoinedAt[id], DisplayName: room.DisplayNames[id]})
-	}
+	participants := room.snapshotParticipants()
 	roomMaxParticipants := room.MaxParticipants
 
 	room.mu.Unlock() // <--- CRITICAL FIX: Unlock before broadcast/send to avoid deadlock/blocking
@@ -521,7 +737,12 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 }
 
 func (h *Hub) handleTurnRefresh(c *Client, msg Message) {
-	if c.rid == "" {
+	// c.rid / c.cid alone aren't sufficient: a socket whose reconnect was
+	// rejected (ROOM_CAPACITY_UNSUPPORTED) keeps its stale fields so the
+	// attached room indexes stay race-free, but the socket is no longer a
+	// real participant. Require that this client is still the attached
+	// transport for its claimed CID before issuing fresh credentials.
+	if !h.isActiveParticipant(c) {
 		c.sendError(msg.RID, "NOT_IN_ROOM", "Must be in a room to refresh TURN credentials")
 		return
 	}
@@ -549,6 +770,27 @@ func (h *Hub) handleTurnRefresh(c *Client, msg Message) {
 	log.Printf("[TURN-REFRESH] Refreshed TURN credentials for client %s (CID: %s) in room %s", c.sid, c.cid, c.rid)
 }
 
+// isActiveParticipant returns true iff c is the transport currently attached
+// to a participant in c.rid. Protects handlers against stale c.rid / c.cid
+// fields left behind on a rejected reconnect socket — those fields are kept
+// as-is on purpose to avoid a data race (other goroutines read them without
+// synchronization), but authorization must come from the room index, not the
+// client's own fields.
+func (h *Hub) isActiveParticipant(c *Client) bool {
+	if c.rid == "" || c.cid == "" {
+		return false
+	}
+	h.mu.RLock()
+	room, exists := h.rooms[c.rid]
+	h.mu.RUnlock()
+	if !exists {
+		return false
+	}
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	return room.byClient[c] == c.cid
+}
+
 func (h *Hub) handleLeave(c *Client, msg Message) {
 	if c.rid == "" {
 		return
@@ -573,17 +815,27 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 
 	room.mu.Lock()
 
-	if room.HostCID != c.cid {
+	// c.cid alone is not sufficient for authorization: a rejected-reconnect
+	// socket keeps its stale c.cid pointing at the host's CID, but is no
+	// longer the attached transport for that participant. Require BOTH that
+	// c is currently attached AND that the attached participant is the host.
+	attachedCID := room.byClient[c]
+	if attachedCID == "" || room.HostCID != attachedCID {
 		room.mu.Unlock()
 		c.sendError(rid, "NOT_HOST", "Only host can end room")
-		log.Printf("[END_ROOM] Client %s (CID: %s) tried to end room %s but is not host (Host: %s)", c.sid, c.cid, rid, room.HostCID)
+		log.Printf("[END_ROOM] Client %s (CID: %s, attachedCID: %q) tried to end room %s but is not the attached host (Host: %s)", c.sid, c.cid, attachedCID, rid, room.HostCID)
 		return
 	}
 
-	// Collect clients to notify
-	clients := make([]*Client, 0, len(room.Participants))
-	for client := range room.Participants {
-		clients = append(clients, client)
+	// Collect currently-attached clients (suspended participants have no
+	// transport to notify; they will discover the room is gone if they try
+	// to reconnect). Also stop any pending hard-eviction timers.
+	clients := room.activeClients()
+	for _, p := range room.byCID {
+		if p.hardEvictionTimer != nil {
+			p.hardEvictionTimer.Stop()
+			p.hardEvictionTimer = nil
+		}
 	}
 
 	room.mu.Unlock() // Unlock before sending
@@ -604,27 +856,17 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 
 	for _, client := range clients {
 		client.sendMessage(endMsg)
-		// Reset client state
-		// Note: modifying client struct is dangerous if read concurrently.
-		// Client struct fields `rid`/`cid` are read in readPump/handle handlers.
-		// Ideally we should protect client fields or just rely on them sending new join.
-		// For MVP, not clearing them is safeish if we assume they will be overwritten on next join.
-		// Or we can clear them but we need a lock on client? Client has no lock.
-		// Let's just leave them stale, it's fine.
 	}
-
-	// Clear room
-	// Re-acquire lock to clear participants? Or just delete room.
-	// If we delete room from hub, existing clients can't find it.
 
 	// Remove room from hub
 	h.mu.Lock()
 	delete(h.rooms, rid)
 	h.mu.Unlock()
 
-	// Also clear participants in room to help GC?
+	// Clear participant maps to help GC
 	room.mu.Lock()
-	room.Participants = make(map[*Client]string)
+	room.byCID = make(map[string]*roomParticipant)
+	room.byClient = make(map[*Client]string)
 	room.HostCID = ""
 	room.mu.Unlock()
 
@@ -650,20 +892,11 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 	room.mu.Lock()
 	defer room.mu.Unlock()
 
-	// Check if sender is in room
-	if _, ok := room.Participants[c]; !ok {
+	// Sender must be an active (attached) participant in this room.
+	if room.cidForClient(c) == "" {
 		log.Printf("[RELAY] Client %s (CID: %s) tried to relay in room %s but is not a participant", c.sid, c.cid, c.rid)
 		return
 	}
-
-	// Relay to other participant(s). Protocol says "to" is optional or required.
-	// MVP: Relay to all OTHER participants.
-
-	// We need to wrap payload with "from"
-	// But Message.Payload is RawMessage.
-	// The protocol says: Server -> client (relay): { payload: { from: "...", ...original_payload... } }
-	// This implies we need to unmarshal payload, add from, and marshal back.
-	// Or more simply: construct a new map.
 
 	var rawPayload map[string]interface{}
 	if err := json.Unmarshal(msg.Payload, &rawPayload); err != nil {
@@ -681,21 +914,89 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 		Payload: newPayload,
 	}
 
+	// Iterate active participants only. Suspended participants have no
+	// transport attached — offer/answer/ice sent to them would be dropped
+	// anyway. The sender will re-send on reconnect via ICE restart.
 	relayedCount := 0
-	for client, cid := range room.Participants {
-		if cid != c.cid {
-			// Check 'to' if present? Protocol says "to" is optional/recommended.
-			// Implementing direct targeting if "to" is present
-			if msg.To != "" && msg.To != cid {
-				continue
-			}
-			client.sendMessage(relayMsg)
-			relayedCount++
+	for client, cid := range room.byClient {
+		if cid == c.cid {
+			continue
 		}
+		if msg.To != "" && msg.To != cid {
+			continue
+		}
+		client.sendMessage(relayMsg)
+		relayedCount++
 	}
 	log.Printf("[RELAY] Client %s (CID: %s) relayed %s message to %d participants in room %s", c.sid, c.cid, msg.Type, relayedCount, c.rid)
 }
 
+func (h *Hub) handleMediaState(c *Client, msg Message) {
+	if c.rid == "" || c.cid == "" {
+		return
+	}
+	h.mu.RLock()
+	room, exists := h.rooms[c.rid]
+	h.mu.RUnlock()
+	if !exists {
+		return
+	}
+
+	var payload struct {
+		AudioEnabled *bool `json:"audioEnabled"`
+		VideoEnabled *bool `json:"videoEnabled"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	p := room.participantByCID(c.cid)
+	if p == nil || p.Client != c {
+		return
+	}
+	if payload.AudioEnabled != nil {
+		p.AudioEnabled = payload.AudioEnabled
+	}
+	if payload.VideoEnabled != nil {
+		p.VideoEnabled = payload.VideoEnabled
+	}
+
+	// Relay as peer message (like offer/answer/ice) instead of broadcasting
+	// room_state, which causes participant reordering and full UI rebuilds.
+	// The stored state is still included in joined/room_state for late joiners.
+	relayPayload := map[string]interface{}{
+		"from": c.cid,
+	}
+	if payload.AudioEnabled != nil {
+		relayPayload["audioEnabled"] = *payload.AudioEnabled
+	}
+	if payload.VideoEnabled != nil {
+		relayPayload["videoEnabled"] = *payload.VideoEnabled
+	}
+	newPayload, _ := json.Marshal(relayPayload)
+	relayMsg := Message{
+		V:       1,
+		Type:    msg.Type,
+		RID:     c.rid,
+		Payload: newPayload,
+	}
+	for client, cid := range room.byClient {
+		if cid != c.cid {
+			client.sendMessage(relayMsg)
+		}
+	}
+}
+
+// disconnectClient is called when a client's transport drops. Instead of
+// removing the participant from the room, we suspend its record — the *Client
+// is detached but the CID-keyed participant stays, so other peers' WebRTC
+// connections continue untouched. A hard-eviction timer reaps the record if
+// the client never reconnects.
+//
+// Explicit departures (leave, end_room, ghost re-take) bypass suspension and
+// call removeParticipantByLeave / the eviction paths directly.
 func (h *Hub) disconnectClient(c *Client) {
 	log.Printf("[DISCONNECT] Client %s disconnected", c.sid)
 	h.mu.Lock()
@@ -724,11 +1025,112 @@ func (h *Hub) disconnectClient(c *Client) {
 	}
 
 	if c.rid != "" {
-		h.removeClientFromRoom(c)
+		h.suspendClientInRoom(c)
 	}
 	closeClientSend(c.send)
 }
 
+// suspendClientInRoom detaches the client from its participant record, marks
+// the record suspended, schedules a hard-eviction timer, and broadcasts an
+// updated room_state so peers can display a "reconnecting" indicator while
+// keeping their peer connections alive.
+func (h *Hub) suspendClientInRoom(c *Client) {
+	rid := c.rid
+	cid := c.cid
+	if rid == "" || cid == "" {
+		return
+	}
+
+	h.mu.RLock()
+	room, exists := h.rooms[rid]
+	h.mu.RUnlock()
+
+	if !exists {
+		log.Printf("[SUSPEND] Room %s not found for client %s", rid, c.sid)
+		return
+	}
+
+	room.mu.Lock()
+	p := room.participantByCID(cid)
+	if p == nil || p.Client != c {
+		// Record already gone (ghost re-take evicted us, or leave/end_room fired).
+		room.mu.Unlock()
+		return
+	}
+
+	room.detachClient(p)
+	log.Printf("[SUSPEND] Client %s (CID: %s) suspended in room %s. Hard eviction in %s", c.sid, cid, rid, suspendHardEvictionTimeout)
+
+	// Close over this specific *Room so a timer firing after the room has been
+	// replaced (end_room + new join reusing the rid) cannot evict the wrong
+	// participant. Reattach on reconnect stops the timer in reattachClient.
+	p.hardEvictionTimer = time.AfterFunc(suspendHardEvictionTimeout, func() {
+		h.hardEvictSuspended(room, cid)
+	})
+
+	activeCount := len(room.byClient)
+	room.mu.Unlock()
+
+	// Do not clear c.cid / c.rid: other goroutines read them without
+	// synchronization. Membership is determined from room.byClient, from
+	// which we've already detached, so stale Client fields are benign.
+
+	// Broadcast updated room_state so peers see connectionStatus="suspended"
+	// for this CID. Skip if no one is listening.
+	if activeCount > 0 {
+		h.broadcastRoomState(room)
+	}
+	h.broadcastRoomStatusUpdate(rid)
+}
+
+// hardEvictSuspended fires when the suspend timer expires without a reconnect.
+// It removes the participant record, reassigns host if needed, and broadcasts
+// final room_state so remaining peers tear down the stale peer connection.
+// Takes *Room (not rid) so a late-firing timer against a replaced-since room
+// is dropped cleanly.
+func (h *Hub) hardEvictSuspended(room *Room, cid string) {
+	h.mu.RLock()
+	current, exists := h.rooms[room.RID]
+	h.mu.RUnlock()
+	if !exists || current != room {
+		return
+	}
+
+	rid := room.RID
+	room.mu.Lock()
+	p := room.participantByCID(cid)
+	if p == nil || p.Client != nil {
+		// Already reconnected or already evicted. No-op.
+		room.mu.Unlock()
+		return
+	}
+	log.Printf("[HARD_EVICT] Suspend window expired for CID %s in room %s. Removing participant.", cid, rid)
+	room.removeParticipant(cid)
+	room.transferHostIfNeeded(cid)
+
+	isEmpty := room.participantCount() == 0
+	room.mu.Unlock()
+
+	if isEmpty {
+		log.Printf("[HARD_EVICT] Room %s is now empty. Deleting room.", rid)
+		h.mu.Lock()
+		delete(h.rooms, rid)
+		h.mu.Unlock()
+	} else {
+		h.broadcastRoomState(room)
+	}
+	h.broadcastRoomStatusUpdate(rid)
+}
+
+// removeClientFromRoom is called for EXPLICIT departures (leave). The
+// participant record is removed immediately (no suspend window).
+//
+// Guarded against stale-socket races: during a reconnect, handleJoin evicts
+// the old *Client from the room and reattaches the CID to a new *Client
+// before deferred ghost cleanup runs. A late `leave` that reaches the old
+// socket during that window must NOT remove the freshly-reattached
+// participant and tear down the call. We only remove the record if the
+// participant is still attached to THIS client.
 func (h *Hub) removeClientFromRoom(c *Client) {
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) being removed from room %s", c.sid, c.cid, c.rid)
 	h.mu.Lock()
@@ -740,34 +1142,23 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 		return
 	}
 
-	rid := c.rid // Store RID for broadcast
+	rid := c.rid
+	cid := c.cid
 	room.mu.Lock()
-	delete(room.Participants, c)
-	delete(room.JoinedAt, c.cid)
-	delete(room.DisplayNames, c.cid)
-	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, c.cid, c.rid, len(room.Participants))
-
-	// Manage Host
-	if room.HostCID == c.cid {
-		// Transfer host to next available
-		newHost := ""
-		for _, cid := range room.Participants {
-			newHost = cid
-			break // pick any
-		}
-		room.HostCID = newHost
-		if newHost != "" {
-			log.Printf("[REMOVE_FROM_ROOM] Host %s left room %s. New host: %s", c.cid, c.rid, newHost)
-		} else {
-			// No participants left, host is empty
-		}
+	p := room.participantByCID(cid)
+	if p == nil || p.Client != c {
+		// Already reattached to a new client, already evicted, or never
+		// belonged to us. Nothing to do here.
+		room.mu.Unlock()
+		log.Printf("[REMOVE_FROM_ROOM] Skipping removal for client %s (CID: %s) — not the currently-attached transport", c.sid, cid)
+		return
 	}
+	room.removeParticipant(cid)
+	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, cid, rid, room.participantCount())
+	room.transferHostIfNeeded(cid)
 
-	isEmpty := len(room.Participants) == 0
+	isEmpty := room.participantCount() == 0
 	room.mu.Unlock()
-
-	c.rid = ""
-	c.cid = ""
 
 	if isEmpty {
 		log.Printf("[REMOVE_FROM_ROOM] Room %s is now empty. Deleting room.", rid)
@@ -777,8 +1168,6 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	} else {
 		h.broadcastRoomState(room)
 	}
-
-	// Notify watchers
 	h.broadcastRoomStatusUpdate(rid)
 }
 
@@ -786,18 +1175,13 @@ func (h *Hub) broadcastRoomState(room *Room) {
 	// Must be called without room lock!
 
 	room.mu.Lock()
-	participants := []Participant{}
-	for _, cid := range room.Participants {
-		participants = append(participants, Participant{CID: cid, JoinedAt: room.JoinedAt[cid], DisplayName: room.DisplayNames[cid]})
-	}
+	participants := room.snapshotParticipants()
 	hostCid := room.HostCID
 	rid := room.RID
 	roomMaxParticipants := room.MaxParticipants
-	// Collect clients
-	clients := make([]*Client, 0, len(room.Participants))
-	for client := range room.Participants {
-		clients = append(clients, client)
-	}
+	// Only broadcast to actively-attached clients; suspended participants
+	// have no transport to receive messages.
+	clients := room.activeClients()
 	room.mu.Unlock()
 
 	payload := map[string]interface{}{
@@ -932,7 +1316,7 @@ func (h *Hub) handleWatchRooms(c *Client, msg Message) {
 		if room, ok := h.rooms[rid]; ok {
 			room.mu.Lock()
 			status[rid] = map[string]int{
-				"count":           len(room.Participants),
+				"count":           room.participantCount(),
 				"maxParticipants": room.MaxParticipants,
 			}
 			room.mu.Unlock()
@@ -965,7 +1349,7 @@ func (h *Hub) broadcastRoomStatusUpdate(rid string) {
 	maxParticipants := 0
 	if room, ok := h.rooms[rid]; ok {
 		room.mu.Lock()
-		count = len(room.Participants)
+		count = room.participantCount()
 		maxParticipants = room.MaxParticipants
 		room.mu.Unlock()
 	}
