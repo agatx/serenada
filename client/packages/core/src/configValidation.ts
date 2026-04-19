@@ -9,9 +9,8 @@ export interface ResolvedSerenadaConfig {
 }
 
 export function resolveSerenadaConfig(config: SerenadaConfig): ResolvedSerenadaConfig {
-    const serverHost = typeof config.serverHost === 'string' && config.serverHost.trim().length > 0
-        ? config.serverHost
-        : null;
+    const trimmedHost = typeof config.serverHost === 'string' ? config.serverHost.trim() : '';
+    const serverHost = trimmedHost.length > 0 ? trimmedHost : null;
     const signalingProvider = config.signalingProvider ?? null;
 
     if (serverHost && signalingProvider) {

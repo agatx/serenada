@@ -99,6 +99,27 @@ func TestHandlePushNotifyRejectsUnauthorizedCID(t *testing.T) {
 	}
 }
 
+// TestHandlePushNotifyRejectsSuspendedCID guards against authorizing push-notify
+// for a participant whose slot is reserved in byCID but whose transport has
+// been detached (suspended). Only actively-attached participants should pass.
+func TestHandlePushNotifyRejectsSuspendedCID(t *testing.T) {
+	roomID := mustGenerateRoomID(t)
+	hub := makeTestHubWithParticipant(roomID, "cid-1")
+	room := hub.rooms[roomID]
+	room.mu.Lock()
+	room.detachClient(room.participantByCID("cid-1"))
+	room.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/push/notify?roomId="+roomID, strings.NewReader(`{"cid":"cid-1"}`))
+	rec := httptest.NewRecorder()
+
+	handlePushNotify(hub)(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected %d, got %d", http.StatusForbidden, rec.Code)
+	}
+}
+
 func TestHandlePushNotifyReturnsServiceUnavailableWhenPushServiceMissing(t *testing.T) {
 	roomID := mustGenerateRoomID(t)
 	oldPushService := pushService

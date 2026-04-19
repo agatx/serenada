@@ -228,6 +228,8 @@ const CallRoom: React.FC = () => {
     const previewVideoRef = useRef<HTMLVideoElement | null>(null);
     const callStartTimeRef = useRef<number | null>(null);
     const pushNotifySentRef = useRef(false);
+    const displayNameRef = useRef(displayNameInput);
+    displayNameRef.current = displayNameInput;
 
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
 
@@ -286,7 +288,7 @@ const CallRoom: React.FC = () => {
             turnsOnly,
         });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
-        const nextSession = core.join(callUrl, { displayName: displayNameInput.trim() || undefined });
+        const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });
         callStartTimeRef.current = Date.now();
         setSession(nextSession);
 

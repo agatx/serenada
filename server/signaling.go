@@ -327,8 +327,10 @@ func (h *Hub) isClientActive(c *Client) bool {
 	return exists
 }
 
-// IsClientInRoom checks whether a client with the given CID is a participant
-// in the specified room. Thread-safe for use from HTTP handlers.
+// IsClientInRoom checks whether a client with the given CID is actively
+// attached (non-suspended) in the specified room. Thread-safe for use from
+// HTTP handlers. Suspended participants are excluded — authorization checks
+// should require an active transport, not just a reserved slot in byCID.
 func (h *Hub) IsClientInRoom(roomID, cid string) bool {
 	h.mu.RLock()
 	room, exists := h.rooms[roomID]
@@ -338,7 +340,8 @@ func (h *Hub) IsClientInRoom(roomID, cid string) bool {
 	}
 	room.mu.Lock()
 	defer room.mu.Unlock()
-	return room.participantByCID(cid) != nil
+	p := room.participantByCID(cid)
+	return p != nil && p.Client != nil
 }
 
 // GetClientDisplayName returns the display name for a client in a room.
