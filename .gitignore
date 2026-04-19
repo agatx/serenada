@@ -44,3 +44,7 @@ client-ios/Resources/GoogleService-Info.plist
 /client-ios/SerenadaCallUI/.build
 /client-ios/SerenadaCore/.build
 /client-ios/.docbuild
+
+# TypeDoc generated docs
+/client/packages/core/docs/
+/client/packages/react-ui/docs/
