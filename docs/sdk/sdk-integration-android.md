@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Android API 26+ (Android 8.0)
+- Android API 24+ (Android 7.0)
 - Kotlin 1.9+
 - Jetpack Compose (BOM 2024.10.00+)
 

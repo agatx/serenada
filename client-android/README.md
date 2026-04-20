@@ -30,7 +30,7 @@ Native Android (Kotlin) client for Serenada WebRTC calls. This app mirrors the c
 - Android Studio (Giraffe+ recommended)
 - JDK 17
 - Android SDK 34
-- minSdk 26
+- minSdk 26 for the sample app (`app/`); the `serenada-core` and `serenada-call-ui` libraries support minSdk 24
 
 ## Project layout
 - `app/` — Android app module

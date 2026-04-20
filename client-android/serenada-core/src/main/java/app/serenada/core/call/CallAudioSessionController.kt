@@ -247,7 +247,7 @@ internal class CallAudioSessionController(
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             findBluetoothCommunicationDevice() != null
         } else {
-            audioManager.getDevices(AudioManager.GET_DEVICES_ALL).any { device ->
+            audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS).any { device ->
                 isBluetoothHeadsetType(device.type)
             }
         }
