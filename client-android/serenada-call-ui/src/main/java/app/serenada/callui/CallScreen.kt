@@ -166,11 +166,6 @@ internal fun CallScreen(
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var showRecoveringBadge by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    val localRenderer = remember { SurfaceViewRenderer(context) }
-    val remoteRenderer = remember { SurfaceViewRenderer(context) }
-    val localPipRenderer = remember { PipTextureRendererView(context, "local-pip") }
-    val localFocusRenderer = remember { PipTextureRendererView(context, "local-focus") }
-    val remotePipRenderer = remember { PipTextureRendererView(context, "remote-pip") }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val localZoomTransformState = rememberTransformableState { zoomChange, _, _ ->
         if (zoomChange > 0f && abs(zoomChange - 1f) > PINCH_ZOOM_CHANGE_THRESHOLD) {
@@ -205,19 +200,6 @@ internal fun CallScreen(
     }
     val localRendererEvents = remember {
         aspectRatioRendererEvents(mainHandler) { ratio -> localAspectRatio = ratio }
-    }
-
-    DisposableEffect(Unit) {
-        localPipRenderer.init(eglContext)
-        localFocusRenderer.init(eglContext, localRendererEvents)
-        remotePipRenderer.init(eglContext)
-        onDispose {
-            localRenderer.release()
-            remoteRenderer.release()
-            localPipRenderer.release()
-            localFocusRenderer.release()
-            remotePipRenderer.release()
-        }
     }
 
     LaunchedEffect(uiState.phase, uiState.connectionStatus) {
@@ -396,8 +378,7 @@ internal fun CallScreen(
                 localCameraMode = uiState.localCameraMode,
                 isScreenSharing = uiState.isScreenSharing,
                 localAspectRatio = localAspectRatio ?: 0f,
-                localPipRenderer = localPipRenderer,
-                localFocusRenderer = localFocusRenderer,
+                localRendererEvents = localRendererEvents,
                 attachLocalSink = attachLocalSink,
                 detachLocalSink = detachLocalSink,
                 eglContext = eglContext,
@@ -452,7 +433,7 @@ internal fun CallScreen(
                         modifier =
                             Modifier.size(fitWidth, fitHeight)
                                 .align(Alignment.Center),
-                        renderer = localRenderer,
+                        viewKey = "local-main",
                         onAttach = { renderer -> attachLocalRenderer(renderer, localRendererEvents) },
                         onDetach = detachLocalRenderer,
                         mirror = uiState.isFrontCamera && !uiState.isScreenSharing,
@@ -464,7 +445,8 @@ internal fun CallScreen(
             if (uiState.remoteVideoEnabled) {
                 TextureVideoSurface(
                     modifier = remoteModifier,
-                    renderer = remotePipRenderer,
+                    rendererName = "remote-pip",
+                    eglContext = eglContext,
                     onAttach = attachRemoteSink,
                     onDetach = detachRemoteSink,
                     mirror = false,
@@ -509,7 +491,7 @@ internal fun CallScreen(
                                     scaleX = animatedRemoteScale
                                     scaleY = animatedRemoteScale
                                 },
-                        renderer = remoteRenderer,
+                        viewKey = "remote-main",
                         onAttach = { renderer ->
                             attachRemoteRenderer(renderer, remoteRendererEvents)
                         },
@@ -522,7 +504,8 @@ internal fun CallScreen(
             if (uiState.localVideoEnabled) {
                 TextureVideoSurface(
                     modifier = localModifier,
-                    renderer = localPipRenderer,
+                    rendererName = "local-pip",
+                    eglContext = eglContext,
                     onAttach = attachLocalSink,
                     onDetach = detachLocalSink,
                     mirror = uiState.isFrontCamera && !uiState.isScreenSharing,
@@ -1368,8 +1351,7 @@ private fun MultiPartyStage(
     localCameraMode: LocalCameraMode,
     isScreenSharing: Boolean,
     localAspectRatio: Float,
-    localPipRenderer: PipTextureRendererView,
-    localFocusRenderer: PipTextureRendererView,
+    localRendererEvents: RendererCommon.RendererEvents,
     attachLocalSink: (VideoSink) -> Unit,
     detachLocalSink: (VideoSink) -> Unit,
     eglContext: EglBase.Context,
@@ -1531,11 +1513,13 @@ private fun MultiPartyStage(
                                                 scaleX = localAnimatedScale
                                                 scaleY = localAnimatedScale
                                             },
-                                        renderer = localFocusRenderer,
+                                        rendererName = "local-focus",
+                                        eglContext = eglContext,
                                         onAttach = attachLocalSink,
                                         onDetach = detachLocalSink,
                                         mirror = if (isLocalContent) false else localMirror,
-                                        contentScale = ContentScale.Crop
+                                        contentScale = ContentScale.Crop,
+                                        rendererEvents = localRendererEvents,
                                     )
                                 } else {
                                     VideoPlaceholder(
@@ -1734,7 +1718,8 @@ private fun MultiPartyStage(
                 if (localVideoEnabled) {
                     TextureVideoSurface(
                         modifier = Modifier.fillMaxSize().padding(2.5.dp).clip(RoundedCornerShape(10.dp)),
-                        renderer = localPipRenderer,
+                        rendererName = "local-pip",
+                        eglContext = eglContext,
                         onAttach = attachLocalSink,
                         onDetach = detachLocalSink,
                         mirror = localMirror,
@@ -1798,14 +1783,14 @@ private fun RemoteParticipantStageTile(
     detachRemoteSink: (VideoSink) -> Unit,
     strings: Map<SerenadaString, String>? = null,
 ) {
-    val context = LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val currentOnAspectRatioChanged = rememberUpdatedState(onAspectRatioChanged)
 
     var videoAspectRatio by remember { mutableStateOf(0f) }
     val isCover = contentScale == ContentScale.Crop
 
     val rendererEvents =
-        remember(participant.cid) {
+        remember(participant.cid, mainHandler) {
             object : RendererCommon.RendererEvents {
                 override fun onFirstFrameRendered() = Unit
 
@@ -1819,7 +1804,7 @@ private fun RemoteParticipantStageTile(
                         // Keep full frame aspect for rendering so tall screen-share streams
                         // still fit correctly, but clamp the ratio used by stage layout.
                         videoAspectRatio = rawRatio
-                        onAspectRatioChanged(layoutRatio)
+                        currentOnAspectRatioChanged.value(layoutRatio)
                     }
                 }
             }
@@ -1828,18 +1813,6 @@ private fun RemoteParticipantStageTile(
     // Use TextureView-based renderer so graphicsLayer clip/scale works correctly.
     // SurfaceView renders on a separate hardware surface that ignores Compose clips,
     // causing video to bleed outside rounded tile corners when scaled.
-    val renderer = remember(participant.cid) {
-        PipTextureRendererView(context, "remote-${participant.cid}").also {
-            it.init(eglContext, rendererEvents)
-        }
-    }
-
-    DisposableEffect(renderer) {
-        onDispose {
-            renderer.release()
-        }
-    }
-
     // Animate fit-to-cover scale (same approach as 1:1 mode)
     val geo = computeFitCoverGeometry(width, height, videoAspectRatio)
     val animatedScale by animateFloatAsState(
@@ -1863,10 +1836,12 @@ private fun RemoteParticipantStageTile(
                     scaleX = animatedScale
                     scaleY = animatedScale
                 },
-            renderer = renderer,
+            rendererName = "remote-${participant.cid}",
+            eglContext = eglContext,
             onAttach = { attachRemoteSink(it) },
             onDetach = { detachRemoteSink(it) },
-            contentScale = ContentScale.Crop
+            contentScale = ContentScale.Crop,
+            rendererEvents = rendererEvents,
         )
         if (!participant.videoEnabled) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -1883,40 +1858,47 @@ private fun RemoteParticipantStageTile(
 @Composable
 private fun TextureVideoSurface(
     modifier: Modifier,
-    renderer: PipTextureRendererView,
+    rendererName: String,
+    eglContext: EglBase.Context,
     onAttach: (VideoSink) -> Unit,
     onDetach: (VideoSink) -> Unit,
     mirror: Boolean = false,
-    contentScale: ContentScale = ContentScale.Crop
+    contentScale: ContentScale = ContentScale.Crop,
+    rendererEvents: RendererCommon.RendererEvents? = null,
 ) {
-    DisposableEffect(renderer) {
-        onAttach(renderer)
-        onDispose { onDetach(renderer) }
-    }
+    val currentOnAttach = rememberUpdatedState(onAttach)
+    val currentOnDetach = rememberUpdatedState(onDetach)
+    val currentRendererEvents = rememberUpdatedState(rendererEvents)
 
-    AndroidView(
-        modifier = modifier,
-        factory = {
-            // Detach from any existing parent to prevent "child already has a parent"
-            // crash when Compose reuses the same View across composition slots
-            (renderer.parent as? ViewGroup)?.removeView(renderer)
-            renderer
-        },
-        update = {
-            it.setMirror(mirror)
-            it.setScalingType(
-                if (contentScale == ContentScale.Crop)
-                    RendererCommon.ScalingType.SCALE_ASPECT_FILL
-                else RendererCommon.ScalingType.SCALE_ASPECT_FIT
-            )
-        }
-    )
+    key(rendererName) {
+        AndroidView(
+            modifier = modifier,
+            factory = { context ->
+                PipTextureRendererView(context, rendererName).apply {
+                    init(eglContext, currentRendererEvents.value)
+                    setMirror(mirror)
+                    setScalingType(contentScale.toRendererScalingType())
+                }.also { renderer ->
+                    currentOnAttach.value(renderer)
+                }
+            },
+            update = { renderer ->
+                renderer.setRendererEvents(currentRendererEvents.value)
+                renderer.setMirror(mirror)
+                renderer.setScalingType(contentScale.toRendererScalingType())
+            },
+            onRelease = { renderer ->
+                currentOnDetach.value(renderer)
+                renderer.release()
+            }
+        )
+    }
 }
 
 @Composable
 private fun VideoSurface(
     modifier: Modifier,
-    renderer: SurfaceViewRenderer,
+    viewKey: Any,
     onAttach: (SurfaceViewRenderer) -> Unit,
     onDetach: (SurfaceViewRenderer) -> Unit,
     mirror: Boolean = false,
@@ -1928,33 +1910,48 @@ private fun VideoSurface(
     val cornerRadiusPx = remember(cornerRadius, density) {
         cornerRadius?.let { with(density) { it.toPx() } }
     }
+    val currentOnAttach = rememberUpdatedState(onAttach)
+    val currentOnDetach = rememberUpdatedState(onDetach)
 
-    DisposableEffect(renderer) {
-        onAttach(renderer)
-        onDispose { onDetach(renderer) }
+    key(viewKey) {
+        AndroidView(
+            modifier = modifier,
+            factory = { context ->
+                val renderer = SurfaceViewRenderer(context).apply {
+                    setZOrderOnTop(false)
+                    setZOrderMediaOverlay(isMediaOverlay)
+                    setMirror(mirror)
+                    setScalingType(contentScale.toRendererScalingType())
+                }
+                RendererContainer(context, renderer).apply {
+                    updateCornerRadius(cornerRadiusPx)
+                }.also { container ->
+                    currentOnAttach.value(container.renderer)
+                }
+            },
+            update = { container ->
+                container.updateCornerRadius(cornerRadiusPx)
+                container.renderer.apply {
+                    setZOrderOnTop(false)
+                    setZOrderMediaOverlay(isMediaOverlay)
+                    setMirror(mirror)
+                    setScalingType(contentScale.toRendererScalingType())
+                }
+            },
+            onRelease = { container ->
+                currentOnDetach.value(container.renderer)
+                container.release()
+            }
+        )
     }
-
-    AndroidView(
-        modifier = modifier,
-        factory = {
-            RendererContainer(it, renderer).apply {
-                updateCornerRadius(cornerRadiusPx)
-            }
-        },
-        update = { container ->
-            container.updateCornerRadius(cornerRadiusPx)
-            val scalingType = if (contentScale == ContentScale.Crop)
-                RendererCommon.ScalingType.SCALE_ASPECT_FILL
-            else RendererCommon.ScalingType.SCALE_ASPECT_FIT
-            renderer.apply {
-                setZOrderOnTop(false)
-                setZOrderMediaOverlay(isMediaOverlay)
-                setMirror(mirror)
-                setScalingType(scalingType)
-            }
-        }
-    )
 }
+
+private fun ContentScale.toRendererScalingType(): RendererCommon.ScalingType =
+    if (this == ContentScale.Crop) {
+        RendererCommon.ScalingType.SCALE_ASPECT_FILL
+    } else {
+        RendererCommon.ScalingType.SCALE_ASPECT_FIT
+    }
 
 private class PipTextureRendererView(
     context: Context,
@@ -1993,14 +1990,22 @@ private class PipTextureRendererView(
         }
     }
 
+    fun setRendererEvents(rendererEvents: RendererCommon.RendererEvents?) {
+        this.rendererEvents = rendererEvents
+    }
+
     fun release() {
-        if (!initialized) return
-        initialized = false
         firstFrameRendered = false
         frameWidth = 0
         frameHeight = 0
-        eglRenderer.releaseEglSurface {}
-        eglRenderer.release()
+        rendererEvents = null
+        if (initialized) {
+            initialized = false
+            eglRenderer.releaseEglSurface {}
+            eglRenderer.release()
+        }
+        surfaceTextureListener = null
+        (parent as? ViewGroup)?.removeView(this)
     }
 
     fun setMirror(mirror: Boolean) {
@@ -2082,7 +2087,7 @@ private class PipTextureRendererView(
 
 private class RendererContainer(
     context: Context,
-    renderer: SurfaceViewRenderer
+    val renderer: SurfaceViewRenderer
 ) : FrameLayout(context) {
     private var cornerRadiusPx: Float = 0f
     private val roundedOutlineProvider =
@@ -2093,9 +2098,6 @@ private class RendererContainer(
         }
 
     init {
-        if (renderer.parent is ViewGroup) {
-            (renderer.parent as ViewGroup).removeView(renderer)
-        }
         addView(
             renderer,
             LayoutParams(
@@ -2117,6 +2119,11 @@ private class RendererContainer(
         outlineProvider = roundedOutlineProvider
         clipToOutline = true
         invalidateOutline()
+    }
+
+    fun release() {
+        (renderer.parent as? ViewGroup)?.removeView(renderer)
+        renderer.release()
     }
 }
 
