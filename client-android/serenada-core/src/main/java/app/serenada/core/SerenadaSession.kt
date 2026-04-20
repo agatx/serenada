@@ -1083,7 +1083,10 @@ class SerenadaSession internal constructor(
         isVideoPausedByProximity = shouldPause
         val enabled = userPreferredVideoEnabled && !shouldPause
         webRtcEngine.toggleVideo(enabled)
-        if (_state.value.localVideoEnabled != enabled) updateState(_state.value.copy(localVideoEnabled = enabled))
+        if (_state.value.localVideoEnabled != enabled) {
+            updateState(_state.value.copy(localVideoEnabled = enabled))
+            broadcastLocalMediaState()
+        }
     }
 
     private fun acquirePerformanceLocks() {
