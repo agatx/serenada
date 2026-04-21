@@ -229,6 +229,11 @@ internal class WebRtcEngine(
         localVideoTrack?.setEnabled(false)
         localAudioTrack?.setEnabled(false)
         cameraController.disposeVideoCapturer()
+        localVideoTrack?.let { track ->
+            localSinks.forEach { sink -> track.removeSink(sink) }
+            track.dispose()
+        }
+        localAudioTrack?.dispose()
         videoSource?.dispose()
         videoSource = null
         audioSource?.dispose()
