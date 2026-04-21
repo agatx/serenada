@@ -10,15 +10,17 @@ set -euo pipefail
 # Optional environment overrides:
 #   WORKDIR=/opt/webrtc-build
 #   BRANCH=branch-heads/7559_173
-#   ARCH=arm64-v8a
+#   ARCHS="armeabi-v7a arm64-v8a x86 x86_64"
+#   FETCH_ARGS="--nohooks --no-history"
 #   ROOT_BUNDLE_URL=https://curl.se/ca/cacert.pem
-#   OUTPUT_AAR=/opt/webrtc-build/artifacts/libwebrtc-7559_173-arm64-curlroots.aar
+#   OUTPUT_AAR=/opt/webrtc-build/artifacts/libwebrtc-7559_173-universal-curlroots.aar
 
 WORKDIR="${WORKDIR:-/opt/webrtc-build}"
 BRANCH="${BRANCH:-branch-heads/7559_173}"
-ARCH="${ARCH:-arm64-v8a}"
+ARCHS="${ARCHS:-armeabi-v7a arm64-v8a x86 x86_64}"
+FETCH_ARGS="${FETCH_ARGS:---nohooks --no-history}"
 ROOT_BUNDLE_URL="${ROOT_BUNDLE_URL:-https://curl.se/ca/cacert.pem}"
-OUTPUT_AAR="${OUTPUT_AAR:-$WORKDIR/artifacts/libwebrtc-7559_173-arm64-curlroots.aar}"
+OUTPUT_AAR="${OUTPUT_AAR:-$WORKDIR/artifacts/libwebrtc-7559_173-universal-curlroots.aar}"
 
 log() {
   printf '[build-libwebrtc] %s\n' "$*"
@@ -54,7 +56,10 @@ setup_workspace() {
 
   if [ ! -d src ]; then
     log "fetching webrtc_android workspace"
-    fetch --nohooks webrtc_android
+    # Avoid pulling full git history; this cuts disk usage materially on smaller
+    # build hosts while still allowing the branch checkout below.
+    # shellcheck disable=SC2086
+    fetch $FETCH_ARGS webrtc_android
   fi
 }
 
@@ -62,13 +67,18 @@ sync_sources() {
   export PATH="$WORKDIR/depot_tools:$PATH"
   cd "$WORKDIR/src"
 
+  local remote_ref="$BRANCH"
+  if [[ "$BRANCH" == branch-heads/* ]]; then
+    remote_ref="refs/$BRANCH"
+  fi
+
   log "checking out $BRANCH"
-  git fetch origin
+  git fetch origin "$remote_ref:refs/remotes/origin/$BRANCH"
   git checkout -f "$BRANCH"
 
   cd "$WORKDIR"
   log "running gclient sync"
-  gclient sync --with_branch_heads
+  gclient sync --with_branch_heads --no-history
   log "running gclient runhooks"
   gclient runhooks
 }
@@ -93,9 +103,12 @@ build_aar() {
 
   mkdir -p "$(dirname "$OUTPUT_AAR")"
 
-  log "building AAR (arch=$ARCH) -> $OUTPUT_AAR"
+  log "building AAR (archs=$ARCHS) -> $OUTPUT_AAR"
+  # build_aar.py expects a single --arch followed by all requested ABIs.
+  # Repeating --arch causes argparse to keep only the last occurrence.
+  # shellcheck disable=SC2086
   vpython3 tools_webrtc/android/build_aar.py \
-    --arch "$ARCH" \
+    --arch $ARCHS \
     --output "$OUTPUT_AAR"
 
   log "build complete"

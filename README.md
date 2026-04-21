@@ -71,9 +71,9 @@ The native Android app lives in `client-android/`.
 1. Open `client-android/` in Android Studio.
 2. Sync Gradle.
 3. Run on a device or emulator (minSdk 26).
-4. Default WebRTC provider is `local7559` (`client-android/serenada-core/libs/libwebrtc-7559_173-arm64.aar`).
+4. Default WebRTC provider is `local7559` (`client-android/serenada-core/libs/libwebrtc-7559_173-universal.aar`).
 5. Rebuild the patched libwebrtc AAR on Linux with `bash tools/build_libwebrtc_android_7559.sh`.
-6. When updating that AAR, regenerate `client-android/serenada-core/libs/libwebrtc-7559_173-arm64.aar.sha256` (Gradle now verifies it before build).
+6. When updating that AAR, regenerate `client-android/serenada-core/libs/libwebrtc-7559_173-universal.aar.sha256` (Gradle now verifies it before build).
 
 By default the app targets `https://serenada.app`, and the server host can be changed in Settings.
 The Android app language can also be set in Settings: `Auto (default)`, `English`, `Русский`, `Español`, `Français`. `Auto` follows the device language and falls back to English.

@@ -102,7 +102,7 @@ cd client-android
   -PfirebaseProjectId=your-project-id \
   -PfirebaseSenderId=1234567890
 ```
-If you use the default `local7559` WebRTC provider, keep `client-android/app/libs/libwebrtc-7559_173-arm64.aar.sha256` in sync with the AAR bytes; Gradle verifies this checksum before `preBuild`.
+If you use the default `local7559` WebRTC provider, keep `client-android/serenada-core/libs/libwebrtc-7559_173-universal.aar.sha256` in sync with the AAR bytes; Gradle verifies this checksum before `preBuild`.
 
 ### 3. HTTPS (SSL) Setup
 
