@@ -111,6 +111,48 @@ build_aar() {
     --arch $ARCHS \
     --output "$OUTPUT_AAR"
 
+  log "recompressing AAR"
+  python3 - "$OUTPUT_AAR" <<'PY'
+import os
+import sys
+import tempfile
+import zipfile
+
+output_aar = sys.argv[1]
+fd, tmp_aar = tempfile.mkstemp(prefix="libwebrtc-", suffix=".aar")
+os.close(fd)
+
+try:
+    with zipfile.ZipFile(output_aar, "r") as src, zipfile.ZipFile(
+        tmp_aar,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
+    ) as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            new_info = zipfile.ZipInfo(info.filename)
+            new_info.date_time = info.date_time
+            new_info.comment = info.comment
+            new_info.extra = info.extra
+            new_info.create_system = info.create_system
+            new_info.create_version = info.create_version
+            new_info.extract_version = info.extract_version
+            new_info.flag_bits = info.flag_bits
+            new_info.volume = getattr(info, "volume", 0)
+            new_info.internal_attr = info.internal_attr
+            new_info.external_attr = info.external_attr
+            new_info.compress_type = (
+                zipfile.ZIP_STORED if info.is_dir() else zipfile.ZIP_DEFLATED
+            )
+            dst.writestr(new_info, data, compress_type=new_info.compress_type)
+
+    os.replace(tmp_aar, output_aar)
+finally:
+    if os.path.exists(tmp_aar):
+        os.remove(tmp_aar)
+PY
+
   log "build complete"
   ls -lh "$OUTPUT_AAR"
   sha256sum "$OUTPUT_AAR"

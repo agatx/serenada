@@ -69,6 +69,7 @@ The script outputs:
 `/opt/webrtc-build/artifacts/libwebrtc-7559_173-universal-curlroots.aar`
 
 By default it builds `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` into a universal AAR.
+It also recompresses the final AAR so the stored artifact is substantially smaller than the raw WebRTC output.
 
 After replacing `serenada-core/libs/libwebrtc-7559_173-universal.aar`, update the pinned SHA-256 file used by Gradle verification:
 ```bash
