@@ -48,3 +48,4 @@ client-ios/Resources/GoogleService-Info.plist
 # TypeDoc generated docs
 /client/packages/core/docs/
 /client/packages/react-ui/docs/
+/client-android/serenada-webrtc/build
