@@ -78,6 +78,16 @@ shasum -a 256 serenada-core/libs/libwebrtc-7559_173-universal.aar | awk '{print 
 ```
 `assembleDebug`/`assembleRelease` will fail if the checksum does not match.
 
+Publish the Android SDK artifacts to `mavenLocal`:
+```bash
+cd client-android
+./gradlew publishSdkToMavenLocal
+```
+This publishes:
+- `app.serenada:libwebrtc-7559_173-universal:0.4.1`
+- `app.serenada:core:0.4.1`
+- `app.serenada:call-ui:0.4.1`
+
 Release APK (signed):
 ```bash
 cd client-android

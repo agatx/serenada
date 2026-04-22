@@ -3,3 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.android") version "1.9.25" apply false
     id("org.jetbrains.dokka") version "1.9.20" apply false
 }
+
+tasks.register("publishSdkToMavenLocal") {
+    dependsOn(
+        ":serenada-webrtc:publishReleasePublicationToMavenLocal",
+        ":serenada-core:publishReleasePublicationToMavenLocal",
+        ":serenada-call-ui:publishReleasePublicationToMavenLocal",
+    )
+}

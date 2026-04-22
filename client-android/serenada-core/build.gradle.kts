@@ -1,11 +1,29 @@
 import java.io.File
 import java.security.MessageDigest
+import groovy.util.Node
+import org.gradle.api.publish.tasks.GenerateModuleMetadata
 
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.dokka")
     `maven-publish`
+}
+
+fun appendPomDependency(
+    dependenciesNode: Node,
+    groupId: String,
+    artifactId: String,
+    version: String? = null,
+    type: String? = null,
+    scope: String,
+) {
+    val dependencyNode = dependenciesNode.appendNode("dependency")
+    dependencyNode.appendNode("groupId", groupId)
+    dependencyNode.appendNode("artifactId", artifactId)
+    version?.let { dependencyNode.appendNode("version", it) }
+    type?.let { dependencyNode.appendNode("type", it) }
+    dependencyNode.appendNode("scope", scope)
 }
 
 fun readSha256FromFile(file: File): String? {
@@ -33,7 +51,10 @@ fun sha256Of(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-val localWebRtcAarPath = "libs/libwebrtc-7559_173-universal.aar"
+val sdkVersion = "0.4.1"
+val mavenGroupId = "app.serenada"
+val webRtcArtifactId = "libwebrtc-7559_173-universal"
+val localWebRtcAarPath = "libs/$webRtcArtifactId.aar"
 val localWebRtcAarFile = file(localWebRtcAarPath)
 val localWebRtcAarSha256Path = "$localWebRtcAarPath.sha256"
 val localWebRtcAarSha256File = file(localWebRtcAarSha256Path)
@@ -95,22 +116,33 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 }
 
 dependencies {
-    api("", name = "libwebrtc-7559_173-universal", ext = "aar")
+    api("", name = webRtcArtifactId, ext = "aar")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
 }
 
+tasks.withType<GenerateModuleMetadata>().matching { it.name == "generateMetadataFileForReleasePublication" }.configureEach {
+    enabled = false
+}
+
 afterEvaluate {
+    val releaseAarPath = layout.buildDirectory.file("outputs/aar/${project.name}-release.aar")
+
     publishing {
         publications {
             create<MavenPublication>("release") {
-                from(components["release"])
-
-                groupId = "app.serenada"
+                groupId = mavenGroupId
                 artifactId = "core"
-                version = "0.4.1"
+                version = sdkVersion
+                artifact(releaseAarPath) {
+                    builtBy(tasks.named("bundleReleaseAar"))
+                    extension = "aar"
+                }
+                artifact(tasks.named("sourceReleaseJar")) {
+                    classifier = "sources"
+                }
 
                 pom {
                     name.set("Serenada Core")
@@ -123,17 +155,40 @@ afterEvaluate {
                             url.set("https://opensource.org/licenses/MIT")
                         }
                     }
-                }
-            }
-        }
 
-        repositories {
-            maven {
-                name = "GitHubPackages"
-                url = uri("https://maven.pkg.github.com/agatx/serenada")
-                credentials {
-                    username = System.getenv("GITHUB_ACTOR") ?: ""
-                    password = System.getenv("GITHUB_TOKEN") ?: ""
+                    withXml {
+                        val root = asNode()
+                        val dependenciesNode = root.appendNode("dependencies")
+                        appendPomDependency(
+                            dependenciesNode = dependenciesNode,
+                            groupId = mavenGroupId,
+                            artifactId = webRtcArtifactId,
+                            version = sdkVersion,
+                            type = "aar",
+                            scope = "compile",
+                        )
+                        appendPomDependency(
+                            dependenciesNode = dependenciesNode,
+                            groupId = "org.jetbrains.kotlinx",
+                            artifactId = "kotlinx-coroutines-android",
+                            version = "1.7.3",
+                            scope = "compile",
+                        )
+                        appendPomDependency(
+                            dependenciesNode = dependenciesNode,
+                            groupId = "org.jetbrains.kotlin",
+                            artifactId = "kotlin-stdlib",
+                            version = "1.9.25",
+                            scope = "compile",
+                        )
+                        appendPomDependency(
+                            dependenciesNode = dependenciesNode,
+                            groupId = "com.squareup.okhttp3",
+                            artifactId = "okhttp",
+                            version = "4.12.0",
+                            scope = "runtime",
+                        )
+                    }
                 }
             }
         }

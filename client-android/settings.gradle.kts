@@ -21,3 +21,4 @@ rootProject.name = "serenada-android"
 include(":app")
 include(":serenada-core")
 include(":serenada-call-ui")
+include(":serenada-webrtc")
