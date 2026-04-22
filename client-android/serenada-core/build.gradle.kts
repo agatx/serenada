@@ -33,7 +33,7 @@ fun sha256Of(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-val localWebRtcAarPath = "libs/libwebrtc-7559_173-arm64.aar"
+val localWebRtcAarPath = "libs/libwebrtc-7559_173-universal.aar"
 val localWebRtcAarFile = file(localWebRtcAarPath)
 val localWebRtcAarSha256Path = "$localWebRtcAarPath.sha256"
 val localWebRtcAarSha256File = file(localWebRtcAarSha256Path)
@@ -95,7 +95,7 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 }
 
 dependencies {
-    api("", name = "libwebrtc-7559_173-arm64", ext = "aar")
+    api("", name = "libwebrtc-7559_173-universal", ext = "aar")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     testImplementation("junit:junit:4.13.2")
@@ -110,7 +110,7 @@ afterEvaluate {
 
                 groupId = "app.serenada"
                 artifactId = "core"
-                version = "0.4.0"
+                version = "0.4.1"
 
                 pom {
                     name.set("Serenada Core")
