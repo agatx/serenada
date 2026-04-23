@@ -84,9 +84,9 @@ cd client-android
 ./gradlew publishSdkToMavenLocal
 ```
 This publishes:
-- `app.serenada:libwebrtc-7559_173-universal:0.4.1`
-- `app.serenada:core:0.4.1`
-- `app.serenada:call-ui:0.4.1`
+- `app.serenada:libwebrtc-7559_173-universal:0.4.2`
+- `app.serenada:core:0.4.2`
+- `app.serenada:call-ui:0.4.2`
 
 Release APK (signed):
 ```bash

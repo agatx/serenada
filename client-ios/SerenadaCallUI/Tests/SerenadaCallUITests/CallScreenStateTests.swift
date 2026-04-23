@@ -3,6 +3,36 @@ import SerenadaCore
 import XCTest
 
 final class CallScreenStateTests: XCTestCase {
+    func testInviteControlsDisabledWhenInviteHandlerMissing() {
+        let config = resolvedCallFlowConfig(
+            SerenadaCallFlowConfig(
+                screenSharingEnabled: true,
+                inviteControlsEnabled: true,
+                debugOverlayEnabled: true
+            ),
+            hasInviteAction: false
+        )
+
+        XCTAssertTrue(config.screenSharingEnabled)
+        XCTAssertFalse(config.inviteControlsEnabled)
+        XCTAssertTrue(config.debugOverlayEnabled)
+    }
+
+    func testInviteControlsPreservedWhenInviteHandlerExists() {
+        let config = resolvedCallFlowConfig(
+            SerenadaCallFlowConfig(
+                screenSharingEnabled: true,
+                inviteControlsEnabled: true,
+                debugOverlayEnabled: true
+            ),
+            hasInviteAction: true
+        )
+
+        XCTAssertTrue(config.screenSharingEnabled)
+        XCTAssertTrue(config.inviteControlsEnabled)
+        XCTAssertTrue(config.debugOverlayEnabled)
+    }
+
     func testPrimaryLocalVideoContentModeUsesFitForWorldAndComposite() {
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .world), .scaleAspectFit)
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .composite), .scaleAspectFit)

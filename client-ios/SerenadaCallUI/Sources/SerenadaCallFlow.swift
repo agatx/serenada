@@ -192,6 +192,7 @@ private struct SessionFirstCallFlow: View {
     var body: some View {
         let state = session.state
         let phase = state.phase
+        let effectiveConfig = resolvedCallFlowConfig(config, hasInviteAction: params.onInviteToRoom != nil)
 
         Group {
             switch phase {
@@ -235,7 +236,7 @@ private struct SessionFirstCallFlow: View {
                     serverHost: session.serverHost,
                     screenShareExtensionBundleId: session.screenShareExtensionBundleId,
                     roomName: params.roomName,
-                    config: config,
+                    config: effectiveConfig,
                     strings: strings,
                     onToggleAudio: { session.toggleAudio() },
                     onToggleVideo: { session.toggleVideo() },
@@ -349,6 +350,18 @@ private struct SessionFirstCallFlow: View {
         case .retrying: return .retrying
         }
     }
+}
+
+func resolvedCallFlowConfig(_ config: SerenadaCallFlowConfig, hasInviteAction: Bool) -> SerenadaCallFlowConfig {
+    guard config.inviteControlsEnabled && !hasInviteAction else {
+        return config
+    }
+
+    return SerenadaCallFlowConfig(
+        screenSharingEnabled: config.screenSharingEnabled,
+        inviteControlsEnabled: false,
+        debugOverlayEnabled: config.debugOverlayEnabled
+    )
 }
 
 extension SerenadaSession: CallRendererProvider {

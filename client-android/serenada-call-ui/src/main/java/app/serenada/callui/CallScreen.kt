@@ -1257,43 +1257,43 @@ private fun WaitingOverlay(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Surface(
-            modifier = Modifier.size(200.dp).clip(RoundedCornerShape(16.dp)),
-            color = Color.White
-        ) {
-            qrBitmap?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = resolveString(SerenadaString.CallQrCode, strings),
-                    modifier = Modifier.fillMaxSize().padding(16.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = {
-                if (onShareLink != null) {
-                    onShareLink()
-                } else {
-                    shareLink(context, link, chooserTitle)
-                }
-            },
-            colors =
-                ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.2f)
-                ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(resolveString(SerenadaString.CallShareInvitation, strings))
-        }
-
         if (config.inviteControlsEnabled) {
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Surface(
+                modifier = Modifier.size(200.dp).clip(RoundedCornerShape(16.dp)),
+                color = Color.White
+            ) {
+                qrBitmap?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = resolveString(SerenadaString.CallQrCode, strings),
+                        modifier = Modifier.fillMaxSize().padding(16.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = {
+                    if (onShareLink != null) {
+                        onShareLink()
+                    } else {
+                        shareLink(context, link, chooserTitle)
+                    }
+                },
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = Color.White.copy(alpha = 0.2f)
+                    ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(resolveString(SerenadaString.CallShareInvitation, strings))
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             Button(

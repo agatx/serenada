@@ -113,6 +113,8 @@ SerenadaCallFlow(
 
 `inviteControlsEnabled` only hides the built-in invite UI. Any custom `waitingActions` still render.
 
+On iOS and Android, the built-in invite controls are also hidden automatically when no `onInviteToRoom` callback is provided, so URL-first flows do not expose a dead native invite action.
+
 ## Web Waiting Actions
 
 Use `waitingActions` for host-app-specific actions that should appear under the default waiting UI:
