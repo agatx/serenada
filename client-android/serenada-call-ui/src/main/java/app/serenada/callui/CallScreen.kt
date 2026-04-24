@@ -153,7 +153,9 @@ internal fun CallScreen(
     }
 
     var areControlsVisible by remember { mutableStateOf(true) }
-    var isControlsAutoHideEnabled by remember { mutableStateOf(true) }
+    var isControlsAutoHideEnabled by remember(config.autoHideControls) {
+        mutableStateOf(config.autoHideControls)
+    }
     var wereControlsLastHiddenByAutoHide by remember { mutableStateOf(false) }
     var isLocalLarge by rememberSaveable { mutableStateOf(false) }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(initialRemoteVideoFitCover) }

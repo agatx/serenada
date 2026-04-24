@@ -306,6 +306,8 @@ struct CallScreenView: View {
         self.initialRemoteVideoFitCover = initialRemoteVideoFitCover
         self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
         _remoteVideoFitCover = State(initialValue: initialRemoteVideoFitCover)
+        _isControlsAutoHideEnabled = State(initialValue: config.autoHideControls)
+        _areControlsVisible = State(initialValue: true)
     }
 
     private func str(_ key: SerenadaString) -> String {

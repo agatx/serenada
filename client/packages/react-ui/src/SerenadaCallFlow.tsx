@@ -241,6 +241,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         && availableCameraModes.length > 1
         && localParticipant?.videoEnabled === true;
     const showScreenShareControl = config?.screenSharingEnabled !== false && canScreenShare;
+    const autoHideControls = config?.autoHideControls !== false;
     const inviteControlsEnabled = config?.inviteControlsEnabled !== false;
     const shareUrl = effectiveState.roomUrl ?? (typeof window !== 'undefined' ? window.location.href : '');
     const shouldMirrorLocalVideo = localParticipant?.cameraMode === 'selfie' && !isScreenSharing;
@@ -493,7 +494,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             return;
         }
 
-        isControlsAutoHideEnabledRef.current = true;
+        isControlsAutoHideEnabledRef.current = autoHideControls;
         wereControlsLastHiddenByAutoHideRef.current = false;
         setAreControlsVisible(true);
         scheduleIdleHide();
@@ -501,7 +502,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         return () => {
             clearIdleHide();
         };
-    }, [clearIdleHide, effectiveState.phase, scheduleIdleHide]);
+    }, [autoHideControls, clearIdleHide, effectiveState.phase, scheduleIdleHide]);
 
     const handleControlsInteraction = useCallback(() => {
         setAreControlsVisible(true);
