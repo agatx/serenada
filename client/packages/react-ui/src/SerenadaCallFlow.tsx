@@ -237,7 +237,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const canScreenShare = session?.canScreenShare === true && !isMobileBrowser();
     const availableCameraModes = localParticipant?.availableCameraModes ?? [];
     const videoCaptureSupported = availableCameraModes.length > 0;
-    const hasMultipleCameras = session?.hasMultipleCameras === true && availableCameraModes.length > 1;
+    const canFlipCamera = session?.hasMultipleCameras === true
+        && availableCameraModes.length > 1
+        && localParticipant?.videoEnabled === true;
     const showScreenShareControl = config?.screenSharingEnabled !== false && canScreenShare;
     const inviteControlsEnabled = config?.inviteControlsEnabled !== false;
     const shareUrl = effectiveState.roomUrl ?? (typeof window !== 'undefined' ? window.location.href : '');
@@ -819,7 +821,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                     {isCameraOff ? <VideoOff size={22} /> : <Video size={22} />}
                 </button>
             )}
-            {hasMultipleCameras && (
+            {canFlipCamera && (
                 <button type="button" onClick={handleFlipCamera} className="btn-control" disabled={isScreenSharing}>
                     <RotateCcw size={22} />
                 </button>

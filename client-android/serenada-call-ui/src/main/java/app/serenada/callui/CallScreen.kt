@@ -768,7 +768,7 @@ internal fun CallScreen(
                         )
                     }
 
-                    if (uiState.availableCameraModes.size > 1) {
+                    if (uiState.availableCameraModes.size > 1 && uiState.localVideoEnabled) {
                         ControlButton(
                             onClick = onFlipCamera,
                             icon = Icons.Default.FlipCameraIos,

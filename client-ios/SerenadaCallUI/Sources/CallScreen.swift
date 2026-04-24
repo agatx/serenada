@@ -732,7 +732,7 @@ struct CallScreenView: View {
                 }
             }
 
-            if uiState.availableCameraModes.count > 1 {
+            if uiState.availableCameraModes.count > 1 && uiState.localVideoEnabled {
                 iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
                     onFlipCamera()
                 }
