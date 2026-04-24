@@ -306,6 +306,8 @@ struct CallScreenView: View {
         self.initialRemoteVideoFitCover = initialRemoteVideoFitCover
         self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
         _remoteVideoFitCover = State(initialValue: initialRemoteVideoFitCover)
+        _isControlsAutoHideEnabled = State(initialValue: config.autoHideControls)
+        _areControlsVisible = State(initialValue: true)
     }
 
     private func str(_ key: SerenadaString) -> String {
@@ -725,13 +727,17 @@ struct CallScreenView: View {
                 onToggleAudio()
             }
 
-            iconButton(system: uiState.localVideoEnabled ? "video.fill" : "video.slash.fill", accessibilityLabel: uiState.localVideoEnabled ? str(.callA11yVideoOn) : str(.callA11yVideoOff)) {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                onToggleVideo()
+            if !uiState.availableCameraModes.isEmpty {
+                iconButton(system: uiState.localVideoEnabled ? "video.fill" : "video.slash.fill", accessibilityLabel: uiState.localVideoEnabled ? str(.callA11yVideoOn) : str(.callA11yVideoOff)) {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onToggleVideo()
+                }
             }
 
-            iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
-                onFlipCamera()
+            if uiState.availableCameraModes.count > 1 && uiState.localVideoEnabled {
+                iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
+                    onFlipCamera()
+                }
             }
 
             if config.screenSharingEnabled {

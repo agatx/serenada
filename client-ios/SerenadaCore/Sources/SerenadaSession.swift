@@ -131,6 +131,7 @@ public final class SerenadaSession: ObservableObject {
     private let clock: SessionClock
     private let config: SerenadaConfig
     private let resolvedConfig: ResolvedSerenadaConfig
+    private let availableCameraModes: [LocalCameraMode]
     private let displayName: String?
     private let delegateProvider: (() -> SerenadaCoreDelegate?)?
     private let logger: SerenadaLogger?
@@ -185,6 +186,7 @@ public final class SerenadaSession: ObservableObject {
                 signalingProvider: nil,
                 defaultAudioEnabled: config.defaultAudioEnabled,
                 defaultVideoEnabled: config.defaultVideoEnabled,
+                cameraModes: config.cameraModes,
                 transports: config.transports,
                 proximityMonitoringEnabled: config.proximityMonitoringEnabled
             )
@@ -214,6 +216,7 @@ public final class SerenadaSession: ObservableObject {
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.config = config
+        self.availableCameraModes = SerenadaSession.resolveAvailableCameraModes(config.cameraModes)
         self.displayName = displayName
         self.delegateProvider = delegateProvider
         self.logger = logger
@@ -249,7 +252,8 @@ public final class SerenadaSession: ObservableObject {
             onCameraFacingChanged: { _ in }, onCameraModeChanged: { _ in },
             onFlashlightStateChanged: { _, _ in }, onScreenShareStopped: {},
             onZoomFactorChanged: { _ in }, onFeatureDegradation: { _ in },
-            logger: logger, isHdVideoExperimentalEnabled: false
+            logger: logger, isHdVideoExperimentalEnabled: false,
+            availableCameraModes: self.availableCameraModes
         )
 
         providerDelegateProxy.session = self
@@ -271,16 +275,29 @@ public final class SerenadaSession: ObservableObject {
         }
 
         internalPhase = .joining
+        let videoCaptureSupported = !self.availableCameraModes.isEmpty
+        let initialCameraMode = self.availableCameraModes.first ?? .selfie
         commitSnapshot { s, _ in
             s.localParticipant.displayName = self.displayName
             s.localParticipant.audioEnabled = config.defaultAudioEnabled
-            s.localParticipant.videoEnabled = config.defaultVideoEnabled
+            s.localParticipant.videoEnabled = videoCaptureSupported && config.defaultVideoEnabled
+            s.localParticipant.cameraMode = initialCameraMode
+            s.localParticipant.availableCameraModes = self.availableCameraModes
         }
         startNetworkMonitoring()
 
         Task { @MainActor [weak self] in
             await self?.beginJoinIfNeeded()
         }
+    }
+
+    private static func resolveAvailableCameraModes(_ configuredModes: [LocalCameraMode]?) -> [LocalCameraMode] {
+        let normalizedModes = resolveCameraModes(configuredModes)
+        guard normalizedModes.contains(.composite) else { return normalizedModes }
+        return resolveCameraModes(
+            configuredModes,
+            compositeAvailable: CameraCaptureController.isCompositeCameraModeAvailable()
+        )
     }
 
     deinit {
@@ -314,6 +331,7 @@ public final class SerenadaSession: ObservableObject {
 
     /// Toggle local video on or off.
     public func toggleVideo() {
+        guard !availableCameraModes.isEmpty else { return }
         userPreferredVideoEnabled = !state.localParticipant.videoEnabled
         applyLocalVideoPreference()
         broadcastLocalMediaState()
@@ -328,10 +346,11 @@ public final class SerenadaSession: ObservableObject {
         webRtcEngine.flipCamera()
     }
 
-    /// Set a specific camera mode.
+    /// Set a specific camera mode. Ignored when `mode` is not in the configured list.
     public func setCameraMode(_ mode: LocalCameraMode) {
         guard mode != state.localParticipant.cameraMode else { return }
-        for _ in 0..<4 where state.localParticipant.cameraMode != mode { flipCamera() }
+        guard availableCameraModes.contains(mode) else { return }
+        for _ in 0..<availableCameraModes.count where state.localParticipant.cameraMode != mode { flipCamera() }
     }
 
     /// Set local audio enabled state.
@@ -343,6 +362,7 @@ public final class SerenadaSession: ObservableObject {
 
     /// Set local video enabled state.
     public func setVideoEnabled(_ enabled: Bool) {
+        if enabled && availableCameraModes.isEmpty { return }
         userPreferredVideoEnabled = enabled
         applyLocalVideoPreference()
     }
@@ -422,14 +442,18 @@ public final class SerenadaSession: ObservableObject {
         joinAttemptSerial += 1
         currentError = nil
         currentRequiredPermissions = nil
-        userPreferredVideoEnabled = config.defaultVideoEnabled
+        let videoCaptureSupported = !self.availableCameraModes.isEmpty
+        userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
         internalPhase = .joining
         participantCount = 0
+        let initialCameraMode = self.availableCameraModes.first ?? .selfie
         commitSnapshot { s, d in
             s.localParticipant = LocalParticipant(
                 cid: nil, displayName: self.displayName,
                 audioEnabled: self.config.defaultAudioEnabled,
-                videoEnabled: self.config.defaultVideoEnabled, cameraMode: .selfie
+                videoEnabled: videoCaptureSupported && self.config.defaultVideoEnabled,
+                cameraMode: initialCameraMode,
+                availableCameraModes: self.availableCameraModes
             )
             s.remoteParticipants = []; s.connectionStatus = .connected
             d.activeTransport = nil; d.isSignalingConnected = false
@@ -438,7 +462,8 @@ public final class SerenadaSession: ObservableObject {
             d.remoteContentParticipantId = nil; d.remoteContentType = nil; d.realtimeStats = .empty
         }
 
-        let required = JoinFlowCoordinator.missingPermissions()
+        let needsCamera = videoCaptureSupported
+        let required = JoinFlowCoordinator.missingPermissions(includeCamera: needsCamera)
         if !required.isEmpty {
             currentRequiredPermissions = required
             internalPhase = .idle
@@ -453,8 +478,9 @@ public final class SerenadaSession: ObservableObject {
     private func prepareMediaAndConnect() async {
         guard state.phase == .joining || state.phase == .awaitingPermissions || internalPhase == .joining else { return }
 
+        let videoCaptureSupported = !availableCameraModes.isEmpty
         let shouldEnableAudio = config.defaultAudioEnabled
-        let shouldEnableVideo = config.defaultVideoEnabled
+        let shouldEnableVideo = videoCaptureSupported && config.defaultVideoEnabled
         commitSnapshot { s, _ in
             s.localParticipant.audioEnabled = shouldEnableAudio
             s.localParticipant.videoEnabled = shouldEnableVideo
@@ -875,15 +901,21 @@ public final class SerenadaSession: ObservableObject {
         connectionStatusTracker?.cancelTimer()
         iceFetchGeneration += 1
 
-        userPreferredVideoEnabled = config.defaultVideoEnabled
+        let videoCaptureSupported = !availableCameraModes.isEmpty
+        userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
         isVideoPausedByProximity = false
         hasJoinSignalStartedForAttempt = false
         hasJoinAcknowledgedCurrentAttempt = false
         reconnectRecoveryPending = false
         participantCount = 0
 
+        let initialCameraMode = availableCameraModes.first ?? .selfie
         commitSnapshot { s, d in
-            s.localParticipant = LocalParticipant(cid: nil, cameraMode: .selfie)
+            s.localParticipant = LocalParticipant(
+                cid: nil,
+                cameraMode: initialCameraMode,
+                availableCameraModes: self.availableCameraModes
+            )
             s.remoteParticipants = []; s.connectionStatus = .connected
             d.isSignalingConnected = false; d.activeTransport = nil
             d.iceConnectionState = .new; d.peerConnectionState = .new; d.rtcSignalingState = .stable

@@ -29,6 +29,7 @@ public struct CallUiState: Equatable {
     public var isFrontCamera: Bool = true
     public var isScreenSharing: Bool = false
     public var localCameraMode: LocalCameraMode = .selfie
+    public var availableCameraModes: [LocalCameraMode] = defaultCameraModes
     public var cameraZoomFactor: Double = 1
     public var isFlashAvailable: Bool = false
     public var isFlashEnabled: Bool = false

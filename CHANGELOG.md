@@ -4,6 +4,20 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] — 2026-04-24
+
+### Added
+- `SerenadaConfig.cameraModes` — restrict which camera modes (selfie / world / composite) are offered and in what order across web, iOS, and Android. Supports initial-mode selection, single-mode lock-in (flip control hidden), and an empty-list audio-only mode (video toggle and camera permission suppressed). Unsupported modes are dropped silently per platform.
+- `LocalParticipant.availableCameraModes` on the observable `CallState` — the resolved (platform-filtered) mode list for UI consumers to gate controls.
+- `SerenadaCallFlowConfig.autoHideControls` — opt out of the idle-time auto-hide of the in-call controls bar. Defaults to `true` (existing behavior); setting to `false` keeps controls visible for the duration of the call on all three platforms.
+
+### Changed
+- The flip-camera control now also hides when the local video is turned off (previously it stayed visible and reacquired the camera invisibly on tap).
+
+### Fixed
+- `scripts/check-version-parity.mjs` now matches `sdkVersion` in `serenada-core/build.gradle.kts` instead of the first `version = "..."` line it finds (which previously matched an unrelated dependency version).
+- `client-ios/scripts/deploy_to_device.sh` resilient to `devicectl` bullet-character changes when translating CoreDevice UDID → xcodebuild UDID.
+
 ## [0.3.0] — 2026-03-28
 
 ### Added

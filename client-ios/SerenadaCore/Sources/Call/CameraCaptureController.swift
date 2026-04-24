@@ -30,6 +30,7 @@ final class CameraCaptureController {
     private var isTorchPreferenceEnabled = false
     private(set) var isTorchEnabled = false
     private(set) var currentZoomFactor: CGFloat = 1
+    var availableCameraModes: [LocalCameraMode] = [.selfie, .world, .composite]
 
 #if canImport(WebRTC)
     private(set) var localVideoCapturer: RTCCameraVideoCapturer?
@@ -66,6 +67,7 @@ final class CameraCaptureController {
     init(
         localVideoSource: RTCVideoSource?,
         isHdVideoExperimentalEnabled: Bool,
+        availableCameraModes: [LocalCameraMode] = defaultCameraModes,
         onCameraFacingChanged: @escaping (Bool) -> Void,
         onCameraModeChanged: @escaping (LocalCameraMode) -> Void,
         onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
@@ -75,16 +77,19 @@ final class CameraCaptureController {
     ) {
         self.localVideoSource = localVideoSource
         self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
+        self.availableCameraModes = availableCameraModes
         self.onCameraFacingChanged = onCameraFacingChanged
         self.onCameraModeChanged = onCameraModeChanged
         self.onFlashlightStateChanged = onFlashlightStateChanged
         self.onZoomFactorChanged = onZoomFactorChanged
         self.onFeatureDegradation = onFeatureDegradation
         self.logger = logger
+        self.localCameraSource = cameraSource(from: availableCameraModes.first ?? .selfie)
     }
 #else
     init(
         isHdVideoExperimentalEnabled: Bool,
+        availableCameraModes: [LocalCameraMode] = defaultCameraModes,
         onCameraFacingChanged: @escaping (Bool) -> Void,
         onCameraModeChanged: @escaping (LocalCameraMode) -> Void,
         onFlashlightStateChanged: @escaping (Bool, Bool) -> Void,
@@ -93,12 +98,14 @@ final class CameraCaptureController {
         logger: SerenadaLogger? = nil
     ) {
         self.isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled
+        self.availableCameraModes = availableCameraModes
         self.onCameraFacingChanged = onCameraFacingChanged
         self.onCameraModeChanged = onCameraModeChanged
         self.onFlashlightStateChanged = onFlashlightStateChanged
         self.onZoomFactorChanged = onZoomFactorChanged
         self.onFeatureDegradation = onFeatureDegradation
         self.logger = logger
+        self.localCameraSource = cameraSource(from: availableCameraModes.first ?? .selfie)
     }
 #endif
 
@@ -162,18 +169,50 @@ final class CameraCaptureController {
         return restartVideoCapturer(source: source)
     }
 
+    @discardableResult
+    func restartVideoCapturerFromAvailableModes() -> Bool {
+        var attempted: Set<LocalCameraSource> = []
+        for mode in availableCameraModes {
+            let source = cameraSource(from: mode)
+            if attempted.contains(source) { continue }
+            attempted.insert(source)
+            if restartVideoCapturer(source: source) {
+                return true
+            }
+            debugTrace("webrtc failed to start camera source=\(mode.rawValue)")
+            if source == .composite {
+                compositeDisabledAfterFailure = true
+                reportCompositeCameraUnavailable(reason: "Composite camera startup failed")
+            }
+        }
+        notifyCameraModeAndFlash()
+        return false
+    }
+
     func flipCamera() {
         guard !isScreenSharing else { return }
 
         let compositeAvailable = canUseCompositeSource()
-        let targetMode = nextFlipCameraMode(current: activeCameraMode(), compositeAvailable: compositeAvailable)
+        guard let targetMode = nextCameraMode(
+            modes: availableCameraModes,
+            current: activeCameraMode(),
+            compositeAvailable: compositeAvailable
+        ) else {
+            debugTrace("webrtc flipCamera skipped — no alternative mode in \(availableCameraModes.map(\.rawValue))")
+            return
+        }
         let targetSource = cameraSource(from: targetMode)
         debugTrace(
-            "webrtc flipCamera current=\(activeCameraMode().rawValue) target=\(targetMode.rawValue) compositeAvailable=\(compositeAvailable)"
+            "webrtc flipCamera current=\(activeCameraMode().rawValue) target=\(targetMode.rawValue) compositeAvailable=\(compositeAvailable) allowed=\(availableCameraModes.map(\.rawValue))"
         )
 
 #if canImport(WebRTC)
-        let fallbackSource: LocalCameraSource? = targetMode == .composite ? .selfie : nil
+        let fallbackSource: LocalCameraSource? = {
+            guard targetMode == .composite else { return nil }
+            if availableCameraModes.contains(.selfie) { return .selfie }
+            if availableCameraModes.contains(.world) { return .world }
+            return nil
+        }()
         switchVideoCapturer(source: targetSource, fallbackSource: fallbackSource)
 #else
         localCameraSource = targetSource
@@ -241,7 +280,7 @@ final class CameraCaptureController {
 
     func compositeSupportDebugState() -> String {
 #if canImport(WebRTC)
-        let snapshot = compositeSupportSnapshot()
+        let snapshot = Self.compositeSupportSnapshot()
         let cached = cachedCompositeSupport.map(String.init(describing:)) ?? "nil"
         return "disabled=\(compositeDisabledAfterFailure) cached=\(cached) switching=\(isSwitchingCameraSource) multi=\(snapshot.hasMultiCam) front=\(snapshot.hasFrontCamera) back=\(snapshot.hasBackCamera) supported=\(snapshot.supported)"
 #else
@@ -258,6 +297,14 @@ final class CameraCaptureController {
     }
 
     // MARK: - Internal Camera Logic
+
+    static func isCompositeCameraModeAvailable() -> Bool {
+#if canImport(WebRTC)
+        return compositeSupportSnapshot().supported
+#else
+        return false
+#endif
+    }
 
 #if canImport(WebRTC)
     @discardableResult
@@ -439,7 +486,7 @@ final class CameraCaptureController {
             debugTrace("webrtc composite support cached=\(cached)")
             return cached
         }
-        let snapshot = compositeSupportSnapshot()
+        let snapshot = Self.compositeSupportSnapshot()
         let supported = snapshot.supported
         cachedCompositeSupport = supported
         debugTrace(
@@ -502,7 +549,7 @@ final class CameraCaptureController {
         )
     }
 
-    private func compositeSupportSnapshot() -> (hasMultiCam: Bool, hasFrontCamera: Bool, hasBackCamera: Bool, supported: Bool) {
+    private static func compositeSupportSnapshot() -> (hasMultiCam: Bool, hasFrontCamera: Bool, hasBackCamera: Bool, supported: Bool) {
         let hasMultiCam = AVCaptureMultiCamSession.isMultiCamSupported
         let hasFrontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) != nil
         let hasBackCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil

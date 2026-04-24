@@ -2,7 +2,7 @@
  * @serenada/core — headless call engine.
  * Vanilla TypeScript — no React dependency.
  */
-export const SERENADA_CORE_VERSION = '0.4.1';
+export const SERENADA_CORE_VERSION = '0.5.0';
 
 // Public API
 export { SerenadaCore } from './SerenadaCore.js';
@@ -20,11 +20,13 @@ export function createSerenadaCore(config: SerenadaConfig): _SerenadaCore { retu
 export function createSerenadaDiagnostics(config: SerenadaConfig): _SerenadaDiagnostics { return new _SerenadaDiagnostics(config); }
 
 // Public types
+export { DEFAULT_CAMERA_MODES } from './types.js';
 export type {
     CallPhase,
     ConnectionStatus,
     ActiveTransport,
     CameraMode,
+    ConfigurableCameraMode,
     MediaCapability,
     PeerConnectionState,
     Participant,

@@ -39,6 +39,7 @@ internal class WebRtcEngine(
     private val onFeatureDegradation: (FeatureDegradationState) -> Unit = {},
     private var isHdVideoExperimentalEnabled: Boolean = false,
     private var isRemoteBlackFrameAnalysisEnabled: Boolean = true,
+    availableCameraModes: List<LocalCameraMode> = app.serenada.core.DEFAULT_CAMERA_MODES,
     private val logger: SerenadaLogger? = null,
 ) : SessionMediaEngine {
 
@@ -73,6 +74,7 @@ internal class WebRtcEngine(
         eglBase = eglBase,
         cameraManager = cameraManager,
         isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled,
+        availableCameraModes = availableCameraModes,
         videoSourceProvider = { videoSource },
         onCameraFacingChanged = onCameraFacingChanged,
         onCameraModeChanged = onCameraModeChanged,
@@ -201,20 +203,21 @@ internal class WebRtcEngine(
         localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
         applyAudioTrackHints()
 
-        videoSource = peerConnectionFactory.createVideoSource(false)
-        cameraController.resetCameraSourceToSelfie()
-        if (!cameraController.restartVideoCapturer(CameraCaptureController.LocalCameraSource.SELFIE, videoSource)) {
-            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available for ${CameraCaptureController.LocalCameraSource.SELFIE}")
-            videoSource?.dispose()
-            videoSource = null
-            localAudioTrack?.setEnabled(false)
-            localAudioTrack = null
-            audioSource?.dispose()
-            audioSource = null
+        if (cameraController.availableCameraModes.isEmpty()) {
+            peerSlots.forEach { slot ->
+                slot.attachLocalTracks(localAudioTrack, null)
+            }
             return
         }
+
+        videoSource = peerConnectionFactory.createVideoSource(false)
+        cameraController.resetCameraSourceToInitial()
+        val startedVideo = cameraController.restartVideoCapturerFromAvailableModes(videoSource)
+        if (!startedVideo) {
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available; continuing audio-only")
+        }
         localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
-        localVideoTrack?.setEnabled(true)
+        localVideoTrack?.setEnabled(startedVideo)
         localSinks.forEach { sink ->
             localVideoTrack?.addSink(sink)
         }
@@ -279,14 +282,23 @@ internal class WebRtcEngine(
         localAudioTrack?.setEnabled(enabled)
     }
 
-    override fun toggleVideo(enabled: Boolean) {
+    override fun toggleVideo(enabled: Boolean): Boolean {
+        if (enabled && cameraController.availableCameraModes.isEmpty() && !screenShareController.isScreenSharing) {
+            localVideoTrack?.setEnabled(false)
+            return false
+        }
         if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
-            cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)
+            if (!cameraController.restartVideoCapturerFromAvailableModes(videoSource)) {
+                localVideoTrack?.setEnabled(false)
+                return false
+            }
         }
         if (!enabled && !screenShareController.isScreenSharing) {
             cameraController.disposeVideoCapturer()
         }
-        localVideoTrack?.setEnabled(enabled)
+        val effectiveEnabled = enabled && (cameraController.videoCapturer != null || screenShareController.isScreenSharing)
+        localVideoTrack?.setEnabled(effectiveEnabled)
+        return effectiveEnabled
     }
 
     fun setHdVideoExperimentalEnabled(enabled: Boolean) {

@@ -17,6 +17,7 @@ import app.serenada.core.call.LiveSessionClock
 import app.serenada.core.call.PeerNegotiationEngine
 import app.serenada.core.call.SessionClock
 import app.serenada.core.call.RemoteMediaState
+import app.serenada.core.call.resolveCameraModes
 import app.serenada.core.call.SignalingMessageRouter
 import app.serenada.core.call.StatsPoller
 import app.serenada.core.call.CallAudioSessionController
@@ -35,6 +36,7 @@ import app.serenada.core.call.SessionMediaEngine
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcEngine
 import app.serenada.core.call.WebRtcResilienceConstants
+import app.serenada.core.call.CameraCaptureController
 import app.serenada.core.call.toContentStatePayload
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
@@ -254,12 +256,21 @@ class SerenadaSession internal constructor(
     private var reconnectRecoveryPending = false
     private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
-    private var userPreferredVideoEnabled = config.defaultVideoEnabled
+    private val availableCameraModes: List<LocalCameraMode> = resolveAvailableCameraModes()
+    private val videoCaptureSupported: Boolean = availableCameraModes.isNotEmpty()
+    private var userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
     private val isMediaEngineInjected = mediaEngine != null
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
     private var hasInitialIceServers = false
+
+    private fun resolveAvailableCameraModes(): List<LocalCameraMode> {
+        val configuredModes = resolveCameraModes(config.cameraModes)
+        if (LocalCameraMode.COMPOSITE !in configuredModes) return configuredModes
+        val compositeAvailable = CameraCaptureController.isCompositeCameraModeAvailable(appContext, logger)
+        return resolveCameraModes(config.cameraModes, compositeAvailable = compositeAvailable)
+    }
 
     init {
         peerNegotiationEngine = PeerNegotiationEngine(
@@ -519,14 +530,16 @@ class SerenadaSession internal constructor(
     /** Toggle local video on or off. */
     fun toggleVideo() {
         assertMainThread()
+        if (!videoCaptureSupported) return
         userPreferredVideoEnabled = !_state.value.localVideoEnabled
         applyLocalVideoPreference()
         broadcastLocalMediaState()
     }
 
-    /** Cycle to the next camera mode (selfie -> world -> composite). */
+    /** Cycle to the next camera mode in the configured preference order. */
     fun flipCamera() {
         assertMainThread()
+        if (availableCameraModes.size <= 1) return
         if (!_diagnostics.value.isScreenSharing) {
             val currentMode = _state.value.localCameraMode
             if (currentMode.isContentMode) signalingMessageRouter.broadcastContentState(false)
@@ -534,10 +547,15 @@ class SerenadaSession internal constructor(
         }
     }
 
-    /** Set a specific camera mode. */
-    fun setCameraMode(@Suppress("UNUSED_PARAMETER") mode: LocalCameraMode) {
+    /** Set a specific camera mode. Ignored when [mode] is not in the configured list. */
+    fun setCameraMode(mode: LocalCameraMode) {
         assertMainThread()
-        flipCamera()
+        if (mode == _state.value.localCameraMode) return
+        if (mode !in availableCameraModes) return
+        repeat(availableCameraModes.size) {
+            if (_state.value.localCameraMode == mode) return
+            flipCamera()
+        }
     }
 
     /** Start screen sharing using the given media projection intent. */
@@ -731,16 +749,18 @@ class SerenadaSession internal constructor(
         recreateWebRtcEngineForNewCall()
         registerConnectivityListener()
 
+        val initialCameraMode = availableCameraModes.firstOrNull() ?: LocalCameraMode.SELFIE
         updateState(
             _state.value.copy(
                 phase = CallPhase.Joining,
                 roomId = roomId,
                 error = null,
                 localAudioEnabled = config.defaultAudioEnabled,
-                localVideoEnabled = config.defaultVideoEnabled,
+                localVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled,
                 localDisplayName = displayName,
                 remoteParticipants = emptyList(),
-                localCameraMode = LocalCameraMode.SELFIE,
+                localCameraMode = initialCameraMode,
+                availableCameraModes = availableCameraModes,
                 connectionStatus = ConnectionStatus.Connected,
             )
         )
@@ -762,7 +782,11 @@ class SerenadaSession internal constructor(
     internal fun startWithPermissionCheck() {
         assertMainThread()
         awaitingPermissions = true
-        val permissions = listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE)
+        val permissions = if (videoCaptureSupported) {
+            listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE)
+        } else {
+            listOf(MediaCapability.MICROPHONE)
+        }
         updateState(
             _state.value.copy(
                 phase = CallPhase.AwaitingPermissions,
@@ -826,6 +850,7 @@ class SerenadaSession internal constructor(
                 }
             },
             isHdVideoExperimentalEnabled = config.isHdVideoExperimentalEnabled,
+            availableCameraModes = availableCameraModes,
             logger = logger,
         )
     }
@@ -1081,10 +1106,10 @@ class SerenadaSession internal constructor(
     private fun applyLocalVideoPreference() {
         val shouldPause = callAudioSessionController.shouldPauseVideoForProximity(_diagnostics.value.isScreenSharing)
         isVideoPausedByProximity = shouldPause
-        val enabled = userPreferredVideoEnabled && !shouldPause
-        webRtcEngine.toggleVideo(enabled)
-        if (_state.value.localVideoEnabled != enabled) {
-            updateState(_state.value.copy(localVideoEnabled = enabled))
+        val requestedEnabled = userPreferredVideoEnabled && !shouldPause
+        val effectiveEnabled = webRtcEngine.toggleVideo(requestedEnabled)
+        if (_state.value.localVideoEnabled != effectiveEnabled) {
+            updateState(_state.value.copy(localVideoEnabled = effectiveEnabled))
             broadcastLocalMediaState()
         }
     }
@@ -1108,7 +1133,12 @@ class SerenadaSession internal constructor(
     }
 
     private fun hasRequiredPermissions(): Boolean {
-        return REQUIRED_ANDROID_PERMISSIONS.all { permission ->
+        val permissions = if (videoCaptureSupported) {
+            REQUIRED_ANDROID_PERMISSIONS
+        } else {
+            AUDIO_ONLY_REQUIRED_PERMISSIONS
+        }
+        return permissions.all { permission ->
             appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
         }
     }
@@ -1118,6 +1148,9 @@ class SerenadaSession internal constructor(
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
             android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
+        )
+        val AUDIO_ONLY_REQUIRED_PERMISSIONS = arrayOf(
             android.Manifest.permission.RECORD_AUDIO,
         )
     }

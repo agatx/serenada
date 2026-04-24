@@ -13,7 +13,7 @@ internal interface SessionMediaEngine {
     fun startLocalMedia()
     fun release()
     fun toggleAudio(enabled: Boolean)
-    fun toggleVideo(enabled: Boolean)
+    fun toggleVideo(enabled: Boolean): Boolean
     fun flipCamera()
     fun startScreenShare(intent: Intent): Boolean
     fun stopScreenShare(): Boolean

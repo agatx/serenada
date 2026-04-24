@@ -4,11 +4,13 @@ import type {
     CallState,
     CallStats,
     CameraMode,
+    ConfigurableCameraMode,
     ConnectionStatus,
     MediaCapability,
     SerenadaConfig,
     SerenadaSessionHandle,
 } from './types.js';
+import { resolveCameraModes } from './cameraModes.js';
 import type {
     ConnectionInfo,
     SignalingErrorEvent,
@@ -232,6 +234,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
     private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean }>();
+    private readonly availableCameraModes: ConfigurableCameraMode[];
     private userPreferredVideoEnabled: boolean;
 
     private get isInactive(): boolean {
@@ -253,7 +256,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.signaling = signaling;
         this.handlesReconnection = signaling.capabilities?.handlesReconnection === true;
         this.displayName = deps.displayName;
-        this.userPreferredVideoEnabled = config.defaultVideoEnabled !== false;
+        this.availableCameraModes = Object.freeze(resolveCameraModes(config.cameraModes)) as ConfigurableCameraMode[];
+        this.userPreferredVideoEnabled = this.availableCameraModes.length > 0 && config.defaultVideoEnabled !== false;
 
         this._state = {
             phase: 'joining',
@@ -267,8 +271,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
             error: null,
         };
 
+        const initialCameraMode = this.availableCameraModes[0];
         this.media = deps.media ?? new MediaEngine(
-            { turnsOnly: config.turnsOnly, logger: config.logger },
+            {
+                turnsOnly: config.turnsOnly,
+                logger: config.logger,
+                initialFacingMode: initialCameraMode === 'world' ? 'environment' : 'user',
+                videoCaptureSupported: this.availableCameraModes.length > 0,
+            },
             (type, payload, to) => {
                 if (to) {
                     this.signaling.sendToPeer(to, type, payload);
@@ -387,15 +397,18 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /** Switch camera mode (selfie/world). Composite is not available on web. */
     setCameraMode(mode: CameraMode): void {
+        if (mode !== 'selfie' && mode !== 'world') return;
+        if (!this.availableCameraModes.includes(mode)) return;
         if (mode === 'world' && this.media.facingMode === 'user') {
-            void this.flipCamera();
+            void this.media.flipCamera();
         } else if (mode === 'selfie' && this.media.facingMode === 'environment') {
-            void this.flipCamera();
+            void this.media.flipCamera();
         }
     }
 
-    /** Cycle to the next camera mode (selfie to world or vice versa). */
+    /** Cycle to the next camera mode in the configured order. */
     async flipCamera(): Promise<void> {
+        if (this.availableCameraModes.length <= 1) return;
         await this.media.flipCamera();
     }
 
@@ -776,6 +789,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const stream = this.media.localStream;
         if (!stream) return;
         if (kind === 'video') {
+            if (this.availableCameraModes.length === 0) return;
             const videoTrack = stream.getVideoTracks()[0];
             const newEnabled = enabled ?? !(videoTrack?.enabled ?? this.userPreferredVideoEnabled);
             this.userPreferredVideoEnabled = newEnabled;
@@ -865,6 +879,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 : this.media.facingMode === 'user'
                     ? 'selfie'
                     : 'world') as CameraMode,
+            availableCameraModes: this.availableCameraModes,
             isHost: signalingState?.hostCid === clientId,
         } : null;
 
@@ -901,11 +916,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.permissionCheckDone || this.permissionCheckInFlight) return;
         this.permissionCheckInFlight = true;
 
+        const needsCamera = this.availableCameraModes.length > 0;
         const permissionsNeeded: MediaCapability[] = [];
         try {
             if (navigator.permissions) {
                 const [cameraResult, micResult] = await Promise.all([
-                    navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null),
+                    needsCamera
+                        ? navigator.permissions.query({ name: 'camera' as PermissionName }).catch(() => null)
+                        : Promise.resolve(null),
                     navigator.permissions.query({ name: 'microphone' as PermissionName }).catch(() => null),
                 ]);
                 if (cameraResult?.state === 'denied') permissionsNeeded.push('camera');
@@ -924,7 +942,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             }
         } catch {
             this.permissionCheckInFlight = false;
-            const required: MediaCapability[] = ['camera', 'microphone'];
+            const required: MediaCapability[] = needsCamera ? ['camera', 'microphone'] : ['microphone'];
             this._state = { ...this._state, phase: 'awaitingPermissions', requiredPermissions: required };
             this.notifyListeners();
             this.onPermissionsRequired?.(required);

@@ -29,7 +29,10 @@ internal class FakeMediaEngine : SessionMediaEngine {
     override fun startLocalMedia() { startLocalMediaCalls++ }
     override fun release() { releaseCalls++ }
     override fun toggleAudio(enabled: Boolean) { toggleAudioCalls.add(enabled) }
-    override fun toggleVideo(enabled: Boolean) { toggleVideoCalls.add(enabled) }
+    override fun toggleVideo(enabled: Boolean): Boolean {
+        toggleVideoCalls.add(enabled)
+        return enabled
+    }
     override fun flipCamera() {}
     override fun startScreenShare(intent: Intent): Boolean = false
     override fun stopScreenShare(): Boolean = false

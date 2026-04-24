@@ -311,9 +311,12 @@ let config = SerenadaConfig(
     serverHost: "serenada.app",       // required
     defaultAudioEnabled: true,        // mic on at join (default)
     defaultVideoEnabled: true,        // camera on at join (default)
+    cameraModes: [.selfie, .world, .composite], // available modes & cycle order; empty = audio-only (default: all supported modes)
     transports: [.ws, .sse]           // transport priority (default)
 )
 ```
+
+See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` interacts with the call-flow controls.
 
 ## Next Steps
 

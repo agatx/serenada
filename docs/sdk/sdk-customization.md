@@ -68,6 +68,7 @@ Provider mode does not expose Serenada server helpers. These APIs require `serve
 | `screenSharingEnabled` | Bool | `true` | Show/hide the screen-share control when the current browser/device supports screen capture |
 | `inviteControlsEnabled` | Bool | `true` | Show/hide the built-in QR code and share-link UI in the waiting screen |
 | `debugOverlayEnabled` | Bool | `false` | Show/hide the in-call debug toggle and diagnostics panel |
+| `autoHideControls` | Bool | `true` | When `true`, the call controls bar fades out after a few seconds of idle time and a tap on the stage brings it back. When `false`, the controls stay visible for the entire call and the idle timer never runs. |
 
 ### iOS
 
@@ -77,7 +78,8 @@ SerenadaCallFlow(
     config: .init(
         screenSharingEnabled: false,
         inviteControlsEnabled: false,
-        debugOverlayEnabled: true
+        debugOverlayEnabled: true,
+        autoHideControls: false
     ),
     onDismiss: { dismiss() }
 )
@@ -91,7 +93,8 @@ SerenadaCallFlow(
     config = SerenadaCallFlowConfig(
         screenSharingEnabled = false,
         inviteControlsEnabled = false,
-        debugOverlayEnabled = true
+        debugOverlayEnabled = true,
+        autoHideControls = false,
     ),
     onDismiss = { navController.popBackStack() }
 )
@@ -106,12 +109,59 @@ SerenadaCallFlow(
         screenSharingEnabled: false,
         inviteControlsEnabled: false,
         debugOverlayEnabled: true,
+        autoHideControls: false,
     }}
     onDismiss={() => navigate('/')}
 />
 ```
 
 `inviteControlsEnabled` only hides the built-in invite UI. Any custom `waitingActions` still render.
+
+## Camera Modes
+
+`SerenadaConfig.cameraModes` is a core-level setting that restricts which camera modes (`selfie`, `world`, `composite`) are available and in what order. It affects the call UI in three ways:
+
+- **Initial mode**: the first supported entry of the list is used when media starts.
+- **Flip-camera control**: hidden when only one mode is configured (nothing to cycle to). Also hidden while the local video is turned off.
+- **Video toggle & camera permission**: when the list is empty, the SDK treats the call as audio-only — the video toggle is hidden entirely and the camera is never requested.
+
+Platform-unsupported modes are dropped silently (`composite` on web; `composite` on devices without multi-camera support on iOS / Android). If a native camera source still fails at runtime, startup retries the remaining configured modes before continuing audio-only. `screenShare` is rejected — screen sharing is controlled separately.
+
+| Value | Effect |
+|---|---|
+| `[selfie, world, composite]` (default) | All supported camera modes available, start in selfie. |
+| `[world, selfie]` | Start in world (rear) camera; flip toggles between world and selfie. |
+| `[selfie]` | Selfie only — flip-camera control hidden. |
+| `[]` | Audio-only call — video toggle and camera controls hidden. |
+
+### iOS
+
+```swift
+let config = SerenadaConfig(
+    serverHost: "serenada.app",
+    cameraModes: [.world, .selfie]       // start in world, cycle → selfie → world
+)
+```
+
+### Android
+
+```kotlin
+val config = SerenadaConfig(
+    serverHost = "serenada.app",
+    cameraModes = listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE),
+)
+```
+
+### Web
+
+```typescript
+const serenada = createSerenadaCore({
+    serverHost: 'serenada.app',
+    cameraModes: ['world', 'selfie'],
+})
+```
+
+The resolved (platform-filtered) list is echoed back on `CallState.localParticipant.availableCameraModes` (web) / `state.localParticipant.availableCameraModes` (iOS) / `CallState.availableCameraModes` (Android). Call UIs should consult that list — not the configured one — when deciding whether to render flip / video-toggle controls.
 
 ## Web Waiting Actions
 

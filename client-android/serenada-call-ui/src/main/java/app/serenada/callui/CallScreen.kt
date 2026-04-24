@@ -153,7 +153,9 @@ internal fun CallScreen(
     }
 
     var areControlsVisible by remember { mutableStateOf(true) }
-    var isControlsAutoHideEnabled by remember { mutableStateOf(true) }
+    var isControlsAutoHideEnabled by remember(config.autoHideControls) {
+        mutableStateOf(config.autoHideControls)
+    }
     var wereControlsLastHiddenByAutoHide by remember { mutableStateOf(false) }
     var isLocalLarge by rememberSaveable { mutableStateOf(false) }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(initialRemoteVideoFitCover) }
@@ -756,26 +758,27 @@ internal fun CallScreen(
                             else Color.Red
                     )
 
-                    // Video Toggle Button
-                    ControlButton(
-                        onClick = onToggleVideo,
-                        icon =
-                            if (uiState.localVideoEnabled) Icons.Default.Videocam
-                            else Icons.Default.VideocamOff,
-                        backgroundColor =
-                            if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
-                                else Color.Red
-                    )
+                    if (uiState.availableCameraModes.isNotEmpty()) {
+                        ControlButton(
+                            onClick = onToggleVideo,
+                            icon =
+                                if (uiState.localVideoEnabled) Icons.Default.Videocam
+                                else Icons.Default.VideocamOff,
+                            backgroundColor =
+                                if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
+                                    else Color.Red
+                        )
+                    }
 
-                    // Flip Camera
-                    ControlButton(
-                        onClick = onFlipCamera,
-                        icon = Icons.Default.FlipCameraIos,
-                        backgroundColor =
-                            if (uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f)
-                            else Color.White.copy(alpha = 0.2f),
-                        // Disabled visual appearance could be added here
-                    )
+                    if (uiState.availableCameraModes.size > 1 && uiState.localVideoEnabled) {
+                        ControlButton(
+                            onClick = onFlipCamera,
+                            icon = Icons.Default.FlipCameraIos,
+                            backgroundColor =
+                                if (uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f)
+                                else Color.White.copy(alpha = 0.2f),
+                        )
+                    }
 
                     // Screen Share Button — only when enabled via config
                     if (config.screenSharingEnabled) {

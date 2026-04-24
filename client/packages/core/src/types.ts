@@ -14,6 +14,12 @@ export type ActiveTransport = TransportKind | (string & {});
 /** Camera mode: selfie (front), world (rear), composite (picture-in-picture), or screen share. */
 export type CameraMode = 'selfie' | 'world' | 'composite' | 'screenShare';
 
+/** Subset of {@link CameraMode} that can be configured via {@link SerenadaConfig.cameraModes}. */
+export type ConfigurableCameraMode = Exclude<CameraMode, 'screenShare'>;
+
+/** Default preference order for camera modes when {@link SerenadaConfig.cameraModes} is unset. */
+export const DEFAULT_CAMERA_MODES: readonly ConfigurableCameraMode[] = ['selfie', 'world', 'composite'];
+
 /** Device media capability that may require user permission. */
 export type MediaCapability = 'camera' | 'microphone';
 
@@ -47,6 +53,13 @@ export interface LocalParticipant {
     audioEnabled: boolean;
     videoEnabled: boolean;
     cameraMode: CameraMode;
+    /**
+     * Camera modes the user can cycle through, in preference order.
+     * Derived from {@link SerenadaConfig.cameraModes} minus modes unsupported
+     * on this device/platform. An empty array means video is unavailable
+     * — the call UI should hide the video toggle.
+     */
+    availableCameraModes: ConfigurableCameraMode[];
     isHost: boolean;
 }
 
@@ -93,6 +106,15 @@ export interface SerenadaConfig {
     defaultAudioEnabled?: boolean;
     /** Whether the camera is enabled when joining. Defaults to `true`. */
     defaultVideoEnabled?: boolean;
+    /**
+     * Camera modes available in the call UI, in preference order. The first
+     * entry is the initial mode. When only one mode is listed the flip-camera
+     * control is hidden; an empty array disables video entirely (the video
+     * toggle is hidden and the camera is never requested). Modes unsupported
+     * on the current platform or device are silently dropped (`'composite'`
+     * is always dropped on web). Defaults to `['selfie', 'world', 'composite']`.
+     */
+    cameraModes?: ConfigurableCameraMode[];
     /** Signaling transport priority order. Defaults to `['ws', 'sse']`. */
     transports?: TransportKind[];
     /** When `true`, only use TURNS (TLS) relay candidates. */

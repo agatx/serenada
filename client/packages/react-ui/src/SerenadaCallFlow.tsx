@@ -235,8 +235,13 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const isCameraOff = localParticipant?.videoEnabled === false;
     const isMuted = localParticipant?.audioEnabled === false;
     const canScreenShare = session?.canScreenShare === true && !isMobileBrowser();
-    const hasMultipleCameras = session?.hasMultipleCameras === true;
+    const availableCameraModes = localParticipant?.availableCameraModes ?? [];
+    const videoCaptureSupported = availableCameraModes.length > 0;
+    const canFlipCamera = session?.hasMultipleCameras === true
+        && availableCameraModes.length > 1
+        && localParticipant?.videoEnabled === true;
     const showScreenShareControl = config?.screenSharingEnabled !== false && canScreenShare;
+    const autoHideControls = config?.autoHideControls !== false;
     const inviteControlsEnabled = config?.inviteControlsEnabled !== false;
     const shareUrl = effectiveState.roomUrl ?? (typeof window !== 'undefined' ? window.location.href : '');
     const shouldMirrorLocalVideo = localParticipant?.cameraMode === 'selfie' && !isScreenSharing;
@@ -489,7 +494,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             return;
         }
 
-        isControlsAutoHideEnabledRef.current = true;
+        isControlsAutoHideEnabledRef.current = autoHideControls;
         wereControlsLastHiddenByAutoHideRef.current = false;
         setAreControlsVisible(true);
         scheduleIdleHide();
@@ -497,7 +502,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         return () => {
             clearIdleHide();
         };
-    }, [clearIdleHide, effectiveState.phase, scheduleIdleHide]);
+    }, [autoHideControls, clearIdleHide, effectiveState.phase, scheduleIdleHide]);
 
     const handleControlsInteraction = useCallback(() => {
         setAreControlsVisible(true);
@@ -511,6 +516,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [clearIdleHide, scheduleIdleHide]);
 
     const handleScreenTap = useCallback(() => {
+        if (!autoHideControls) {
+            setAreControlsVisible(true);
+            clearIdleHide();
+            return;
+        }
         setAreControlsVisible((prev) => {
             const next = !prev;
             if (next) {
@@ -527,7 +537,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             }
             return next;
         });
-    }, [clearIdleHide, scheduleIdleHide]);
+    }, [autoHideControls, clearIdleHide, scheduleIdleHide]);
 
     const handleGrantPermissions = useCallback(() => {
         if (!session) return;
@@ -812,10 +822,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             <button type="button" onClick={handleToggleAudio} className={`btn-control ${isMuted ? 'active' : ''}`}>
                 {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
             </button>
-            <button type="button" onClick={handleToggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
-                {isCameraOff ? <VideoOff size={22} /> : <Video size={22} />}
-            </button>
-            {hasMultipleCameras && (
+            {videoCaptureSupported && (
+                <button type="button" onClick={handleToggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
+                    {isCameraOff ? <VideoOff size={22} /> : <Video size={22} />}
+                </button>
+            )}
+            {canFlipCamera && (
                 <button type="button" onClick={handleFlipCamera} className="btn-control" disabled={isScreenSharing}>
                     <RotateCcw size={22} />
                 </button>

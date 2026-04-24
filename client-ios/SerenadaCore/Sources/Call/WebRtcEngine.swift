@@ -133,7 +133,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
         onZoomFactorChanged: @escaping (Double) -> Void,
         onFeatureDegradation: @escaping (FeatureDegradationState) -> Void = { _ in },
         logger: SerenadaLogger? = nil,
-        isHdVideoExperimentalEnabled: Bool
+        isHdVideoExperimentalEnabled: Bool,
+        availableCameraModes: [LocalCameraMode] = defaultCameraModes
     ) {
         self.logger = logger
 
@@ -141,6 +142,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
         self.cameraController = CameraCaptureController(
             localVideoSource: nil,
             isHdVideoExperimentalEnabled: isHdVideoExperimentalEnabled,
+            availableCameraModes: availableCameraModes,
             onCameraFacingChanged: onCameraFacingChanged,
             onCameraModeChanged: onCameraModeChanged,
             onFlashlightStateChanged: onFlashlightStateChanged,
@@ -151,6 +153,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
 #else
         self.cameraController = CameraCaptureController(
             isHdVideoExperimentalEnabled: isHdVideoExperimentalEnabled,
+            availableCameraModes: availableCameraModes,
             onCameraFacingChanged: onCameraFacingChanged,
             onCameraModeChanged: onCameraModeChanged,
             onFlashlightStateChanged: onFlashlightStateChanged,
@@ -235,8 +238,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
 
         cameraController.updateLocalVideoSource(localVideoSource)
 
-        if preferVideo {
-            let started = cameraController.restartVideoCapturer(source: .selfie)
+        let videoCaptureSupported = !cameraController.availableCameraModes.isEmpty
+        if preferVideo && videoCaptureSupported {
+            let started = cameraController.restartVideoCapturerFromAvailableModes()
             localVideoTrack?.isEnabled = started
         } else {
             localVideoTrack?.isEnabled = false
@@ -331,8 +335,12 @@ internal final class WebRtcEngine: SessionMediaEngine {
     @discardableResult
     public func toggleVideo(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)
+        if enabled && cameraController.availableCameraModes.isEmpty && !screenShareController.isScreenSharing {
+            localVideoTrack?.isEnabled = false
+            return false
+        }
         if enabled && !cameraController.hasActiveCapturer() && !screenShareController.isScreenSharing {
-            let started = cameraController.restartVideoCapturer(source: cameraController.localCameraSource)
+            let started = cameraController.restartVideoCapturerFromAvailableModes()
             if !started {
                 localVideoTrack?.isEnabled = false
                 return false

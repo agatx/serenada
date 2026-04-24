@@ -30,6 +30,7 @@ data class CallUiState(
     val isFrontCamera: Boolean = true,
     val isScreenSharing: Boolean = false,
     val localCameraMode: LocalCameraMode = LocalCameraMode.SELFIE,
+    val availableCameraModes: List<LocalCameraMode> = app.serenada.core.DEFAULT_CAMERA_MODES,
     val isFlashAvailable: Boolean = false,
     val isFlashEnabled: Boolean = false,
     val remoteContentCid: String? = null,

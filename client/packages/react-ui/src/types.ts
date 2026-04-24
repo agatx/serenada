@@ -9,6 +9,12 @@ export interface SerenadaCallFlowConfig {
     screenSharingEnabled?: boolean;
     inviteControlsEnabled?: boolean;
     debugOverlayEnabled?: boolean;
+    /**
+     * When `true` (default), the call controls bar fades out after a few
+     * seconds of idle time and a tap on the stage brings it back. When
+     * `false`, the controls are always visible and the idle timer never runs.
+     */
+    autoHideControls?: boolean;
 }
 
 export interface SerenadaCallFlowTheme {
