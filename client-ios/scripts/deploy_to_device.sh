@@ -15,7 +15,10 @@ SHOULD_LAUNCH=1
 resolve_xcode_udid() {
   candidate="$1"
   details="$(xcrun devicectl device info details --device "$candidate" 2>/dev/null || true)"
-  resolved="$(printf '%s\n' "$details" | sed -n 's/^[[:space:]]*• udid: //p' | head -n 1)"
+  # Pull the first `udid:` value regardless of the bullet character — devicectl
+  # has rendered it as `•`, `?`, etc. across releases. The hardwareProperties
+  # block is listed first, so `head -n 1` takes the xcodebuild-compatible UDID.
+  resolved="$(printf '%s\n' "$details" | sed -n 's/.*udid:[[:space:]]*\([0-9A-Fa-f-]\{1,\}\).*/\1/p' | head -n 1)"
   if [ -n "$resolved" ]; then
     printf '%s\n' "$resolved"
     return 0
