@@ -36,6 +36,7 @@ import app.serenada.core.call.SessionMediaEngine
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcEngine
 import app.serenada.core.call.WebRtcResilienceConstants
+import app.serenada.core.call.CameraCaptureController
 import app.serenada.core.call.toContentStatePayload
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
@@ -255,7 +256,7 @@ class SerenadaSession internal constructor(
     private var reconnectRecoveryPending = false
     private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
-    private val availableCameraModes: List<LocalCameraMode> = resolveCameraModes(config.cameraModes)
+    private val availableCameraModes: List<LocalCameraMode> = resolveAvailableCameraModes()
     private val videoCaptureSupported: Boolean = availableCameraModes.isNotEmpty()
     private var userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
@@ -263,6 +264,13 @@ class SerenadaSession internal constructor(
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
     private var hasInitialIceServers = false
+
+    private fun resolveAvailableCameraModes(): List<LocalCameraMode> {
+        val configuredModes = resolveCameraModes(config.cameraModes)
+        if (LocalCameraMode.COMPOSITE !in configuredModes) return configuredModes
+        val compositeAvailable = CameraCaptureController.isCompositeCameraModeAvailable(appContext, logger)
+        return resolveCameraModes(config.cameraModes, compositeAvailable = compositeAvailable)
+    }
 
     init {
         peerNegotiationEngine = PeerNegotiationEngine(
@@ -1098,10 +1106,10 @@ class SerenadaSession internal constructor(
     private fun applyLocalVideoPreference() {
         val shouldPause = callAudioSessionController.shouldPauseVideoForProximity(_diagnostics.value.isScreenSharing)
         isVideoPausedByProximity = shouldPause
-        val enabled = userPreferredVideoEnabled && !shouldPause
-        webRtcEngine.toggleVideo(enabled)
-        if (_state.value.localVideoEnabled != enabled) {
-            updateState(_state.value.copy(localVideoEnabled = enabled))
+        val requestedEnabled = userPreferredVideoEnabled && !shouldPause
+        val effectiveEnabled = webRtcEngine.toggleVideo(requestedEnabled)
+        if (_state.value.localVideoEnabled != effectiveEnabled) {
+            updateState(_state.value.copy(localVideoEnabled = effectiveEnabled))
             broadcastLocalMediaState()
         }
     }

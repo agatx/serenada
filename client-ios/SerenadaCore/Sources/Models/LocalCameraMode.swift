@@ -21,15 +21,17 @@ public enum ContentTypeWire {
 /// removed, preserving the first occurrence. Returning an empty array is
 /// valid and signals that video is disabled entirely.
 ///
-/// Device-level composite support is checked later at flip time; that filter
-/// is not applied here, so `.composite` may still be present in the result
-/// even on devices that can't use it.
-internal func resolveCameraModes(_ configured: [LocalCameraMode]?) -> [LocalCameraMode] {
+/// `.composite` is dropped when `compositeAvailable` is false.
+internal func resolveCameraModes(
+    _ configured: [LocalCameraMode]?,
+    compositeAvailable: Bool = true
+) -> [LocalCameraMode] {
     let source = configured ?? [.selfie, .world, .composite]
     var seen: Set<LocalCameraMode> = []
     var result: [LocalCameraMode] = []
     for mode in source {
         if mode == .screenShare { continue }
+        if mode == .composite && !compositeAvailable { continue }
         if seen.contains(mode) { continue }
         seen.insert(mode)
         result.append(mode)

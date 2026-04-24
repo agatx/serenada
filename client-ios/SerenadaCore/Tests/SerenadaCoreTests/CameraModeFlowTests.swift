@@ -24,6 +24,13 @@ final class CameraModeFlowTests: XCTestCase {
         XCTAssertEqual(resolveCameraModes([.world, .selfie, .world]), [.world, .selfie])
     }
 
+    func testResolveDropsCompositeWhenUnsupported() {
+        XCTAssertEqual(
+            resolveCameraModes([.selfie, .composite, .world], compositeAvailable: false),
+            [.selfie, .world]
+        )
+    }
+
     // MARK: - nextCameraMode (configured list)
 
     func testNextCameraModeNilForSingletonList() {

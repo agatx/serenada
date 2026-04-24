@@ -121,15 +121,15 @@ SerenadaCallFlow(
 
 `SerenadaConfig.cameraModes` is a core-level setting that restricts which camera modes (`selfie`, `world`, `composite`) are available and in what order. It affects the call UI in three ways:
 
-- **Initial mode**: the first entry of the list is used when media starts.
+- **Initial mode**: the first supported entry of the list is used when media starts.
 - **Flip-camera control**: hidden when only one mode is configured (nothing to cycle to). Also hidden while the local video is turned off.
 - **Video toggle & camera permission**: when the list is empty, the SDK treats the call as audio-only — the video toggle is hidden entirely and the camera is never requested.
 
-Platform-unsupported modes are dropped silently (`composite` on web; `composite` on devices without multi-camera support on iOS / Android). `screenShare` is rejected — screen sharing is controlled separately.
+Platform-unsupported modes are dropped silently (`composite` on web; `composite` on devices without multi-camera support on iOS / Android). If a native camera source still fails at runtime, startup retries the remaining configured modes before continuing audio-only. `screenShare` is rejected — screen sharing is controlled separately.
 
 | Value | Effect |
 |---|---|
-| `[selfie, world, composite]` (default) | All modes available, start in selfie. |
+| `[selfie, world, composite]` (default) | All supported camera modes available, start in selfie. |
 | `[world, selfie]` | Start in world (rear) camera; flip toggles between world and selfie. |
 | `[selfie]` | Selfie only — flip-camera control hidden. |
 | `[]` | Audio-only call — video toggle and camera controls hidden. |

@@ -516,6 +516,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [clearIdleHide, scheduleIdleHide]);
 
     const handleScreenTap = useCallback(() => {
+        if (!autoHideControls) {
+            setAreControlsVisible(true);
+            clearIdleHide();
+            return;
+        }
         setAreControlsVisible((prev) => {
             const next = !prev;
             if (next) {
@@ -532,7 +537,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             }
             return next;
         });
-    }, [clearIdleHide, scheduleIdleHide]);
+    }, [autoHideControls, clearIdleHide, scheduleIdleHide]);
 
     const handleGrantPermissions = useCallback(() => {
         if (!session) return;

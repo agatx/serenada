@@ -240,7 +240,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
 
         let videoCaptureSupported = !cameraController.availableCameraModes.isEmpty
         if preferVideo && videoCaptureSupported {
-            let started = cameraController.restartVideoCapturer(source: cameraController.localCameraSource)
+            let started = cameraController.restartVideoCapturerFromAvailableModes()
             localVideoTrack?.isEnabled = started
         } else {
             localVideoTrack?.isEnabled = false
@@ -340,7 +340,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
             return false
         }
         if enabled && !cameraController.hasActiveCapturer() && !screenShareController.isScreenSharing {
-            let started = cameraController.restartVideoCapturer(source: cameraController.localCameraSource)
+            let started = cameraController.restartVideoCapturerFromAvailableModes()
             if !started {
                 localVideoTrack?.isEnabled = false
                 return false

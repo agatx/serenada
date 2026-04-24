@@ -7,16 +7,18 @@ package app.serenada.core.call
  * removed, preserving the first occurrence. Returning an empty list is
  * valid and signals that video is disabled entirely.
  *
- * Device-level composite support is checked later at flip time; that filter
- * is not applied here, so `COMPOSITE` may still be present in the result
- * even on devices that can't use it.
+ * `COMPOSITE` is dropped when [compositeAvailable] is false.
  */
-internal fun resolveCameraModes(configured: List<LocalCameraMode>?): List<LocalCameraMode> {
+internal fun resolveCameraModes(
+    configured: List<LocalCameraMode>?,
+    compositeAvailable: Boolean = true,
+): List<LocalCameraMode> {
     val source = configured ?: app.serenada.core.DEFAULT_CAMERA_MODES
     val seen = mutableSetOf<LocalCameraMode>()
     val result = mutableListOf<LocalCameraMode>()
     for (mode in source) {
         if (mode == LocalCameraMode.SCREEN_SHARE) continue
+        if (mode == LocalCameraMode.COMPOSITE && !compositeAvailable) continue
         if (!seen.add(mode)) continue
         result.add(mode)
     }

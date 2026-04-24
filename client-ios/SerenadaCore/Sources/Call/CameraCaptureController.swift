@@ -169,6 +169,26 @@ final class CameraCaptureController {
         return restartVideoCapturer(source: source)
     }
 
+    @discardableResult
+    func restartVideoCapturerFromAvailableModes() -> Bool {
+        var attempted: Set<LocalCameraSource> = []
+        for mode in availableCameraModes {
+            let source = cameraSource(from: mode)
+            if attempted.contains(source) { continue }
+            attempted.insert(source)
+            if restartVideoCapturer(source: source) {
+                return true
+            }
+            debugTrace("webrtc failed to start camera source=\(mode.rawValue)")
+            if source == .composite {
+                compositeDisabledAfterFailure = true
+                reportCompositeCameraUnavailable(reason: "Composite camera startup failed")
+            }
+        }
+        notifyCameraModeAndFlash()
+        return false
+    }
+
     func flipCamera() {
         guard !isScreenSharing else { return }
 
@@ -260,7 +280,7 @@ final class CameraCaptureController {
 
     func compositeSupportDebugState() -> String {
 #if canImport(WebRTC)
-        let snapshot = compositeSupportSnapshot()
+        let snapshot = Self.compositeSupportSnapshot()
         let cached = cachedCompositeSupport.map(String.init(describing:)) ?? "nil"
         return "disabled=\(compositeDisabledAfterFailure) cached=\(cached) switching=\(isSwitchingCameraSource) multi=\(snapshot.hasMultiCam) front=\(snapshot.hasFrontCamera) back=\(snapshot.hasBackCamera) supported=\(snapshot.supported)"
 #else
@@ -277,6 +297,14 @@ final class CameraCaptureController {
     }
 
     // MARK: - Internal Camera Logic
+
+    static func isCompositeCameraModeAvailable() -> Bool {
+#if canImport(WebRTC)
+        return compositeSupportSnapshot().supported
+#else
+        return false
+#endif
+    }
 
 #if canImport(WebRTC)
     @discardableResult
@@ -458,7 +486,7 @@ final class CameraCaptureController {
             debugTrace("webrtc composite support cached=\(cached)")
             return cached
         }
-        let snapshot = compositeSupportSnapshot()
+        let snapshot = Self.compositeSupportSnapshot()
         let supported = snapshot.supported
         cachedCompositeSupport = supported
         debugTrace(
@@ -521,7 +549,7 @@ final class CameraCaptureController {
         )
     }
 
-    private func compositeSupportSnapshot() -> (hasMultiCam: Bool, hasFrontCamera: Bool, hasBackCamera: Bool, supported: Bool) {
+    private static func compositeSupportSnapshot() -> (hasMultiCam: Bool, hasFrontCamera: Bool, hasBackCamera: Bool, supported: Bool) {
         let hasMultiCam = AVCaptureMultiCamSession.isMultiCamSupported
         let hasFrontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) != nil
         let hasBackCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil

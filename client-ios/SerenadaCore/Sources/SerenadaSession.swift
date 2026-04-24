@@ -216,7 +216,7 @@ public final class SerenadaSession: ObservableObject {
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.config = config
-        self.availableCameraModes = resolveCameraModes(config.cameraModes)
+        self.availableCameraModes = SerenadaSession.resolveAvailableCameraModes(config.cameraModes)
         self.displayName = displayName
         self.delegateProvider = delegateProvider
         self.logger = logger
@@ -289,6 +289,15 @@ public final class SerenadaSession: ObservableObject {
         Task { @MainActor [weak self] in
             await self?.beginJoinIfNeeded()
         }
+    }
+
+    private static func resolveAvailableCameraModes(_ configuredModes: [LocalCameraMode]?) -> [LocalCameraMode] {
+        let normalizedModes = resolveCameraModes(configuredModes)
+        guard normalizedModes.contains(.composite) else { return normalizedModes }
+        return resolveCameraModes(
+            configuredModes,
+            compositeAvailable: CameraCaptureController.isCompositeCameraModeAvailable()
+        )
     }
 
     deinit {

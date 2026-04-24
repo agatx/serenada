@@ -308,6 +308,24 @@ internal class CameraCaptureController(
         currentCameraSource = cameraSourceFromMode(availableCameraModes.firstOrNull() ?: LocalCameraMode.SELFIE)
     }
 
+    fun restartVideoCapturerFromAvailableModes(videoSource: VideoSource?): Boolean {
+        val attempted = mutableSetOf<LocalCameraSource>()
+        for (mode in availableCameraModes) {
+            val source = cameraSourceFromMode(mode)
+            if (!attempted.add(source)) continue
+            if (restartVideoCapturer(source, videoSource)) {
+                return true
+            }
+            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to start camera source $source")
+            if (source == LocalCameraSource.COMPOSITE) {
+                compositeDisabledAfterFailure = true
+                reportCompositeCameraUnavailable("Composite camera startup failed")
+            }
+        }
+        notifyCameraModeAndFlash()
+        return false
+    }
+
     // ── Camera capture profile selection ────────────────────────────────
 
     internal fun cameraCapturePolicyFor(source: LocalCameraSource): CapturePolicy {
@@ -571,47 +589,14 @@ internal class CameraCaptureController(
         if (compositeDisabledAfterFailure) {
             return false
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            val manager = appContext.getSystemService(CameraManager::class.java) ?: return false
-            val capable = setOf(
-                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL,
-                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
-            )
-            val frontLevel = runCatching {
-                manager.getCameraCharacteristics(frontDevice)
-                    .get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
-            }.getOrNull()
-            val backLevel = runCatching {
-                manager.getCameraCharacteristics(backDevice)
-                    .get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
-            }.getOrNull()
-            if (frontLevel !in capable || backLevel !in capable) {
-                logger?.log(SerenadaLogLevel.DEBUG, "Camera",
-                    "Composite source skipped on API <30: hardware level insufficient (front=$frontLevel back=$backLevel)")
-                return false
-            }
-            return true
-        }
         val cacheKey = Pair(frontDevice, backDevice)
         compositeSupportCache?.let { (savedKey, savedValue) ->
             if (savedKey == cacheKey) {
                 return savedValue
             }
         }
-        val manager = appContext.getSystemService(CameraManager::class.java) ?: return false
-        val supported = runCatching {
-            manager.concurrentCameraIds.any { ids ->
-                ids.contains(frontDevice) && ids.contains(backDevice)
-            }
-        }.getOrDefault(false)
+        val supported = isCompositeCameraPairAvailable(appContext, frontDevice, backDevice, logger)
         compositeSupportCache = Pair(cacheKey, supported)
-        if (!supported) {
-            logger?.log(
-                SerenadaLogLevel.WARNING,
-                "Camera",
-                "Composite source unsupported by concurrent camera constraints. front=$frontDevice back=$backDevice"
-            )
-        }
         return supported
     }
 
@@ -1062,5 +1047,61 @@ internal class CameraCaptureController(
         const val ZOOM_RATIO_DELTA_EPSILON = 0.01f
         const val TORCH_RETRY_DELAY_MS = 120L
         const val MAX_TORCH_RETRY_ATTEMPTS = 8
+
+        fun isCompositeCameraModeAvailable(
+            context: Context,
+            logger: SerenadaLogger? = null,
+        ): Boolean {
+            val appContext = context.applicationContext
+            val enumerator = runCatching { Camera2Enumerator(appContext) }.getOrNull() ?: return false
+            val front = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) } ?: return false
+            val back = enumerator.deviceNames.firstOrNull { enumerator.isBackFacing(it) } ?: return false
+            return isCompositeCameraPairAvailable(appContext, front, back, logger)
+        }
+
+        private fun isCompositeCameraPairAvailable(
+            context: Context,
+            frontDevice: String,
+            backDevice: String,
+            logger: SerenadaLogger?,
+        ): Boolean {
+            val manager = context.getSystemService(CameraManager::class.java) ?: return false
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                val capable = setOf(
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL,
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+                )
+                val frontLevel = runCatching {
+                    manager.getCameraCharacteristics(frontDevice)
+                        .get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                }.getOrNull()
+                val backLevel = runCatching {
+                    manager.getCameraCharacteristics(backDevice)
+                        .get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
+                }.getOrNull()
+                if (frontLevel !in capable || backLevel !in capable) {
+                    logger?.log(
+                        SerenadaLogLevel.DEBUG,
+                        "Camera",
+                        "Composite source skipped on API <30: hardware level insufficient (front=$frontLevel back=$backLevel)"
+                    )
+                    return false
+                }
+                return true
+            }
+            val supported = runCatching {
+                manager.concurrentCameraIds.any { ids ->
+                    ids.contains(frontDevice) && ids.contains(backDevice)
+                }
+            }.getOrDefault(false)
+            if (!supported) {
+                logger?.log(
+                    SerenadaLogLevel.WARNING,
+                    "Camera",
+                    "Composite source unsupported by concurrent camera constraints. front=$frontDevice back=$backDevice"
+                )
+            }
+            return supported
+        }
     }
 }

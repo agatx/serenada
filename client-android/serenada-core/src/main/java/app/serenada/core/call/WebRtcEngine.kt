@@ -212,19 +212,12 @@ internal class WebRtcEngine(
 
         videoSource = peerConnectionFactory.createVideoSource(false)
         cameraController.resetCameraSourceToInitial()
-        val initialSource = cameraController.currentCameraSource
-        if (!cameraController.restartVideoCapturer(initialSource, videoSource)) {
-            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available for $initialSource")
-            videoSource?.dispose()
-            videoSource = null
-            localAudioTrack?.setEnabled(false)
-            localAudioTrack = null
-            audioSource?.dispose()
-            audioSource = null
-            return
+        val startedVideo = cameraController.restartVideoCapturerFromAvailableModes(videoSource)
+        if (!startedVideo) {
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available; continuing audio-only")
         }
         localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
-        localVideoTrack?.setEnabled(true)
+        localVideoTrack?.setEnabled(startedVideo)
         localSinks.forEach { sink ->
             localVideoTrack?.addSink(sink)
         }
@@ -289,18 +282,23 @@ internal class WebRtcEngine(
         localAudioTrack?.setEnabled(enabled)
     }
 
-    override fun toggleVideo(enabled: Boolean) {
+    override fun toggleVideo(enabled: Boolean): Boolean {
         if (enabled && cameraController.availableCameraModes.isEmpty() && !screenShareController.isScreenSharing) {
             localVideoTrack?.setEnabled(false)
-            return
+            return false
         }
         if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
-            cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)
+            if (!cameraController.restartVideoCapturerFromAvailableModes(videoSource)) {
+                localVideoTrack?.setEnabled(false)
+                return false
+            }
         }
         if (!enabled && !screenShareController.isScreenSharing) {
             cameraController.disposeVideoCapturer()
         }
-        localVideoTrack?.setEnabled(enabled)
+        val effectiveEnabled = enabled && (cameraController.videoCapturer != null || screenShareController.isScreenSharing)
+        localVideoTrack?.setEnabled(effectiveEnabled)
+        return effectiveEnabled
     }
 
     fun setHdVideoExperimentalEnabled(enabled: Boolean) {

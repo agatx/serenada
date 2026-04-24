@@ -43,6 +43,17 @@ class CameraModesTest {
     }
 
     @Test
+    fun resolveDropsCompositeWhenUnsupported() {
+        assertEquals(
+            listOf(LocalCameraMode.SELFIE, LocalCameraMode.WORLD),
+            resolveCameraModes(
+                listOf(LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE, LocalCameraMode.WORLD),
+                compositeAvailable = false,
+            ),
+        )
+    }
+
+    @Test
     fun nextCameraModeNilForSingletonList() {
         assertNull(
             nextCameraMode(

@@ -383,7 +383,7 @@ val config = SerenadaConfig(
     serverHost = "serenada.app",      // required
     defaultAudioEnabled = true,       // mic on at join (default)
     defaultVideoEnabled = true,       // camera on at join (default)
-    cameraModes = DEFAULT_CAMERA_MODES, // available modes & cycle order; empty = audio-only (default: all modes)
+    cameraModes = DEFAULT_CAMERA_MODES, // available modes & cycle order; empty = audio-only (default: all supported modes)
     transports = listOf(SerenadaTransport.WS, SerenadaTransport.SSE) // transport priority (default)
 )
 ```

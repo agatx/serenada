@@ -349,7 +349,7 @@ const serenada = createSerenadaCore({
     serverHost: 'serenada.app',    // required; bare host or full origin
     defaultAudioEnabled: true,     // mic on at join (default)
     defaultVideoEnabled: true,     // camera on at join (default)
-    cameraModes: ['selfie', 'world', 'composite'], // available modes & cycle order; empty = audio-only (default: all modes)
+    cameraModes: ['selfie', 'world', 'composite'], // available modes & cycle order; empty = audio-only (default: all supported modes)
     transports: ['ws', 'sse'],     // transport priority (default)
     turnsOnly: false,              // optional; only use TURN relays when true
 })
