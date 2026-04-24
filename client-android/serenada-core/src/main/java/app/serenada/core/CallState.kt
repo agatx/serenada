@@ -32,6 +32,13 @@ data class CallState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.Connected,
     /** Current camera mode (selfie, world, or composite). */
     val localCameraMode: LocalCameraMode = LocalCameraMode.SELFIE,
+    /**
+     * Camera modes the user can cycle through, in preference order. Derived
+     * from [SerenadaConfig.cameraModes] minus modes unsupported on this
+     * device. Empty means video is unavailable — call UIs should hide the
+     * video toggle.
+     */
+    val availableCameraModes: List<LocalCameraMode> = DEFAULT_CAMERA_MODES,
     /** Current error, if any. */
     val error: CallError? = null,
     /** Permissions needed before joining (empty when all granted). */

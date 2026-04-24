@@ -725,13 +725,17 @@ struct CallScreenView: View {
                 onToggleAudio()
             }
 
-            iconButton(system: uiState.localVideoEnabled ? "video.fill" : "video.slash.fill", accessibilityLabel: uiState.localVideoEnabled ? str(.callA11yVideoOn) : str(.callA11yVideoOff)) {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                onToggleVideo()
+            if !uiState.availableCameraModes.isEmpty {
+                iconButton(system: uiState.localVideoEnabled ? "video.fill" : "video.slash.fill", accessibilityLabel: uiState.localVideoEnabled ? str(.callA11yVideoOn) : str(.callA11yVideoOff)) {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onToggleVideo()
+                }
             }
 
-            iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
-                onFlipCamera()
+            if uiState.availableCameraModes.count > 1 {
+                iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
+                    onFlipCamera()
+                }
             }
 
             if config.screenSharingEnabled {

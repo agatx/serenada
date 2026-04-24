@@ -235,7 +235,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const isCameraOff = localParticipant?.videoEnabled === false;
     const isMuted = localParticipant?.audioEnabled === false;
     const canScreenShare = session?.canScreenShare === true && !isMobileBrowser();
-    const hasMultipleCameras = session?.hasMultipleCameras === true;
+    const availableCameraModes = localParticipant?.availableCameraModes ?? [];
+    const videoCaptureSupported = availableCameraModes.length > 0;
+    const hasMultipleCameras = session?.hasMultipleCameras === true && availableCameraModes.length > 1;
     const showScreenShareControl = config?.screenSharingEnabled !== false && canScreenShare;
     const inviteControlsEnabled = config?.inviteControlsEnabled !== false;
     const shareUrl = effectiveState.roomUrl ?? (typeof window !== 'undefined' ? window.location.href : '');
@@ -812,9 +814,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             <button type="button" onClick={handleToggleAudio} className={`btn-control ${isMuted ? 'active' : ''}`}>
                 {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
             </button>
-            <button type="button" onClick={handleToggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
-                {isCameraOff ? <VideoOff size={22} /> : <Video size={22} />}
-            </button>
+            {videoCaptureSupported && (
+                <button type="button" onClick={handleToggleVideo} className={`btn-control ${isCameraOff ? 'active' : ''}`}>
+                    {isCameraOff ? <VideoOff size={22} /> : <Video size={22} />}
+                </button>
+            )}
             {hasMultipleCameras && (
                 <button type="button" onClick={handleFlipCamera} className="btn-control" disabled={isScreenSharing}>
                     <RotateCcw size={22} />

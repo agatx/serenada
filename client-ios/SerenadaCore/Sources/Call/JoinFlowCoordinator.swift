@@ -129,9 +129,9 @@ final class JoinFlowCoordinator {
 
     // MARK: - Permissions
 
-    static func missingPermissions() -> [MediaCapability] {
+    static func missingPermissions(includeCamera: Bool = true) -> [MediaCapability] {
         var required: [MediaCapability] = []
-        if AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
+        if includeCamera && AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
             required.append(.camera)
         }
         if AVAudioSession.sharedInstance().recordPermission != .granted {

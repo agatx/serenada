@@ -1,5 +1,14 @@
 package app.serenada.core
 
+import app.serenada.core.call.LocalCameraMode
+
+/** Default preference order for [SerenadaConfig.cameraModes] when left null. */
+val DEFAULT_CAMERA_MODES: List<LocalCameraMode> = listOf(
+    LocalCameraMode.SELFIE,
+    LocalCameraMode.WORLD,
+    LocalCameraMode.COMPOSITE,
+)
+
 /**
  * Configuration for the Serenada SDK.
  */
@@ -12,6 +21,16 @@ data class SerenadaConfig(
     val defaultAudioEnabled: Boolean = true,
     /** Whether video starts enabled (default true). */
     val defaultVideoEnabled: Boolean = true,
+    /**
+     * Camera modes available in the call UI, in preference order. The first
+     * entry is the initial mode. When only one mode is listed the flip-camera
+     * control is hidden; an empty list disables video entirely (the video
+     * toggle is hidden and the camera is never requested). Modes unsupported
+     * on the current device are silently dropped (`COMPOSITE` is dropped on
+     * devices without multi-cam). `SCREEN_SHARE` is always ignored — screen
+     * sharing is controlled separately. Defaults to `[SELFIE, WORLD, COMPOSITE]`.
+     */
+    val cameraModes: List<LocalCameraMode>? = null,
     /** Enable experimental HD video capture. */
     val isHdVideoExperimentalEnabled: Boolean = false,
     /** Preferred signaling transports in priority order (default: WS then SSE). */

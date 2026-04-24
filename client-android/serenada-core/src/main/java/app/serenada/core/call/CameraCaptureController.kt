@@ -33,6 +33,7 @@ internal class CameraCaptureController(
     private val eglBase: EglBase,
     private val cameraManager: CameraManager?,
     isHdVideoExperimentalEnabled: Boolean,
+    availableCameraModes: List<LocalCameraMode> = app.serenada.core.DEFAULT_CAMERA_MODES,
     private val videoSourceProvider: () -> VideoSource?,
     private val onCameraFacingChanged: (Boolean) -> Unit,
     private val onCameraModeChanged: (LocalCameraMode) -> Unit,
@@ -74,12 +75,19 @@ internal class CameraCaptureController(
         val sensorRect: Rect?
     )
 
-    var currentCameraSource = LocalCameraSource.SELFIE
+    var currentCameraSource: LocalCameraSource = LocalCameraSource.SELFIE
         private set
     var cameraSourceBeforeScreenShare: LocalCameraSource? = null
     var videoCapturer: VideoCapturer? = null
         private set
     var isScreenSharing = false
+
+    val availableCameraModes: List<LocalCameraMode> = availableCameraModes
+
+    init {
+        currentCameraSource =
+            cameraSourceFromMode(this.availableCameraModes.firstOrNull() ?: LocalCameraMode.SELFIE)
+    }
 
     var isHdVideoExperimentalEnabled: Boolean = isHdVideoExperimentalEnabled
         private set
@@ -160,10 +168,19 @@ internal class CameraCaptureController(
         if (isScreenSharing) return
         if (videoSource == null) return
         val compositeAvailable = canUseCompositeSource()
-        val targetMode = nextFlipCameraMode(
+        val targetMode = nextCameraMode(
+            modes = availableCameraModes,
             current = activeCameraMode(),
-            compositeAvailable = compositeAvailable
+            compositeAvailable = compositeAvailable,
         )
+        if (targetMode == null) {
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "Camera",
+                "flipCamera skipped — no alternative mode in ${availableCameraModes.map { it.name }}"
+            )
+            return
+        }
         val target = cameraSourceFromMode(targetMode)
         if (!compositeAvailable && targetMode == LocalCameraMode.SELFIE && currentCameraSource == LocalCameraSource.WORLD) {
             logger?.log(SerenadaLogLevel.WARNING, "Camera", "Transitioning from WORLD to SELFIE (COMPOSITE unavailable)")
@@ -287,8 +304,8 @@ internal class CameraCaptureController(
         return applied
     }
 
-    fun resetCameraSourceToSelfie() {
-        currentCameraSource = LocalCameraSource.SELFIE
+    fun resetCameraSourceToInitial() {
+        currentCameraSource = cameraSourceFromMode(availableCameraModes.firstOrNull() ?: LocalCameraMode.SELFIE)
     }
 
     // ── Camera capture profile selection ────────────────────────────────

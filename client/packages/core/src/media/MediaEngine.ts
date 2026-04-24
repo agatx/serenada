@@ -39,6 +39,10 @@ interface PeerState {
 export interface MediaEngineConfig {
     turnsOnly?: boolean;
     logger?: SerenadaLogger;
+    /** Initial camera facing mode. Defaults to `'user'` (selfie). */
+    initialFacingMode?: 'user' | 'environment';
+    /** When `false`, the camera is never requested and video is always off. */
+    videoCaptureSupported?: boolean;
 }
 
 export class MediaEngine {
@@ -48,6 +52,7 @@ export class MediaEngine {
     canScreenShare = !!navigator.mediaDevices?.getDisplayMedia;
     facingMode: 'user' | 'environment' = 'user';
     hasMultipleCameras = false;
+    readonly videoCaptureSupported: boolean;
     iceConnectionState: RTCIceConnectionState = 'new';
     connectionState: RTCPeerConnectionState = 'new';
     signalingState: RTCSignalingState = 'stable';
@@ -85,6 +90,8 @@ export class MediaEngine {
     ) {
         this.turnsOnly = config.turnsOnly ?? false;
         this.logger = config.logger;
+        this.facingMode = config.initialFacingMode ?? 'user';
+        this.videoCaptureSupported = config.videoCaptureSupported !== false;
         this.sendSignalingMessage = sendMessage;
         this.setupEventListeners();
     }
@@ -192,13 +199,17 @@ export class MediaEngine {
                 sampleRate: { ideal: 48000 }
             };
             let stream: MediaStream;
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: this.facingMode },
-                    audio: audioConstraints
-                });
-            } catch {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            if (!this.videoCaptureSupported) {
+                stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: audioConstraints });
+            } else {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: this.facingMode },
+                        audio: audioConstraints
+                    });
+                } catch {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                }
             }
 
             if (this.destroyed || this.mediaRequestId !== requestId) {
@@ -242,7 +253,6 @@ export class MediaEngine {
             this.localStream = null;
         }
         this.isScreenSharing = false;
-        this.facingMode = 'user';
         this.requestingMedia = false;
         this.notifyChange();
     }
@@ -255,6 +265,7 @@ export class MediaEngine {
     }
 
     async reacquireVideoTrack(): Promise<void> {
+        if (!this.videoCaptureSupported) return;
         if (this.isScreenSharing) return;
         if (this.localStream?.getVideoTracks()[0]) return;
         if (this.cameraRecoveryInFlight || this.requestingMedia) return;

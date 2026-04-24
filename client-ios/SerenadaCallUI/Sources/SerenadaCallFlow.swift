@@ -312,6 +312,7 @@ private struct SessionFirstCallFlow: View {
         uiState.realtimeStats = diagnostics.realtimeStats
         uiState.isFrontCamera = diagnostics.isFrontCamera
         uiState.isScreenSharing = diagnostics.isScreenSharing
+        uiState.availableCameraModes = state.localParticipant.availableCameraModes
         uiState.cameraZoomFactor = diagnostics.cameraZoomFactor
         uiState.isFlashAvailable = diagnostics.isFlashAvailable
         uiState.isFlashEnabled = diagnostics.isFlashEnabled

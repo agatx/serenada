@@ -6,6 +6,9 @@ public enum SerenadaTransport: String, Equatable, Sendable {
     case sse
 }
 
+/// Default preference order for camera modes when `SerenadaConfig.cameraModes` is `nil`.
+public let defaultCameraModes: [LocalCameraMode] = [.selfie, .world, .composite]
+
 /// SDK configuration.
 ///
 /// `SerenadaConfig` is marked `@unchecked Sendable` because a custom
@@ -21,6 +24,14 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     public var defaultAudioEnabled: Bool
     /// Whether video is enabled when joining a call. Defaults to `true`.
     public var defaultVideoEnabled: Bool
+    /// Camera modes available in the call UI, in preference order. The first
+    /// entry is the initial mode. When only one mode is listed the flip-camera
+    /// control is hidden; an empty array disables video entirely (the video
+    /// toggle is hidden and the camera is never requested). Modes unsupported
+    /// on the current device are silently dropped (`.composite` is dropped on
+    /// devices without multi-cam). `.screenShare` is always ignored — screen
+    /// sharing is controlled separately. Defaults to `[.selfie, .world, .composite]`.
+    public var cameraModes: [LocalCameraMode]?
     /// Preferred signaling transports in priority order. Defaults to `[.ws, .sse]`.
     public var transports: [SerenadaTransport]
     /// Whether the proximity sensor is used to switch audio to the earpiece and pause video.
@@ -32,6 +43,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         signalingProvider: SignalingProvider? = nil,
         defaultAudioEnabled: Bool = true,
         defaultVideoEnabled: Bool = true,
+        cameraModes: [LocalCameraMode]? = nil,
         transports: [SerenadaTransport] = [.ws, .sse],
         proximityMonitoringEnabled: Bool = false
     ) {
@@ -39,6 +51,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         self.signalingProvider = signalingProvider
         self.defaultAudioEnabled = defaultAudioEnabled
         self.defaultVideoEnabled = defaultVideoEnabled
+        self.cameraModes = cameraModes
         self.transports = transports
         self.proximityMonitoringEnabled = proximityMonitoringEnabled
     }
@@ -47,6 +60,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         lhs.serverHost == rhs.serverHost
             && lhs.defaultAudioEnabled == rhs.defaultAudioEnabled
             && lhs.defaultVideoEnabled == rhs.defaultVideoEnabled
+            && lhs.cameraModes == rhs.cameraModes
             && lhs.transports == rhs.transports
             && lhs.proximityMonitoringEnabled == rhs.proximityMonitoringEnabled
             && haveSameProvider(lhs.signalingProvider, rhs.signalingProvider)

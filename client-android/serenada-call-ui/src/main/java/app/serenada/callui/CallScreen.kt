@@ -756,26 +756,27 @@ internal fun CallScreen(
                             else Color.Red
                     )
 
-                    // Video Toggle Button
-                    ControlButton(
-                        onClick = onToggleVideo,
-                        icon =
-                            if (uiState.localVideoEnabled) Icons.Default.Videocam
-                            else Icons.Default.VideocamOff,
-                        backgroundColor =
-                            if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
-                                else Color.Red
-                    )
+                    if (uiState.availableCameraModes.isNotEmpty()) {
+                        ControlButton(
+                            onClick = onToggleVideo,
+                            icon =
+                                if (uiState.localVideoEnabled) Icons.Default.Videocam
+                                else Icons.Default.VideocamOff,
+                            backgroundColor =
+                                if (uiState.localVideoEnabled) Color.White.copy(alpha = 0.2f)
+                                    else Color.Red
+                        )
+                    }
 
-                    // Flip Camera
-                    ControlButton(
-                        onClick = onFlipCamera,
-                        icon = Icons.Default.FlipCameraIos,
-                        backgroundColor =
-                            if (uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f)
-                            else Color.White.copy(alpha = 0.2f),
-                        // Disabled visual appearance could be added here
-                    )
+                    if (uiState.availableCameraModes.size > 1) {
+                        ControlButton(
+                            onClick = onFlipCamera,
+                            icon = Icons.Default.FlipCameraIos,
+                            backgroundColor =
+                                if (uiState.isScreenSharing) Color.Gray.copy(alpha = 0.1f)
+                                else Color.White.copy(alpha = 0.2f),
+                        )
+                    }
 
                     // Screen Share Button — only when enabled via config
                     if (config.screenSharingEnabled) {

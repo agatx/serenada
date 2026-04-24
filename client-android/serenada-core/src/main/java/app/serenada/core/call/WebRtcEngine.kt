@@ -39,6 +39,7 @@ internal class WebRtcEngine(
     private val onFeatureDegradation: (FeatureDegradationState) -> Unit = {},
     private var isHdVideoExperimentalEnabled: Boolean = false,
     private var isRemoteBlackFrameAnalysisEnabled: Boolean = true,
+    availableCameraModes: List<LocalCameraMode> = app.serenada.core.DEFAULT_CAMERA_MODES,
     private val logger: SerenadaLogger? = null,
 ) : SessionMediaEngine {
 
@@ -73,6 +74,7 @@ internal class WebRtcEngine(
         eglBase = eglBase,
         cameraManager = cameraManager,
         isHdVideoExperimentalEnabled = isHdVideoExperimentalEnabled,
+        availableCameraModes = availableCameraModes,
         videoSourceProvider = { videoSource },
         onCameraFacingChanged = onCameraFacingChanged,
         onCameraModeChanged = onCameraModeChanged,
@@ -201,10 +203,18 @@ internal class WebRtcEngine(
         localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
         applyAudioTrackHints()
 
+        if (cameraController.availableCameraModes.isEmpty()) {
+            peerSlots.forEach { slot ->
+                slot.attachLocalTracks(localAudioTrack, null)
+            }
+            return
+        }
+
         videoSource = peerConnectionFactory.createVideoSource(false)
-        cameraController.resetCameraSourceToSelfie()
-        if (!cameraController.restartVideoCapturer(CameraCaptureController.LocalCameraSource.SELFIE, videoSource)) {
-            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available for ${CameraCaptureController.LocalCameraSource.SELFIE}")
+        cameraController.resetCameraSourceToInitial()
+        val initialSource = cameraController.currentCameraSource
+        if (!cameraController.restartVideoCapturer(initialSource, videoSource)) {
+            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available for $initialSource")
             videoSource?.dispose()
             videoSource = null
             localAudioTrack?.setEnabled(false)
@@ -280,6 +290,10 @@ internal class WebRtcEngine(
     }
 
     override fun toggleVideo(enabled: Boolean) {
+        if (enabled && cameraController.availableCameraModes.isEmpty() && !screenShareController.isScreenSharing) {
+            localVideoTrack?.setEnabled(false)
+            return
+        }
         if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
             cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)
         }

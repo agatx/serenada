@@ -20,11 +20,13 @@ export function createSerenadaCore(config: SerenadaConfig): _SerenadaCore { retu
 export function createSerenadaDiagnostics(config: SerenadaConfig): _SerenadaDiagnostics { return new _SerenadaDiagnostics(config); }
 
 // Public types
+export { DEFAULT_CAMERA_MODES } from './types.js';
 export type {
     CallPhase,
     ConnectionStatus,
     ActiveTransport,
     CameraMode,
+    ConfigurableCameraMode,
     MediaCapability,
     PeerConnectionState,
     Participant,

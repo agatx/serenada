@@ -326,6 +326,7 @@ private fun rememberCallUiState(
             isFrontCamera = diagnostics.isFrontCamera,
             isScreenSharing = diagnostics.isScreenSharing,
             localCameraMode = state.localCameraMode,
+            availableCameraModes = state.availableCameraModes,
             isFlashAvailable = diagnostics.isFlashAvailable,
             isFlashEnabled = diagnostics.isFlashEnabled,
             remoteContentCid = diagnostics.remoteContentCid,
