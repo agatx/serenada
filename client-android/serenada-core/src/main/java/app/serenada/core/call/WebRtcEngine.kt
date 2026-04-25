@@ -212,7 +212,7 @@ internal class WebRtcEngine(
 
         videoSource = peerConnectionFactory.createVideoSource(false)
         cameraController.resetCameraSourceToInitial()
-        val startedVideo = cameraController.restartVideoCapturerFromAvailableModes(videoSource)
+        val startedVideo = cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)
         if (!startedVideo) {
             logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available; continuing audio-only")
         }
@@ -288,7 +288,7 @@ internal class WebRtcEngine(
             return false
         }
         if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
-            if (!cameraController.restartVideoCapturerFromAvailableModes(videoSource)) {
+            if (!cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)) {
                 localVideoTrack?.setEnabled(false)
                 return false
             }
