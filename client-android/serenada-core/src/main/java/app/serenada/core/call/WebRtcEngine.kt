@@ -32,6 +32,7 @@ import org.webrtc.audio.JavaAudioDeviceModule
 
 internal class WebRtcEngine(
     context: Context,
+    private val eglBase: EglBase,
     private val onCameraFacingChanged: (Boolean) -> Unit,
     private val onCameraModeChanged: (LocalCameraMode) -> Unit,
     private val onFlashlightStateChanged: (Boolean, Boolean) -> Unit,
@@ -51,7 +52,6 @@ internal class WebRtcEngine(
     )
 
     private val appContext = context.applicationContext
-    private val eglBase: EglBase = EglBase.create()
     private val audioDeviceModule: AudioDeviceModule = createAudioDeviceModule(appContext)
     private val peerConnectionFactory: PeerConnectionFactory
     private val cameraManager = appContext.getSystemService(CameraManager::class.java)
@@ -256,7 +256,7 @@ internal class WebRtcEngine(
         localSinks.clear()
         runCatching { peerConnectionFactory.dispose() }
         runCatching { audioDeviceModule.release() }
-        runCatching { eglBase.release() }
+        // eglBase is owned by SerenadaSession and outlives the engine — do not release it here.
     }
 
     override fun setIceServers(servers: List<PeerConnection.IceServer>) {

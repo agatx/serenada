@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 import org.json.JSONObject
+import org.webrtc.EglBase
 import org.webrtc.PeerConnection
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -261,6 +262,11 @@ class SerenadaSession internal constructor(
     private var userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
     private val isMediaEngineInjected = mediaEngine != null
+    // Owned at the session level so that engine recreation (or release on call end) does not
+    // invalidate the EglBase.Context handed to Compose AndroidView factories. Releasing the
+    // EglBase before the call UI unmounts caused crashes in WebRTC's EglBase14Impl with
+    // "Invalid sharedContext" when a new PiP renderer was created with a stale handle.
+    private val eglBase: EglBase? = if (isMediaEngineInjected) null else EglBase.create()
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
     private var hasInitialIceServers = false
@@ -709,9 +715,9 @@ class SerenadaSession internal constructor(
     }
 
     /** Get the EGL context for custom rendering or renderer initialization. */
-    fun eglContext(): org.webrtc.EglBase.Context {
+    fun eglContext(): EglBase.Context {
         assertMainThread()
-        return webRtcEngine.getEglContext()
+        return eglBase?.eglBaseContext ?: webRtcEngine.getEglContext()
     }
 
     /** Adjust the camera zoom level by the given scale factor. */
@@ -803,8 +809,12 @@ class SerenadaSession internal constructor(
     // --- Internal: WebRTC Engine ---
 
     private fun buildWebRtcEngine(): WebRtcEngine {
+        val sharedEglBase = requireNotNull(eglBase) {
+            "buildWebRtcEngine should not be called when a media engine is injected"
+        }
         return WebRtcEngine(
             context = appContext,
+            eglBase = sharedEglBase,
             onCameraFacingChanged = { isFront ->
                 handler.post {
                     updateDiagnostics(_diagnostics.value.copy(isFrontCamera = isFront))
