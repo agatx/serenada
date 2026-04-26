@@ -90,14 +90,20 @@ gap.
 Introduce a per-participant **bounded outbound queue** (`pendingDelivery []json.RawMessage`)
 attached to the `Participant` record, populated when relay is targeted at a
 suspended CID. On successful reattach, flush the queue only after the `joined`
-response / current room state has been sent, so the SDK never processes queued
-SDP or ICE before it knows whether the reconnect was `fresh` or `reattached`.
+response, the current room state, and the latest content state have been sent.
+
+**Strict Flush Order:**
+1. `joined` payload (with reattach confirmation).
+2. `room_state` (full membership sync).
+3. `room_content_state` (latest UI/ephemeral state).
+4. `pendingDelivery` FIFO queue (buffered negotiation traffic).
+
+This ensures the SDK has the full structural and UI context before processing
+any buffered SDP or ICE messages.
 
 Constraints:
 
-- Cap queue depth to a small constant (e.g. 64 messages) — beyond that, drop
-  the *oldest* SDP/ICE messages and log; a session that has accumulated 64
-  unsent messages is effectively dead and we should not memory-balloon.
+- Cap queue depth to a small constant (e.g. 64 messages). On overflow, **only drop stateless messages (like ICE candidates)**. If an SDP message must be dropped to prevent memory exhaustion, the server must mark the participant's state as "desynced" and force a full ground-up rejoin (instead of an ICE restart) upon reconnect to prevent SDP deadlocks.
 - For ICE candidates specifically, deduplicate by `candidate` string before
   enqueueing — bursts of trickle ICE can flood the buffer otherwise.
 - Drop messages older than `suspendHardEvictionTimeout` on flush (defensive;
@@ -267,16 +273,18 @@ after a shorter client timeout.
 2. While suspended, suppress outbound offers/ICE for that CID (no point).
 3. On reattach (status transitions back to `active`), cancel the timer; the
    ICE restart pathway picks up cleanup (#4).
-4. On timer fire, locally close the `RTCPeerConnection` and mark the CID as
-   locally expired. The server still holds the slot until hard-eviction, but our
-   local view treats the peer as gone. If the participant later reattaches, clear
-   the local-expired marker and re-create the peer connection from the next
-   active `room_state` change.
+4. On timer fire, **do not** close the `RTCPeerConnection`. Instead, update the UI
+   (e.g., remove them from the active grid or show a "Connection Lost" overlay)
+   and pause outbound data. Keep the `RTCPeerConnection` object alive in memory
+   until the server explicitly sends a hard eviction. This preserves the fast ICE
+   restart path for common mobile dropouts (e.g., elevator rides) without forcing
+   a costly ground-up DTLS/ICE setup on reconnect.
 
-The local-expired marker matters: current `syncPeers` implementations recreate a
-peer connection for any CID still present in `room_state`. If the server
-continues to include the suspended CID for the full 10-minute window, the SDK
-must not immediately rebuild the peer it just timed out.
+**Priority Rule:** A server-initiated `room_state` change that explicitly removes
+the participant (due to hard eviction, host leave, or `end_room`) MUST
+immediately trigger local PC teardown and override any pending
+`peerSuspendedClientTimeout`. The local timer is only for UI state and resource
+conservation during signaling-down scenarios, never for PC teardown.
 
 Render the existing remote-participant signaling status in UI. The SDKs already
 parse `connectionStatus="suspended"` into per-participant state, but the call
@@ -391,11 +399,7 @@ Two coordinated changes:
 
 **A. Best-effort final leave on shutdown signals**
 
-- iOS: subscribe to `UIApplication.willTerminateNotification` and to
-  `scenePhase == .background` transitions. On terminate, send a synchronous
-  HTTP `POST /api/leave` with `{rid, cid, reconnectToken}` (no WS dependency
-  — the WS may already be dead, and we have at most ~5 s before the OS kills
-  us).
+- iOS: subscribe to `scenePhase == .background` transitions. Since `UIApplication.willTerminateNotification` is highly unreliable and rarely called on jetsam (memory pressure kills), it cannot be relied upon as a core cleanup mechanism. Instead, hook into iOS Background Tasks (`beginBackgroundTask`); if the background time allowance expires (usually ~30s without an active audio session), use the expiration handler to send a preemptive synchronous HTTP `POST /api/leave` with `{rid, cid, reconnectToken}` before the OS suspends the app.
 - Android: in `CallService.onTaskRemoved` we already call `leaveCall()`. Also
   hook `onDestroy` and a `Process.killProcess` death intent if available; in
   practice the LMK path is handled by adding the same HTTP `/api/leave`
@@ -560,7 +564,9 @@ until identity is proven.
    considered an active room participant.
 
 3. The HTTP layer should drop the `sid` query parameter from server logs
-   immediately to reduce leak surface area.
+   immediately to reduce leak surface area. Additionally, the SDK should
+   sanitize the `Referer` header (or omit it for signaling requests) to prevent
+   `sid` leaking to external services if the user navigates away mid-session.
 4. Ship together with #15's reconnect-token hardening. Otherwise replacing SID
    auth with reconnect-token auth just moves the takeover primitive from "leaked
    SID" to "leaked reconnect token."
@@ -738,8 +744,11 @@ local PC teardown.
 
 Before processing a push-driven deep link, check `CallManager.activeSession`.
 If it points to a *different* room, present a "switch call?" prompt rather
-than starting a parallel session. If it points to the *same* room, no-op
-and bring UI to foreground.
+than starting a parallel session. If it points to the *same* room:
+- If the session is `connected`, no-op and bring UI to foreground.
+- If the session is `reconnecting` or `suspended`, trigger an **immediate**
+  forced reconnection attempt (skip existing backoff/timers) to reduce the
+  perceived time-to-reattach.
 
 ### Tests
 
@@ -885,8 +894,10 @@ fresh one.
 ### Suggested fix
 
 1. **Timestamp-tag every buffered payload** at enqueue time. On flush,
-   drop any payload older than `2 * offerTimeoutMs` (~16 s). The
-   counterparty has long since timed out anyway.
+   if an offer payload is older than `2 * offerTimeoutMs` (~16 s), **do not silently drop it**.
+   The counterparty is likely stuck waiting for an answer. Instead, the client must
+   generate a rollback or a "reject" SDP Answer and send it to the peer to unstick their
+   state machine, or explicitly request a full renegotiation.
 2. **Tag with the room-state epoch** (#4) at enqueue time. On flush, if
    the current epoch is past, drop. This catches "the membership changed
    while I was queued."
@@ -984,8 +995,10 @@ Make reconnect authority short-lived and generation-bound:
    Issue reconnect tokens as HMAC over `rid|cid|generation|expiresAt` or store
    opaque random tokens server-side with an expiry.
 2. Rotate the token after every successful reattach / active ghost replacement.
-   The old token is immediately invalid. Include the new token in the next
-   `joined` response and update SDK persistence.
+   The old token is invalidated after a short **30 s grace window** to prevent
+   stranding a client that crashes between reattaching and persisting the new
+   token. Include the new token in the next `joined` response and update SDK
+   persistence.
 3. Give reconnect tokens a TTL no longer than `suspendHardEvictionTimeout` and
    reject expired tokens with `INVALID_RECONNECT_TOKEN`.
 4. Split active ghost replacement from suspended reattach. Active replacement
@@ -1047,7 +1060,12 @@ Treat content state as latest-state room metadata, not best-effort relay only:
 4. Clear a participant's content state on explicit leave, hard eviction,
    `room_ended`, and when the participant sends `content_state.active=false`.
 5. SDKs should reconcile local diagnostic/UI content state from room state after
-   reconnect, not only from live peer messages.
+   reconnect. **Critically**, the UI must reconcile the signaling `content_state`
+   with the actual `RTCPeerConnection` media state. If `content_state` indicates an
+   active share but no corresponding track is receiving media yet, the UI should
+   display a "Loading media..." or "Reconnecting presentation..." indicator rather
+   than an empty frame, to prevent aggressive state-sync from causing a broken UX
+   while the underlying SDP Offer/Answer completes.
 
 ### Tests
 
@@ -1167,6 +1185,10 @@ Out of scope for this document, listed for visibility:
 
 ### 2026-04-26
 
+- Corrected #1 and #13 to prevent SDP deadlocks: SDP messages must never be silently dropped on overflow or timeout, as this permanently sticks the peer connection in a `have-local-offer` state.
+- Revised #3 to preserve `RTCPeerConnection` objects during client-side suspension timeouts instead of tearing them down. This retains the fast ICE restart path for common mobile dropouts while updating UI state appropriately.
+- Refined #5 to note the unreliability of iOS `willTerminateNotification` for jetsam events, replacing it with background task expiration handlers for preemptive cleanup.
+- Refined #16 to require UI reconciliation between instant `content_state` signaling metadata and the actual delayed WebRTC track availability, preventing empty frames.
 - Added #15, reconnect-token replay, because the previous security coverage
   focused on SSE SID hijack but did not cover leaked `{rid, cid,
   reconnectToken}` reclaiming an active participant slot.
@@ -1198,3 +1220,11 @@ Out of scope for this document, listed for visibility:
 - Updated the cross-cutting summary and suggested ordering to include reconnect
   token hardening, content-state sync, pending SSE auth, and authenticated
   transport resume.
+
+### 2026-04-25
+
+- Refined #1 & #16 to specify a strict reattach flush order (`joined` → `room_state` → `room_content_state` → `pendingDelivery`) to ensure correct SDK state initialization.
+- Refined #3 to clarify that server-initiated leave/eviction signals always take precedence over the 30s local client timeout.
+- Refined #7 to include `Referer` header sanitization to prevent `sid` leakage to external services.
+- Refined #10 to specify that tapping a push notification during `reconnecting` or `suspended` states triggers an immediate forced reconnection attempt.
+- Refined #15 to add a 30s grace window for rotated reconnect tokens, preventing clients from being stranded if they crash before persisting the new token.
