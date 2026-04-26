@@ -49,3 +49,4 @@ client-ios/Resources/GoogleService-Info.plist
 /client/packages/core/docs/
 /client/packages/react-ui/docs/
 /client-android/serenada-webrtc/build
+/.autoplanner
