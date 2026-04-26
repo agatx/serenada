@@ -30,6 +30,25 @@ public struct JoinOptions: Equatable, Sendable {
     }
 }
 
+public struct SignalingProviderParticipantContentState: Equatable, Sendable {
+    public let active: Bool
+    public let contentType: String?
+    public let updatedAtMs: Int64?
+    public let epoch: Int64?
+
+    public init(
+        active: Bool,
+        contentType: String? = nil,
+        updatedAtMs: Int64? = nil,
+        epoch: Int64? = nil
+    ) {
+        self.active = active
+        self.contentType = contentType
+        self.updatedAtMs = updatedAtMs
+        self.epoch = epoch
+    }
+}
+
 public struct SignalingProviderParticipant: Equatable, Sendable {
     public let peerId: String
     public let joinedAt: Int64?
@@ -37,6 +56,7 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
     public let audioEnabled: Bool?
     public let videoEnabled: Bool?
     public let signalingStatus: ParticipantSignalingStatus
+    public let contentState: SignalingProviderParticipantContentState?
 
     public init(
         peerId: String,
@@ -44,7 +64,8 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
         displayName: String? = nil,
         audioEnabled: Bool? = nil,
         videoEnabled: Bool? = nil,
-        signalingStatus: ParticipantSignalingStatus = .active
+        signalingStatus: ParticipantSignalingStatus = .active,
+        contentState: SignalingProviderParticipantContentState? = nil
     ) {
         self.peerId = peerId
         self.joinedAt = joinedAt
@@ -52,6 +73,7 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.signalingStatus = signalingStatus
+        self.contentState = contentState
     }
 }
 
@@ -60,17 +82,25 @@ public struct JoinedEvent: Equatable, Sendable {
     public let participants: [SignalingProviderParticipant]
     public let hostPeerId: String?
     public let maxParticipants: Int?
+    /// Server room-state epoch on this transport; monotonic per room.
+    public let epoch: Int64?
+    /// How the server treated this join. nil for older providers.
+    public let reconnectOutcome: ReconnectOutcome?
 
     public init(
         peerId: String,
         participants: [SignalingProviderParticipant],
         hostPeerId: String? = nil,
-        maxParticipants: Int? = nil
+        maxParticipants: Int? = nil,
+        epoch: Int64? = nil,
+        reconnectOutcome: ReconnectOutcome? = nil
     ) {
         self.peerId = peerId
         self.participants = participants
         self.hostPeerId = hostPeerId
         self.maxParticipants = maxParticipants
+        self.epoch = epoch
+        self.reconnectOutcome = reconnectOutcome
     }
 }
 
@@ -78,15 +108,19 @@ public struct RoomStateEvent: Equatable, Sendable {
     public let participants: [SignalingProviderParticipant]
     public let hostPeerId: String?
     public let maxParticipants: Int?
+    /// Server room-state epoch on this transport; monotonic per room.
+    public let epoch: Int64?
 
     public init(
         participants: [SignalingProviderParticipant],
         hostPeerId: String? = nil,
-        maxParticipants: Int? = nil
+        maxParticipants: Int? = nil,
+        epoch: Int64? = nil
     ) {
         self.participants = participants
         self.hostPeerId = hostPeerId
         self.maxParticipants = maxParticipants
+        self.epoch = epoch
     }
 }
 

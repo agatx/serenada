@@ -69,6 +69,7 @@ export type CallErrorCode =
     | 'connectionFailed'
     | 'roomFull'
     | 'roomEnded'
+    | 'sessionExpired'
     | 'permissionDenied'
     | 'serverError'
     | 'webrtcUnavailable'

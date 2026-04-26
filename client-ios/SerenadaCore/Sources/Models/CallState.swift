@@ -123,6 +123,11 @@ public enum CallError: Equatable, Sendable {
     case roomFull
     /// Room was ended by another participant or the server.
     case roomEnded
+    /// The persisted reconnect credential is no longer valid (expired or
+    /// rejected). The SDK must clear stored reconnect state and surface a
+    /// dedicated terminal error so the host app can route the user back to
+    /// a fresh start instead of looping reconnects.
+    case sessionExpired
     /// Required media permissions were denied.
     case permissionDenied
     /// Server returned an error.

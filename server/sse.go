@@ -65,6 +65,13 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	client := &Client{hub: hub, send: make(chan []byte, 256), sid: sid, ip: ip, transport: TransportSSE}
 	existing := hub.getClientBySID(sid)
 	if existing != nil {
+		// TODO(#7): SID-based replaceClient is currently a participant
+		// takeover risk for in-room sessions — anyone who learns the SID can
+		// inherit the participant's identity. The proper fix is the pending
+		// unauthenticated SSE + `resumeSse` protocol described in
+		// docs/resilience-failure-modes.md. Hardening here is gated on the
+		// SDKs gaining the `resumeSse` envelope first to avoid breaking
+		// legitimate SSE reconnects in transit. Tracked for Phase 2.
 		hub.replaceClient(existing, client)
 	} else {
 		hub.registerClient(client)

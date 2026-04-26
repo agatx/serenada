@@ -157,6 +157,7 @@ internal class SignalingMessageRouter(
             "CONNECTION_FAILED" -> CallError.ConnectionFailed
             "JOIN_TIMEOUT" -> CallError.SignalingTimeout
             "ROOM_ENDED" -> CallError.RoomEnded
+            "INVALID_RECONNECT_TOKEN" -> CallError.SessionExpired
             else -> if (event.message.isNotBlank()) CallError.ServerError(event.message)
             else CallError.Unknown("Unknown error")
         }
@@ -201,6 +202,7 @@ internal class SignalingMessageRouter(
             "CONNECTION_FAILED" -> CallError.ConnectionFailed
             "JOIN_TIMEOUT" -> CallError.SignalingTimeout
             "ROOM_ENDED" -> CallError.RoomEnded
+            "INVALID_RECONNECT_TOKEN" -> CallError.SessionExpired
             else -> if (payload?.message != null) CallError.ServerError(payload.message)
             else CallError.Unknown("Unknown error")
         }

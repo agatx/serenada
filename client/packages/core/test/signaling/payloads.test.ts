@@ -7,6 +7,8 @@ import {
     parseOfferPayload,
     parseAnswerPayload,
     parseIceCandidatePayload,
+    parseRelayFailedPayload,
+    parseNegotiationDirtyPayload,
 } from '../../src/signaling/payloads';
 
 describe('parseJoinedPayload', () => {
@@ -328,5 +330,129 @@ describe('parseIceCandidatePayload', () => {
             from: 'c',
             candidate: validCandidate,
         });
+    });
+});
+
+describe('parseJoinedPayload — Phase 1 fields', () => {
+    it('parses reconnect outcome and epoch', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [{ cid: 'a' }],
+            reconnect: 'recovered',
+            epoch: 7,
+            reconnectTokenTTLMs: 600_000,
+        });
+        expect(result?.reconnect).toBe('recovered');
+        expect(result?.epoch).toBe(7);
+        expect(result?.reconnectTokenTTLMs).toBe(600_000);
+    });
+
+    it('rejects unknown reconnect outcome values', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [{ cid: 'a' }],
+            reconnect: 'banana',
+        });
+        expect(result?.reconnect).toBeUndefined();
+    });
+
+    it('parses participant content state', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [
+                {
+                    cid: 'a',
+                    contentState: { active: true, contentType: 'screen', updatedAtMs: 1000, epoch: 3 },
+                },
+                {
+                    cid: 'b',
+                    contentState: { active: false },
+                },
+                {
+                    cid: 'c',
+                    contentState: { active: 'nope' },
+                },
+            ],
+        });
+        expect(result?.participants[0].contentState).toEqual({
+            active: true,
+            contentType: 'screen',
+            updatedAtMs: 1000,
+            epoch: 3,
+        });
+        expect(result?.participants[1].contentState).toEqual({
+            active: false,
+            contentType: undefined,
+            updatedAtMs: undefined,
+            epoch: undefined,
+        });
+        expect(result?.participants[2].contentState).toBeUndefined();
+    });
+});
+
+describe('parseRoomStatePayload — Phase 1 fields', () => {
+    it('parses epoch and content state', () => {
+        const result = parseRoomStatePayload({
+            hostCid: 'h',
+            participants: [
+                { cid: 'a', contentState: { active: true, contentType: 'screen' } },
+            ],
+            epoch: 12,
+        });
+        expect(result?.epoch).toBe(12);
+        expect(result?.participants[0].contentState?.active).toBe(true);
+        expect(result?.participants[0].contentState?.contentType).toBe('screen');
+    });
+});
+
+describe('parseErrorPayload — Phase 1 fields', () => {
+    it('parses reason field', () => {
+        expect(parseErrorPayload({ code: 'ROOM_ENDED', message: 'gone', reason: 'ended_by_host' })).toEqual({
+            code: 'ROOM_ENDED',
+            message: 'gone',
+            reason: 'ended_by_host',
+        });
+    });
+
+    it('omits reason when not a string', () => {
+        const result = parseErrorPayload({ code: 'X', message: 'y', reason: 42 });
+        expect(result?.reason).toBeUndefined();
+    });
+});
+
+describe('parseRelayFailedPayload', () => {
+    it('parses target_suspended payload', () => {
+        expect(parseRelayFailedPayload({ reason: 'target_suspended', targets: ['C-1'], of: 'offer' })).toEqual({
+            reason: 'target_suspended',
+            targets: ['C-1'],
+            of: 'offer',
+        });
+    });
+
+    it('returns null on empty targets list', () => {
+        expect(parseRelayFailedPayload({ reason: 'target_suspended', targets: [] })).toBeNull();
+    });
+
+    it('returns null when reason missing', () => {
+        expect(parseRelayFailedPayload({ targets: ['C-1'] })).toBeNull();
+    });
+
+    it('drops non-string entries from targets', () => {
+        const result = parseRelayFailedPayload({ reason: 'target_suspended', targets: ['C-1', 7, ''] });
+        expect(result?.targets).toEqual(['C-1']);
+    });
+});
+
+describe('parseNegotiationDirtyPayload', () => {
+    it('parses well-formed payload', () => {
+        expect(parseNegotiationDirtyPayload({ with: 'C-2' })).toEqual({ with: 'C-2' });
+    });
+
+    it('returns null when `with` missing', () => {
+        expect(parseNegotiationDirtyPayload({})).toBeNull();
+    });
+
+    it('returns null when `with` empty', () => {
+        expect(parseNegotiationDirtyPayload({ with: '' })).toBeNull();
     });
 });

@@ -193,9 +193,16 @@ extension SerenadaServerProvider: SignalingClientListener {
             delegate?.signalingProviderDidEndRoom(RoomEndedEvent(by: endedBy, reason: reason))
         case "error":
             let payload = ErrorPayload(from: message.payload)
+            let code = payload.code ?? "UNKNOWN"
+            // Terminal codes that invalidate persisted reconnect authority.
+            // Drop the stored token so a future join cannot try to reclaim
+            // the (gone) slot.
+            if code == "ROOM_ENDED" || code == "INVALID_RECONNECT_TOKEN" {
+                clearReconnect()
+            }
             delegate?.signalingProviderDidReceiveError(
                 ErrorEvent(
-                    code: payload.code ?? "UNKNOWN",
+                    code: code,
                     message: payload.message ?? "Unknown error"
                 )
             )
@@ -239,9 +246,7 @@ private extension SerenadaServerProvider {
         }
 
         let participants = dedupeProviderParticipants(
-            participants: (payload.participants ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus)
-            },
+            participants: (payload.participants ?? []).map(toProviderParticipant),
             localPeerId: peerId
         )
         previousParticipants = Dictionary(uniqueKeysWithValues: participants.map { ($0.peerId, $0) })
@@ -250,8 +255,29 @@ private extension SerenadaServerProvider {
                 peerId: peerId,
                 participants: participants,
                 hostPeerId: payload.hostCid,
-                maxParticipants: payload.maxParticipants
+                maxParticipants: payload.maxParticipants,
+                epoch: payload.epoch,
+                reconnectOutcome: payload.reconnect
             )
+        )
+    }
+
+    private func toProviderParticipant(_ p: Participant) -> SignalingProviderParticipant {
+        SignalingProviderParticipant(
+            peerId: p.cid,
+            joinedAt: p.joinedAt,
+            displayName: p.displayName,
+            audioEnabled: p.audioEnabled,
+            videoEnabled: p.videoEnabled,
+            signalingStatus: p.signalingStatus,
+            contentState: p.contentState.map {
+                SignalingProviderParticipantContentState(
+                    active: $0.active,
+                    contentType: $0.contentType,
+                    updatedAtMs: $0.updatedAtMs,
+                    epoch: $0.epoch
+                )
+            }
         )
     }
 
@@ -290,9 +316,7 @@ private extension SerenadaServerProvider {
     func roomStateEvent(from payload: JSONValue?) -> RoomStateEvent? {
         guard let object = payload?.objectValue else { return nil }
         let participants = dedupeProviderParticipants(
-            participants: (parseParticipants(from: object["participants"]?.arrayValue) ?? []).map {
-                SignalingProviderParticipant(peerId: $0.cid, joinedAt: $0.joinedAt, displayName: $0.displayName, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus)
-            },
+            participants: (parseParticipants(from: object["participants"]?.arrayValue) ?? []).map(toProviderParticipant),
             localPeerId: clientId
         )
         var hostPeerId = object["hostCid"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -305,7 +329,8 @@ private extension SerenadaServerProvider {
         return RoomStateEvent(
             participants: participants,
             hostPeerId: hostPeerId,
-            maxParticipants: object["maxParticipants"]?.intValue
+            maxParticipants: object["maxParticipants"]?.intValue,
+            epoch: object["epoch"]?.intValue.map(Int64.init)
         )
     }
 
