@@ -128,6 +128,8 @@ class SerenadaSession internal constructor(
     private val remoteMediaStates = mutableMapOf<String, RemoteMediaState>()
     private var callStartTimeMs: Long? = null
     private var pendingJoinRoom: String? = null
+    private val recoveryStorage = RecoveryStorage(appContext)
+    private var sessionStartTs: Long? = null
     private val connectionStatusTracker = ConnectionStatusTracker(
         handler = handler,
         getPhase = { _state.value.phase },
@@ -177,6 +179,7 @@ class SerenadaSession internal constructor(
                 hostCid = roomState.hostCid
                 updateParticipants(roomState)
             }
+            persistRecoveryRecord()
             broadcastLocalMediaState()
             loadInitialIceServers()
         },
@@ -1109,8 +1112,31 @@ class SerenadaSession internal constructor(
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
+        sessionStartTs = null
+        recoveryStorage.clear()
         providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
+    }
+
+    /**
+     * Snapshots the in-memory reconnect state into the cross-launch
+     * recovery store so a relaunched process can offer a "Rejoin call?"
+     * prompt. No-op until the join handshake has produced a CID + token.
+     */
+    private fun persistRecoveryRecord() {
+        val cid = clientId ?: return
+        val token = reconnectToken ?: return
+        if (sessionStartTs == null) sessionStartTs = clock.nowMs()
+        val ttlMs = RecoveryTokenTTLMs
+        val record = RecoveryRecord(
+            roomId = roomId,
+            cid = cid,
+            reconnectToken = token,
+            lastEpoch = currentRoomState?.epoch,
+            sessionStartTs = sessionStartTs ?: clock.nowMs(),
+            expiresAtMs = clock.nowMs() + ttlMs,
+        )
+        recoveryStorage.save(record)
     }
 
     private fun applyLocalVideoPreference() {
@@ -1156,6 +1182,10 @@ class SerenadaSession internal constructor(
     private companion object {
         const val TAG = "SerenadaSession"
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
+        // Matches the server's reconnectTokenTTL (= suspendHardEvictionTimeout).
+        // The recovery record stops offering rejoin past this window because
+        // the persisted token would no longer be honored anyway.
+        const val RecoveryTokenTTLMs = 10L * 60L * 1000L
         val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
             android.Manifest.permission.CAMERA,
             android.Manifest.permission.RECORD_AUDIO,

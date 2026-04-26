@@ -48,6 +48,7 @@ export type {
     SerenadaLogLevel,
     SerenadaLogger,
 } from './types.js';
+export type { RecoveryRecord } from './recoveryStorage.js';
 export type {
     ProviderCapabilities,
     ConnectionInfo,

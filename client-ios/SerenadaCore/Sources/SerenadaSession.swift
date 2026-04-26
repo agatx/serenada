@@ -171,6 +171,9 @@ public final class SerenadaSession: ObservableObject {
     private var iceFetchGeneration = 0
     private var reconnectTask: Task<Void, Never>?
 
+    private let recoveryStorage: RecoveryStorage
+    private var sessionStartTs: Int64?
+
     public convenience init(
         roomId: String,
         roomUrl: URL? = nil,
@@ -178,7 +181,8 @@ public final class SerenadaSession: ObservableObject {
         config: SerenadaConfig,
         delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
         logger: SerenadaLogger? = nil,
-        displayName: String? = nil
+        displayName: String? = nil,
+        recoveryStorage: RecoveryStorage = RecoveryStorage()
     ) {
         let sessionConfig = config.signalingProvider == nil
             ? SerenadaConfig(
@@ -195,7 +199,8 @@ public final class SerenadaSession: ObservableObject {
             roomId: roomId, roomUrl: roomUrl, config: sessionConfig,
             delegateProvider: delegateProvider, logger: logger,
             initialSignalingProvider: nil, signaling: nil, apiClient: nil, audioController: nil, mediaEngine: nil, clock: nil,
-            displayName: displayName
+            displayName: displayName,
+            recoveryStorage: recoveryStorage
         )
     }
 
@@ -211,8 +216,10 @@ public final class SerenadaSession: ObservableObject {
         audioController: SessionAudioController? = nil,
         mediaEngine: SessionMediaEngine? = nil,
         clock: SessionClock? = nil,
-        displayName: String? = nil
+        displayName: String? = nil,
+        recoveryStorage: RecoveryStorage = RecoveryStorage()
     ) {
+        self.recoveryStorage = recoveryStorage
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.config = config
@@ -638,6 +645,7 @@ public final class SerenadaSession: ObservableObject {
     fileprivate func handleProviderJoined(_ event: JoinedEvent) {
         currentError = nil
         signalingMessageRouter?.processJoinedEvent(event)
+        persistRecoveryRecord(token: event.reconnectToken, ttlMs: event.reconnectTokenTTLMs)
     }
 
     fileprivate func handleProviderRoomStateUpdated(_ event: RoomStateEvent) {
@@ -900,6 +908,8 @@ public final class SerenadaSession: ObservableObject {
         joinFlowCoordinator?.clearAllTimers()
         connectionStatusTracker?.cancelTimer()
         iceFetchGeneration += 1
+        sessionStartTs = nil
+        recoveryStorage.clear()
 
         let videoCaptureSupported = !availableCameraModes.isEmpty
         userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
@@ -1141,4 +1151,30 @@ public final class SerenadaSession: ObservableObject {
         }
         pathMonitor.start(queue: pathMonitorQueue)
     }
+
+    /// Snapshots the in-memory reconnect state into the cross-launch
+    /// recovery store so a relaunched process can offer a "Rejoin call?"
+    /// prompt. No-op until the join handshake has produced a CID + token.
+    private func persistRecoveryRecord(token: String?, ttlMs: Int64?) {
+        guard let cid = clientId, let token = token else { return }
+        if sessionStartTs == nil { sessionStartTs = Self.nowMs() }
+        let ttl = ttlMs.flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultRecoveryTokenTTLMs
+        let record = RecoveryRecord(
+            roomId: roomId,
+            cid: cid,
+            reconnectToken: token,
+            lastEpoch: currentRoomState?.epoch,
+            sessionStartTs: sessionStartTs ?? Self.nowMs(),
+            expiresAtMs: Self.nowMs() + ttl
+        )
+        recoveryStorage.save(record)
+    }
+
+    private static func nowMs() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    /// Matches the server's `reconnectTokenTTL` (= `suspendHardEvictionTimeout`).
+    /// Used when the server did not surface `reconnectTokenTTLMs`.
+    private static let defaultRecoveryTokenTTLMs: Int64 = 10 * 60 * 1000
 }
