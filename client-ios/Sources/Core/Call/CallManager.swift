@@ -625,11 +625,7 @@ final class CallManager: ObservableObject {
         case .roomEnded:
             return L10n.callStatusRoomEnded
         case .sessionExpired:
-            // The persisted reconnect credential is gone — the user needs
-            // to start a new call from scratch. Use the room-ended copy as
-            // the closest existing localized string until a dedicated
-            // session-expired message is added to L10n.
-            return L10n.callStatusRoomEnded
+            return L10n.callStatusSessionExpired
         case .permissionDenied:
             return L10n.callStatusConnectionFailed
         case .serverError(let message), .unknown(let message):

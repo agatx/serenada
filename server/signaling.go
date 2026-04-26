@@ -1033,12 +1033,13 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	room.mu.Unlock() // <--- CRITICAL FIX: Unlock before broadcast/send to avoid deadlock/blocking
 
-	// Successful, non-fresh joins clear any stale tombstone for this room —
-	// the room is alive again and future reconnects should not see a stale
-	// terminal error.
-	if outcome != reconnectOutcomeFresh {
-		h.clearTombstone(rid)
-	}
+	// Any successful join means the room is alive again, so clear any stale
+	// tombstone for this RID. Reconnect attempts arriving with a token for a
+	// dead room are already gated above (before they reach this point); by
+	// the time we get here the join has succeeded and a fresh participant
+	// reconnecting later — including the one who just joined — must not be
+	// rejected with ROOM_ENDED for a previous session.
+	h.clearTombstone(rid)
 
 	payload := map[string]interface{}{
 		"hostCid":         hostCID,
@@ -1340,25 +1341,32 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 // applyContentStateUpdate merges the latest content metadata into the
 // sender's participant record so it can be replayed via room_state after a
 // suspension. Caller must hold room.mu.
+//
+// Bails out unless the payload carries a boolean `active` field — a
+// malformed/empty content_state must NOT destructively clear the
+// participant's previously-stored state, since suspended peers depend on
+// the latest known good value at reattach time.
 func applyContentStateUpdate(room *Room, senderCID string, payload map[string]interface{}) {
 	p := room.participantByCID(senderCID)
 	if p == nil {
 		return
 	}
+	active, ok := payload["active"].(bool)
+	if !ok {
+		return
+	}
 	state := &ParticipantContentState{
+		Active:      active,
 		Epoch:       room.Epoch,
 		UpdatedAtMs: time.Now().UnixMilli(),
 	}
-	if active, ok := payload["active"].(bool); ok {
-		state.Active = active
-	}
-	if contentType, ok := payload["contentType"].(string); ok {
-		state.ContentType = contentType
-	}
-	// `active=false` collapses to a cleared state so suspended peers don't see
-	// a stale "screen sharing" indicator after the share stops.
-	if !state.Active {
-		state.ContentType = ""
+	// contentType is meaningful only while a share is active. `active=false`
+	// collapses to a cleared state so suspended peers don't see a stale
+	// "screen sharing" indicator after the share stops.
+	if active {
+		if contentType, ok := payload["contentType"].(string); ok {
+			state.ContentType = contentType
+		}
 	}
 	p.ContentState = state
 }
@@ -1454,13 +1462,16 @@ func (h *Hub) handleMediaLiveness(c *Client, msg Message) {
 	now := time.Now().UnixMilli()
 	room.mu.Lock()
 	defer room.mu.Unlock()
-	// Sender must be an attached participant in this room. Stale-socket
-	// reports get dropped — same authorization rule as relay.
-	if room.cidForClient(c) == "" {
+	// Sender must be an attached participant in this room. Resolve the CID
+	// from the room index, NOT c.cid — stale-socket fields can outlive a
+	// reattach and we should authorize / self-skip against the index, like
+	// handleRelay does.
+	senderCID := room.cidForClient(c)
+	if senderCID == "" {
 		return
 	}
 	for _, reportedCID := range payload.CIDs {
-		if reportedCID == "" || reportedCID == c.cid {
+		if reportedCID == "" || reportedCID == senderCID {
 			continue
 		}
 		if room.participantByCID(reportedCID) == nil {

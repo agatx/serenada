@@ -235,6 +235,105 @@ func TestReconnectAfterEndRoomReturnsRoomEnded(t *testing.T) {
 	_ = hostJoined
 }
 
+// TestFreshJoinClearsTombstoneSoNewParticipantsCanReconnect locks in the
+// fix for the bug where ending a room and immediately recreating it via a
+// fresh join left the tombstone in place. Any reconnect with a valid
+// token (including one issued for the new room session) would then be
+// rejected with ROOM_ENDED until the tombstone TTL expired.
+func TestFreshJoinClearsTombstoneSoNewParticipantsCanReconnect(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	// Session 1: host joins and ends the room → tombstone created.
+	host1 := fakeClient(hub)
+	hub.registerClient(host1)
+	hub.handleMessage(host1, joinPayload(rid, 4, 4))
+	captureJoined(t, host1)
+
+	endMsg := Message{V: 1, Type: "end_room", RID: rid}
+	endBytes, _ := json.Marshal(endMsg)
+	hub.handleMessage(host1, endBytes)
+
+	if t1 := hub.lookupTombstone(rid); t1 == nil {
+		t.Fatal("expected tombstone after end_room")
+	}
+
+	// Session 2: someone does a FRESH join to the same RID. Tombstone
+	// should be cleared once the room is alive again.
+	host2 := fakeClient(hub)
+	hub.registerClient(host2)
+	hub.handleMessage(host2, joinPayload(rid, 4, 4))
+	host2Joined := captureJoined(t, host2)
+	if host2Joined.Reconnect != reconnectOutcomeFresh {
+		t.Fatalf("expected fresh outcome on second join, got %q", host2Joined.Reconnect)
+	}
+	if t2 := hub.lookupTombstone(rid); t2 != nil {
+		t.Fatal("expected tombstone to be cleared after a fresh join recreates the room")
+	}
+
+	// Now the new participant must be able to reconnect with the token
+	// they were just issued, without hitting the stale ROOM_ENDED gate.
+	hub.disconnectClient(host2)
+
+	host2b := fakeClient(hub)
+	hub.registerClient(host2b)
+	hub.handleMessage(host2b, joinWithReconnect(rid, host2Joined.CID, host2Joined.ReconnectToken))
+	rejoined := captureJoined(t, host2b)
+	if rejoined.Reconnect != reconnectOutcomeReattached {
+		t.Fatalf("expected reattach for new-room participant, got %q", rejoined.Reconnect)
+	}
+}
+
+// TestMalformedContentStateDoesNotClearStoredValue locks in the fix for
+// the bug where a content_state payload missing a boolean `active` field
+// would destructively clear the participant's previously-stored content
+// state instead of being ignored.
+func TestMalformedContentStateDoesNotClearStoredValue(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	captureJoined(t, b)
+	drainMessages(a)
+	drainMessages(b)
+
+	// A starts a screen share.
+	csPayload, _ := json.Marshal(map[string]interface{}{
+		"active":      true,
+		"contentType": "screen",
+	})
+	hub.handleMessage(a, mustMarshal(Message{V: 1, Type: "content_state", RID: rid, Payload: csPayload}))
+
+	// A sends a malformed update missing the boolean `active`. This must
+	// NOT clobber the stored state.
+	bogusPayload, _ := json.Marshal(map[string]interface{}{
+		"contentType": "huh",
+	})
+	hub.handleMessage(a, mustMarshal(Message{V: 1, Type: "content_state", RID: rid, Payload: bogusPayload}))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	room.mu.Lock()
+	p := room.participantByCID(a.cid)
+	room.mu.Unlock()
+	if p == nil || p.ContentState == nil {
+		t.Fatal("expected stored content state to survive malformed update")
+	}
+	if !p.ContentState.Active || p.ContentState.ContentType != "screen" {
+		t.Fatalf("expected active=true contentType=screen, got %+v", p.ContentState)
+	}
+}
+
 func TestExpiredReconnectTokenIsRejected(t *testing.T) {
 	t.Setenv("TURN_SECRET", "test-reconnect-secret")
 	rid := mustTestRoomID(t)

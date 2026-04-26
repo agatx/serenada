@@ -361,17 +361,21 @@ export class SignalingEngine {
                 this.clearReconnectStorage();
                 this.lastReconnectOutcome = null;
                 this.lastEpoch = null;
+                this.awaitingPostReconnectSnapshot = false;
+                this.epochAtDisconnect = null;
                 break;
             case 'negotiation_dirty':
             case 'relay_failed': {
-                // Pure forwarding to message listeners — MediaEngine handles
-                // the renegotiation/back-off behavior. Parsing here surfaces
-                // shape errors early and keeps the listeners on the typed
-                // path.
-                if (msg.type === 'relay_failed') {
-                    parseRelayFailedPayload(msg.payload);
-                } else {
-                    parseNegotiationDirtyPayload(msg.payload);
+                // Validate payload shape and drop anything malformed before
+                // it reaches downstream listeners. MediaEngine handles the
+                // actual renegotiation/back-off behavior off the listener
+                // stream.
+                const parsed = msg.type === 'relay_failed'
+                    ? parseRelayFailedPayload(msg.payload)
+                    : parseNegotiationDirtyPayload(msg.payload);
+                if (!parsed) {
+                    this.logger?.log('warning', 'Signaling', `Ignoring malformed ${msg.type} payload`);
+                    return;
                 }
                 break;
             }
@@ -403,6 +407,8 @@ export class SignalingEngine {
                         this.clearReconnectStorage();
                         this.lastReconnectOutcome = null;
                         this.lastEpoch = null;
+                        this.awaitingPostReconnectSnapshot = false;
+                        this.epochAtDisconnect = null;
                     }
                 }
                 break;
