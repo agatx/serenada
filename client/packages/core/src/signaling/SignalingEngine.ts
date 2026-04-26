@@ -235,6 +235,10 @@ export class SignalingEngine {
         this.turnToken = null;
         this.turnTokenTTLMs = null;
         this.turnTokenExpiresAtMs = null;
+        this.lastReconnectOutcome = null;
+        this.lastEpoch = null;
+        this.awaitingPostReconnectSnapshot = false;
+        this.epochAtDisconnect = null;
         this.notifyStateChange();
     }
 
@@ -354,15 +358,7 @@ export class SignalingEngine {
                 break;
             }
             case 'room_ended':
-                this.clearJoinTimers();
-                this.roomState = null;
-                this.currentRoomId = null;
-                this.needsRejoin = false;
-                this.clearReconnectStorage();
-                this.lastReconnectOutcome = null;
-                this.lastEpoch = null;
-                this.awaitingPostReconnectSnapshot = false;
-                this.epochAtDisconnect = null;
+                this.resetForTerminal();
                 break;
             case 'negotiation_dirty':
             case 'relay_failed': {
@@ -400,15 +396,7 @@ export class SignalingEngine {
                         errorPayload.code === 'ROOM_ENDED' ||
                         errorPayload.code === 'INVALID_RECONNECT_TOKEN'
                     ) {
-                        this.clearJoinTimers();
-                        this.roomState = null;
-                        this.currentRoomId = null;
-                        this.needsRejoin = false;
-                        this.clearReconnectStorage();
-                        this.lastReconnectOutcome = null;
-                        this.lastEpoch = null;
-                        this.awaitingPostReconnectSnapshot = false;
-                        this.epochAtDisconnect = null;
+                        this.resetForTerminal();
                     }
                 }
                 break;
@@ -655,6 +643,22 @@ export class SignalingEngine {
 
     private notifyStateChange(): void {
         [...this.stateListeners].forEach(l => l());
+    }
+
+    // Drops in-room state, persisted reconnect authority, and the
+    // post-reconnect gate. Called for any terminal event that means the
+    // current session is over and should not influence a future join:
+    // server `room_ended`, terminal error codes, etc.
+    private resetForTerminal(): void {
+        this.clearJoinTimers();
+        this.roomState = null;
+        this.currentRoomId = null;
+        this.needsRejoin = false;
+        this.clearReconnectStorage();
+        this.lastReconnectOutcome = null;
+        this.lastEpoch = null;
+        this.awaitingPostReconnectSnapshot = false;
+        this.epochAtDisconnect = null;
     }
 
     // Session storage helpers

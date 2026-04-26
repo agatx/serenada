@@ -152,16 +152,7 @@ internal class SignalingMessageRouter(
 
     fun processErrorEvent(event: ErrorEvent) {
         assertMainThread()
-        val callError = when (event.code) {
-            "ROOM_CAPACITY_UNSUPPORTED", "ROOM_FULL" -> CallError.RoomFull
-            "CONNECTION_FAILED" -> CallError.ConnectionFailed
-            "JOIN_TIMEOUT" -> CallError.SignalingTimeout
-            "ROOM_ENDED" -> CallError.RoomEnded
-            "INVALID_RECONNECT_TOKEN" -> CallError.SessionExpired
-            else -> if (event.message.isNotBlank()) CallError.ServerError(event.message)
-            else CallError.Unknown("Unknown error")
-        }
-        onError(callError)
+        onError(mapError(event.code, event.message))
     }
 
     // --- Private handlers ---
@@ -197,16 +188,17 @@ internal class SignalingMessageRouter(
 
     private fun handleError(msg: SignalingMessage) {
         val payload = msg.payload.toErrorPayload()
-        val callError = when (payload?.code) {
-            "ROOM_CAPACITY_UNSUPPORTED", "ROOM_FULL" -> CallError.RoomFull
-            "CONNECTION_FAILED" -> CallError.ConnectionFailed
-            "JOIN_TIMEOUT" -> CallError.SignalingTimeout
-            "ROOM_ENDED" -> CallError.RoomEnded
-            "INVALID_RECONNECT_TOKEN" -> CallError.SessionExpired
-            else -> if (payload?.message != null) CallError.ServerError(payload.message)
-            else CallError.Unknown("Unknown error")
-        }
-        onError(callError)
+        onError(mapError(payload?.code, payload?.message))
+    }
+
+    private fun mapError(code: String?, message: String?): CallError = when (code) {
+        "ROOM_CAPACITY_UNSUPPORTED", "ROOM_FULL" -> CallError.RoomFull
+        "CONNECTION_FAILED" -> CallError.ConnectionFailed
+        "JOIN_TIMEOUT" -> CallError.SignalingTimeout
+        "ROOM_ENDED" -> CallError.RoomEnded
+        "INVALID_RECONNECT_TOKEN" -> CallError.SessionExpired
+        else -> if (!message.isNullOrBlank()) CallError.ServerError(message)
+        else CallError.Unknown("Unknown error")
     }
 
     private fun parseRoomState(payload: JSONObject?): RoomState? {

@@ -816,8 +816,12 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	// caller in a recreated room.
 	if reconnectCID != "" && tokenValid {
 		if t := h.lookupTombstone(rid); t != nil {
-			log.Printf("[JOIN] Rejecting reconnect to tombstoned room %s (reason=%s)", rid, t.Reason)
-			h.sendRoomEnded(c, rid, t.Reason)
+			reason := t.Reason
+			if reason == "" {
+				reason = tombstoneReasonEndedByHost
+			}
+			log.Printf("[JOIN] Rejecting reconnect to tombstoned room %s (reason=%s)", rid, reason)
+			c.sendErrorWithReason(rid, "ROOM_ENDED", "Room has ended", reason)
 			return
 		}
 	}
@@ -1299,7 +1303,7 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 	// sender doesn't sit waiting forever for an answer that will never come.
 	negotiationType := msg.Type == "offer" || msg.Type == "answer" || msg.Type == "ice"
 	relayedCount := 0
-	suspendedTargets := make([]string, 0)
+	var suspendedTargets []string
 	for cid, p := range room.byCID {
 		if cid == senderCID {
 			continue
@@ -1318,7 +1322,7 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 		}
 	}
 
-	if len(suspendedTargets) > 0 && negotiationType {
+	if len(suspendedTargets) > 0 {
 		// Tell the sender we couldn't deliver. The SDK should suppress further
 		// negotiation to that CID and wait for `negotiation_dirty` after the
 		// peer reattaches.
@@ -1752,26 +1756,6 @@ func (h *Hub) sendRoomStateSnapshot(c *Client, room *Room) {
 	})
 }
 
-// sendRoomEnded surfaces a structured terminal error to a client whose
-// reconnect attempt landed on a tombstoned room. SDKs map ROOM_ENDED to a
-// final "call ended" UI and clear persisted reconnect state.
-func (h *Hub) sendRoomEnded(c *Client, rid, reason string) {
-	if reason == "" {
-		reason = tombstoneReasonEndedByHost
-	}
-	payload, _ := json.Marshal(map[string]interface{}{
-		"code":    "ROOM_ENDED",
-		"message": "Room has ended",
-		"reason":  reason,
-	})
-	c.sendMessage(Message{
-		V:       1,
-		Type:    "error",
-		RID:     rid,
-		Payload: payload,
-	})
-}
-
 // notifyDirtyNegotiation informs each active peer that they had pending
 // signaling traffic to the given CID while it was suspended. SDKs use this to
 // schedule a fresh glare-safe negotiation/ICE-restart after the authoritative
@@ -1806,15 +1790,26 @@ func (h *Hub) notifyDirtyNegotiation(room *Room, recoveredCID string, partners [
 }
 
 func (c *Client) sendError(rid, code, message string) {
-	payload, _ := json.Marshal(map[string]interface{}{
+	c.sendErrorWithReason(rid, code, message, "")
+}
+
+// sendErrorWithReason mirrors sendError but emits an additional `reason`
+// field on the error payload. Used for terminal codes (e.g. ROOM_ENDED)
+// where the SDK wants the trigger surfaced for UX or telemetry.
+func (c *Client) sendErrorWithReason(rid, code, message, reason string) {
+	payload := map[string]interface{}{
 		"code":    code,
 		"message": message,
-	})
+	}
+	if reason != "" {
+		payload["reason"] = reason
+	}
+	body, _ := json.Marshal(payload)
 	c.sendMessage(Message{
 		V:       1,
 		Type:    "error",
 		RID:     rid,
-		Payload: payload,
+		Payload: body,
 	})
 }
 
