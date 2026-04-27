@@ -1,11 +1,14 @@
 package app.serenada.core
 
+import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -120,6 +123,53 @@ class SerenadaSession internal constructor(
                 }
             }
         }
+    }
+
+    // App lifecycle (foreground / Doze release force-ping — see resilience #8).
+    // Activity-counting via the framework `ActivityLifecycleCallbacks` keeps the
+    // SDK dependency-free; ProcessLifecycleOwner would require lifecycle-process.
+    private var startedActivityCount = 0
+    private var lastBackgroundedAtMs: Long? = null
+    private val appLifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+        override fun onActivityStarted(activity: Activity) {
+            handler.post {
+                val wasBackgrounded = startedActivityCount == 0
+                startedActivityCount += 1
+                if (wasBackgrounded) handleAppForegrounded()
+            }
+        }
+        override fun onActivityResumed(activity: Activity) {}
+        override fun onActivityPaused(activity: Activity) {}
+        override fun onActivityStopped(activity: Activity) {
+            handler.post {
+                startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+                if (startedActivityCount == 0) handleAppBackgrounded()
+            }
+        }
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+        override fun onActivityDestroyed(activity: Activity) {}
+    }
+
+    private fun handleAppBackgrounded() {
+        lastBackgroundedAtMs = clock.nowMs()
+    }
+
+    /**
+     * Force-ping hook for resilience #8: when Android resumes the app after
+     * a long enough background (or a Doze release), the WS that the OS
+     * silently killed gets detected inside `foregroundForcePingTimeoutMs`
+     * instead of waiting for the regular `pingIntervalMs` cycle.
+     */
+    private fun handleAppForegrounded() {
+        val backgroundedAt = lastBackgroundedAtMs
+        lastBackgroundedAtMs = null
+        if (backgroundedAt == null) return
+        val phase = _state.value.phase
+        if (phase != CallPhase.InCall && phase != CallPhase.Joining && phase != CallPhase.Waiting) return
+        val backgroundedMs = clock.nowMs() - backgroundedAt
+        if (backgroundedMs < FOREGROUND_RESUME_MIN_BACKGROUND_MS) return
+        signalingProvider.forceReconnectIfStale(WebRtcResilienceConstants.FOREGROUND_FORCE_PING_TIMEOUT_MS)
     }
 
     private var clientId: String? = null
@@ -1162,10 +1212,24 @@ class SerenadaSession internal constructor(
 
     private fun registerConnectivityListener() {
         runCatching { connectivityManager.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback) }
+        registerAppLifecycleListener()
     }
 
     private fun unregisterConnectivityListener() {
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
+        unregisterAppLifecycleListener()
+    }
+
+    private fun registerAppLifecycleListener() {
+        val app = appContext as? Application ?: return
+        runCatching { app.registerActivityLifecycleCallbacks(appLifecycleCallbacks) }
+    }
+
+    private fun unregisterAppLifecycleListener() {
+        val app = appContext as? Application ?: return
+        runCatching { app.unregisterActivityLifecycleCallbacks(appLifecycleCallbacks) }
+        startedActivityCount = 0
+        lastBackgroundedAtMs = null
     }
 
     private fun hasRequiredPermissions(): Boolean {
@@ -1186,6 +1250,11 @@ class SerenadaSession internal constructor(
         // The recovery record stops offering rejoin past this window because
         // the persisted token would no longer be honored anyway.
         const val RecoveryTokenTTLMs = 10L * 60L * 1000L
+        // Background duration that triggers a foreground force-ping. Anything
+        // shorter is short enough that pings would have noticed the failure on
+        // their own; longer is the OS window where Doze / process freeze may
+        // have killed the WS.
+        const val FOREGROUND_RESUME_MIN_BACKGROUND_MS = 5_000L
         val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
             android.Manifest.permission.CAMERA,
             android.Manifest.permission.RECORD_AUDIO,

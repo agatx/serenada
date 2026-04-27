@@ -42,8 +42,10 @@ internal class SignalingClient(
     @Volatile private var connecting = false
     private var pingRunnable: Runnable? = null
     private var connectTimeoutRunnable: Runnable? = null
+    private var forcePingRunnable: Runnable? = null
     private var wsConsecutiveFailures = 0
     private var lastPongAt = System.currentTimeMillis()
+    private var pongSeq = 0L
     private var missedPongs = 0
     private var connectionAttemptId = 0
     private var activeAttemptId = 0
@@ -82,6 +84,7 @@ internal class SignalingClient(
         closedByClient = true
         stopPing()
         clearConnectTimeout()
+        clearForcePing()
         connecting = false
         connected = false
         activeAttemptId = -kotlin.math.abs(activeAttemptId)
@@ -91,6 +94,38 @@ internal class SignalingClient(
         normalizedHost = null
         resetTransportState()
         resetTransportSessions()
+    }
+
+    override fun forcePingWithDeadline(timeoutMs: Long) {
+        if (!connected) return
+        val kind = activeTransport ?: return
+        val attemptId = activeAttemptId
+        val pongSeqAtPing = pongSeq
+        clearForcePing()
+
+        val payload = SignalingMessage(
+            type = "ping",
+            rid = null,
+            sid = null,
+            cid = null,
+            to = null,
+            payload = null
+        )
+        send(payload)
+
+        val runnable = Runnable {
+            if (!isAttemptActive(attemptId, kind)) return@Runnable
+            if (!connected) return@Runnable
+            if (pongSeq > pongSeqAtPing) return@Runnable
+            handleTransportClosed(attemptId, kind, "foreground_force_ping_timeout")
+        }
+        forcePingRunnable = runnable
+        handler.postDelayed(runnable, timeoutMs.coerceAtLeast(0L))
+    }
+
+    private fun clearForcePing() {
+        forcePingRunnable?.let { handler.removeCallbacks(it) }
+        forcePingRunnable = null
     }
 
     private fun startPing() {
@@ -276,6 +311,7 @@ internal class SignalingClient(
 
     override fun recordPong() {
         lastPongAt = System.currentTimeMillis()
+        pongSeq += 1L
         missedPongs = 0
     }
 

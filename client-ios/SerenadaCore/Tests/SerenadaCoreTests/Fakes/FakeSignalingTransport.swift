@@ -50,4 +50,8 @@ final class FakeSignalingTransport: SignalingTransport {
     func simulateMessage(_ message: SignalingMessage) {
         onMessage?(message)
     }
+
+    func clearSentMessages() {
+        sentMessages.removeAll()
+    }
 }

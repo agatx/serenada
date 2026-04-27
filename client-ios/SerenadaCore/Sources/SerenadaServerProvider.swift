@@ -125,6 +125,18 @@ internal final class SerenadaServerProvider: SignalingProvider {
         }
     }
 
+    func forceReconnectIfStale(timeoutMs: Int) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                signaling.forcePingWithDeadline(timeoutMs: timeoutMs)
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.signaling.forcePingWithDeadline(timeoutMs: timeoutMs)
+            }
+        }
+    }
+
     func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?) {
         if Thread.isMainThread {
             MainActor.assumeIsolated {

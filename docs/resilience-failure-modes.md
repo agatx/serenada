@@ -1,6 +1,6 @@
 # Resilience Failure Modes — Audit & Fix Plan
 
-**Status:** Phase 1 implemented; Phase 2 partial (process-death recovery #5 landed end-to-end; #8/#10 in flight).
+**Status:** Phase 1 implemented; Phase 2 partial (process-death recovery #5 and foreground/Doze force-ping #8 landed end-to-end; #6/#7/#10 outstanding).
 **Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed) · 2026-04-26 (Phase 2 partial landed)
 **Scope:** Web, Android, iOS SDKs and the Go signaling server
 
@@ -67,7 +67,7 @@ must preserve the core UX model:
 | 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      | Phase 2 ✅ (server `POST /api/leave` + per-platform recovery store + rejoin API) |
 | 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      | Phase 2 |
 | 7 | SSE transport hijack via SID reuse                        | Security: another connection can take over an SSE session | Critical | S      | Phase 2 — server `TODO(#7)` placed; needs SDK `resumeSse` first |
-| 8 | iOS background suspension keeps SDK in stale "connected"  | After long background, signaling appears alive but isn't  | High     | M      | Phase 2 |
+| 8 | iOS background suspension keeps SDK in stale "connected"  | After long background, signaling appears alive but isn't  | High     | M      | Phase 2 ✅ |
 | 9 | TURN credentials expire while signaling is down           | Relay path fails; cannot recover even when signaling back | Medium   | S      | Phase 3 |
 | 10| Push-to-rejoin races with local cleanup                   | Duplicate sessions, ghost slot on server                  | High     | M      | Phase 2 |
 | 11| `end_room` doesn't notify suspended peers                 | Suspended peer reconnect-loops a dead room                | Medium   | XS     | Phase 1 ✅ (tombstone + ROOM_ENDED) |
@@ -746,7 +746,17 @@ behind a server feature flag for one release; clients gain `resumeSse` first.
 
 ## 8. iOS background suspension keeps SDK in stale "connected" state
 
-**Status (2026-04-25):** Not started — Phase 2.
+**Status (2026-04-26):** Landed end-to-end. Both iOS and Android SDKs
+auto-detect foreground transitions after a ≥ 5 s background and call a
+new `signalingProvider.forceReconnectIfStale(timeoutMs:)` hook that
+sends a synthetic ping, arms a `foregroundForcePingTimeoutMs = 2_000`
+deadline, and force-closes the transport on miss so the existing
+reconnect path runs. iOS observes `UIApplication.willEnterForeground`
+notifications; Android tracks Activity start/stop counts via
+`Application.ActivityLifecycleCallbacks` (no new dependency on
+`lifecycle-process`). The internal `SessionSignaling.forcePingWithDeadline`
+uses a monotonic pong-sequence counter so the deadline arms the close
+only when no pong arrives between ping and timeout.
 
 ### Symptom
 
@@ -1411,6 +1421,69 @@ Out of scope for this document, listed for visibility:
   it deserves a fresh look.
 
 ## Change Log
+
+### 2026-04-26 — Phase 2 partial: foreground / Doze force-ping (#8)
+
+- **Shared resilience constants**: New
+  `foregroundForcePingTimeoutMs = 2_000` added to all three SDKs
+  (`client/packages/core/src/constants.ts`,
+  `client-android/.../call/WebRtcResilienceConstants.kt`,
+  `client-ios/SerenadaCore/Sources/Call/WebRtcResilienceConstants.swift`)
+  and surfaced in `scripts/check-resilience-constants.mjs`'s parity check
+  (now 19 cross-platform constants).
+
+- **iOS SDK**: `SessionSignaling` gains a `forcePingWithDeadline(timeoutMs:)`
+  hook with a default no-op extension; `SignalingClient` implements it by
+  sending a synthetic ping, recording a monotonic `pongSeq` snapshot, and
+  arming a deadline `Task` that calls `handleTransportClosed` with reason
+  `foreground_force_ping_timeout` on miss. `SignalingProvider` gets a
+  matching public `forceReconnectIfStale(timeoutMs:)` (default no-op) so
+  custom providers can opt out; `SerenadaServerProvider` forwards to the
+  signaling client. `SerenadaSession` subscribes to
+  `UIApplication.didEnterBackground` / `willEnterForeground` notifications
+  in `startNetworkMonitoring`, tracks `lastBackgroundedAtMs`, and on
+  foreground transitions where the app was backgrounded for
+  ≥ `foregroundResumeMinBackgroundMs = 5_000` and the call is in
+  `joining` / `waiting` / `inCall`, calls
+  `signalingProvider.forceReconnectIfStale(timeoutMs:)`. Observers are
+  removed in `deinit`.
+
+- **Android SDK**: `SessionSignaling` gains a default-no-op
+  `forcePingWithDeadline(timeoutMs: Long)`; `SignalingClient` implements it
+  with the same monotonic `pongSeq` discipline and posts a `Runnable`
+  through the session handler that closes the transport with
+  `foreground_force_ping_timeout` on miss. `SignalingProvider` gains a
+  default-no-op `forceReconnectIfStale(timeoutMs:)`;
+  `SerenadaServerProvider` forwards. `SerenadaSession` registers an
+  `Application.ActivityLifecycleCallbacks` (no new
+  `lifecycle-process` dependency) that counts started Activities;
+  transitions from 0 → 1 are treated as foreground and from 1 → 0 as
+  background. Same 5_000 ms minimum-background threshold as iOS. The
+  observer is registered/unregistered alongside the existing connectivity
+  network callback.
+
+- **Tests**:
+  - iOS `SignalingClientForcePingTests` (6 tests, xcodebuild green) covers
+    ping emission, deadline-miss closes the transport, pong-arrival
+    cancels the close, no-op while disconnected, repeated calls cancel
+    earlier deadlines, and post-close calls stay no-op.
+  - Android `SignalingClientForcePingTest` (6 tests, Robolectric, gradle
+    green) mirrors the iOS matrix with `ShadowLooper` time advancement.
+  - `scripts/check-resilience-constants.mjs` and
+    `scripts/check-version-parity.mjs` green.
+
+- **Deferred (still Phase 2)**:
+  - **#6 explicit suspension state surface** — needs the
+    `peerSuspendedUiTimeoutMs` / `suspendHardEvictionTimeoutMs` /
+    `epochResyncTimeoutMs` shared constants and the
+    `SignalingState.suspended` model on top of the constants this slice
+    added. Tracked for a follow-up slice.
+  - **#7 SSE transport hijack** — server `TODO(#7)` still in place; the
+    SDK `resumeSse` envelope and pending-session model is the remaining
+    piece.
+  - **#10 lifecycle serialization on `CallManager`** and **#10 deep-link
+    guard ("switch call?" prompt)** — both deferred to product/UX work
+    on the host apps.
 
 ### 2026-04-26 — Phase 2 partial: process-death recovery (#5)
 

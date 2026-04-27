@@ -121,6 +121,17 @@ interface SignalingProvider {
 
     suspend fun getIceServers(): List<PeerConnection.IceServer>
 
+    /**
+     * Hook the SDK calls when the host app returns to foreground after a
+     * background period long enough that the OS may have silently killed
+     * the underlying transport (e.g. Doze release or process freeze). The
+     * expected behavior for transport-owning providers is to send a
+     * synthetic ping and arm a `timeoutMs` deadline, then force-close the
+     * transport on miss so the normal reconnect path runs. Default is
+     * no-op for providers that manage their own lifecycle.
+     */
+    fun forceReconnectIfStale(timeoutMs: Long) {}
+
     interface Listener {
         fun onConnected(info: ConnectionInfo = ConnectionInfo()) {}
         fun onDisconnected(reason: String?) {}

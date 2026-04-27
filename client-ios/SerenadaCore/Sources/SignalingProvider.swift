@@ -225,6 +225,14 @@ public protocol SignalingProvider: AnyObject {
     func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?)
     func broadcast(type: String, payload: SignalingPayload?)
     func getIceServers() async throws -> [IceServerConfig]
+
+    /// Hook the SDK calls when the host app returns to foreground after a
+    /// background period long enough that the OS may have silently killed
+    /// the underlying transport. The expected behavior for transport-owning
+    /// providers is to send a synthetic ping and arm a `timeoutMs` deadline,
+    /// then force-close the transport on miss so the normal reconnect path
+    /// runs. Default is no-op for providers that manage their own lifecycle.
+    func forceReconnectIfStale(timeoutMs: Int)
 }
 
 public extension SignalingProvider {
@@ -234,4 +242,6 @@ public extension SignalingProvider {
     func joinRoom(_ roomId: String) {
         joinRoom(roomId, options: JoinOptions())
     }
+
+    func forceReconnectIfStale(timeoutMs: Int) {}
 }
