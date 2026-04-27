@@ -66,9 +66,9 @@ self.addEventListener('activate', (event) => {
     event.waitUntil(clients.claim());
 });
 
-self.addEventListener('fetch', (event) => {
-    // Basic pass-through fetch handler
-    event.respondWith(fetch(event.request));
+self.addEventListener('fetch', () => {
+    // No-op — let the browser handle requests normally.
+    // Listener is kept to satisfy PWA installability heuristics.
 });
 
 self.addEventListener('push', (event) => {
