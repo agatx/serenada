@@ -290,6 +290,12 @@ internal fun CallScreen(
         }
     }
 
+    // When the local camera is off there's nothing meaningful to enlarge — force
+    // remote-as-large so the user doesn't see a giant "Camera off" placeholder.
+    // The user's swap preference (`isLocalLarge`) is preserved and reapplied
+    // automatically when video comes back on.
+    val effectiveLocalLarge = isLocalLarge && uiState.localVideoEnabled
+
     SerenadaTheme(theme) {
         BoxWithConstraints(
             modifier =
@@ -365,8 +371,8 @@ internal fun CallScreen(
         val pipVideoModifier =
             pipBaseModifier.padding(pipContentPadding).clip(RoundedCornerShape(pipInnerCornerRadius))
 
-        val localModifier = if (isLocalLarge) mainModifier else pipVideoModifier
-        val remoteModifier = if (isLocalLarge) pipVideoModifier else mainModifier
+        val localModifier = if (effectiveLocalLarge) mainModifier else pipVideoModifier
+        val remoteModifier = if (effectiveLocalLarge) pipVideoModifier else mainModifier
         if (showPip) {
             Box(modifier = pipBackgroundModifier)
         }
@@ -405,7 +411,7 @@ internal fun CallScreen(
                 onLocalPinchZoom = onLocalPinchZoom,
                 strings = strings,
             )
-        } else if (isLocalLarge) {
+        } else if (effectiveLocalLarge) {
             val ratio = localAspectRatio ?: 0f
             val containerRatio = if (maxHeight == 0.dp) 1f else maxWidth / maxHeight
             val safeContainerRatio = if (containerRatio > 0f) containerRatio else 1f
@@ -524,9 +530,9 @@ internal fun CallScreen(
             Box(modifier = localModifier) {
                 VideoPlaceholder(
                     text =
-                        if (isLocalLarge) resolveString(SerenadaString.CallLocalCameraOff, strings)
+                        if (effectiveLocalLarge) resolveString(SerenadaString.CallLocalCameraOff, strings)
                         else resolveString(SerenadaString.CallCameraOff, strings),
-                    fontSize = if (isLocalLarge) 16.sp else 10.sp
+                    fontSize = if (effectiveLocalLarge) 16.sp else 10.sp
                 )
             }
         }
@@ -535,7 +541,7 @@ internal fun CallScreen(
             !isMultiParty &&
                     !uiState.remoteVideoEnabled &&
                     (uiState.phase == CallPhase.InCall ||
-                            (uiState.phase == CallPhase.Waiting && isLocalLarge))
+                            (uiState.phase == CallPhase.Waiting && effectiveLocalLarge))
         if (showRemotePlaceholder) {
             val remoteP = uiState.remoteParticipants.firstOrNull()
             val text =
@@ -545,7 +551,7 @@ internal fun CallScreen(
             Box(modifier = remoteModifier) {
                 VideoPlaceholder(
                     text = text,
-                    fontSize = if (isLocalLarge) 10.sp else 16.sp,
+                    fontSize = if (effectiveLocalLarge) 10.sp else 16.sp,
                     displayName = nameToShow,
                 )
             }
@@ -608,7 +614,7 @@ internal fun CallScreen(
         }
 
         // Waiting State Overlay
-        if (uiState.phase == CallPhase.Waiting && !isLocalLarge) {
+        if (uiState.phase == CallPhase.Waiting && !effectiveLocalLarge) {
             WaitingOverlay(
                 roomId = roomId,
                 serverHost = serverHost,
@@ -653,7 +659,7 @@ internal fun CallScreen(
             uiState.phase == CallPhase.InCall &&
                     isWorldOrCompositeMode &&
                     uiState.isFlashAvailable
-        val showRemoteFitButton = uiState.remoteVideoEnabled && !isLocalLarge && !isMultiParty
+        val showRemoteFitButton = uiState.remoteVideoEnabled && !effectiveLocalLarge && !isMultiParty
         if (showFlashButton || showRemoteFitButton) {
             Column(
                 modifier =

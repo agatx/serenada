@@ -249,6 +249,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const [permissionDenied, setPermissionDenied] = useState(false);
     const [copied, setCopied] = useState(false);
     const [isLocalLarge, setIsLocalLarge] = useState(false);
+    // When the local camera is off there's nothing meaningful to enlarge — force
+    // remote-as-primary so the user doesn't see a giant "Camera off" placeholder.
+    // The user's swap preference (`isLocalLarge`) is preserved and reapplied
+    // automatically when video comes back on.
+    const effectiveLocalLarge = isLocalLarge && !isCameraOff;
     const [areControlsVisible, setAreControlsVisible] = useState(true);
     const [showRecoveringBadge, setShowRecoveringBadge] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
@@ -1035,10 +1040,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         <div data-serenada-callflow="" className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
             {callProbe}
             {overlayContent}
-            <div className={`call-container ${isLocalLarge ? 'local-large' : ''}`}>
+            <div className={`call-container ${effectiveLocalLarge ? 'local-large' : ''}`}>
                 <div
-                    className={`video-remote-container ${isLocalLarge ? 'pip' : 'primary'}`}
-                    onPointerUp={isLocalLarge ? (event) => {
+                    className={`video-remote-container ${effectiveLocalLarge ? 'pip' : 'primary'}`}
+                    onPointerUp={effectiveLocalLarge ? (event) => {
                         event.stopPropagation();
                         handleControlsInteraction();
                         setIsLocalLarge(false);
@@ -1087,8 +1092,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                 </div>
 
                 <div
-                    className={`video-local-container ${isLocalLarge ? 'primary' : 'pip'}`}
-                    onPointerUp={!isLocalLarge ? (event) => {
+                    className={`video-local-container ${effectiveLocalLarge ? 'primary' : 'pip'}`}
+                    onPointerUp={!effectiveLocalLarge ? (event) => {
                         event.stopPropagation();
                         handleControlsInteraction();
                         setIsLocalLarge(true);

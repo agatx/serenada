@@ -4,6 +4,14 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] — 2026-04-27
+
+### Fixed
+- Android: in-call layout now uses `localCameraMode` (instead of `isFrontCamera`) to decide which video is large vs PIP, so configs that start in `WORLD` or `COMPOSITE` mode correctly show the local camera as the main surface from the first frame.
+- Web, Android, iOS: when the local camera is off, the remote video is always the main surface (the user's swap preference is preserved and reapplied when video resumes) — no more giant "Camera off" placeholder when the call starts in `WORLD`/`COMPOSITE` with video disabled.
+- Web, Android, iOS: hide the participant name from the bottom-left pill when the remote video-off placeholder is already showing the name; the mic-muted icon still appears when applicable.
+- Android: `inviteControlsEnabled = false` now also hides the QR code and Share button in the waiting overlay (previously only the "Invite to room" button was gated), so invite controls no longer flash during phase transitions.
+
 ## [0.6.0] — 2026-04-27
 
 ### Changed
