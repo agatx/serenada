@@ -34,6 +34,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val AVATAR_FETCH_TIMEOUT_MS = 10_000
+
 /**
  * Lazily resolves and caches avatars for the lifetime of the call UI.
  * Each `peerId` is sent through [AvatarProvider.resolve] at most once per call,
@@ -41,22 +43,19 @@ import kotlinx.coroutines.withContext
  */
 internal class AvatarCache(private val provider: AvatarProvider?) {
     private val entries = mutableMapOf<String, MutableState<Bitmap?>>()
-    private val pending = mutableSetOf<String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     fun get(peerId: String): MutableState<Bitmap?> {
-        val existing = entries[peerId]
-        if (existing != null) return existing
+        entries[peerId]?.let { return it }
         val state = mutableStateOf<Bitmap?>(null)
         entries[peerId] = state
-        if (provider != null && pending.add(peerId)) {
+        if (provider != null) {
             scope.launch {
-                // Hop off the main thread before invoking the host's provider so any
-                // sync work it does before its first suspension point doesn't jank the UI.
                 val bitmap = runCatching {
+                    // Hop off the main thread so a host's pre-suspension sync work
+                    // doesn't jank the UI.
                     withContext(Dispatchers.IO) {
-                        val source = provider.resolve(peerId) ?: return@withContext null
-                        materialize(source)
+                        provider.resolve(peerId)?.let(::materialize)
                     }
                 }.onFailure { error ->
                     Log.w("Serenada", "avatarProvider failed for $peerId", error)
@@ -70,7 +69,6 @@ internal class AvatarCache(private val provider: AvatarProvider?) {
     fun release() {
         scope.cancel()
         entries.clear()
-        pending.clear()
     }
 
     private fun materialize(source: AvatarSource): Bitmap? = when (source) {
@@ -82,8 +80,8 @@ internal class AvatarCache(private val provider: AvatarProvider?) {
     private fun fetchBitmap(urlString: String): Bitmap? {
         val connection = (URL(urlString).openConnection() as? HttpURLConnection) ?: return null
         return try {
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 10_000
+            connection.connectTimeout = AVATAR_FETCH_TIMEOUT_MS
+            connection.readTimeout = AVATAR_FETCH_TIMEOUT_MS
             connection.instanceFollowRedirects = true
             connection.inputStream.use(BitmapFactory::decodeStream)
         } finally {
