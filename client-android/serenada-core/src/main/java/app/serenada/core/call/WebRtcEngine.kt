@@ -390,7 +390,11 @@ internal class WebRtcEngine(
             return
         }
         renderer.init(eglBase.eglBaseContext, rendererEvents)
-        renderer.setEnableHardwareScaler(true)
+        // Hardware scaler issues setFixedSize(...) with a buffer smaller than the view.
+        // On Android 9 / older SurfaceFlinger this leaves the surface anchored at top-left
+        // after a remote resolution change, producing a black bar on the right until the
+        // next forced layout pass. Sizing the buffer from layout avoids the race.
+        renderer.setEnableHardwareScaler(false)
     }
 
     private fun applyAudioTrackHints() {
