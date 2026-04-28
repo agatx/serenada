@@ -157,9 +157,14 @@ internal fun CallScreen(
         mutableStateOf(config.autoHideControls)
     }
     var wereControlsLastHiddenByAutoHide by remember { mutableStateOf(false) }
-    var isLocalLarge by rememberSaveable { mutableStateOf(false) }
+    var isLocalLarge by rememberSaveable {
+        mutableStateOf(
+            uiState.localCameraMode == LocalCameraMode.WORLD ||
+                uiState.localCameraMode == LocalCameraMode.COMPOSITE
+        )
+    }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(initialRemoteVideoFitCover) }
-    var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
+    var lastCameraMode by remember { mutableStateOf(uiState.localCameraMode) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
@@ -276,13 +281,12 @@ internal fun CallScreen(
         }
     }
 
-    // Auto-swap based on camera facing
-    LaunchedEffect(uiState.isFrontCamera) {
-        if (uiState.isFrontCamera != lastFrontCameraState) {
-            // Front -> Back: Swapping to main view for better preview of what we capture
-            // Back -> Front: Swapping to PIP to see remote person clearly
-            isLocalLarge = !uiState.isFrontCamera
-            lastFrontCameraState = uiState.isFrontCamera
+    // Auto-swap when camera mode changes: WORLD/COMPOSITE → local large, SELFIE → local PIP.
+    LaunchedEffect(uiState.localCameraMode) {
+        if (uiState.localCameraMode != lastCameraMode) {
+            isLocalLarge = uiState.localCameraMode == LocalCameraMode.WORLD ||
+                uiState.localCameraMode == LocalCameraMode.COMPOSITE
+            lastCameraMode = uiState.localCameraMode
         }
     }
 
@@ -560,7 +564,8 @@ internal fun CallScreen(
                 ParticipantBadge(
                     modifier = Modifier.align(Alignment.BottomStart),
                     muted = remoteP?.audioEnabled == false,
-                    displayName = remoteP?.displayName,
+                    // Avoid duplicating the name when the remote video-off placeholder already shows it.
+                    displayName = if (uiState.remoteVideoEnabled) remoteP?.displayName else null,
                 )
             }
         }
@@ -1260,43 +1265,45 @@ private fun WaitingOverlay(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Surface(
-            modifier = Modifier.size(200.dp).clip(RoundedCornerShape(16.dp)),
-            color = Color.White
-        ) {
-            qrBitmap?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = resolveString(SerenadaString.CallQrCode, strings),
-                    modifier = Modifier.fillMaxSize().padding(16.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = {
-                if (onShareLink != null) {
-                    onShareLink()
-                } else {
-                    shareLink(context, link, chooserTitle)
-                }
-            },
-            colors =
-                ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.2f)
-                ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(resolveString(SerenadaString.CallShareInvitation, strings))
-        }
-
+        // QR / Share / Invite are all "invite controls" — keep them off the screen
+        // entirely when disabled so they don't flash during phase transitions.
         if (config.inviteControlsEnabled) {
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Surface(
+                modifier = Modifier.size(200.dp).clip(RoundedCornerShape(16.dp)),
+                color = Color.White
+            ) {
+                qrBitmap?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = resolveString(SerenadaString.CallQrCode, strings),
+                        modifier = Modifier.fillMaxSize().padding(16.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = {
+                    if (onShareLink != null) {
+                        onShareLink()
+                    } else {
+                        shareLink(context, link, chooserTitle)
+                    }
+                },
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = Color.White.copy(alpha = 0.2f)
+                    ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(resolveString(SerenadaString.CallShareInvitation, strings))
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             Button(

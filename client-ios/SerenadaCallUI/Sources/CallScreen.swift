@@ -386,7 +386,11 @@ struct CallScreenView: View {
                         placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil,
                         placeholderDisplayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
                     )
-                    ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
+                    // Avoid duplicating the name when the remote video-off placeholder already shows it.
+                    ParticipantBadge(
+                        muted: uiState.remoteParticipants.first?.audioEnabled == false,
+                        displayName: uiState.remoteVideoEnabled ? uiState.remoteParticipants.first?.displayName : nil
+                    )
                 }
                 .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallLocalView

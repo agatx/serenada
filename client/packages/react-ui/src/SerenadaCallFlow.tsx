@@ -1077,7 +1077,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                         </button>
                     )}
 
-                    <ParticipantBadge muted={remoteParticipant0?.audioEnabled === false} displayName={remoteParticipant0?.displayName} />
+                    <ParticipantBadge
+                        muted={remoteParticipant0?.audioEnabled === false}
+                        // Avoid duplicating the name when the remote video-off placeholder already shows it.
+                        displayName={remoteParticipant0?.videoEnabled === false ? undefined : remoteParticipant0?.displayName}
+                    />
 
                     {waitingOverlay}
                 </div>
