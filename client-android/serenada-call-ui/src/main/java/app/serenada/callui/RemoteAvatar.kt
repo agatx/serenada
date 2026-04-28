@@ -10,10 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -27,8 +24,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
 import java.net.HttpURLConnection
 import java.net.URL
@@ -56,9 +51,13 @@ internal class AvatarCache(private val provider: AvatarProvider?) {
         entries[peerId] = state
         if (provider != null && pending.add(peerId)) {
             scope.launch {
+                // Hop off the main thread before invoking the host's provider so any
+                // sync work it does before its first suspension point doesn't jank the UI.
                 val bitmap = runCatching {
-                    val source = provider.resolve(peerId) ?: return@runCatching null
-                    materialize(source)
+                    withContext(Dispatchers.IO) {
+                        val source = provider.resolve(peerId) ?: return@withContext null
+                        materialize(source)
+                    }
                 }.onFailure { error ->
                     Log.w("Serenada", "avatarProvider failed for $peerId", error)
                 }.getOrNull()
@@ -74,12 +73,10 @@ internal class AvatarCache(private val provider: AvatarProvider?) {
         pending.clear()
     }
 
-    private suspend fun materialize(source: AvatarSource): Bitmap? = withContext(Dispatchers.IO) {
-        when (source) {
-            is AvatarSource.Bitmap -> source.bitmap
-            is AvatarSource.Bytes -> BitmapFactory.decodeByteArray(source.bytes, 0, source.bytes.size)
-            is AvatarSource.Url -> fetchBitmap(source.url)
-        }
+    private fun materialize(source: AvatarSource): Bitmap? = when (source) {
+        is AvatarSource.Bitmap -> source.bitmap
+        is AvatarSource.Bytes -> BitmapFactory.decodeByteArray(source.bytes, 0, source.bytes.size)
+        is AvatarSource.Url -> fetchBitmap(source.url)
     }
 
     private fun fetchBitmap(urlString: String): Bitmap? {

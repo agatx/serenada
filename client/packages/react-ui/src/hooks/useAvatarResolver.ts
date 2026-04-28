@@ -15,9 +15,11 @@ export type AvatarResolver = (peerId: string | undefined) => ResolvedAvatar;
 export function useAvatarResolver(provider: AvatarProvider | undefined): AvatarResolver {
     const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
     const objectUrlsRef = useRef<string[]>([]);
+    const mountedRef = useRef(true);
     const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
 
     useEffect(() => () => {
+        mountedRef.current = false;
         for (const url of objectUrlsRef.current) {
             URL.revokeObjectURL(url);
         }
@@ -34,12 +36,16 @@ export function useAvatarResolver(provider: AvatarProvider | undefined): AvatarR
         if (cached !== undefined) return cached;
 
         cacheRef.current.set(peerId, 'pending');
-        provider(peerId).then(
+        // Wrap in Promise.resolve so a sync throw inside a non-async provider
+        // becomes a rejection and never escapes the render path.
+        Promise.resolve().then(() => provider(peerId)).then(
             (source) => {
+                if (!mountedRef.current) return;
                 cacheRef.current.set(peerId, materializeAvatar(source, objectUrlsRef.current));
                 forceUpdate();
             },
             (error) => {
+                if (!mountedRef.current) return;
                 console.warn('[serenada] avatarProvider rejected for', peerId, error);
                 cacheRef.current.set(peerId, null);
                 forceUpdate();

@@ -21,7 +21,7 @@ fun interface AvatarProvider {
 
 /** Image payload returned by an [AvatarProvider]. */
 sealed class AvatarSource {
-    /** A remote URL that the call UI loads via the host's image-loading stack. */
+    /** A remote URL that the call UI fetches and decodes itself (no host image-loading library required). */
     data class Url(val url: String) : AvatarSource()
 
     /** Encoded image bytes (e.g. JPEG, PNG); decoded once at render time. */

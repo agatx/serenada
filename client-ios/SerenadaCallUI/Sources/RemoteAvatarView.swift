@@ -3,31 +3,42 @@ import UIKit
 
 /// Lazily resolves and caches avatars for the lifetime of the call UI. Each
 /// `peerId` is sent through `AvatarProvider.resolve` at most once per call,
-/// with the resulting `UIImage` (or `nil`) cached for the rest of the call.
+/// with the resulting `UIImage` (or a sentinel for "no avatar") cached for
+/// the rest of the call.
 @MainActor
 final class AvatarCache: ObservableObject {
+    private enum Entry {
+        case pending
+        case resolved(UIImage?)
+    }
+
     private let provider: AvatarProvider?
-    @Published private var entries: [String: UIImage?] = [:]
-    private var inFlight: Set<String> = []
+    @Published private var entries: [String: Entry] = [:]
 
     nonisolated init(provider: AvatarProvider?) {
         self.provider = provider
     }
 
     func image(for peerId: String) -> UIImage? {
-        if let cached = entries[peerId] { return cached ?? nil }
-        guard let provider, !inFlight.contains(peerId) else { return nil }
-        inFlight.insert(peerId)
-        Task { [weak self] in
-            let source = await provider.resolve(peerId: peerId)
-            let image = await Self.materialize(source)
-            await MainActor.run {
-                guard let self else { return }
-                self.entries[peerId] = image
-                self.inFlight.remove(peerId)
+        switch entries[peerId] {
+        case .resolved(let image):
+            return image
+        case .pending:
+            return nil
+        case .none:
+            guard let provider else { return nil }
+            entries[peerId] = .pending
+            // Detached so the provider's pre-suspension work runs off the main actor;
+            // we hop back to main to publish the result.
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let source = await provider.resolve(peerId: peerId)
+                let image = await Self.materialize(source)
+                await MainActor.run {
+                    self?.entries[peerId] = .resolved(image)
+                }
             }
+            return nil
         }
-        return nil
     }
 
     private static func materialize(_ source: AvatarSource?) async -> UIImage? {
@@ -76,7 +87,8 @@ struct RemoteAvatarView: View {
                     .frame(width: size, height: size)
                     .clipShape(Circle())
             } else {
-                Text(initialsFor(displayName: displayName).isEmpty ? "•" : initialsFor(displayName: displayName))
+                let initials = initialsFor(displayName: displayName)
+                Text(initials.isEmpty ? "•" : initials)
                     .font(.system(size: size * 0.4, weight: .semibold))
                     .foregroundColor(.white.opacity(0.85))
             }
