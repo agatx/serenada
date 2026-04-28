@@ -308,24 +308,6 @@ internal class CameraCaptureController(
         currentCameraSource = cameraSourceFromMode(availableCameraModes.firstOrNull() ?: LocalCameraMode.SELFIE)
     }
 
-    fun restartVideoCapturerFromAvailableModes(videoSource: VideoSource?): Boolean {
-        val attempted = mutableSetOf<LocalCameraSource>()
-        for (mode in availableCameraModes) {
-            val source = cameraSourceFromMode(mode)
-            if (!attempted.add(source)) continue
-            if (restartVideoCapturer(source, videoSource)) {
-                return true
-            }
-            logger?.log(SerenadaLogLevel.WARNING, "Camera", "Failed to start camera source $source")
-            if (source == LocalCameraSource.COMPOSITE) {
-                compositeDisabledAfterFailure = true
-                reportCompositeCameraUnavailable("Composite camera startup failed")
-            }
-        }
-        notifyCameraModeAndFlash()
-        return false
-    }
-
     // ── Camera capture profile selection ────────────────────────────────
 
     internal fun cameraCapturePolicyFor(source: LocalCameraSource): CapturePolicy {

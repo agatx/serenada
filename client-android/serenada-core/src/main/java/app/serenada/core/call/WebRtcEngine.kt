@@ -212,7 +212,7 @@ internal class WebRtcEngine(
 
         videoSource = peerConnectionFactory.createVideoSource(false)
         cameraController.resetCameraSourceToInitial()
-        val startedVideo = cameraController.restartVideoCapturerFromAvailableModes(videoSource)
+        val startedVideo = cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)
         if (!startedVideo) {
             logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available; continuing audio-only")
         }
@@ -288,7 +288,7 @@ internal class WebRtcEngine(
             return false
         }
         if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
-            if (!cameraController.restartVideoCapturerFromAvailableModes(videoSource)) {
+            if (!cameraController.restartVideoCapturer(cameraController.currentCameraSource, videoSource)) {
                 localVideoTrack?.setEnabled(false)
                 return false
             }
@@ -390,7 +390,11 @@ internal class WebRtcEngine(
             return
         }
         renderer.init(eglBase.eglBaseContext, rendererEvents)
-        renderer.setEnableHardwareScaler(true)
+        // Hardware scaler issues setFixedSize(...) with a buffer smaller than the view.
+        // On Android 9 / older SurfaceFlinger this leaves the surface anchored at top-left
+        // after a remote resolution change, producing a black bar on the right until the
+        // next forced layout pass. Sizing the buffer from layout avoids the race.
+        renderer.setEnableHardwareScaler(false)
     }
 
     private fun applyAudioTrackHints() {
