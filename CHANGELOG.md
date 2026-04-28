@@ -4,7 +4,7 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.5.1] — 2026-04-27
+## [0.6.0] — 2026-04-27
 
 ### Changed
 - Version bump across all SDK platforms (web `@serenada/core` + `@serenada/react-ui`, Android `core` + `call-ui` + `libwebrtc`, iOS `SerenadaCore`) and integration docs.
