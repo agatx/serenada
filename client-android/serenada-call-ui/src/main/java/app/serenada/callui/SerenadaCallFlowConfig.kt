@@ -10,4 +10,11 @@ data class SerenadaCallFlowConfig(
      * `false`, the controls are always visible and the idle timer never runs.
      */
     val autoHideControls: Boolean = true,
+    /**
+     * Optional resolver that returns an avatar for a remote participant's
+     * host-supplied `peerId` (passed to `SerenadaCore.join`). When unset or
+     * when `peerId` is absent on the participant, the call UI shows an
+     * initials placeholder derived from their display name.
+     */
+    val avatarProvider: AvatarProvider? = null,
 )

@@ -75,6 +75,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
         this.signaling.joinRoom(roomId, {
             createMaxParticipants: options?.maxParticipants,
             displayName: options?.displayName,
+            peerId: options?.appPeerId,
         });
     }
 
@@ -308,6 +309,7 @@ function mapParticipant(participant: RoomParticipant): SignalingProviderParticip
         peerId: participant.cid,
         joinedAt: participant.joinedAt,
         displayName: participant.displayName,
+        appPeerId: participant.peerId,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
         connectionStatus: participant.connectionStatus,

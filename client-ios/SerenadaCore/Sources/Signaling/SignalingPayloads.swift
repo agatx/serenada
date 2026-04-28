@@ -11,6 +11,7 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         guard let cid = obj["cid"]?.stringValue, !cid.isEmpty else { continue }
         let joinedAt = obj["joinedAt"]?.intValue.map(Int64.init)
         let displayName = obj["displayName"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let peerId = obj["peerId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let audioEnabled = obj["audioEnabled"]?.boolValue
         let videoEnabled = obj["videoEnabled"]?.boolValue
         // Unknown status values fall back to .active per protocol spec.
@@ -19,6 +20,7 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
             cid: cid,
             joinedAt: joinedAt,
             displayName: displayName,
+            peerId: peerId,
             audioEnabled: audioEnabled,
             videoEnabled: videoEnabled,
             signalingStatus: signalingStatus

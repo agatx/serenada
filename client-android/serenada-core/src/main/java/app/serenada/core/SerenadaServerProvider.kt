@@ -68,6 +68,7 @@ internal class SerenadaServerProvider(
     private var closedByClient = false
     private var pendingJoinRoomId: String? = null
     private var currentDisplayName: String? = null
+    private var currentAppPeerId: String? = null
 
     override fun connect() {
         closedByClient = false
@@ -91,6 +92,9 @@ internal class SerenadaServerProvider(
         currentReconnectPeerId = options.reconnectPeerId
         if (options.displayName != null) {
             currentDisplayName = options.displayName
+        }
+        if (options.appPeerId != null) {
+            currentAppPeerId = options.appPeerId
         }
         if (signaling.isConnected()) {
             pendingJoinRoomId = null
@@ -227,6 +231,7 @@ internal class SerenadaServerProvider(
                 peerId = participant.cid,
                 joinedAt = participant.joinedAt,
                 displayName = participant.displayName,
+                appPeerId = participant.peerId,
                 audioEnabled = participant.audioEnabled,
                 videoEnabled = participant.videoEnabled,
                 connectionStatus = participant.signalingStatus,
@@ -253,6 +258,7 @@ internal class SerenadaServerProvider(
                 peerId = participant.cid,
                 joinedAt = participant.joinedAt,
                 displayName = participant.displayName,
+                appPeerId = participant.peerId,
                 audioEnabled = participant.audioEnabled,
                 videoEnabled = participant.videoEnabled,
                 connectionStatus = participant.signalingStatus,
@@ -275,12 +281,12 @@ internal class SerenadaServerProvider(
         val nextParticipants = participants.associateBy { it.peerId }
         for ((peerId, participant) in nextParticipants) {
             if (!previousParticipants.containsKey(peerId)) {
-                listener?.onPeerJoined(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName))
+                listener?.onPeerJoined(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName, appPeerId = participant.appPeerId))
             }
         }
         for ((peerId, participant) in previousParticipants) {
             if (!nextParticipants.containsKey(peerId)) {
-                listener?.onPeerLeft(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName))
+                listener?.onPeerLeft(PeerEvent(peerId = peerId, joinedAt = participant.joinedAt, displayName = participant.displayName, appPeerId = participant.appPeerId))
             }
         }
     }
@@ -303,6 +309,7 @@ internal class SerenadaServerProvider(
             )
             put("createMaxParticipants", currentMaxParticipants)
             currentDisplayName?.let { put("displayName", it) }
+            currentAppPeerId?.let { put("peerId", it) }
             reconnectToken?.let { put("reconnectToken", it) }
             currentReconnectPeerId?.let { put("reconnectCid", it) }
         }

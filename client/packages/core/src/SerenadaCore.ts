@@ -27,22 +27,31 @@ export class SerenadaCore {
     }
 
     /** Join an existing call by URL. Returns a session handle. */
-    join(url: string, options?: { displayName?: string }): SerenadaSessionHandle;
+    join(url: string, options?: { displayName?: string; peerId?: string }): SerenadaSessionHandle;
     /** Join an existing call by room ID. Returns a session handle. */
-    join(options: { roomId: string; displayName?: string }): SerenadaSessionHandle;
-    join(urlOrOptions: string | { roomId: string; displayName?: string }, extraOptions?: { displayName?: string }): SerenadaSessionHandle {
+    join(options: { roomId: string; displayName?: string; peerId?: string }): SerenadaSessionHandle;
+    join(
+        urlOrOptions: string | { roomId: string; displayName?: string; peerId?: string },
+        extraOptions?: { displayName?: string; peerId?: string },
+    ): SerenadaSessionHandle {
         if (!SerenadaCore.isSupported()) {
             return this.createUnsupportedSession();
         }
         const signalingProvider = this.createSignalingProvider();
         if (typeof urlOrOptions === 'string') {
             const roomId = this.parseRoomIdFromUrl(urlOrOptions);
-            return new SerenadaSession(this.config, roomId, urlOrOptions, signalingProvider, { displayName: extraOptions?.displayName });
+            return new SerenadaSession(this.config, roomId, urlOrOptions, signalingProvider, {
+                displayName: extraOptions?.displayName,
+                peerId: extraOptions?.peerId,
+            });
         }
         const roomUrl = this.resolvedConfig.serverHost
             ? buildRoomUrl(this.resolvedConfig.serverHost, urlOrOptions.roomId)
             : null;
-        return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl, signalingProvider, { displayName: urlOrOptions.displayName });
+        return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl, signalingProvider, {
+            displayName: urlOrOptions.displayName,
+            peerId: urlOrOptions.peerId,
+        });
     }
 
     /** Create a new room. Returns the room URL and ID. Call {@link join} to start the call. */

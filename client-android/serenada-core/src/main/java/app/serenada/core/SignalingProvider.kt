@@ -15,6 +15,12 @@ data class JoinOptions(
     val reconnectPeerId: String? = null,
     val maxParticipants: Int? = null,
     val displayName: String? = null,
+    /**
+     * Host-supplied stable identity for this user. Distinct from `peerId`/cid
+     * (per-call, server-issued) — lets host applications correlate a participant
+     * to their own user identity (avatar lookup, telemetry).
+     */
+    val appPeerId: String? = null,
 )
 
 /**
@@ -29,6 +35,8 @@ data class SignalingProviderParticipant(
     val peerId: String,
     val joinedAt: Long? = null,
     val displayName: String? = null,
+    /** Host-supplied stable identity — see [JoinOptions.appPeerId]. */
+    val appPeerId: String? = null,
     val audioEnabled: Boolean? = null,
     val videoEnabled: Boolean? = null,
     val connectionStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE,
@@ -51,6 +59,8 @@ data class PeerEvent(
     val peerId: String,
     val joinedAt: Long? = null,
     val displayName: String? = null,
+    /** Host-supplied stable identity — see [JoinOptions.appPeerId]. */
+    val appPeerId: String? = null,
 )
 
 data class PeerMessage(
