@@ -146,9 +146,18 @@ internal fun RemoteAvatar(
 
 internal fun initialsFor(displayName: String?): String {
     if (displayName.isNullOrBlank()) return ""
-    val parts = displayName.trim().split(Regex("\\s+"))
-    val first = parts.first().firstOrNull()?.toString() ?: return ""
-    if (parts.size == 1) return first.uppercase()
-    val last = parts.last().firstOrNull()?.toString() ?: ""
-    return (first + last).uppercase()
+    val initials = mutableListOf<String>()
+    for (part in displayName.trim().split(Regex("\\s+"))) {
+        for (ch in part) {
+            if (ch.isLetterOrDigit()) {
+                initials.add(ch.toString().uppercase())
+                break
+            }
+        }
+    }
+    return when {
+        initials.isEmpty() -> ""
+        initials.size == 1 -> initials.first()
+        else -> initials.first() + initials.last()
+    }
 }

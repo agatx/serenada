@@ -67,13 +67,16 @@ function materializeAvatar(source: AvatarSource | null, objectUrls: string[]): R
 
 export function initialsFor(displayName: string | undefined): string {
     if (!displayName) return '';
-    const trimmed = displayName.trim();
-    if (!trimmed) return '';
-    const parts = trimmed.split(/\s+/);
-    if (parts.length === 1) {
-        return [...parts[0]][0]?.toUpperCase() ?? '';
+    const initials: string[] = [];
+    for (const part of displayName.trim().split(/\s+/)) {
+        for (const ch of part) {
+            if (/[\p{L}\p{N}]/u.test(ch)) {
+                initials.push(ch.toUpperCase());
+                break;
+            }
+        }
     }
-    const first = [...parts[0]][0] ?? '';
-    const last = [...parts[parts.length - 1]][0] ?? '';
-    return (first + last).toUpperCase();
+    if (initials.length === 0) return '';
+    if (initials.length === 1) return initials[0];
+    return initials[0] + initials[initials.length - 1];
 }

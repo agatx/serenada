@@ -90,9 +90,14 @@ func initialsFor(displayName: String?) -> String {
     guard let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
         return ""
     }
-    let parts = name.split(whereSeparator: { $0.isWhitespace })
-    guard let first = parts.first?.first else { return "" }
-    if parts.count == 1 { return String(first).uppercased() }
-    let last = parts.last?.first.map(String.init) ?? ""
-    return (String(first) + last).uppercased()
+    var initials: [String] = []
+    for part in name.split(whereSeparator: { $0.isWhitespace }) {
+        for ch in part where ch.isLetter || ch.isNumber {
+            initials.append(String(ch).uppercased())
+            break
+        }
+    }
+    if initials.isEmpty { return "" }
+    if initials.count == 1 { return initials[0] }
+    return initials[0] + initials[initials.count - 1]
 }
