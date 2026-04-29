@@ -753,7 +753,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.cancelPostReconnectResync();
         if (reason === 'timeout') {
             this.config.logger?.log(
-                'warn',
+                'warning',
                 'Session',
                 `Post-reconnect snapshot timeout after ${EPOCH_RESYNC_TIMEOUT_MS}ms; firing ICE restart against last-known peer map`,
             );
