@@ -48,7 +48,7 @@ public enum WebRtcResilience {
 
     /// After signaling reconnects, the SDK waits this long for an authoritative
     /// `room_state` snapshot before falling back to firing ICE restart against
-    /// the last-known peer map (graceful degradation to pre-#4 behavior).
+    /// the last-known peer map.
     public static let epochResyncTimeoutMs = 5_000
 }
 

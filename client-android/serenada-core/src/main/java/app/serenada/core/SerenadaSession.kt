@@ -315,23 +315,20 @@ class SerenadaSession internal constructor(
     private val signalingProvider: SignalingProvider
     private var reconnectToken: String? = null
     private var reconnectRecoveryPending = false
-    /**
-     * True between transport reconnect and the first authoritative `room_state`
-     * snapshot. While set, `peerNegotiationEngine.scheduleIceRestart` is
-     * deferred so it runs against the server-confirmed peer set rather than the
-     * stale in-memory map. Falls back to firing on `EPOCH_RESYNC_TIMEOUT_MS` to
-     * preserve pre-#4 behavior if the snapshot never arrives.
-     */
+    // True between transport reconnect and the first authoritative room_state
+    // snapshot; gates ICE restart so it runs against a confirmed peer set.
     private var pendingPostReconnectResync = false
     private var iceRestartCallsFromGate = 0
     private val postReconnectResyncTimeoutRunnable = Runnable {
-        flushPostReconnectResync(reason = "timeout")
+        flushPostReconnectResync(PostReconnectFlushReason.TIMEOUT)
     }
 
-    /** @internal Test-only accessor for the post-reconnect snapshot gate state. */
+    private enum class PostReconnectFlushReason { SNAPSHOT, TIMEOUT }
+
+    /** Test-only accessor for the post-reconnect snapshot gate state. */
     internal fun isPostReconnectResyncPending(): Boolean = pendingPostReconnectResync
 
-    /** @internal Test-only counter incremented each time the gate fires an ICE restart. */
+    /** Test-only counter incremented each time the gate fires an ICE restart. */
     internal fun postReconnectResyncFireCount(): Int = iceRestartCallsFromGate
     private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
@@ -530,7 +527,7 @@ class SerenadaSession internal constructor(
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX room_state")
                 signalingMessageRouter.processRoomStateEvent(event)
-                flushPostReconnectResync(reason = "snapshot")
+                flushPostReconnectResync(PostReconnectFlushReason.SNAPSHOT)
             }
         }
 
@@ -1165,7 +1162,7 @@ class SerenadaSession internal constructor(
         )
     }
 
-    // --- Internal: Post-reconnect snapshot gate (#4) ---
+    // --- Internal: Post-reconnect snapshot gate ---
 
     private fun armPostReconnectResync() {
         pendingPostReconnectResync = true
@@ -1173,11 +1170,11 @@ class SerenadaSession internal constructor(
         handler.postDelayed(postReconnectResyncTimeoutRunnable, WebRtcResilienceConstants.EPOCH_RESYNC_TIMEOUT_MS)
     }
 
-    private fun flushPostReconnectResync(reason: String) {
+    private fun flushPostReconnectResync(reason: PostReconnectFlushReason) {
         if (!pendingPostReconnectResync) return
         pendingPostReconnectResync = false
         handler.removeCallbacks(postReconnectResyncTimeoutRunnable)
-        if (reason == "timeout") {
+        if (reason == PostReconnectFlushReason.TIMEOUT) {
             logger?.log(
                 SerenadaLogLevel.WARNING,
                 "Session",
@@ -1188,7 +1185,8 @@ class SerenadaSession internal constructor(
         peerNegotiationEngine.scheduleIceRestart("signaling-reconnect", 0)
     }
 
-    private fun clearPostReconnectResyncTimer() {
+    private fun cancelPostReconnectResync() {
+        pendingPostReconnectResync = false
         handler.removeCallbacks(postReconnectResyncTimeoutRunnable)
     }
 
@@ -1221,7 +1219,7 @@ class SerenadaSession internal constructor(
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
-        pendingPostReconnectResync = false; clearPostReconnectResyncTimer()
+        cancelPostReconnectResync()
         sessionStartTs = null
         if (clearRecovery) recoveryStorage.clear()
         providerScope.coroutineContext.cancelChildren()

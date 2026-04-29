@@ -174,12 +174,8 @@ public final class SerenadaSession: ObservableObject {
     private var userPreferredVideoEnabled = true
     private var isVideoPausedByProximity = false
     private var reconnectRecoveryPending = false
-    /// True between transport reconnect and the first authoritative `room_state`
-    /// snapshot. While set, `peerNegotiationEngine.triggerIceRestart` is
-    /// deferred so it runs against the server-confirmed peer set rather than
-    /// the stale in-memory map. Falls back to firing on
-    /// `epochResyncTimeoutMs` to preserve pre-#4 behavior if the snapshot
-    /// never arrives.
+    // True between transport reconnect and the first authoritative room_state
+    // snapshot; gates ICE restart so it runs against a confirmed peer set.
     private var pendingPostReconnectResync = false
     private var postReconnectResyncTask: Task<Void, Never>?
     private var iceRestartCallsFromGate = 0
@@ -334,6 +330,7 @@ public final class SerenadaSession: ObservableObject {
     deinit {
         pathMonitor.cancel()
         reconnectTask?.cancel()
+        postReconnectResyncTask?.cancel()
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
     }
@@ -942,8 +939,7 @@ public final class SerenadaSession: ObservableObject {
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
 
         reconnectTask?.cancel(); reconnectTask = nil
-        clearPostReconnectResyncTimer()
-        pendingPostReconnectResync = false
+        cancelPostReconnectResync()
         joinFlowCoordinator?.clearAllTimers()
         connectionStatusTracker?.cancelTimer()
         iceFetchGeneration += 1
@@ -1008,7 +1004,7 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    // MARK: - Post-reconnect snapshot gate (#4)
+    // MARK: - Post-reconnect snapshot gate
 
     private enum PostReconnectFlushReason {
         case snapshot
@@ -1043,7 +1039,8 @@ public final class SerenadaSession: ObservableObject {
         peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
     }
 
-    private func clearPostReconnectResyncTimer() {
+    private func cancelPostReconnectResync() {
+        pendingPostReconnectResync = false
         postReconnectResyncTask?.cancel()
         postReconnectResyncTask = nil
     }
