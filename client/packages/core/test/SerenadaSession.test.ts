@@ -1,5 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { JOIN_HARD_TIMEOUT_MS } from '../src/constants.js';
+import {
+    JOIN_HARD_TIMEOUT_MS,
+    PEER_SUSPENDED_UI_TIMEOUT_MS,
+    SUSPEND_HARD_EVICTION_TIMEOUT_MS,
+} from '../src/constants.js';
 import { TestSessionHarness } from './helpers/TestSessionHarness.js';
 
 // SerenadaSession uses `window.setTimeout` / `window.clearTimeout`.
@@ -868,6 +872,126 @@ describe('SerenadaSession', () => {
             harness.media.emit({ connectionStatus: 'recovering' });
 
             expect(harness.state.connectionStatus).toBe('recovering');
+        });
+    });
+
+    // ---------------------------------------------------------------
+    // Suspended-peer presentation (#3) and SignalingState surface (#6)
+    // ---------------------------------------------------------------
+    describe('suspended state surface', () => {
+        async function joinWithRemote() {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+            return harness;
+        }
+
+        it('flips presumedLost on a remote peer after PEER_SUSPENDED_UI_TIMEOUT_MS suspended', async () => {
+            await joinWithRemote();
+
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [
+                    { peerId: 'me', connectionStatus: 'active' },
+                    { peerId: 'peer-1', connectionStatus: 'suspended' },
+                ],
+            });
+
+            const remote = harness.state.remoteParticipants[0];
+            expect(remote.signalingStatus).toBe('suspended');
+            expect(remote.presumedLost).toBe(false);
+
+            // Just before timeout: still not presumed lost
+            await vi.advanceTimersByTimeAsync(PEER_SUSPENDED_UI_TIMEOUT_MS - 1);
+            expect(harness.state.remoteParticipants[0].presumedLost).toBe(false);
+
+            // Cross the threshold
+            await vi.advanceTimersByTimeAsync(2);
+            expect(harness.state.remoteParticipants[0].presumedLost).toBe(true);
+        });
+
+        it('cancels the timer and clears presumedLost when peer goes back to active', async () => {
+            await joinWithRemote();
+
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [
+                    { peerId: 'me' },
+                    { peerId: 'peer-1', connectionStatus: 'suspended' },
+                ],
+            });
+
+            await vi.advanceTimersByTimeAsync(PEER_SUSPENDED_UI_TIMEOUT_MS + 100);
+            expect(harness.state.remoteParticipants[0].presumedLost).toBe(true);
+
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [
+                    { peerId: 'me' },
+                    { peerId: 'peer-1', connectionStatus: 'active' },
+                ],
+            });
+
+            const remote = harness.state.remoteParticipants[0];
+            expect(remote.signalingStatus).toBe('active');
+            expect(remote.presumedLost).toBe(false);
+        });
+
+        it('clears suspension state when peer leaves the room', async () => {
+            await joinWithRemote();
+
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [
+                    { peerId: 'me' },
+                    { peerId: 'peer-1', connectionStatus: 'suspended' },
+                ],
+            });
+
+            // Peer is removed before timer fires
+            harness.signaling.emitPeerLeft({ peerId: 'peer-1', joinedAt: 2 });
+
+            // Advance past the would-be timeout — no error, no stale state
+            await vi.advanceTimersByTimeAsync(PEER_SUSPENDED_UI_TIMEOUT_MS + 1000);
+            expect(harness.state.remoteParticipants).toHaveLength(0);
+        });
+
+        it('signalingState transitions connected → suspended → connected over a transport drop', async () => {
+            await joinWithRemote();
+            expect(harness.state.signalingState).toEqual({ kind: 'connected' });
+
+            const before = Date.now();
+            harness.simulateDisconnect();
+
+            const sigState = harness.state.signalingState;
+            expect(sigState.kind).toBe('suspended');
+            if (sigState.kind === 'suspended') {
+                expect(sigState.suspendedSinceMs).toBeGreaterThanOrEqual(before);
+                expect(sigState.estimatedHardEvictionAtMs).toBe(
+                    sigState.suspendedSinceMs + SUSPEND_HARD_EVICTION_TIMEOUT_MS,
+                );
+            }
+
+            harness.signaling.emitConnected('ws');
+            expect(harness.state.signalingState).toEqual({ kind: 'connected' });
+        });
+
+        it('signalingState reports failed with the terminal error code', async () => {
+            harness = new TestSessionHarness();
+            harness.signaling.emitConnected('ws');
+            harness.simulateError('Room is gone', 'ROOM_ENDED');
+
+            await vi.advanceTimersByTimeAsync(0);
+
+            const sigState = harness.state.signalingState;
+            expect(sigState.kind).toBe('failed');
+            if (sigState.kind === 'failed') {
+                expect(sigState.reason).toBe('roomEnded');
+            }
         });
     });
 

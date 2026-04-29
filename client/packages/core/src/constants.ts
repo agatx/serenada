@@ -47,6 +47,20 @@ export const FOREGROUND_FORCE_PING_TIMEOUT_MS = 2000;
 // last-known peer map.
 export const EPOCH_RESYNC_TIMEOUT_MS = 5000;
 
+// Suspended-peer presentation
+// After a remote peer transitions to `signalingStatus="suspended"`, the SDK
+// starts a per-CID UI presentation timer. When this timer expires the
+// participant is flagged `presumedLost=true` so call UIs can move them out
+// of the active grid. The peer connection itself stays open so media can
+// resume immediately if the peer reattaches.
+export const PEER_SUSPENDED_UI_TIMEOUT_MS = 30000;
+
+// Server hard-eviction window
+// Mirrors `suspendHardEvictionTimeout` on the Go server. Used SDK-side to
+// compute `estimatedHardEvictionAtMs` for the `signalingState.suspended`
+// surface so apps can render a countdown.
+export const SUSPEND_HARD_EVICTION_TIMEOUT_MS = 600000;
+
 // Connection Status
 export const CONNECTION_RETRYING_DELAY_MS = 10_000;
 

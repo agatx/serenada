@@ -97,6 +97,7 @@ export class SerenadaCore {
             localParticipant: null,
             remoteParticipants: [],
             connectionStatus: 'connected',
+            signalingState: { kind: 'failed', reason: 'webrtcUnavailable' },
             activeTransport: null,
             requiredPermissions: null,
             error: { code: 'webrtcUnavailable', message: 'WebRTC is not supported in this browser' },

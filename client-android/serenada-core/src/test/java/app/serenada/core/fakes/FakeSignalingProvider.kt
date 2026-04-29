@@ -134,6 +134,25 @@ internal class FakeSignalingProvider(
         )
     }
 
+    /**
+     * Variant that lets a test pass full [SignalingProviderParticipant]
+     * records — needed when the test cares about per-participant
+     * `connectionStatus` (active/suspended), `displayName`, etc.
+     */
+    fun simulateRoomStateUpdatedWith(
+        participants: List<SignalingProviderParticipant>,
+        hostPeerId: String?,
+        maxParticipants: Int? = null,
+    ) {
+        listener?.onRoomStateUpdated(
+            RoomStateEvent(
+                participants = participants,
+                hostPeerId = hostPeerId,
+                maxParticipants = maxParticipants,
+            ),
+        )
+    }
+
     fun simulatePeerJoined(peerId: String, joinedAt: Long? = null) {
         listener?.onPeerJoined(PeerEvent(peerId = peerId, joinedAt = joinedAt))
     }
