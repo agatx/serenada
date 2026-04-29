@@ -12,12 +12,20 @@ export interface JoinOptions {
     reconnectPeerId?: string;
     maxParticipants?: number;
     displayName?: string;
+    /**
+     * Host-supplied stable identity. Distinct from `peerId`/cid (which is per-call
+     * and server-issued) — lets host applications correlate a participant to
+     * their own user identity (avatar lookup, telemetry).
+     */
+    appPeerId?: string;
 }
 
 export interface SignalingProviderParticipant {
     peerId: string;
     joinedAt?: number;
     displayName?: string;
+    /** Host-supplied stable identity — see {@link JoinOptions.appPeerId}. */
+    appPeerId?: string;
     audioEnabled?: boolean;
     videoEnabled?: boolean;
     // Wire-reported signaling transport status. Absent = active.
@@ -41,6 +49,8 @@ export interface PeerEvent {
     peerId: string;
     joinedAt?: number;
     displayName?: string;
+    /** Host-supplied stable identity — see {@link JoinOptions.appPeerId}. */
+    appPeerId?: string;
 }
 
 export interface PeerMessage {

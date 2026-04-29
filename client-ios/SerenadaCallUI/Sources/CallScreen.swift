@@ -380,6 +380,8 @@ struct CallScreenView: View {
                 .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallRemoteView
             } else {
+                let inCall = uiState.phase == .inCall
+                let firstRemote = uiState.remoteParticipants.first
                 ZStack(alignment: .bottomLeading) {
                     mainVideoSurface(
                         kind: .remote,
@@ -388,13 +390,14 @@ struct CallScreenView: View {
                             phase: uiState.phase,
                             remoteVideoEnabled: uiState.remoteVideoEnabled
                         ),
-                        placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil,
-                        placeholderDisplayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
+                        placeholderText: inCall ? str(.callVideoOff) : nil,
+                        placeholderDisplayName: inCall ? firstRemote?.displayName : nil,
+                        placeholderPeerId: inCall ? firstRemote?.peerId : nil
                     )
                     // Avoid duplicating the name when the remote video-off placeholder already shows it.
                     ParticipantBadge(
-                        muted: uiState.remoteParticipants.first?.audioEnabled == false,
-                        displayName: uiState.remoteVideoEnabled ? uiState.remoteParticipants.first?.displayName : nil
+                        muted: firstRemote?.audioEnabled == false,
+                        displayName: uiState.remoteVideoEnabled ? firstRemote?.displayName : nil
                     )
                 }
                 .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
@@ -507,7 +510,8 @@ struct CallScreenView: View {
         videoContentMode: UIView.ContentMode = .scaleAspectFill,
         showPlaceholder: Bool,
         placeholderText: String?,
-        placeholderDisplayName: String? = nil
+        placeholderDisplayName: String? = nil,
+        placeholderPeerId: String? = nil
     ) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -520,7 +524,7 @@ struct CallScreenView: View {
                 .ignoresSafeArea()
 
             if showPlaceholder {
-                VideoPlaceholderTile(text: placeholderText, compact: false, displayName: placeholderDisplayName)
+                VideoPlaceholderTile(text: placeholderText, compact: false, displayName: placeholderDisplayName, peerId: placeholderPeerId)
                     .ignoresSafeArea()
             }
         }
@@ -568,7 +572,8 @@ struct CallScreenView: View {
                 VideoPlaceholderTile(
                     text: uiState.phase == .inCall ? str(.callVideoOff) : nil,
                     compact: true,
-                    displayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
+                    displayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil,
+                    peerId: uiState.phase == .inCall ? uiState.remoteParticipants.first?.peerId : nil
                 )
             }
 
@@ -1020,7 +1025,7 @@ private struct MultiPartyStage: View {
                                     }
                                 )
                                 if !participant.videoEnabled {
-                                    VideoPlaceholderTile(text: str(.callVideoOff), compact: false, displayName: participant.displayName)
+                                    VideoPlaceholderTile(text: str(.callVideoOff), compact: false, displayName: participant.displayName, peerId: participant.peerId)
                                 }
                             }
 
@@ -1189,7 +1194,7 @@ private struct RemoteParticipantStageTile: View {
                 onVideoSizeChanged: onVideoSizeChanged
             )
             if !participant.videoEnabled {
-                VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false, displayName: participant.displayName)
+                VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false, displayName: participant.displayName, peerId: participant.peerId)
             }
             ParticipantBadge(muted: participant.audioEnabled == false, displayName: participant.displayName)
         }
@@ -1239,17 +1244,32 @@ struct VideoPlaceholderTile: View {
     let text: String?
     let compact: Bool
     var displayName: String? = nil
+    var peerId: String? = nil
+
+    @Environment(\.avatarCache) private var avatarCache
 
     var body: some View {
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayNameToShow = name?.isEmpty == false ? name : nil
+        let showIdentityPlaceholder = displayNameToShow != nil || peerId?.isEmpty == false
         ZStack {
             Color.black
-            if let name = displayName, !name.isEmpty {
-                Text(name)
-                    .font(compact ? .system(size: 13, weight: .semibold) : .system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .padding(.horizontal, compact ? 6 : 16)
+            if showIdentityPlaceholder {
+                VStack(spacing: compact ? 6 : 12) {
+                    if avatarCache != nil {
+                        RemoteAvatarView(
+                            peerId: peerId,
+                            displayName: displayNameToShow,
+                            size: compact ? 48 : 96
+                        )
+                    }
+                    Text(displayNameToShow ?? text ?? "")
+                        .font(compact ? .system(size: 13, weight: .semibold) : .system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .padding(.horizontal, compact ? 6 : 16)
+                }
             } else {
                 VStack(spacing: compact ? 6 : 10) {
                     Image(systemName: "video.slash.fill")

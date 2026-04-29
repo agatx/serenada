@@ -40,6 +40,13 @@ export type ParticipantSignalingStatus = 'active' | 'suspended';
 export interface Participant {
     cid: string;
     displayName?: string;
+    /**
+     * Host-supplied stable identity passed via {@link SerenadaCore.join} (the
+     * `peerId` option). Distinct from {@link cid} (per-call, server-issued) —
+     * used by the call UI to look up avatars or correlate to host-side records.
+     * Absent when the remote peer didn't supply one.
+     */
+    peerId?: string;
     audioEnabled: boolean;
     videoEnabled: boolean;
     connectionState: PeerConnectionState;
@@ -50,6 +57,8 @@ export interface Participant {
 export interface LocalParticipant {
     cid: string;
     displayName?: string;
+    /** Host-supplied stable identity — see {@link Participant.peerId}. */
+    peerId?: string;
     audioEnabled: boolean;
     videoEnabled: boolean;
     cameraMode: CameraMode;

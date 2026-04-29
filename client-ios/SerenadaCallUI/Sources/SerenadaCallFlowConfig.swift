@@ -17,15 +17,23 @@ public struct SerenadaCallFlowConfig {
     /// `false`, the controls are always visible and the idle timer never runs.
     public var autoHideControls: Bool
 
+    /// Optional resolver that returns an avatar for a remote participant's
+    /// host-supplied `peerId` (passed to `SerenadaCore.join`). When unset or
+    /// when `peerId` is absent on the participant, the call UI shows an
+    /// initials placeholder derived from their display name.
+    public var avatarProvider: AvatarProvider?
+
     public init(
         screenSharingEnabled: Bool = true,
         inviteControlsEnabled: Bool = true,
         debugOverlayEnabled: Bool = false,
-        autoHideControls: Bool = true
+        autoHideControls: Bool = true,
+        avatarProvider: AvatarProvider? = nil
     ) {
         self.screenSharingEnabled = screenSharingEnabled
         self.inviteControlsEnabled = inviteControlsEnabled
         self.debugOverlayEnabled = debugOverlayEnabled
         self.autoHideControls = autoHideControls
+        self.avatarProvider = avatarProvider
     }
 }

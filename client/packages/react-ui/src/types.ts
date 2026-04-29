@@ -2,6 +2,28 @@ import type { ReactNode } from 'react';
 import type { SerenadaSessionHandle, CallStats } from '@serenada/core';
 
 // ---------------------------------------------------------------------------
+// Avatar provider (host-supplied)
+// ---------------------------------------------------------------------------
+
+/**
+ * Avatar payload returned by an {@link AvatarProvider}. The image is rendered
+ * cover-fit, cropped to a circle above the participant's name when their
+ * remote video track is off.
+ */
+export type AvatarSource =
+    | { kind: 'url'; url: string }
+    | { kind: 'bytes'; bytes: Uint8Array }
+    | { kind: 'image'; image: HTMLImageElement };
+
+/**
+ * Resolves an avatar for a given host-supplied `peerId`. Returning `null` (or
+ * throwing) falls back to the initials placeholder. The call UI never blocks
+ * on the provider — it shows initials immediately and swaps in the avatar
+ * when the promise resolves. Each `peerId` is resolved at most once per call.
+ */
+export type AvatarProvider = (peerId: string) => Promise<AvatarSource | null>;
+
+// ---------------------------------------------------------------------------
 // Feature configuration
 // ---------------------------------------------------------------------------
 
@@ -15,6 +37,13 @@ export interface SerenadaCallFlowConfig {
      * `false`, the controls are always visible and the idle timer never runs.
      */
     autoHideControls?: boolean;
+    /**
+     * Optional resolver that returns an avatar for a remote participant's
+     * host-supplied `peerId` (passed to {@link SerenadaCore.join}). When
+     * unset or when `peerId` is absent on the participant, the call UI shows
+     * an initials placeholder derived from their display name.
+     */
+    avatarProvider?: AvatarProvider;
 }
 
 export interface SerenadaCallFlowTheme {

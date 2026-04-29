@@ -18,6 +18,8 @@ internal data class Participant(
     val cid: String,
     val joinedAt: Long?,
     val displayName: String? = null,
+    /** Host-supplied stable identity; opaque to the SDK, surfaced for avatar lookup. */
+    val peerId: String? = null,
     val audioEnabled: Boolean? = null,
     val videoEnabled: Boolean? = null,
     val signalingStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE,

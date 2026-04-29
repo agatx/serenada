@@ -40,6 +40,7 @@ interface SessionDependencies {
     statsCollector?: CallStatsCollector;
     autoStart?: boolean;
     displayName?: string;
+    peerId?: string;
 }
 
 function mapErrorCode(serverCode: string): CallErrorCode {
@@ -74,6 +75,7 @@ function toRoomParticipant(participant: SignalingProviderParticipant): RoomParti
         cid: participant.peerId,
         joinedAt: participant.joinedAt,
         displayName: participant.displayName,
+        peerId: participant.appPeerId,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
         connectionStatus: participant.connectionStatus,
@@ -136,7 +138,12 @@ function upsertParticipant(
     }
     const participants = dedupeParticipants([
         ...(roomState?.participants ?? []),
-        { cid: event.peerId, joinedAt: event.joinedAt, displayName: event.displayName },
+        {
+            cid: event.peerId,
+            joinedAt: event.joinedAt,
+            displayName: event.displayName,
+            peerId: event.appPeerId,
+        },
     ], localPeerId);
     return {
         hostCid: resolveHostCid(participants, roomState?.hostCid ?? null, localPeerId),
@@ -208,6 +215,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly roomUrl: string | null;
     private readonly handlesReconnection: boolean;
     private readonly displayName?: string;
+    private readonly appPeerId?: string;
 
     private _state: CallState;
     private stateListeners: Array<(state: CallState) => void> = [];
@@ -256,6 +264,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.signaling = signaling;
         this.handlesReconnection = signaling.capabilities?.handlesReconnection === true;
         this.displayName = deps.displayName;
+        this.appPeerId = deps.peerId;
         this.availableCameraModes = Object.freeze(resolveCameraModes(config.cameraModes)) as ConfigurableCameraMode[];
         this.userPreferredVideoEnabled = this.availableCameraModes.length > 0 && config.defaultVideoEnabled !== false;
 
@@ -446,6 +455,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.started = true;
         this.pendingJoinOptions = {
             displayName: this.displayName,
+            appPeerId: this.appPeerId,
         };
         this.scheduleJoinTimeout();
         this.signaling.connect();
@@ -509,7 +519,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.handlesReconnection) {
             this.reconnectRecoveryPending = hadRoomState;
         } else {
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
+            this.pendingJoinOptions = {
+                reconnectPeerId: this.clientId ?? undefined,
+                displayName: this.displayName,
+                appPeerId: this.appPeerId,
+            };
             this.scheduleReconnect();
         }
 
@@ -698,7 +712,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
             if (this.isInactive) {
                 return;
             }
-            this.pendingJoinOptions = { reconnectPeerId: this.clientId ?? undefined, displayName: this.displayName };
+            this.pendingJoinOptions = {
+                reconnectPeerId: this.clientId ?? undefined,
+                displayName: this.displayName,
+                appPeerId: this.appPeerId,
+            };
             this.signaling.connect();
         }, delayMs);
     }
@@ -869,6 +887,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const localParticipant = clientId ? {
             cid: clientId,
             displayName: this.displayName,
+            peerId: this.appPeerId,
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
             // Mirror broadcast: derive from real track presence/state so the
             // local UI matches what peers see. Pre-media-start (no stream),
@@ -890,6 +909,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 return {
                     cid: participant.cid,
                     displayName: participant.displayName,
+                    peerId: participant.peerId,
                     audioEnabled: peerState?.audioEnabled ?? participant.audioEnabled ?? true,
                     videoEnabled: peerState?.videoEnabled ?? participant.videoEnabled ?? true,
                     connectionState: this.media.connectionState,

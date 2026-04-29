@@ -296,7 +296,10 @@ internal fun CallScreen(
     // automatically when video comes back on.
     val effectiveLocalLarge = isLocalLarge && uiState.localVideoEnabled
 
+    val avatarCache = rememberAvatarCache(config.avatarProvider)
+
     SerenadaTheme(theme) {
+      androidx.compose.runtime.CompositionLocalProvider(LocalAvatarCache provides avatarCache) {
         BoxWithConstraints(
             modifier =
                 Modifier.fillMaxSize().background(theme.backgroundColor)
@@ -553,6 +556,7 @@ internal fun CallScreen(
                     text = text,
                     fontSize = if (effectiveLocalLarge) 10.sp else 16.sp,
                     displayName = nameToShow,
+                    peerId = remoteP?.peerId,
                 )
             }
         }
@@ -821,6 +825,7 @@ internal fun CallScreen(
             }
         }
         }
+      }
     }
 }
 
@@ -1865,6 +1870,7 @@ private fun RemoteParticipantStageTile(
                     text = resolveString(SerenadaString.CallVideoOff, strings),
                     fontSize = 14.sp,
                     displayName = participant.displayName,
+                    peerId = participant.peerId,
                 )
             }
         }
@@ -2148,22 +2154,42 @@ private fun VideoPlaceholder(
     text: String,
     fontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
     displayName: String? = null,
+    peerId: String? = null,
 ) {
+    val avatarCache = LocalAvatarCache.current
+    val isLargeTile = fontSize >= 14.sp
+    val avatarSize = if (isLargeTile) 96.dp else 56.dp
+    val avatarFontSize = if (isLargeTile) 36.sp else 22.sp
+    val displayNameToShow = displayName?.takeIf { it.isNotBlank() }
+    val showIdentityPlaceholder = displayNameToShow != null || peerId != null
     Box(
         modifier = Modifier.fillMaxSize().background(Color(0xFF111111)),
         contentAlignment = Alignment.Center
     ) {
-        if (displayName != null) {
-            Text(
-                text = displayName,
-                color = Color.White.copy(alpha = 0.85f),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+        if (showIdentityPlaceholder) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.padding(horizontal = 16.dp),
-            )
+            ) {
+                if (avatarCache != null) {
+                    RemoteAvatar(
+                        peerId = peerId,
+                        displayName = displayNameToShow,
+                        size = avatarSize,
+                        fontSize = avatarFontSize,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+                Text(
+                    text = displayNameToShow ?: text,
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = if (displayNameToShow != null) 18.sp else fontSize,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         } else {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(

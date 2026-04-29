@@ -143,6 +143,7 @@ final class SignalingMessageRouter {
             cid: p.peerId,
             joinedAt: p.joinedAt,
             displayName: p.displayName,
+            peerId: p.appPeerId,
             audioEnabled: p.audioEnabled,
             videoEnabled: p.videoEnabled,
             signalingStatus: p.signalingStatus,
