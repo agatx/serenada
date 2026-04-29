@@ -31,6 +31,7 @@ secrets/
 /.webrtc-ios-build
 client-ios/Resources/GoogleService-Info.plist
 /.claude/worktrees
+/.claude/scheduled_tasks.lock
 /tools/smoke-test/artifacts
 
 # ralphex progress logs
