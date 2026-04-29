@@ -1,10 +1,17 @@
-import type { RoomState, SignalingMessage } from './types.js';
+import type { ReconnectOutcome, RoomState, SignalingMessage } from './types.js';
 import type { RoomStatuses } from './roomStatuses.js';
 import type { SignalingTransport, TransportKind } from './transports/types.js';
 import type { SerenadaLogger } from '../types.js';
 import { createSignalingTransport } from './transports/index.js';
 import { mergeRoomStatusesPayload, mergeRoomStatusUpdatePayload } from './roomStatuses.js';
-import { parseJoinedPayload, parseRoomStatePayload, parseErrorPayload, parseTurnRefreshedPayload } from './payloads.js';
+import {
+    parseJoinedPayload,
+    parseRoomStatePayload,
+    parseErrorPayload,
+    parseTurnRefreshedPayload,
+    parseRelayFailedPayload,
+    parseNegotiationDirtyPayload,
+} from './payloads.js';
 import { formatError } from '../formatError.js';
 import {
     RECONNECT_BACKOFF_BASE_MS,
@@ -36,8 +43,24 @@ export class SignalingEngine {
     roomState: RoomState | null = null;
     turnToken: string | null = null;
     turnTokenTTLMs: number | null = null;
-    error: { code: string; message: string } | null = null;
+    error: { code: string; message: string; reason?: string } | null = null;
     roomStatuses: RoomStatuses = {};
+    /** Most-recent reconnect outcome reported by the server in `joined`. */
+    lastReconnectOutcome: ReconnectOutcome | null = null;
+    /**
+     * Highest room-state epoch observed so far. Advances monotonically (per
+     * room) on every membership change. Used by MediaEngine to gate ICE
+     * restart on an authoritative post-reconnect snapshot.
+     */
+    lastEpoch: number | null = null;
+    /** Epoch at the moment the transport was last observed disconnected. */
+    epochAtDisconnect: number | null = null;
+    /**
+     * True from disconnect until we've seen a fresh authoritative snapshot
+     * for the current room on the new transport. Consumers should suppress
+     * ICE restart while this flag is set.
+     */
+    awaitingPostReconnectSnapshot = false;
 
     // Config
     private wsUrl: string;
@@ -101,6 +124,8 @@ export class SignalingEngine {
         this.clearJoinTimers();
         this.clearPingInterval();
         this.clearTurnRefreshTimer();
+        this.awaitingPostReconnectSnapshot = false;
+        this.epochAtDisconnect = null;
         if (this.transport) {
             this.transport.close();
             this.transport = null;
@@ -210,6 +235,10 @@ export class SignalingEngine {
         this.turnToken = null;
         this.turnTokenTTLMs = null;
         this.turnTokenExpiresAtMs = null;
+        this.lastReconnectOutcome = null;
+        this.lastEpoch = null;
+        this.awaitingPostReconnectSnapshot = false;
+        this.epochAtDisconnect = null;
         this.notifyStateChange();
     }
 
@@ -255,10 +284,15 @@ export class SignalingEngine {
                 if (!joined) break;
                 this.clearJoinTimers();
                 this.joinAcked = true;
+                this.lastReconnectOutcome = joined.reconnect ?? null;
+                if (joined.epoch !== undefined) {
+                    this.lastEpoch = joined.epoch;
+                }
                 this.roomState = {
                     hostCid: joined.hostCid,
                     participants: joined.participants,
                     maxParticipants: joined.maxParticipants,
+                    epoch: joined.epoch,
                 };
                 if (joined.turnToken) {
                     this.turnToken = joined.turnToken;
@@ -273,6 +307,14 @@ export class SignalingEngine {
                     this.persistReconnectStorage();
                 }
                 this.persistClientId();
+                this.logger?.log(
+                    'debug',
+                    'Signaling',
+                    `joined outcome=${joined.reconnect ?? 'fresh'} epoch=${joined.epoch ?? 'n/a'}`
+                );
+                // joined alone is not the authoritative post-reconnect
+                // snapshot — wait for the dedicated room_state that the
+                // server emits immediately after.
                 break;
             }
             case 'turn-refreshed': {
@@ -297,16 +339,42 @@ export class SignalingEngine {
                 const roomState = parseRoomStatePayload(msg.payload);
                 if (roomState) {
                     this.roomState = roomState;
+                    if (roomState.epoch !== undefined) {
+                        this.lastEpoch = roomState.epoch;
+                    }
+                    // First room_state seen after a transport reconnect is the
+                    // authoritative sync point. Clear the gate so MediaEngine
+                    // can proceed with renegotiation against confirmed state.
+                    if (this.awaitingPostReconnectSnapshot) {
+                        this.awaitingPostReconnectSnapshot = false;
+                        this.epochAtDisconnect = null;
+                        this.logger?.log(
+                            'debug',
+                            'Signaling',
+                            `Post-reconnect snapshot received (epoch=${roomState.epoch ?? 'n/a'})`
+                        );
+                    }
                 }
                 break;
             }
             case 'room_ended':
-                this.clearJoinTimers();
-                this.roomState = null;
-                this.currentRoomId = null;
-                this.needsRejoin = false;
-                this.clearReconnectStorage();
+                this.resetForTerminal();
                 break;
+            case 'negotiation_dirty':
+            case 'relay_failed': {
+                // Validate payload shape and drop anything malformed before
+                // it reaches downstream listeners. MediaEngine handles the
+                // actual renegotiation/back-off behavior off the listener
+                // stream.
+                const parsed = msg.type === 'relay_failed'
+                    ? parseRelayFailedPayload(msg.payload)
+                    : parseNegotiationDirtyPayload(msg.payload);
+                if (!parsed) {
+                    this.logger?.log('warning', 'Signaling', `Ignoring malformed ${msg.type} payload`);
+                    return;
+                }
+                break;
+            }
             case 'room_statuses':
                 if (msg.payload) {
                     this.roomStatuses = mergeRoomStatusesPayload(this.roomStatuses, msg.payload);
@@ -321,6 +389,15 @@ export class SignalingEngine {
                 const errorPayload = parseErrorPayload(msg.payload);
                 if (errorPayload) {
                     this.error = errorPayload;
+                    // Terminal errors that invalidate persisted reconnect
+                    // state. The session is over for this CID — clear the
+                    // token so a future join can't try to reclaim it.
+                    if (
+                        errorPayload.code === 'ROOM_ENDED' ||
+                        errorPayload.code === 'INVALID_RECONNECT_TOKEN'
+                    ) {
+                        this.resetForTerminal();
+                    }
                 }
                 break;
             }
@@ -392,6 +469,13 @@ export class SignalingEngine {
                 }
                 this.transport = null;
                 this.needsRejoin = !!this.currentRoomId;
+                // We may miss membership transitions while disconnected. Set
+                // the gate so consumers wait for an authoritative
+                // post-reconnect snapshot before scheduling renegotiation.
+                if (this.currentRoomId) {
+                    this.epochAtDisconnect = this.lastEpoch;
+                    this.awaitingPostReconnectSnapshot = true;
+                }
 
                 if (this.shouldFallback(targetKind, reason) && this.tryNextTransport(reason)) {
                     this.notifyStateChange();
@@ -559,6 +643,22 @@ export class SignalingEngine {
 
     private notifyStateChange(): void {
         [...this.stateListeners].forEach(l => l());
+    }
+
+    // Drops in-room state, persisted reconnect authority, and the
+    // post-reconnect gate. Called for any terminal event that means the
+    // current session is over and should not influence a future join:
+    // server `room_ended`, terminal error codes, etc.
+    private resetForTerminal(): void {
+        this.clearJoinTimers();
+        this.roomState = null;
+        this.currentRoomId = null;
+        this.needsRejoin = false;
+        this.clearReconnectStorage();
+        this.lastReconnectOutcome = null;
+        this.lastEpoch = null;
+        this.awaitingPostReconnectSnapshot = false;
+        this.epochAtDisconnect = null;
     }
 
     // Session storage helpers

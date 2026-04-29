@@ -1,7 +1,7 @@
 # Resilience Failure Modes — Audit & Fix Plan
 
-**Status:** Draft
-**Date:** 2026-04-26
+**Status:** Phase 1 implemented (server + Web/Android/iOS SDKs); Phase 2 & 3 outstanding.
+**Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed)
 **Scope:** Web, Android, iOS SDKs and the Go signaling server
 
 ## Background
@@ -58,32 +58,44 @@ must preserve the core UX model:
 
 ## Priority Summary
 
-| # | Failure Mode                                              | User-visible Symptom                                      | Severity | Effort |
-|---|-----------------------------------------------------------|-----------------------------------------------------------|----------|--------|
-| 1 | Negotiation messages missed while peer is suspended       | Stuck call setup, missing media after reconnect           | Critical | M      |
-| 2 | Reconnect creates a new CID instead of preserving identity | App thinks it rejoined; peers see duplicate/empty state   | Critical | S      |
-| 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      |
-| 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      |
-| 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      |
-| 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      |
-| 7 | SSE transport hijack via SID reuse                        | Security: another connection can take over an SSE session | Critical | S      |
-| 8 | iOS background suspension keeps SDK in stale "connected"  | After long background, signaling appears alive but isn't  | High     | M      |
-| 9 | TURN credentials expire while signaling is down           | Relay path fails; cannot recover even when signaling back | Medium   | S      |
-| 10| Push-to-rejoin races with local cleanup                   | Duplicate sessions, ghost slot on server                  | High     | M      |
-| 11| `end_room` doesn't notify suspended peers                 | Suspended peer reconnect-loops a dead room                | Medium   | XS     |
-| 12| WS↔SSE failover creates split SIDs server-side            | Brief duplicate-attached state, peer flicker              | Medium   | M      |
-| 13| Buffered signaling payloads become stale across reconnect | SDP collisions / out-of-order offer-answer state          | Medium   | S      |
-| 14| Android foreground-service lifecycle drift                | Orphaned service after process kill blocks next call      | Medium   | S      |
-| 15| Reconnect-token replay can reclaim active CIDs            | Security: attacker can evict and impersonate a participant | Critical | M      |
-| 16| Ephemeral content state lost while peer is suspended      | Screen share / content layout gets stale after reconnect  | High     | S      |
+| # | Failure Mode                                              | User-visible Symptom                                      | Severity | Effort | Status |
+|---|-----------------------------------------------------------|-----------------------------------------------------------|----------|--------|--------|
+| 1 | Negotiation messages missed while peer is suspended       | Stuck call setup, missing media after reconnect           | Critical | M      | Phase 1 (server) · SDK glare-safe renegotiation pending |
+| 2 | Reconnect creates a new CID instead of preserving identity | App thinks it rejoined; peers see duplicate/empty state   | Critical | S      | Phase 1 ✅ |
+| 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 1 (server cleanup gate) · SDK presentation timer + emission pending |
+| 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      | Phase 1 (server epoch + post-reconnect snapshot) · SDK MediaEngine wiring pending |
+| 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      | Phase 2 |
+| 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      | Phase 2 |
+| 7 | SSE transport hijack via SID reuse                        | Security: another connection can take over an SSE session | Critical | S      | Phase 2 — server `TODO(#7)` placed; needs SDK `resumeSse` first |
+| 8 | iOS background suspension keeps SDK in stale "connected"  | After long background, signaling appears alive but isn't  | High     | M      | Phase 2 |
+| 9 | TURN credentials expire while signaling is down           | Relay path fails; cannot recover even when signaling back | Medium   | S      | Phase 3 |
+| 10| Push-to-rejoin races with local cleanup                   | Duplicate sessions, ghost slot on server                  | High     | M      | Phase 2 |
+| 11| `end_room` doesn't notify suspended peers                 | Suspended peer reconnect-loops a dead room                | Medium   | XS     | Phase 1 ✅ (tombstone + ROOM_ENDED) |
+| 12| WS↔SSE failover creates split SIDs server-side            | Brief duplicate-attached state, peer flicker              | Medium   | M      | Phase 3 — depends on #7 + #15 |
+| 13| Buffered signaling payloads become stale across reconnect | SDP collisions / out-of-order offer-answer state          | Medium   | S      | Phase 1 (server epoch + dirty-pair) · SDK enqueue tagging + flush-time discard pending |
+| 14| Android foreground-service lifecycle drift                | Orphaned service after process kill blocks next call      | Medium   | S      | Phase 3 |
+| 15| Reconnect-token replay can reclaim active CIDs            | Security: attacker can evict and impersonate a participant | Critical | M      | Phase 1 (token expiry) · transport-resume coupling Phase 2 |
+| 16| Ephemeral content state lost while peer is suspended      | Screen share / content layout gets stale after reconnect  | High     | S      | Phase 1 ✅ |
 
 Severity legend: Critical = corruption or security; High = correctness break;
 Medium = degraded UX or recoverable.
 Effort: XS < 1d, S = 1-3d, M = 3-7d.
 
+Status legend: **Phase 1 ✅** = fully landed (server + all 3 SDKs); **Phase 1
+(server)** = server-side protocol in place, SDK-side consumption staged for
+follow-up; **Phase 2** / **Phase 3** = not started, see *Suggested ordering*.
+
 ---
 
 ## 1. Negotiation messages missed while a peer is suspended
+
+**Status (2026-04-25):** Server side landed. `handleRelay` now records a
+dirty pair on the room when an offer/answer/ice targets a CID without an
+attached transport, replies `relay_failed{target_suspended,targets,of}` to
+the sender, and emits `negotiation_dirty{with}` to active peers right after
+the reattach snapshot. SDKs parse both new messages but glare-safe
+renegotiation scheduling in `MediaEngine` / `WebRtcEngine` /
+`PeerNegotiationEngine` is the remaining piece.
 
 ### Symptom
 
@@ -172,6 +184,15 @@ senders stop waiting forever for an answer that will never arrive.
 ---
 
 ## 2. Reconnect creates a new CID instead of preserving identity
+
+**Status (2026-04-25):** Landed end-to-end. `joined.payload.reconnect` now
+reports `"fresh" | "reattached" | "recovered"`, and a valid reconnect token
+that targets a missing participant record recreates the slot under the
+requested CID. SDKs parse the outcome (`lastReconnectOutcome` /
+`JoinReconnectOutcome` / `ReconnectOutcome`) and surface `sessionExpired`
+on `INVALID_RECONNECT_TOKEN`, clearing persisted reconnect state. Tombstone
+checks (#11) gate the `"recovered"` path so a deliberately-ended room never
+silently turns into a fresh participant.
 
 ### Symptom
 
@@ -275,6 +296,13 @@ the boundary.
 
 ## 3. Suspension conflates signaling loss with media death
 
+**Status (2026-04-25):** Server-side cleanup gate landed. Active peers can
+send a new `media_liveness{cids:[...]}` hint and the server defers
+hard-eviction while a recent observation exists for the CID
+(`mediaLivenessFreshnessWindow = 30s`,
+`hardEvictMediaActiveDeferral = 30s`). SDK-side periodic emission and the
+per-participant presentation timer (#6 surface) are the remaining pieces.
+
 ### Symptom
 
 Remote peer A's signaling transport drops. Server marks A
@@ -375,6 +403,15 @@ authorization or proof of identity.
 
 ## 4. ICE restart fires against stale peer map on reconnect
 
+**Status (2026-04-25):** Server-side ready. `Room.Epoch` advances on every
+membership-mutating operation; `joined` and `room_state` carry `epoch`; and
+the server now sends an authoritative `room_state` snapshot on the new
+transport immediately after every successful `joined`, regardless of
+whether membership changed. The Web `SignalingEngine` records
+`epochAtDisconnect` and exposes `awaitingPostReconnectSnapshot` for
+`MediaEngine` to gate ICE restart on. Wiring that gate into the actual ICE
+restart scheduler in each SDK is the remaining piece.
+
 ### Symptom
 
 Signaling reconnects after a 30 s drop. The SDK's cached `roomState` shows
@@ -439,6 +476,8 @@ top of existing reconnect flow.
 ---
 
 ## 5. Process death without clean teardown
+
+**Status (2026-04-25):** Not started — Phase 2.
 
 ### Symptom
 
@@ -528,6 +567,14 @@ rejoin dead calls.
 
 ## 6. No explicit "you are suspended / about to be evicted" signal
 
+**Status (2026-04-25):** Not started — Phase 2. The shared resilience
+constants needed for the countdown
+(`peerSuspendedUiTimeoutMs`, `suspendHardEvictionTimeoutMs`,
+`epochResyncTimeoutMs`, `turnRefreshSafetyMarginMs`,
+`foregroundForcePingTimeoutMs`) are not yet added to
+`scripts/check-resilience-constants.mjs`; do that as part of the Phase 2
+slice.
+
 ### Symptom
 
 The SDK can't tell the difference between "I'm reconnecting and the server is
@@ -593,6 +640,11 @@ Low. State surface only.
 ---
 
 ## 7. SSE transport hijack via SID reuse
+
+**Status (2026-04-25):** Deferred to Phase 2. A `TODO(#7)` is placed at
+`server/sse.go` next to `replaceClient` so the hardening lands in lockstep
+with SDK `resumeSse` support. Shipping the server change without the SDK
+piece would break legitimate in-flight SSE transport flaps.
 
 ### Symptom
 
@@ -682,6 +734,8 @@ behind a server feature flag for one release; clients gain `resumeSse` first.
 
 ## 8. iOS background suspension keeps SDK in stale "connected" state
 
+**Status (2026-04-25):** Not started — Phase 2.
+
 ### Symptom
 
 User backgrounds the iOS app during a call. iOS suspends the process, freezing
@@ -734,6 +788,8 @@ Low. Additive lifecycle observers; the synthetic ping is cheap.
 ---
 
 ## 9. TURN credentials expire while signaling is down
+
+**Status (2026-04-25):** Not started — Phase 3.
 
 ### Symptom
 
@@ -788,6 +844,8 @@ changes.
 ---
 
 ## 10. Push-to-rejoin races with local cleanup
+
+**Status (2026-04-25):** Not started — Phase 2.
 
 ### Symptom
 
@@ -856,6 +914,13 @@ decision, not as part of this race fix.
 
 ## 11. `end_room` doesn't notify suspended peers
 
+**Status (2026-04-25):** Landed end-to-end. `Hub.tombstones` records ended
+rooms with a 5-minute TTL; reconnect attempts presenting valid token
+authority for a tombstoned RID receive a structured
+`error{code:"ROOM_ENDED", reason:"ended_by_host"}`. SDKs map ROOM_ENDED to
+the existing terminal `roomEnded` error and clear persisted reconnect
+state.
+
 ### Symptom
 
 Host calls `end_room` while peer P is suspended. Server stops P's
@@ -905,6 +970,9 @@ Very low. Pure server-side addition.
 ---
 
 ## 12. WS↔SSE failover creates split SIDs server-side
+
+**Status (2026-04-25):** Not started — Phase 3 (depends on #7 + #15
+hardening shipping first).
 
 ### Symptom
 
@@ -958,6 +1026,12 @@ it would create a new takeover path.
 ---
 
 ## 13. Buffered signaling payloads become stale across reconnect
+
+**Status (2026-04-25):** Server-side support already in place via #1's
+dirty-pair tracking and #4's epoch-stamped snapshots. SDK enqueue tagging
+(timestamp + epoch at enqueue, discard at flush, and tail-drop on ICE
+candidate overflow) is the remaining piece — staged for the same MediaEngine
+slice that wires up #4's gate.
 
 ### Symptom
 
@@ -1015,6 +1089,8 @@ wait forever.
 
 ## 14. Android foreground-service lifecycle drift
 
+**Status (2026-04-25):** Not started — Phase 3.
+
 ### Symptom
 
 `SerenadaSession` crashes (uncaught exception, OOM in WebRTC native code,
@@ -1060,6 +1136,15 @@ Low. Additive guards on a host-app lifecycle.
 ---
 
 ## 15. Reconnect-token replay can reclaim active CIDs
+
+**Status (2026-04-25):** Token expiry landed. Reconnect tokens are now
+HMAC-bound to `(cid, rid, expiresAt)` with format `<hmac>.<expiresAtUnix>`,
+TTL = `suspendHardEvictionTimeout`. `validateReconnectToken` returns
+`(ok, expired)` and the join handler maps both to
+`INVALID_RECONNECT_TOKEN`. Coupling token authority to the
+`transportResumeId` proof from #12 — so a leaked token alone cannot
+replace an active transport — is Phase 2 work and ships together with #7
+and #12.
 
 ### Symptom
 
@@ -1133,6 +1218,14 @@ device-bound proof as a future hardening option if the product needs it.
 ---
 
 ## 16. Ephemeral content state lost while peer is suspended
+
+**Status (2026-04-25):** Landed end-to-end. `roomParticipant.ContentState`
+captures the latest `{active, contentType, updatedAtMs, epoch}` at
+`handleRelay` time and the value is included in every `joined` /
+`room_state` participant entry. SDKs parse `ParticipantContentState` on
+all three platforms; UI reconciliation (showing a "loading media" state
+while the SDP catches up to a stale-but-active share) is a follow-up that
+sits on top of the existing parser.
 
 ### Symptom
 
@@ -1306,6 +1399,88 @@ Out of scope for this document, listed for visibility:
   it deserves a fresh look.
 
 ## Change Log
+
+### 2026-04-25 — Phase 1 implementation landed
+
+- **Server (`server/signaling.go`, `server/sse.go`)**:
+  - Added `Hub.tombstones` (5-minute TTL) populated by `handleEndRoom`;
+    reconnect attempts presenting valid token authority for a tombstoned
+    RID receive `error{code:"ROOM_ENDED", reason:"ended_by_host"}`.
+  - Reworked `handleJoin` to surface
+    `joined.payload.reconnect: "fresh" | "reattached" | "recovered"` and
+    to recreate the participant record under the requested CID when a
+    valid reconnect token's room is gone.
+  - Reformatted reconnect tokens as
+    `hex(HMAC-SHA256(secret, cid|rid|expiresAt)).<expiresAtUnix>` with TTL
+    capped at `suspendHardEvictionTimeout`; `validateReconnectToken`
+    returns `(ok, expired)` and old-format tokens are rejected.
+  - Added `Room.Epoch` (monotonic, advanced on every join/leave/suspend/
+    reattach/evict/end_room) plumbed into `joined` and `room_state`. The
+    server now emits an authoritative `room_state` snapshot on the new
+    transport immediately after every successful `joined`.
+  - Added `Room.negotiationDirty` and rewrote `handleRelay` so that
+    offer/answer/ice to suspended targets is no longer silently dropped:
+    the dirty pair is recorded, the sender receives
+    `relay_failed{target_suspended,targets,of}`, and on reattach the
+    server emits `negotiation_dirty{with}` to the affected peers right
+    after the post-reconnect snapshot.
+  - Added new `media_liveness{cids:[...]}` message and
+    `Room.mediaLiveness`. `hardEvictSuspended` now defers eviction while
+    a recent liveness hint exists
+    (`mediaLivenessFreshnessWindow = 30s`,
+    `hardEvictMediaActiveDeferral = 30s`).
+  - Persisted latest content state on `roomParticipant.ContentState`;
+    `handleRelay` for `content_state` updates the record and the value
+    is included in every `joined` / `room_state` participant entry.
+  - SSE pending-session model (#7) deliberately deferred behind a
+    `TODO(#7)` next to `replaceClient`; the proper fix needs the matching
+    SDK `resumeSse` envelope and ships in Phase 2.
+
+- **All three SDKs**:
+  - Parse the new fields (`epoch`, `reconnect`, `reconnectTokenTTLMs`,
+    `participants[].contentState`, `error.reason`) and the new payload
+    types (`relay_failed`, `negotiation_dirty`).
+  - Map `INVALID_RECONNECT_TOKEN` to a new dedicated terminal error
+    (`sessionExpired` / `SessionExpired` / `.sessionExpired`) and clear
+    persisted reconnect storage on either `ROOM_ENDED` or
+    `INVALID_RECONNECT_TOKEN`.
+  - Web `SignalingEngine` additionally tracks
+    `lastReconnectOutcome`, `lastEpoch`, `epochAtDisconnect`, and
+    `awaitingPostReconnectSnapshot` so `MediaEngine` can gate ICE restart
+    on a confirmed post-reconnect snapshot.
+
+- **Tests / CI**:
+  - Added `server/resilience_phase1_test.go` covering reconnect outcomes,
+    recovered-CID, ROOM_ENDED tombstone, expired-token rejection, epoch
+    advancement, post-reconnect snapshot, dirty-pair + `relay_failed`,
+    `negotiation_dirty` on reattach, content-state replay, and
+    media-liveness deferral.
+  - Added Web payload tests for the new fields and parsers.
+  - Server (Go), Web (vitest, 301), Android (gradle), iOS
+    (xcodebuild, 246) all green.
+  - `scripts/check-resilience-constants.mjs` and
+    `scripts/check-version-parity.mjs` green.
+
+- **Docs**:
+  - `docs/serenada_protocol_v1.md` updated with the new fields on
+    `joined` / `room_state`, the new error codes
+    (`ROOM_ENDED`, `INVALID_RECONNECT_TOKEN`), and three new message
+    types (`relay_failed`, `negotiation_dirty`, `media_liveness`).
+  - This document's priority table now carries a Status column and each
+    failure-mode section has a `**Status:**` line summarizing what
+    landed in Phase 1 and what remains.
+
+- **Deferred to follow-up slices**:
+  - SDK MediaEngine consumption of `negotiation_dirty` /
+    `relay_failed` / post-reconnect snapshot gate (#1, #4, #13 SDK side).
+  - Periodic `media_liveness` emission from SDKs (#3 SDK side) and the
+    per-participant suspended UI presentation timer (#3 / #6 surface).
+  - Stale buffered offer/ICE discard in the SDK enqueue/flush path (#13).
+  - SSE pending-session + `resumeSse` (#7) shipped together with the
+    transport-resume coupling (#12) and the active-replacement guard
+    (#15 part 2).
+  - Process-death recovery (#5), iOS background-foreground forced ping
+    (#8), push-to-rejoin lifecycle serialization (#10).
 
 ### 2026-04-26
 

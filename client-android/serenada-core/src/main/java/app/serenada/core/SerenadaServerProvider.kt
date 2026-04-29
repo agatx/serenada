@@ -1,6 +1,8 @@
 package app.serenada.core
 
 import android.os.Handler
+import app.serenada.core.call.Participant
+import app.serenada.core.call.ReconnectOutcome
 import app.serenada.core.call.SessionSignaling
 import app.serenada.core.call.SignalingClient
 import app.serenada.core.call.SignalingMessage
@@ -182,9 +184,16 @@ internal class SerenadaServerProvider(
             }
             "error" -> {
                 message.payload.toErrorPayload()?.let { payload ->
+                    val code = payload.code ?: "UNKNOWN"
+                    // Terminal codes that invalidate persisted reconnect
+                    // authority. Drop the stored token so a future join can
+                    // not try to reclaim the (gone) slot.
+                    if (code == "ROOM_ENDED" || code == "INVALID_RECONNECT_TOKEN") {
+                        clearReconnect()
+                    }
                     listener?.onError(
                         ErrorEvent(
-                            code = payload.code ?: "UNKNOWN",
+                            code = code,
                             message = payload.message ?: "Unknown error",
                         )
                     )
@@ -222,16 +231,7 @@ internal class SerenadaServerProvider(
         currentHostPeerId = payload.hostCid
         currentTurnToken = payload.turnToken
         payload.turnTokenTTLMs?.let { scheduleTurnRefresh(it) } ?: clearTurnRefresh()
-        val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(
-                peerId = participant.cid,
-                joinedAt = participant.joinedAt,
-                displayName = participant.displayName,
-                audioEnabled = participant.audioEnabled,
-                videoEnabled = participant.videoEnabled,
-                connectionStatus = participant.signalingStatus,
-            )
-        }
+        val participants = payload.participants.map { it.toProviderParticipant() }
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
             participants.forEach { put(it.peerId, it) }
         }
@@ -241,6 +241,8 @@ internal class SerenadaServerProvider(
                 participants = participants,
                 hostPeerId = payload.hostCid,
                 maxParticipants = payload.maxParticipants,
+                epoch = payload.epoch,
+                reconnectOutcome = payload.reconnect.toProviderOutcome(),
             )
         )
     }
@@ -248,16 +250,7 @@ internal class SerenadaServerProvider(
     private fun handleRoomState(message: SignalingMessage) {
         val payload = message.payload.toRoomStatePayload() ?: return
         currentHostPeerId = payload.hostCid
-        val participants = payload.participants.map { participant ->
-            SignalingProviderParticipant(
-                peerId = participant.cid,
-                joinedAt = participant.joinedAt,
-                displayName = participant.displayName,
-                audioEnabled = participant.audioEnabled,
-                videoEnabled = participant.videoEnabled,
-                connectionStatus = participant.signalingStatus,
-            )
-        }
+        val participants = payload.participants.map { it.toProviderParticipant() }
         emitParticipantDiffs(participants)
         previousParticipants = linkedMapOf<String, SignalingProviderParticipant>().apply {
             participants.forEach { put(it.peerId, it) }
@@ -267,8 +260,34 @@ internal class SerenadaServerProvider(
                 participants = participants,
                 hostPeerId = payload.hostCid,
                 maxParticipants = payload.maxParticipants,
+                epoch = payload.epoch,
             )
         )
+    }
+
+    private fun Participant.toProviderParticipant(): SignalingProviderParticipant =
+        SignalingProviderParticipant(
+            peerId = cid,
+            joinedAt = joinedAt,
+            displayName = displayName,
+            audioEnabled = audioEnabled,
+            videoEnabled = videoEnabled,
+            connectionStatus = signalingStatus,
+            contentState = contentState?.let {
+                SignalingProviderParticipantContentState(
+                    active = it.active,
+                    contentType = it.contentType,
+                    updatedAtMs = it.updatedAtMs,
+                    epoch = it.epoch,
+                )
+            },
+        )
+
+    private fun ReconnectOutcome?.toProviderOutcome(): JoinReconnectOutcome? = when (this) {
+        ReconnectOutcome.FRESH -> JoinReconnectOutcome.FRESH
+        ReconnectOutcome.REATTACHED -> JoinReconnectOutcome.REATTACHED
+        ReconnectOutcome.RECOVERED -> JoinReconnectOutcome.RECOVERED
+        null -> null
     }
 
     private fun emitParticipantDiffs(participants: List<SignalingProviderParticipant>) {
