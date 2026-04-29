@@ -36,6 +36,13 @@ public enum WebRtcResilience {
     // MARK: - Snapshot
 
     public static let snapshotPrepareTimeoutMs = 2_000
+
+    // MARK: - Foreground / Doze recovery
+
+    /// After the app returns to foreground from background, the SDK issues a
+    /// synthetic ping and waits this long for a pong before force-closing the
+    /// transport and triggering the normal reconnect path.
+    public static let foregroundForcePingTimeoutMs = 2_000
 }
 
 // MARK: - Nanosecond convenience accessors

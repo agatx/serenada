@@ -119,6 +119,10 @@ internal class SerenadaServerProvider(
         sendRawMessage(type = type, payload = payload)
     }
 
+    override fun forceReconnectIfStale(timeoutMs: Long) {
+        signaling.forcePingWithDeadline(timeoutMs)
+    }
+
     override suspend fun getIceServers(): List<PeerConnection.IceServer> {
         val token = currentTurnToken?.takeIf { it.isNotBlank() } ?: return emptyList()
         return suspendCancellableCoroutine { continuation ->

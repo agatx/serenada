@@ -147,6 +147,11 @@ public final class SerenadaSession: ObservableObject {
     private let pathMonitor = NWPathMonitor()
     private let pathMonitorQueue = DispatchQueue(label: "SerenadaSession.PathMonitor")
 
+    // App lifecycle (foreground force-ping — see resilience #8)
+    private var foregroundObserver: NSObjectProtocol?
+    private var backgroundObserver: NSObjectProtocol?
+    private var lastBackgroundedAtMs: Int64?
+
     // Session state
     private var internalPhase: CallPhase = .joining
     private var participantCount = 0
@@ -310,6 +315,8 @@ public final class SerenadaSession: ObservableObject {
     deinit {
         pathMonitor.cancel()
         reconnectTask?.cancel()
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+        if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
     }
 
     // MARK: - Public API
@@ -1159,7 +1166,49 @@ public final class SerenadaSession: ObservableObject {
             }
         }
         pathMonitor.start(queue: pathMonitorQueue)
+        startAppLifecycleMonitoring()
     }
+
+    private func startAppLifecycleMonitoring() {
+        let center = NotificationCenter.default
+        backgroundObserver = center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleAppBackgrounded() }
+        }
+        foregroundObserver = center.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleAppForegrounded() }
+        }
+    }
+
+    private func handleAppBackgrounded() {
+        lastBackgroundedAtMs = clock.nowMs()
+    }
+
+    /// Force-ping hook for resilience #8: when iOS resumes the app after a
+    /// long enough background, the WS the OS killed silently is detected
+    /// inside `foregroundForcePingTimeoutMs` instead of waiting a full
+    /// `pingIntervalMs` cycle.
+    private func handleAppForegrounded() {
+        let backgroundedAt = lastBackgroundedAtMs
+        lastBackgroundedAtMs = nil
+        guard let backgroundedAt else { return }
+        guard internalPhase == .inCall || internalPhase == .joining || internalPhase == .waiting else { return }
+        let backgroundedMs = clock.nowMs() - backgroundedAt
+        guard backgroundedMs >= Self.foregroundResumeMinBackgroundMs else { return }
+        signalingProvider.forceReconnectIfStale(timeoutMs: WebRtcResilience.foregroundForcePingTimeoutMs)
+    }
+
+    /// Background duration that triggers a foreground force-ping. Anything
+    /// shorter is short enough that pings would have noticed the failure on
+    /// their own; longer is the OS window where iOS may have killed the WS.
+    private static let foregroundResumeMinBackgroundMs: Int64 = 5_000
 
     /// Snapshots the in-memory reconnect state into the cross-launch
     /// recovery store so a relaunched process can offer a "Rejoin call?"

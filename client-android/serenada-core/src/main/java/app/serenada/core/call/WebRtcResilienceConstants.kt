@@ -33,4 +33,10 @@ object WebRtcResilienceConstants {
 
     // ── Snapshot ─────────────────────────────────────────────────────
     const val SNAPSHOT_PREPARE_TIMEOUT_MS = 2_000L
+
+    // ── Foreground / Doze recovery ───────────────────────────────────
+    // After the app returns to foreground from background, the SDK issues a
+    // synthetic ping and waits this long for a pong before force-closing the
+    // transport and triggering the normal reconnect path.
+    const val FOREGROUND_FORCE_PING_TIMEOUT_MS = 2_000L
 }

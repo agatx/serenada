@@ -70,6 +70,7 @@
 		C8363EE39A1335203566D71B /* RoomStatuses.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8B7715C6AFF6FAA67DB5D01 /* RoomStatuses.swift */; };
 		CAD139965FF8325D89A8113A /* ErrorScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D7AA70D76623801E762E2DB /* ErrorScreen.swift */; };
 		CB94D71B6D37742D4EAAC565 /* SessionOrchestrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */; };
+		CC3D167A630FB82F98509DDF /* SignalingClientForcePingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF2A1B8AEF0CE257BBAB5F0F /* SignalingClientForcePingTests.swift */; };
 		CEEA0CFAF57BC2B4A48F8441 /* DeepLinkParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5BC48440A4DD113050C3E29 /* DeepLinkParserTests.swift */; };
 		D05E6EDD64E9A169FF7DAD21 /* SerenadaCoreProviderModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECF59DDD3EB32D08B6F0B913 /* SerenadaCoreProviderModeTests.swift */; };
 		D137590CDB7A1FC9C94D3F74 /* SignalingClientFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C62ED85E9C29EE8FB7BC0806 /* SignalingClientFallbackTests.swift */; };
@@ -226,6 +227,7 @@
 		FCB3288DA9DF528251D2A52D /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
 		FD06F6B1E706207C4ED2D7DD /* SignalingPayloadsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingPayloadsTests.swift; sourceTree = "<group>"; };
 		FD2E85BAF2302D3C1569C2E5 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
+		FF2A1B8AEF0CE257BBAB5F0F /* SignalingClientForcePingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingClientForcePingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -418,6 +420,7 @@
 				8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */,
 				09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */,
 				C62ED85E9C29EE8FB7BC0806 /* SignalingClientFallbackTests.swift */,
+				FF2A1B8AEF0CE257BBAB5F0F /* SignalingClientForcePingTests.swift */,
 				1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */,
 				FD06F6B1E706207C4ED2D7DD /* SignalingPayloadsTests.swift */,
 				DA4E5581F6502FD66EEAB5CD /* Fakes */,
@@ -825,6 +828,7 @@
 				CB94D71B6D37742D4EAAC565 /* SessionOrchestrationTests.swift in Sources */,
 				90E4D65F01CB4CBE8E6CA6EF /* SessionTestHarness.swift in Sources */,
 				D137590CDB7A1FC9C94D3F74 /* SignalingClientFallbackTests.swift in Sources */,
+				CC3D167A630FB82F98509DDF /* SignalingClientForcePingTests.swift in Sources */,
 				60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */,
 				887A6F874A06A47C37E73A85 /* SignalingPayloadsTests.swift in Sources */,
 			);

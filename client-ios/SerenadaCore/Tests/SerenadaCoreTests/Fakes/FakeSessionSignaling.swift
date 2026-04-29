@@ -9,6 +9,7 @@ final class FakeSessionSignaling: SessionSignaling {
     private(set) var sentMessages: [SignalingMessage] = []
     private(set) var closeCalls = 0
     private(set) var recordPongCalls = 0
+    private(set) var forcePingTimeouts: [Int] = []
     var connected = false
 
     func connect(host: String) {
@@ -30,6 +31,10 @@ final class FakeSessionSignaling: SessionSignaling {
 
     func recordPong() {
         recordPongCalls += 1
+    }
+
+    func forcePingWithDeadline(timeoutMs: Int) {
+        forcePingTimeouts.append(timeoutMs)
     }
 
     func clearSentMessages() {
