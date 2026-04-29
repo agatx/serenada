@@ -4,6 +4,15 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.2] — 2026-04-28
+
+### Added
+- Web, Android, iOS: host-supplied avatars in the call UI. Hosts can pass an opaque `peerId` on `join()` (alongside `displayName`) and supply an `AvatarProvider` (`avatarProvider` config on the call flow). The remote video-off placeholder renders a circle avatar above the name; null/error falls back to initials. Resolution is lazy and cached for the call's lifetime.
+- Server forwards a new `peerId` field in `joined` / `room_state` participant entries (trimmed, max 128 chars). Wire-compatible — older clients ignore the new field.
+
+### Fixed
+- Initials derivation skips non-alphanumeric characters per word, so display names like `{Admin}` or `(CEO) John` produce sensible initials instead of punctuation.
+
 ## [0.6.1] — 2026-04-27
 
 ### Fixed
