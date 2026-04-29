@@ -1,6 +1,7 @@
 package app.serenada.core
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -1230,6 +1231,8 @@ class SerenadaSession internal constructor(
 
     private fun registerAppLifecycleListener() {
         val app = appContext as? Application ?: return
+        startedActivityCount = if (isAppProcessForeground()) 1 else 0
+        lastBackgroundedAtMs = null
         runCatching { app.registerActivityLifecycleCallbacks(appLifecycleCallbacks) }
     }
 
@@ -1238,6 +1241,12 @@ class SerenadaSession internal constructor(
         runCatching { app.unregisterActivityLifecycleCallbacks(appLifecycleCallbacks) }
         startedActivityCount = 0
         lastBackgroundedAtMs = null
+    }
+
+    private fun isAppProcessForeground(): Boolean {
+        val processInfo = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(processInfo)
+        return processInfo.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
     }
 
     private fun hasRequiredPermissions(): Boolean {

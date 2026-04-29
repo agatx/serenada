@@ -1188,7 +1188,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func handleAppBackgrounded() {
-        lastBackgroundedAtMs = Self.nowMs()
+        lastBackgroundedAtMs = clock.nowMs()
     }
 
     /// Force-ping hook for resilience #8: when iOS resumes the app after a
@@ -1200,7 +1200,7 @@ public final class SerenadaSession: ObservableObject {
         lastBackgroundedAtMs = nil
         guard let backgroundedAt else { return }
         guard internalPhase == .inCall || internalPhase == .joining || internalPhase == .waiting else { return }
-        let backgroundedMs = Self.nowMs() - backgroundedAt
+        let backgroundedMs = clock.nowMs() - backgroundedAt
         guard backgroundedMs >= Self.foregroundResumeMinBackgroundMs else { return }
         signalingProvider.forceReconnectIfStale(timeoutMs: WebRtcResilience.foregroundForcePingTimeoutMs)
     }
