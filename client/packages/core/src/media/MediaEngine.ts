@@ -154,6 +154,21 @@ export class MediaEngine {
         }
     }
 
+    /**
+     * Schedule glare-safe ICE restart for a specific peer because the server
+     * told us the pair is dirty after the peer reattached (#1).
+     */
+    scheduleDirtyPairRestart(remoteCid: string): void {
+        if (!this.peers.has(remoteCid)) {
+            return;
+        }
+        if (this.shouldIOffer(remoteCid)) {
+            this.scheduleIceRestart(remoteCid, 'negotiation-dirty', 0);
+        } else {
+            this.scheduleNonHostFallback(remoteCid);
+        }
+    }
+
     processSignalingMessage(msg: SignalingMessage): void {
         const { type, payload } = msg;
         if (!payload) return;

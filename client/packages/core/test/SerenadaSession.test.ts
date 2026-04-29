@@ -801,6 +801,40 @@ describe('SerenadaSession', () => {
             expect(harness.media.handleSignalingReconnectCalls).toBe(1);
         });
 
+        it('schedules per-CID ICE restart on negotiation_dirty', async () => {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+
+            expect(harness.media.scheduleDirtyPairRestartCalls).toEqual([]);
+
+            harness.signaling.emitNegotiationDirty({ withCid: 'peer-1' });
+
+            expect(harness.media.scheduleDirtyPairRestartCalls).toEqual(['peer-1']);
+        });
+
+        it('does not call dirty-pair restart for unrelated provider events', async () => {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+
+            // relay_failed is informational only — no ICE restart should fire.
+            harness.signaling.emitRelayFailed({
+                reason: 'target_suspended',
+                targets: ['peer-1'],
+                of: 'offer',
+            });
+
+            expect(harness.media.scheduleDirtyPairRestartCalls).toEqual([]);
+        });
+
         it('retries reconnect and rejoins when the provider does not manage reconnection', async () => {
             harness = new TestSessionHarness({ handlesReconnection: false, autoStart: true });
 

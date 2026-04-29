@@ -1,7 +1,14 @@
 import { SignalingProviderEmitter, type JoinOptions, type RoomEndedEvent, type RoomStateEvent, type SignalingProviderParticipant } from './SignalingProvider.js';
 import type { SerenadaLogger } from './types.js';
 import { SignalingEngine } from './signaling/SignalingEngine.js';
-import { parseErrorPayload, parseJoinedPayload, parseRoomStatePayload, parseTurnRefreshedPayload } from './signaling/payloads.js';
+import {
+    parseErrorPayload,
+    parseJoinedPayload,
+    parseNegotiationDirtyPayload,
+    parseRelayFailedPayload,
+    parseRoomStatePayload,
+    parseTurnRefreshedPayload,
+} from './signaling/payloads.js';
 import type { RoomParticipant, SignalingMessage } from './signaling/types.js';
 import type { TransportKind } from './signaling/transports/types.js';
 import { TURN_FETCH_TIMEOUT_MS } from './constants.js';
@@ -198,6 +205,20 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             case 'participant_media_state':
                 this.emitPeerMessage(message);
                 break;
+            case 'negotiation_dirty': {
+                const dirty = parseNegotiationDirtyPayload(message.payload);
+                if (dirty) {
+                    this.emit('negotiationDirty', { withCid: dirty.with });
+                }
+                break;
+            }
+            case 'relay_failed': {
+                const failed = parseRelayFailedPayload(message.payload);
+                if (failed) {
+                    this.emit('relayFailed', failed);
+                }
+                break;
+            }
         }
     }
 

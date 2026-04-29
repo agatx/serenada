@@ -101,6 +101,27 @@ data class ErrorEvent(
 )
 
 /**
+ * Server tells an active peer that a previously-suspended peer has reattached
+ * AND there was pending negotiation traffic to it during the suspension. The
+ * SDK should perform glare-safe fresh negotiation / ICE restart for the named
+ * CID.
+ */
+data class NegotiationDirtyEvent(
+    /** The CID that needs fresh renegotiation. */
+    val withCid: String,
+)
+
+/** Server tells the sender it could not deliver a relay because the target had no transport. */
+data class RelayFailedEvent(
+    /** Server-assigned reason code, e.g. `"target_suspended"`. */
+    val reason: String,
+    /** Target CIDs the relay could not reach. */
+    val targets: List<String>,
+    /** Original signaling type that failed, e.g. `"offer" | "answer" | "ice"`. */
+    val of: String? = null,
+)
+
+/**
  * Transport-agnostic signaling contract for Android SDK sessions.
  *
  * Implementations may invoke [listener] callbacks from any thread. The session
@@ -153,5 +174,7 @@ interface SignalingProvider {
         fun onRoomEnded(event: RoomEndedEvent) {}
         fun onError(event: ErrorEvent) {}
         fun onIceServersChanged(iceServers: List<PeerConnection.IceServer>) {}
+        fun onNegotiationDirty(event: NegotiationDirtyEvent) {}
+        fun onRelayFailed(event: RelayFailedEvent) {}
     }
 }

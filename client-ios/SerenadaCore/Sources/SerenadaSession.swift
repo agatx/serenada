@@ -88,6 +88,18 @@ private final class SignalingProviderDelegateProxy: SignalingProviderDelegate {
             session?.handleProviderIceServersChanged(iceServers)
         }
     }
+
+    func signalingProviderDidReceiveNegotiationDirty(_ event: NegotiationDirtyEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderNegotiationDirty(event)
+        }
+    }
+
+    func signalingProviderDidReceiveRelayFailed(_ event: RelayFailedEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderRelayFailed(event)
+        }
+    }
 }
 
 /// Represents an active call session. Created via ``SerenadaCore/join(url:)`` or ``SerenadaCore/createRoom()``.
@@ -719,6 +731,22 @@ public final class SerenadaSession: ObservableObject {
 
     fileprivate func handleProviderIceServersChanged(_ iceServers: [IceServerConfig]) {
         applyIceServers(iceServers)
+    }
+
+    fileprivate func handleProviderNegotiationDirty(_ event: NegotiationDirtyEvent) {
+        logger?.log(.debug, tag: "Session", "RX negotiation_dirty with=\(event.withCid)")
+        peerNegotiationEngine?.scheduleIceRestart(remoteCid: event.withCid, reason: "negotiation-dirty", delayMs: 0)
+    }
+
+    fileprivate func handleProviderRelayFailed(_ event: RelayFailedEvent) {
+        // Server has the dirty-pair record; once the suspended target reattaches
+        // we'll get `negotiation_dirty` and renegotiate then. For now, surface
+        // in logs so suppressed offers/ICE are visible.
+        logger?.log(
+            .debug,
+            tag: "Session",
+            "RX relay_failed reason=\(event.reason) of=\(event.of ?? "n/a") targets=\(event.targets.joined(separator: ","))"
+        )
     }
 
     // MARK: - Participants

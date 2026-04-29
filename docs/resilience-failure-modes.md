@@ -1,7 +1,7 @@
 # Resilience Failure Modes — Audit & Fix Plan
 
-**Status:** Phase 1 implemented; Phase 2 partial (#4 SDK snapshot gate, #5 process-death recovery, and #8 foreground/Doze force-ping landed end-to-end; #1/#3/#6/#7/#10/#13 SDK pieces outstanding).
-**Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed) · 2026-04-26 (Phase 2 partial #5+#8 landed) · 2026-04-28 (#4 SDK snapshot gate landed)
+**Status:** Phase 1 implemented; Phase 2 partial (#1 dirty-pair renegotiation, #4 SDK snapshot gate, #5 process-death recovery, and #8 foreground/Doze force-ping landed end-to-end; #3/#6/#7/#10/#13 SDK pieces outstanding).
+**Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed) · 2026-04-26 (Phase 2 partial #5+#8 landed) · 2026-04-28 (#4 SDK snapshot gate landed) · 2026-04-29 (#1 dirty-pair renegotiation landed)
 **Scope:** Web, Android, iOS SDKs and the Go signaling server
 
 ## Background
@@ -60,7 +60,7 @@ must preserve the core UX model:
 
 | # | Failure Mode                                              | User-visible Symptom                                      | Severity | Effort | Status |
 |---|-----------------------------------------------------------|-----------------------------------------------------------|----------|--------|--------|
-| 1 | Negotiation messages missed while peer is suspended       | Stuck call setup, missing media after reconnect           | Critical | M      | Phase 1 (server) · SDK glare-safe renegotiation pending |
+| 1 | Negotiation messages missed while peer is suspended       | Stuck call setup, missing media after reconnect           | Critical | M      | Phase 1 (server) · Phase 2 ✅ (SDK consumes `negotiation_dirty` for per-CID ICE restart; `relay_failed` informational) |
 | 2 | Reconnect creates a new CID instead of preserving identity | App thinks it rejoined; peers see duplicate/empty state   | Critical | S      | Phase 1 ✅ |
 | 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 1 (server cleanup gate) · SDK presentation timer + emission pending |
 | 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      | Phase 1 (server) · Phase 2 ✅ (SDK snapshot gate landed end-to-end) |
@@ -89,13 +89,18 @@ follow-up; **Phase 2** / **Phase 3** = not started, see *Suggested ordering*.
 
 ## 1. Negotiation messages missed while a peer is suspended
 
-**Status (2026-04-25):** Server side landed. `handleRelay` now records a
-dirty pair on the room when an offer/answer/ice targets a CID without an
-attached transport, replies `relay_failed{target_suspended,targets,of}` to
-the sender, and emits `negotiation_dirty{with}` to active peers right after
-the reattach snapshot. SDKs parse both new messages but glare-safe
-renegotiation scheduling in `MediaEngine` / `WebRtcEngine` /
-`PeerNegotiationEngine` is the remaining piece.
+**Status (2026-04-29):** Landed end-to-end (server + all 3 SDKs). The
+server side from Phase 1 is unchanged: `handleRelay` records a dirty pair
+on the room when an offer/answer/ice targets a CID without an attached
+transport, replies `relay_failed{target_suspended,targets,of}` to the
+sender, and emits `negotiation_dirty{with}` to active peers right after
+the reattach snapshot. SDK side: each platform now surfaces both
+messages as typed provider events (`negotiationDirty`, `relayFailed`).
+On `negotiation_dirty`, `SerenadaSession` calls per-CID
+`scheduleIceRestart`/`scheduleDirtyPairRestart` against the existing
+glare-safe ICE-restart machinery. `relay_failed` is logged but not
+acted on directly — the same dirty-pair condition will surface as
+`negotiation_dirty` once the suspended target reattaches.
 
 ### Symptom
 
@@ -1423,6 +1428,57 @@ Out of scope for this document, listed for visibility:
   it deserves a fresh look.
 
 ## Change Log
+
+### 2026-04-29 — Phase 2 partial: SDK dirty-pair renegotiation (#1)
+
+- **Provider events**: Each SDK gains two new typed provider events
+  surfacing the Phase 1 server messages:
+  - `negotiationDirty { withCid: String }` — server tells an active peer
+    that a previously-suspended peer reattached and there was pending
+    negotiation traffic to it during the suspension.
+  - `relayFailed { reason, targets, of? }` — server tells a sender it
+    could not deliver a relay because the target had no transport.
+
+- **Web SDK** (`SignalingProvider.ts`, `SerenadaServerProvider.ts`,
+  `SerenadaSession.ts`, `MediaEngine.ts`): `SerenadaServerProvider` parses
+  both messages (parsers were already present from Phase 1, dropped
+  silently before) and emits the new events. `SerenadaSession` consumes
+  `negotiationDirty` to call `MediaEngine.scheduleDirtyPairRestart(cid)`,
+  which routes through the existing per-CID `scheduleIceRestart` (or
+  `scheduleNonHostFallback` when the local peer should not offer) so all
+  existing glare/cooldown guards apply.
+
+- **Android SDK** (`SignalingProvider.kt`, `SerenadaServerProvider.kt`,
+  `SerenadaSession.kt`): `Listener` gains `onNegotiationDirty` and
+  `onRelayFailed` (default no-op). `SerenadaServerProvider` dispatches
+  via the existing `toNegotiationDirtyPayload` / `toRelayFailedPayload`
+  parsers. `SerenadaSession.buildProviderListener` consumes
+  `onNegotiationDirty` by calling
+  `peerNegotiationEngine.scheduleIceRestart(cid, "negotiation-dirty", 0)`.
+
+- **iOS SDK** (`SignalingProvider.swift`, `SerenadaServerProvider.swift`,
+  `SerenadaSession.swift`): `SignalingProviderDelegate` gains
+  `signalingProviderDidReceiveNegotiationDirty` /
+  `signalingProviderDidReceiveRelayFailed` (default no-op extensions).
+  `SerenadaServerProvider` dispatches using the already-existing
+  `NegotiationDirtyPayload` / `RelayFailedPayload` parsers (previously
+  unreachable). `SerenadaSession.handleProviderNegotiationDirty` calls
+  `peerNegotiationEngine.scheduleIceRestart(remoteCid:reason:delayMs:)`.
+
+- **`relay_failed` behavior**: All three SDKs log it but do NOT
+  immediately act on it. The same dirty-pair condition will surface as
+  `negotiation_dirty` once the suspended target reattaches; acting on
+  `relay_failed` would duplicate the trigger. A future slice can
+  optimize the in-flight offer-timeout for suspended targets.
+
+- **Tests**:
+  - Web `SerenadaSession.test.ts` — 2 new tests: `negotiation_dirty`
+    schedules per-CID ICE restart; `relay_failed` does not.
+  - Android `SessionDirtyPairTest.kt` — 3 new tests covering both events
+    + unknown-CID no-op.
+  - iOS `SessionDirtyPairTests.swift` — 3 new tests mirroring Android.
+  - Web 312 (was 310), Android `:serenada-core:testDebugUnitTest` green,
+    iOS `xcodebuild test` green.
 
 ### 2026-04-28 — Phase 2 partial: SDK post-reconnect snapshot gate (#4)
 

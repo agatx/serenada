@@ -227,6 +227,18 @@ extension SerenadaServerProvider: SignalingClientListener {
             turnManager?.handleTurnRefreshed(payload: message.payload)
         case "offer", "answer", "ice", "content_state", "participant_media_state":
             emitPeerMessage(message)
+        case "negotiation_dirty":
+            if let payload = NegotiationDirtyPayload(from: message.payload) {
+                delegate?.signalingProviderDidReceiveNegotiationDirty(
+                    NegotiationDirtyEvent(withCid: payload.withCid)
+                )
+            }
+        case "relay_failed":
+            if let payload = RelayFailedPayload(from: message.payload) {
+                delegate?.signalingProviderDidReceiveRelayFailed(
+                    RelayFailedEvent(reason: payload.reason, targets: payload.targets, of: payload.of)
+                )
+            }
         case "pong":
             signaling.recordPong()
         default:

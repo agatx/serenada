@@ -26,6 +26,7 @@ export class FakeMediaEngine {
     cleanupAllPeersCalls = 0;
     destroyCalls = 0;
     handleSignalingReconnectCalls = 0;
+    scheduleDirtyPairRestartCalls: string[] = [];
     processSignalingMessageCalls: SignalingMessage[] = [];
     setIceServersCalls: RTCIceServer[][] = [];
     updateRoomStateCalls: { state: RoomState | null; clientId: string | null }[] = [];
@@ -81,6 +82,10 @@ export class FakeMediaEngine {
 
     handleSignalingReconnect(): void {
         this.handleSignalingReconnectCalls++;
+    }
+
+    scheduleDirtyPairRestart(remoteCid: string): void {
+        this.scheduleDirtyPairRestartCalls.push(remoteCid);
     }
 
     allPathsDirect = false;

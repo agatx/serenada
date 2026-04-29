@@ -1,4 +1,14 @@
-import { SignalingProviderEmitter, type JoinOptions, type PeerEvent, type PeerMessage, type ProviderCapabilities, type RoomEndedEvent, type RoomStateEvent } from '../../src/SignalingProvider.js';
+import {
+    SignalingProviderEmitter,
+    type JoinOptions,
+    type NegotiationDirtyEvent,
+    type PeerEvent,
+    type PeerMessage,
+    type ProviderCapabilities,
+    type RelayFailedEvent,
+    type RoomEndedEvent,
+    type RoomStateEvent,
+} from '../../src/SignalingProvider.js';
 
 export class FakeSignalingProvider extends SignalingProviderEmitter {
     readonly capabilities?: ProviderCapabilities;
@@ -105,5 +115,13 @@ export class FakeSignalingProvider extends SignalingProviderEmitter {
 
     emitIceServersChanged(iceServers: RTCIceServer[]): void {
         this.emit('iceServersChanged', iceServers);
+    }
+
+    emitNegotiationDirty(event: NegotiationDirtyEvent): void {
+        this.emit('negotiationDirty', event);
+    }
+
+    emitRelayFailed(event: RelayFailedEvent): void {
+        this.emit('relayFailed', event);
     }
 }
