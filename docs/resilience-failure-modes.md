@@ -10,15 +10,15 @@ Sessions used to die on every signaling drop: when the WebSocket / SSE transport
 went away, the SDK tore down peer connections and required the user to start
 over. To improve perceived reliability, we introduced a keep-alive design:
 
-- The server preserves participant records for `suspendHardEvictionTimeout = 10
-  min` (`server/signaling.go:34`) after the transport drops, marking them
+- The server preserves participant records for `suspendHardEvictionTimeout = 10 min`
+  (`server/signaling.go:34`) after the transport drops, marking them
   `connectionStatus="suspended"` instead of removing them.
 - The server's WS handler defers cleanup by `wsGracePeriod = 6 s`
   (`server/ws.go:16`), and SSE by `sseGracePeriod = 5 s` (`server/sse.go:17`).
 - Clients keep their `roomState`, `clientId`, and per-peer `RTCPeerConnection`s
   in memory across signaling drops, persist a `reconnectToken`, and rejoin with
   `reconnectCid` to reattach to the same slot
-  (`signaling.go:556-595`).
+  (`server/signaling.go:556-595`).
 - On signaling reconnect, SDKs trigger an ICE restart against the cached peer
   set rather than a full rejoin.
 
@@ -690,7 +690,7 @@ if existing != nil {
 ```
 
 The WS join handler validates `reconnectToken` (via
-`validateReconnectToken`, `signaling.go:564`) before reattaching to a CID,
+`validateReconnectToken`, `server/signaling.go:564`) before reattaching to a CID,
 but SSE replacement has no equivalent gate. Any SSE GET with a guessed /
 leaked SID wins.
 
@@ -844,7 +844,7 @@ Two coordinated guards:
 
 1. **Track TURN credential expiry** in the SDK. Each `joined` /
    `turn-refresh` response provides `turnTokenTTLMs` (already populated
-   server-side, `signaling.go:715`). Store
+   server-side, `server/signaling.go:715`). Store
    `turnExpiresAtMs = receivedAtMs + turnTokenTTLMs - 60_000` (60 s safety
    margin).
 2. **Refresh TURN on a timer**, regardless of signaling state. Path mode may
@@ -953,8 +953,8 @@ state.
 ### Symptom
 
 Host calls `end_room` while peer P is suspended. Server stops P's
-hard-eviction timer (`signaling.go:836-839`) and sends `room_ended` only to
-*active* clients (`signaling.go:861`). P reconnects later, finds the room
+hard-eviction timer (`server/signaling.go:836-839`) and sends `room_ended` only to
+*active* clients (`server/signaling.go:861`). P reconnects later, finds the room
 gone, gets a "room not found" error, and treats it as a transient network
 failure — looping reconnect attempts indefinitely.
 
@@ -1188,7 +1188,7 @@ continue, but signaling messages now go to the attacker-controlled transport.
 `reconnectToken` is an HMAC over `cid|rid` (`server/signaling.go:43-71`). It is
 not bound to a transport generation, issued-at timestamp, device key, or active
 session epoch. `handleJoin` validates the token and, when the participant has an
-active client, evicts that client as a fast-reconnect ghost (`signaling.go:571-591`).
+active client, evicts that client as a fast-reconnect ghost (`server/signaling.go:571-591`).
 
 That active-ghost path is useful for legitimate fast reconnects during the WS /
 SSE grace window, but the token is reusable for the lifetime of the room. A
@@ -1422,7 +1422,7 @@ Out of scope for this document, listed for visibility:
   manages its own allocation refresh; this is a coturn-side concern, not
   a signaling-server concern.
 - Race-condition hardening of `replaceClient` itself
-  (`signaling.go:364-398`). This was flagged as a potential map-write
+  (`server/signaling.go:364-398`). This was flagged as a potential map-write
   race during the audit but is well-protected by the room mutex on all
   current paths. If we ever take `replaceClient` outside the room lock
   it deserves a fresh look.
