@@ -195,6 +195,35 @@ public struct ErrorEvent: Equatable, Sendable {
     }
 }
 
+/// Server tells an active peer that a previously-suspended peer has reattached
+/// AND there was pending negotiation traffic to it during the suspension. The
+/// SDK should perform glare-safe fresh negotiation / ICE restart for the
+/// named CID.
+public struct NegotiationDirtyEvent: Equatable, Sendable {
+    /// The CID that needs fresh renegotiation.
+    public let withCid: String
+
+    public init(withCid: String) {
+        self.withCid = withCid
+    }
+}
+
+/// Server tells the sender it could not deliver a relay because the target had no transport.
+public struct RelayFailedEvent: Equatable, Sendable {
+    /// Server-assigned reason code, e.g. `"target_suspended"`.
+    public let reason: String
+    /// Target CIDs the relay could not reach.
+    public let targets: [String]
+    /// Original signaling type that failed, e.g. `"offer" | "answer" | "ice"`.
+    public let of: String?
+
+    public init(reason: String, targets: [String], of: String? = nil) {
+        self.reason = reason
+        self.targets = targets
+        self.of = of
+    }
+}
+
 /// Receives provider events. Implementations may invoke these callbacks from
 /// any thread; the SDK session layer hops back to the main actor before
 /// mutating observable SDK state.
@@ -209,6 +238,8 @@ public protocol SignalingProviderDelegate: AnyObject {
     func signalingProviderDidEndRoom(_ event: RoomEndedEvent)
     func signalingProviderDidReceiveError(_ event: ErrorEvent)
     func signalingProviderDidChangeIceServers(_ iceServers: [IceServerConfig])
+    func signalingProviderDidReceiveNegotiationDirty(_ event: NegotiationDirtyEvent)
+    func signalingProviderDidReceiveRelayFailed(_ event: RelayFailedEvent)
 }
 
 public extension SignalingProviderDelegate {
@@ -222,6 +253,8 @@ public extension SignalingProviderDelegate {
     func signalingProviderDidEndRoom(_ event: RoomEndedEvent) {}
     func signalingProviderDidReceiveError(_ event: ErrorEvent) {}
     func signalingProviderDidChangeIceServers(_ iceServers: [IceServerConfig]) {}
+    func signalingProviderDidReceiveNegotiationDirty(_ event: NegotiationDirtyEvent) {}
+    func signalingProviderDidReceiveRelayFailed(_ event: RelayFailedEvent) {}
 }
 
 /// Transport-agnostic signaling contract for iOS SDK sessions.

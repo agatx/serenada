@@ -9,6 +9,8 @@ import app.serenada.core.call.SignalingMessage
 import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.call.toErrorPayload
 import app.serenada.core.call.toJoinedPayload
+import app.serenada.core.call.toNegotiationDirtyPayload
+import app.serenada.core.call.toRelayFailedPayload
 import app.serenada.core.call.toRoomStatePayload
 import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
@@ -227,6 +229,20 @@ internal class SerenadaServerProvider(
                 }
             }
             "offer", "answer", "ice", "content_state", "participant_media_state" -> emitPeerMessage(message)
+            "negotiation_dirty" -> {
+                val payload = message.payload.toNegotiationDirtyPayload() ?: return
+                listener?.onNegotiationDirty(NegotiationDirtyEvent(withCid = payload.withCid))
+            }
+            "relay_failed" -> {
+                val payload = message.payload.toRelayFailedPayload() ?: return
+                listener?.onRelayFailed(
+                    RelayFailedEvent(
+                        reason = payload.reason,
+                        targets = payload.targets,
+                        of = payload.of,
+                    )
+                )
+            }
             "pong" -> signaling.recordPong()
         }
     }

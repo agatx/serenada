@@ -69,6 +69,27 @@ export interface SignalingErrorEvent {
     message: string;
 }
 
+/**
+ * Server tells an active peer that a previously-suspended peer has reattached
+ * AND there was pending negotiation traffic to it during the suspension. The
+ * SDK should perform glare-safe fresh negotiation / ICE restart for the named
+ * CID.
+ */
+export interface NegotiationDirtyEvent {
+    /** The CID that needs fresh renegotiation. */
+    with: string;
+}
+
+/** Server tells the sender it could not deliver a relay because the target had no transport. */
+export interface RelayFailedEvent {
+    /** Server-assigned reason code, e.g. `"target_suspended"`. */
+    reason: string;
+    /** Target CIDs the relay could not reach. */
+    targets: string[];
+    /** Original signaling type that failed, e.g. `"offer" | "answer" | "ice"`. */
+    of?: string;
+}
+
 export interface SignalingProviderEventMap {
     connected: ConnectionInfo | undefined;
     disconnected: string | undefined;
@@ -80,6 +101,8 @@ export interface SignalingProviderEventMap {
     roomEnded: RoomEndedEvent;
     error: SignalingErrorEvent;
     iceServersChanged: RTCIceServer[];
+    negotiationDirty: NegotiationDirtyEvent;
+    relayFailed: RelayFailedEvent;
 }
 
 export type SignalingProviderEventName = keyof SignalingProviderEventMap;

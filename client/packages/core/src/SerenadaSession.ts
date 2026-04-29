@@ -15,8 +15,10 @@ import type {
     ConnectionInfo,
     SignalingErrorEvent,
     JoinOptions,
+    NegotiationDirtyEvent,
     PeerEvent,
     PeerMessage,
+    RelayFailedEvent,
     RoomStateEvent,
     SignalingProvider,
     SignalingProviderEventMap,
@@ -478,6 +480,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.bindProviderEvent('roomEnded', this.handleRoomEnded);
         this.bindProviderEvent('error', this.handleError);
         this.bindProviderEvent('iceServersChanged', this.handleIceServersChanged);
+        this.bindProviderEvent('negotiationDirty', this.handleNegotiationDirty);
+        this.bindProviderEvent('relayFailed', this.handleRelayFailed);
     }
 
     private bindProviderEvent<K extends SignalingProviderEventName>(
@@ -623,6 +627,27 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.media.setIceServers(iceServers);
+    };
+
+    private readonly handleNegotiationDirty = (event: NegotiationDirtyEvent): void => {
+        if (this.isInactive) {
+            return;
+        }
+        this.media.scheduleDirtyPairRestart(event.with);
+    };
+
+    private readonly handleRelayFailed = (event: RelayFailedEvent): void => {
+        if (this.isInactive) {
+            return;
+        }
+        // The server has the dirty-pair record; once the suspended target
+        // reattaches we'll get `negotiation_dirty` and renegotiate then.
+        // For now, just surface in logs so suppressed offers/ICE are visible.
+        this.config.logger?.log(
+            'debug',
+            'Session',
+            `relay_failed reason=${event.reason} of=${event.of ?? 'n/a'} targets=${event.targets.join(',')}`,
+        );
     };
 
     private async fetchInitialIceServers(): Promise<void> {

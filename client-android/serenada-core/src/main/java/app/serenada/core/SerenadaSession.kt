@@ -581,6 +581,26 @@ class SerenadaSession internal constructor(
                 applyIceServers(iceServers)
             }
         }
+
+        override fun onNegotiationDirty(event: NegotiationDirtyEvent) {
+            runOnMain {
+                logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX negotiation_dirty with=${event.withCid}")
+                peerNegotiationEngine.scheduleIceRestart(event.withCid, "negotiation-dirty", 0)
+            }
+        }
+
+        override fun onRelayFailed(event: RelayFailedEvent) {
+            runOnMain {
+                // Server has the dirty-pair record; once the suspended target
+                // reattaches we'll get `negotiation_dirty` and renegotiate then.
+                // For now, just surface in logs so suppressed offers/ICE are visible.
+                logger?.log(
+                    SerenadaLogLevel.DEBUG,
+                    "Session",
+                    "RX relay_failed reason=${event.reason} of=${event.of ?: "n/a"} targets=${event.targets.joinToString(",")}",
+                )
+            }
+        }
     }
 
     // --- Public API ---

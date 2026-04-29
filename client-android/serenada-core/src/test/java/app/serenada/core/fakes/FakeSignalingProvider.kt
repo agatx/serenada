@@ -4,9 +4,11 @@ import app.serenada.core.ConnectionInfo
 import app.serenada.core.ErrorEvent
 import app.serenada.core.JoinOptions
 import app.serenada.core.JoinedEvent
+import app.serenada.core.NegotiationDirtyEvent
 import app.serenada.core.PeerEvent
 import app.serenada.core.PeerMessage
 import app.serenada.core.ProviderCapabilities
+import app.serenada.core.RelayFailedEvent
 import app.serenada.core.RoomEndedEvent
 import app.serenada.core.RoomStateEvent
 import app.serenada.core.SignalingProvider
@@ -154,6 +156,14 @@ internal class FakeSignalingProvider(
 
     fun simulateIceServersChanged(iceServers: List<PeerConnection.IceServer>) {
         listener?.onIceServersChanged(iceServers)
+    }
+
+    fun simulateNegotiationDirty(withCid: String) {
+        listener?.onNegotiationDirty(NegotiationDirtyEvent(withCid = withCid))
+    }
+
+    fun simulateRelayFailed(reason: String, targets: List<String>, of: String? = null) {
+        listener?.onRelayFailed(RelayFailedEvent(reason = reason, targets = targets, of = of))
     }
 
     fun sentMessages(ofType: String): List<SentProviderMessage> {

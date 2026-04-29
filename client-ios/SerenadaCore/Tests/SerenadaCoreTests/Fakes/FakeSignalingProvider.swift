@@ -150,4 +150,12 @@ final class FakeSignalingProvider: SignalingProvider {
     func simulateIceServersChanged(_ iceServers: [IceServerConfig]) {
         delegate?.signalingProviderDidChangeIceServers(iceServers)
     }
+
+    func simulateNegotiationDirty(withCid: String) {
+        delegate?.signalingProviderDidReceiveNegotiationDirty(NegotiationDirtyEvent(withCid: withCid))
+    }
+
+    func simulateRelayFailed(reason: String, targets: [String], of: String? = nil) {
+        delegate?.signalingProviderDidReceiveRelayFailed(RelayFailedEvent(reason: reason, targets: targets, of: of))
+    }
 }
