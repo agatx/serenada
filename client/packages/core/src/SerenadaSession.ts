@@ -265,7 +265,6 @@ export class SerenadaSession implements SerenadaSessionHandle {
     // we flip `presumedLost=true` for that CID so call UIs can move it out of
     // the active grid. Timers cancel when the peer goes back to active or is
     // removed from the room.
-    private readonly suspendedRemoteSinceMs = new Map<string, number>();
     private readonly suspendedPresentationTimers = new Map<string, number>();
     private readonly presumedLostRemoteCids = new Set<string>();
 
@@ -828,7 +827,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearJoinTimeout();
         this.clearEndingTimer();
         this.cancelPostReconnectResync();
-        this.clearAllRemoteSuspensionTimers();
+        this.clearAllRemoteSuspensionTracking();
         this.invalidateIceFetches();
         this.statsCollector.stop();
 
@@ -1065,6 +1064,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
      * Walk the latest authoritative participant list and start/cancel per-CID
      * suspended-presentation timers. Cancels cleanly when peers go back to
      * active or are removed; flips `presumedLost=true` on timer expiry.
+     *
+     * "Already presumed lost" is a sticky state: once the timer has fired,
+     * we don't reschedule a new one if the peer remains suspended across
+     * subsequent room_state updates. The flag clears the moment the peer
+     * transitions back to active or leaves the room.
      */
     private reconcileRemoteSuspensionTimers(participants: RoomParticipant[]): void {
         const remoteCids = new Set<string>();
@@ -1075,22 +1079,29 @@ export class SerenadaSession implements SerenadaSessionHandle {
             remoteCids.add(participant.cid);
             const isSuspended = participant.connectionStatus === 'suspended';
             const hasTimer = this.suspendedPresentationTimers.has(participant.cid);
-            if (isSuspended && !hasTimer) {
-                this.startRemoteSuspensionTimer(participant.cid);
-            } else if (!isSuspended && hasTimer) {
-                this.clearRemoteSuspensionTimer(participant.cid);
+            const isPresumedLost = this.presumedLostRemoteCids.has(participant.cid);
+            if (isSuspended) {
+                if (!hasTimer && !isPresumedLost) {
+                    this.startRemoteSuspensionTimer(participant.cid);
+                }
+            } else {
+                this.clearRemoteSuspensionTracking(participant.cid);
             }
         }
-        for (const cid of [...this.suspendedPresentationTimers.keys()]) {
+        const trackedCids = new Set<string>([
+            ...this.suspendedPresentationTimers.keys(),
+            ...this.presumedLostRemoteCids,
+        ]);
+        for (const cid of trackedCids) {
             if (!remoteCids.has(cid)) {
-                this.clearRemoteSuspensionTimer(cid);
+                this.clearRemoteSuspensionTracking(cid);
             }
         }
     }
 
     private startRemoteSuspensionTimer(cid: string): void {
-        this.suspendedRemoteSinceMs.set(cid, Date.now());
         const handle = window.setTimeout(() => {
+            if (this.isInactive) return;
             this.suspendedPresentationTimers.delete(cid);
             this.presumedLostRemoteCids.add(cid);
             this.config.logger?.log(
@@ -1098,26 +1109,32 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 'Session',
                 `Remote ${cid} presumed lost after ${PEER_SUSPENDED_UI_TIMEOUT_MS}ms suspended`,
             );
-            if (!this.isInactive) {
-                this.rebuildState();
-            }
+            this.rebuildState();
         }, PEER_SUSPENDED_UI_TIMEOUT_MS);
         this.suspendedPresentationTimers.set(cid, handle);
     }
 
-    private clearRemoteSuspensionTimer(cid: string): void {
+    /**
+     * Clear all per-CID suspension state (timer + presumed-lost flag).
+     * Called when a peer transitions back to active, leaves the room, or
+     * the session is reset.
+     */
+    private clearRemoteSuspensionTracking(cid: string): void {
         const handle = this.suspendedPresentationTimers.get(cid);
         if (handle !== undefined) {
             window.clearTimeout(handle);
             this.suspendedPresentationTimers.delete(cid);
         }
-        this.suspendedRemoteSinceMs.delete(cid);
         this.presumedLostRemoteCids.delete(cid);
     }
 
-    private clearAllRemoteSuspensionTimers(): void {
-        for (const cid of [...this.suspendedPresentationTimers.keys()]) {
-            this.clearRemoteSuspensionTimer(cid);
+    private clearAllRemoteSuspensionTracking(): void {
+        const tracked = new Set<string>([
+            ...this.suspendedPresentationTimers.keys(),
+            ...this.presumedLostRemoteCids,
+        ]);
+        for (const cid of tracked) {
+            this.clearRemoteSuspensionTracking(cid);
         }
     }
 

@@ -126,6 +126,80 @@ final class SessionSuspendedSurfaceTests: XCTestCase {
         XCTAssertEqual(harness.session.state.signalingState, .connected)
     }
 
+    func testSubsequentRoomStateUpdatesWithPeerStillSuspendedDoNotRescheduleTimer() async {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        harness.simulateRoomStateWith(
+            participants: [
+                participant(cid: "alpha", joinedAt: 1, status: .active),
+                participant(cid: "remote", joinedAt: 2, status: .suspended),
+            ],
+            hostCid: "alpha"
+        )
+        // Yield enough to let the timer Task register its sleep on FakeSessionClock.
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.peerSuspendedUiTimeoutMs) + 1)
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.presumedLostRemoteCount, 1)
+
+        // Several more room_state updates while still suspended must not arm new timers.
+        for _ in 0..<3 {
+            harness.simulateRoomStateWith(
+                participants: [
+                    participant(cid: "alpha", joinedAt: 1, status: .active),
+                    participant(cid: "remote", joinedAt: 2, status: .suspended),
+                ],
+                hostCid: "alpha"
+            )
+            await harness.yieldToMainActor()
+            await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.peerSuspendedUiTimeoutMs) + 1)
+            await harness.yieldToMainActor()
+        }
+
+        XCTAssertEqual(harness.session.presumedLostRemoteCount, 1)
+    }
+
+    func testPresumedLostTrackingClearsWhenPresumedLostPeerLeavesRoom() async {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        harness.simulateRoomStateWith(
+            participants: [
+                participant(cid: "alpha", joinedAt: 1, status: .active),
+                participant(cid: "remote", joinedAt: 2, status: .suspended),
+            ],
+            hostCid: "alpha"
+        )
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.peerSuspendedUiTimeoutMs) + 1)
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.presumedLostRemoteCount, 1)
+
+        // Peer leaves entirely
+        harness.simulateRoomStateWith(
+            participants: [
+                participant(cid: "alpha", joinedAt: 1, status: .active),
+            ],
+            hostCid: "alpha"
+        )
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.presumedLostRemoteCount, 0)
+    }
+
     func testLocalSignalingStateReportsFailedOnTerminalError() async {
         await harness.advanceToInCallWithTurn(
             localCid: "alpha",

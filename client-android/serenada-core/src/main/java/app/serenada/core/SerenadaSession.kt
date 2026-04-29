@@ -1227,26 +1227,28 @@ class SerenadaSession internal constructor(
      * Walks the latest authoritative remote participant list and starts/cancels
      * per-CID suspended-presentation timers. Cancels cleanly when peers go back
      * to active or are removed; flips `presumedLost=true` on timer expiry.
+     *
+     * "Already presumed lost" is a sticky state: once the timer has fired, we
+     * don't reschedule a new one if the peer remains suspended across
+     * subsequent room_state updates. The flag clears the moment the peer
+     * transitions back to active or leaves the room.
      */
     private fun reconcileRemoteSuspensionTimers(remoteParticipants: List<Participant>) {
         val seen = remoteParticipants.map { it.cid }.toSet()
         for (participant in remoteParticipants) {
             val isSuspended = participant.signalingStatus == ParticipantSignalingStatus.SUSPENDED
             val hasTimer = participant.cid in suspendedPresentationRunnables
-            if (isSuspended && !hasTimer) {
-                startRemoteSuspensionTimer(participant.cid)
-            } else if (!isSuspended && hasTimer) {
-                clearRemoteSuspensionTimer(participant.cid)
-            } else if (!isSuspended && participant.cid in presumedLostRemoteCids) {
-                presumedLostRemoteCids.remove(participant.cid)
+            val isPresumedLost = participant.cid in presumedLostRemoteCids
+            if (isSuspended) {
+                if (!hasTimer && !isPresumedLost) startRemoteSuspensionTimer(participant.cid)
+            } else {
+                clearRemoteSuspensionTracking(participant.cid)
             }
         }
         // Drop tracking for CIDs that left the room entirely.
-        for (cid in suspendedPresentationRunnables.keys.toList()) {
-            if (cid !in seen) clearRemoteSuspensionTimer(cid)
-        }
-        for (cid in presumedLostRemoteCids.toList()) {
-            if (cid !in seen) presumedLostRemoteCids.remove(cid)
+        val tracked = suspendedPresentationRunnables.keys + presumedLostRemoteCids
+        for (cid in tracked.toList()) {
+            if (cid !in seen) clearRemoteSuspensionTracking(cid)
         }
     }
 
@@ -1265,12 +1267,17 @@ class SerenadaSession internal constructor(
         handler.postDelayed(runnable, WebRtcResilienceConstants.PEER_SUSPENDED_UI_TIMEOUT_MS)
     }
 
-    private fun clearRemoteSuspensionTimer(cid: String) {
+    /**
+     * Clear all per-CID suspension state (timer + presumed-lost flag). Called
+     * when a peer transitions back to active, leaves the room, or the session
+     * is reset.
+     */
+    private fun clearRemoteSuspensionTracking(cid: String) {
         suspendedPresentationRunnables.remove(cid)?.let { handler.removeCallbacks(it) }
         presumedLostRemoteCids.remove(cid)
     }
 
-    private fun clearAllRemoteSuspensionTimers() {
+    private fun clearAllRemoteSuspensionTracking() {
         for (runnable in suspendedPresentationRunnables.values) handler.removeCallbacks(runnable)
         suspendedPresentationRunnables.clear()
         presumedLostRemoteCids.clear()
@@ -1361,7 +1368,7 @@ class SerenadaSession internal constructor(
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
         cancelPostReconnectResync()
-        clearAllRemoteSuspensionTimers()
+        clearAllRemoteSuspensionTracking()
         localSuspendedSinceMs = null
         sessionStartTs = null
         if (clearRecovery) recoveryStorage.clear()

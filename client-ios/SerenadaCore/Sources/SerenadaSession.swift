@@ -803,7 +803,7 @@ public final class SerenadaSession: ObservableObject {
 
     private func refreshRemoteParticipants() {
         guard let roomState = currentRoomState else {
-            clearAllRemoteSuspensionTimers()
+            clearAllRemoteSuspensionTracking()
             commitSnapshot { s, _ in s.remoteParticipants = [] }
             return
         }
@@ -996,7 +996,7 @@ public final class SerenadaSession: ObservableObject {
 
         reconnectTask?.cancel(); reconnectTask = nil
         cancelPostReconnectResync()
-        clearAllRemoteSuspensionTimers()
+        clearAllRemoteSuspensionTracking()
         localSuspendedSinceMs = nil
         joinFlowCoordinator?.clearAllTimers()
         connectionStatusTracker?.cancelTimer()
@@ -1108,24 +1108,34 @@ public final class SerenadaSession: ObservableObject {
     /// Walks the latest authoritative remote participant list and starts/cancels
     /// per-CID suspended-presentation timers. Cancels cleanly when peers go back
     /// to active or are removed; flips `presumedLost=true` on timer expiry.
+    ///
+    /// "Already presumed lost" is a sticky state: once the timer has fired, we
+    /// don't reschedule a new one if the peer remains suspended across
+    /// subsequent room_state updates. The flag clears the moment the peer
+    /// transitions back to active or leaves the room.
     private func reconcileRemoteSuspensionTimers(_ remotes: [Participant]) {
         let seen = Set(remotes.map(\.cid))
         for participant in remotes {
             let isSuspended = participant.signalingStatus == .suspended
             let hasTimer = suspendedPresentationTasks[participant.cid] != nil
-            if isSuspended, !hasTimer {
-                startRemoteSuspensionTimer(cid: participant.cid)
-            } else if !isSuspended, hasTimer {
-                clearRemoteSuspensionTimer(cid: participant.cid)
-            } else if !isSuspended {
-                presumedLostRemoteCids.remove(participant.cid)
+            let isPresumedLost = presumedLostRemoteCids.contains(participant.cid)
+            if isSuspended {
+                if !hasTimer, !isPresumedLost {
+                    startRemoteSuspensionTimer(cid: participant.cid)
+                }
+            } else {
+                clearRemoteSuspensionTracking(cid: participant.cid)
             }
         }
-        for cid in suspendedPresentationTasks.keys where !seen.contains(cid) {
-            clearRemoteSuspensionTimer(cid: cid)
+        // Snapshot keys before iterating — `clearRemoteSuspensionTracking`
+        // mutates both collections, which would otherwise trap.
+        let trackedTasks = Array(suspendedPresentationTasks.keys)
+        for cid in trackedTasks where !seen.contains(cid) {
+            clearRemoteSuspensionTracking(cid: cid)
         }
-        for cid in presumedLostRemoteCids where !seen.contains(cid) {
-            presumedLostRemoteCids.remove(cid)
+        let trackedPresumed = Array(presumedLostRemoteCids)
+        for cid in trackedPresumed where !seen.contains(cid) {
+            clearRemoteSuspensionTracking(cid: cid)
         }
     }
 
@@ -1151,12 +1161,15 @@ public final class SerenadaSession: ObservableObject {
         refreshRemoteParticipants()
     }
 
-    private func clearRemoteSuspensionTimer(cid: String) {
+    /// Clear all per-CID suspension state (timer + presumed-lost flag).
+    /// Called when a peer transitions back to active, leaves the room, or
+    /// the session is reset.
+    private func clearRemoteSuspensionTracking(cid: String) {
         suspendedPresentationTasks.removeValue(forKey: cid)?.cancel()
         presumedLostRemoteCids.remove(cid)
     }
 
-    private func clearAllRemoteSuspensionTimers() {
+    private func clearAllRemoteSuspensionTracking() {
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
         presumedLostRemoteCids.removeAll()

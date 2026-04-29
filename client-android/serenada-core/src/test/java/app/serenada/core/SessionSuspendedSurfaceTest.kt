@@ -142,6 +142,81 @@ class SessionSuspendedSurfaceTest {
     }
 
     @Test
+    fun `subsequent room_state updates with peer still suspended do not reschedule timer`() {
+        factory.advanceToInCallWithTurn(
+            localCid = "alpha",
+            remoteCid = "remote",
+            localJoinedAt = 1,
+            remoteJoinedAt = 2,
+        )
+
+        factory.fakeProvider.simulateRoomStateUpdatedWith(
+            participants = listOf(
+                participant("alpha", 1, ParticipantSignalingStatus.ACTIVE),
+                participant("remote", 2, ParticipantSignalingStatus.SUSPENDED),
+            ),
+            hostPeerId = "alpha",
+        )
+        ShadowLooper.idleMainLooper(
+            WebRtcResilienceConstants.PEER_SUSPENDED_UI_TIMEOUT_MS + 100,
+            TimeUnit.MILLISECONDS,
+        )
+        assertEquals(1, factory.session.presumedLostRemoteCount())
+
+        // Several more room_state updates arrive while peer remains suspended.
+        // Should not re-arm a new timer (presumed-lost is sticky).
+        repeat(3) {
+            factory.fakeProvider.simulateRoomStateUpdatedWith(
+                participants = listOf(
+                    participant("alpha", 1, ParticipantSignalingStatus.ACTIVE),
+                    participant("remote", 2, ParticipantSignalingStatus.SUSPENDED),
+                ),
+                hostPeerId = "alpha",
+            )
+            ShadowLooper.idleMainLooper(
+                WebRtcResilienceConstants.PEER_SUSPENDED_UI_TIMEOUT_MS + 100,
+                TimeUnit.MILLISECONDS,
+            )
+        }
+
+        assertEquals(1, factory.session.presumedLostRemoteCount())
+    }
+
+    @Test
+    fun `presumedLost tracking clears when a presumed-lost peer leaves the room`() {
+        factory.advanceToInCallWithTurn(
+            localCid = "alpha",
+            remoteCid = "remote",
+            localJoinedAt = 1,
+            remoteJoinedAt = 2,
+        )
+
+        factory.fakeProvider.simulateRoomStateUpdatedWith(
+            participants = listOf(
+                participant("alpha", 1, ParticipantSignalingStatus.ACTIVE),
+                participant("remote", 2, ParticipantSignalingStatus.SUSPENDED),
+            ),
+            hostPeerId = "alpha",
+        )
+        ShadowLooper.idleMainLooper(
+            WebRtcResilienceConstants.PEER_SUSPENDED_UI_TIMEOUT_MS + 100,
+            TimeUnit.MILLISECONDS,
+        )
+        assertEquals(1, factory.session.presumedLostRemoteCount())
+
+        // Peer leaves entirely
+        factory.fakeProvider.simulateRoomStateUpdatedWith(
+            participants = listOf(
+                participant("alpha", 1, ParticipantSignalingStatus.ACTIVE),
+            ),
+            hostPeerId = "alpha",
+        )
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(0, factory.session.presumedLostRemoteCount())
+    }
+
+    @Test
     fun `local signalingState reports Failed on terminal error`() {
         factory.advanceToInCallWithTurn(
             localCid = "alpha",
