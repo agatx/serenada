@@ -2147,11 +2147,13 @@ private fun VideoPlaceholder(
     val isLargeTile = fontSize >= 14.sp
     val avatarSize = if (isLargeTile) 96.dp else 56.dp
     val avatarFontSize = if (isLargeTile) 36.sp else 22.sp
+    val displayNameToShow = displayName?.takeIf { it.isNotBlank() }
+    val showIdentityPlaceholder = displayNameToShow != null || peerId != null
     Box(
         modifier = Modifier.fillMaxSize().background(Color(0xFF111111)),
         contentAlignment = Alignment.Center
     ) {
-        if (displayName != null) {
+        if (showIdentityPlaceholder) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -2159,16 +2161,16 @@ private fun VideoPlaceholder(
                 if (avatarCache != null) {
                     RemoteAvatar(
                         peerId = peerId,
-                        displayName = displayName,
+                        displayName = displayNameToShow,
                         size = avatarSize,
                         fontSize = avatarFontSize,
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                 }
                 Text(
-                    text = displayName,
+                    text = displayNameToShow ?: text,
                     color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 18.sp,
+                    fontSize = if (displayNameToShow != null) 18.sp else fontSize,
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center,
                     maxLines = 2,

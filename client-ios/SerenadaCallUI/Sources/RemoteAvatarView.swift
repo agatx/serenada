@@ -5,7 +5,6 @@ import UIKit
 /// `peerId` is sent through `AvatarProvider.resolve` at most once per call,
 /// with the resulting `UIImage` (or a sentinel for "no avatar") cached for
 /// the rest of the call.
-@MainActor
 final class AvatarCache: ObservableObject {
     private enum Entry {
         case pending
@@ -13,12 +12,14 @@ final class AvatarCache: ObservableObject {
     }
 
     private let provider: AvatarProvider?
+    @MainActor
     @Published private var entries: [String: Entry] = [:]
 
-    nonisolated init(provider: AvatarProvider?) {
+    init(provider: AvatarProvider?) {
         self.provider = provider
     }
 
+    @MainActor
     func image(for peerId: String) -> UIImage? {
         switch entries[peerId] {
         case .resolved(let image):
@@ -26,18 +27,26 @@ final class AvatarCache: ObservableObject {
         case .pending:
             return nil
         case .none:
-            guard let provider else { return nil }
-            entries[peerId] = .pending
-            // Detached so the provider's pre-suspension work runs off the main actor;
-            // we hop back to main to publish the result.
-            Task.detached(priority: .userInitiated) { [weak self] in
-                let source = await provider.resolve(peerId: peerId)
-                let image = await Self.materialize(source)
-                await MainActor.run {
-                    self?.entries[peerId] = .resolved(image)
-                }
-            }
             return nil
+        }
+    }
+
+    @MainActor
+    func load(peerId: String) {
+        guard entries[peerId] == nil else { return }
+        guard let provider else {
+            entries[peerId] = .resolved(nil)
+            return
+        }
+
+        entries[peerId] = .pending
+        let task = Task.detached(priority: .userInitiated) { [provider, peerId] in
+            let source = await provider.resolve(peerId: peerId)
+            return await Self.materialize(source)
+        }
+        Task { @MainActor [weak self] in
+            let image = await task.value
+            self?.entries[peerId] = .resolved(image)
         }
     }
 
@@ -60,7 +69,7 @@ final class AvatarCache: ObservableObject {
 }
 
 private struct AvatarCacheKey: EnvironmentKey {
-    @MainActor static let defaultValue: AvatarCache? = nil
+    static let defaultValue: AvatarCache? = nil
 }
 
 extension EnvironmentValues {
@@ -78,9 +87,10 @@ struct RemoteAvatarView: View {
     @Environment(\.avatarCache) private var cache
 
     var body: some View {
+        let image = peerId.flatMap { cache?.image(for: $0) }
         ZStack {
             Circle().fill(Color(white: 0.16))
-            if let peerId, let cache, let image = cache.image(for: peerId) {
+            if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -95,6 +105,10 @@ struct RemoteAvatarView: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+        .task(id: peerId) {
+            guard let peerId, let cache else { return }
+            cache.load(peerId: peerId)
+        }
     }
 }
 

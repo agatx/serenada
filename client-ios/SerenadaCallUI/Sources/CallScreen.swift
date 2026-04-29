@@ -1239,18 +1239,21 @@ struct VideoPlaceholderTile: View {
     @Environment(\.avatarCache) private var avatarCache
 
     var body: some View {
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayNameToShow = name?.isEmpty == false ? name : nil
+        let showIdentityPlaceholder = displayNameToShow != nil || peerId?.isEmpty == false
         ZStack {
             Color.black
-            if let name = displayName, !name.isEmpty {
+            if showIdentityPlaceholder {
                 VStack(spacing: compact ? 6 : 12) {
                     if avatarCache != nil {
                         RemoteAvatarView(
                             peerId: peerId,
-                            displayName: name,
+                            displayName: displayNameToShow,
                             size: compact ? 48 : 96
                         )
                     }
-                    Text(name)
+                    Text(displayNameToShow ?? text ?? "")
                         .font(compact ? .system(size: 13, weight: .semibold) : .system(size: 18, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
                         .multilineTextAlignment(.center)
