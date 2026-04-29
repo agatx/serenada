@@ -4,6 +4,8 @@ export type RoomParticipant = {
     cid: string;
     joinedAt?: number;
     displayName?: string;
+    /** Host-supplied stable identity — opaque to the SDK, surfaced for avatar lookup. */
+    peerId?: string;
     audioEnabled?: boolean;
     videoEnabled?: boolean;
     // Absent = active. 'suspended' means the server is holding the slot

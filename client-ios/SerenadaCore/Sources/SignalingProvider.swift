@@ -22,11 +22,21 @@ public struct JoinOptions: Equatable, Sendable {
     public var reconnectPeerId: String?
     public var maxParticipants: Int?
     public var displayName: String?
+    /// Host-supplied stable identity. Distinct from `peerId`/cid (per-call,
+    /// server-issued) — lets host applications correlate a participant to their
+    /// own user identity (avatar lookup, telemetry).
+    public var appPeerId: String?
 
-    public init(reconnectPeerId: String? = nil, maxParticipants: Int? = nil, displayName: String? = nil) {
+    public init(
+        reconnectPeerId: String? = nil,
+        maxParticipants: Int? = nil,
+        displayName: String? = nil,
+        appPeerId: String? = nil
+    ) {
         self.reconnectPeerId = reconnectPeerId
         self.maxParticipants = maxParticipants
         self.displayName = displayName
+        self.appPeerId = appPeerId
     }
 }
 
@@ -34,6 +44,8 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
     public let peerId: String
     public let joinedAt: Int64?
     public let displayName: String?
+    /// Host-supplied stable identity — see `JoinOptions.appPeerId`.
+    public let appPeerId: String?
     public let audioEnabled: Bool?
     public let videoEnabled: Bool?
     public let signalingStatus: ParticipantSignalingStatus
@@ -42,6 +54,7 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
         peerId: String,
         joinedAt: Int64? = nil,
         displayName: String? = nil,
+        appPeerId: String? = nil,
         audioEnabled: Bool? = nil,
         videoEnabled: Bool? = nil,
         signalingStatus: ParticipantSignalingStatus = .active
@@ -49,6 +62,7 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
         self.peerId = peerId
         self.joinedAt = joinedAt
         self.displayName = displayName
+        self.appPeerId = appPeerId
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.signalingStatus = signalingStatus
@@ -94,11 +108,14 @@ public struct PeerEvent: Equatable, Sendable {
     public let peerId: String
     public let joinedAt: Int64?
     public let displayName: String?
+    /// Host-supplied stable identity — see `JoinOptions.appPeerId`.
+    public let appPeerId: String?
 
-    public init(peerId: String, joinedAt: Int64? = nil, displayName: String? = nil) {
+    public init(peerId: String, joinedAt: Int64? = nil, displayName: String? = nil, appPeerId: String? = nil) {
         self.peerId = peerId
         self.joinedAt = joinedAt
         self.displayName = displayName
+        self.appPeerId = appPeerId
     }
 }
 

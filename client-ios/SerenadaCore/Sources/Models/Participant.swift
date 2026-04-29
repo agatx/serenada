@@ -15,6 +15,8 @@ public struct Participant: Codable, Equatable {
     public let cid: String
     public let joinedAt: Int64?
     public let displayName: String?
+    /// Host-supplied stable identity; opaque to the SDK, surfaced for avatar lookup.
+    public let peerId: String?
     public let audioEnabled: Bool?
     public let videoEnabled: Bool?
     public let signalingStatus: ParticipantSignalingStatus
@@ -23,6 +25,7 @@ public struct Participant: Codable, Equatable {
         cid: String,
         joinedAt: Int64?,
         displayName: String? = nil,
+        peerId: String? = nil,
         audioEnabled: Bool? = nil,
         videoEnabled: Bool? = nil,
         signalingStatus: ParticipantSignalingStatus = .active
@@ -30,6 +33,7 @@ public struct Participant: Codable, Equatable {
         self.cid = cid
         self.joinedAt = joinedAt
         self.displayName = displayName
+        self.peerId = peerId
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.signalingStatus = signalingStatus

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,6 +49,7 @@ func drainMessages(c *Client) []Message {
 type joinPayloadOptions struct {
 	ReconnectCID string
 	DisplayName  *string
+	PeerID       *string
 }
 
 // joinPayload builds a raw JSON join message with optional capabilities.
@@ -64,11 +66,13 @@ func joinPayloadWithOptions(rid string, capMax int, createMax int, options joinP
 		CreateMaxParticipants int     `json:"createMaxParticipants,omitempty"`
 		ReconnectCID          string  `json:"reconnectCid,omitempty"`
 		DisplayName           *string `json:"displayName,omitempty"`
+		PeerID                *string `json:"peerId,omitempty"`
 	}{
 		Capabilities:          caps{MaxParticipants: capMax},
 		CreateMaxParticipants: createMax,
 		ReconnectCID:          options.ReconnectCID,
 		DisplayName:           options.DisplayName,
+		PeerID:                options.PeerID,
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -188,6 +192,88 @@ func TestReconnectJoinCanClearDisplayName(t *testing.T) {
 	}
 	if reattached.DisplayName != "" {
 		t.Fatalf("expected reconnect with empty displayName to clear the stored name, got %q", reattached.DisplayName)
+	}
+}
+
+func TestJoinPropagatesPeerIDInSnapshot(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	c1 := fakeClient(hub)
+	hub.registerClient(c1)
+	alicePeer := "host-user-alice"
+	hub.handleMessage(c1, joinPayloadWithOptions(rid, 4, 4, joinPayloadOptions{
+		PeerID: &alicePeer,
+	}))
+	drainMessages(c1)
+
+	c2 := fakeClient(hub)
+	hub.registerClient(c2)
+	bobPeer := "host-user-bob"
+	hub.handleMessage(c2, joinPayloadWithOptions(rid, 4, 4, joinPayloadOptions{
+		PeerID: &bobPeer,
+	}))
+
+	msgs := drainMessages(c2)
+	var joined Message
+	for _, m := range msgs {
+		if m.Type == "joined" {
+			joined = m
+			break
+		}
+	}
+	if joined.Type == "" {
+		t.Fatal("expected joined message for c2")
+	}
+
+	var payload struct {
+		Participants []Participant `json:"participants"`
+	}
+	if err := json.Unmarshal(joined.Payload, &payload); err != nil {
+		t.Fatalf("failed to parse joined payload: %v", err)
+	}
+	gotByCID := map[string]string{}
+	for _, p := range payload.Participants {
+		gotByCID[p.CID] = p.PeerID
+	}
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	room.mu.Lock()
+	aliceCID := room.cidForClient(c1)
+	bobCID := room.cidForClient(c2)
+	room.mu.Unlock()
+	if gotByCID[aliceCID] != alicePeer {
+		t.Fatalf("expected alice peerId %q, got %q", alicePeer, gotByCID[aliceCID])
+	}
+	if gotByCID[bobCID] != bobPeer {
+		t.Fatalf("expected bob peerId %q, got %q", bobPeer, gotByCID[bobCID])
+	}
+}
+
+func TestJoinTruncatesOversizedPeerID(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	c := fakeClient(hub)
+	hub.registerClient(c)
+	oversized := strings.Repeat("a", maxPeerIDLength+50)
+	hub.handleMessage(c, joinPayloadWithOptions(rid, 4, 4, joinPayloadOptions{
+		PeerID: &oversized,
+	}))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	room.mu.Lock()
+	defer room.mu.Unlock()
+	cid := room.cidForClient(c)
+	p := room.participantByCID(cid)
+	if p == nil {
+		t.Fatal("expected participant record")
+	}
+	if len([]rune(p.PeerID)) != maxPeerIDLength {
+		t.Fatalf("expected peerId truncated to %d runes, got %d", maxPeerIDLength, len([]rune(p.PeerID)))
 	}
 }
 

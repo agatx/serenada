@@ -58,7 +58,11 @@ public final class SerenadaCore {
     }
 
     /// Join an existing call by URL. Returns a session that begins connecting immediately.
-    public func join(url: URL, displayName: String? = nil) -> SerenadaSession {
+    ///
+    /// - Parameter peerId: Optional host-supplied stable identity for this user
+    ///   (distinct from the per-call client ID). Surfaced on remote participants so
+    ///   the call UI can resolve avatars via `SerenadaCallFlowConfig.avatarProvider`.
+    public func join(url: URL, displayName: String? = nil, peerId: String? = nil) -> SerenadaSession {
         let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
         let target = DeepLinkParser.parseTarget(from: url)
         let serverHost = target?.host
@@ -84,13 +88,16 @@ public final class SerenadaCore {
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
             initialSignalingProvider: createSignalingProvider(for: sessionConfig),
-            displayName: displayName
+            displayName: displayName,
+            peerId: peerId
         )
         return session
     }
 
     /// Join an existing call by room ID. Returns a session that begins connecting immediately.
-    public func join(roomId: String, displayName: String? = nil) -> SerenadaSession {
+    ///
+    /// - Parameter peerId: Optional host-supplied stable identity — see the URL ``join(url:displayName:peerId:)`` overload.
+    public func join(roomId: String, displayName: String? = nil, peerId: String? = nil) -> SerenadaSession {
         let url = resolvedConfig.serverHost.flatMap { buildRoomURL(host: $0, roomId: roomId) }
 
         let session = SerenadaSession(
@@ -100,7 +107,8 @@ public final class SerenadaCore {
             delegateProvider: { [weak self] in self?.delegate },
             logger: logger,
             initialSignalingProvider: createSignalingProvider(for: config),
-            displayName: displayName
+            displayName: displayName,
+            peerId: peerId
         )
         return session
     }

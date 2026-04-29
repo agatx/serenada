@@ -38,8 +38,12 @@ class SerenadaCore(
 
     /**
      * Join a call using a full URL (e.g., "https://serenada.app/call/ABC123").
+     *
+     * @param peerId optional host-supplied stable identity for this user (distinct from
+     *   the per-call client ID). Surfaced on remote participants so the call UI can
+     *   resolve avatars via [SerenadaCallFlowConfig.avatarProvider].
      */
-    fun join(url: String, displayName: String? = null): SerenadaSession {
+    fun join(url: String, displayName: String? = null, peerId: String? = null): SerenadaSession {
         assertMainThread()
         val resolved = resolveRoomUrl(url)
         val roomId = resolved?.roomId ?: url
@@ -54,6 +58,7 @@ class SerenadaCore(
             initialSignalingProvider = createSignalingProvider(sessionConfig),
             logger = logger,
             displayName = displayName,
+            peerId = peerId,
         )
         session.start()
         return session
@@ -61,8 +66,15 @@ class SerenadaCore(
 
     /**
      * Join a call using a room ID.
+     *
+     * @param peerId optional host-supplied stable identity — see the URL [join] overload.
      */
-    fun join(roomId: String, serverHost: String? = resolvedConfig.serverHost, displayName: String? = null): SerenadaSession {
+    fun join(
+        roomId: String,
+        serverHost: String? = resolvedConfig.serverHost,
+        displayName: String? = null,
+        peerId: String? = null,
+    ): SerenadaSession {
         assertMainThread()
         val sessionConfig = sessionConfigFor(serverHost)
         val roomUrl = resolvedConfig.serverHost?.let { buildRoomUrl(serverHost ?: it, roomId) }
@@ -76,6 +88,7 @@ class SerenadaCore(
             initialSignalingProvider = createSignalingProvider(sessionConfig),
             logger = logger,
             displayName = displayName,
+            peerId = peerId,
         )
         session.start()
         return session

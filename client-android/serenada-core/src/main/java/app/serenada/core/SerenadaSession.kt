@@ -80,6 +80,7 @@ class SerenadaSession internal constructor(
     clock: SessionClock? = null,
     private val logger: SerenadaLogger? = null,
     private val displayName: String? = null,
+    private val peerId: String? = null,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -148,7 +149,12 @@ class SerenadaSession internal constructor(
         joinRoom = { targetRoomId, reconnectPeerId ->
             signalingProvider.joinRoom(
                 targetRoomId,
-                JoinOptions(reconnectPeerId = reconnectPeerId, maxParticipants = 4, displayName = displayName),
+                JoinOptions(
+                    reconnectPeerId = reconnectPeerId,
+                    maxParticipants = 4,
+                    displayName = displayName,
+                    appPeerId = peerId,
+                ),
             )
         },
         onJoinTimeout = {
@@ -904,7 +910,12 @@ class SerenadaSession internal constructor(
         localPeerId: String?,
     ): RoomState? {
         val participants = dedupeParticipants(
-            (roomState?.participants ?: emptyList()) + Participant(cid = event.peerId, joinedAt = event.joinedAt),
+            (roomState?.participants ?: emptyList()) + Participant(
+                cid = event.peerId,
+                joinedAt = event.joinedAt,
+                displayName = event.displayName,
+                peerId = event.appPeerId,
+            ),
             localPeerId,
         )
         val host = roomState?.hostCid ?: localPeerId ?: participants.firstOrNull()?.cid ?: return null
@@ -1022,6 +1033,7 @@ class SerenadaSession internal constructor(
             RemoteParticipant(
                 cid = cid,
                 displayName = participant?.displayName,
+                peerId = participant?.peerId,
                 audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true,
                 videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled(),
                 connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()),

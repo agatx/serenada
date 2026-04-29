@@ -10,7 +10,14 @@ export { useCallState } from './hooks/useCallState.js';
 
 // Call Flow
 export { SerenadaCallFlow } from './SerenadaCallFlow.js';
-export type { SerenadaCallFlowConfig, SerenadaCallFlowTheme, SerenadaString, CallFlowProps } from './types.js';
+export type {
+    SerenadaCallFlowConfig,
+    SerenadaCallFlowTheme,
+    SerenadaString,
+    CallFlowProps,
+    AvatarProvider,
+    AvatarSource,
+} from './types.js';
 export { serenadaDefaultStrings, resolveString } from './types.js';
 
 export { StatusOverlay } from './components/StatusOverlay.js';

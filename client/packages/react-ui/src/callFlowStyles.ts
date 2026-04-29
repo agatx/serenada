@@ -187,8 +187,10 @@ const CALL_FLOW_CSS = `
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: clamp(8px, 2cqi, 24px);
   background: #111;
   border-radius: inherit;
   z-index: 1;
@@ -204,6 +206,37 @@ const CALL_FLOW_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+[data-serenada-callflow] .serenada-avatar-circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(56px, 22cqi, 168px);
+  height: clamp(56px, 22cqi, 168px);
+  border-radius: 50%;
+  overflow: hidden;
+  background: #2a2a2a;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: clamp(20px, 8cqi, 64px);
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+[data-serenada-callflow] .serenada-avatar-circle.compact {
+  width: clamp(40px, 16cqi, 96px);
+  height: clamp(40px, 16cqi, 96px);
+  font-size: clamp(14px, 6cqi, 36px);
+}
+
+[data-serenada-callflow] .serenada-avatar-circle img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 [data-serenada-callflow] .video-stage-pin-indicator {

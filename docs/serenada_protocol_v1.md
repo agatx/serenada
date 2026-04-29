@@ -125,10 +125,18 @@ Join a room.
     },
     "createMaxParticipants": 4,
     "displayName": "optional display name",
+    "peerId": "optional host-supplied stable identity",
     "reconnectCid": "optionalPreviousClientId"
   }
 }
 ```
+
+**Notes**
+- `peerId` is opaque to the server and forwarded verbatim in `participants` entries
+  for `joined` and `room_state`. It lets host applications correlate a participant
+  to their own user identity (for avatar lookup, telemetry, etc.) — distinct from
+  `cid`, which is per-call and server-issued. Trimmed and truncated to 128
+  characters; an empty string clears the stored value (matching `displayName`).
 
 **Server behavior**
 - Validate `rid` as a signed 27-character room token (generated via `/api/room-id`).
@@ -170,7 +178,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, and `connectionStatus` *(string, optional)*. See section 4.3 for the meaning of `connectionStatus`.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `peerId` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, and `connectionStatus` *(string, optional)*. See section 4.3 for the meaning of `connectionStatus`.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 

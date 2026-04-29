@@ -27,6 +27,8 @@ import {
     type SerenadaSessionHandle,
 } from '@serenada/core';
 import { DebugPanel } from './components/DebugPanel.js';
+import { RemoteAvatar } from './components/RemoteAvatar.js';
+import { useAvatarResolver, type AvatarResolver } from './hooks/useAvatarResolver.js';
 import { StatusOverlay } from './components/StatusOverlay.js';
 import { useCallState } from './hooks/useCallState.js';
 import { SerenadaPermissions } from './SerenadaPermissions.js';
@@ -88,6 +90,9 @@ const VideoTile: React.FC<{
     videoEnabled?: boolean;
     cameraOffLabel?: string;
     compact?: boolean;
+    peerId?: string;
+    displayName?: string;
+    resolveAvatar?: AvatarResolver;
     onAspectRatioChange?: (ratio: number) => void;
     onClick?: () => void;
 }> = ({
@@ -101,6 +106,9 @@ const VideoTile: React.FC<{
     videoEnabled,
     cameraOffLabel,
     compact = false,
+    peerId,
+    displayName,
+    resolveAvatar,
     onAspectRatioChange,
     onClick,
 }) => {
@@ -167,6 +175,14 @@ const VideoTile: React.FC<{
             />
             {videoEnabled === false && (
                 <div className={`video-camera-off-overlay${compact ? ' compact' : ''}`}>
+                    {resolveAvatar && (
+                        <RemoteAvatar
+                            peerId={peerId}
+                            displayName={displayName}
+                            resolveAvatar={resolveAvatar}
+                            compact={compact}
+                        />
+                    )}
                     <span className="video-camera-off-label">{cameraOffLabel}</span>
                 </div>
             )}
@@ -243,6 +259,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const showScreenShareControl = config?.screenSharingEnabled !== false && canScreenShare;
     const autoHideControls = config?.autoHideControls !== false;
     const inviteControlsEnabled = config?.inviteControlsEnabled !== false;
+    const resolveAvatar = useAvatarResolver(config?.avatarProvider);
     const shareUrl = effectiveState.roomUrl ?? (typeof window !== 'undefined' ? window.location.href : '');
     const shouldMirrorLocalVideo = localParticipant?.cameraMode === 'selfie' && !isScreenSharing;
 
@@ -937,6 +954,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                     videoFit={tile.fit === 'contain' ? 'contain' : 'cover'}
                                                     videoEnabled={tileVideoEnabled}
                                                     cameraOffLabel={tileDisplayName ?? resolveString('cameraOff', strings)}
+                                                    peerId={isContentTile || isLocalTile ? undefined : tileRemote?.peerId}
+                                                    displayName={isContentTile || isLocalTile ? undefined : tileRemote?.displayName}
+                                                    resolveAvatar={isContentTile || isLocalTile ? undefined : resolveAvatar}
                                                     onAspectRatioChange={
                                                         isLocalTile || isContentTile ? undefined : (ratio) => {
                                                             setRemoteStageAspectRatios((prev) => (
@@ -981,6 +1001,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                             tileStyle={{ width: '100%', height: '100%' }}
                                                             videoEnabled={gridRemote?.videoEnabled}
                                                             cameraOffLabel={gridRemote?.displayName ?? resolveString('cameraOff', strings)}
+                                                            peerId={gridRemote?.peerId}
+                                                            displayName={gridRemote?.displayName}
+                                                            resolveAvatar={resolveAvatar}
                                                             onAspectRatioChange={(ratio) => {
                                                                 setRemoteStageAspectRatios((prev) => (
                                                                     prev[tile.cid] === ratio ? prev : { ...prev, [tile.cid]: ratio }
@@ -1060,6 +1083,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
                     {remoteParticipant0?.videoEnabled === false && (
                         <div className="video-camera-off-overlay">
+                            <RemoteAvatar
+                                peerId={remoteParticipant0.peerId}
+                                displayName={remoteParticipant0.displayName}
+                                resolveAvatar={resolveAvatar}
+                            />
                             <span className="video-camera-off-label">
                                 {remoteParticipant0.displayName ?? resolveString('cameraOff', strings)}
                             </span>

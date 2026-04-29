@@ -50,6 +50,7 @@ public struct SerenadaCallFlow: View {
         self.strings = strings
         self.onDismiss = onDismiss
         self.onCallEnded = nil
+        self._avatarCache = StateObject(wrappedValue: AvatarCache(provider: config.avatarProvider))
     }
 
     // MARK: - Session-first init
@@ -75,29 +76,35 @@ public struct SerenadaCallFlow: View {
         self.strings = strings
         self.onDismiss = onDismiss
         self.onCallEnded = nil
+        self._avatarCache = StateObject(wrappedValue: AvatarCache(provider: config.avatarProvider))
     }
 
-    public var body: some View {
-        switch mode {
-        case .urlFirst(let url, let serenadaConfig):
-            URLFirstCallFlow(
-                url: url,
-                serenadaConfig: serenadaConfig,
-                config: config,
-                strings: strings,
-                onDismiss: onDismiss,
-                onCallEnded: onCallEnded
-            )
+    @StateObject private var avatarCache: AvatarCache
 
-        case .sessionFirst(let params):
-            SessionFirstCallFlow(
-                params: params,
-                config: config,
-                strings: strings,
-                onDismiss: onDismiss,
-                onCallEnded: onCallEnded
-            )
+    public var body: some View {
+        Group {
+            switch mode {
+            case .urlFirst(let url, let serenadaConfig):
+                URLFirstCallFlow(
+                    url: url,
+                    serenadaConfig: serenadaConfig,
+                    config: config,
+                    strings: strings,
+                    onDismiss: onDismiss,
+                    onCallEnded: onCallEnded
+                )
+
+            case .sessionFirst(let params):
+                SessionFirstCallFlow(
+                    params: params,
+                    config: config,
+                    strings: strings,
+                    onDismiss: onDismiss,
+                    onCallEnded: onCallEnded
+                )
+            }
         }
+        .environment(\.avatarCache, avatarCache)
     }
 
     /// Callback for when the call ends.
@@ -322,6 +329,7 @@ private struct SessionFirstCallFlow: View {
             RemoteParticipant(
                 cid: rp.cid,
                 displayName: rp.displayName,
+                peerId: rp.peerId,
                 audioEnabled: rp.audioEnabled,
                 videoEnabled: rp.videoEnabled,
                 connectionState: rp.connectionState

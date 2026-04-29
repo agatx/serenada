@@ -46,6 +46,7 @@ function parseParticipants(raw: unknown): RoomParticipant[] | null {
             cid: rec.cid,
             joinedAt: typeof rec.joinedAt === 'number' ? rec.joinedAt : undefined,
             displayName: typeof rec.displayName === 'string' && rec.displayName.trim() !== '' ? rec.displayName : undefined,
+            peerId: typeof rec.peerId === 'string' && rec.peerId.trim() !== '' ? rec.peerId : undefined,
             audioEnabled: typeof rec.audioEnabled === 'boolean' ? rec.audioEnabled : undefined,
             videoEnabled: typeof rec.videoEnabled === 'boolean' ? rec.videoEnabled : undefined,
             // Only the recognized status value is forwarded; absent/unknown

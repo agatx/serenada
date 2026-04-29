@@ -18,6 +18,7 @@ import (
 
 const maxMessageSize = 65536 // 64KB
 const maxDisplayNameLength = 40
+const maxPeerIDLength = 128
 
 // TURN token TTL for call credentials: 15 minutes.
 // Clients proactively refresh at 80% of TTL (~12 min). Both Cloudflare and coturn
@@ -93,6 +94,7 @@ type Participant struct {
 	CID              string `json:"cid"`
 	JoinedAt         int64  `json:"joinedAt,omitempty"`
 	DisplayName      string `json:"displayName,omitempty"`
+	PeerID           string `json:"peerId,omitempty"` // host-supplied stable identity, distinct from CID; opaque to server
 	AudioEnabled     *bool  `json:"audioEnabled,omitempty"`
 	VideoEnabled     *bool  `json:"videoEnabled,omitempty"`
 	ConnectionStatus string `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
@@ -107,6 +109,7 @@ type roomParticipant struct {
 	CID          string
 	JoinedAt     int64
 	DisplayName  string
+	PeerID       string
 	AudioEnabled *bool
 	VideoEnabled *bool
 	// Client is the currently attached transport. Nil when suspended.
@@ -239,6 +242,7 @@ func (r *Room) snapshotParticipants() []Participant {
 			CID:          p.CID,
 			JoinedAt:     p.JoinedAt,
 			DisplayName:  p.DisplayName,
+			PeerID:       p.PeerID,
 			AudioEnabled: p.AudioEnabled,
 			VideoEnabled: p.VideoEnabled,
 		}
@@ -495,6 +499,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		ReconnectToken        string  `json:"reconnectToken"`
 		CreateMaxParticipants int     `json:"createMaxParticipants"`
 		DisplayName           *string `json:"displayName"`
+		PeerID                *string `json:"peerId"`
 		Capabilities          struct {
 			MaxParticipants int `json:"maxParticipants"`
 		} `json:"capabilities"`
@@ -686,6 +691,19 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			trimmed = string(runes[:maxDisplayNameLength])
 		}
 		p.DisplayName = trimmed
+	}
+
+	// Update peer ID on every join. Empty string clears it (mirroring displayName).
+	// PeerID is host-supplied (e.g. host's user identifier) and opaque to the server —
+	// it is forwarded to other participants so call UIs can resolve avatars consistently
+	// even when displayName collides.
+	if joinPayload.PeerID != nil && p != nil {
+		trimmed := strings.TrimSpace(*joinPayload.PeerID)
+		runes := []rune(trimmed)
+		if len(runes) > maxPeerIDLength {
+			trimmed = string(runes[:maxPeerIDLength])
+		}
+		p.PeerID = trimmed
 	}
 
 	if room.HostCID == "" {

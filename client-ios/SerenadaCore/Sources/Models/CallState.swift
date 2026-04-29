@@ -24,6 +24,9 @@ public struct LocalParticipant: Equatable {
     public var cid: String?
     /// Display name shown to other participants.
     public var displayName: String?
+    /// Host-supplied stable identity passed via ``SerenadaCore/join(url:displayName:peerId:)``.
+    /// Distinct from ``cid`` (per-call, server-issued).
+    public var peerId: String?
     /// Whether local audio is enabled.
     public var audioEnabled: Bool = true
     /// Whether local video is enabled.
@@ -43,6 +46,7 @@ public struct LocalParticipant: Equatable {
     public init(
         cid: String?,
         displayName: String? = nil,
+        peerId: String? = nil,
         audioEnabled: Bool = true,
         videoEnabled: Bool = true,
         cameraMode: LocalCameraMode = .selfie,
@@ -51,6 +55,7 @@ public struct LocalParticipant: Equatable {
     ) {
         self.cid = cid
         self.displayName = displayName
+        self.peerId = peerId
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.cameraMode = cameraMode
@@ -65,6 +70,11 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     public let cid: String
     /// Display name of the remote participant.
     public var displayName: String?
+    /// Host-supplied stable identity passed via the remote peer's
+    /// ``SerenadaCore/join(url:displayName:peerId:)``. Distinct from ``cid``
+    /// (per-call, server-issued) — call UIs use this to look up avatars or
+    /// correlate to host-side records.
+    public var peerId: String?
     /// Whether remote audio is enabled.
     public var audioEnabled: Bool
     /// Whether remote video is enabled.
@@ -83,6 +93,7 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     public init(
         cid: String,
         displayName: String? = nil,
+        peerId: String? = nil,
         audioEnabled: Bool = true,
         videoEnabled: Bool = true,
         connectionState: SerenadaPeerConnectionState = .new,
@@ -90,6 +101,7 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     ) {
         self.cid = cid
         self.displayName = displayName
+        self.peerId = peerId
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
         self.connectionState = connectionState
