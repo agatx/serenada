@@ -31,6 +31,7 @@ import {
     RECONNECT_BACKOFF_CAP_MS,
     JOIN_HARD_TIMEOUT_MS,
     ENDING_SCREEN_MS,
+    EPOCH_RESYNC_TIMEOUT_MS,
 } from './constants.js';
 import { formatError } from './formatError.js';
 import type { RoomParticipant, RoomState, SignalingMessage } from './signaling/types.js';
@@ -232,6 +233,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private pendingJoinOptions: JoinOptions | null = null;
     private joinInFlight = false;
     private reconnectRecoveryPending = false;
+    /**
+     * True between transport reconnect and the first authoritative `room_state`
+     * snapshot. While set, `media.handleSignalingReconnect()` is deferred so it
+     * runs against the server-confirmed peer set rather than the stale
+     * in-memory map. Falls back to firing on `EPOCH_RESYNC_TIMEOUT_MS` to
+     * preserve pre-#4 behavior if the snapshot never arrives.
+     */
+    private pendingPostReconnectResync = false;
+    private postReconnectResyncTimer: number | null = null;
     private iceFetchGeneration = 0;
     private started = false;
     private terminated = false;
@@ -439,6 +449,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearReconnectTimer();
         this.clearEndingTimer();
         this.clearJoinTimeout();
+        this.clearPostReconnectResyncTimer();
         for (const unsubscribe of this.providerUnsubscribers) {
             unsubscribe();
         }
@@ -500,7 +511,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.signaling.joinRoom(this.roomId, this.pendingJoinOptions);
         } else if (!wasConnected && this.handlesReconnection && this.reconnectRecoveryPending && this.roomState) {
             this.reconnectRecoveryPending = false;
-            this.media.handleSignalingReconnect();
+            this.armPostReconnectResync();
         }
 
         this.rebuildState();
@@ -554,6 +565,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.error = null;
         this.roomState = buildRoomState(event, this.roomState?.hostCid ?? null, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
+        this.flushPostReconnectResync('snapshot');
         this.rebuildState();
     };
 
@@ -728,6 +740,38 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
     }
 
+    private armPostReconnectResync(): void {
+        this.pendingPostReconnectResync = true;
+        this.clearPostReconnectResyncTimer();
+        this.postReconnectResyncTimer = window.setTimeout(() => {
+            this.postReconnectResyncTimer = null;
+            this.flushPostReconnectResync('timeout');
+        }, EPOCH_RESYNC_TIMEOUT_MS);
+    }
+
+    private flushPostReconnectResync(reason: 'snapshot' | 'timeout'): void {
+        if (!this.pendingPostReconnectResync) {
+            return;
+        }
+        this.pendingPostReconnectResync = false;
+        this.clearPostReconnectResyncTimer();
+        if (reason === 'timeout') {
+            this.config.logger?.log(
+                'warn',
+                'Session',
+                `Post-reconnect snapshot timeout after ${EPOCH_RESYNC_TIMEOUT_MS}ms; firing ICE restart against last-known peer map`,
+            );
+        }
+        this.media.handleSignalingReconnect();
+    }
+
+    private clearPostReconnectResyncTimer(): void {
+        if (this.postReconnectResyncTimer !== null) {
+            window.clearTimeout(this.postReconnectResyncTimer);
+            this.postReconnectResyncTimer = null;
+        }
+    }
+
     private clearEndingTimer(): void {
         if (this.endingTimer !== null) {
             window.clearTimeout(this.endingTimer);
@@ -739,6 +783,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearReconnectTimer();
         this.clearJoinTimeout();
         this.clearEndingTimer();
+        this.clearPostReconnectResyncTimer();
         this.invalidateIceFetches();
         this.statsCollector.stop();
 
@@ -748,6 +793,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.pendingJoinOptions = null;
         this.joinInFlight = false;
         this.reconnectRecoveryPending = false;
+        this.pendingPostReconnectResync = false;
         this.reconnectAttempts = 0;
         this.roomState = null;
         this.clientId = null;
