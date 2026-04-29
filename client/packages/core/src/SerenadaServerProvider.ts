@@ -208,7 +208,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             case 'negotiation_dirty': {
                 const dirty = parseNegotiationDirtyPayload(message.payload);
                 if (dirty) {
-                    this.emit('negotiationDirty', { with: dirty.with });
+                    this.emit('negotiationDirty', { withCid: dirty.with });
                 }
                 break;
             }

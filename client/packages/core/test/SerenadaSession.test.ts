@@ -812,7 +812,7 @@ describe('SerenadaSession', () => {
 
             expect(harness.media.scheduleDirtyPairRestartCalls).toEqual([]);
 
-            harness.signaling.emitNegotiationDirty({ with: 'peer-1' });
+            harness.signaling.emitNegotiationDirty({ withCid: 'peer-1' });
 
             expect(harness.media.scheduleDirtyPairRestartCalls).toEqual(['peer-1']);
         });

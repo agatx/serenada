@@ -187,6 +187,84 @@ describe('MediaEngine', () => {
         });
     });
 
+    it('scheduleDirtyPairRestart is a no-op for an unknown CID', () => {
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+
+        const offerCountBefore = sentMessages.filter((m) => m.type === 'offer').length;
+
+        // Unknown CID — should not throw and should not produce any offers.
+        engine.scheduleDirtyPairRestart('stranger');
+
+        const offerCountAfter = sentMessages.filter((m) => m.type === 'offer').length;
+        expect(offerCountAfter).toBe(offerCountBefore);
+        expect(engine.getPeerConnectionsMap().has('stranger')).toBe(false);
+    });
+
+    it('scheduleDirtyPairRestart dispatches to scheduleIceRestart when local should offer', () => {
+        const engine = new MediaEngine({}, () => {});
+
+        engine.updateSignalingConnected(true);
+        // Local 'alpha' (host) sorts before 'zeta', so local should offer.
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+
+        // Spy on the private routing methods to verify dispatch without
+        // fighting the FakeRtcPeerConnection's signaling-state guards
+        // (the actual ICE-restart machinery is exercised by existing tests).
+        const internals = engine as unknown as {
+            scheduleIceRestart: (cid: string, reason: string, delay: number) => void;
+            scheduleNonHostFallback: (cid: string) => void;
+        };
+        const iceSpy = vi.spyOn(internals, 'scheduleIceRestart');
+        const fallbackSpy = vi.spyOn(internals, 'scheduleNonHostFallback');
+
+        engine.scheduleDirtyPairRestart('zeta');
+
+        expect(iceSpy).toHaveBeenCalledWith('zeta', 'negotiation-dirty', 0);
+        expect(fallbackSpy).not.toHaveBeenCalled();
+
+        iceSpy.mockRestore();
+        fallbackSpy.mockRestore();
+    });
+
+    it('scheduleDirtyPairRestart dispatches to non-host fallback when local should not offer', () => {
+        const engine = new MediaEngine({}, () => {});
+
+        engine.updateSignalingConnected(true);
+        // Local 'zeta' sorts after 'alpha', so 'alpha' (the remote) is the
+        // offerer; local takes the non-host fallback path.
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+
+        const internals = engine as unknown as {
+            scheduleIceRestart: (cid: string, reason: string, delay: number) => void;
+            scheduleNonHostFallback: (cid: string) => void;
+        };
+        const iceSpy = vi.spyOn(internals, 'scheduleIceRestart');
+        const fallbackSpy = vi.spyOn(internals, 'scheduleNonHostFallback');
+
+        engine.scheduleDirtyPairRestart('alpha');
+
+        expect(fallbackSpy).toHaveBeenCalledWith('alpha');
+        expect(iceSpy).not.toHaveBeenCalled();
+
+        iceSpy.mockRestore();
+        fallbackSpy.mockRestore();
+    });
+
     it('uses direct string ordering for offer ownership', async () => {
         const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
         const localeCompareSpy = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {

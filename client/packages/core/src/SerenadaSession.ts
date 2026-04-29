@@ -633,7 +633,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.isInactive) {
             return;
         }
-        this.media.scheduleDirtyPairRestart(event.with);
+        this.media.scheduleDirtyPairRestart(event.withCid);
     };
 
     private readonly handleRelayFailed = (event: RelayFailedEvent): void => {

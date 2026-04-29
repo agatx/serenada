@@ -73,11 +73,13 @@ export interface SignalingErrorEvent {
  * Server tells an active peer that a previously-suspended peer has reattached
  * AND there was pending negotiation traffic to it during the suspension. The
  * SDK should perform glare-safe fresh negotiation / ICE restart for the named
- * CID.
+ * CID. The wire payload field `with` is mapped to the explicit `withCid` here
+ * to avoid the JavaScript reserved-word association and to match the Android
+ * / iOS event shapes.
  */
 export interface NegotiationDirtyEvent {
     /** The CID that needs fresh renegotiation. */
-    with: string;
+    withCid: string;
 }
 
 /** Server tells the sender it could not deliver a relay because the target had no transport. */
