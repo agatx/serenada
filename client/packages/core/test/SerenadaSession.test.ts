@@ -724,7 +724,7 @@ describe('SerenadaSession', () => {
     // Reconnect Behavior
     // ---------------------------------------------------------------
     describe('reconnect behavior', () => {
-        it('rebuilds state when signaling reconnects with room state', async () => {
+        it('defers ICE restart on reconnect until post-reconnect snapshot arrives', async () => {
             harness = new TestSessionHarness();
             harness.simulateJoined({
                 clientId: 'me',
@@ -734,14 +734,70 @@ describe('SerenadaSession', () => {
             await harness.session.resumeJoin();
             expect(harness.state.phase).toBe('inCall');
 
-            // Simulate disconnect
             harness.simulateDisconnect();
             expect(harness.state.activeTransport).toBeNull();
 
             harness.signaling.emitConnected('ws');
 
-            expect(harness.state.phase).toBe('inCall');
+            // Transport reconnected, but no snapshot yet — restart deferred.
             expect(harness.state.activeTransport).toBe('ws');
+            expect(harness.media.handleSignalingReconnectCalls).toBe(0);
+
+            // Authoritative post-reconnect snapshot arrives.
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [
+                    { peerId: 'me' },
+                    { peerId: 'peer-1' },
+                ],
+            });
+
+            expect(harness.media.handleSignalingReconnectCalls).toBe(1);
+        });
+
+        it('does not double-fire ICE restart when more snapshots follow the first', async () => {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+
+            harness.simulateDisconnect();
+            harness.signaling.emitConnected('ws');
+
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [{ peerId: 'me' }, { peerId: 'peer-1' }],
+            });
+            expect(harness.media.handleSignalingReconnectCalls).toBe(1);
+
+            // Subsequent room_state updates (e.g. peer mute) should not retrigger.
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [{ peerId: 'me' }, { peerId: 'peer-1' }],
+            });
+            expect(harness.media.handleSignalingReconnectCalls).toBe(1);
+        });
+
+        it('falls back to ICE restart on snapshot timeout to preserve pre-#4 behavior', async () => {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+
+            harness.simulateDisconnect();
+            harness.signaling.emitConnected('ws');
+
+            expect(harness.media.handleSignalingReconnectCalls).toBe(0);
+
+            // No snapshot arrives — graceful degradation kicks in after 5s.
+            await vi.advanceTimersByTimeAsync(5_000);
+
             expect(harness.media.handleSignalingReconnectCalls).toBe(1);
         });
 

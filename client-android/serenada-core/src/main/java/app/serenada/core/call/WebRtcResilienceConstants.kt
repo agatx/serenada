@@ -39,4 +39,10 @@ object WebRtcResilienceConstants {
     // synthetic ping and waits this long for a pong before force-closing the
     // transport and triggering the normal reconnect path.
     const val FOREGROUND_FORCE_PING_TIMEOUT_MS = 2_000L
+
+    // ── Post-reconnect snapshot resync ───────────────────────────────
+    // After signaling reconnects, the SDK waits this long for an authoritative
+    // `room_state` snapshot before falling back to firing ICE restart against
+    // the last-known peer map.
+    const val EPOCH_RESYNC_TIMEOUT_MS = 5_000L
 }

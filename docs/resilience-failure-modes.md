@@ -1,7 +1,7 @@
 # Resilience Failure Modes — Audit & Fix Plan
 
-**Status:** Phase 1 implemented; Phase 2 partial (process-death recovery #5 and foreground/Doze force-ping #8 landed end-to-end; #6/#7/#10 outstanding).
-**Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed) · 2026-04-26 (Phase 2 partial landed)
+**Status:** Phase 1 implemented; Phase 2 partial (#4 SDK snapshot gate, #5 process-death recovery, and #8 foreground/Doze force-ping landed end-to-end; #1/#3/#6/#7/#10/#13 SDK pieces outstanding).
+**Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed) · 2026-04-26 (Phase 2 partial #5+#8 landed) · 2026-04-28 (#4 SDK snapshot gate landed)
 **Scope:** Web, Android, iOS SDKs and the Go signaling server
 
 ## Background
@@ -63,7 +63,7 @@ must preserve the core UX model:
 | 1 | Negotiation messages missed while peer is suspended       | Stuck call setup, missing media after reconnect           | Critical | M      | Phase 1 (server) · SDK glare-safe renegotiation pending |
 | 2 | Reconnect creates a new CID instead of preserving identity | App thinks it rejoined; peers see duplicate/empty state   | Critical | S      | Phase 1 ✅ |
 | 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 1 (server cleanup gate) · SDK presentation timer + emission pending |
-| 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      | Phase 1 (server epoch + post-reconnect snapshot) · SDK MediaEngine wiring pending |
+| 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      | Phase 1 (server) · Phase 2 ✅ (SDK snapshot gate landed end-to-end) |
 | 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      | Phase 2 ✅ (server `POST /api/leave` + per-platform recovery store + rejoin API) |
 | 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      | Phase 2 |
 | 7 | SSE transport hijack via SID reuse                        | Security: another connection can take over an SSE session | Critical | S      | Phase 2 — server `TODO(#7)` placed; needs SDK `resumeSse` first |
@@ -403,14 +403,16 @@ authorization or proof of identity.
 
 ## 4. ICE restart fires against stale peer map on reconnect
 
-**Status (2026-04-25):** Server-side ready. `Room.Epoch` advances on every
-membership-mutating operation; `joined` and `room_state` carry `epoch`; and
-the server now sends an authoritative `room_state` snapshot on the new
-transport immediately after every successful `joined`, regardless of
-whether membership changed. The Web `SignalingEngine` records
-`epochAtDisconnect` and exposes `awaitingPostReconnectSnapshot` for
-`MediaEngine` to gate ICE restart on. Wiring that gate into the actual ICE
-restart scheduler in each SDK is the remaining piece.
+**Status (2026-04-28):** Landed end-to-end. Server-side: `Room.Epoch`
+advances on every membership-mutating operation; `joined` and `room_state`
+carry `epoch`; the server sends an authoritative `room_state` snapshot on
+the new transport immediately after every successful `joined`, regardless
+of whether membership changed. SDK-side: all three platforms now defer
+the post-reconnect ICE restart in `SerenadaSession` until either the
+authoritative `room_state` snapshot arrives or the new shared
+`epochResyncTimeoutMs = 5_000` elapses. On timeout, the SDK falls back to
+firing ICE restart against the last-known peer map (graceful degradation
+to pre-#4 behavior).
 
 ### Symptom
 
@@ -1347,9 +1349,9 @@ Several fixes share infrastructure. To minimize churn:
   `scripts/check-resilience-constants.mjs` parity check):
   - `peerSuspendedUiTimeoutMs = 30_000` (#3).
   - `suspendHardEvictionTimeoutMs = 600_000` (#6).
-  - `epochResyncTimeoutMs = 5_000` (#4).
+  - `epochResyncTimeoutMs = 5_000` (#4) ✅ landed.
   - `turnRefreshSafetyMarginMs = 60_000` (#9).
-  - `foregroundForcePingTimeoutMs = 2_000` (#8).
+  - `foregroundForcePingTimeoutMs = 2_000` (#8) ✅ landed.
 
 - **Shared SDK responsibilities:**
   - Persist `{roomId, cid, reconnectToken, lastSeenEpoch}` and surface
@@ -1421,6 +1423,50 @@ Out of scope for this document, listed for visibility:
   it deserves a fresh look.
 
 ## Change Log
+
+### 2026-04-28 — Phase 2 partial: SDK post-reconnect snapshot gate (#4)
+
+- **Shared resilience constants**: New `epochResyncTimeoutMs = 5_000` added
+  to all three SDKs (`client/packages/core/src/constants.ts`,
+  `client-android/.../call/WebRtcResilienceConstants.kt`,
+  `client-ios/SerenadaCore/Sources/Call/WebRtcResilienceConstants.swift`)
+  and surfaced in `scripts/check-resilience-constants.mjs`'s parity check
+  (now 20 cross-platform constants).
+
+- **Web SDK** (`SerenadaSession.ts`): Adds `pendingPostReconnectResync`
+  state and a 5s timeout. On signaling reconnect with an existing room,
+  defers `MediaEngine.handleSignalingReconnect()` instead of firing
+  immediately. The deferred call runs when `handleRoomStateUpdated`
+  processes the post-reconnect `room_state` snapshot, or after
+  `EPOCH_RESYNC_TIMEOUT_MS` as a graceful-degradation fallback to pre-#4
+  behavior. Existing reconnect test updated; two new tests cover the gate
+  (defer + flush + timeout fallback + no double-fire).
+
+- **Android SDK** (`SerenadaSession.kt`): Mirrors the Web shape. Reconnect
+  handler arms the gate via a `Handler.postDelayed` callback;
+  `onRoomStateUpdated` flushes the gate via the new
+  `flushPostReconnectResync` helper. Test-only `isPostReconnectResyncPending`
+  / `postReconnectResyncFireCount` accessors expose state for assertions
+  (Robolectric-driven `SessionPostReconnectGateTest`, 4 tests).
+
+- **iOS SDK** (`SerenadaSession.swift`): Mirrors the same shape via a
+  `Task { try? await clock.sleep(...) }` timeout pattern aligned with the
+  existing `scheduleReconnect` helper. `internal var
+  isPostReconnectResyncPending` / `postReconnectResyncFireCount` for tests.
+  Pre-existing `testSignalingReconnectDuringInCallTriggersIceRestart` updated
+  to provide a snapshot after reconnect; new `SessionPostReconnectGateTests`
+  covers all four cases.
+
+- **Behavior**: A reconnect with stale peer-map state (e.g. a peer left
+  during the outage) now waits for the server's authoritative snapshot
+  before scheduling ICE restart, so offers go to confirmed-present peers
+  only. If the server fails to send a snapshot within 5s, the SDK falls
+  back to firing against the last-known map — strictly no worse than
+  pre-#4 behavior.
+
+- **Tests / CI**: Web 310 (was 308), Android `:serenada-core:testDebugUnitTest`
+  green, iOS xcodebuild green. `check-resilience-constants.mjs` reports 20
+  matching constants. `check-version-parity.mjs` green.
 
 ### 2026-04-26 — Phase 2 partial: foreground / Doze force-ping (#8)
 

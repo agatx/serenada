@@ -43,6 +43,13 @@ public enum WebRtcResilience {
     /// synthetic ping and waits this long for a pong before force-closing the
     /// transport and triggering the normal reconnect path.
     public static let foregroundForcePingTimeoutMs = 2_000
+
+    // MARK: - Post-reconnect snapshot resync
+
+    /// After signaling reconnects, the SDK waits this long for an authoritative
+    /// `room_state` snapshot before falling back to firing ICE restart against
+    /// the last-known peer map.
+    public static let epochResyncTimeoutMs = 5_000
 }
 
 // MARK: - Nanosecond convenience accessors

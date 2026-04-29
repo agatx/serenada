@@ -174,8 +174,18 @@ public final class SerenadaSession: ObservableObject {
     private var userPreferredVideoEnabled = true
     private var isVideoPausedByProximity = false
     private var reconnectRecoveryPending = false
+    // True between transport reconnect and the first authoritative room_state
+    // snapshot; gates ICE restart so it runs against a confirmed peer set.
+    private var pendingPostReconnectResync = false
+    private var postReconnectResyncTask: Task<Void, Never>?
+    private var iceRestartCallsFromGate = 0
     private var iceFetchGeneration = 0
     private var reconnectTask: Task<Void, Never>?
+
+    /// Test-only accessor for the post-reconnect snapshot gate state.
+    internal var isPostReconnectResyncPending: Bool { pendingPostReconnectResync }
+    /// Test-only counter incremented each time the gate fires an ICE restart.
+    internal var postReconnectResyncFireCount: Int { iceRestartCallsFromGate }
 
     private let recoveryStorage: RecoveryStorage
     private var sessionStartTs: Int64?
@@ -320,6 +330,7 @@ public final class SerenadaSession: ObservableObject {
     deinit {
         pathMonitor.cancel()
         reconnectTask?.cancel()
+        postReconnectResyncTask?.cancel()
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
     }
@@ -638,7 +649,7 @@ public final class SerenadaSession: ObservableObject {
             sendJoin(roomId: join)
         } else if !wasConnected, signalingProvider.capabilities.handlesReconnection, reconnectRecoveryPending, currentRoomState != nil {
             reconnectRecoveryPending = false
-            peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
+            armPostReconnectResync()
         }
     }
 
@@ -668,6 +679,7 @@ public final class SerenadaSession: ObservableObject {
     fileprivate func handleProviderRoomStateUpdated(_ event: RoomStateEvent) {
         currentError = nil
         signalingMessageRouter?.processRoomStateEvent(event)
+        flushPostReconnectResync(reason: .snapshot)
     }
 
     fileprivate func handleProviderPeerJoined(_ event: PeerEvent) {
@@ -927,6 +939,7 @@ public final class SerenadaSession: ObservableObject {
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
 
         reconnectTask?.cancel(); reconnectTask = nil
+        cancelPostReconnectResync()
         joinFlowCoordinator?.clearAllTimers()
         connectionStatusTracker?.cancelTimer()
         iceFetchGeneration += 1
@@ -989,6 +1002,47 @@ public final class SerenadaSession: ObservableObject {
             self.pendingJoinRoom = self.roomId
             self.signalingProvider.connect()
         }
+    }
+
+    // MARK: - Post-reconnect snapshot gate
+
+    private enum PostReconnectFlushReason {
+        case snapshot
+        case timeout
+    }
+
+    private func armPostReconnectResync() {
+        pendingPostReconnectResync = true
+        postReconnectResyncTask?.cancel()
+        postReconnectResyncTask = Task { [weak self] in
+            guard let clock = self?.clock else { return }
+            let timeoutMs = UInt64(WebRtcResilience.epochResyncTimeoutMs)
+            try? await clock.sleep(nanoseconds: timeoutMs * 1_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.flushPostReconnectResync(reason: .timeout)
+        }
+    }
+
+    private func flushPostReconnectResync(reason: PostReconnectFlushReason) {
+        guard pendingPostReconnectResync else { return }
+        pendingPostReconnectResync = false
+        postReconnectResyncTask?.cancel()
+        postReconnectResyncTask = nil
+        if reason == .timeout {
+            logger?.log(
+                .warning,
+                tag: "Session",
+                "Post-reconnect snapshot timeout after \(WebRtcResilience.epochResyncTimeoutMs)ms; firing ICE restart against last-known peer map"
+            )
+        }
+        iceRestartCallsFromGate += 1
+        peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
+    }
+
+    private func cancelPostReconnectResync() {
+        pendingPostReconnectResync = false
+        postReconnectResyncTask?.cancel()
+        postReconnectResyncTask = nil
     }
 
     // MARK: - Snapshot Management
