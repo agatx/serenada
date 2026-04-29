@@ -23,12 +23,16 @@ func shouldShowRemoteVideoPlaceholder(phase: CallPhase, remoteVideoEnabled: Bool
     !remoteVideoEnabled && phase == .inCall
 }
 
-func shouldShowRemoteFitButton(phase: CallPhase, remoteVideoEnabled: Bool, isLocalLarge: Bool) -> Bool {
-    phase == .inCall && remoteVideoEnabled && !isLocalLarge
+func shouldShowRemoteFitButton(phase: CallPhase, remoteVideoEnabled: Bool, isLocalLarge: Bool, localVideoEnabled: Bool) -> Bool {
+    phase == .inCall && remoteVideoEnabled && !(isLocalLarge && localVideoEnabled)
 }
 
-func shouldRenderLocalAsPrimarySurface(phase: CallPhase, isLocalLarge: Bool) -> Bool {
-    phase == .inCall && isLocalLarge
+// When the local camera is off there's nothing meaningful to enlarge — force
+// remote-as-primary so the user doesn't see a giant "Camera off" placeholder.
+// The user's swap preference (`isLocalLarge`) is preserved and reapplied
+// automatically when video comes back on.
+func shouldRenderLocalAsPrimarySurface(phase: CallPhase, isLocalLarge: Bool, localVideoEnabled: Bool) -> Bool {
+    phase == .inCall && isLocalLarge && localVideoEnabled
 }
 
 func shouldUseBroadcastPicker(isScreenSharing: Bool, screenShareExtensionBundleId: String?) -> Bool {
@@ -317,7 +321,8 @@ struct CallScreenView: View {
     var body: some View {
         let showLocalAsPrimarySurface = shouldRenderLocalAsPrimarySurface(
             phase: uiState.phase,
-            isLocalLarge: isLocalLarge
+            isLocalLarge: isLocalLarge,
+            localVideoEnabled: uiState.localVideoEnabled
         )
         let isPinchZoomEnabled = shouldEnablePinchZoom(showLocalAsPrimarySurface: showLocalAsPrimarySurface)
         let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
@@ -386,7 +391,11 @@ struct CallScreenView: View {
                         placeholderText: uiState.phase == .inCall ? str(.callVideoOff) : nil,
                         placeholderDisplayName: uiState.phase == .inCall ? uiState.remoteParticipants.first?.displayName : nil
                     )
-                    ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
+                    // Avoid duplicating the name when the remote video-off placeholder already shows it.
+                    ParticipantBadge(
+                        muted: uiState.remoteParticipants.first?.audioEnabled == false,
+                        displayName: uiState.remoteVideoEnabled ? uiState.remoteParticipants.first?.displayName : nil
+                    )
                 }
                 .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallLocalView
@@ -651,7 +660,8 @@ struct CallScreenView: View {
                 if shouldShowRemoteFitButton(
                     phase: uiState.phase,
                     remoteVideoEnabled: uiState.remoteVideoEnabled,
-                    isLocalLarge: isLocalLarge
+                    isLocalLarge: isLocalLarge,
+                    localVideoEnabled: uiState.localVideoEnabled
                 ) && !isMultiParty {
                     iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", accessibilityLabel: remoteVideoFitCover ? str(.callA11yVideoFit) : str(.callA11yVideoFill)) {
                         withAnimation(.easeInOut(duration: 0.2)) {

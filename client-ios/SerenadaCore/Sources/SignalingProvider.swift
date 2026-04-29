@@ -86,6 +86,12 @@ public struct JoinedEvent: Equatable, Sendable {
     public let epoch: Int64?
     /// How the server treated this join. nil for older providers.
     public let reconnectOutcome: ReconnectOutcome?
+    /// Server-issued reconnect token from `joined.reconnectToken`. The
+    /// session uses this to populate the cross-launch recovery record;
+    /// the provider also keeps an internal copy for transport reconnects.
+    public let reconnectToken: String?
+    /// How long (ms) the server is willing to honor `reconnectToken`.
+    public let reconnectTokenTTLMs: Int64?
 
     public init(
         peerId: String,
@@ -93,7 +99,9 @@ public struct JoinedEvent: Equatable, Sendable {
         hostPeerId: String? = nil,
         maxParticipants: Int? = nil,
         epoch: Int64? = nil,
-        reconnectOutcome: ReconnectOutcome? = nil
+        reconnectOutcome: ReconnectOutcome? = nil,
+        reconnectToken: String? = nil,
+        reconnectTokenTTLMs: Int64? = nil
     ) {
         self.peerId = peerId
         self.participants = participants
@@ -101,6 +109,8 @@ public struct JoinedEvent: Equatable, Sendable {
         self.maxParticipants = maxParticipants
         self.epoch = epoch
         self.reconnectOutcome = reconnectOutcome
+        self.reconnectToken = reconnectToken
+        self.reconnectTokenTTLMs = reconnectTokenTTLMs
     }
 }
 

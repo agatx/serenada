@@ -1,7 +1,7 @@
 # Resilience Failure Modes — Audit & Fix Plan
 
-**Status:** Phase 1 implemented (server + Web/Android/iOS SDKs); Phase 2 & 3 outstanding.
-**Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed)
+**Status:** Phase 1 implemented; Phase 2 partial (process-death recovery #5 landed end-to-end; #8/#10 in flight).
+**Date:** 2026-04-26 (audit) · 2026-04-25 (Phase 1 landed) · 2026-04-26 (Phase 2 partial landed)
 **Scope:** Web, Android, iOS SDKs and the Go signaling server
 
 ## Background
@@ -64,7 +64,7 @@ must preserve the core UX model:
 | 2 | Reconnect creates a new CID instead of preserving identity | App thinks it rejoined; peers see duplicate/empty state   | Critical | S      | Phase 1 ✅ |
 | 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 1 (server cleanup gate) · SDK presentation timer + emission pending |
 | 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      | Phase 1 (server epoch + post-reconnect snapshot) · SDK MediaEngine wiring pending |
-| 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      | Phase 2 |
+| 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      | Phase 2 ✅ (server `POST /api/leave` + per-platform recovery store + rejoin API) |
 | 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      | Phase 2 |
 | 7 | SSE transport hijack via SID reuse                        | Security: another connection can take over an SSE session | Critical | S      | Phase 2 — server `TODO(#7)` placed; needs SDK `resumeSse` first |
 | 8 | iOS background suspension keeps SDK in stale "connected"  | After long background, signaling appears alive but isn't  | High     | M      | Phase 2 |
@@ -477,7 +477,19 @@ top of existing reconnect flow.
 
 ## 5. Process death without clean teardown
 
-**Status (2026-04-25):** Not started — Phase 2.
+**Status (2026-04-26):** Landed end-to-end. Server exposes `POST /api/leave`
+that takes `{rid, cid, reconnectToken}`, validates the token (rejects
+expired or unsigned), and immediately hard-evicts via the new
+`Hub.evictByLeave`. Idempotent and rate-limited (12 req/min/IP). All
+three SDKs persist `{roomId, cid, reconnectToken, lastEpoch,
+sessionStartTs, expiresAtMs}` across launches: Web → `sessionStorage`,
+Android → app-private `SharedPreferences`, iOS → injectable
+`UserDefaults` (defaults to `.standard`; host apps can pass an
+app-group store). Each SDK exposes `getRecoverableSession()` and
+`discardRecoverableSession()` so host apps can offer a "Rejoin call?"
+prompt on relaunch. Recovery records are cleared on clean leave,
+`room_ended`, and `INVALID_RECONNECT_TOKEN`; expired records are dropped
+on read.
 
 ### Symptom
 
@@ -1399,6 +1411,60 @@ Out of scope for this document, listed for visibility:
   it deserves a fresh look.
 
 ## Change Log
+
+### 2026-04-26 — Phase 2 partial: process-death recovery (#5)
+
+- **Server (`server/leave_handler.go`)**: New `POST /api/leave` endpoint
+  for explicit terminal-leave intent. Validates `{rid, cid,
+  reconnectToken}` against the existing HMAC machinery (rejects expired
+  or unsigned tokens with 401), then calls the new `Hub.evictByLeave`
+  which removes the participant immediately, drops dirty/liveness state,
+  rebroadcasts `room_state` (or GCs the room when empty), and is
+  idempotent. Rate-limited at 12 req/min/IP via the existing
+  `rateLimitMiddleware` and gated by `enableCors`. Tests cover the happy
+  path, missing-field rejection, bogus and expired tokens, idempotency,
+  and method-not-allowed.
+
+- **All three SDKs**: Persistent recovery state lands per the doc.
+  Web → `sessionStorage` (per-tab; survives reload, lost on tab close),
+  Android → app-private `SharedPreferences`, iOS → injectable
+  `UserDefaults` (defaults `.standard`; host apps can pass an
+  app-group-scoped store before opening any session). Each SDK
+  surfaces a public `getRecoverableSession()` / `discardRecoverableSession()`
+  pair on `SerenadaCore`. The active session writes the record on every
+  successful `joined` (with the original `sessionStartTs` preserved
+  across reconnects) and clears it on clean leave, `room_ended`, or
+  `INVALID_RECONNECT_TOKEN`. Records expire on the wire-side
+  `reconnectTokenTTLMs` (Web) or the matching `suspendHardEvictionTimeout`
+  (Android/iOS, where the TTL was not previously plumbed).
+
+- **iOS-specific**: `JoinedEvent` gains `reconnectToken` and
+  `reconnectTokenTTLMs` fields so the session — which previously had no
+  visibility into provider-internal token state — can populate the
+  recovery record from the wire payload directly.
+
+- **Tests**:
+  - Server: `server/leave_handler_test.go` (6 tests) covers token
+    happy/sad paths and idempotency.
+  - Web: `recoveryStorage.test.ts` (7 tests) covers round-trip,
+    malformed JSON, expired entries, and missing-field rejection.
+  - Android: `RecoveryStorageTest` (5 tests, Robolectric) covers the
+    same matrix.
+  - iOS: `RecoveryStorageTests` (6 tests) covers the same matrix
+    plus injected-clock expiry semantics.
+  - All four suites green (server Go, Web vitest 308, Android gradle,
+    iOS xcodebuild 252).
+
+- **Deferred (still Phase 2)**:
+  - **#8 iOS scene-phase observer + foreground force-ping** — needs
+    `SignalingClient`-level "fresh ping with 2s deadline" plumbing the
+    SDK does not yet expose. Tracked for a follow-up slice.
+  - **#10 lifecycle serialization on `CallManager`** — current
+    `@MainActor` class serializes synchronous code but has interleave
+    holes across `await` suspension points. Needs a Task-chain
+    refactor; deferred.
+  - **#10 deep-link guard ("switch call?" prompt)** — host-app UI
+    territory; deferred to product/UX work.
 
 ### 2026-04-25 — Phase 1 implementation landed
 

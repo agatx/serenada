@@ -170,12 +170,12 @@ type Message struct {
 
 // Participant is the wire-format entry broadcast to clients in joined/room_state.
 type Participant struct {
-	CID              string                 `json:"cid"`
-	JoinedAt         int64                  `json:"joinedAt,omitempty"`
-	DisplayName      string                 `json:"displayName,omitempty"`
-	AudioEnabled     *bool                  `json:"audioEnabled,omitempty"`
-	VideoEnabled     *bool                  `json:"videoEnabled,omitempty"`
-	ConnectionStatus string                 `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
+	CID              string                   `json:"cid"`
+	JoinedAt         int64                    `json:"joinedAt,omitempty"`
+	DisplayName      string                   `json:"displayName,omitempty"`
+	AudioEnabled     *bool                    `json:"audioEnabled,omitempty"`
+	VideoEnabled     *bool                    `json:"videoEnabled,omitempty"`
+	ConnectionStatus string                   `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
 	ContentState     *ParticipantContentState `json:"contentState,omitempty"`
 }
 
@@ -1683,6 +1683,54 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 
 	if isEmpty {
 		log.Printf("[REMOVE_FROM_ROOM] Room %s is now empty. Deleting room.", rid)
+		h.mu.Lock()
+		delete(h.rooms, rid)
+		h.mu.Unlock()
+	} else {
+		h.broadcastRoomState(room)
+	}
+	h.broadcastRoomStatusUpdate(rid)
+}
+
+// evictByLeave is the explicit terminal-leave path used by `POST /api/leave`.
+// Unlike `disconnectClient` it does not start a suspend window — the
+// participant is removed immediately (the user explicitly chose to leave or
+// end the call, often during page unload). Idempotent: a second call for an
+// already-evicted CID is a no-op.
+//
+// The caller is responsible for verifying the reconnect token before calling
+// this helper. The participant record is removed regardless of whether a
+// signaling transport is currently attached, and any attached *Client is
+// detached + suspended-record cleaned up so the next reconnect with a stale
+// token can not silently revive the slot.
+func (h *Hub) evictByLeave(rid, cid string) {
+	h.mu.RLock()
+	room, exists := h.rooms[rid]
+	h.mu.RUnlock()
+	if !exists {
+		return
+	}
+
+	room.mu.Lock()
+	p := room.participantByCID(cid)
+	if p == nil {
+		room.mu.Unlock()
+		return
+	}
+	attachedClient := p.Client
+	room.removeParticipant(cid)
+	room.dropCIDFromDirty(cid)
+	room.dropMediaLivenessFor(cid)
+	room.transferHostIfNeeded(cid)
+	room.bumpEpoch()
+	isEmpty := room.participantCount() == 0
+	room.mu.Unlock()
+
+	if attachedClient != nil {
+		h.cleanupEvictedClient(attachedClient)
+	}
+
+	if isEmpty {
 		h.mu.Lock()
 		delete(h.rooms, rid)
 		h.mu.Unlock()

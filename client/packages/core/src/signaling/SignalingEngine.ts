@@ -13,6 +13,7 @@ import {
     parseNegotiationDirtyPayload,
 } from './payloads.js';
 import { formatError } from '../formatError.js';
+import { saveRecoveryRecord, clearRecoveryRecord } from '../recoveryStorage.js';
 import {
     RECONNECT_BACKOFF_BASE_MS,
     RECONNECT_BACKOFF_CAP_MS,
@@ -55,6 +56,12 @@ export class SignalingEngine {
     lastEpoch: number | null = null;
     /** Epoch at the moment the transport was last observed disconnected. */
     epochAtDisconnect: number | null = null;
+    /**
+     * Unix-ms timestamp of the first successful `joined` for the current
+     * session. Stable across reconnects so the persisted recovery record
+     * carries the original join time, not the latest reattach time.
+     */
+    private sessionStartTs: number | null = null;
     /**
      * True from disconnect until we've seen a fresh authoritative snapshot
      * for the current room on the new transport. Consumers should suppress
@@ -307,6 +314,10 @@ export class SignalingEngine {
                     this.persistReconnectStorage();
                 }
                 this.persistClientId();
+                if (this.sessionStartTs === null) {
+                    this.sessionStartTs = Date.now();
+                }
+                this.persistRecoveryRecord(joined.reconnectTokenTTLMs);
                 this.logger?.log(
                     'debug',
                     'Signaling',
@@ -709,5 +720,28 @@ export class SignalingEngine {
         }
         this.reconnectToken = null;
         this.reconnectTokenRoomId = null;
+        this.sessionStartTs = null;
+        clearRecoveryRecord();
+    }
+
+    // Snapshots the in-memory reconnect state into the cross-launch
+    // recovery store so a relaunched tab can offer a "Rejoin call?" prompt.
+    // No-op when we don't have full credentials yet (e.g. first transport
+    // open before the server has answered with `joined`).
+    private persistRecoveryRecord(reconnectTokenTTLMs: number | undefined): void {
+        if (!this.currentRoomId || !this.clientId || !this.reconnectToken || !this.sessionStartTs) {
+            return;
+        }
+        const ttl = reconnectTokenTTLMs && reconnectTokenTTLMs > 0
+            ? reconnectTokenTTLMs
+            : 10 * 60 * 1000;
+        saveRecoveryRecord({
+            roomId: this.currentRoomId,
+            cid: this.clientId,
+            reconnectToken: this.reconnectToken,
+            lastEpoch: this.lastEpoch,
+            sessionStartTs: this.sessionStartTs,
+            expiresAtMs: Date.now() + ttl,
+        });
     }
 }

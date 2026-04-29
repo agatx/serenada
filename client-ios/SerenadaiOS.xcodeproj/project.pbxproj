@@ -18,6 +18,7 @@
 		252529C96E5D4B8966096E25 /* JoinWithCodeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */; };
 		25AD5A8310F31233C76D87DB /* LiveRoomOverride.swift in Sources */ = {isa = PBXBuildFile; fileRef = 367DCC8F4EDC812C9FBA3F02 /* LiveRoomOverride.swift */; };
 		2689E7B3ED25607A90E268B7 /* FakeMediaEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461DCF4D9C695C2B6051BF91 /* FakeMediaEngine.swift */; };
+		2A96BF63C126AFE8CE2976D4 /* RecoveryStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77004950192C89C56E76A8F /* RecoveryStorageTests.swift */; };
 		2B3986D47A857C11365A6D68 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5B216BB8A302914AB1CA5B /* NotificationService.swift */; };
 		2DC84097620992B43C52D59E /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = ECFBB844D3428C53592F5F7B /* FirebaseMessaging */; };
 		3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BD7296B4488661AE49A34BA /* RootViewRoutingTests.swift */; };
@@ -212,6 +213,7 @@
 		E194DC9F376B307952F4AD8E /* LayoutConformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutConformanceTests.swift; sourceTree = "<group>"; };
 		E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaiOSApp.swift; sourceTree = "<group>"; };
 		E5D3CF250B070B90F00B3B1D /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		E77004950192C89C56E76A8F /* RecoveryStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryStorageTests.swift; sourceTree = "<group>"; };
 		E77A32857F53D8DEADAF2B04 /* SerenadaiOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SerenadaiOS.entitlements; sourceTree = "<group>"; };
 		E9CFF87F710AB38BB7519AFB /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/Localizable.strings; sourceTree = "<group>"; };
 		ECF59DDD3EB32D08B6F0B913 /* SerenadaCoreProviderModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaCoreProviderModeTests.swift; sourceTree = "<group>"; };
@@ -407,6 +409,7 @@
 				F54D58A452D7949DF145435E /* JoinRecoveryTests.swift */,
 				E194DC9F376B307952F4AD8E /* LayoutConformanceTests.swift */,
 				801D5040B2102E7DFFFDC2B2 /* LoopbackSignalingProviderTests.swift */,
+				E77004950192C89C56E76A8F /* RecoveryStorageTests.swift */,
 				79D3BC3109B79353E8157F76 /* RoomWatcherTests.swift */,
 				ECF59DDD3EB32D08B6F0B913 /* SerenadaCoreProviderModeTests.swift */,
 				4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */,
@@ -809,6 +812,7 @@
 				366BA266D1F08550723BA77D /* LayoutConformanceTests.swift in Sources */,
 				C0500F3658A11A038780B5FD /* LoopbackSignalingProviderTests.swift in Sources */,
 				C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */,
+				2A96BF63C126AFE8CE2976D4 /* RecoveryStorageTests.swift in Sources */,
 				71320D322F59D2244B5A2027 /* RoomStatusesTests.swift in Sources */,
 				9C333A1799F89B5A4A9080BB /* RoomWatcherTests.swift in Sources */,
 				3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */,

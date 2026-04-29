@@ -257,7 +257,9 @@ private extension SerenadaServerProvider {
                 hostPeerId: payload.hostCid,
                 maxParticipants: payload.maxParticipants,
                 epoch: payload.epoch,
-                reconnectOutcome: payload.reconnect
+                reconnectOutcome: payload.reconnect,
+                reconnectToken: reconnectToken,
+                reconnectTokenTTLMs: payload.reconnectTokenTTLMs.map(Int64.init)
             )
         )
     }

@@ -29,6 +29,31 @@ class SerenadaCore(
     private val okHttpClient = OkHttpClient.Builder().build()
     private val apiClient = CoreApiClient(okHttpClient)
     private val resolvedConfig = resolveSerenadaConfig(config)
+    internal val recoveryStorage = RecoveryStorage(context)
+
+    /**
+     * Returns a recoverable session if the previous process ended abruptly
+     * (kill, OS LMK, crash) while a call was active and the persisted
+     * reconnect token is still within its TTL. Host apps should call this on
+     * launch and surface a "Rejoin call?" prompt — calling [join] with the
+     * returned `roomId` reattaches under the same CID.
+     *
+     * Returns `null` when there is nothing to recover.
+     */
+    fun getRecoverableSession(): RecoveryRecord? {
+        assertMainThread()
+        return recoveryStorage.load()
+    }
+
+    /**
+     * Drops any persisted recovery record. Call this when the user
+     * explicitly declines the rejoin prompt so subsequent launches do not
+     * keep offering the same dead session.
+     */
+    fun discardRecoverableSession() {
+        assertMainThread()
+        recoveryStorage.clear()
+    }
 
     private fun assertMainThread() {
         check(Looper.myLooper() == Looper.getMainLooper()) {
