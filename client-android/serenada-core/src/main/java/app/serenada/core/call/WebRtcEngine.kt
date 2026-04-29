@@ -212,7 +212,7 @@ internal class WebRtcEngine(
 
         videoSource = peerConnectionFactory.createVideoSource(false)
         cameraController.resetCameraSourceToInitial()
-        val startedVideo = cameraController.restartVideoCapturerFromAvailableModes(videoSource)
+        val startedVideo = restartVideoCapturerWithFallback(cameraController.currentCameraSource)
         if (!startedVideo) {
             logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available; continuing audio-only")
         }
@@ -288,7 +288,7 @@ internal class WebRtcEngine(
             return false
         }
         if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
-            if (!cameraController.restartVideoCapturerFromAvailableModes(videoSource)) {
+            if (!restartVideoCapturerWithFallback(cameraController.currentCameraSource)) {
                 localVideoTrack?.setEnabled(false)
                 return false
             }
@@ -299,6 +299,39 @@ internal class WebRtcEngine(
         val effectiveEnabled = enabled && (cameraController.videoCapturer != null || screenShareController.isScreenSharing)
         localVideoTrack?.setEnabled(effectiveEnabled)
         return effectiveEnabled
+    }
+
+    private fun restartVideoCapturerWithFallback(preferredSource: CameraCaptureController.LocalCameraSource): Boolean {
+        for (candidate in cameraSourceCandidates(preferredSource)) {
+            if (cameraController.restartVideoCapturer(candidate, videoSource)) {
+                if (candidate != preferredSource) {
+                    logger?.log(SerenadaLogLevel.WARNING, "Camera", "Camera source fallback applied: $candidate")
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun cameraSourceCandidates(
+        preferredSource: CameraCaptureController.LocalCameraSource
+    ): List<CameraCaptureController.LocalCameraSource> {
+        val candidates = mutableListOf(preferredSource)
+        cameraController.availableCameraModes
+            .map { cameraSourceFromMode(it) }
+            .forEach { source ->
+                if (source !in candidates) candidates.add(source)
+            }
+        return candidates
+    }
+
+    private fun cameraSourceFromMode(mode: LocalCameraMode): CameraCaptureController.LocalCameraSource {
+        return when (mode) {
+            LocalCameraMode.SELFIE -> CameraCaptureController.LocalCameraSource.SELFIE
+            LocalCameraMode.WORLD -> CameraCaptureController.LocalCameraSource.WORLD
+            LocalCameraMode.COMPOSITE -> CameraCaptureController.LocalCameraSource.COMPOSITE
+            LocalCameraMode.SCREEN_SHARE -> CameraCaptureController.LocalCameraSource.SELFIE
+        }
     }
 
     fun setHdVideoExperimentalEnabled(enabled: Boolean) {
@@ -390,7 +423,11 @@ internal class WebRtcEngine(
             return
         }
         renderer.init(eglBase.eglBaseContext, rendererEvents)
-        renderer.setEnableHardwareScaler(true)
+        // Hardware scaler issues setFixedSize(...) with a buffer smaller than the view.
+        // On Android 9 / older SurfaceFlinger this leaves the surface anchored at top-left
+        // after a remote resolution change, producing a black bar on the right until the
+        // next forced layout pass. Sizing the buffer from layout avoids the race.
+        renderer.setEnableHardwareScaler(false)
     }
 
     private fun applyAudioTrackHints() {

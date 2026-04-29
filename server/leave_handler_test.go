@@ -89,6 +89,22 @@ func TestApiLeaveRejectsInvalidToken(t *testing.T) {
 	}
 }
 
+func TestApiLeaveRejectsUnsignedTokenWhenSecretMissing(t *testing.T) {
+	t.Setenv("TURN_SECRET", "")
+	t.Setenv("TURN_TOKEN_SECRET", "")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	w := postLeave(t, hub, map[string]string{
+		"rid":            rid,
+		"cid":            "C-abc",
+		"reconnectToken": "unsigned-dev-token",
+	})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when reconnect token secret is missing, got %d", w.Code)
+	}
+}
+
 func TestApiLeaveRejectsExpiredToken(t *testing.T) {
 	t.Setenv("TURN_SECRET", "test-leave-secret")
 	rid := mustTestRoomID(t)

@@ -157,9 +157,14 @@ internal fun CallScreen(
         mutableStateOf(config.autoHideControls)
     }
     var wereControlsLastHiddenByAutoHide by remember { mutableStateOf(false) }
-    var isLocalLarge by rememberSaveable { mutableStateOf(false) }
+    var isLocalLarge by rememberSaveable {
+        mutableStateOf(
+            uiState.localCameraMode == LocalCameraMode.WORLD ||
+                uiState.localCameraMode == LocalCameraMode.COMPOSITE
+        )
+    }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(initialRemoteVideoFitCover) }
-    var lastFrontCameraState by remember { mutableStateOf(uiState.isFrontCamera) }
+    var lastCameraMode by remember { mutableStateOf(uiState.localCameraMode) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
@@ -276,15 +281,20 @@ internal fun CallScreen(
         }
     }
 
-    // Auto-swap based on camera facing
-    LaunchedEffect(uiState.isFrontCamera) {
-        if (uiState.isFrontCamera != lastFrontCameraState) {
-            // Front -> Back: Swapping to main view for better preview of what we capture
-            // Back -> Front: Swapping to PIP to see remote person clearly
-            isLocalLarge = !uiState.isFrontCamera
-            lastFrontCameraState = uiState.isFrontCamera
+    // Auto-swap when camera mode changes: WORLD/COMPOSITE → local large, SELFIE → local PIP.
+    LaunchedEffect(uiState.localCameraMode) {
+        if (uiState.localCameraMode != lastCameraMode) {
+            isLocalLarge = uiState.localCameraMode == LocalCameraMode.WORLD ||
+                uiState.localCameraMode == LocalCameraMode.COMPOSITE
+            lastCameraMode = uiState.localCameraMode
         }
     }
+
+    // When the local camera is off there's nothing meaningful to enlarge — force
+    // remote-as-large so the user doesn't see a giant "Camera off" placeholder.
+    // The user's swap preference (`isLocalLarge`) is preserved and reapplied
+    // automatically when video comes back on.
+    val effectiveLocalLarge = isLocalLarge && uiState.localVideoEnabled
 
     SerenadaTheme(theme) {
         BoxWithConstraints(
@@ -361,8 +371,8 @@ internal fun CallScreen(
         val pipVideoModifier =
             pipBaseModifier.padding(pipContentPadding).clip(RoundedCornerShape(pipInnerCornerRadius))
 
-        val localModifier = if (isLocalLarge) mainModifier else pipVideoModifier
-        val remoteModifier = if (isLocalLarge) pipVideoModifier else mainModifier
+        val localModifier = if (effectiveLocalLarge) mainModifier else pipVideoModifier
+        val remoteModifier = if (effectiveLocalLarge) pipVideoModifier else mainModifier
         if (showPip) {
             Box(modifier = pipBackgroundModifier)
         }
@@ -401,7 +411,7 @@ internal fun CallScreen(
                 onLocalPinchZoom = onLocalPinchZoom,
                 strings = strings,
             )
-        } else if (isLocalLarge) {
+        } else if (effectiveLocalLarge) {
             val ratio = localAspectRatio ?: 0f
             val containerRatio = if (maxHeight == 0.dp) 1f else maxWidth / maxHeight
             val safeContainerRatio = if (containerRatio > 0f) containerRatio else 1f
@@ -520,9 +530,9 @@ internal fun CallScreen(
             Box(modifier = localModifier) {
                 VideoPlaceholder(
                     text =
-                        if (isLocalLarge) resolveString(SerenadaString.CallLocalCameraOff, strings)
+                        if (effectiveLocalLarge) resolveString(SerenadaString.CallLocalCameraOff, strings)
                         else resolveString(SerenadaString.CallCameraOff, strings),
-                    fontSize = if (isLocalLarge) 16.sp else 10.sp
+                    fontSize = if (effectiveLocalLarge) 16.sp else 10.sp
                 )
             }
         }
@@ -531,7 +541,7 @@ internal fun CallScreen(
             !isMultiParty &&
                     !uiState.remoteVideoEnabled &&
                     (uiState.phase == CallPhase.InCall ||
-                            (uiState.phase == CallPhase.Waiting && isLocalLarge))
+                            (uiState.phase == CallPhase.Waiting && effectiveLocalLarge))
         if (showRemotePlaceholder) {
             val remoteP = uiState.remoteParticipants.firstOrNull()
             val text =
@@ -541,7 +551,7 @@ internal fun CallScreen(
             Box(modifier = remoteModifier) {
                 VideoPlaceholder(
                     text = text,
-                    fontSize = if (isLocalLarge) 10.sp else 16.sp,
+                    fontSize = if (effectiveLocalLarge) 10.sp else 16.sp,
                     displayName = nameToShow,
                 )
             }
@@ -560,7 +570,8 @@ internal fun CallScreen(
                 ParticipantBadge(
                     modifier = Modifier.align(Alignment.BottomStart),
                     muted = remoteP?.audioEnabled == false,
-                    displayName = remoteP?.displayName,
+                    // Avoid duplicating the name when the remote video-off placeholder already shows it.
+                    displayName = if (uiState.remoteVideoEnabled) remoteP?.displayName else null,
                 )
             }
         }
@@ -603,7 +614,7 @@ internal fun CallScreen(
         }
 
         // Waiting State Overlay
-        if (uiState.phase == CallPhase.Waiting && !isLocalLarge) {
+        if (uiState.phase == CallPhase.Waiting && !effectiveLocalLarge) {
             WaitingOverlay(
                 roomId = roomId,
                 serverHost = serverHost,
@@ -648,7 +659,7 @@ internal fun CallScreen(
             uiState.phase == CallPhase.InCall &&
                     isWorldOrCompositeMode &&
                     uiState.isFlashAvailable
-        val showRemoteFitButton = uiState.remoteVideoEnabled && !isLocalLarge && !isMultiParty
+        val showRemoteFitButton = uiState.remoteVideoEnabled && !effectiveLocalLarge && !isMultiParty
         if (showFlashButton || showRemoteFitButton) {
             Column(
                 modifier =
@@ -1260,43 +1271,45 @@ private fun WaitingOverlay(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Surface(
-            modifier = Modifier.size(200.dp).clip(RoundedCornerShape(16.dp)),
-            color = Color.White
-        ) {
-            qrBitmap?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = resolveString(SerenadaString.CallQrCode, strings),
-                    modifier = Modifier.fillMaxSize().padding(16.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = {
-                if (onShareLink != null) {
-                    onShareLink()
-                } else {
-                    shareLink(context, link, chooserTitle)
-                }
-            },
-            colors =
-                ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.2f)
-                ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(resolveString(SerenadaString.CallShareInvitation, strings))
-        }
-
+        // QR / Share / Invite are all "invite controls" — keep them off the screen
+        // entirely when disabled so they don't flash during phase transitions.
         if (config.inviteControlsEnabled) {
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Surface(
+                modifier = Modifier.size(200.dp).clip(RoundedCornerShape(16.dp)),
+                color = Color.White
+            ) {
+                qrBitmap?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = resolveString(SerenadaString.CallQrCode, strings),
+                        modifier = Modifier.fillMaxSize().padding(16.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = {
+                    if (onShareLink != null) {
+                        onShareLink()
+                    } else {
+                        shareLink(context, link, chooserTitle)
+                    }
+                },
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = Color.White.copy(alpha = 0.2f)
+                    ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(resolveString(SerenadaString.CallShareInvitation, strings))
+            }
+
             Spacer(modifier = Modifier.height(12.dp))
 
             Button(

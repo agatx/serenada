@@ -43,6 +43,11 @@ func handleLeave(hub *Hub) http.HandlerFunc {
 			http.Error(w, "Invalid room id", http.StatusBadRequest)
 			return
 		}
+		if reconnectSecret() == nil {
+			log.Printf("[API_LEAVE] Rejecting leave for CID %s in room %s: reconnect token secret is not configured", body.CID, body.RID)
+			http.Error(w, "Reconnect token validation unavailable", http.StatusUnauthorized)
+			return
+		}
 		ok, _ := validateReconnectToken(body.ReconnectToken, body.CID, body.RID)
 		if !ok {
 			http.Error(w, "Invalid reconnect token", http.StatusUnauthorized)

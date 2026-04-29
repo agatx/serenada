@@ -71,6 +71,11 @@ export function loadRecoveryRecord(): RecoveryRecord | null {
             expiresAtMs: parsed.expiresAtMs,
         };
     } catch {
+        try {
+            store.removeItem(STORAGE_KEY);
+        } catch {
+            // Ignore cleanup failures and preserve best-effort behavior.
+        }
         return null;
     }
 }
