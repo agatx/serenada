@@ -190,7 +190,7 @@ class SerenadaSession internal constructor(
         },
         onError = { callError ->
             joinFlowCoordinator.clearJoinTimeout()
-            resetResources()
+            resetResources(clearRecovery = shouldClearRecovery(callError))
             updateState(CallState(phase = CallPhase.Error, error = callError))
             delegate?.invoke()?.onSessionEnded(this, EndReason.Error(callError))
         },
@@ -1088,12 +1088,12 @@ class SerenadaSession internal constructor(
     private fun cleanupCall(reason: EndReason) {
         updateState(_state.value.copy(phase = CallPhase.Ending))
         if (_diagnostics.value.isScreenSharing) webRtcEngine.stopScreenShare()
-        resetResources()
+        resetResources(clearRecovery = true)
         updateState(CallState(phase = CallPhase.Idle))
         delegate?.invoke()?.onSessionEnded(this, reason)
     }
 
-    private fun resetResources() {
+    private fun resetResources(clearRecovery: Boolean = false) {
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
@@ -1113,9 +1113,17 @@ class SerenadaSession internal constructor(
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
         sessionStartTs = null
-        recoveryStorage.clear()
+        if (clearRecovery) recoveryStorage.clear()
         providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
+    }
+
+    private fun shouldClearRecovery(callError: CallError): Boolean {
+        return when (callError) {
+            CallError.RoomEnded,
+            CallError.SessionExpired -> true
+            else -> false
+        }
     }
 
     /**

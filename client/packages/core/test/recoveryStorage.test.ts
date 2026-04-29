@@ -61,6 +61,7 @@ describe('recoveryStorage', () => {
     it('drops malformed JSON entries on read', () => {
         window.sessionStorage.setItem(STORAGE_KEY, '{not valid');
         expect(loadRecoveryRecord()).toBeNull();
+        expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull();
     });
 
     it('drops records that are missing required fields', () => {

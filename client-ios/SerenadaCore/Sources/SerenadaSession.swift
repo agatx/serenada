@@ -599,7 +599,7 @@ public final class SerenadaSession: ObservableObject {
     private func handleError(_ error: CallError) {
         currentError = error
         joinFlowCoordinator?.clearAllTimers()
-        resetResources()
+        resetResources(clearRecovery: shouldClearRecovery(for: error))
         internalPhase = .error
         commitSnapshot()
     }
@@ -749,7 +749,7 @@ public final class SerenadaSession: ObservableObject {
     private func failJoinWithError(_ error: CallError) {
         joinFlowCoordinator?.clearAllTimers()
         currentError = error
-        resetResources()
+        resetResources(clearRecovery: shouldClearRecovery(for: error))
         internalPhase = .error
         commitSnapshot()
     }
@@ -877,7 +877,7 @@ public final class SerenadaSession: ObservableObject {
             internalPhase = .ending
             commitSnapshot { s, _ in s.localParticipant.videoEnabled = false; s.remoteParticipants = [] }
         }
-        resetResources()
+        resetResources(clearRecovery: true)
         if transitionToEnding {
             delegateProvider?()?.sessionDidEnd(self, reason: reason)
             Task { @MainActor [weak self] in
@@ -892,7 +892,7 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    private func resetResources() {
+    private func resetResources(clearRecovery: Bool = false) {
         statsPoller?.stop()
         peerNegotiationEngine?.resetAll()
         signalingProvider.disconnect()
@@ -909,7 +909,7 @@ public final class SerenadaSession: ObservableObject {
         connectionStatusTracker?.cancelTimer()
         iceFetchGeneration += 1
         sessionStartTs = nil
-        recoveryStorage.clear()
+        if clearRecovery { recoveryStorage.clear() }
 
         let videoCaptureSupported = !availableCameraModes.isEmpty
         userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
@@ -933,6 +933,15 @@ public final class SerenadaSession: ObservableObject {
             d.isFlashAvailable = false; d.isFlashEnabled = false
             d.remoteContentParticipantId = nil; d.remoteContentType = nil
             d.realtimeStats = .empty; d.featureDegradations = []
+        }
+    }
+
+    private func shouldClearRecovery(for error: CallError) -> Bool {
+        switch error {
+        case .roomEnded, .sessionExpired:
+            return true
+        default:
+            return false
         }
     }
 

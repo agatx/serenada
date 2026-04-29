@@ -170,12 +170,12 @@ type Message struct {
 
 // Participant is the wire-format entry broadcast to clients in joined/room_state.
 type Participant struct {
-	CID              string                 `json:"cid"`
-	JoinedAt         int64                  `json:"joinedAt,omitempty"`
-	DisplayName      string                 `json:"displayName,omitempty"`
-	AudioEnabled     *bool                  `json:"audioEnabled,omitempty"`
-	VideoEnabled     *bool                  `json:"videoEnabled,omitempty"`
-	ConnectionStatus string                 `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
+	CID              string                   `json:"cid"`
+	JoinedAt         int64                    `json:"joinedAt,omitempty"`
+	DisplayName      string                   `json:"displayName,omitempty"`
+	AudioEnabled     *bool                    `json:"audioEnabled,omitempty"`
+	VideoEnabled     *bool                    `json:"videoEnabled,omitempty"`
+	ConnectionStatus string                   `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
 	ContentState     *ParticipantContentState `json:"contentState,omitempty"`
 }
 
@@ -1727,7 +1727,6 @@ func (h *Hub) evictByLeave(rid, cid string) {
 	room.mu.Unlock()
 
 	if attachedClient != nil {
-		closeClientSend(attachedClient.send)
 		h.cleanupEvictedClient(attachedClient)
 	}
 
