@@ -562,17 +562,19 @@ internal fun CallScreen(
                     audioLevel = uiState.localAudioLevel,
                 )
             }
-            Box(modifier = remoteModifier) {
-                // Hide displayName from the badge when remote video is off — the
-                // remote placeholder already shows the participant's name.
-                val remoteNameForBadge =
-                    if (remoteP?.videoEnabled == false) null else remoteP?.displayName
-                ParticipantBadge(
-                    modifier = Modifier.align(Alignment.BottomStart),
-                    muted = remoteP?.audioEnabled == false,
-                    displayName = remoteNameForBadge,
-                    audioLevel = remoteP?.audioLevel ?: 0f,
-                )
+            if (remoteP != null) {
+                Box(modifier = remoteModifier) {
+                    // Hide displayName from the badge when remote video is off — the
+                    // remote placeholder already shows the participant's name.
+                    val remoteNameForBadge =
+                        if (!remoteP.videoEnabled) null else remoteP.displayName
+                    ParticipantBadge(
+                        modifier = Modifier.align(Alignment.BottomStart),
+                        muted = !remoteP.audioEnabled,
+                        displayName = remoteNameForBadge,
+                        audioLevel = remoteP.audioLevel,
+                    )
+                }
             }
         }
 

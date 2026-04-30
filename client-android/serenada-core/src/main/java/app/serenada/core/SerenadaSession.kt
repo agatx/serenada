@@ -1107,12 +1107,18 @@ class SerenadaSession internal constructor(
         val nextLocal = if (current.localAudioEnabled) localLevel else 0f
         var nextRemote: List<RemoteParticipant>? = null
         if (current.remoteParticipants.isNotEmpty()) {
+            var remoteChanged = false
             val updated = current.remoteParticipants.map { participant ->
                 val raw = remoteLevels[participant.cid] ?: 0f
                 val target = if (participant.audioEnabled) raw else 0f
-                if (participant.audioLevel == target) participant else participant.copy(audioLevel = target)
+                if (participant.audioLevel == target) {
+                    participant
+                } else {
+                    remoteChanged = true
+                    participant.copy(audioLevel = target)
+                }
             }
-            if (updated !== current.remoteParticipants) nextRemote = updated
+            if (remoteChanged) nextRemote = updated
         }
         if (nextLocal == current.localAudioLevel && nextRemote == null) return
         updateState(
