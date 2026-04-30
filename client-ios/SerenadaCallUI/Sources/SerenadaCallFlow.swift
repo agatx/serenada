@@ -326,7 +326,13 @@ private struct SessionFirstCallFlow: View {
         uiState.isFlashEnabled = diagnostics.isFlashEnabled
         uiState.remoteContentCid = diagnostics.remoteContentParticipantId
         uiState.remoteContentType = diagnostics.remoteContentType
-        uiState.remoteParticipants = state.remoteParticipants.map { rp in
+        // Hide presumed-lost remotes from the call grid — the SDK keeps their
+        // peer connections open in case they reattach, but the active grid
+        // should not display them. Host apps wanting different presentation
+        // (e.g., a "connection lost" tile) can read presumedLost off the
+        // SDK's state directly instead of using SerenadaCallFlow.
+        let visibleRemotes = state.remoteParticipants.filter { !$0.presumedLost }
+        uiState.remoteParticipants = visibleRemotes.map { rp in
             RemoteParticipant(
                 cid: rp.cid,
                 displayName: rp.displayName,
@@ -337,7 +343,7 @@ private struct SessionFirstCallFlow: View {
                 audioLevel: rp.audioLevel
             )
         }
-        uiState.participantCount = 1 + state.remoteParticipants.count
+        uiState.participantCount = 1 + visibleRemotes.count
         return uiState
     }
 

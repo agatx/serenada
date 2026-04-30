@@ -675,6 +675,93 @@ func TestMediaLivenessHintDefersHardEviction(t *testing.T) {
 	}
 }
 
+func TestMediaLivenessFastPathEvictsGhostExcludedByAllPeers(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	bJoined := captureJoined(t, b)
+	drainMessages(a)
+
+	// B drops its signaling transport and becomes suspended.
+	hub.disconnectClient(b)
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+
+	// Force the suspension dwell to satisfy ghostEvictMinDwell so the fast
+	// path is eligible to fire on the next media_liveness from A. Without
+	// this the test would have to wait 30s of wall time.
+	room.mu.Lock()
+	if p := room.participantByCID(bJoined.CID); p != nil {
+		p.SuspendedAt = time.Now().Add(-2 * ghostEvictMinDwell).UnixNano()
+	}
+	room.mu.Unlock()
+
+	// A reports it is alive and observes media — but only from itself
+	// (empty cids list since B is the only other participant). With the
+	// dwell condition satisfied and no positive media report for B, this
+	// is the "ghost" signal: every active peer is reporting and none
+	// observe media flowing from B.
+	livenessPayload, _ := json.Marshal(map[string]interface{}{
+		"cids": []string{},
+	})
+	hub.handleMessage(a, mustMarshal(Message{V: 1, Type: "media_liveness", RID: rid, Payload: livenessPayload}))
+
+	room.mu.Lock()
+	gone := room.participantByCID(bJoined.CID) == nil
+	room.mu.Unlock()
+	if !gone {
+		t.Fatal("expected fast-path eviction to remove suspended ghost when all active peers report no inbound media")
+	}
+}
+
+func TestMediaLivenessFastPathRespectsMinDwell(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	bJoined := captureJoined(t, b)
+	drainMessages(a)
+
+	hub.disconnectClient(b)
+
+	// SuspendedAt is "now" — well under ghostEvictMinDwell. A's report
+	// should NOT trigger eviction because the suspension is too fresh
+	// (a legitimate reattach attempt may still be in flight).
+	livenessPayload, _ := json.Marshal(map[string]interface{}{
+		"cids": []string{},
+	})
+	hub.handleMessage(a, mustMarshal(Message{V: 1, Type: "media_liveness", RID: rid, Payload: livenessPayload}))
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	room.mu.Lock()
+	stillThere := room.participantByCID(bJoined.CID) != nil
+	room.mu.Unlock()
+	if !stillThere {
+		t.Fatal("expected fresh suspension (under ghostEvictMinDwell) to survive fast-path check")
+	}
+}
+
 // helpers ---------------------------------------------------------------------
 
 func mustMarshal(msg Message) []byte {

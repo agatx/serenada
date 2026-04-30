@@ -307,18 +307,24 @@ private fun rememberCallUiState(
     diagnostics: CallDiagnostics,
 ): CallUiState {
     return remember(state, diagnostics) {
+        // Hide presumed-lost remotes from the call grid — the SDK keeps their
+        // peer connections open in case they reattach, but the active grid
+        // should not display them. Host apps wanting different presentation
+        // (e.g., a "connection lost" tile) can read presumedLost off the SDK's
+        // CallState directly instead of using SerenadaCallFlow.
+        val visibleRemotes = state.remoteParticipants.filterNot { it.presumedLost }
         CallUiState(
             phase = state.phase,
             roomId = state.roomId,
             localCid = state.localCid,
             errorMessageText = state.error?.displayMessage,
             isHost = state.isHost,
-            participantCount = state.participantCount,
+            participantCount = 1 + visibleRemotes.size,
             localAudioEnabled = state.localAudioEnabled,
             localVideoEnabled = state.localVideoEnabled,
             localDisplayName = state.localDisplayName,
             localAudioLevel = state.localAudioLevel,
-            remoteParticipants = state.remoteParticipants,
+            remoteParticipants = visibleRemotes,
             connectionStatus = state.connectionStatus,
             isSignalingConnected = diagnostics.isSignalingConnected,
             iceConnectionState = diagnostics.iceConnectionState.name,

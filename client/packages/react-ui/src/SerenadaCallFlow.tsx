@@ -246,7 +246,19 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     const session: SerenadaSessionHandle | null = externalSession ?? internalSession;
     const state = useCallState(session ?? null);
-    const effectiveState = session ? state : IDLE_STATE;
+    const rawEffectiveState = session ? state : IDLE_STATE;
+    // Hide presumed-lost remotes from the call grid — the SDK keeps their
+    // peer connections open in case they reattach, but for the active grid
+    // they should be invisible. Host apps wanting different presentation
+    // (e.g., dimmed tile + "connection lost" badge) can read presumedLost
+    // off the SDK's state directly.
+    const effectiveState = useMemo(() => {
+        const visibleRemotes = rawEffectiveState.remoteParticipants.filter((p) => !p.presumedLost);
+        if (visibleRemotes.length === rawEffectiveState.remoteParticipants.length) {
+            return rawEffectiveState;
+        }
+        return { ...rawEffectiveState, remoteParticipants: visibleRemotes };
+    }, [rawEffectiveState]);
     const localParticipant = effectiveState.localParticipant;
     const localStream = session?.localStream ?? null;
     const remoteStreams = session?.remoteStreams ?? EMPTY_STREAMS;
