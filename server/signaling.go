@@ -396,17 +396,20 @@ func (r *Room) recordMediaLivenessReporter(cid string, atMs int64) {
 	r.mediaLivenessReporters[cid] = atMs
 }
 
-// suspendedGhostsExcludedByAllPeers returns the CIDs of suspended participants
-// that meet ALL of: (1) suspended for at least minDwell; (2) no recent
-// positive media-flowing report from any peer; (3) every currently-active peer
-// has sent a media_liveness within freshness. Caller must hold r.mu.
+// suspendedGhostsExcludedByActiveReporters returns the CIDs of suspended
+// participants that meet ALL of: (1) suspended for at least minDwell;
+// (2) no recent positive media-flowing report from any peer; (3) at least
+// one currently-active peer has sent a fresh media_liveness within freshness.
+// Caller must hold r.mu.
 //
-// These are participants no peer is observing media from, and every active
-// peer is alive and silent about them — they're ghosts. Returning their CIDs
-// lets the caller hard-evict early instead of waiting for the full
-// suspendHardEvictionTimeout. If there are no active peers (e.g., the only
-// other participant just suspended too), we cannot conclude and return nil.
-func (r *Room) suspendedGhostsExcludedByAllPeers(now int64, minDwell, freshness time.Duration) []string {
+// The "at least one fresh reporter" requirement (rather than "every active
+// peer") accommodates mixed-version rooms: an older client that does not
+// emit media_liveness should not block eviction of an unrelated CID. As long
+// as ONE up-to-date peer is alive, reporting, and not observing media from
+// the suspended CID, we treat that as sufficient grounds to evict — the
+// suspended CID has no signaling transport AND no peer reporting media from
+// it, so it can't be reached and shouldn't keep its slot.
+func (r *Room) suspendedGhostsExcludedByActiveReporters(now int64, minDwell, freshness time.Duration) []string {
 	minDwellMs := minDwell.Milliseconds()
 	freshnessMs := freshness.Milliseconds()
 	var ghosts []string
@@ -424,20 +427,18 @@ func (r *Room) suspendedGhostsExcludedByAllPeers(now int64, minDwell, freshness 
 		if last, ok := r.mediaLiveness[cid]; ok && now-last <= freshnessMs {
 			continue
 		}
-		activePeerCount := 0
-		allFresh := true
+		anyFresh := false
 		for activeCID, q := range r.byCID {
 			if activeCID == cid || q.Client == nil {
 				continue
 			}
-			activePeerCount++
 			last, ok := r.mediaLivenessReporters[activeCID]
-			if !ok || now-last > freshnessMs {
-				allFresh = false
+			if ok && now-last <= freshnessMs {
+				anyFresh = true
 				break
 			}
 		}
-		if activePeerCount == 0 || !allFresh {
+		if !anyFresh {
 			continue
 		}
 		ghosts = append(ghosts, cid)
@@ -1586,7 +1587,7 @@ func (h *Hub) handleMediaLiveness(c *Client, msg Message) {
 	// without waiting for the full 10-minute hard-evict timer. Compute the
 	// candidate list under the lock, then drop the lock before calling
 	// hardEvictSuspended (which re-acquires it).
-	ghosts := room.suspendedGhostsExcludedByAllPeers(now, ghostEvictMinDwell, mediaLivenessFreshnessWindow)
+	ghosts := room.suspendedGhostsExcludedByActiveReporters(now, ghostEvictMinDwell, mediaLivenessFreshnessWindow)
 	rid := room.RID
 	room.mu.Unlock()
 	for _, cid := range ghosts {

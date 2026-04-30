@@ -675,7 +675,7 @@ func TestMediaLivenessHintDefersHardEviction(t *testing.T) {
 	}
 }
 
-func TestMediaLivenessFastPathEvictsGhostExcludedByAllPeers(t *testing.T) {
+func TestMediaLivenessFastPathEvictsGhostExcludedByActiveReporters(t *testing.T) {
 	t.Setenv("TURN_SECRET", "test-reconnect-secret")
 	rid := mustTestRoomID(t)
 	hub := newHub(4)
@@ -759,6 +759,64 @@ func TestMediaLivenessFastPathRespectsMinDwell(t *testing.T) {
 	room.mu.Unlock()
 	if !stillThere {
 		t.Fatal("expected fresh suspension (under ghostEvictMinDwell) to survive fast-path check")
+	}
+}
+
+// TestMediaLivenessFastPathTolersSilentOlderPeer covers the mixed-version
+// case from the field: a 3-peer room where peer C is on an older client
+// build that doesn't emit media_liveness. When peer B is suspended past the
+// dwell and peer A reports inbound media but excludes B, the fast path
+// should still fire — the silent peer C does not block eviction. Without
+// this tolerance, an older client in the same room indefinitely keeps the
+// ghost slot alive.
+func TestMediaLivenessFastPathTolersSilentOlderPeer(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	bJoined := captureJoined(t, b)
+	drainMessages(a)
+
+	c := fakeClient(hub)
+	hub.registerClient(c)
+	hub.handleMessage(c, joinPayload(rid, 4, 4))
+	captureJoined(t, c)
+	drainMessages(a)
+	drainMessages(b)
+
+	// B's transport drops; B becomes a suspended ghost.
+	hub.disconnectClient(b)
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+
+	// Force the suspension dwell so the fast-path is eligible.
+	room.mu.Lock()
+	if p := room.participantByCID(bJoined.CID); p != nil {
+		p.SuspendedAt = time.Now().Add(-2 * ghostEvictMinDwell).UnixNano()
+	}
+	room.mu.Unlock()
+
+	// A reports — empty list (B is suspended, doesn't observe). C never
+	// emits media_liveness (simulating an older build). With the
+	// any-fresh-reporter rule, A's report alone should be enough to evict.
+	livenessPayload, _ := json.Marshal(map[string]interface{}{"cids": []string{}})
+	hub.handleMessage(a, mustMarshal(Message{V: 1, Type: "media_liveness", RID: rid, Payload: livenessPayload}))
+
+	room.mu.Lock()
+	gone := room.participantByCID(bJoined.CID) == nil
+	room.mu.Unlock()
+	if !gone {
+		t.Fatal("expected fast-path eviction to fire even when one active peer never sends media_liveness")
 	}
 }
 
