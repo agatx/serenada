@@ -359,15 +359,20 @@ final class SessionNegotiationTests: XCTestCase {
 
         harness.fakeProvider.simulateConnected()
         await harness.yieldToMainActor()
-        // Give ICE restart task time to fire
-        await harness.fakeClock.advance(byMs: 5000)
+
+        // Per #4, ICE restart now waits for the authoritative post-reconnect
+        // `room_state` snapshot. Provide it so the gate flushes.
+        harness.simulateRoomState(
+            participants: [(cid: "local", joinedAt: 1), (cid: "remote", joinedAt: 2)],
+            hostCid: "local"
+        )
         await harness.yieldToMainActor()
 
         let offersAfter = fakeSlot?.createOfferCalls ?? 0
         let hasTask = fakeSlot?.iceRestartTask != nil
         let hasPending = fakeSlot?.pendingIceRestart == true
         XCTAssertTrue(offersAfter > offersBefore || hasTask || hasPending,
-                       "Signaling reconnect during inCall should trigger ICE restart")
+                       "Signaling reconnect (after post-reconnect snapshot) should trigger ICE restart")
     }
 
     // MARK: - Additional: Slot Creation

@@ -2,7 +2,7 @@
  * @serenada/core — headless call engine.
  * Vanilla TypeScript — no React dependency.
  */
-export const SERENADA_CORE_VERSION = '0.6.0';
+export const SERENADA_CORE_VERSION = '0.6.6';
 
 // Public API
 export { SerenadaCore } from './SerenadaCore.js';
@@ -48,6 +48,7 @@ export type {
     SerenadaLogLevel,
     SerenadaLogger,
 } from './types.js';
+export type { RecoveryRecord } from './recoveryStorage.js';
 export type {
     ProviderCapabilities,
     ConnectionInfo,

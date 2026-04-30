@@ -24,6 +24,8 @@ final class SignalingClient: SessionSignaling {
     private var connecting = false
     private var pingTask: Task<Void, Never>?
     private var connectTimeoutTask: Task<Void, Never>?
+    private var forcePingTask: Task<Void, Never>?
+    private var pongSeq: Int64 = 0
 
     private var connectionAttemptId = 0
     private var activeAttemptId = 0
@@ -84,6 +86,7 @@ final class SignalingClient: SessionSignaling {
         closedByClient = true
         stopPing()
         clearConnectTimeout()
+        clearForcePing()
 
         connecting = false
         connected = false
@@ -99,7 +102,32 @@ final class SignalingClient: SessionSignaling {
 
     func recordPong() {
         lastPongAtMs = clock.nowMs()
+        pongSeq += 1
         missedPongs = 0
+    }
+
+    func forcePingWithDeadline(timeoutMs: Int) {
+        guard connected, let kind = activeTransport else { return }
+        clearForcePing()
+
+        let attemptId = activeAttemptId
+        let pongSeqAtPing = pongSeq
+        send(SignalingMessage(type: "ping"))
+
+        forcePingTask = Task { [weak self] in
+            guard let self else { return }
+            try? await self.clock.sleep(nanoseconds: UInt64(max(timeoutMs, 0)) * 1_000_000)
+            if Task.isCancelled { return }
+            guard self.isAttemptActive(attemptId: attemptId, kind: kind) else { return }
+            guard self.connected else { return }
+            if self.pongSeq > pongSeqAtPing { return }
+            self.handleTransportClosed(attemptId: attemptId, kind: kind, reason: "foreground_force_ping_timeout")
+        }
+    }
+
+    private func clearForcePing() {
+        forcePingTask?.cancel()
+        forcePingTask = nil
     }
 
     private func startPing() {

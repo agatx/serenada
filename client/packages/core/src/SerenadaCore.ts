@@ -6,6 +6,11 @@ import type { ResolvedSerenadaConfig } from './configValidation.js';
 import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
 import { SerenadaServerProvider } from './SerenadaServerProvider.js';
 import type { PeerMessage, SignalingProvider } from './SignalingProvider.js';
+import {
+    clearRecoveryRecord,
+    loadRecoveryRecord,
+    type RecoveryRecord,
+} from './recoveryStorage.js';
 
 /**
  * Main entry point for the Serenada SDK.
@@ -24,6 +29,28 @@ export class SerenadaCore {
     /** Check if the current browser supports WebRTC calling. */
     static isSupported(): boolean {
         return typeof RTCPeerConnection !== 'undefined';
+    }
+
+    /**
+     * Returns a recoverable session if the previous tab/page session ended
+     * abruptly (reload, OS-level crash) while a call was active and the
+     * persisted reconnect token is still within its TTL. Host apps should
+     * call this on launch and surface a "Rejoin call?" prompt — calling
+     * {@link join} with the returned `roomId` reattaches under the same CID.
+     *
+     * Returns `null` when there is nothing to recover.
+     */
+    static getRecoverableSession(): RecoveryRecord | null {
+        return loadRecoveryRecord();
+    }
+
+    /**
+     * Drops any persisted recovery record. Host apps call this when the
+     * user explicitly declines to rejoin, so subsequent launches do not
+     * keep prompting for the same dead session.
+     */
+    static discardRecoverableSession(): void {
+        clearRecoveryRecord();
     }
 
     /** Join an existing call by URL. Returns a session handle. */
@@ -70,6 +97,7 @@ export class SerenadaCore {
             localParticipant: null,
             remoteParticipants: [],
             connectionStatus: 'connected',
+            signalingState: { kind: 'failed', reason: 'webrtcUnavailable' },
             activeTransport: null,
             requiredPermissions: null,
             error: { code: 'webrtcUnavailable', message: 'WebRTC is not supported in this browser' },

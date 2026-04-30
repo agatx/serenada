@@ -6,6 +6,40 @@ import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.RemoteParticipant
 
 /**
+ * Richer view of the local signaling transport state. Apps can use this to
+ * render reconnect spinners, "you have been disconnected" UI, and a hard-
+ * eviction countdown when applicable. [CallState.connectionStatus] remains
+ * the simpler tri-value summary.
+ */
+sealed interface SignalingState {
+    object Connected : SignalingState
+
+    /**
+     * Actively retrying to (re)connect.
+     * @property attempt consecutive reconnect attempts since the transport last dropped.
+     * @property nextRetryAtMs wall-clock ms for the next scheduled retry, or `null` if a retry is in flight.
+     */
+    data class Reconnecting(val attempt: Int, val nextRetryAtMs: Long? = null) : SignalingState
+
+    /**
+     * Mid-call transport drop. The server is holding the participant slot
+     * for `suspendHardEvictionTimeout` (10 min); apps can render a countdown
+     * using [estimatedHardEvictionAtMs].
+     * @property suspendedSinceMs wall-clock ms when the local transport last dropped.
+     * @property estimatedHardEvictionAtMs computed locally from
+     *   `suspendedSinceMs + SUSPEND_HARD_EVICTION_TIMEOUT_MS`. Best-effort —
+     *   server media-liveness hints can extend retention.
+     */
+    data class Suspended(
+        val suspendedSinceMs: Long,
+        val estimatedHardEvictionAtMs: Long,
+    ) : SignalingState
+
+    /** Terminal failure; see [reason]. */
+    data class Failed(val reason: CallError) : SignalingState
+}
+
+/**
  * SDK-native call state. This is the primary observable state for SDK consumers.
  * Does not include host-app concerns (saved rooms, settings, etc.).
  */
@@ -36,6 +70,11 @@ data class CallState(
     val remoteParticipants: List<RemoteParticipant> = emptyList(),
     /** Network connection status. */
     val connectionStatus: ConnectionStatus = ConnectionStatus.Connected,
+    /**
+     * Richer signaling-transport state with timing details. Apps that don't
+     * need the extra detail can stick with [connectionStatus].
+     */
+    val signalingState: SignalingState = SignalingState.Connected,
     /** Current camera mode (selfie, world, or composite). */
     val localCameraMode: LocalCameraMode = LocalCameraMode.SELFIE,
     /**

@@ -59,6 +59,11 @@ export class MediaEngine {
     connectionStatus: ConnectionStatus = 'connected';
 
     private peers = new Map<string, PeerState>();
+    // Per-remote-CID tally of cumulative `inbound-rtp.bytesReceived`. Sampled
+    // on every `getInboundFlowingCids()` call; a CID is "flowing" when its
+    // current sample exceeds the previous one. Drives #3's `media_liveness`
+    // emission (see SerenadaSession.startMediaLivenessTimer).
+    private lastInboundBytesByCid = new Map<string, number>();
     private rtcConfig: RTCConfiguration = DEFAULT_RTC_CONFIG;
     private screenShareTrack: MediaStreamTrack | null = null;
     private requestingMedia = false;
@@ -151,6 +156,21 @@ export class MediaEngine {
             } else {
                 this.scheduleNonHostFallback(remoteCid);
             }
+        }
+    }
+
+    /**
+     * Schedule glare-safe ICE restart for a specific peer because the server
+     * told us the pair is dirty after the peer reattached (#1).
+     */
+    scheduleDirtyPairRestart(remoteCid: string): void {
+        if (!this.peers.has(remoteCid)) {
+            return;
+        }
+        if (this.shouldIOffer(remoteCid)) {
+            this.scheduleIceRestart(remoteCid, 'negotiation-dirty', 0);
+        } else {
+            this.scheduleNonHostFallback(remoteCid);
         }
     }
 
@@ -379,12 +399,50 @@ export class MediaEngine {
         }
         this.peers.clear();
         this.remoteStreams = new Map();
+        this.lastInboundBytesByCid.clear();
         if (this.retryingTimer) { window.clearTimeout(this.retryingTimer); this.retryingTimer = null; }
         this.iceConnectionState = 'closed';
         this.connectionState = 'closed';
         this.signalingState = 'closed';
         this.connectionStatus = 'connected';
         this.notifyChange();
+    }
+
+    /**
+     * Sample inbound RTP `bytesReceived` per remote peer and return the CIDs
+     * whose totals advanced since the previous sample. Drives #3's
+     * `media_liveness{cids}` emission so the server can defer hard-eviction
+     * of suspended peers whose media is still being received locally.
+     *
+     * Conservative on first call (no baseline → empty result). Cleans up
+     * tracking for peers that have left.
+     */
+    async getInboundFlowingCids(): Promise<string[]> {
+        const flowing: string[] = [];
+        const seen = new Set<string>();
+        for (const [cid, peer] of this.peers) {
+            seen.add(cid);
+            let bytes = 0;
+            try {
+                const report = await peer.pc.getStats();
+                report.forEach((stat) => {
+                    if (stat.type !== 'inbound-rtp') return;
+                    const value = (stat as unknown as Record<string, unknown>)['bytesReceived'];
+                    if (typeof value === 'number') bytes += value;
+                });
+            } catch {
+                continue;
+            }
+            const previous = this.lastInboundBytesByCid.get(cid);
+            if (previous !== undefined && bytes > previous) {
+                flowing.push(cid);
+            }
+            this.lastInboundBytesByCid.set(cid, bytes);
+        }
+        for (const cid of [...this.lastInboundBytesByCid.keys()]) {
+            if (!seen.has(cid)) this.lastInboundBytesByCid.delete(cid);
+        }
+        return flowing;
     }
 
     destroy(): void {

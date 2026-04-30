@@ -4,7 +4,88 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.5.1] — 2026-04-27
+## [0.6.6] — 2026-04-30
+
+Resilience hardening release. The SDK now degrades gracefully across long
+signaling drops, post-reconnect peer-set churn, and process death; suspended
+peers are surfaced explicitly to the UI with timing details, and active peers
+report media-liveness so the server can defer hard-eviction while media is
+still flowing locally. See `docs/resilience-failure-modes.md` for the full
+audit and per-failure-mode design notes.
+
+### Added
+- Web, Android, iOS: `CallState.signalingState` (richer transport state with
+  `connected | reconnecting{attempt, nextRetryAtMs} | suspended{suspendedSinceMs, estimatedHardEvictionAtMs} | failed{reason}`).
+  Mid-call transport drops produce `suspended` with a hard-eviction estimate
+  computed from the new shared `suspendHardEvictionTimeoutMs` constant
+  (mirrors the Go server's `suspendHardEvictionTimeout`). `connectionStatus`
+  remains the simpler tri-value summary for apps that don't need the detail.
+- Web, Android, iOS: `Participant.presumedLost: boolean` flag on remote
+  participants. Flipped to `true` after a peer has been
+  `signalingStatus="suspended"` for `peerSuspendedUiTimeoutMs = 30 s` so call
+  UIs can move them out of the active grid. The peer connection itself stays
+  open so media can resume immediately if the peer reattaches; the flag
+  clears when the peer transitions back to active or leaves the room.
+- Web, Android, iOS: periodic `media_liveness{cids}` broadcast every
+  `mediaLivenessIntervalMs = 10 s` for remote CIDs whose inbound RTP
+  `bytesReceived` advanced. Server uses these hints to defer hard-eviction
+  of suspended peers whose media is still being received locally.
+- Web, Android, iOS: `getRecoverableSession()` / `discardRecoverableSession()`
+  on `SerenadaCore` for app-relaunch recovery. Each SDK persists
+  `{roomId, cid, reconnectToken, lastEpoch, sessionStartTs, expiresAtMs}` —
+  Web uses `sessionStorage` (per-tab, survives reload), Android uses
+  app-private `SharedPreferences`, iOS uses an injectable `UserDefaults`
+  (defaults to `.standard`; host apps can pass an app-group store).
+- Server: new `POST /api/leave` endpoint for explicit terminal leave (skips
+  the suspension hold). Validates the reconnect token, idempotent,
+  rate-limited at 12 req/min/IP. Used by the recovery flow on relaunch and
+  by deliberate teardown paths.
+- Server: dirty-pair tracking. When a relay targets a suspended CID,
+  `relay_failed{reason: "target_suspended", targets, of}` is returned to the
+  sender and the pair is marked dirty. On the suspended target's reattach,
+  `negotiation_dirty{with}` notifies active peers to schedule glare-safe
+  ICE restart for that pair only (each SDK maps the wire `with` field into
+  an internal `withCid` event property). SDKs consume both messages.
+- Server: room-state epoch + post-reconnect snapshot. Every successful
+  `joined` is followed by an authoritative `room_state` snapshot on the new
+  transport regardless of whether membership changed, so SDKs can gate ICE
+  restart on a server-confirmed peer set.
+- Server: room tombstones (`ROOM_ENDED`) so peers reconnecting to an ended
+  room get a structured terminal error instead of a fresh-join attempt.
+  Reconnect tokens are now HMAC-bound to `(cid, rid, expiresAt)` and expire
+  with `suspendHardEvictionTimeout`; replay is rejected with
+  `INVALID_RECONNECT_TOKEN` (mapped to a new `sessionExpired` SDK error).
+- iOS, Android: foreground / Doze release force-ping. When the app returns
+  from background, the SDK issues a synthetic ping with a 2 s deadline
+  (`foregroundForcePingTimeoutMs`); on miss it force-closes the transport
+  and runs the normal reconnect path. Fixes the "still shows connected for
+  up to `pingIntervalMs` after suspension" gap on iOS background suspension
+  and Android Doze.
+
+### Changed
+- iOS: the WebRTC-mirror `SignalingState` enum (in `CallDiagnostics`) is now
+  `RtcSignalingState` so the new Phase 2 surface can take the unqualified
+  name (matches Web/Android naming). `CallDiagnostics.rtcSignalingState`
+  keeps its name.
+
+## [0.6.2] — 2026-04-28
+
+### Added
+- Web, Android, iOS: host-supplied avatars in the call UI. Hosts can pass an opaque `peerId` on `join()` (alongside `displayName`) and supply an `AvatarProvider` (`avatarProvider` config on the call flow). The remote video-off placeholder renders a circle avatar above the name; null/error falls back to initials. Resolution is lazy and cached for the call's lifetime.
+- Server forwards a new `peerId` field in `joined` / `room_state` participant entries (trimmed, max 128 chars). Wire-compatible — older clients ignore the new field.
+
+### Fixed
+- Initials derivation skips non-alphanumeric characters per word, so display names like `{Admin}` or `(CEO) John` produce sensible initials instead of punctuation.
+
+## [0.6.1] — 2026-04-27
+
+### Fixed
+- Android: in-call layout now uses `localCameraMode` (instead of `isFrontCamera`) to decide which video is large vs PIP, so configs that start in `WORLD` or `COMPOSITE` mode correctly show the local camera as the main surface from the first frame.
+- Web, Android, iOS: when the local camera is off, the remote video is always the main surface (the user's swap preference is preserved and reapplied when video resumes) — no more giant "Camera off" placeholder when the call starts in `WORLD`/`COMPOSITE` with video disabled.
+- Web, Android, iOS: hide the participant name from the bottom-left pill when the remote video-off placeholder is already showing the name; the mic-muted icon still appears when applicable.
+- Android: `inviteControlsEnabled = false` now also hides the QR code and Share button in the waiting overlay (previously only the "Invite to room" button was gated), so invite controls no longer flash during phase transitions.
+
+## [0.6.0] — 2026-04-27
 
 ### Changed
 - Version bump across all SDK platforms (web `@serenada/core` + `@serenada/react-ui`, Android `core` + `call-ui` + `libwebrtc`, iOS `SerenadaCore`) and integration docs.

@@ -26,6 +26,7 @@ export class FakeMediaEngine {
     cleanupAllPeersCalls = 0;
     destroyCalls = 0;
     handleSignalingReconnectCalls = 0;
+    scheduleDirtyPairRestartCalls: string[] = [];
     processSignalingMessageCalls: SignalingMessage[] = [];
     setIceServersCalls: RTCIceServer[][] = [];
     updateRoomStateCalls: { state: RoomState | null; clientId: string | null }[] = [];
@@ -83,9 +84,25 @@ export class FakeMediaEngine {
         this.handleSignalingReconnectCalls++;
     }
 
+    scheduleDirtyPairRestart(remoteCid: string): void {
+        this.scheduleDirtyPairRestartCalls.push(remoteCid);
+    }
+
     allPathsDirect = false;
     async arePeerPathsAllDirect(): Promise<boolean> {
         return this.allPathsDirect;
+    }
+
+    /**
+     * CIDs returned from the next `getInboundFlowingCids()` call. Tests can
+     * override to assert the periodic `media_liveness` emit picks up the
+     * right list.
+     */
+    inboundFlowingCids: string[] = [];
+    getInboundFlowingCidsCalls = 0;
+    async getInboundFlowingCids(): Promise<string[]> {
+        this.getInboundFlowingCidsCalls += 1;
+        return [...this.inboundFlowingCids];
     }
 
     cleanupAllPeers(): void {

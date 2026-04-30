@@ -170,7 +170,11 @@ Acknowledges join success and provides room state.
       { "cid": "C-c3d4...", "joinedAt": 1735171215000 }
     ],
     "turnToken": "T-abc123yz...",
-    "turnTokenExpiresAt": 1735174800
+    "turnTokenExpiresAt": 1735174800,
+    "reconnectToken": "ab12...c3.1735174800",
+    "reconnectTokenTTLMs": 600000,
+    "epoch": 7,
+    "reconnect": "reattached"
   }
 }
 ```
@@ -178,20 +182,33 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `peerId` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, and `connectionStatus` *(string, optional)*. See section 4.3 for the meaning of `connectionStatus`.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `peerId` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, `connectionStatus` *(string, optional)*, and `contentState` *(object, optional)*. See section 4.3 for the meaning of `connectionStatus` and `contentState`.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
+- `reconnectToken` *(string, optional)*: opaque proof bound to `(cid, rid, expiresAt)` that the SDK persists and presents on a future `join` to reattach or recover the same CID. Format is implementation-defined; clients should treat it as opaque.
+- `reconnectTokenTTLMs` *(number, optional)*: how long (ms) the server will accept this reconnect token. SDKs that persist the token across launches should clear it once the window has elapsed.
+- `epoch` *(number, optional)*: monotonic room state epoch advanced by the server on every membership-mutating operation. SDKs gate ICE restart on receiving an authoritative post-reconnect snapshot rather than acting on a stale in-memory peer map.
+- `reconnect` *(string, optional)*: outcome of this join. Values: `"fresh"` (server created a new participant identity — CID may be new), `"reattached"` (server attached the new transport to a still-present participant slot), `"recovered"` (the previous participant record was gone but the reconnect token still validated, so the server recreated the record with the requested CID). Older servers may omit this field; SDKs should treat absent as `"fresh"`.
 
 **Client behavior**
 - Store `sid`, `cid`, and `turnToken`.
 - Immediately fetch ICE servers using the `turnToken` via the `token` query param on `/api/turn-credentials`.
+- Persist `reconnectToken` (with `reconnectTokenTTLMs`) so a future join can reattach or recover identity.
+- For `"reattached"`/`"recovered"` outcomes, keep media-active `RTCPeerConnection`s in place; renegotiate only for pairs the server flags via `negotiation_dirty` (section 4.10) or that the SDK considers stale based on local heuristics.
+- For `"fresh"` outcomes, the SDK may treat the call as ground-up new; an existing `RTCPeerConnection` should still only be torn down if no media has flowed recently.
+- Wait for the authoritative `room_state` snapshot the server emits immediately after `joined` before scheduling renegotiation against this transport's view of the peer set.
 - If another participant is already present, proceed to WebRTC negotiation using the rules in section 5.
+
+The server emits an authoritative `room_state` (section 4.3) immediately after every successful `joined`, even when membership did not change during the outage. SDKs use that broadcast as the reliable post-reconnect sync point.
 
 ---
 
 ### 4.3 `room_state` (server → client)
 Sent when participants join/leave, host changes, or a participant's transport
-state transitions between connected and suspended.
+state transitions between connected and suspended. Also delivered to a
+single client immediately after every successful `joined` so the SDK has a
+reliable post-reconnect sync point even when membership did not change
+during the outage.
 
 ```json
 {
@@ -201,13 +218,24 @@ state transitions between connected and suspended.
   "payload": {
     "hostCid": "C-a1b2...",
     "maxParticipants": 4,
+    "epoch": 7,
     "participants": [
       { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
-      { "cid": "C-c3d4...", "joinedAt": 1735171215000, "connectionStatus": "suspended" }
+      { "cid": "C-c3d4...", "joinedAt": 1735171215000, "connectionStatus": "suspended", "contentState": { "active": true, "contentType": "screen" } }
     ]
   }
 }
 ```
+
+**Payload `epoch`**
+
+`epoch` is a monotonic counter advanced by the server on every
+membership-mutating operation (join, leave, suspend, reattach, evict, host
+transfer, end_room). SDKs use it to gate ICE restart on an authoritative
+post-reconnect snapshot rather than acting on a stale in-memory peer map.
+Older servers may omit this field. Forward compatibility: SDKs should
+tolerate `epoch` being absent and only act on epoch comparisons when the
+server has supplied them.
 
 **Participant `connectionStatus`**
 
@@ -225,6 +253,28 @@ Each participant entry may carry an optional `connectionStatus` field. Values:
 
 Unknown `connectionStatus` values must be treated as `"active"` for forward
 compatibility.
+
+**Participant `contentState`**
+
+Each participant entry may carry an optional `contentState` object that
+describes the participant's latest ephemeral content metadata (screen
+share, content camera mode, etc.). Persisting this on the participant
+record means a peer reconnecting after a suspension reconstructs UI from
+the next `room_state` without waiting for the sender to toggle content
+again.
+
+Fields:
+- `active` *(boolean, required)*: whether content is currently being
+  shared. When `false`, `contentType` is omitted.
+- `contentType` *(string, optional)*: free-form content kind (for
+  example `"screen"`).
+- `updatedAtMs` *(number, optional)*: unix-ms timestamp of the last
+  content state transition.
+- `epoch` *(number, optional)*: room state epoch at which the latest
+  content state transition was recorded.
+
+Older servers may omit `contentState` entirely; SDKs should treat that as
+"unknown — preserve current local state" rather than implicitly clearing.
 
 **Client behavior**
 - Update UI for "waiting for someone to join" vs "in call".
@@ -439,7 +489,100 @@ Standard error message.
 - `NOT_HOST` — non-host attempted `end_room`
 - `SERVER_NOT_CONFIGURED` — room ID secret missing on server
 - `INVALID_ROOM_ID` — room ID failed validation
+- `INVALID_RECONNECT_TOKEN` — supplied `reconnectToken` failed signature/expiry validation. SDKs MUST clear persisted reconnect state and surface a dedicated terminal error (e.g. `sessionExpired`) instead of looping reconnect attempts.
+- `ROOM_ENDED` — the room was explicitly ended (host `end_room`) within the server-side tombstone window. Returned to a reconnect attempt that presents valid reconnect authority for a now-gone room. Payload may include `"reason": "ended_by_host"`. SDKs MUST treat this as terminal and clear persisted reconnect state.
 - `INTERNAL` — unexpected server error
+
+---
+
+### 4.14 `relay_failed` (server → client)
+
+Notifies a sender that a previously-routable peer message could not be
+delivered because the target was suspended at the time. Emitted only for
+negotiation traffic (`offer`, `answer`, `ice`); `content_state` is handled
+via the participant content metadata in section 4.3.
+
+```json
+{
+  "v": 1,
+  "type": "relay_failed",
+  "rid": "AbC123",
+  "payload": {
+    "reason": "target_suspended",
+    "targets": ["C-c3d4..."],
+    "of": "offer"
+  }
+}
+```
+
+**Client behavior**
+- Suppress further negotiation toward the named CIDs while they remain
+  suspended. Old offers/ICE may have already moved on; replaying them is
+  worse than missing them.
+- Wait for `negotiation_dirty` (section 4.15) once the peer reattaches,
+  then perform glare-safe fresh negotiation/ICE restart for that pair.
+
+---
+
+### 4.15 `negotiation_dirty` (server → client)
+
+Tells the sender that a previously-suspended peer has reattached AND that
+the sender had pending negotiation traffic to it during the suspension.
+Emitted after the authoritative post-reconnect `room_state` so SDKs can
+schedule fresh negotiation against confirmed state.
+
+```json
+{
+  "v": 1,
+  "type": "negotiation_dirty",
+  "rid": "AbC123",
+  "payload": {
+    "with": "C-c3d4..."
+  }
+}
+```
+
+**Client behavior**
+- Schedule a glare-safe fresh negotiation or ICE restart for the named
+  CID. Do NOT replay the previously-buffered SDP/ICE.
+
+---
+
+### 4.16 `media_liveness` (client → server)
+
+Hint reported by an active client that it is currently receiving inbound
+media from one or more remote CIDs. The server uses this to defer
+hard-eviction of a suspended participant when at least one peer still sees
+its media — a participant whose signaling transport is late to recover but
+whose media is still flowing should not be removed solely because the
+directory clock fired.
+
+```json
+{
+  "v": 1,
+  "type": "media_liveness",
+  "rid": "AbC123",
+  "payload": {
+    "cids": ["C-c3d4...", "C-e5f6..."]
+  }
+}
+```
+
+**Server behavior**
+- Records the most recent unix-ms timestamp at which any active peer
+  reported inbound media for each CID.
+- During hard-eviction, defers removal while a recent liveness report
+  exists; re-evaluates after a short window. Liveness is a cleanup hint
+  only — it never authorizes anything else and never extends the slot
+  indefinitely.
+
+**Client behavior**
+- Send periodically while in a call (recommended every ~5 s) for any
+  remote CID whose inbound media is currently flowing. Send immediately
+  after a successful reconnect for any peer whose `RTCPeerConnection`
+  survived the outage.
+- Older servers ignore unknown message types — the hint is purely
+  additive.
 
 ---
 

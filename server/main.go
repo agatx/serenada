@@ -87,6 +87,9 @@ func main() {
 	pushLimiter := NewIPLimiter(10.0/60.0, 5)
 	// Feedback: 3 requests per minute
 	feedbackLimiter := NewIPLimiter(3.0/60.0, 3)
+	// Explicit terminal leave: 12 requests per minute (allows a few retries
+	// per active call without inviting abuse).
+	leaveLimiter := NewIPLimiter(12.0/60.0, 6)
 
 	http.HandleFunc("/ws", rateLimitMiddleware(wsLimiter, func(w http.ResponseWriter, r *http.Request) {
 		if wsHang {
@@ -105,6 +108,7 @@ func main() {
 	http.HandleFunc("/api/turn-credentials", withTimeout(rateLimitMiddleware(turnCredsLimiter, enableCors(handleTurnCredentials())), 15*time.Second))
 	http.HandleFunc("/api/diagnostic-token", withTimeout(rateLimitMiddleware(diagnosticLimiter, enableCors(handleDiagnosticToken())), 15*time.Second))
 	http.HandleFunc("/api/room-id", withTimeout(rateLimitMiddleware(roomIDLimiter, enableCors(handleRoomID())), 15*time.Second))
+	http.HandleFunc("/api/leave", withTimeout(rateLimitMiddleware(leaveLimiter, enableCors(handleLeave(hub))), 5*time.Second))
 	http.HandleFunc("/api/internal/stats", withTimeout(handleInternalStats(hub), 5*time.Second))
 
 	// Push Routes

@@ -84,7 +84,7 @@ final class SignalingMessageRouter {
 
     func processJoinedEvent(_ event: JoinedEvent) {
         let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName, peerId: $0.appPeerId, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus) },
+            participants: event.participants.map(Self.toParticipant),
             localPeerId: event.peerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
@@ -96,7 +96,12 @@ final class SignalingMessageRouter {
         )
         let roomState: RoomState?
         if let host, !host.isEmpty {
-            roomState = RoomState(hostCid: host, participants: participants, maxParticipants: event.maxParticipants)
+            roomState = RoomState(
+                hostCid: host,
+                participants: participants,
+                maxParticipants: event.maxParticipants,
+                epoch: event.epoch
+            )
         } else {
             roomState = nil
         }
@@ -107,7 +112,7 @@ final class SignalingMessageRouter {
     func processRoomStateEvent(_ event: RoomStateEvent) {
         let localPeerId = getClientId()
         let participants = dedupeParticipants(
-            participants: event.participants.map { Participant(cid: $0.peerId, joinedAt: $0.joinedAt, displayName: $0.displayName, peerId: $0.appPeerId, audioEnabled: $0.audioEnabled, videoEnabled: $0.videoEnabled, signalingStatus: $0.signalingStatus) },
+            participants: event.participants.map(Self.toParticipant),
             localPeerId: localPeerId,
             makeLocalParticipant: { Participant(cid: $0, joinedAt: nil) }
         )
@@ -123,8 +128,33 @@ final class SignalingMessageRouter {
             return
         }
         onRoomState(
-            RoomState(hostCid: host, participants: participants, maxParticipants: event.maxParticipants),
+            RoomState(
+                hostCid: host,
+                participants: participants,
+                maxParticipants: event.maxParticipants,
+                epoch: event.epoch
+            ),
             hint
+        )
+    }
+
+    private static func toParticipant(_ p: SignalingProviderParticipant) -> Participant {
+        Participant(
+            cid: p.peerId,
+            joinedAt: p.joinedAt,
+            displayName: p.displayName,
+            peerId: p.appPeerId,
+            audioEnabled: p.audioEnabled,
+            videoEnabled: p.videoEnabled,
+            signalingStatus: p.signalingStatus,
+            contentState: p.contentState.map {
+                ParticipantContentState(
+                    active: $0.active,
+                    contentType: $0.contentType,
+                    updatedAtMs: $0.updatedAtMs,
+                    epoch: $0.epoch
+                )
+            }
         )
     }
 
@@ -155,7 +185,7 @@ final class SignalingMessageRouter {
     }
 
     func processErrorEvent(_ event: ErrorEvent) {
-        let payload = ErrorPayload(code: event.code, message: event.message)
+        let payload = ErrorPayload(code: event.code, message: event.message, reason: nil)
         onError(payload.toCallError())
     }
 
@@ -194,7 +224,8 @@ final class SignalingMessageRouter {
 
         guard let resolvedHostCid, !resolvedHostCid.isEmpty else { return nil }
         let maxParticipants = obj["maxParticipants"]?.intValue
-        return RoomState(hostCid: resolvedHostCid, participants: participants, maxParticipants: maxParticipants)
+        let epoch = obj["epoch"]?.intValue.map(Int64.init)
+        return RoomState(hostCid: resolvedHostCid, participants: participants, maxParticipants: maxParticipants, epoch: epoch)
     }
 
     static func turnToken(from payload: JSONValue?) -> String? {

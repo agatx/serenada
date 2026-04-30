@@ -53,6 +53,7 @@
 "call_status_in_call" = "En appel";
 "call_status_left_room" = "Salle quittée";
 "call_status_room_ended" = "Salle terminée";
+"call_status_session_expired" = "Session expirée. Rejoignez l’appel.";
 
 "call_local_camera_off" = "Votre caméra est désactivée";
 "call_camera_off" = "Caméra désactivée";

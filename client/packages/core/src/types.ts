@@ -51,6 +51,16 @@ export interface Participant {
     videoEnabled: boolean;
     connectionState: PeerConnectionState;
     signalingStatus: ParticipantSignalingStatus;
+    /**
+     * `true` when this peer has been suspended longer than
+     * `PEER_SUSPENDED_UI_TIMEOUT_MS` and the SDK has flipped its UI
+     * presentation to "presumed lost." The peer connection is intentionally
+     * left open so media can resume immediately if the peer reattaches; this
+     * flag is purely a UI hint that call shells can use to move the
+     * participant out of the active grid or show a "connection lost" badge.
+     * Cleared when the peer transitions back to `signalingStatus="active"`.
+     */
+    presumedLost: boolean;
 }
 
 /** Local participant info including camera mode and host status. */
@@ -78,6 +88,7 @@ export type CallErrorCode =
     | 'connectionFailed'
     | 'roomFull'
     | 'roomEnded'
+    | 'sessionExpired'
     | 'permissionDenied'
     | 'serverError'
     | 'webrtcUnavailable'
@@ -90,6 +101,35 @@ export interface CallError {
 }
 
 /**
+ * Richer view of the local signaling transport state. Apps can use this to
+ * render reconnect spinners, "you have been disconnected" UI, and a hard-
+ * eviction countdown when applicable. {@link CallState.connectionStatus}
+ * remains the simpler four-value summary.
+ */
+export type SignalingState =
+    | { kind: 'connected' }
+    | {
+          kind: 'reconnecting';
+          /** Number of consecutive reconnect attempts since transport last dropped. */
+          attempt: number;
+          /** Wall-clock ms for the next scheduled retry, or `null` if a retry is in flight. */
+          nextRetryAtMs: number | null;
+      }
+    | {
+          kind: 'suspended';
+          /** Wall-clock ms when the local transport last dropped. */
+          suspendedSinceMs: number;
+          /**
+           * Wall-clock ms when the server is expected to hard-evict the slot
+           * absent a successful reconnect. Computed locally from
+           * `suspendedSinceMs + SUSPEND_HARD_EVICTION_TIMEOUT_MS`. Best-effort
+           * — server media-liveness hints can extend retention.
+           */
+          estimatedHardEvictionAtMs: number;
+      }
+    | { kind: 'failed'; reason: CallErrorCode };
+
+/**
  * Primary observable call state. This is the main state object consumers subscribe to
  * via {@link SerenadaSessionHandle.subscribe}.
  */
@@ -100,6 +140,11 @@ export interface CallState {
     localParticipant: LocalParticipant | null;
     remoteParticipants: Participant[];
     connectionStatus: ConnectionStatus;
+    /**
+     * Richer signaling-transport state with timing details. Apps that don't
+     * need the extra detail can stick with {@link connectionStatus}.
+     */
+    signalingState: SignalingState;
     activeTransport: ActiveTransport | null;
     requiredPermissions: MediaCapability[] | null;
     error: CallError | null;

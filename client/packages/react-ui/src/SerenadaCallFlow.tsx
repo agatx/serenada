@@ -246,7 +246,19 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     const session: SerenadaSessionHandle | null = externalSession ?? internalSession;
     const state = useCallState(session ?? null);
-    const effectiveState = session ? state : IDLE_STATE;
+    const rawEffectiveState = session ? state : IDLE_STATE;
+    // Hide presumed-lost remotes from the call grid — the SDK keeps their
+    // peer connections open in case they reattach, but for the active grid
+    // they should be invisible. Host apps wanting different presentation
+    // (e.g., dimmed tile + "connection lost" badge) can read presumedLost
+    // off the SDK's state directly.
+    const effectiveState = useMemo(() => {
+        const visibleRemotes = rawEffectiveState.remoteParticipants.filter((p) => !p.presumedLost);
+        if (visibleRemotes.length === rawEffectiveState.remoteParticipants.length) {
+            return rawEffectiveState;
+        }
+        return { ...rawEffectiveState, remoteParticipants: visibleRemotes };
+    }, [rawEffectiveState]);
     const localParticipant = effectiveState.localParticipant;
     const localStream = session?.localStream ?? null;
     const remoteStreams = session?.remoteStreams ?? EMPTY_STREAMS;
@@ -273,6 +285,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const [permissionDenied, setPermissionDenied] = useState(false);
     const [copied, setCopied] = useState(false);
     const [isLocalLarge, setIsLocalLarge] = useState(false);
+    // When the local camera is off there's nothing meaningful to enlarge — force
+    // remote-as-primary so the user doesn't see a giant "Camera off" placeholder.
+    // The user's swap preference (`isLocalLarge`) is preserved and reapplied
+    // automatically when video comes back on.
+    const effectiveLocalLarge = isLocalLarge && !isCameraOff;
     const [areControlsVisible, setAreControlsVisible] = useState(true);
     const [showRecoveringBadge, setShowRecoveringBadge] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
@@ -1066,10 +1083,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         <div data-serenada-callflow="" className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
             {callProbe}
             {overlayContent}
-            <div className={`call-container ${isLocalLarge ? 'local-large' : ''}`}>
+            <div className={`call-container ${effectiveLocalLarge ? 'local-large' : ''}`}>
                 <div
-                    className={`video-remote-container ${isLocalLarge ? 'pip' : 'primary'}`}
-                    onPointerUp={isLocalLarge ? (event) => {
+                    className={`video-remote-container ${effectiveLocalLarge ? 'pip' : 'primary'}`}
+                    onPointerUp={effectiveLocalLarge ? (event) => {
                         event.stopPropagation();
                         handleControlsInteraction();
                         setIsLocalLarge(false);
@@ -1113,14 +1130,18 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                         </button>
                     )}
 
-                    <ParticipantBadge muted={remoteParticipant0?.audioEnabled === false} displayName={remoteParticipant0?.videoEnabled === false ? undefined : remoteParticipant0?.displayName} stream={remoteStream} />
+                    <ParticipantBadge
+                        muted={remoteParticipant0?.audioEnabled === false}
+                        displayName={remoteParticipant0?.videoEnabled === false ? undefined : remoteParticipant0?.displayName}
+                        stream={remoteStream}
+                    />
 
                     {waitingOverlay}
                 </div>
 
                 <div
-                    className={`video-local-container ${isLocalLarge ? 'primary' : 'pip'}`}
-                    onPointerUp={!isLocalLarge ? (event) => {
+                    className={`video-local-container ${effectiveLocalLarge ? 'primary' : 'pip'}`}
+                    onPointerUp={!effectiveLocalLarge ? (event) => {
                         event.stopPropagation();
                         handleControlsInteraction();
                         setIsLocalLarge(true);

@@ -23,12 +23,16 @@ func shouldShowRemoteVideoPlaceholder(phase: CallPhase, remoteVideoEnabled: Bool
     !remoteVideoEnabled && phase == .inCall
 }
 
-func shouldShowRemoteFitButton(phase: CallPhase, remoteVideoEnabled: Bool, isLocalLarge: Bool) -> Bool {
-    phase == .inCall && remoteVideoEnabled && !isLocalLarge
+func shouldShowRemoteFitButton(phase: CallPhase, remoteVideoEnabled: Bool, isLocalLarge: Bool, localVideoEnabled: Bool) -> Bool {
+    phase == .inCall && remoteVideoEnabled && !(isLocalLarge && localVideoEnabled)
 }
 
-func shouldRenderLocalAsPrimarySurface(phase: CallPhase, isLocalLarge: Bool) -> Bool {
-    phase == .inCall && isLocalLarge
+// When the local camera is off there's nothing meaningful to enlarge — force
+// remote-as-primary so the user doesn't see a giant "Camera off" placeholder.
+// The user's swap preference (`isLocalLarge`) is preserved and reapplied
+// automatically when video comes back on.
+func shouldRenderLocalAsPrimarySurface(phase: CallPhase, isLocalLarge: Bool, localVideoEnabled: Bool) -> Bool {
+    phase == .inCall && isLocalLarge && localVideoEnabled
 }
 
 func shouldUseBroadcastPicker(isScreenSharing: Bool, screenShareExtensionBundleId: String?) -> Bool {
@@ -321,7 +325,8 @@ struct CallScreenView: View {
     var body: some View {
         let showLocalAsPrimarySurface = shouldRenderLocalAsPrimarySurface(
             phase: uiState.phase,
-            isLocalLarge: isLocalLarge
+            isLocalLarge: isLocalLarge,
+            localVideoEnabled: uiState.localVideoEnabled
         )
         let isPinchZoomEnabled = shouldEnablePinchZoom(showLocalAsPrimarySurface: showLocalAsPrimarySurface)
         let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
@@ -671,7 +676,8 @@ struct CallScreenView: View {
                 if shouldShowRemoteFitButton(
                     phase: uiState.phase,
                     remoteVideoEnabled: uiState.remoteVideoEnabled,
-                    isLocalLarge: isLocalLarge
+                    isLocalLarge: isLocalLarge,
+                    localVideoEnabled: uiState.localVideoEnabled
                 ) && !isMultiParty {
                     iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", accessibilityLabel: remoteVideoFitCover ? str(.callA11yVideoFit) : str(.callA11yVideoFill)) {
                         withAnimation(.easeInOut(duration: 0.2)) {

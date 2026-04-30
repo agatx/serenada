@@ -73,6 +73,14 @@ internal interface PeerConnectionSlotProtocol {
     fun attachRemoteSink(sink: VideoSink)
     fun detachRemoteSink(sink: VideoSink)
     fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit)
+    /**
+     * Asynchronously samples the cumulative inbound `bytesReceived` across all
+     * inbound-rtp stats for this peer. Used by the media-liveness emitter
+     * (see SerenadaSession.startMediaLivenessTimer); a CID is "flowing" when
+     * its sample advances over the previous one. Reports `0` when the peer
+     * connection is not yet established.
+     */
+    fun collectInboundBytes(onComplete: (Long) -> Unit)
 
     /**
      * Lightweight stats fetch that extracts only `audioLevel` (W3C webrtc-stats):

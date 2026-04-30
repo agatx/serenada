@@ -38,7 +38,7 @@ public struct CreateRoomResult {
 @MainActor
 public final class SerenadaCore {
     /// SDK version string.
-    public static let version = "0.6.0"
+    public static let version = "0.6.6"
 
     /// SDK configuration.
     public let config: SerenadaConfig
@@ -48,13 +48,36 @@ public final class SerenadaCore {
     /// Optional logger for SDK diagnostics.
     public var logger: SerenadaLogger?
 
-    public init(config: SerenadaConfig) {
+    /// Cross-launch recovery store for in-flight call state. Default
+    /// `UserDefaults.standard`; the host app can replace it with an
+    /// app-group-scoped store before opening any session.
+    public let recoveryStorage: RecoveryStorage
+
+    public init(config: SerenadaConfig, recoveryStorage: RecoveryStorage = RecoveryStorage()) {
         self.config = config
+        self.recoveryStorage = recoveryStorage
         do {
             self.resolvedConfig = try resolveSerenadaConfig(config)
         } catch {
             preconditionFailure(error.localizedDescription)
         }
+    }
+
+    /// Returns a recoverable session if the previous process ended abruptly
+    /// (force-quit, jetsam, OS kill) while a call was active and the
+    /// persisted reconnect token is still within its TTL. Host apps should
+    /// call this on launch and surface a "Rejoin call?" prompt — calling
+    /// `join(roomId:)` with the returned `roomId` reattaches under the same
+    /// CID. Returns `nil` when there is nothing to recover.
+    public func getRecoverableSession() -> RecoveryRecord? {
+        recoveryStorage.load()
+    }
+
+    /// Drops any persisted recovery record. Call this when the user
+    /// explicitly declines the rejoin prompt so subsequent launches do not
+    /// keep offering the same dead session.
+    public func discardRecoverableSession() {
+        recoveryStorage.clear()
     }
 
     /// Join an existing call by URL. Returns a session that begins connecting immediately.
@@ -89,7 +112,8 @@ public final class SerenadaCore {
             logger: logger,
             initialSignalingProvider: createSignalingProvider(for: sessionConfig),
             displayName: displayName,
-            peerId: peerId
+            peerId: peerId,
+            recoveryStorage: recoveryStorage
         )
         return session
     }
@@ -108,7 +132,8 @@ public final class SerenadaCore {
             logger: logger,
             initialSignalingProvider: createSignalingProvider(for: config),
             displayName: displayName,
-            peerId: peerId
+            peerId: peerId,
+            recoveryStorage: recoveryStorage
         )
         return session
     }

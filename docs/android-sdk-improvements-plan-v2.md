@@ -287,6 +287,7 @@ internal class StatsPoller(
 ```
 
 Threading model:
+
 - **Slot-list snapshot** runs on `Dispatchers.Main.immediate` (the only safe reader of `peerSlots`); the lambda copies the map and returns the list to the worker.
 - **Stats collection + merge** run on `Dispatchers.Default` (or `StandardTestDispatcher` in tests).
 - **Publish** hops back to `Main.immediate` before mutating `MutableStateFlow.value`.
@@ -354,6 +355,7 @@ DTX default is `OFF` because today's WebRTC SDP doesn't set `usedtx=1`. AUTO wou
 **Tests.**
 
 - `ApiSurfaceCompileTest.kt` — plain compile-time usage, no reflection:
+
   ```kotlin
   @Suppress("UNUSED_VARIABLE", "unused")
   class ApiSurfaceCompileTest {
@@ -366,6 +368,7 @@ DTX default is `OFF` because today's WebRTC SDP doesn't set `usedtx=1`. AUTO wou
       // …one fun per new public surface
   }
   ```
+ 
 - `EventsBufferOverflowTest.kt` — uses an **active slow subscriber**. Subscriber consumes one event then `delay(10_000)`s; producer emits 100 events; on resume, subscriber sees the most-recent 32 (DROP_OLDEST semantics). With `replay = 0`, the test never asserts that a late subscriber sees prior events.
 - One trivial Compose test under `:serenada-call-ui:test` to confirm test deps resolve.
 

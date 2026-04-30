@@ -31,6 +31,13 @@ data class JoinOptions(
  */
 enum class ParticipantSignalingStatus { ACTIVE, SUSPENDED }
 
+data class SignalingProviderParticipantContentState(
+    val active: Boolean,
+    val contentType: String? = null,
+    val updatedAtMs: Long? = null,
+    val epoch: Long? = null,
+)
+
 data class SignalingProviderParticipant(
     val peerId: String,
     val joinedAt: Long? = null,
@@ -40,19 +47,33 @@ data class SignalingProviderParticipant(
     val audioEnabled: Boolean? = null,
     val videoEnabled: Boolean? = null,
     val connectionStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE,
+    val contentState: SignalingProviderParticipantContentState? = null,
 )
+
+/**
+ * Disposition of a join, surfaced by the server in `joined.reconnect`.
+ * Drives whether the SDK preserves media-active peer connections,
+ * schedules dirty-pair renegotiation, or starts ground-up.
+ */
+enum class JoinReconnectOutcome { FRESH, REATTACHED, RECOVERED }
 
 data class JoinedEvent(
     val peerId: String,
     val participants: List<SignalingProviderParticipant>,
     val hostPeerId: String? = null,
     val maxParticipants: Int? = null,
+    /** Server room-state epoch on this transport; monotonic per room. */
+    val epoch: Long? = null,
+    /** How the server treated this join. Null means an older provider that did not surface this field. */
+    val reconnectOutcome: JoinReconnectOutcome? = null,
 )
 
 data class RoomStateEvent(
     val participants: List<SignalingProviderParticipant>,
     val hostPeerId: String? = null,
     val maxParticipants: Int? = null,
+    /** Server room-state epoch on this transport; monotonic per room. */
+    val epoch: Long? = null,
 )
 
 data class PeerEvent(
@@ -77,6 +98,27 @@ data class RoomEndedEvent(
 data class ErrorEvent(
     val code: String,
     val message: String,
+)
+
+/**
+ * Server tells an active peer that a previously-suspended peer has reattached
+ * AND there was pending negotiation traffic to it during the suspension. The
+ * SDK should perform glare-safe fresh negotiation / ICE restart for the named
+ * CID.
+ */
+data class NegotiationDirtyEvent(
+    /** The CID that needs fresh renegotiation. */
+    val withCid: String,
+)
+
+/** Server tells the sender it could not deliver a relay because the target had no transport. */
+data class RelayFailedEvent(
+    /** Server-assigned reason code, e.g. `"target_suspended"`. */
+    val reason: String,
+    /** Target CIDs the relay could not reach. */
+    val targets: List<String>,
+    /** Original signaling type that failed, e.g. `"offer" | "answer" | "ice"`. */
+    val of: String? = null,
 )
 
 /**
@@ -110,6 +152,17 @@ interface SignalingProvider {
 
     suspend fun getIceServers(): List<PeerConnection.IceServer>
 
+    /**
+     * Hook the SDK calls when the host app returns to foreground after a
+     * background period long enough that the OS may have silently killed
+     * the underlying transport (e.g. Doze release or process freeze). The
+     * expected behavior for transport-owning providers is to send a
+     * synthetic ping and arm a `timeoutMs` deadline, then force-close the
+     * transport on miss so the normal reconnect path runs. Default is
+     * no-op for providers that manage their own lifecycle.
+     */
+    fun forceReconnectIfStale(timeoutMs: Long) {}
+
     interface Listener {
         fun onConnected(info: ConnectionInfo = ConnectionInfo()) {}
         fun onDisconnected(reason: String?) {}
@@ -121,5 +174,7 @@ interface SignalingProvider {
         fun onRoomEnded(event: RoomEndedEvent) {}
         fun onError(event: ErrorEvent) {}
         fun onIceServersChanged(iceServers: List<PeerConnection.IceServer>) {}
+        fun onNegotiationDirty(event: NegotiationDirtyEvent) {}
+        fun onRelayFailed(event: RelayFailedEvent) {}
     }
 }

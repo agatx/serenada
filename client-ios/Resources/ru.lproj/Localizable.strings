@@ -53,6 +53,7 @@
 "call_status_in_call" = "В звонке";
 "call_status_left_room" = "Вы вышли из комнаты";
 "call_status_room_ended" = "Комната завершена";
+"call_status_session_expired" = "Сессия истекла. Подключитесь к звонку заново.";
 
 "call_local_camera_off" = "Ваша камера выключена";
 "call_camera_off" = "Камера выключена";

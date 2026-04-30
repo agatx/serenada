@@ -88,6 +88,18 @@ private final class SignalingProviderDelegateProxy: SignalingProviderDelegate {
             session?.handleProviderIceServersChanged(iceServers)
         }
     }
+
+    func signalingProviderDidReceiveNegotiationDirty(_ event: NegotiationDirtyEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderNegotiationDirty(event)
+        }
+    }
+
+    func signalingProviderDidReceiveRelayFailed(_ event: RelayFailedEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderRelayFailed(event)
+        }
+    }
 }
 
 /// Represents an active call session. Created via ``SerenadaCore/join(url:)`` or ``SerenadaCore/createRoom()``.
@@ -147,6 +159,11 @@ public final class SerenadaSession: ObservableObject {
     private let pathMonitor = NWPathMonitor()
     private let pathMonitorQueue = DispatchQueue(label: "SerenadaSession.PathMonitor")
 
+    // App lifecycle (foreground force-ping — see resilience #8)
+    private var foregroundObserver: NSObjectProtocol?
+    private var backgroundObserver: NSObjectProtocol?
+    private var lastBackgroundedAtMs: Int64?
+
     // Session state
     private var internalPhase: CallPhase = .joining
     private var participantCount = 0
@@ -168,8 +185,47 @@ public final class SerenadaSession: ObservableObject {
     private var userPreferredVideoEnabled = true
     private var isVideoPausedByProximity = false
     private var reconnectRecoveryPending = false
+    // True between transport reconnect and the first authoritative room_state
+    // snapshot; gates ICE restart so it runs against a confirmed peer set.
+    private var pendingPostReconnectResync = false
+    private var postReconnectResyncTask: Task<Void, Never>?
+    private var iceRestartCallsFromGate = 0
     private var iceFetchGeneration = 0
     private var reconnectTask: Task<Void, Never>?
+
+    /// Test-only accessor for the post-reconnect snapshot gate state.
+    internal var isPostReconnectResyncPending: Bool { pendingPostReconnectResync }
+    /// Test-only counter incremented each time the gate fires an ICE restart.
+    internal var postReconnectResyncFireCount: Int { iceRestartCallsFromGate }
+
+    // Wall-clock ms when the local transport last dropped while a roomState
+    // was present (i.e. mid-call). Cleared on reconnect.
+    private var localSuspendedSinceMs: Int64?
+
+    // After a remote peer transitions to suspended, we start a timer; on
+    // expiry we flip `presumedLost=true` for that CID. Timers cancel when
+    // the peer goes back to active or is removed from the room.
+    private var suspendedPresentationTasks: [String: Task<Void, Never>] = [:]
+    private var presumedLostRemoteCids: Set<String> = []
+
+    /// Test-only count of remote CIDs currently flagged as `presumedLost`.
+    internal var presumedLostRemoteCount: Int { presumedLostRemoteCids.count }
+
+    // #3 — periodic `media_liveness` emission. Active across the in-call
+    // window so the server can defer hard-eviction of suspended peers
+    // whose media is still flowing locally. Ticks no-op while transport
+    // is disconnected (baseline samples preserved so the next post-
+    // reconnect tick can detect flow).
+    private var lastInboundBytesByCid: [String: Int64] = [:]
+    private var mediaLivenessTask: Task<Void, Never>?
+    private var mediaLivenessEmitInFlight = false
+    private var mediaLivenessEmitCount = 0
+
+    /// Test-only counter incremented on each `media_liveness` broadcast.
+    internal var mediaLivenessBroadcastCount: Int { mediaLivenessEmitCount }
+
+    private let recoveryStorage: RecoveryStorage
+    private var sessionStartTs: Int64?
 
     public convenience init(
         roomId: String,
@@ -179,7 +235,8 @@ public final class SerenadaSession: ObservableObject {
         delegateProvider: (() -> SerenadaCoreDelegate?)? = nil,
         logger: SerenadaLogger? = nil,
         displayName: String? = nil,
-        peerId: String? = nil
+        peerId: String? = nil,
+        recoveryStorage: RecoveryStorage = RecoveryStorage()
     ) {
         let sessionConfig = config.signalingProvider == nil
             ? SerenadaConfig(
@@ -197,7 +254,8 @@ public final class SerenadaSession: ObservableObject {
             delegateProvider: delegateProvider, logger: logger,
             initialSignalingProvider: nil, signaling: nil, apiClient: nil, audioController: nil, mediaEngine: nil, clock: nil,
             displayName: displayName,
-            peerId: peerId
+            peerId: peerId,
+            recoveryStorage: recoveryStorage
         )
     }
 
@@ -214,8 +272,10 @@ public final class SerenadaSession: ObservableObject {
         mediaEngine: SessionMediaEngine? = nil,
         clock: SessionClock? = nil,
         displayName: String? = nil,
-        peerId: String? = nil
+        peerId: String? = nil,
+        recoveryStorage: RecoveryStorage = RecoveryStorage()
     ) {
+        self.recoveryStorage = recoveryStorage
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.config = config
@@ -307,6 +367,12 @@ public final class SerenadaSession: ObservableObject {
     deinit {
         pathMonitor.cancel()
         reconnectTask?.cancel()
+        postReconnectResyncTask?.cancel()
+        for task in suspendedPresentationTasks.values { task.cancel() }
+        suspendedPresentationTasks.removeAll()
+        mediaLivenessTask?.cancel()
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+        if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
     }
 
     // MARK: - Public API
@@ -427,8 +493,19 @@ public final class SerenadaSession: ObservableObject {
     public func detachLocalRenderer(_ renderer: AnyObject) { webRtcEngine.detachLocalRenderer(renderer) }
 
     /// Attach a view for rendering remote video.
+    ///
+    /// In a 1:1 call, the host app calls this without a CID and we pick a
+    /// peer for them. Prefer an ACTIVE (non-suspended) participant: picking a
+    /// suspended one attaches the renderer to a frozen peer connection — the
+    /// last frame stays on screen as a "ghost" — while a co-existing fresh
+    /// CID for the same physical device that joined without a reconnect
+    /// token gets no renderer at all. Falls back to any non-self
+    /// participant, then to any peer slot, before giving up.
     public func attachRemoteRenderer(_ renderer: AnyObject) {
-        let cid = currentRoomState?.participants.first(where: { $0.cid != clientId })?.cid ?? peerSlots.keys.first
+        let participants = currentRoomState?.participants ?? []
+        let cid = participants.first(where: { $0.cid != clientId && $0.signalingStatus != .suspended })?.cid
+            ?? participants.first(where: { $0.cid != clientId })?.cid
+            ?? peerSlots.keys.first
         guard let cid else { return }
         attachRemoteRenderer(renderer, forParticipant: cid)
     }
@@ -602,9 +679,10 @@ public final class SerenadaSession: ObservableObject {
     private func handleError(_ error: CallError) {
         currentError = error
         joinFlowCoordinator?.clearAllTimers()
-        resetResources()
+        resetResources(clearRecovery: shouldClearRecovery(for: error))
         internalPhase = .error
-        commitSnapshot()
+        let nextSignalingState = computeSignalingState(connected: false)
+        commitSnapshot { s, _ in s.signalingState = nextSignalingState }
     }
 
     // MARK: - Provider Events
@@ -614,9 +692,12 @@ public final class SerenadaSession: ObservableObject {
         reconnectAttempts = 0
         reconnectTask?.cancel()
         reconnectTask = nil
-        commitSnapshot { _, d in
+        localSuspendedSinceMs = nil
+        let nextSignalingState = computeSignalingState(connected: true)
+        commitSnapshot { s, d in
             d.isSignalingConnected = true
             d.activeTransport = info.transport
+            s.signalingState = nextSignalingState
         }
         connectionStatusTracker?.update()
         if let join = pendingJoinRoom {
@@ -624,15 +705,20 @@ public final class SerenadaSession: ObservableObject {
             sendJoin(roomId: join)
         } else if !wasConnected, signalingProvider.capabilities.handlesReconnection, reconnectRecoveryPending, currentRoomState != nil {
             reconnectRecoveryPending = false
-            peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
+            armPostReconnectResync()
         }
     }
 
     fileprivate func handleProviderDisconnected(reason: String?) {
         _ = reason
-        commitSnapshot { _, d in
+        if currentRoomState != nil, localSuspendedSinceMs == nil {
+            localSuspendedSinceMs = clock.nowMs()
+        }
+        let nextSignalingState = computeSignalingState(connected: false)
+        commitSnapshot { s, d in
             d.isSignalingConnected = false
             d.activeTransport = nil
+            s.signalingState = nextSignalingState
         }
         connectionStatusTracker?.update()
         let phase = state.phase
@@ -648,11 +734,13 @@ public final class SerenadaSession: ObservableObject {
     fileprivate func handleProviderJoined(_ event: JoinedEvent) {
         currentError = nil
         signalingMessageRouter?.processJoinedEvent(event)
+        persistRecoveryRecord(token: event.reconnectToken, ttlMs: event.reconnectTokenTTLMs)
     }
 
     fileprivate func handleProviderRoomStateUpdated(_ event: RoomStateEvent) {
         currentError = nil
         signalingMessageRouter?.processRoomStateEvent(event)
+        flushPostReconnectResync(reason: .snapshot)
     }
 
     fileprivate func handleProviderPeerJoined(_ event: PeerEvent) {
@@ -694,6 +782,22 @@ public final class SerenadaSession: ObservableObject {
         applyIceServers(iceServers)
     }
 
+    fileprivate func handleProviderNegotiationDirty(_ event: NegotiationDirtyEvent) {
+        logger?.log(.debug, tag: "Session", "RX negotiation_dirty with=\(event.withCid)")
+        peerNegotiationEngine?.scheduleIceRestart(remoteCid: event.withCid, reason: "negotiation-dirty", delayMs: 0)
+    }
+
+    fileprivate func handleProviderRelayFailed(_ event: RelayFailedEvent) {
+        // Server has the dirty-pair record; once the suspended target reattaches
+        // we'll get `negotiation_dirty` and renegotiate then. For now, surface
+        // in logs so suppressed offers/ICE are visible.
+        logger?.log(
+            .debug,
+            tag: "Session",
+            "RX relay_failed reason=\(event.reason) of=\(event.of ?? "n/a") targets=\(event.targets.joined(separator: ","))"
+        )
+    }
+
     // MARK: - Participants
 
     private func updateParticipants(_ roomState: RoomState) {
@@ -709,6 +813,10 @@ public final class SerenadaSession: ObservableObject {
         peerNegotiationEngine?.syncPeers(roomState: roomState)
         refreshRemoteParticipants()
         connectionStatusTracker?.update()
+        // Start media-liveness emission only once we have remote peers — there's
+        // nothing to report when alone in the room, and the timer is otherwise
+        // a noisy no-op.
+        if phase == .inCall { startMediaLivenessTimer() }
     }
 
     /// True only when at least one peer exists and every slot's last observed
@@ -724,11 +832,14 @@ public final class SerenadaSession: ObservableObject {
 
     private func refreshRemoteParticipants() {
         guard let roomState = currentRoomState else {
+            clearAllRemoteSuspensionTracking()
             commitSnapshot { s, _ in s.remoteParticipants = [] }
             return
         }
+        let remotes = roomState.participants.filter { $0.cid != clientId }
+        reconcileRemoteSuspensionTimers(remotes)
         let previousLevels = Dictionary(uniqueKeysWithValues: state.remoteParticipants.map { ($0.cid, $0.audioLevel) })
-        let participants = roomState.participants.filter { $0.cid != clientId }.map { p in
+        let participants = remotes.map { p in
             let slot = peerSlots[p.cid]
             let peerState = remoteMediaStates[p.cid]
             let audioEnabled = peerState?.audioEnabled ?? p.audioEnabled ?? true
@@ -738,6 +849,7 @@ public final class SerenadaSession: ObservableObject {
                 videoEnabled: peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
                 connectionState: slot?.getConnectionState() ?? .new,
                 signalingStatus: p.signalingStatus,
+                presumedLost: p.signalingStatus == .suspended && presumedLostRemoteCids.contains(p.cid),
                 audioLevel: audioEnabled ? (previousLevels[p.cid] ?? 0) : 0
             )
         }
@@ -784,7 +896,7 @@ public final class SerenadaSession: ObservableObject {
     private func failJoinWithError(_ error: CallError) {
         joinFlowCoordinator?.clearAllTimers()
         currentError = error
-        resetResources()
+        resetResources(clearRecovery: shouldClearRecovery(for: error))
         internalPhase = .error
         commitSnapshot()
     }
@@ -917,7 +1029,7 @@ public final class SerenadaSession: ObservableObject {
             internalPhase = .ending
             commitSnapshot { s, _ in s.localParticipant.videoEnabled = false; s.remoteParticipants = [] }
         }
-        resetResources()
+        resetResources(clearRecovery: true)
         if transitionToEnding {
             delegateProvider?()?.sessionDidEnd(self, reason: reason)
             Task { @MainActor [weak self] in
@@ -932,7 +1044,7 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    private func resetResources() {
+    private func resetResources(clearRecovery: Bool = false) {
         statsPoller?.stop()
         audioLevelPoller?.stop()
         peerNegotiationEngine?.resetAll()
@@ -946,9 +1058,17 @@ public final class SerenadaSession: ObservableObject {
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
 
         reconnectTask?.cancel(); reconnectTask = nil
+        cancelPostReconnectResync()
+        clearAllRemoteSuspensionTracking()
+        stopMediaLivenessTimer()
+        lastInboundBytesByCid.removeAll()
+        mediaLivenessEmitInFlight = false
+        localSuspendedSinceMs = nil
         joinFlowCoordinator?.clearAllTimers()
         connectionStatusTracker?.cancelTimer()
         iceFetchGeneration += 1
+        sessionStartTs = nil
+        if clearRecovery { recoveryStorage.clear() }
 
         let videoCaptureSupported = !availableCameraModes.isEmpty
         userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
@@ -975,6 +1095,15 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
+    private func shouldClearRecovery(for error: CallError) -> Bool {
+        switch error {
+        case .roomEnded, .sessionExpired:
+            return true
+        default:
+            return false
+        }
+    }
+
     // MARK: - Video & Audio
 
     private func applyLocalVideoPreference() {
@@ -988,6 +1117,7 @@ public final class SerenadaSession: ObservableObject {
 
     private func scheduleReconnect() {
         reconnectAttempts += 1
+        refreshSignalingState()
         let backoff = Backoff.reconnectDelayMs(attempt: reconnectAttempts)
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
@@ -996,6 +1126,205 @@ public final class SerenadaSession: ObservableObject {
             guard !Task.isCancelled, let self, !self.diagnostics.isSignalingConnected else { return }
             self.pendingJoinRoom = self.roomId
             self.signalingProvider.connect()
+        }
+    }
+
+    // MARK: - Post-reconnect snapshot gate
+
+    private enum PostReconnectFlushReason {
+        case snapshot
+        case timeout
+    }
+
+    private func armPostReconnectResync() {
+        pendingPostReconnectResync = true
+        postReconnectResyncTask?.cancel()
+        postReconnectResyncTask = Task { [weak self] in
+            guard let clock = self?.clock else { return }
+            let timeoutMs = UInt64(WebRtcResilience.epochResyncTimeoutMs)
+            try? await clock.sleep(nanoseconds: timeoutMs * 1_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.flushPostReconnectResync(reason: .timeout)
+        }
+    }
+
+    private func flushPostReconnectResync(reason: PostReconnectFlushReason) {
+        guard pendingPostReconnectResync else { return }
+        pendingPostReconnectResync = false
+        postReconnectResyncTask?.cancel()
+        postReconnectResyncTask = nil
+        if reason == .timeout {
+            logger?.log(
+                .warning,
+                tag: "Session",
+                "Post-reconnect snapshot timeout after \(WebRtcResilience.epochResyncTimeoutMs)ms; firing ICE restart against last-known peer map"
+            )
+        }
+        iceRestartCallsFromGate += 1
+        peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
+    }
+
+    private func cancelPostReconnectResync() {
+        pendingPostReconnectResync = false
+        postReconnectResyncTask?.cancel()
+        postReconnectResyncTask = nil
+    }
+
+    // MARK: - Suspended-peer presentation
+
+    /// Walks the latest authoritative remote participant list and starts/cancels
+    /// per-CID suspended-presentation timers. Cancels cleanly when peers go back
+    /// to active or are removed; flips `presumedLost=true` on timer expiry.
+    ///
+    /// "Already presumed lost" is a sticky state: once the timer has fired, we
+    /// don't reschedule a new one if the peer remains suspended across
+    /// subsequent room_state updates. The flag clears the moment the peer
+    /// transitions back to active or leaves the room.
+    private func reconcileRemoteSuspensionTimers(_ remotes: [Participant]) {
+        let seen = Set(remotes.map(\.cid))
+        for participant in remotes {
+            let isSuspended = participant.signalingStatus == .suspended
+            let hasTimer = suspendedPresentationTasks[participant.cid] != nil
+            let isPresumedLost = presumedLostRemoteCids.contains(participant.cid)
+            if isSuspended {
+                if !hasTimer, !isPresumedLost {
+                    startRemoteSuspensionTimer(cid: participant.cid)
+                }
+            } else {
+                clearRemoteSuspensionTracking(cid: participant.cid)
+            }
+        }
+        // Snapshot keys before iterating — `clearRemoteSuspensionTracking`
+        // mutates both collections, which would otherwise trap.
+        let trackedTasks = Array(suspendedPresentationTasks.keys)
+        for cid in trackedTasks where !seen.contains(cid) {
+            clearRemoteSuspensionTracking(cid: cid)
+        }
+        let trackedPresumed = Array(presumedLostRemoteCids)
+        for cid in trackedPresumed where !seen.contains(cid) {
+            clearRemoteSuspensionTracking(cid: cid)
+        }
+    }
+
+    private func startRemoteSuspensionTimer(cid: String) {
+        let task = Task { [weak self] in
+            guard let clock = self?.clock else { return }
+            let timeoutMs = UInt64(WebRtcResilience.peerSuspendedUiTimeoutMs)
+            try? await clock.sleep(nanoseconds: timeoutMs * 1_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.handleRemoteSuspensionTimerFired(cid: cid)
+        }
+        suspendedPresentationTasks[cid] = task
+    }
+
+    private func handleRemoteSuspensionTimerFired(cid: String) {
+        suspendedPresentationTasks.removeValue(forKey: cid)
+        presumedLostRemoteCids.insert(cid)
+        logger?.log(
+            .info,
+            tag: "Session",
+            "Remote \(cid) presumed lost after \(WebRtcResilience.peerSuspendedUiTimeoutMs)ms suspended"
+        )
+        refreshRemoteParticipants()
+    }
+
+    /// Clear all per-CID suspension state (timer + presumed-lost flag).
+    /// Called when a peer transitions back to active, leaves the room, or
+    /// the session is reset.
+    private func clearRemoteSuspensionTracking(cid: String) {
+        suspendedPresentationTasks.removeValue(forKey: cid)?.cancel()
+        presumedLostRemoteCids.remove(cid)
+    }
+
+    private func clearAllRemoteSuspensionTracking() {
+        for task in suspendedPresentationTasks.values { task.cancel() }
+        suspendedPresentationTasks.removeAll()
+        presumedLostRemoteCids.removeAll()
+    }
+
+    // MARK: - Media-liveness emission (#3)
+
+    /// Periodic `media_liveness{cids}` broadcast for #3. Started on a
+    /// successful join; runs across reconnects (ticks no-op while
+    /// disconnected but baseline samples persist so the next post-reconnect
+    /// tick can detect flow). Stopped on session reset/destroy.
+    private func startMediaLivenessTimer() {
+        guard mediaLivenessTask == nil else { return }
+        mediaLivenessTask = Task { [weak self] in
+            guard let clock = self?.clock else { return }
+            let intervalNs = UInt64(WebRtcResilience.mediaLivenessIntervalMs) * 1_000_000
+            while !Task.isCancelled {
+                try? await clock.sleep(nanoseconds: intervalNs)
+                if Task.isCancelled { return }
+                guard let self else { return }
+                self.emitMediaLiveness()
+            }
+        }
+    }
+
+    private func stopMediaLivenessTimer() {
+        mediaLivenessTask?.cancel()
+        mediaLivenessTask = nil
+    }
+
+    private func emitMediaLiveness() {
+        if mediaLivenessEmitInFlight { return }
+        guard diagnostics.isSignalingConnected, currentRoomState != nil else { return }
+        let slots = peerSlots
+        if slots.isEmpty { return }
+
+        mediaLivenessEmitInFlight = true
+        var newSamples: [String: Int64] = [:]
+        var remaining = slots.count
+        for (cid, slot) in slots {
+            slot.collectInboundBytes { [weak self] bytes in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    newSamples[cid] = bytes
+                    remaining -= 1
+                    if remaining == 0 { self.finalizeMediaLivenessEmit(newSamples: newSamples) }
+                }
+            }
+        }
+    }
+
+    private func finalizeMediaLivenessEmit(newSamples: [String: Int64]) {
+        mediaLivenessEmitInFlight = false
+        var flowing: [String] = []
+        for (cid, bytes) in newSamples {
+            if let previous = lastInboundBytesByCid[cid], bytes > previous {
+                flowing.append(cid)
+            }
+            lastInboundBytesByCid[cid] = bytes
+        }
+        // Drop tracking for peers that left.
+        for cid in Array(lastInboundBytesByCid.keys) where peerSlots[cid] == nil {
+            lastInboundBytesByCid.removeValue(forKey: cid)
+        }
+        guard !flowing.isEmpty, diagnostics.isSignalingConnected else { return }
+        let cidsArray = JSONValue.array(flowing.map(JSONValue.string))
+        signalingProvider.broadcast(type: "media_liveness", payload: ["cids": cidsArray])
+        mediaLivenessEmitCount += 1
+    }
+
+    // MARK: - Local signaling state
+
+    private func computeSignalingState(connected: Bool) -> SignalingState {
+        if let error = currentError { return .failed(reason: error) }
+        if connected { return .connected }
+        if let suspendedSince = localSuspendedSinceMs {
+            return .suspended(
+                suspendedSinceMs: suspendedSince,
+                estimatedHardEvictionAtMs: suspendedSince + Int64(WebRtcResilience.suspendHardEvictionTimeoutMs)
+            )
+        }
+        return .reconnecting(attempt: reconnectAttempts, nextRetryAtMs: nil)
+    }
+
+    fileprivate func refreshSignalingState() {
+        let next = computeSignalingState(connected: diagnostics.isSignalingConnected)
+        if state.signalingState != next {
+            commitSnapshot { s, _ in s.signalingState = next }
         }
     }
 
@@ -1201,5 +1530,73 @@ public final class SerenadaSession: ObservableObject {
             }
         }
         pathMonitor.start(queue: pathMonitorQueue)
+        startAppLifecycleMonitoring()
     }
+
+    private func startAppLifecycleMonitoring() {
+        let center = NotificationCenter.default
+        backgroundObserver = center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleAppBackgrounded() }
+        }
+        foregroundObserver = center.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleAppForegrounded() }
+        }
+    }
+
+    private func handleAppBackgrounded() {
+        lastBackgroundedAtMs = clock.nowMs()
+    }
+
+    /// Force-ping hook for resilience #8: when iOS resumes the app after a
+    /// long enough background, the WS the OS killed silently is detected
+    /// inside `foregroundForcePingTimeoutMs` instead of waiting a full
+    /// `pingIntervalMs` cycle.
+    private func handleAppForegrounded() {
+        let backgroundedAt = lastBackgroundedAtMs
+        lastBackgroundedAtMs = nil
+        guard let backgroundedAt else { return }
+        guard internalPhase == .inCall || internalPhase == .joining || internalPhase == .waiting else { return }
+        let backgroundedMs = clock.nowMs() - backgroundedAt
+        guard backgroundedMs >= Self.foregroundResumeMinBackgroundMs else { return }
+        signalingProvider.forceReconnectIfStale(timeoutMs: WebRtcResilience.foregroundForcePingTimeoutMs)
+    }
+
+    /// Background duration that triggers a foreground force-ping. Anything
+    /// shorter is short enough that pings would have noticed the failure on
+    /// their own; longer is the OS window where iOS may have killed the WS.
+    private static let foregroundResumeMinBackgroundMs: Int64 = 5_000
+
+    /// Snapshots the in-memory reconnect state into the cross-launch
+    /// recovery store so a relaunched process can offer a "Rejoin call?"
+    /// prompt. No-op until the join handshake has produced a CID + token.
+    private func persistRecoveryRecord(token: String?, ttlMs: Int64?) {
+        guard let cid = clientId, let token = token else { return }
+        if sessionStartTs == nil { sessionStartTs = Self.nowMs() }
+        let ttl = ttlMs.flatMap { $0 > 0 ? $0 : nil } ?? Self.defaultRecoveryTokenTTLMs
+        let record = RecoveryRecord(
+            roomId: roomId,
+            cid: cid,
+            reconnectToken: token,
+            lastEpoch: currentRoomState?.epoch,
+            sessionStartTs: sessionStartTs ?? Self.nowMs(),
+            expiresAtMs: Self.nowMs() + ttl
+        )
+        recoveryStorage.save(record)
+    }
+
+    private static func nowMs() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    /// Matches the server's `reconnectTokenTTL` (= `suspendHardEvictionTimeout`).
+    /// Used when the server did not surface `reconnectTokenTTLMs`.
+    private static let defaultRecoveryTokenTTLMs: Int64 = 10 * 60 * 1000
 }

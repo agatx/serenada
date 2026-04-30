@@ -134,6 +134,13 @@ internal class FakePeerConnectionSlot(
     override fun attachRemoteSink(sink: VideoSink) {}
     override fun detachRemoteSink(sink: VideoSink) {}
     override fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit) { onComplete("fake", null) }
+    /** Cumulative inbound bytes returned from the next `collectInboundBytes()` call. */
+    var inboundBytesSample: Long = 0L
+    var collectInboundBytesCalls = 0
+    override fun collectInboundBytes(onComplete: (Long) -> Unit) {
+        collectInboundBytesCalls += 1
+        onComplete(inboundBytesSample)
+    }
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) { onComplete(null, null) }
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {}
 

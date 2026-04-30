@@ -419,6 +419,22 @@ internal class PeerConnectionSlot(
         }
     }
 
+    override fun collectInboundBytes(onComplete: (Long) -> Unit) {
+        val pc = peerConnection
+        if (pc == null) {
+            onComplete(0L)
+            return
+        }
+        pc.getStats { report ->
+            var bytes = 0L
+            for (stat in report.statsMap.values) {
+                if (stat.type != "inbound-rtp") continue
+                bytes += memberLong(stat, "bytesReceived") ?: 0L
+            }
+            onComplete(bytes)
+        }
+    }
+
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) {
         val pc = peerConnection
         if (pc == null) {

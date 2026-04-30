@@ -9,14 +9,17 @@ import type {
     MediaCapability,
     SerenadaConfig,
     SerenadaSessionHandle,
+    SignalingState,
 } from './types.js';
 import { resolveCameraModes } from './cameraModes.js';
 import type {
     ConnectionInfo,
     SignalingErrorEvent,
     JoinOptions,
+    NegotiationDirtyEvent,
     PeerEvent,
     PeerMessage,
+    RelayFailedEvent,
     RoomStateEvent,
     SignalingProvider,
     SignalingProviderEventMap,
@@ -31,6 +34,10 @@ import {
     RECONNECT_BACKOFF_CAP_MS,
     JOIN_HARD_TIMEOUT_MS,
     ENDING_SCREEN_MS,
+    EPOCH_RESYNC_TIMEOUT_MS,
+    MEDIA_LIVENESS_INTERVAL_MS,
+    PEER_SUSPENDED_UI_TIMEOUT_MS,
+    SUSPEND_HARD_EVICTION_TIMEOUT_MS,
 } from './constants.js';
 import { formatError } from './formatError.js';
 import type { RoomParticipant, RoomState, SignalingMessage } from './signaling/types.js';
@@ -232,6 +239,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private pendingJoinOptions: JoinOptions | null = null;
     private joinInFlight = false;
     private reconnectRecoveryPending = false;
+    // True between transport reconnect and the first authoritative room_state
+    // snapshot; gates ICE restart so it runs against a confirmed peer set.
+    private pendingPostReconnectResync = false;
+    private postReconnectResyncTimer: number | null = null;
     private iceFetchGeneration = 0;
     private started = false;
     private terminated = false;
@@ -244,6 +255,24 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean }>();
     private readonly availableCameraModes: ConfigurableCameraMode[];
     private userPreferredVideoEnabled: boolean;
+
+    // Wall-clock ms when the local transport last dropped while a roomState
+    // was present (i.e. mid-call). Cleared on reconnect.
+    private localSuspendedSinceMs: number | null = null;
+
+    // After a peer transitions to suspended, we start a 30s timer; on expiry
+    // we flip `presumedLost=true` for that CID so call UIs can move it out of
+    // the active grid. Timers cancel when the peer goes back to active or is
+    // removed from the room.
+    private readonly suspendedPresentationTimers = new Map<string, number>();
+    private readonly presumedLostRemoteCids = new Set<string>();
+
+    // #3 — periodic `media_liveness` emission. Active across the in-call
+    // window so the server can defer hard-eviction of suspended peers whose
+    // media is still flowing locally. Emission skipped while transport is
+    // disconnected (ticks just no-op).
+    private mediaLivenessTimer: number | null = null;
+    private mediaLivenessEmitInFlight = false;
 
     private get isInactive(): boolean {
         return this._destroyed || this.terminated;
@@ -275,6 +304,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             localParticipant: null,
             remoteParticipants: [],
             connectionStatus: 'connected',
+            signalingState: { kind: 'connected' },
             activeTransport: null,
             requiredPermissions: null,
             error: null,
@@ -439,6 +469,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearReconnectTimer();
         this.clearEndingTimer();
         this.clearJoinTimeout();
+        this.cancelPostReconnectResync();
+        this.clearAllRemoteSuspensionTracking();
+        this.stopMediaLivenessTimer();
         for (const unsubscribe of this.providerUnsubscribers) {
             unsubscribe();
         }
@@ -472,6 +505,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.bindProviderEvent('roomEnded', this.handleRoomEnded);
         this.bindProviderEvent('error', this.handleError);
         this.bindProviderEvent('iceServersChanged', this.handleIceServersChanged);
+        this.bindProviderEvent('negotiationDirty', this.handleNegotiationDirty);
+        this.bindProviderEvent('relayFailed', this.handleRelayFailed);
     }
 
     private bindProviderEvent<K extends SignalingProviderEventName>(
@@ -491,6 +526,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const wasConnected = this.isConnected;
         this.isConnected = true;
         this.activeTransport = info?.transport ?? null;
+        this.localSuspendedSinceMs = null;
         this.clearReconnectTimer();
         this.reconnectAttempts = 0;
         this.media.updateSignalingConnected(true);
@@ -500,7 +536,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.signaling.joinRoom(this.roomId, this.pendingJoinOptions);
         } else if (!wasConnected && this.handlesReconnection && this.reconnectRecoveryPending && this.roomState) {
             this.reconnectRecoveryPending = false;
-            this.media.handleSignalingReconnect();
+            this.armPostReconnectResync();
         }
 
         this.rebuildState();
@@ -514,6 +550,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.isConnected = false;
         this.activeTransport = null;
         this.joinInFlight = false;
+        if (hadRoomState && this.localSuspendedSinceMs === null) {
+            this.localSuspendedSinceMs = Date.now();
+        }
         this.media.updateSignalingConnected(false);
 
         if (this.handlesReconnection) {
@@ -542,6 +581,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clientId = event.peerId;
         this.roomState = buildRoomState(event, null, event.peerId);
         this.media.updateRoomState(this.roomState, this.clientId);
+        this.maybeStartMediaLivenessTimer();
         this.rebuildState();
         this.broadcastLocalMediaState();
         void this.fetchInitialIceServers();
@@ -554,6 +594,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.error = null;
         this.roomState = buildRoomState(event, this.roomState?.hostCid ?? null, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
+        this.maybeStartMediaLivenessTimer();
+        this.flushPostReconnectResync('snapshot');
         this.rebuildState();
     };
 
@@ -564,6 +606,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.error = null;
         this.roomState = upsertParticipant(this.roomState, event, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
+        this.maybeStartMediaLivenessTimer();
         this.rebuildState();
         this.broadcastLocalMediaState();
     };
@@ -616,6 +659,27 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.media.setIceServers(iceServers);
+    };
+
+    private readonly handleNegotiationDirty = (event: NegotiationDirtyEvent): void => {
+        if (this.isInactive) {
+            return;
+        }
+        this.media.scheduleDirtyPairRestart(event.withCid);
+    };
+
+    private readonly handleRelayFailed = (event: RelayFailedEvent): void => {
+        if (this.isInactive) {
+            return;
+        }
+        // The server has the dirty-pair record; once the suspended target
+        // reattaches we'll get `negotiation_dirty` and renegotiate then.
+        // For now, just surface in logs so suppressed offers/ICE are visible.
+        this.config.logger?.log(
+            'debug',
+            'Session',
+            `relay_failed reason=${event.reason} of=${event.of ?? 'n/a'} targets=${event.targets.join(',')}`,
+        );
     };
 
     private async fetchInitialIceServers(): Promise<void> {
@@ -718,6 +782,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 appPeerId: this.appPeerId,
             };
             this.signaling.connect();
+            this.rebuildState();
         }, delayMs);
     }
 
@@ -725,6 +790,40 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.reconnectTimer !== null) {
             window.clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
+        }
+    }
+
+    private armPostReconnectResync(): void {
+        if (this.postReconnectResyncTimer !== null) {
+            window.clearTimeout(this.postReconnectResyncTimer);
+        }
+        this.pendingPostReconnectResync = true;
+        this.postReconnectResyncTimer = window.setTimeout(() => {
+            this.postReconnectResyncTimer = null;
+            this.flushPostReconnectResync('timeout');
+        }, EPOCH_RESYNC_TIMEOUT_MS);
+    }
+
+    private flushPostReconnectResync(reason: 'snapshot' | 'timeout'): void {
+        if (!this.pendingPostReconnectResync) {
+            return;
+        }
+        this.cancelPostReconnectResync();
+        if (reason === 'timeout') {
+            this.config.logger?.log(
+                'warning',
+                'Session',
+                `Post-reconnect snapshot timeout after ${EPOCH_RESYNC_TIMEOUT_MS}ms; firing ICE restart against last-known peer map`,
+            );
+        }
+        this.media.handleSignalingReconnect();
+    }
+
+    private cancelPostReconnectResync(): void {
+        this.pendingPostReconnectResync = false;
+        if (this.postReconnectResyncTimer !== null) {
+            window.clearTimeout(this.postReconnectResyncTimer);
+            this.postReconnectResyncTimer = null;
         }
     }
 
@@ -739,6 +838,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearReconnectTimer();
         this.clearJoinTimeout();
         this.clearEndingTimer();
+        this.cancelPostReconnectResync();
+        this.clearAllRemoteSuspensionTracking();
+        this.stopMediaLivenessTimer();
         this.invalidateIceFetches();
         this.statsCollector.stop();
 
@@ -749,6 +851,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.joinInFlight = false;
         this.reconnectRecoveryPending = false;
         this.reconnectAttempts = 0;
+        this.localSuspendedSinceMs = null;
         this.roomState = null;
         this.clientId = null;
         this.remoteMediaStates.clear();
@@ -765,6 +868,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         phase: CallState['phase'],
         error: CallState['error'] = null,
     ): void {
+        const signalingState: SignalingState = error
+            ? { kind: 'failed', reason: error.code }
+            : this._state.signalingState;
         this._state = {
             phase,
             roomId: this.roomId,
@@ -772,6 +878,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             localParticipant: null,
             remoteParticipants: [],
             connectionStatus: 'disconnected',
+            signalingState,
             activeTransport: null,
             requiredPermissions: null,
             error,
@@ -902,10 +1009,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
             isHost: signalingState?.hostCid === clientId,
         } : null;
 
+        this.reconcileRemoteSuspensionTimers(signalingState?.participants ?? []);
+
         const remoteParticipants = (signalingState?.participants ?? [])
             .filter((participant) => participant.cid !== clientId)
             .map((participant) => {
                 const peerState = this.remoteMediaStates.get(participant.cid);
+                const status = participant.connectionStatus ?? 'active';
                 return {
                     cid: participant.cid,
                     displayName: participant.displayName,
@@ -913,9 +1023,12 @@ export class SerenadaSession implements SerenadaSessionHandle {
                     audioEnabled: peerState?.audioEnabled ?? participant.audioEnabled ?? true,
                     videoEnabled: peerState?.videoEnabled ?? participant.videoEnabled ?? true,
                     connectionState: this.media.connectionState,
-                    signalingStatus: participant.connectionStatus ?? 'active',
+                    signalingStatus: status,
+                    presumedLost: status === 'suspended' && this.presumedLostRemoteCids.has(participant.cid),
                 };
             });
+
+        const errorPayload = this.error ? { code: mapErrorCode(this.error.code), message: this.error.message } : null;
 
         this._state = {
             phase,
@@ -924,12 +1037,158 @@ export class SerenadaSession implements SerenadaSessionHandle {
             localParticipant,
             remoteParticipants,
             connectionStatus: this.media.connectionStatus as ConnectionStatus,
+            signalingState: this.computeSignalingState(errorPayload),
             activeTransport: this.activeTransport,
             requiredPermissions: this._state.requiredPermissions,
-            error: this.error ? { code: mapErrorCode(this.error.code), message: this.error.message } : null,
+            error: errorPayload,
         };
 
         this.notifyListeners();
+    }
+
+    /**
+     * Compute the public {@link SignalingState} surface from current internal
+     * state. Mid-call transport drops surface as `suspended` (carries
+     * `suspendedSinceMs` + estimated hard-eviction deadline); pre-join drops
+     * surface as `reconnecting`. Terminal errors map to `failed`.
+     */
+    private computeSignalingState(error: CallState['error']): SignalingState {
+        if (error) {
+            return { kind: 'failed', reason: error.code };
+        }
+        if (this.isConnected) {
+            return { kind: 'connected' };
+        }
+        if (this.localSuspendedSinceMs !== null) {
+            return {
+                kind: 'suspended',
+                suspendedSinceMs: this.localSuspendedSinceMs,
+                estimatedHardEvictionAtMs: this.localSuspendedSinceMs + SUSPEND_HARD_EVICTION_TIMEOUT_MS,
+            };
+        }
+        return {
+            kind: 'reconnecting',
+            attempt: this.reconnectAttempts,
+            nextRetryAtMs: null,
+        };
+    }
+
+    /**
+     * Walk the latest authoritative participant list and start/cancel per-CID
+     * suspended-presentation timers. Cancels cleanly when peers go back to
+     * active or are removed; flips `presumedLost=true` on timer expiry.
+     *
+     * "Already presumed lost" is a sticky state: once the timer has fired,
+     * we don't reschedule a new one if the peer remains suspended across
+     * subsequent room_state updates. The flag clears the moment the peer
+     * transitions back to active or leaves the room.
+     */
+    private reconcileRemoteSuspensionTimers(participants: RoomParticipant[]): void {
+        const remoteCids = new Set<string>();
+        for (const participant of participants) {
+            if (participant.cid === this.clientId) {
+                continue;
+            }
+            remoteCids.add(participant.cid);
+            const isSuspended = participant.connectionStatus === 'suspended';
+            const hasTimer = this.suspendedPresentationTimers.has(participant.cid);
+            const isPresumedLost = this.presumedLostRemoteCids.has(participant.cid);
+            if (isSuspended) {
+                if (!hasTimer && !isPresumedLost) {
+                    this.startRemoteSuspensionTimer(participant.cid);
+                }
+            } else {
+                this.clearRemoteSuspensionTracking(participant.cid);
+            }
+        }
+        const trackedCids = new Set<string>([
+            ...this.suspendedPresentationTimers.keys(),
+            ...this.presumedLostRemoteCids,
+        ]);
+        for (const cid of trackedCids) {
+            if (!remoteCids.has(cid)) {
+                this.clearRemoteSuspensionTracking(cid);
+            }
+        }
+    }
+
+    private startRemoteSuspensionTimer(cid: string): void {
+        const handle = window.setTimeout(() => {
+            if (this.isInactive) return;
+            this.suspendedPresentationTimers.delete(cid);
+            this.presumedLostRemoteCids.add(cid);
+            this.config.logger?.log(
+                'info',
+                'Session',
+                `Remote ${cid} presumed lost after ${PEER_SUSPENDED_UI_TIMEOUT_MS}ms suspended`,
+            );
+            this.rebuildState();
+        }, PEER_SUSPENDED_UI_TIMEOUT_MS);
+        this.suspendedPresentationTimers.set(cid, handle);
+    }
+
+    /**
+     * Clear all per-CID suspension state (timer + presumed-lost flag).
+     * Called when a peer transitions back to active, leaves the room, or
+     * the session is reset.
+     */
+    private clearRemoteSuspensionTracking(cid: string): void {
+        const handle = this.suspendedPresentationTimers.get(cid);
+        if (handle !== undefined) {
+            window.clearTimeout(handle);
+            this.suspendedPresentationTimers.delete(cid);
+        }
+        this.presumedLostRemoteCids.delete(cid);
+    }
+
+    private clearAllRemoteSuspensionTracking(): void {
+        for (const handle of this.suspendedPresentationTimers.values()) {
+            window.clearTimeout(handle);
+        }
+        this.suspendedPresentationTimers.clear();
+        this.presumedLostRemoteCids.clear();
+    }
+
+    /**
+     * Periodic `media_liveness{cids}` emission for #3. Started once we have
+     * remote peers (i.e. the call reaches `inCall`); runs across reconnects
+     * (ticks no-op while disconnected but baseline samples persist so the
+     * next post-reconnect tick can detect flow). Stopped on session
+     * reset/destroy.
+     */
+    private maybeStartMediaLivenessTimer(): void {
+        if (this.mediaLivenessTimer !== null) return;
+        const remoteCount = (this.roomState?.participants?.length ?? 0) - (this.clientId ? 1 : 0);
+        if (remoteCount <= 0) return;
+        this.mediaLivenessTimer = window.setInterval(() => {
+            void this.emitMediaLiveness();
+        }, MEDIA_LIVENESS_INTERVAL_MS);
+    }
+
+    private stopMediaLivenessTimer(): void {
+        if (this.mediaLivenessTimer !== null) {
+            window.clearInterval(this.mediaLivenessTimer);
+            this.mediaLivenessTimer = null;
+        }
+    }
+
+    private async emitMediaLiveness(): Promise<void> {
+        if (this.isInactive || this.mediaLivenessEmitInFlight) return;
+        if (!this.isConnected || this.roomState === null) return;
+        this.mediaLivenessEmitInFlight = true;
+        try {
+            const flowing = await this.media.getInboundFlowingCids();
+            if (this.isInactive || flowing.length === 0) return;
+            this.signaling.broadcast('media_liveness', { cids: flowing });
+        } catch (error) {
+            this.config.logger?.log(
+                'debug',
+                'Session',
+                `media_liveness emit failed: ${formatError(error)}`,
+            );
+        } finally {
+            this.mediaLivenessEmitInFlight = false;
+        }
     }
 
     private async checkPermissionsAndStartMedia(): Promise<void> {

@@ -35,7 +35,7 @@ final class PeerNegotiationEngine {
     // Callbacks to session
     private let sendMessage: (String, JSONValue?, String?) -> Void
     private let onRemoteParticipantsChanged: () -> Void
-    private let onAggregatePeerStateChanged: (IceConnectionState, PeerConnectionState, SignalingState) -> Void
+    private let onAggregatePeerStateChanged: (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Void
     private let onConnectionStatusUpdate: () -> Void
 
     init(
@@ -63,7 +63,7 @@ final class PeerNegotiationEngine {
         engineRemoveSlot: @escaping (any PeerConnectionSlotProtocol) -> Void,
         sendMessage: @escaping (String, JSONValue?, String?) -> Void,
         onRemoteParticipantsChanged: @escaping () -> Void,
-        onAggregatePeerStateChanged: @escaping (IceConnectionState, PeerConnectionState, SignalingState) -> Void,
+        onAggregatePeerStateChanged: @escaping (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Void,
         onConnectionStatusUpdate: @escaping () -> Void
     ) {
         self.clock = clock
@@ -645,7 +645,7 @@ final class PeerNegotiationEngine {
         onAggregatePeerStateChanged(
             IceConnectionState(rawValueOrUnknown: nextIceState),
             PeerConnectionState(rawValueOrUnknown: nextConnectionState.rawValue),
-            SignalingState(rawValueOrUnknown: nextSignalingState)
+            RtcSignalingState(rawValueOrUnknown: nextSignalingState)
         )
     }
 }

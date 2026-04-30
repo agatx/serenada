@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,36 @@ const turnTokenTTL = 15 * time.Minute
 // timeout the record is evicted and peers tear down.
 const suspendHardEvictionTimeout = 10 * time.Minute
 
+// reconnectTokenTTL bounds how long a reconnect token can be used to reattach
+// or recover a participant identity. Capped at the same window the server
+// preserves participant records so that a token never outlives the slot it can
+// reclaim.
+const reconnectTokenTTL = suspendHardEvictionTimeout
+
+// roomTombstoneTTL is the window during which an explicitly-ended room is
+// remembered with a structured reason. Reconnect attempts with a valid
+// reconnect token receive ROOM_ENDED instead of being silently turned into a
+// fresh participant in a recreated room.
+const roomTombstoneTTL = 5 * time.Minute
+
+// mediaLivenessFreshnessWindow bounds how recent a peer-reported
+// media_liveness hint must be to defer hard-eviction of a suspended
+// participant. The hint is a cleanup signal only: it may delay eviction but
+// never authorizes anything else.
+const mediaLivenessFreshnessWindow = 30 * time.Second
+
+// hardEvictMediaActiveDeferral is how long hard-eviction is pushed back when
+// at least one active peer recently reported inbound media from the suspended
+// CID. Re-evaluated on each fire.
+const hardEvictMediaActiveDeferral = 30 * time.Second
+
+// ghostEvictMinDwell is the minimum suspension dwell before fast-path ghost
+// eviction can fire. Gives a legitimate reattach attempt (with a valid
+// reconnect token) a chance to land before peers' "no media flowing" reports
+// trigger early eviction. If we evicted immediately, a brief signaling-layer
+// blip would cost the participant their slot.
+const ghostEvictMinDwell = 30 * time.Second
+
 // ConnectionStatus values broadcast in room_state/joined participant entries.
 // Omitted when "active" (backward compatible with older clients).
 const (
@@ -41,34 +72,90 @@ const (
 	connectionStatusSuspended = "suspended"
 )
 
-// issueReconnectToken generates an HMAC proof that allows a client to reclaim
-// its CID on reconnect. Format: hex(HMAC-SHA256(secret, cid|rid)).
-// The token is bound to (cid, rid) — NOT session id — because the session id
-// changes on every reconnect.
-func issueReconnectToken(cid, rid string) string {
+// Reconnect outcome values reported back to SDKs in joined.payload.reconnect.
+// Drives whether the SDK keeps media-active peer connections, schedules
+// dirty-pair renegotiation, or starts fresh.
+const (
+	reconnectOutcomeFresh      = "fresh"
+	reconnectOutcomeReattached = "reattached"
+	reconnectOutcomeRecovered  = "recovered"
+)
+
+// Tombstone reasons broadcast via the ROOM_ENDED error to reconnect-with-token
+// attempts targeting a room that is no longer present.
+const (
+	tombstoneReasonEndedByHost = "ended_by_host"
+)
+
+// reconnectSecret returns the HMAC secret used to sign and verify reconnect
+// tokens. Falls back to TURN_SECRET so existing deployments keep working
+// without configuration changes.
+func reconnectSecret() []byte {
 	secret := os.Getenv("TURN_TOKEN_SECRET")
 	if secret == "" {
 		secret = os.Getenv("TURN_SECRET")
 	}
 	if secret == "" {
-		return ""
+		return nil
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(cid + "|" + rid))
-	return hex.EncodeToString(mac.Sum(nil))
+	return []byte(secret)
 }
 
-// validateReconnectToken checks that the provided token matches the expected HMAC.
-func validateReconnectToken(token, cid, rid string) bool {
+// issueReconnectToken generates an HMAC proof bound to (cid, rid, expiresAt).
+// Format: hex(HMAC-SHA256(secret, cid|rid|expiresAt)) || "." || expiresAtUnix.
+// expiresAt is wall-clock unix seconds. The expiry is on-the-wire so the
+// validator can reject expired tokens without server-side state.
+func issueReconnectToken(cid, rid string) string {
+	return issueReconnectTokenWithExpiry(cid, rid, time.Now().Add(reconnectTokenTTL))
+}
+
+func issueReconnectTokenWithExpiry(cid, rid string, expiresAt time.Time) string {
+	secret := reconnectSecret()
+	if secret == nil {
+		return ""
+	}
+	exp := expiresAt.Unix()
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(cid + "|" + rid + "|" + strconv.FormatInt(exp, 10)))
+	return hex.EncodeToString(mac.Sum(nil)) + "." + strconv.FormatInt(exp, 10)
+}
+
+// validateReconnectToken returns ok=true when the token's HMAC verifies and
+// the embedded expiresAt is in the future. expired=true when the token's
+// signature is valid but it has aged out — the SDK should treat the token as
+// dead and clear persisted state. ok=false, expired=false means the token is
+// malformed or the signature does not verify.
+func validateReconnectToken(token, cid, rid string) (ok bool, expired bool) {
 	if token == "" {
-		return false
+		return false, false
 	}
-	expected := issueReconnectToken(cid, rid)
-	if expected == "" {
-		// No secret configured — allow legacy clients (backwards compatible)
-		return true
+	secret := reconnectSecret()
+	if secret == nil {
+		// No secret configured — legacy/dev environments. Accept any token to
+		// preserve current behavior on machines that never set TURN_SECRET.
+		return true, false
 	}
-	return hmac.Equal([]byte(expected), []byte(token))
+	dot := strings.LastIndexByte(token, '.')
+	if dot < 0 {
+		// Pre-expiry-format tokens — clients carrying these need to refresh.
+		return false, true
+	}
+	macHex := token[:dot]
+	expStr := token[dot+1:]
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil {
+		return false, false
+	}
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(cid + "|" + rid + "|" + strconv.FormatInt(exp, 10)))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(expected), []byte(macHex)) {
+		return false, false
+	}
+	if time.Now().Unix() > exp {
+		return false, true
+	}
+	return true, false
 }
 
 type TransportKind string
@@ -91,13 +178,26 @@ type Message struct {
 
 // Participant is the wire-format entry broadcast to clients in joined/room_state.
 type Participant struct {
-	CID              string `json:"cid"`
-	JoinedAt         int64  `json:"joinedAt,omitempty"`
-	DisplayName      string `json:"displayName,omitempty"`
-	PeerID           string `json:"peerId,omitempty"` // host-supplied stable identity, distinct from CID; opaque to server
-	AudioEnabled     *bool  `json:"audioEnabled,omitempty"`
-	VideoEnabled     *bool  `json:"videoEnabled,omitempty"`
-	ConnectionStatus string `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
+	CID              string                   `json:"cid"`
+	JoinedAt         int64                    `json:"joinedAt,omitempty"`
+	DisplayName      string                   `json:"displayName,omitempty"`
+	PeerID           string                   `json:"peerId,omitempty"` // host-supplied stable identity, distinct from CID; opaque to server
+	AudioEnabled     *bool                    `json:"audioEnabled,omitempty"`
+	VideoEnabled     *bool                    `json:"videoEnabled,omitempty"`
+	ConnectionStatus string                   `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
+	ContentState     *ParticipantContentState `json:"contentState,omitempty"`
+}
+
+// ParticipantContentState is the latest ephemeral content metadata (screen
+// share, content camera mode, etc.) for a participant. Stored on the
+// participant record so it survives suspension and is restored to a peer
+// reattaching after being away. Latest wins — older transitions are not
+// replayed.
+type ParticipantContentState struct {
+	Active      bool   `json:"active"`
+	ContentType string `json:"contentType,omitempty"`
+	UpdatedAtMs int64  `json:"updatedAtMs,omitempty"`
+	Epoch       int64  `json:"epoch,omitempty"`
 }
 
 // roomParticipant is the server-side stable participant record keyed by CID.
@@ -120,11 +220,25 @@ type roomParticipant struct {
 	// hardEvictionTimer fires after suspendHardEvictionTimeout if the participant
 	// has not reattached. It calls hardEvictSuspended to remove the record.
 	hardEvictionTimer *time.Timer
+	// ContentState is the latest ephemeral content metadata for this CID (screen
+	// share active, content camera mode, etc.) so a reattaching peer can
+	// reconstruct UI without waiting for the sender to toggle again.
+	ContentState *ParticipantContentState
+}
+
+// roomTombstone records that a room has explicitly ended. Reconnect attempts
+// against the room within roomTombstoneTTL receive a structured ROOM_ENDED
+// error so SDKs can clear recovery state instead of looping reconnect against
+// a dead RID.
+type roomTombstone struct {
+	Reason    string
+	ExpiresAt time.Time
 }
 
 type Hub struct {
 	rooms                map[string]*Room
 	watchers             map[string]map[*Client]bool // roomID -> set of clients
+	tombstones           map[string]*roomTombstone   // roomID -> termination record (TTL'd)
 	mu                   sync.RWMutex
 	clients              map[*Client]bool
 	clientsBySID         map[string]*Client
@@ -145,7 +259,191 @@ type Room struct {
 	MaxParticipants          int  // effective room capacity; group-capable rooms stay provisional at 2 until participant #2 joins
 	RequestedMaxParticipants int  // creator's requested ceiling, clamped by creator capability and server ceiling
 	CapacityLocked           bool // once true, MaxParticipants is final for the room lifetime
-	mu                       sync.Mutex
+	// Epoch is a monotonic counter advanced on every membership-mutating
+	// operation (join, leave, suspend, reattach, evict, host transfer).
+	// Embedded in joined / room_state so SDKs can detect missed membership
+	// transitions and gate ICE restart on an authoritative post-reconnect
+	// snapshot rather than acting on stale in-memory peer maps.
+	Epoch int64
+	// negotiationDirty[fromCID] is the set of toCIDs that fromCID attempted to
+	// reach via offer/answer/ice while toCID had no attached transport. On
+	// reattach the server notifies the active peers so they can schedule fresh
+	// glare-safe negotiation instead of waiting for an answer that never
+	// arrives.
+	negotiationDirty map[string]map[string]bool
+	// mediaLiveness records the most recent unix-ms timestamp at which an
+	// active peer reported inbound media flowing from the keyed CID. Used as
+	// a cleanup hint only: hard-eviction may be deferred while at least one
+	// peer recently observed media. Never used as authorization.
+	mediaLiveness map[string]int64
+	// mediaLivenessReporters records the most recent unix-ms timestamp at
+	// which each active peer (keyed by reporter CID) sent a media_liveness
+	// message — regardless of payload contents. Combined with mediaLiveness,
+	// lets us detect "all active peers are alive and reporting, but none
+	// observe media flowing from suspended CID X" — the trigger for fast-path
+	// ghost eviction.
+	mediaLivenessReporters map[string]int64
+	mu                     sync.Mutex
+}
+
+// bumpEpoch increments the room state epoch. Caller must hold r.mu. Returns
+// the new epoch so callers can stamp it onto outgoing payloads without a
+// second lock.
+func (r *Room) bumpEpoch() int64 {
+	r.Epoch++
+	return r.Epoch
+}
+
+// markNegotiationDirty records that fromCID attempted to negotiate with toCID
+// while toCID had no attached transport. Caller must hold r.mu.
+func (r *Room) markNegotiationDirty(fromCID, toCID string) {
+	if r.negotiationDirty == nil {
+		r.negotiationDirty = make(map[string]map[string]bool)
+	}
+	set, ok := r.negotiationDirty[fromCID]
+	if !ok {
+		set = make(map[string]bool)
+		r.negotiationDirty[fromCID] = set
+	}
+	set[toCID] = true
+}
+
+// drainDirtyPartnersFor returns and clears the set of CIDs that previously
+// attempted to negotiate with `cid` while it was suspended. Caller must hold
+// r.mu. The returned slice is a freshly allocated copy.
+func (r *Room) drainDirtyPartnersFor(cid string) []string {
+	if r.negotiationDirty == nil {
+		return nil
+	}
+	out := make([]string, 0)
+	for fromCID, partners := range r.negotiationDirty {
+		if !partners[cid] {
+			continue
+		}
+		out = append(out, fromCID)
+		delete(partners, cid)
+		if len(partners) == 0 {
+			delete(r.negotiationDirty, fromCID)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// dropCIDFromDirty removes the CID from all dirty entries (both as source and
+// target). Called on participant removal. Caller must hold r.mu.
+func (r *Room) dropCIDFromDirty(cid string) {
+	if r.negotiationDirty == nil {
+		return
+	}
+	delete(r.negotiationDirty, cid)
+	for fromCID, partners := range r.negotiationDirty {
+		delete(partners, cid)
+		if len(partners) == 0 {
+			delete(r.negotiationDirty, fromCID)
+		}
+	}
+}
+
+// recordMediaLiveness updates the last-reported inbound-media timestamp for a
+// CID. Caller must hold r.mu. Used to defer hard-eviction while peers still
+// see media from a suspended participant.
+func (r *Room) recordMediaLiveness(cid string, atMs int64) {
+	if r.mediaLiveness == nil {
+		r.mediaLiveness = make(map[string]int64)
+	}
+	if existing, ok := r.mediaLiveness[cid]; ok && existing >= atMs {
+		return
+	}
+	r.mediaLiveness[cid] = atMs
+}
+
+// hasRecentMediaLiveness returns true when at least one peer has reported
+// inbound media for `cid` within the last `window`. Caller must hold r.mu.
+func (r *Room) hasRecentMediaLiveness(cid string, window time.Duration) bool {
+	if r.mediaLiveness == nil {
+		return false
+	}
+	last, ok := r.mediaLiveness[cid]
+	if !ok {
+		return false
+	}
+	return time.Since(time.UnixMilli(last)) <= window
+}
+
+// dropMediaLivenessFor removes any liveness record for the participant. Caller
+// must hold r.mu.
+func (r *Room) dropMediaLivenessFor(cid string) {
+	if r.mediaLiveness != nil {
+		delete(r.mediaLiveness, cid)
+	}
+	if r.mediaLivenessReporters != nil {
+		delete(r.mediaLivenessReporters, cid)
+	}
+}
+
+// recordMediaLivenessReporter updates the last-seen unix-ms timestamp at
+// which `cid` sent any media_liveness message. Caller must hold r.mu.
+func (r *Room) recordMediaLivenessReporter(cid string, atMs int64) {
+	if r.mediaLivenessReporters == nil {
+		r.mediaLivenessReporters = make(map[string]int64)
+	}
+	if existing, ok := r.mediaLivenessReporters[cid]; ok && existing >= atMs {
+		return
+	}
+	r.mediaLivenessReporters[cid] = atMs
+}
+
+// suspendedGhostsExcludedByActiveReporters returns the CIDs of suspended
+// participants that meet ALL of: (1) suspended for at least minDwell;
+// (2) no recent positive media-flowing report from any peer; (3) at least
+// one currently-active peer has sent a fresh media_liveness within freshness.
+// Caller must hold r.mu.
+//
+// The "at least one fresh reporter" requirement (rather than "every active
+// peer") accommodates mixed-version rooms: an older client that does not
+// emit media_liveness should not block eviction of an unrelated CID. As long
+// as ONE up-to-date peer is alive, reporting, and not observing media from
+// the suspended CID, we treat that as sufficient grounds to evict — the
+// suspended CID has no signaling transport AND no peer reporting media from
+// it, so it can't be reached and shouldn't keep its slot.
+func (r *Room) suspendedGhostsExcludedByActiveReporters(now int64, minDwell, freshness time.Duration) []string {
+	minDwellMs := minDwell.Milliseconds()
+	freshnessMs := freshness.Milliseconds()
+	var ghosts []string
+	for cid, p := range r.byCID {
+		if p.Client != nil {
+			continue
+		}
+		if p.SuspendedAt == 0 {
+			continue
+		}
+		suspendedAtMs := p.SuspendedAt / int64(time.Millisecond)
+		if now-suspendedAtMs < minDwellMs {
+			continue
+		}
+		if last, ok := r.mediaLiveness[cid]; ok && now-last <= freshnessMs {
+			continue
+		}
+		anyFresh := false
+		for activeCID, q := range r.byCID {
+			if activeCID == cid || q.Client == nil {
+				continue
+			}
+			last, ok := r.mediaLivenessReporters[activeCID]
+			if ok && now-last <= freshnessMs {
+				anyFresh = true
+				break
+			}
+		}
+		if !anyFresh {
+			continue
+		}
+		ghosts = append(ghosts, cid)
+	}
+	return ghosts
 }
 
 // Room helper methods. All assume the caller holds room.mu unless noted.
@@ -245,6 +543,7 @@ func (r *Room) snapshotParticipants() []Participant {
 			PeerID:       p.PeerID,
 			AudioEnabled: p.AudioEnabled,
 			VideoEnabled: p.VideoEnabled,
+			ContentState: p.ContentState,
 		}
 		if p.Client == nil {
 			entry.ConnectionStatus = connectionStatusSuspended
@@ -304,9 +603,57 @@ func newHub(maxParticipantsLimit int) *Hub {
 	return &Hub{
 		rooms:                make(map[string]*Room),
 		watchers:             make(map[string]map[*Client]bool),
+		tombstones:           make(map[string]*roomTombstone),
 		clients:              make(map[*Client]bool),
 		clientsBySID:         make(map[string]*Client),
 		maxParticipantsLimit: maxParticipantsLimit,
+	}
+}
+
+// recordTombstone marks the room as explicitly ended. Reconnect attempts
+// arriving within roomTombstoneTTL will receive a structured ROOM_ENDED error
+// instead of being silently turned into a fresh participant.
+func (h *Hub) recordTombstone(rid, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tombstones[rid] = &roomTombstone{
+		Reason:    reason,
+		ExpiresAt: time.Now().Add(roomTombstoneTTL),
+	}
+	h.gcTombstonesLocked()
+}
+
+// lookupTombstone returns the active tombstone for rid, or nil if absent or
+// expired. Expired entries are evicted lazily on lookup.
+func (h *Hub) lookupTombstone(rid string) *roomTombstone {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	t, ok := h.tombstones[rid]
+	if !ok {
+		return nil
+	}
+	if time.Now().After(t.ExpiresAt) {
+		delete(h.tombstones, rid)
+		return nil
+	}
+	return t
+}
+
+// clearTombstone removes any tombstone for the room. Called when an explicit
+// fresh start is requested (no reconnect token, or token validation failed).
+func (h *Hub) clearTombstone(rid string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.tombstones, rid)
+}
+
+// gcTombstonesLocked drops expired tombstones. Must be called with h.mu held.
+func (h *Hub) gcTombstonesLocked() {
+	now := time.Now()
+	for rid, t := range h.tombstones {
+		if now.After(t.ExpiresAt) {
+			delete(h.tombstones, rid)
+		}
 	}
 }
 
@@ -470,6 +817,8 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 		h.handleRelay(c, msg)
 	case "participant_media_state":
 		h.handleMediaState(c, msg)
+	case "media_liveness":
+		h.handleMediaLiveness(c, msg)
 	default:
 		log.Printf("[UNKNOWN] Unknown message type: %s", msg.Type)
 	}
@@ -531,6 +880,38 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	reconnectCID := joinPayload.ReconnectCID
 	reconnectToken := joinPayload.ReconnectToken
 
+	// Validate the reconnect token up-front so authority decisions are made on
+	// the same proof regardless of which case below applies.
+	tokenValid := false
+	if reconnectCID != "" && reconnectToken != "" {
+		valid, expired := validateReconnectToken(reconnectToken, reconnectCID, rid)
+		if !valid {
+			log.Printf("[JOIN] Invalid reconnectToken for CID %s from client %s (expired=%t)", reconnectCID, c.sid, expired)
+			c.sendError(rid, "INVALID_RECONNECT_TOKEN", "Reconnect token validation failed")
+			return
+		}
+		tokenValid = valid
+	}
+
+	// Tombstone gate: if a recent end_room marked this RID as terminated and
+	// the client is presenting reconnect authority for it, surface the
+	// terminal error rather than silently turning the request into a fresh
+	// caller in a recreated room.
+	if reconnectCID != "" && tokenValid {
+		if t := h.lookupTombstone(rid); t != nil {
+			reason := t.Reason
+			if reason == "" {
+				reason = tombstoneReasonEndedByHost
+			}
+			log.Printf("[JOIN] Rejecting reconnect to tombstoned room %s (reason=%s)", rid, reason)
+			c.sendErrorWithReason(rid, "ROOM_ENDED", "Room has ended", reason)
+			return
+		}
+	}
+
+	// Hub-level lookup. We may need to recreate the room if a valid reconnect
+	// token references a room that has been GC'd (no participants, no
+	// tombstone — e.g. server restart or all participants hard-evicted).
 	h.mu.Lock()
 	room, exists := h.rooms[rid]
 	if !exists {
@@ -557,22 +938,19 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	room.mu.Lock()
 	reusedCID := false
+	recoveredCID := false
 
 	// Reconnect path: a client presenting reconnectCid wants to reclaim an
-	// existing participant slot. Two cases:
+	// existing participant slot. Three cases:
 	//   (a) Suspended participant (Client == nil): the previous transport
 	//       already detached; simply reattach the new Client. No ghost cleanup.
 	//   (b) Active ghost (Client != nil): the previous transport is still
 	//       attached (race on fast reconnect). Detach and clean up hub state.
+	//   (c) No participant record (room was GC'd or recreated): if the
+	//       reconnect token validates, recreate the participant with the
+	//       requested CID so identity survives server-side memory loss.
 	var ghostToEvict *Client
 	if reconnectCID != "" {
-		if reconnectToken != "" && !validateReconnectToken(reconnectToken, reconnectCID, rid) {
-			room.mu.Unlock()
-			log.Printf("[JOIN] Invalid reconnectToken for CID %s from client %s", reconnectCID, c.sid)
-			c.sendError(rid, "INVALID_RECONNECT_TOKEN", "Reconnect token validation failed")
-			return
-		}
-
 		if existing := room.participantByCID(reconnectCID); existing != nil {
 			if existing.Client != nil {
 				// Case (b): active ghost. Detach the old Client from the
@@ -653,11 +1031,31 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 
 	// Room full check. Only applies to fresh joins — a reconnect has already
 	// slotted back into its existing record without increasing the count.
-	if !reusedCID && room.participantCount() >= room.MaxParticipants {
+	// A token-validated identity recovery (case c) also slots into the
+	// requested CID without growing the count beyond what we're about to add.
+	if !reusedCID && !(reconnectCID != "" && tokenValid) && room.participantCount() >= room.MaxParticipants {
 		room.mu.Unlock()
 		log.Printf("[JOIN] Room %s is full (%d/%d)", rid, room.participantCount(), room.MaxParticipants)
 		c.sendError(rid, "ROOM_FULL", "Room is full")
 		return
+	}
+
+	// Identity recovery (case c): valid reconnect token but no participant
+	// record. Recreate the participant with the requested CID so the SDK can
+	// preserve media-active peer connections across signaling-only memory
+	// loss. We still bound this by capacity above.
+	if !reusedCID && reconnectCID != "" && tokenValid {
+		if room.participantCount() >= room.MaxParticipants {
+			room.mu.Unlock()
+			log.Printf("[JOIN] Room %s is full while attempting to recover CID %s (%d/%d)", rid, reconnectCID, room.participantCount(), room.MaxParticipants)
+			c.sendError(rid, "ROOM_FULL", "Room is full")
+			return
+		}
+		log.Printf("[JOIN] Recovering CID %s in room %s with valid reconnect token (no prior record)", reconnectCID, rid)
+		c.cid = reconnectCID
+		c.rid = rid
+		room.attachParticipant(reconnectCID, c, time.Now().UnixMilli())
+		recoveredCID = true
 	}
 
 	// Deferred hub-level cleanup of ghost outside room lock to avoid deadlock.
@@ -670,17 +1068,25 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	var (
-		cid string
-		p   *roomParticipant
+		cid     string
+		p       *roomParticipant
+		outcome string
 	)
-	if reusedCID {
+	switch {
+	case reusedCID:
 		cid = reconnectCID
 		p = room.participantByCID(cid)
-	} else {
+		outcome = reconnectOutcomeReattached
+	case recoveredCID:
+		cid = reconnectCID
+		p = room.participantByCID(cid)
+		outcome = reconnectOutcomeRecovered
+	default:
 		cid = generateID("C-")
 		c.cid = cid
 		c.rid = rid
 		p = room.attachParticipant(cid, c, time.Now().UnixMilli())
+		outcome = reconnectOutcomeFresh
 	}
 
 	// Update display name on every join (including reconnect) so users can rename.
@@ -710,17 +1116,37 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		room.HostCID = cid
 	}
 
-	log.Printf("[JOIN] Client %s assigned CID %s in room %s (maxParticipants=%d). Host: %s", c.sid, cid, rid, room.MaxParticipants, room.HostCID)
+	// Membership-mutating operation — bump the room state epoch so SDKs can
+	// detect changes that happened while their last snapshot is in hand.
+	epoch := room.bumpEpoch()
+
+	// On reattach / recover, surface any negotiations that peers attempted
+	// while we had no transport so the SDK can schedule fresh glare-safe
+	// negotiation rather than waiting for an answer that will never arrive.
+	dirtyPartners := room.drainDirtyPartnersFor(cid)
+
+	log.Printf("[JOIN] Client %s assigned CID %s in room %s (maxParticipants=%d outcome=%s epoch=%d). Host: %s", c.sid, cid, rid, room.MaxParticipants, outcome, epoch, room.HostCID)
 
 	participants := room.snapshotParticipants()
 	roomMaxParticipants := room.MaxParticipants
+	hostCID := room.HostCID
 
 	room.mu.Unlock() // <--- CRITICAL FIX: Unlock before broadcast/send to avoid deadlock/blocking
 
+	// Any successful join means the room is alive again, so clear any stale
+	// tombstone for this RID. Reconnect attempts arriving with a token for a
+	// dead room are already gated above (before they reach this point); by
+	// the time we get here the join has succeeded and a fresh participant
+	// reconnecting later — including the one who just joined — must not be
+	// rejected with ROOM_ENDED for a previous session.
+	h.clearTombstone(rid)
+
 	payload := map[string]interface{}{
-		"hostCid":         room.HostCID,
+		"hostCid":         hostCID,
 		"participants":    participants,
 		"maxParticipants": roomMaxParticipants,
+		"epoch":           epoch,
+		"reconnect":       outcome,
 	}
 
 	// Include TURN token in joined response (gated by valid room ID)
@@ -736,6 +1162,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	// Include reconnectToken for authenticated reconnection
 	if rt := issueReconnectToken(cid, rid); rt != "" {
 		payload["reconnectToken"] = rt
+		payload["reconnectTokenTTLMs"] = int64(reconnectTokenTTL / time.Millisecond)
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
@@ -750,8 +1177,22 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	})
 	stats.RecordJoinLatency(time.Since(joinStartedAt))
 
-	// Broadcast room_state to others
+	// Always send an authoritative room_state snapshot on the new transport
+	// after a successful reconnect so the SDK has a confirmed sync point
+	// before scheduling renegotiation. For fresh joins the snapshot is
+	// redundant with `joined`, but emitting it uniformly keeps the SDK code
+	// path simple.
+	h.sendRoomStateSnapshot(c, room)
+
+	// Broadcast room_state to others so peers learn about the new/reattached/
+	// recovered participant.
 	h.broadcastRoomState(room)
+
+	// Tell active peers that they have dirty negotiation pairs with this CID
+	// so they can schedule fresh negotiation after the snapshot above.
+	if len(dirtyPartners) > 0 {
+		h.notifyDirtyNegotiation(room, cid, dirtyPartners)
+	}
 
 	// Notify watchers
 	h.broadcastRoomStatusUpdate(rid)
@@ -858,6 +1299,7 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 			p.hardEvictionTimer = nil
 		}
 	}
+	room.bumpEpoch()
 
 	room.mu.Unlock() // Unlock before sending
 
@@ -866,7 +1308,7 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 	// Broadcast room_ended
 	endPayload, _ := json.Marshal(map[string]string{
 		"by":     c.cid,
-		"reason": "host_ended",
+		"reason": tombstoneReasonEndedByHost,
 	})
 	endMsg := Message{
 		V:       1,
@@ -879,6 +1321,11 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 		client.sendMessage(endMsg)
 	}
 
+	// Record a tombstone so suspended participants that reconnect within the
+	// TTL receive a structured ROOM_ENDED instead of being silently turned
+	// into a fresh participant in a recreated room.
+	h.recordTombstone(rid, tombstoneReasonEndedByHost)
+
 	// Remove room from hub
 	h.mu.Lock()
 	delete(h.rooms, rid)
@@ -889,6 +1336,9 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 	room.byCID = make(map[string]*roomParticipant)
 	room.byClient = make(map[*Client]string)
 	room.HostCID = ""
+	room.negotiationDirty = nil
+	room.mediaLiveness = nil
+	room.mediaLivenessReporters = nil
 	room.mu.Unlock()
 
 	// Notify watchers
@@ -914,7 +1364,8 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 	defer room.mu.Unlock()
 
 	// Sender must be an active (attached) participant in this room.
-	if room.cidForClient(c) == "" {
+	senderCID := room.cidForClient(c)
+	if senderCID == "" {
 		log.Printf("[RELAY] Client %s (CID: %s) tried to relay in room %s but is not a participant", c.sid, c.cid, c.rid)
 		return
 	}
@@ -924,7 +1375,15 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 		rawPayload = make(map[string]interface{})
 		log.Printf("[RELAY] Client %s (CID: %s) sent invalid payload for type %s: %v", c.sid, c.cid, msg.Type, err)
 	}
-	rawPayload["from"] = c.cid
+	rawPayload["from"] = senderCID
+
+	// content_state is latest-state UI metadata, not negotiation traffic.
+	// Persist it on the participant record so a peer reconnecting after a
+	// suspension still receives the current value via room_state, instead of
+	// only learning about new transitions.
+	if msg.Type == "content_state" {
+		applyContentStateUpdate(room, senderCID, rawPayload)
+	}
 
 	newPayload, _ := json.Marshal(rawPayload)
 
@@ -935,21 +1394,82 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 		Payload: newPayload,
 	}
 
-	// Iterate active participants only. Suspended participants have no
-	// transport attached — offer/answer/ice sent to them would be dropped
-	// anyway. The sender will re-send on reconnect via ICE restart.
+	// Walk the full participant list (including suspended). Active peers get
+	// the message; for offer/answer/ice we additionally mark the sender's
+	// dirty pair with each suspended target and respond `relay_failed` so the
+	// sender doesn't sit waiting forever for an answer that will never come.
+	negotiationType := msg.Type == "offer" || msg.Type == "answer" || msg.Type == "ice"
 	relayedCount := 0
-	for client, cid := range room.byClient {
-		if cid == c.cid {
+	var suspendedTargets []string
+	for cid, p := range room.byCID {
+		if cid == senderCID {
 			continue
 		}
 		if msg.To != "" && msg.To != cid {
 			continue
 		}
-		client.sendMessage(relayMsg)
-		relayedCount++
+		if p.Client != nil {
+			p.Client.sendMessage(relayMsg)
+			relayedCount++
+			continue
+		}
+		if negotiationType {
+			room.markNegotiationDirty(senderCID, cid)
+			suspendedTargets = append(suspendedTargets, cid)
+		}
 	}
-	log.Printf("[RELAY] Client %s (CID: %s) relayed %s message to %d participants in room %s", c.sid, c.cid, msg.Type, relayedCount, c.rid)
+
+	if len(suspendedTargets) > 0 {
+		// Tell the sender we couldn't deliver. The SDK should suppress further
+		// negotiation to that CID and wait for `negotiation_dirty` after the
+		// peer reattaches.
+		failPayload, _ := json.Marshal(map[string]interface{}{
+			"reason":  "target_suspended",
+			"targets": suspendedTargets,
+			"of":      msg.Type,
+		})
+		c.sendMessage(Message{
+			V:       1,
+			Type:    "relay_failed",
+			RID:     msg.RID,
+			Payload: failPayload,
+		})
+	}
+
+	log.Printf("[RELAY] Client %s (CID: %s) relayed %s message to %d participants in room %s (suspended-targets=%d)", c.sid, senderCID, msg.Type, relayedCount, c.rid, len(suspendedTargets))
+}
+
+// applyContentStateUpdate merges the latest content metadata into the
+// sender's participant record so it can be replayed via room_state after a
+// suspension. Caller must hold room.mu.
+//
+// Bails out unless the payload carries a boolean `active` field — a
+// malformed/empty content_state must NOT destructively clear the
+// participant's previously-stored state, since suspended peers depend on
+// the latest known good value at reattach time.
+func applyContentStateUpdate(room *Room, senderCID string, payload map[string]interface{}) {
+	p := room.participantByCID(senderCID)
+	if p == nil {
+		return
+	}
+	active, ok := payload["active"].(bool)
+	if !ok {
+		return
+	}
+	state := &ParticipantContentState{
+		Active:      active,
+		Epoch:       room.Epoch,
+		UpdatedAtMs: time.Now().UnixMilli(),
+	}
+	// contentType is meaningful only while a share is active. `active=false`
+	// collapses to a cleared state so suspended peers don't see a stale
+	// "screen sharing" indicator after the share stops.
+	if active {
+		if contentType, ok := payload["contentType"].(string); ok {
+			state.ContentType = contentType
+		}
+	}
+	p.ContentState = state
 }
 
 func (h *Hub) handleMediaState(c *Client, msg Message) {
@@ -1007,6 +1527,72 @@ func (h *Hub) handleMediaState(c *Client, msg Message) {
 		if cid != c.cid {
 			client.sendMessage(relayMsg)
 		}
+	}
+}
+
+// handleMediaLiveness records peer-reported inbound-media observations for
+// suspended CIDs. Used as a cleanup hint in hardEvictSuspended so a
+// suspended participant whose signaling transport is late to recover but
+// whose peer media is still flowing is not removed solely because the
+// directory clock fired. The hint is NEVER used for authorization or
+// authority — only to defer eviction.
+//
+// Wire payload:
+//
+//	{ "v":1, "type":"media_liveness", "payload":{ "cids":["C-..","C-.."] } }
+//
+// Reports apply to the sender's room. Unknown CIDs are ignored.
+func (h *Hub) handleMediaLiveness(c *Client, msg Message) {
+	if c.rid == "" || c.cid == "" {
+		return
+	}
+	h.mu.RLock()
+	room, exists := h.rooms[c.rid]
+	h.mu.RUnlock()
+	if !exists {
+		return
+	}
+
+	var payload struct {
+		CIDs []string `json:"cids"`
+	}
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	room.mu.Lock()
+	// Sender must be an attached participant in this room. Resolve the CID
+	// from the room index, NOT c.cid — stale-socket fields can outlive a
+	// reattach and we should authorize / self-skip against the index, like
+	// handleRelay does.
+	senderCID := room.cidForClient(c)
+	if senderCID == "" {
+		room.mu.Unlock()
+		return
+	}
+	room.recordMediaLivenessReporter(senderCID, now)
+	for _, reportedCID := range payload.CIDs {
+		if reportedCID == "" || reportedCID == senderCID {
+			continue
+		}
+		if room.participantByCID(reportedCID) == nil {
+			continue
+		}
+		room.recordMediaLiveness(reportedCID, now)
+	}
+	// Fast-path ghost eviction: any suspended CID that has cleared the
+	// minimum dwell, has no recent positive media report, and is excluded
+	// from every active peer's recent media_liveness is a ghost — evict
+	// without waiting for the full 10-minute hard-evict timer. Compute the
+	// candidate list under the lock, then drop the lock before calling
+	// hardEvictSuspended (which re-acquires it).
+	ghosts := room.suspendedGhostsExcludedByActiveReporters(now, ghostEvictMinDwell, mediaLivenessFreshnessWindow)
+	rid := room.RID
+	room.mu.Unlock()
+	for _, cid := range ghosts {
+		log.Printf("[HARD_EVICT] Fast-path eviction of suspended CID %s in room %s — all active peers report no inbound media", cid, rid)
+		h.hardEvictSuspended(room, cid)
 	}
 }
 
@@ -1080,6 +1666,7 @@ func (h *Hub) suspendClientInRoom(c *Client) {
 	}
 
 	room.detachClient(p)
+	room.bumpEpoch()
 	log.Printf("[SUSPEND] Client %s (CID: %s) suspended in room %s. Hard eviction in %s", c.sid, cid, rid, suspendHardEvictionTimeout)
 
 	// Close over this specific *Room so a timer firing after the room has been
@@ -1109,6 +1696,12 @@ func (h *Hub) suspendClientInRoom(c *Client) {
 // final room_state so remaining peers tear down the stale peer connection.
 // Takes *Room (not rid) so a late-firing timer against a replaced-since room
 // is dropped cleanly.
+//
+// If active peers have recently reported inbound media from this CID, eviction
+// is deferred for a short window and re-evaluated. media_liveness is a
+// cleanup hint only — it never extends the slot indefinitely, but a peer
+// whose signaling transport is late to recover should not be removed solely
+// because the directory clock fired.
 func (h *Hub) hardEvictSuspended(room *Room, cid string) {
 	h.mu.RLock()
 	current, exists := h.rooms[room.RID]
@@ -1125,9 +1718,24 @@ func (h *Hub) hardEvictSuspended(room *Room, cid string) {
 		room.mu.Unlock()
 		return
 	}
+
+	if room.hasRecentMediaLiveness(cid, mediaLivenessFreshnessWindow) {
+		log.Printf("[HARD_EVICT] Deferring eviction of CID %s in room %s — recent media-liveness hint", cid, rid)
+		// Re-arm; we'll re-check once peers either go quiet or the participant
+		// reattaches.
+		p.hardEvictionTimer = time.AfterFunc(hardEvictMediaActiveDeferral, func() {
+			h.hardEvictSuspended(room, cid)
+		})
+		room.mu.Unlock()
+		return
+	}
+
 	log.Printf("[HARD_EVICT] Suspend window expired for CID %s in room %s. Removing participant.", cid, rid)
 	room.removeParticipant(cid)
+	room.dropCIDFromDirty(cid)
+	room.dropMediaLivenessFor(cid)
 	room.transferHostIfNeeded(cid)
+	room.bumpEpoch()
 
 	isEmpty := room.participantCount() == 0
 	room.mu.Unlock()
@@ -1175,6 +1783,9 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 		return
 	}
 	room.removeParticipant(cid)
+	room.dropCIDFromDirty(cid)
+	room.dropMediaLivenessFor(cid)
+	room.bumpEpoch()
 	log.Printf("[REMOVE_FROM_ROOM] Client %s (CID: %s) removed from room %s. Remaining participants: %d", c.sid, cid, rid, room.participantCount())
 	room.transferHostIfNeeded(cid)
 
@@ -1192,6 +1803,54 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	h.broadcastRoomStatusUpdate(rid)
 }
 
+// evictByLeave is the explicit terminal-leave path used by `POST /api/leave`.
+// Unlike `disconnectClient` it does not start a suspend window — the
+// participant is removed immediately (the user explicitly chose to leave or
+// end the call, often during page unload). Idempotent: a second call for an
+// already-evicted CID is a no-op.
+//
+// The caller is responsible for verifying the reconnect token before calling
+// this helper. The participant record is removed regardless of whether a
+// signaling transport is currently attached, and any attached *Client is
+// detached + suspended-record cleaned up so the next reconnect with a stale
+// token can not silently revive the slot.
+func (h *Hub) evictByLeave(rid, cid string) {
+	h.mu.RLock()
+	room, exists := h.rooms[rid]
+	h.mu.RUnlock()
+	if !exists {
+		return
+	}
+
+	room.mu.Lock()
+	p := room.participantByCID(cid)
+	if p == nil {
+		room.mu.Unlock()
+		return
+	}
+	attachedClient := p.Client
+	room.removeParticipant(cid)
+	room.dropCIDFromDirty(cid)
+	room.dropMediaLivenessFor(cid)
+	room.transferHostIfNeeded(cid)
+	room.bumpEpoch()
+	isEmpty := room.participantCount() == 0
+	room.mu.Unlock()
+
+	if attachedClient != nil {
+		h.cleanupEvictedClient(attachedClient)
+	}
+
+	if isEmpty {
+		h.mu.Lock()
+		delete(h.rooms, rid)
+		h.mu.Unlock()
+	} else {
+		h.broadcastRoomState(room)
+	}
+	h.broadcastRoomStatusUpdate(rid)
+}
+
 func (h *Hub) broadcastRoomState(room *Room) {
 	// Must be called without room lock!
 
@@ -1200,6 +1859,7 @@ func (h *Hub) broadcastRoomState(room *Room) {
 	hostCid := room.HostCID
 	rid := room.RID
 	roomMaxParticipants := room.MaxParticipants
+	epoch := room.Epoch
 	// Only broadcast to actively-attached clients; suspended participants
 	// have no transport to receive messages.
 	clients := room.activeClients()
@@ -1209,10 +1869,11 @@ func (h *Hub) broadcastRoomState(room *Room) {
 		"hostCid":         hostCid,
 		"participants":    participants,
 		"maxParticipants": roomMaxParticipants,
+		"epoch":           epoch,
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
-	log.Printf("[BROADCAST] Room State for %s: %d participants", rid, len(participants))
+	log.Printf("[BROADCAST] Room State for %s: %d participants epoch=%d", rid, len(participants), epoch)
 
 	msg := Message{
 		V:       1,
@@ -1226,16 +1887,88 @@ func (h *Hub) broadcastRoomState(room *Room) {
 	}
 }
 
-func (c *Client) sendError(rid, code, message string) {
+// sendRoomStateSnapshot delivers an authoritative room_state to a single
+// client. Used after a successful reconnect so SDKs have a confirmed sync
+// point on the new transport before scheduling renegotiation, regardless of
+// whether the epoch advanced during the outage.
+func (h *Hub) sendRoomStateSnapshot(c *Client, room *Room) {
+	room.mu.Lock()
+	participants := room.snapshotParticipants()
+	hostCid := room.HostCID
+	rid := room.RID
+	roomMaxParticipants := room.MaxParticipants
+	epoch := room.Epoch
+	room.mu.Unlock()
+
+	payload := map[string]interface{}{
+		"hostCid":         hostCid,
+		"participants":    participants,
+		"maxParticipants": roomMaxParticipants,
+		"epoch":           epoch,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	c.sendMessage(Message{
+		V:       1,
+		Type:    "room_state",
+		RID:     rid,
+		Payload: payloadBytes,
+	})
+}
+
+// notifyDirtyNegotiation informs each active peer that they had pending
+// signaling traffic to the given CID while it was suspended. SDKs use this to
+// schedule a fresh glare-safe negotiation/ICE-restart after the authoritative
+// post-reconnect snapshot, instead of waiting for an answer that will never
+// arrive.
+func (h *Hub) notifyDirtyNegotiation(room *Room, recoveredCID string, partners []string) {
+	if len(partners) == 0 {
+		return
+	}
 	payload, _ := json.Marshal(map[string]interface{}{
+		"with": recoveredCID,
+	})
+	msg := Message{
+		V:       1,
+		Type:    "negotiation_dirty",
+		RID:     room.RID,
+		Payload: payload,
+	}
+	room.mu.Lock()
+	targets := make([]*Client, 0, len(partners))
+	for _, partnerCID := range partners {
+		p := room.participantByCID(partnerCID)
+		if p == nil || p.Client == nil {
+			continue
+		}
+		targets = append(targets, p.Client)
+	}
+	room.mu.Unlock()
+	for _, client := range targets {
+		client.sendMessage(msg)
+	}
+}
+
+func (c *Client) sendError(rid, code, message string) {
+	c.sendErrorWithReason(rid, code, message, "")
+}
+
+// sendErrorWithReason mirrors sendError but emits an additional `reason`
+// field on the error payload. Used for terminal codes (e.g. ROOM_ENDED)
+// where the SDK wants the trigger surfaced for UX or telemetry.
+func (c *Client) sendErrorWithReason(rid, code, message, reason string) {
+	payload := map[string]interface{}{
 		"code":    code,
 		"message": message,
-	})
+	}
+	if reason != "" {
+		payload["reason"] = reason
+	}
+	body, _ := json.Marshal(payload)
 	c.sendMessage(Message{
 		V:       1,
 		Type:    "error",
 		RID:     rid,
-		Payload: payload,
+		Payload: body,
 	})
 }
 
