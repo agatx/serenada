@@ -785,16 +785,29 @@ class SerenadaSession internal constructor(
         webRtcEngine.detachLocalRenderer(renderer)
     }
 
-    /** Attach a [SurfaceViewRenderer][org.webrtc.SurfaceViewRenderer] for remote video. */
+    /**
+     * Attach a [SurfaceViewRenderer][org.webrtc.SurfaceViewRenderer] for remote video.
+     *
+     * In a 1:1 call, the host app calls this without a CID and we pick a peer
+     * for them. Prefer an ACTIVE (non-suspended) participant: picking a
+     * suspended one attaches the renderer to a frozen peer connection — the
+     * last frame stays on screen as a "ghost" — while a co-existing fresh
+     * CID for the same physical device that joined without a reconnect token
+     * gets no renderer at all. Falls back to any non-self participant, then
+     * to any peer slot, before giving up.
+     */
     fun attachRemoteRenderer(
         renderer: org.webrtc.SurfaceViewRenderer,
         rendererEvents: org.webrtc.RendererCommon.RendererEvents? = null,
     ) {
         assertMainThread()
-        val remoteCid = currentRoomState
-            ?.participants
-            ?.firstOrNull { it.cid != clientId }
+        val participants = currentRoomState?.participants
+        val remoteCid = participants
+            ?.firstOrNull { it.cid != clientId && it.signalingStatus != ParticipantSignalingStatus.SUSPENDED }
             ?.cid
+            ?: participants
+                ?.firstOrNull { it.cid != clientId }
+                ?.cid
             ?: peerSlots.keys.firstOrNull()
             ?: return
         attachRemoteRendererForCid(remoteCid, renderer, rendererEvents)
@@ -833,10 +846,15 @@ class SerenadaSession internal constructor(
 
     fun attachRemoteSink(sink: org.webrtc.VideoSink) {
         assertMainThread()
-        val remoteCid = currentRoomState
-            ?.participants
-            ?.firstOrNull { it.cid != clientId }
+        // Same active-first preference as attachRemoteRenderer above —
+        // attaching a sink to a suspended peer pins it to a frozen track.
+        val participants = currentRoomState?.participants
+        val remoteCid = participants
+            ?.firstOrNull { it.cid != clientId && it.signalingStatus != ParticipantSignalingStatus.SUSPENDED }
             ?.cid
+            ?: participants
+                ?.firstOrNull { it.cid != clientId }
+                ?.cid
             ?: peerSlots.keys.firstOrNull()
             ?: return
         peerSlots[remoteCid]?.attachRemoteSink(sink)

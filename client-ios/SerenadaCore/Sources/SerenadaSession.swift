@@ -493,8 +493,19 @@ public final class SerenadaSession: ObservableObject {
     public func detachLocalRenderer(_ renderer: AnyObject) { webRtcEngine.detachLocalRenderer(renderer) }
 
     /// Attach a view for rendering remote video.
+    ///
+    /// In a 1:1 call, the host app calls this without a CID and we pick a
+    /// peer for them. Prefer an ACTIVE (non-suspended) participant: picking a
+    /// suspended one attaches the renderer to a frozen peer connection — the
+    /// last frame stays on screen as a "ghost" — while a co-existing fresh
+    /// CID for the same physical device that joined without a reconnect
+    /// token gets no renderer at all. Falls back to any non-self
+    /// participant, then to any peer slot, before giving up.
     public func attachRemoteRenderer(_ renderer: AnyObject) {
-        let cid = currentRoomState?.participants.first(where: { $0.cid != clientId })?.cid ?? peerSlots.keys.first
+        let participants = currentRoomState?.participants ?? []
+        let cid = participants.first(where: { $0.cid != clientId && $0.signalingStatus != .suspended })?.cid
+            ?? participants.first(where: { $0.cid != clientId })?.cid
+            ?? peerSlots.keys.first
         guard let cid else { return }
         attachRemoteRenderer(renderer, forParticipant: cid)
     }
