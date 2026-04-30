@@ -26,10 +26,12 @@ import {
     type LayoutResult,
     type SerenadaSessionHandle,
 } from '@serenada/core';
+import { AudioActivityIndicator } from './components/AudioActivityIndicator.js';
 import { DebugPanel } from './components/DebugPanel.js';
 import { RemoteAvatar } from './components/RemoteAvatar.js';
 import { useAvatarResolver, type AvatarResolver } from './hooks/useAvatarResolver.js';
 import { StatusOverlay } from './components/StatusOverlay.js';
+import { useAudioLevel } from './hooks/useAudioLevel.js';
 import { useCallState } from './hooks/useCallState.js';
 import { SerenadaPermissions } from './SerenadaPermissions.js';
 import type { CallFlowProps } from './types.js';
@@ -69,11 +71,16 @@ function isMobileBrowser(): boolean {
     return typeof navigator !== 'undefined' && MOBILE_BROWSER_RE.test(navigator.userAgent);
 }
 
-const ParticipantBadge: React.FC<{ muted?: boolean; displayName?: string }> = ({ muted, displayName }) => {
-    if (!muted && !displayName) return null;
+const ParticipantBadge: React.FC<{
+    muted?: boolean;
+    displayName?: string;
+    stream?: MediaStream | null;
+}> = ({ muted, displayName, stream }) => {
+    const level = useAudioLevel(stream ?? null, !muted);
+    if (!muted && !displayName && !stream) return null;
     return (
         <div className="participant-badge">
-            {muted && <MicOff size={14} />}
+            {muted ? <MicOff size={14} /> : stream ? <AudioActivityIndicator level={level} /> : null}
             {displayName && <span className="participant-badge-name">{displayName}</span>}
         </div>
     );
@@ -946,6 +953,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                         const tileAudioMuted = isContentTile ? false : isLocalTile ? isMuted : tileRemote?.audioEnabled === false;
                                         const tileDisplayName = isContentTile ? undefined : isLocalTile ? localParticipant?.displayName : tileRemote?.displayName;
                                         const tileVideoEnabled = isContentTile ? true : isLocalTile ? localParticipant?.videoEnabled !== false : tileRemote?.videoEnabled;
+                                        const tileAudioStream = isContentTile ? null : isLocalTile ? localStream : remoteStreams.get(tile.id) ?? null;
                                         return (
                                             <div key={tile.id} className="video-stage-tile" style={tileStyle}>
                                                 <VideoTile
@@ -981,7 +989,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                         {remoteVideoFit === 'cover' ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
                                                     </button>
                                                 )}
-                                                <ParticipantBadge muted={tileAudioMuted} displayName={tileDisplayName} />
+                                                <ParticipantBadge muted={tileAudioMuted} displayName={tileVideoEnabled === false ? undefined : tileDisplayName} stream={tileAudioStream} />
                                             </div>
                                         );
                                     })}
@@ -1011,7 +1019,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                             }}
                                                             onClick={() => setPinnedParticipantId(tile.cid)}
                                                         />
-                                                        <ParticipantBadge muted={gridRemote?.audioEnabled === false} displayName={gridRemote?.displayName} />
+                                                        <ParticipantBadge muted={gridRemote?.audioEnabled === false} displayName={gridRemote?.videoEnabled === false ? undefined : gridRemote?.displayName} stream={stageTile.stream} />
                                                     </div>
                                                 );
                                             })}
@@ -1043,7 +1051,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                     style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
                                 />
                             )}
-                            <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} />
+                            <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} stream={localStream} />
                         </div>
                     )}
                 </div>
@@ -1105,7 +1113,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                         </button>
                     )}
 
-                    <ParticipantBadge muted={remoteParticipant0?.audioEnabled === false} displayName={remoteParticipant0?.displayName} />
+                    <ParticipantBadge muted={remoteParticipant0?.audioEnabled === false} displayName={remoteParticipant0?.videoEnabled === false ? undefined : remoteParticipant0?.displayName} stream={remoteStream} />
 
                     {waitingOverlay}
                 </div>
@@ -1132,7 +1140,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             style={{ objectFit: isScreenSharing ? 'contain' : 'cover' }}
                         />
                     )}
-                    <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} />
+                    <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} stream={localStream} />
                 </div>
             </div>
             {controlsBar}

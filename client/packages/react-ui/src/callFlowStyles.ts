@@ -420,6 +420,21 @@ const CALL_FLOW_CSS = `
   text-overflow: ellipsis;
 }
 
+[data-serenada-callflow] .audio-activity-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+[data-serenada-callflow] .audio-activity-bar {
+  width: 3px;
+  border-radius: 1.5px;
+  background: #22c55e;
+  transition: height 100ms ease-out;
+}
+
 [data-serenada-callflow] .debug-toggle-zone {
   position: absolute;
   top: 0;
