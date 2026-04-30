@@ -547,12 +547,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             for stat in report.statistics.values {
                 switch stat.type {
                 case "inbound-rtp":
-                    if mediaKind(for: stat) == "audio", let level = memberDouble(stat, key: "audioLevel") {
-                        inbound = max(0, min(1, Float(level)))
+                    if mediaKind(for: stat) == "audio" {
+                        inbound = clampedAudioLevel(memberDouble(stat, key: "audioLevel"))
                     }
                 case "media-source":
-                    if mediaKind(for: stat) == "audio", let level = memberDouble(stat, key: "audioLevel") {
-                        mediaSource = max(0, min(1, Float(level)))
+                    if mediaKind(for: stat) == "audio" {
+                        mediaSource = clampedAudioLevel(memberDouble(stat, key: "audioLevel"))
                     }
                 default:
                     break

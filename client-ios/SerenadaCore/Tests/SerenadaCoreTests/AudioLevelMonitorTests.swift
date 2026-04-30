@@ -32,6 +32,16 @@ final class AudioLevelMonitorTests: XCTestCase {
         XCTAssertLessThanOrEqual(monitor.level, 1)
     }
 
+    func testTreatsNonFiniteInputAsSilence() {
+        let monitor = AudioLevelMonitor()
+        // NaN/inf would otherwise slip through the clamp (min/max use `<`
+        // comparisons that propagate NaN) and pin the indicator to garbage.
+        _ = monitor.update(rawLevel: .nan)
+        XCTAssertEqual(monitor.level, 0, accuracy: 1e-6)
+        _ = monitor.update(rawLevel: .infinity)
+        XCTAssertEqual(monitor.level, 0, accuracy: 1e-6)
+    }
+
     func testReleasesSlowerThanItAttacks() {
         let attack = AudioLevelMonitor()
         _ = attack.update(rawLevel: 1.0)

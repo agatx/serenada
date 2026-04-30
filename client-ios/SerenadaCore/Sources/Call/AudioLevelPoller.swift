@@ -20,6 +20,9 @@ final class AudioLevelPoller {
     private var requestInFlight = false
     private let localMonitor = AudioLevelMonitor()
     private var remoteMonitors: [String: AudioLevelMonitor] = [:]
+    /// Bumped on each `start()`/`stop()` so any stats request started in a
+    /// previous run can be discarded when its async result returns.
+    private var generation: UInt64 = 0
 
     init(
         clock: SessionClock,
@@ -35,6 +38,7 @@ final class AudioLevelPoller {
 
     func start() {
         stop()
+        generation &+= 1
         pollTimerCancellable = clock.scheduleRepeating(intervalSeconds: AudioLevelMonitor.updateIntervalSeconds) { [weak self] in
             self?.tick()
         }
@@ -43,13 +47,17 @@ final class AudioLevelPoller {
     func stop() {
         pollTimerCancellable?.cancel()
         pollTimerCancellable = nil
+        // Bumping the generation invalidates any stats request kicked off by
+        // a previous tick — when its async completion fires, applyAndEmit
+        // will drop the result instead of emitting after teardown.
+        generation &+= 1
         requestInFlight = false
         localMonitor.reset()
         remoteMonitors.removeAll()
     }
 
     private func tick() {
-        guard isActivePhase() else { return }
+        guard pollTimerCancellable != nil, isActivePhase() else { return }
         if requestInFlight { return }
         let slots = getPeerSlots()
         guard !slots.isEmpty else {
@@ -62,6 +70,7 @@ final class AudioLevelPoller {
         }
 
         requestInFlight = true
+        let tickGeneration = generation
         let group = DispatchGroup()
         let lock = NSLock()
         var rawRemote: [String: Float?] = [:]
@@ -81,16 +90,22 @@ final class AudioLevelPoller {
 
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
-            Task { @MainActor in self.applyAndEmit(rawLocal: rawLocal, rawRemote: rawRemote) }
+            Task { @MainActor in self.applyAndEmit(rawLocal: rawLocal, rawRemote: rawRemote, tickGeneration: tickGeneration) }
         }
     }
 
-    private func applyAndEmit(rawLocal: Float?, rawRemote: [String: Float?]) {
+    private func applyAndEmit(rawLocal: Float?, rawRemote: [String: Float?], tickGeneration: UInt64) {
+        // Drop late results from a previous start()/stop() cycle.
+        guard tickGeneration == generation, pollTimerCancellable != nil else {
+            requestInFlight = false
+            return
+        }
         requestInFlight = false
         let local = localMonitor.update(rawLevel: rawLocal ?? 0)
-        // Drop monitors for peers no longer present.
+        // Drop monitors for peers no longer present. Snapshot the keys so we
+        // don't mutate the dictionary while iterating it.
         let activeCids = Set(rawRemote.keys)
-        for cid in remoteMonitors.keys where !activeCids.contains(cid) {
+        for cid in Array(remoteMonitors.keys) where !activeCids.contains(cid) {
             remoteMonitors.removeValue(forKey: cid)
         }
         var remote: [String: Float] = [:]

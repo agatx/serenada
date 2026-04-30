@@ -28,7 +28,11 @@ final class AudioLevelMonitor {
     /// Submit a raw 0..1 level and return the smoothed value.
     @discardableResult
     func update(rawLevel: Float) -> Float {
-        let raw = max(0, min(1, rawLevel))
+        // `max`/`min` use `<` comparisons that propagate NaN unchanged, so a
+        // non-finite input would slip through the clamp and pin the indicator
+        // to a garbage value. Treat anything non-finite as silence.
+        let sanitized = rawLevel.isFinite ? rawLevel : 0
+        let raw = max(0, min(1, sanitized))
         let dbfs: Float = raw > 0 ? 20 * log10f(raw) : Self.noiseFloorDb
         let span = Self.speechPeakDb - Self.noiseFloorDb
         let target = max(0, min(1, (dbfs - Self.noiseFloorDb) / span))

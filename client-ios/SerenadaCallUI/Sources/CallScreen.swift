@@ -393,7 +393,7 @@ struct CallScreenView: View {
                     ParticipantBadge(
                         muted: firstRemote?.audioEnabled == false,
                         displayName: firstRemote?.videoEnabled == false ? nil : firstRemote?.displayName,
-                        audioLevel: firstRemote?.audioLevel ?? 0
+                        audioLevel: firstRemote?.audioLevel
                     )
                 }
                 .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
@@ -576,7 +576,7 @@ struct CallScreenView: View {
             ParticipantBadge(
                 muted: uiState.remoteParticipants.first?.audioEnabled == false,
                 displayName: uiState.remoteParticipants.first?.videoEnabled == false ? nil : uiState.remoteParticipants.first?.displayName,
-                audioLevel: uiState.remoteParticipants.first?.audioLevel ?? 0
+                audioLevel: uiState.remoteParticipants.first?.audioLevel
             )
         }
             .frame(width: 110, height: 160)
@@ -1075,7 +1075,7 @@ private struct MultiPartyStage: View {
                                 let tileName = isLocal ? localDisplayName : tileRemote?.displayName
                                 let tileNameForBadge: String? =
                                     (!isLocal && tileRemote?.videoEnabled == false) ? nil : tileName
-                                let tileAudioLevel: Float = isLocal ? localAudioLevel : (tileRemote?.audioLevel ?? 0)
+                                let tileAudioLevel: Float? = isLocal ? localAudioLevel : tileRemote?.audioLevel
                                 ParticipantBadge(
                                     muted: tileAudioMuted,
                                     displayName: tileNameForBadge,
@@ -1305,18 +1305,21 @@ struct VideoPlaceholderTile: View {
 private struct ParticipantBadge: View {
     var muted: Bool = false
     var displayName: String? = nil
-    var audioLevel: Float = 0
-    var showActivityIndicator: Bool = true
+    /// When non-nil, drives the green activity indicator (and signals that a
+    /// real participant is bound to this badge). Pass `nil` for tiles without
+    /// a participant — e.g. the remote slot before a peer joins — to suppress
+    /// the badge entirely when there's nothing to show.
+    var audioLevel: Float? = nil
 
     var body: some View {
-        let showIndicator = showActivityIndicator && !muted
+        let showIndicator = !muted && audioLevel != nil
         if muted || showIndicator || displayName != nil {
             HStack(spacing: 4) {
                 if muted {
                     Image(systemName: "mic.slash.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color(red: 0.94, green: 0.27, blue: 0.27))
-                } else if showIndicator {
+                } else if let audioLevel {
                     AudioActivityIndicator(level: audioLevel)
                 }
                 if let name = displayName {
