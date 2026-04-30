@@ -2,7 +2,7 @@
  * @serenada/core — headless call engine.
  * Vanilla TypeScript — no React dependency.
  */
-export const SERENADA_CORE_VERSION = '0.6.3';
+export const SERENADA_CORE_VERSION = '0.6.4';
 
 // Public API
 export { SerenadaCore } from './SerenadaCore.js';
@@ -139,6 +139,10 @@ export {
 
 /** @internal Local video recovery utilities */
 export { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './media/localVideoRecovery.js';
+
+// Audio level monitoring (used by call UI for activity indicators)
+export { AudioLevelMonitor } from './media/AudioLevelMonitor.js';
+export type { AudioLevelMonitorOptions } from './media/AudioLevelMonitor.js';
 
 /** @internal */
 export { createRoomId } from './api/roomApi.js';

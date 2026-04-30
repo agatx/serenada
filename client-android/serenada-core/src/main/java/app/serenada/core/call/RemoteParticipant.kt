@@ -26,4 +26,10 @@ data class RemoteParticipant(
      * [ParticipantSignalingStatus.ACTIVE].
      */
     val presumedLost: Boolean = false,
+    /**
+     * Smoothed voice activity level (0..1) for this peer's inbound audio.
+     * Updated at ~10 Hz while the call is active; intended to drive UI
+     * activity indicators. Always 0 when [audioEnabled] is false.
+     */
+    val audioLevel: Float = 0f,
 )

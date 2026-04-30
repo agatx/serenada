@@ -76,4 +76,10 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     /// when its sample advances over the previous one. Reports `0` when
     /// the peer connection is not yet established.
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void)
+
+    /// Lightweight stats fetch for voice-activity indicators. Extracts only
+    /// `inbound-rtp.audioLevel` (the remote peer's audio) and
+    /// `media-source.audioLevel` (the locally captured mic). Either may be
+    /// `nil` if stats haven't populated yet. Callback fires on the main actor.
+    func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void)
 }

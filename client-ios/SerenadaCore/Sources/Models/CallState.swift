@@ -40,6 +40,10 @@ public struct LocalParticipant: Equatable {
     public var availableCameraModes: [LocalCameraMode] = defaultCameraModes
     /// Whether this participant is the room host.
     public var isHost: Bool = false
+    /// Smoothed voice activity level (0..1) for the locally captured mic.
+    /// Updated at ~10 Hz while the call is active; intended to drive UI
+    /// activity indicators. Always 0 when ``audioEnabled`` is false.
+    public var audioLevel: Float = 0
 
     public init() {}
 
@@ -51,7 +55,8 @@ public struct LocalParticipant: Equatable {
         videoEnabled: Bool = true,
         cameraMode: LocalCameraMode = .selfie,
         availableCameraModes: [LocalCameraMode] = defaultCameraModes,
-        isHost: Bool = false
+        isHost: Bool = false,
+        audioLevel: Float = 0
     ) {
         self.cid = cid
         self.displayName = displayName
@@ -61,6 +66,7 @@ public struct LocalParticipant: Equatable {
         self.cameraMode = cameraMode
         self.availableCameraModes = availableCameraModes
         self.isHost = isHost
+        self.audioLevel = audioLevel
     }
 }
 
@@ -95,6 +101,10 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     /// to move the participant out of the active grid or show a "connection
     /// lost" badge. Cleared when the peer transitions back to `.active`.
     public var presumedLost: Bool
+    /// Smoothed voice activity level (0..1) for this peer's inbound audio.
+    /// Updated at ~10 Hz while the call is active; intended to drive UI
+    /// activity indicators. Always 0 when ``audioEnabled`` is false.
+    public var audioLevel: Float = 0
 
     public var id: String { cid }
 
@@ -106,7 +116,8 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         videoEnabled: Bool = true,
         connectionState: SerenadaPeerConnectionState = .new,
         signalingStatus: ParticipantSignalingStatus = .active,
-        presumedLost: Bool = false
+        presumedLost: Bool = false,
+        audioLevel: Float = 0
     ) {
         self.cid = cid
         self.displayName = displayName
@@ -116,6 +127,7 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         self.connectionState = connectionState
         self.signalingStatus = signalingStatus
         self.presumedLost = presumedLost
+        self.audioLevel = audioLevel
     }
 }
 

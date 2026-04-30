@@ -309,6 +309,7 @@ private struct SessionFirstCallFlow: View {
         uiState.localAudioEnabled = state.localParticipant.audioEnabled
         uiState.localVideoEnabled = state.localParticipant.videoEnabled
         uiState.localDisplayName = state.localParticipant.displayName
+        uiState.localAudioLevel = state.localParticipant.audioLevel
         uiState.localCameraMode = state.localParticipant.cameraMode
         uiState.connectionStatus = mapConnectionStatus(state.connectionStatus)
         uiState.activeTransport = diagnostics.activeTransport
@@ -332,7 +333,8 @@ private struct SessionFirstCallFlow: View {
                 peerId: rp.peerId,
                 audioEnabled: rp.audioEnabled,
                 videoEnabled: rp.videoEnabled,
-                connectionState: rp.connectionState
+                connectionState: rp.connectionState,
+                audioLevel: rp.audioLevel
             )
         }
         uiState.participantCount = 1 + state.remoteParticipants.count

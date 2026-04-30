@@ -388,6 +388,7 @@ internal fun CallScreen(
                 localCid = uiState.localCid,
                 localVideoEnabled = uiState.localVideoEnabled,
                 localAudioEnabled = uiState.localAudioEnabled,
+                localAudioLevel = uiState.localAudioLevel,
                 localDisplayName = uiState.localDisplayName,
                 localMirror = uiState.isFrontCamera && !uiState.isScreenSharing,
                 localCameraMode = uiState.localCameraMode,
@@ -568,15 +569,20 @@ internal fun CallScreen(
                     modifier = Modifier.align(Alignment.BottomStart),
                     muted = !uiState.localAudioEnabled,
                     displayName = uiState.localDisplayName,
+                    audioLevel = uiState.localAudioLevel,
                 )
             }
-            Box(modifier = remoteModifier) {
-                ParticipantBadge(
-                    modifier = Modifier.align(Alignment.BottomStart),
-                    muted = remoteP?.audioEnabled == false,
-                    // Avoid duplicating the name when the remote video-off placeholder already shows it.
-                    displayName = if (uiState.remoteVideoEnabled) remoteP?.displayName else null,
-                )
+            if (remoteP != null) {
+                Box(modifier = remoteModifier) {
+                    val remoteNameForBadge =
+                        if (!remoteP.videoEnabled) null else remoteP.displayName
+                    ParticipantBadge(
+                        modifier = Modifier.align(Alignment.BottomStart),
+                        muted = !remoteP.audioEnabled,
+                        displayName = remoteNameForBadge,
+                        audioLevel = remoteP.audioLevel,
+                    )
+                }
             }
         }
 
@@ -1367,6 +1373,7 @@ private fun MultiPartyStage(
     localCid: String?,
     localVideoEnabled: Boolean,
     localAudioEnabled: Boolean,
+    localAudioLevel: Float,
     localDisplayName: String?,
     localMirror: Boolean,
     localCameraMode: LocalCameraMode,
@@ -1624,7 +1631,17 @@ private fun MultiPartyStage(
                                 val tileRemote = if (isLocal) null else remoteParticipants.find { it.cid == tile.id }
                                 val tileAudioMuted = if (isLocal) !localAudioEnabled else tileRemote?.audioEnabled == false
                                 val tileName = if (isLocal) localDisplayName else tileRemote?.displayName
-                                ParticipantBadge(modifier = Modifier.align(Alignment.BottomStart), muted = tileAudioMuted, displayName = tileName)
+                                // Remote tiles render their displayName inside the camera-off
+                                // placeholder, so hide it from the badge in that case.
+                                val tileNameForBadge =
+                                    if (!isLocal && tileRemote?.videoEnabled == false) null else tileName
+                                val tileAudioLevel = if (isLocal) localAudioLevel else tileRemote?.audioLevel ?: 0f
+                                ParticipantBadge(
+                                    modifier = Modifier.align(Alignment.BottomStart),
+                                    muted = tileAudioMuted,
+                                    displayName = tileNameForBadge,
+                                    audioLevel = tileAudioLevel,
+                                )
                             }
                             // Fit toggle on primary tile (bottom-end to avoid flashlight conflict)
                             if (tile.zOrder == 0) {
@@ -1717,7 +1734,14 @@ private fun MultiPartyStage(
                                         },
                                         strings = strings,
                                     )
-                                    ParticipantBadge(modifier = Modifier.align(Alignment.BottomStart), muted = participant.audioEnabled == false, displayName = participant.displayName)
+                                    val gridNameForBadge =
+                                        if (!participant.videoEnabled) null else participant.displayName
+                                    ParticipantBadge(
+                                        modifier = Modifier.align(Alignment.BottomStart),
+                                        muted = participant.audioEnabled == false,
+                                        displayName = gridNameForBadge,
+                                        audioLevel = participant.audioLevel,
+                                    )
                                 }
                             }
                         }
@@ -1752,7 +1776,12 @@ private fun MultiPartyStage(
                         fontSize = 10.sp
                     )
                 }
-                ParticipantBadge(modifier = Modifier.align(Alignment.BottomStart), muted = !localAudioEnabled, displayName = localDisplayName)
+                ParticipantBadge(
+                    modifier = Modifier.align(Alignment.BottomStart),
+                    muted = !localAudioEnabled,
+                    displayName = localDisplayName,
+                    audioLevel = localAudioLevel,
+                )
             }
         }
     }
@@ -2215,8 +2244,11 @@ private fun ParticipantBadge(
     modifier: Modifier = Modifier,
     muted: Boolean = false,
     displayName: String? = null,
+    audioLevel: Float = 0f,
+    showActivityIndicator: Boolean = true,
 ) {
-    if (!muted && displayName == null) return
+    val showIndicator = showActivityIndicator && !muted
+    if (!muted && !showIndicator && displayName == null) return
     Row(
         modifier = modifier
             .padding(6.dp)
@@ -2225,13 +2257,14 @@ private fun ParticipantBadge(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        if (muted) {
-            Icon(
+        when {
+            muted -> Icon(
                 imageVector = Icons.Default.MicOff,
                 contentDescription = null,
                 modifier = Modifier.size(14.dp),
                 tint = Color(0xFFEF4444)
             )
+            showIndicator -> AudioActivityIndicator(level = audioLevel)
         }
         if (displayName != null) {
             Text(

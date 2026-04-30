@@ -201,6 +201,9 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
     }
+    func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
+        onComplete(nil, nil)
+    }
 
     // MARK: - Test Drivers
 

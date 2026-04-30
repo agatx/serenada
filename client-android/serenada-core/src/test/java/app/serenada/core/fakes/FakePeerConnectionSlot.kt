@@ -141,6 +141,7 @@ internal class FakePeerConnectionSlot(
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
     }
+    override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) { onComplete(null, null) }
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {}
 
     // Test drivers

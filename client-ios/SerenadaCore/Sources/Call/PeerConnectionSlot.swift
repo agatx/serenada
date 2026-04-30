@@ -544,15 +544,42 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         peerConnection.statistics { report in
             var bytes: Int64 = 0
             for stat in report.statistics.values where stat.type == "inbound-rtp" {
-                // libwebrtc stat values can arrive as either NSNumber or String.
-                // memberInt64 handles both — using `as? NSNumber` alone would
-                // silently drop the string form and report 0 every tick.
                 bytes += memberInt64(stat, key: "bytesReceived") ?? 0
             }
             Task { @MainActor in onComplete(bytes) }
         }
 #else
         onComplete(0)
+#endif
+    }
+
+    public func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(nil, nil)
+            return
+        }
+        peerConnection.statistics { report in
+            var inbound: Float?
+            var mediaSource: Float?
+            for stat in report.statistics.values {
+                switch stat.type {
+                case "inbound-rtp":
+                    if mediaKind(for: stat) == "audio" {
+                        inbound = clampedAudioLevel(memberDouble(stat, key: "audioLevel"))
+                    }
+                case "media-source":
+                    if mediaKind(for: stat) == "audio" {
+                        mediaSource = clampedAudioLevel(memberDouble(stat, key: "audioLevel"))
+                    }
+                default:
+                    break
+                }
+            }
+            Task { @MainActor in onComplete(inbound, mediaSource) }
+        }
+#else
+        onComplete(nil, nil)
 #endif
     }
 

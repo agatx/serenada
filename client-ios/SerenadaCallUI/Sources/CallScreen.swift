@@ -340,6 +340,7 @@ struct CallScreenView: View {
                     localCid: uiState.localCid,
                     localVideoEnabled: uiState.localVideoEnabled,
                     localAudioEnabled: uiState.localAudioEnabled,
+                    localAudioLevel: uiState.localAudioLevel,
                     localDisplayName: uiState.localDisplayName,
                     localMirror: uiState.isFrontCamera,
                     localCameraMode: uiState.localCameraMode,
@@ -375,7 +376,7 @@ struct CallScreenView: View {
                         showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
                         placeholderText: str(.callLocalCameraOff)
                     )
-                    ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName)
+                    ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName, audioLevel: uiState.localAudioLevel)
                 }
                 .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
                 smallRemoteView
@@ -394,10 +395,10 @@ struct CallScreenView: View {
                         placeholderDisplayName: inCall ? firstRemote?.displayName : nil,
                         placeholderPeerId: inCall ? firstRemote?.peerId : nil
                     )
-                    // Avoid duplicating the name when the remote video-off placeholder already shows it.
                     ParticipantBadge(
                         muted: firstRemote?.audioEnabled == false,
-                        displayName: uiState.remoteVideoEnabled ? firstRemote?.displayName : nil
+                        displayName: firstRemote?.videoEnabled == false ? nil : firstRemote?.displayName,
+                        audioLevel: firstRemote?.audioLevel
                     )
                 }
                 .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
@@ -548,7 +549,7 @@ struct CallScreenView: View {
                 VideoPlaceholderTile(text: str(.callCameraOff), compact: true)
             }
 
-            ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName)
+            ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName, audioLevel: uiState.localAudioLevel)
         }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -577,7 +578,11 @@ struct CallScreenView: View {
                 )
             }
 
-            ParticipantBadge(muted: uiState.remoteParticipants.first?.audioEnabled == false, displayName: uiState.remoteParticipants.first?.displayName)
+            ParticipantBadge(
+                muted: uiState.remoteParticipants.first?.audioEnabled == false,
+                displayName: uiState.remoteParticipants.first?.videoEnabled == false ? nil : uiState.remoteParticipants.first?.displayName,
+                audioLevel: uiState.remoteParticipants.first?.audioLevel
+            )
         }
             .frame(width: 110, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -897,6 +902,7 @@ private struct MultiPartyStage: View {
     let localCid: String?
     let localVideoEnabled: Bool
     let localAudioEnabled: Bool
+    let localAudioLevel: Float
     let localDisplayName: String?
     let localMirror: Bool
     let localCameraMode: LocalCameraMode
@@ -1073,7 +1079,14 @@ private struct MultiPartyStage: View {
                                 let tileRemote = isLocal ? nil : remoteParticipants.first(where: { $0.cid == tile.id })
                                 let tileAudioMuted = isLocal ? !localAudioEnabled : tileRemote?.audioEnabled == false
                                 let tileName = isLocal ? localDisplayName : tileRemote?.displayName
-                                ParticipantBadge(muted: tileAudioMuted, displayName: tileName)
+                                let tileNameForBadge: String? =
+                                    (!isLocal && tileRemote?.videoEnabled == false) ? nil : tileName
+                                let tileAudioLevel: Float? = isLocal ? localAudioLevel : tileRemote?.audioLevel
+                                ParticipantBadge(
+                                    muted: tileAudioMuted,
+                                    displayName: tileNameForBadge,
+                                    audioLevel: tileAudioLevel
+                                )
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                             }
                         }
@@ -1158,6 +1171,7 @@ private struct MultiPartyStage: View {
                     MultiPartyLocalPip(
                         localVideoEnabled: localVideoEnabled,
                         localAudioEnabled: localAudioEnabled,
+                        localAudioLevel: localAudioLevel,
                         localDisplayName: localDisplayName,
                         localMirror: localMirror,
                         cornerRadius: pipCornerRadius,
@@ -1196,7 +1210,11 @@ private struct RemoteParticipantStageTile: View {
             if !participant.videoEnabled {
                 VideoPlaceholderTile(text: resolveString(.callVideoOff, overrides: strings), compact: false, displayName: participant.displayName, peerId: participant.peerId)
             }
-            ParticipantBadge(muted: participant.audioEnabled == false, displayName: participant.displayName)
+            ParticipantBadge(
+                muted: participant.audioEnabled == false,
+                displayName: participant.videoEnabled ? participant.displayName : nil,
+                audioLevel: participant.audioLevel
+            )
         }
         .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -1210,6 +1228,7 @@ private struct RemoteParticipantStageTile: View {
 private struct MultiPartyLocalPip: View {
     let localVideoEnabled: Bool
     let localAudioEnabled: Bool
+    let localAudioLevel: Float
     let localDisplayName: String?
     let localMirror: Bool
     let cornerRadius: CGFloat
@@ -1229,7 +1248,7 @@ private struct MultiPartyLocalPip: View {
             } else {
                 VideoPlaceholderTile(text: resolveString(.callCameraOff, overrides: strings), compact: true)
             }
-            ParticipantBadge(muted: !localAudioEnabled, displayName: localDisplayName)
+            ParticipantBadge(muted: !localAudioEnabled, displayName: localDisplayName, audioLevel: localAudioLevel)
         }
         .frame(width: 100, height: 150)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -1292,14 +1311,22 @@ struct VideoPlaceholderTile: View {
 private struct ParticipantBadge: View {
     var muted: Bool = false
     var displayName: String? = nil
+    /// When non-nil, drives the green activity indicator (and signals that a
+    /// real participant is bound to this badge). Pass `nil` for tiles without
+    /// a participant — e.g. the remote slot before a peer joins — to suppress
+    /// the badge entirely when there's nothing to show.
+    var audioLevel: Float? = nil
 
     var body: some View {
-        if muted || displayName != nil {
+        let showIndicator = !muted && audioLevel != nil
+        if muted || showIndicator || displayName != nil {
             HStack(spacing: 4) {
                 if muted {
                     Image(systemName: "mic.slash.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color(red: 0.94, green: 0.27, blue: 0.27))
+                } else if let audioLevel {
+                    AudioActivityIndicator(level: audioLevel)
                 }
                 if let name = displayName {
                     Text(name)
