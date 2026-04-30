@@ -33,6 +33,15 @@ func memberDouble(_ stat: RTCStatistics?, key: String) -> Double? {
     return nil
 }
 
+/// Clamps a raw `audioLevel` stat value to `[0, 1]`, returning `nil` for
+/// missing or non-finite inputs. `max`/`min` alone don't reject NaN (they use
+/// `<` comparisons that propagate NaN), so a stray non-finite value would
+/// otherwise pin the indicator to a garbage reading.
+func clampedAudioLevel(_ raw: Double?) -> Float? {
+    guard let raw, raw.isFinite else { return nil }
+    return Float(max(0, min(1, raw)))
+}
+
 func memberInt64(_ stat: RTCStatistics?, key: String) -> Int64? {
     guard let value = stat?.values[key] else { return nil }
     if let number = value as? NSNumber {

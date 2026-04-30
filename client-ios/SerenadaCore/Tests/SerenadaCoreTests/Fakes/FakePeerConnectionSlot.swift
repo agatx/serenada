@@ -194,6 +194,10 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         onComplete(.empty, "fake")
     }
 
+    func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
+        onComplete(nil, nil)
+    }
+
     // MARK: - Test Drivers
 
     func simulateConnectionStateChange(_ state: SerenadaPeerConnectionState) {

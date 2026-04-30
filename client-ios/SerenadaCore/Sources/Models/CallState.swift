@@ -40,6 +40,10 @@ public struct LocalParticipant: Equatable {
     public var availableCameraModes: [LocalCameraMode] = defaultCameraModes
     /// Whether this participant is the room host.
     public var isHost: Bool = false
+    /// Smoothed voice activity level (0..1) for the locally captured mic.
+    /// Updated at ~10 Hz while the call is active; intended to drive UI
+    /// activity indicators. Always 0 when ``audioEnabled`` is false.
+    public var audioLevel: Float = 0
 
     public init() {}
 
@@ -51,7 +55,8 @@ public struct LocalParticipant: Equatable {
         videoEnabled: Bool = true,
         cameraMode: LocalCameraMode = .selfie,
         availableCameraModes: [LocalCameraMode] = defaultCameraModes,
-        isHost: Bool = false
+        isHost: Bool = false,
+        audioLevel: Float = 0
     ) {
         self.cid = cid
         self.displayName = displayName
@@ -61,6 +66,7 @@ public struct LocalParticipant: Equatable {
         self.cameraMode = cameraMode
         self.availableCameraModes = availableCameraModes
         self.isHost = isHost
+        self.audioLevel = audioLevel
     }
 }
 
@@ -87,6 +93,10 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     /// them is intentionally kept alive. UIs should show a "reconnecting"
     /// indicator instead of rendering them as gone.
     public var signalingStatus: ParticipantSignalingStatus
+    /// Smoothed voice activity level (0..1) for this peer's inbound audio.
+    /// Updated at ~10 Hz while the call is active; intended to drive UI
+    /// activity indicators. Always 0 when ``audioEnabled`` is false.
+    public var audioLevel: Float = 0
 
     public var id: String { cid }
 
@@ -97,7 +107,8 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         audioEnabled: Bool = true,
         videoEnabled: Bool = true,
         connectionState: SerenadaPeerConnectionState = .new,
-        signalingStatus: ParticipantSignalingStatus = .active
+        signalingStatus: ParticipantSignalingStatus = .active,
+        audioLevel: Float = 0
     ) {
         self.cid = cid
         self.displayName = displayName
@@ -106,6 +117,7 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         self.videoEnabled = videoEnabled
         self.connectionState = connectionState
         self.signalingStatus = signalingStatus
+        self.audioLevel = audioLevel
     }
 }
 
