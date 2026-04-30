@@ -264,6 +264,12 @@ private extension SerenadaServerProvider {
         guard let peerId else { return }
 
         clientId = peerId
+        // Keep currentReconnectPeerId in sync with the server-assigned CID so
+        // the auto-rejoin path (`onOpen` → `sendJoin`) carries `reconnectCid`
+        // alongside the stored `reconnectToken`. Without this, transport-drop
+        // re-joins go out as fresh joins and the server admits a duplicate
+        // participant alongside our suspended record.
+        currentReconnectPeerId = peerId
         reconnectToken = payload.reconnectToken ?? reconnectToken
         currentHostPeerId = payload.hostCid
         currentTurnToken = payload.turnToken

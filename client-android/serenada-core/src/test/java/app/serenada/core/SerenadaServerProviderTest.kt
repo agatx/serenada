@@ -58,6 +58,11 @@ class SerenadaServerProviderTest {
         fun receive(message: SignalingMessage) {
             listener?.onMessage(message)
         }
+
+        fun simulateClosed(reason: String = "test") {
+            connected = false
+            listener?.onClosed(reason)
+        }
     }
 
     private class RecordingListener : SignalingProvider.Listener {
@@ -136,6 +141,49 @@ class SerenadaServerProviderTest {
         assertEquals("room-1", joinMessage.rid)
         assertEquals("local-cid", joinMessage.payload?.optString("reconnectCid"))
         assertEquals(6, joinMessage.payload?.optInt("createMaxParticipants"))
+    }
+
+    @Test
+    fun `auto rejoin after transport drop carries server-assigned cid and token`() {
+        // Initial fresh join — no reconnect peer id from the host app.
+        provider.joinRoom(
+            roomId = "room-1",
+            options = JoinOptions(maxParticipants = 4),
+        )
+        signaling.open(activeTransport = "ws")
+
+        // Server assigns a CID and reconnect token via JOINED.
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "server-assigned",
+                to = null,
+                payload = JSONObject().apply {
+                    put("reconnectToken", "token-xyz")
+                    put(
+                        "participants",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("cid", "server-assigned")
+                                put("joinedAt", 1L)
+                            },
+                        ),
+                    )
+                },
+            ),
+        )
+        signaling.sentMessages.clear()
+
+        // Transport drop and reopen — auto-rejoin path.
+        signaling.simulateClosed()
+        signaling.open(activeTransport = "ws")
+
+        val rejoin = signaling.sentMessages.single()
+        assertEquals("join", rejoin.type)
+        assertEquals("server-assigned", rejoin.payload?.optString("reconnectCid"))
+        assertEquals("token-xyz", rejoin.payload?.optString("reconnectToken"))
     }
 
     @Test

@@ -84,6 +84,40 @@ final class SerenadaServerProviderTests: XCTestCase {
         XCTAssertEqual(joinMessage.payload?.objectValue?["createMaxParticipants"]?.intValue, 6)
     }
 
+    func testAutoRejoinAfterTransportDropCarriesServerAssignedCidAndToken() throws {
+        // Initial fresh join — no reconnect peer id from the host app.
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        signaling.simulateOpen(activeTransport: "ws")
+
+        // Server assigns a CID and reconnect token via JOINED.
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "joined",
+                rid: "room-1",
+                cid: "server-assigned",
+                payload: .object([
+                    "reconnectToken": .string("token-xyz"),
+                    "participants": .array([
+                        .object([
+                            "cid": .string("server-assigned"),
+                            "joinedAt": .number(1)
+                        ])
+                    ])
+                ])
+            )
+        )
+        signaling.clearSentMessages()
+
+        // Transport drop and reopen — auto-rejoin path.
+        signaling.simulateClosed()
+        signaling.simulateOpen(activeTransport: "ws")
+
+        let rejoin = try XCTUnwrap(signaling.sentMessages.last)
+        XCTAssertEqual(rejoin.type, "join")
+        XCTAssertEqual(rejoin.payload?.objectValue?["reconnectCid"]?.stringValue, "server-assigned")
+        XCTAssertEqual(rejoin.payload?.objectValue?["reconnectToken"]?.stringValue, "token-xyz")
+    }
+
     func testJoinedTurnTokenIsUsedForIceServerFetch() async throws {
         apiClient.turnCredentialsResult = .success(
             TurnCredentials(
