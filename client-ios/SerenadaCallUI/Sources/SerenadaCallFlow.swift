@@ -239,7 +239,7 @@ private struct SessionFirstCallFlow: View {
                 CallScreenView(
                     roomId: session.roomId,
                     uiState: mapSessionToUiState(session),
-                    serverHost: session.serverHost,
+                    roomShareURL: session.roomUrl,
                     screenShareExtensionBundleId: session.screenShareExtensionBundleId,
                     roomName: params.roomName,
                     config: config,

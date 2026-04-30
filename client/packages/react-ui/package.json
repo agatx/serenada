@@ -1,6 +1,6 @@
 {
   "name": "@serenada/react-ui",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Pre-built React call UI components for Serenada video calls",
   "type": "module",
   "main": "dist/index.js",
@@ -27,13 +27,13 @@
     "react-qr-code": "^2.0.17"
   },
   "peerDependencies": {
-    "@serenada/core": "^0.5.1",
+    "@serenada/core": "^0.6.0",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0",
     "lucide-react": ">=0.300.0"
   },
   "devDependencies": {
-    "@serenada/core": "0.5.1"
+    "@serenada/core": "0.6.0"
   },
   "repository": {
     "type": "git",

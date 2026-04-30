@@ -378,8 +378,8 @@ class SerenadaSession internal constructor(
     /** Callback invoked when camera/microphone permissions are needed before joining. */
     var onPermissionsRequired: ((List<MediaCapability>) -> Unit)? = null
 
-    val host: String
-        get() = resolvedConfig.serverHost ?: throw IllegalStateException("requires serverHost")
+    val host: String?
+        get() = resolvedConfig.serverHost
 
     private fun assertMainThread() {
         check(Looper.myLooper() == Looper.getMainLooper()) {

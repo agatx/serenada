@@ -232,7 +232,7 @@ func worstStatus(_ statuses: DebugStatus...) -> DebugStatus {
 struct CallScreenView: View {
     let roomId: String
     let uiState: CallUiState
-    let serverHost: String
+    let roomShareURL: URL?
     let screenShareExtensionBundleId: String?
     let roomName: String?
     let config: SerenadaCallFlowConfig
@@ -268,7 +268,7 @@ struct CallScreenView: View {
     init(
         roomId: String,
         uiState: CallUiState,
-        serverHost: String,
+        roomShareURL: URL?,
         screenShareExtensionBundleId: String? = nil,
         roomName: String? = nil,
         config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
@@ -288,7 +288,7 @@ struct CallScreenView: View {
     ) {
         self.roomId = roomId
         self.uiState = uiState
-        self.serverHost = serverHost
+        self.roomShareURL = roomShareURL
         self.screenShareExtensionBundleId = screenShareExtensionBundleId
         self.roomName = roomName
         self.config = config
@@ -312,6 +312,10 @@ struct CallScreenView: View {
 
     private func str(_ key: SerenadaString) -> String {
         resolveString(key, overrides: strings)
+    }
+
+    private var shareLinkURL: URL? {
+        roomShareURL
     }
 
     var body: some View {
@@ -447,7 +451,9 @@ struct CallScreenView: View {
             showRecoveringBadge = true
         }
         .sheet(isPresented: $showShareSheet) {
-            ActivityView(items: ["https://\(serverHost)/call/\(roomId)"])
+            if let shareURL = shareLinkURL {
+                ActivityView(items: [shareURL])
+            }
         }
         .overlay(alignment: .topLeading) {
             VStack(spacing: 0) {
@@ -656,7 +662,7 @@ struct CallScreenView: View {
                     .opacity(autoHideOpacity)
                 }
 
-                if uiState.phase == .waiting && config.inviteControlsEnabled {
+                if uiState.phase == .waiting && config.inviteControlsEnabled && shareLinkURL != nil {
                     iconButton(system: "square.and.arrow.up", accessibilityLabel: str(.callA11yShareInvite)) {
                         showShareSheet = true
                     }
@@ -690,8 +696,10 @@ struct CallScreenView: View {
                         .multilineTextAlignment(.center)
 
                     if config.inviteControlsEnabled {
-                        QRCodeImageView(text: "https://\(serverHost)/call/\(roomId)")
-                            .padding(.vertical, 6)
+                        if let shareURL = shareLinkURL {
+                            QRCodeImageView(text: shareURL.absoluteString)
+                                .padding(.vertical, 6)
+                        }
 
                         Button {
                             Task {
