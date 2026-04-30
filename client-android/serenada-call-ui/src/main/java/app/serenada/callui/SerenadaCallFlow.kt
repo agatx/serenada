@@ -199,7 +199,9 @@ fun SerenadaCallFlow(
  *
  * @param uiState Current call UI state, typically derived from [CallState].
  * @param roomId The room identifier for the active call.
- * @param serverHost Signaling server host (e.g. `"serenada.app"`).
+ * @param serverHost Signaling server host (e.g. `"serenada.app"`). Pass `null` when running with a
+ *   custom [app.serenada.core.SignalingProvider] and no Serenada-hosted server; the share-link
+ *   and QR-code controls in the waiting overlay are hidden in that case.
  * @param eglContext Shared EGL context for WebRTC video rendering.
  * @param roomName Optional display name shown in the call UI.
  * @param rendererProvider Custom renderer provider for advanced rendering setups.
@@ -235,7 +237,7 @@ fun SerenadaCallFlow(
 fun SerenadaCallFlow(
     uiState: CallUiState,
     roomId: String,
-    serverHost: String,
+    serverHost: String?,
     eglContext: EglBase.Context,
     roomName: String? = null,
     rendererProvider: CallRendererProvider? = null,

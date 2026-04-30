@@ -439,7 +439,9 @@ final class CallManager: ObservableObject {
         let cid = state.localParticipant.cid?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let cid, !cid.isEmpty, activeSessionJoinCid != cid {
             activeSessionJoinCid = cid
-            pushSubscriptionManager.subscribeRoom(roomId: session.roomId, host: session.serverHost)
+            if let sessionHost = session.serverHost {
+                pushSubscriptionManager.subscribeRoom(roomId: session.roomId, host: sessionHost)
+            }
         }
 
         let participantCount = max(1, 1 + state.remoteParticipants.count)
@@ -498,10 +500,10 @@ final class CallManager: ObservableObject {
         guard !hasNotifiedPushForJoin else { return }
         guard let cid, !cid.isEmpty else { return }
         guard state.phase == .waiting || state.phase == .inCall else { return }
+        guard let host = session.serverHost else { return }
 
         hasNotifiedPushForJoin = true
         let roomId = session.roomId
-        let host = session.serverHost
         let endpoint = pushSubscriptionManager.cachedEndpoint()
         joinSnapshotFeature.prepareSnapshotId(
             host: host,
@@ -681,8 +683,8 @@ final class CallManager: ObservableObject {
         let cleanEndpoint = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines)
         pushSubscriptionManager.updateCachedEndpoint(cleanEndpoint?.isEmpty == false ? cleanEndpoint : nil)
 
-        if let session = activeSession {
-            pushSubscriptionManager.subscribeRoom(roomId: session.roomId, host: session.serverHost)
+        if let session = activeSession, let sessionHost = session.serverHost {
+            pushSubscriptionManager.subscribeRoom(roomId: session.roomId, host: sessionHost)
         }
         syncSavedRoomPushSubscriptions(savedRooms)
     }

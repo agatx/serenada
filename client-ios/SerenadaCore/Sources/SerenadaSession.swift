@@ -103,12 +103,10 @@ public final class SerenadaSession: ObservableObject {
     public let roomId: String
     /// Full URL for this room, if available.
     public let roomUrl: URL?
-    /// Server host used for signaling.
-    public var serverHost: String {
-        guard let serverHost = resolvedConfig.serverHost else {
-            preconditionFailure("requires serverHost")
-        }
-        return serverHost
+    /// Server host used for signaling. `nil` when the session was configured with a custom
+    /// ``SignalingProvider`` and no Serenada-hosted server.
+    public var serverHost: String? {
+        resolvedConfig.serverHost
     }
     /// Bundle ID for the broadcast upload extension used in screen sharing.
     public var screenShareExtensionBundleId: String? {

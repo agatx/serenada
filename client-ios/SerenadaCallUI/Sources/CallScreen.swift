@@ -232,7 +232,7 @@ func worstStatus(_ statuses: DebugStatus...) -> DebugStatus {
 struct CallScreenView: View {
     let roomId: String
     let uiState: CallUiState
-    let serverHost: String
+    let serverHost: String?
     let screenShareExtensionBundleId: String?
     let roomName: String?
     let config: SerenadaCallFlowConfig
@@ -268,7 +268,7 @@ struct CallScreenView: View {
     init(
         roomId: String,
         uiState: CallUiState,
-        serverHost: String,
+        serverHost: String?,
         screenShareExtensionBundleId: String? = nil,
         roomName: String? = nil,
         config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
@@ -312,6 +312,11 @@ struct CallScreenView: View {
 
     private func str(_ key: SerenadaString) -> String {
         resolveString(key, overrides: strings)
+    }
+
+    private var shareLinkURL: String? {
+        guard let serverHost, !serverHost.isEmpty else { return nil }
+        return "https://\(serverHost)/call/\(roomId)"
     }
 
     var body: some View {
@@ -442,7 +447,9 @@ struct CallScreenView: View {
             showRecoveringBadge = true
         }
         .sheet(isPresented: $showShareSheet) {
-            ActivityView(items: ["https://\(serverHost)/call/\(roomId)"])
+            if let shareURL = shareLinkURL {
+                ActivityView(items: [shareURL])
+            }
         }
         .overlay(alignment: .topLeading) {
             VStack(spacing: 0) {
@@ -647,7 +654,7 @@ struct CallScreenView: View {
                     .opacity(autoHideOpacity)
                 }
 
-                if uiState.phase == .waiting && config.inviteControlsEnabled {
+                if uiState.phase == .waiting && config.inviteControlsEnabled && shareLinkURL != nil {
                     iconButton(system: "square.and.arrow.up", accessibilityLabel: str(.callA11yShareInvite)) {
                         showShareSheet = true
                     }
@@ -681,8 +688,10 @@ struct CallScreenView: View {
                         .multilineTextAlignment(.center)
 
                     if config.inviteControlsEnabled {
-                        QRCodeImageView(text: "https://\(serverHost)/call/\(roomId)")
-                            .padding(.vertical, 6)
+                        if let shareURL = shareLinkURL {
+                            QRCodeImageView(text: shareURL)
+                                .padding(.vertical, 6)
+                        }
 
                         Button {
                             Task {
