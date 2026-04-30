@@ -112,9 +112,8 @@ private const val PINCH_ZOOM_CHANGE_THRESHOLD = 0.01f
 
 @Composable
 internal fun CallScreen(
-    roomId: String,
     uiState: CallUiState,
-    serverHost: String?,
+    roomShareUrl: String?,
     eglContext: EglBase.Context,
     initialRemoteVideoFitCover: Boolean = true,
     config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
@@ -618,8 +617,7 @@ internal fun CallScreen(
         // Waiting State Overlay
         if (uiState.phase == CallPhase.Waiting && !isLocalLarge) {
             WaitingOverlay(
-                roomId = roomId,
-                serverHost = serverHost,
+                roomShareUrl = roomShareUrl,
                 onInviteToRoom = onInviteToRoom,
                 strings = strings,
                 config = config,
@@ -1249,14 +1247,13 @@ private fun ControlButton(
 
 @Composable
 private fun WaitingOverlay(
-    roomId: String,
-    serverHost: String?,
+    roomShareUrl: String?,
     onInviteToRoom: () -> Unit,
     strings: Map<SerenadaString, String>?,
     config: SerenadaCallFlowConfig,
     onShareLink: (() -> Unit)?,
 ) {
-    val link = serverHost?.let { "https://$it/call/$roomId" }
+    val link = roomShareUrl?.takeIf { it.isNotBlank() }
     val qrBitmap = remember(link) { link?.let { generateQrCode(it) } }
     val context = LocalContext.current
     val chooserTitle = resolveString(SerenadaString.CallShareLinkChooser, strings)

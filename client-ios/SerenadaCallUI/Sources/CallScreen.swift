@@ -232,7 +232,7 @@ func worstStatus(_ statuses: DebugStatus...) -> DebugStatus {
 struct CallScreenView: View {
     let roomId: String
     let uiState: CallUiState
-    let serverHost: String?
+    let roomShareURL: URL?
     let screenShareExtensionBundleId: String?
     let roomName: String?
     let config: SerenadaCallFlowConfig
@@ -268,7 +268,7 @@ struct CallScreenView: View {
     init(
         roomId: String,
         uiState: CallUiState,
-        serverHost: String?,
+        roomShareURL: URL?,
         screenShareExtensionBundleId: String? = nil,
         roomName: String? = nil,
         config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
@@ -288,7 +288,7 @@ struct CallScreenView: View {
     ) {
         self.roomId = roomId
         self.uiState = uiState
-        self.serverHost = serverHost
+        self.roomShareURL = roomShareURL
         self.screenShareExtensionBundleId = screenShareExtensionBundleId
         self.roomName = roomName
         self.config = config
@@ -314,9 +314,8 @@ struct CallScreenView: View {
         resolveString(key, overrides: strings)
     }
 
-    private var shareLinkURL: String? {
-        guard let serverHost, !serverHost.isEmpty else { return nil }
-        return "https://\(serverHost)/call/\(roomId)"
+    private var shareLinkURL: URL? {
+        roomShareURL
     }
 
     var body: some View {
@@ -689,7 +688,7 @@ struct CallScreenView: View {
 
                     if config.inviteControlsEnabled {
                         if let shareURL = shareLinkURL {
-                            QRCodeImageView(text: shareURL)
+                            QRCodeImageView(text: shareURL.absoluteString)
                                 .padding(.vertical, 6)
                         }
 
