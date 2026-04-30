@@ -535,6 +535,27 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
+    public func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(0)
+            return
+        }
+        peerConnection.statistics { report in
+            var bytes: Int64 = 0
+            for stat in report.statistics.values where stat.type == "inbound-rtp" {
+                // libwebrtc stat values can arrive as either NSNumber or String.
+                // memberInt64 handles both — using `as? NSNumber` alone would
+                // silently drop the string form and report 0 every tick.
+                bytes += memberInt64(stat, key: "bytesReceived") ?? 0
+            }
+            Task { @MainActor in onComplete(bytes) }
+        }
+#else
+        onComplete(0)
+#endif
+    }
+
     public func isReady() -> Bool {
 #if canImport(WebRTC)
         peerConnection != nil

@@ -66,6 +66,16 @@ public enum WebRtcResilience {
     /// to compute `estimatedHardEvictionAtMs` for the
     /// `SignalingState.suspended` surface so apps can render a countdown.
     public static let suspendHardEvictionTimeoutMs = 600_000
+
+    // MARK: - Media-liveness emission cadence
+
+    /// Active SDKs broadcast `media_liveness{cids:[..]}` every interval
+    /// for remote CIDs whose inbound media is currently flowing. The
+    /// server uses this hint to defer hard-eviction of suspended peers
+    /// whose media is still being received. 10s leaves headroom under the
+    /// server's 30s freshness window (`mediaLivenessFreshnessWindow`) for
+    /// missed emissions.
+    public static let mediaLivenessIntervalMs = 10_000
 }
 
 // MARK: - Nanosecond convenience accessors

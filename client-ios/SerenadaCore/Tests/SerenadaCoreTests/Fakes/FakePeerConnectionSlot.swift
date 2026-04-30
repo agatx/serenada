@@ -194,6 +194,14 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         onComplete(.empty, "fake")
     }
 
+    /// Cumulative inbound bytes returned from the next `collectInboundBytes()` call.
+    var inboundBytesSample: Int64 = 0
+    var collectInboundBytesCalls = 0
+    func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
+        collectInboundBytesCalls += 1
+        onComplete(inboundBytesSample)
+    }
+
     // MARK: - Test Drivers
 
     func simulateConnectionStateChange(_ state: SerenadaPeerConnectionState) {

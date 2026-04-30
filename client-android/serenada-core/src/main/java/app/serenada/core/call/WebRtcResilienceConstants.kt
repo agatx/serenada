@@ -59,4 +59,13 @@ object WebRtcResilienceConstants {
     // compute `estimatedHardEvictionAtMs` for the `SignalingState.Suspended`
     // surface so apps can render a countdown.
     const val SUSPEND_HARD_EVICTION_TIMEOUT_MS = 600_000L
+
+    // ── Media-liveness emission cadence ──────────────────────────────
+    // Active SDKs broadcast `media_liveness{cids:[..]}` every interval for
+    // remote CIDs whose inbound media is currently flowing. The server uses
+    // this hint to defer hard-eviction of suspended peers whose media is
+    // still being received. 10s leaves headroom under the server's 30s
+    // freshness window (`mediaLivenessFreshnessWindow`) for missed
+    // emissions.
+    const val MEDIA_LIVENESS_INTERVAL_MS = 10_000L
 }

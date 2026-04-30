@@ -61,6 +61,14 @@ export const PEER_SUSPENDED_UI_TIMEOUT_MS = 30000;
 // surface so apps can render a countdown.
 export const SUSPEND_HARD_EVICTION_TIMEOUT_MS = 600000;
 
+// Media-liveness emission cadence
+// Active SDKs broadcast `media_liveness{cids:[..]}` every interval for
+// remote CIDs whose inbound media is currently flowing. The server uses
+// this hint to defer hard-eviction of suspended peers whose media is still
+// being received. 10s leaves headroom under the server's 30s freshness
+// window (`mediaLivenessFreshnessWindow`) for missed emissions.
+export const MEDIA_LIVENESS_INTERVAL_MS = 10000;
+
 // Connection Status
 export const CONNECTION_RETRYING_DELAY_MS = 10_000;
 

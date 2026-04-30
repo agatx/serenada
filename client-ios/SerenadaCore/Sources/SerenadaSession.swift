@@ -212,6 +212,19 @@ public final class SerenadaSession: ObservableObject {
     /// Test-only count of remote CIDs currently flagged as `presumedLost`.
     internal var presumedLostRemoteCount: Int { presumedLostRemoteCids.count }
 
+    // #3 — periodic `media_liveness` emission. Active across the in-call
+    // window so the server can defer hard-eviction of suspended peers
+    // whose media is still flowing locally. Ticks no-op while transport
+    // is disconnected (baseline samples preserved so the next post-
+    // reconnect tick can detect flow).
+    private var lastInboundBytesByCid: [String: Int64] = [:]
+    private var mediaLivenessTask: Task<Void, Never>?
+    private var mediaLivenessEmitInFlight = false
+    private var mediaLivenessEmitCount = 0
+
+    /// Test-only counter incremented on each `media_liveness` broadcast.
+    internal var mediaLivenessBroadcastCount: Int { mediaLivenessEmitCount }
+
     private let recoveryStorage: RecoveryStorage
     private var sessionStartTs: Int64?
 
@@ -358,6 +371,7 @@ public final class SerenadaSession: ObservableObject {
         postReconnectResyncTask?.cancel()
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
+        mediaLivenessTask?.cancel()
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
     }
@@ -788,6 +802,10 @@ public final class SerenadaSession: ObservableObject {
         peerNegotiationEngine?.syncPeers(roomState: roomState)
         refreshRemoteParticipants()
         connectionStatusTracker?.update()
+        // Start media-liveness emission only once we have remote peers — there's
+        // nothing to report when alone in the room, and the timer is otherwise
+        // a noisy no-op.
+        if phase == .inCall { startMediaLivenessTimer() }
     }
 
     /// True only when at least one peer exists and every slot's last observed
@@ -997,6 +1015,9 @@ public final class SerenadaSession: ObservableObject {
         reconnectTask?.cancel(); reconnectTask = nil
         cancelPostReconnectResync()
         clearAllRemoteSuspensionTracking()
+        stopMediaLivenessTimer()
+        lastInboundBytesByCid.removeAll()
+        mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = nil
         joinFlowCoordinator?.clearAllTimers()
         connectionStatusTracker?.cancelTimer()
@@ -1174,6 +1195,71 @@ public final class SerenadaSession: ObservableObject {
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
         presumedLostRemoteCids.removeAll()
+    }
+
+    // MARK: - Media-liveness emission (#3)
+
+    /// Periodic `media_liveness{cids}` broadcast for #3. Started on a
+    /// successful join; runs across reconnects (ticks no-op while
+    /// disconnected but baseline samples persist so the next post-reconnect
+    /// tick can detect flow). Stopped on session reset/destroy.
+    private func startMediaLivenessTimer() {
+        guard mediaLivenessTask == nil else { return }
+        mediaLivenessTask = Task { [weak self] in
+            guard let clock = self?.clock else { return }
+            let intervalNs = UInt64(WebRtcResilience.mediaLivenessIntervalMs) * 1_000_000
+            while !Task.isCancelled {
+                try? await clock.sleep(nanoseconds: intervalNs)
+                if Task.isCancelled { return }
+                guard let self else { return }
+                self.emitMediaLiveness()
+            }
+        }
+    }
+
+    private func stopMediaLivenessTimer() {
+        mediaLivenessTask?.cancel()
+        mediaLivenessTask = nil
+    }
+
+    private func emitMediaLiveness() {
+        if mediaLivenessEmitInFlight { return }
+        guard diagnostics.isSignalingConnected, currentRoomState != nil else { return }
+        let slots = peerSlots
+        if slots.isEmpty { return }
+
+        mediaLivenessEmitInFlight = true
+        var newSamples: [String: Int64] = [:]
+        var remaining = slots.count
+        for (cid, slot) in slots {
+            slot.collectInboundBytes { [weak self] bytes in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    newSamples[cid] = bytes
+                    remaining -= 1
+                    if remaining == 0 { self.finalizeMediaLivenessEmit(newSamples: newSamples) }
+                }
+            }
+        }
+    }
+
+    private func finalizeMediaLivenessEmit(newSamples: [String: Int64]) {
+        mediaLivenessEmitInFlight = false
+        var flowing: [String] = []
+        for (cid, bytes) in newSamples {
+            if let previous = lastInboundBytesByCid[cid], bytes > previous {
+                flowing.append(cid)
+            }
+            lastInboundBytesByCid[cid] = bytes
+        }
+        // Drop tracking for peers that left.
+        for cid in Array(lastInboundBytesByCid.keys) where peerSlots[cid] == nil {
+            lastInboundBytesByCid.removeValue(forKey: cid)
+        }
+        guard !flowing.isEmpty, diagnostics.isSignalingConnected else { return }
+        let cidsArray = JSONValue.array(flowing.map(JSONValue.string))
+        signalingProvider.broadcast(type: "media_liveness", payload: ["cids": cidsArray])
+        mediaLivenessEmitCount += 1
     }
 
     // MARK: - Local signaling state

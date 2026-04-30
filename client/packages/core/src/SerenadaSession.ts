@@ -35,6 +35,7 @@ import {
     JOIN_HARD_TIMEOUT_MS,
     ENDING_SCREEN_MS,
     EPOCH_RESYNC_TIMEOUT_MS,
+    MEDIA_LIVENESS_INTERVAL_MS,
     PEER_SUSPENDED_UI_TIMEOUT_MS,
     SUSPEND_HARD_EVICTION_TIMEOUT_MS,
 } from './constants.js';
@@ -266,6 +267,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly suspendedPresentationTimers = new Map<string, number>();
     private readonly presumedLostRemoteCids = new Set<string>();
 
+    // #3 — periodic `media_liveness` emission. Active across the in-call
+    // window so the server can defer hard-eviction of suspended peers whose
+    // media is still flowing locally. Emission skipped while transport is
+    // disconnected (ticks just no-op).
+    private mediaLivenessTimer: number | null = null;
+    private mediaLivenessEmitInFlight = false;
+
     private get isInactive(): boolean {
         return this._destroyed || this.terminated;
     }
@@ -462,6 +470,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearEndingTimer();
         this.clearJoinTimeout();
         this.cancelPostReconnectResync();
+        this.clearAllRemoteSuspensionTracking();
+        this.stopMediaLivenessTimer();
         for (const unsubscribe of this.providerUnsubscribers) {
             unsubscribe();
         }
@@ -571,6 +581,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clientId = event.peerId;
         this.roomState = buildRoomState(event, null, event.peerId);
         this.media.updateRoomState(this.roomState, this.clientId);
+        this.maybeStartMediaLivenessTimer();
         this.rebuildState();
         this.broadcastLocalMediaState();
         void this.fetchInitialIceServers();
@@ -583,6 +594,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.error = null;
         this.roomState = buildRoomState(event, this.roomState?.hostCid ?? null, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
+        this.maybeStartMediaLivenessTimer();
         this.flushPostReconnectResync('snapshot');
         this.rebuildState();
     };
@@ -594,6 +606,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.error = null;
         this.roomState = upsertParticipant(this.roomState, event, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
+        this.maybeStartMediaLivenessTimer();
         this.rebuildState();
         this.broadcastLocalMediaState();
     };
@@ -827,6 +840,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearEndingTimer();
         this.cancelPostReconnectResync();
         this.clearAllRemoteSuspensionTracking();
+        this.stopMediaLivenessTimer();
         this.invalidateIceFetches();
         this.statsCollector.stop();
 
@@ -1133,6 +1147,48 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         this.suspendedPresentationTimers.clear();
         this.presumedLostRemoteCids.clear();
+    }
+
+    /**
+     * Periodic `media_liveness{cids}` emission for #3. Started once we have
+     * remote peers (i.e. the call reaches `inCall`); runs across reconnects
+     * (ticks no-op while disconnected but baseline samples persist so the
+     * next post-reconnect tick can detect flow). Stopped on session
+     * reset/destroy.
+     */
+    private maybeStartMediaLivenessTimer(): void {
+        if (this.mediaLivenessTimer !== null) return;
+        const remoteCount = (this.roomState?.participants?.length ?? 0) - (this.clientId ? 1 : 0);
+        if (remoteCount <= 0) return;
+        this.mediaLivenessTimer = window.setInterval(() => {
+            void this.emitMediaLiveness();
+        }, MEDIA_LIVENESS_INTERVAL_MS);
+    }
+
+    private stopMediaLivenessTimer(): void {
+        if (this.mediaLivenessTimer !== null) {
+            window.clearInterval(this.mediaLivenessTimer);
+            this.mediaLivenessTimer = null;
+        }
+    }
+
+    private async emitMediaLiveness(): Promise<void> {
+        if (this.isInactive || this.mediaLivenessEmitInFlight) return;
+        if (!this.isConnected || this.roomState === null) return;
+        this.mediaLivenessEmitInFlight = true;
+        try {
+            const flowing = await this.media.getInboundFlowingCids();
+            if (this.isInactive || flowing.length === 0) return;
+            this.signaling.broadcast('media_liveness', { cids: flowing });
+        } catch (error) {
+            this.config.logger?.log(
+                'debug',
+                'Session',
+                `media_liveness emit failed: ${formatError(error)}`,
+            );
+        } finally {
+            this.mediaLivenessEmitInFlight = false;
+        }
     }
 
     private async checkPermissionsAndStartMedia(): Promise<void> {

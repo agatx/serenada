@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
     JOIN_HARD_TIMEOUT_MS,
+    MEDIA_LIVENESS_INTERVAL_MS,
     PEER_SUSPENDED_UI_TIMEOUT_MS,
     SUSPEND_HARD_EVICTION_TIMEOUT_MS,
 } from '../src/constants.js';
@@ -1061,6 +1062,82 @@ describe('SerenadaSession', () => {
             if (sigState.kind === 'failed') {
                 expect(sigState.reason).toBe('roomEnded');
             }
+        });
+    });
+
+    // ---------------------------------------------------------------
+    // Media-liveness emission (#3)
+    // ---------------------------------------------------------------
+    describe('media-liveness emission', () => {
+        async function joinWithRemotes(remoteCids: string[]) {
+            harness = new TestSessionHarness();
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, ...remoteCids.map((cid) => ({ cid }))],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+            return harness;
+        }
+
+        function livenessBroadcasts() {
+            return harness.signaling.broadcastCalls.filter((call) => call.type === 'media_liveness');
+        }
+
+        it('broadcasts media_liveness with flowing CIDs on each interval tick', async () => {
+            await joinWithRemotes(['peer-1']);
+            harness.media.inboundFlowingCids = ['peer-1'];
+
+            expect(livenessBroadcasts()).toHaveLength(0);
+
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS + 50);
+
+            const broadcasts = livenessBroadcasts();
+            expect(broadcasts).toHaveLength(1);
+            expect(broadcasts[0].payload).toEqual({ cids: ['peer-1'] });
+        });
+
+        it('skips broadcast when no peer is currently flowing', async () => {
+            await joinWithRemotes(['peer-1']);
+            harness.media.inboundFlowingCids = [];
+
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS * 3);
+
+            expect(livenessBroadcasts()).toHaveLength(0);
+            expect(harness.media.getInboundFlowingCidsCalls).toBeGreaterThan(0);
+        });
+
+        it('skips broadcast while transport is disconnected; resumes after reconnect', async () => {
+            await joinWithRemotes(['peer-1']);
+            harness.media.inboundFlowingCids = ['peer-1'];
+
+            // First tick — connected, broadcast happens.
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS + 50);
+            expect(livenessBroadcasts()).toHaveLength(1);
+
+            // Drop transport. Subsequent ticks must not broadcast.
+            harness.simulateDisconnect();
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS * 3);
+            expect(livenessBroadcasts()).toHaveLength(1);
+
+            // Reconnect — next tick should broadcast again.
+            harness.signaling.emitConnected('ws');
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS + 50);
+            expect(livenessBroadcasts().length).toBeGreaterThanOrEqual(2);
+        });
+
+        it('stops emitting after the session is destroyed', async () => {
+            await joinWithRemotes(['peer-1']);
+            harness.media.inboundFlowingCids = ['peer-1'];
+
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS + 50);
+            const baseline = livenessBroadcasts().length;
+            expect(baseline).toBe(1);
+
+            harness.session.destroy();
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS * 3);
+
+            expect(livenessBroadcasts().length).toBe(baseline);
         });
     });
 
