@@ -315,6 +315,7 @@ private fun rememberCallUiState(
             localAudioEnabled = state.localAudioEnabled,
             localVideoEnabled = state.localVideoEnabled,
             localDisplayName = state.localDisplayName,
+            localAudioLevel = state.localAudioLevel,
             remoteParticipants = state.remoteParticipants,
             connectionStatus = state.connectionStatus,
             isSignalingConnected = diagnostics.isSignalingConnected,
