@@ -62,10 +62,10 @@ must preserve the core UX model:
 |---|-----------------------------------------------------------|-----------------------------------------------------------|----------|--------|--------|
 | 1 | Negotiation messages missed while peer is suspended       | Stuck call setup, missing media after reconnect           | Critical | M      | Phase 1 (server) · Phase 2 ✅ (SDK consumes `negotiation_dirty` for per-CID ICE restart; `relay_failed` informational) |
 | 2 | Reconnect creates a new CID instead of preserving identity | App thinks it rejoined; peers see duplicate/empty state   | Critical | S      | Phase 1 ✅ |
-| 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 1 (server cleanup gate) · SDK presentation timer + emission pending |
+| 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 1 (server cleanup gate) · Phase 2 partial (SDK presentation timer landed; periodic media-liveness emission still pending) |
 | 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      | Phase 1 (server) · Phase 2 ✅ (SDK snapshot gate landed end-to-end) |
 | 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      | Phase 2 ✅ (server `POST /api/leave` + per-platform recovery store + rejoin API) |
-| 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      | Phase 2 |
+| 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      | Phase 2 ✅ (SDK `signalingState` surface with `Suspended`/`Reconnecting`/`Failed` variants and hard-eviction estimate) |
 | 7 | SSE transport hijack via SID reuse                        | Security: another connection can take over an SSE session | Critical | S      | Phase 2 — server `TODO(#7)` placed; needs SDK `resumeSse` first |
 | 8 | iOS background suspension keeps SDK in stale "connected"  | After long background, signaling appears alive but isn't  | High     | M      | Phase 2 ✅ |
 | 9 | TURN credentials expire while signaling is down           | Relay path fails; cannot recover even when signaling back | Medium   | S      | Phase 3 |
@@ -301,12 +301,20 @@ the boundary.
 
 ## 3. Suspension conflates signaling loss with media death
 
-**Status (2026-04-25):** Server-side cleanup gate landed. Active peers can
-send a new `media_liveness{cids:[...]}` hint and the server defers
-hard-eviction while a recent observation exists for the CID
+**Status (2026-04-29):** Phase 2 partial — SDK presentation timer landed
+end-to-end across Web, Android, and iOS. When a remote peer transitions to
+`signalingStatus="suspended"` in `room_state`, each SDK starts a per-CID
+timer of `peerSuspendedUiTimeoutMs = 30 s` (new shared constant). On
+expiry the SDK flips a new `presumedLost: boolean` field on the
+participant so call UIs can move them out of the active grid. The peer
+connection itself stays open so media can resume immediately if the peer
+reattaches. Cancellation is automatic when the peer reattaches as active
+or leaves the room. The remaining piece — periodic `media_liveness`
+emission from active peers so the server can keep the slot longer for
+peers whose media is still flowing — is still pending and will land in a
+follow-up slice. Server-side support from Phase 1 is unchanged
 (`mediaLivenessFreshnessWindow = 30s`,
-`hardEvictMediaActiveDeferral = 30s`). SDK-side periodic emission and the
-per-participant presentation timer (#6 surface) are the remaining pieces.
+`hardEvictMediaActiveDeferral = 30s`).
 
 ### Symptom
 
@@ -586,13 +594,18 @@ rejoin dead calls.
 
 ## 6. No explicit "you are suspended / about to be evicted" signal
 
-**Status (2026-04-25):** Not started — Phase 2. The shared resilience
-constants needed for the countdown
-(`peerSuspendedUiTimeoutMs`, `suspendHardEvictionTimeoutMs`,
-`epochResyncTimeoutMs`, `turnRefreshSafetyMarginMs`,
-`foregroundForcePingTimeoutMs`) are not yet added to
-`scripts/check-resilience-constants.mjs`; do that as part of the Phase 2
-slice.
+**Status (2026-04-29):** Landed end-to-end. Each SDK now exposes a
+richer `signalingState` field on `CallState` with four variants:
+`connected`, `reconnecting{attempt, nextRetryAtMs}`,
+`suspended{suspendedSinceMs, estimatedHardEvictionAtMs}`, and
+`failed{reason}`. The `suspended` variant is entered when the local
+transport drops while a roomState is present (i.e. mid-call); the hard-
+eviction estimate is computed locally from the new shared
+`suspendHardEvictionTimeoutMs = 600_000` constant and mirrors the Go
+server's `suspendHardEvictionTimeout`. Resilience-constants check now
+validates 22 constants across platforms (was 20). The `mediaRecentlyObserved`
+field from the original proposal is deferred until the matching #3
+media-liveness emission lands.
 
 ### Symptom
 
@@ -1428,6 +1441,54 @@ Out of scope for this document, listed for visibility:
   it deserves a fresh look.
 
 ## Change Log
+
+### 2026-04-29 — Phase 2: suspended-state surface (#6) + remote presentation timer (#3 partial)
+
+- **New shared constants**: `peerSuspendedUiTimeoutMs = 30_000` and
+  `suspendHardEvictionTimeoutMs = 600_000` added to Web
+  (`client/packages/core/src/constants.ts`), Android
+  (`client-android/.../call/WebRtcResilienceConstants.kt`), and iOS
+  (`client-ios/SerenadaCore/Sources/Call/WebRtcResilienceConstants.swift`).
+  `scripts/check-resilience-constants.mjs` now validates 22 shared constants.
+
+- **#6 — `signalingState` surface**: All three SDKs now expose a richer
+  `signalingState` field on `CallState` alongside the existing
+  `connectionStatus`. Variants: `connected`,
+  `reconnecting{attempt, nextRetryAtMs}`,
+  `suspended{suspendedSinceMs, estimatedHardEvictionAtMs}`,
+  `failed{reason}`. Mid-call transport drops produce `suspended` with a
+  hard-eviction estimate computed from `suspendHardEvictionTimeoutMs`
+  (mirroring the Go server's `suspendHardEvictionTimeout`). Pre-join
+  drops surface as `reconnecting`. Terminal errors map to `failed`.
+
+- **#3 partial — per-remote-CID presentation timer**: When a remote
+  participant transitions to `signalingStatus="suspended"` in
+  `room_state`, each SDK starts a per-CID timer of
+  `peerSuspendedUiTimeoutMs`. On expiry the SDK flips a new
+  `presumedLost: boolean` field on the participant so call UIs can
+  move them out of the active grid. The peer connection itself stays
+  open — this flag is presentation-only. Cancellation is automatic
+  when the peer reattaches as active or leaves the room. The
+  remaining piece of #3 (active SDKs periodically emitting
+  `media_liveness` to the server so a peer whose media is still
+  flowing isn't hard-evicted) is queued for the next slice.
+
+- **iOS rename**: The internal WebRTC mirror previously called
+  `SignalingState` is now `RtcSignalingState` so the new Phase 2
+  surface can take the unqualified name (matching Web/Android).
+  `CallDiagnostics.rtcSignalingState` keeps its name.
+
+- **Tests**:
+  - Web `SerenadaSession.test.ts` — 5 new tests covering presumedLost
+    flip on timer expiry, cancellation on reattach, cancellation on
+    peerLeft, suspended/connected transitions, failed mapping.
+  - Android `SessionSuspendedSurfaceTest.kt` — 4 Robolectric tests
+    covering the same matrix using the new
+    `simulateRoomStateUpdatedWith` test helper.
+  - iOS `SessionSuspendedSurfaceTests.swift` — 4 XCTest cases mirroring
+    Android using `FakeSessionClock` advances.
+  - Web 320 (was 315), Android `:serenada-core:testDebugUnitTest` green,
+    iOS `xcodebuild test` green, resilience-constants check green.
 
 ### 2026-04-29 — Phase 2 partial: SDK dirty-pair renegotiation (#1)
 

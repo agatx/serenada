@@ -87,6 +87,14 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     /// them is intentionally kept alive. UIs should show a "reconnecting"
     /// indicator instead of rendering them as gone.
     public var signalingStatus: ParticipantSignalingStatus
+    /// `true` when this peer has been suspended longer than
+    /// ``WebRtcResilience/peerSuspendedUiTimeoutMs`` and the SDK has flipped
+    /// its UI presentation to "presumed lost." The peer connection is
+    /// intentionally left open so media can resume immediately if the peer
+    /// reattaches; this flag is purely a UI hint that call shells can use
+    /// to move the participant out of the active grid or show a "connection
+    /// lost" badge. Cleared when the peer transitions back to `.active`.
+    public var presumedLost: Bool
 
     public var id: String { cid }
 
@@ -97,7 +105,8 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         audioEnabled: Bool = true,
         videoEnabled: Bool = true,
         connectionState: SerenadaPeerConnectionState = .new,
-        signalingStatus: ParticipantSignalingStatus = .active
+        signalingStatus: ParticipantSignalingStatus = .active,
+        presumedLost: Bool = false
     ) {
         self.cid = cid
         self.displayName = displayName
@@ -106,6 +115,7 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         self.videoEnabled = videoEnabled
         self.connectionState = connectionState
         self.signalingStatus = signalingStatus
+        self.presumedLost = presumedLost
     }
 }
 
@@ -148,6 +158,28 @@ public enum CallError: Equatable, Sendable {
     case unknown(String)
 }
 
+/// Richer view of the local signaling transport state. Apps can use this to
+/// render reconnect spinners, "you have been disconnected" UI, and a hard-
+/// eviction countdown when applicable. ``CallState/connectionStatus`` remains
+/// the simpler tri-value summary.
+public enum SignalingState: Equatable, Sendable {
+    case connected
+    /// Actively retrying to (re)connect.
+    /// - Parameter attempt: consecutive reconnect attempts since the transport last dropped.
+    /// - Parameter nextRetryAtMs: wall-clock ms for the next scheduled retry, or `nil` if a retry is in flight.
+    case reconnecting(attempt: Int, nextRetryAtMs: Int64?)
+    /// Mid-call transport drop. The server is holding the participant slot
+    /// for `suspendHardEvictionTimeout` (10 min); apps can render a countdown
+    /// using ``estimatedHardEvictionAtMs``.
+    /// - Parameter suspendedSinceMs: wall-clock ms when the local transport last dropped.
+    /// - Parameter estimatedHardEvictionAtMs: computed locally from
+    ///   `suspendedSinceMs + WebRtcResilience.suspendHardEvictionTimeoutMs`.
+    ///   Best-effort — server media-liveness hints can extend retention.
+    case suspended(suspendedSinceMs: Int64, estimatedHardEvictionAtMs: Int64)
+    /// Terminal failure; see `reason`.
+    case failed(reason: CallError)
+}
+
 /// Primary observable state for SDK consumers. Contains everything needed to render a call UI.
 public struct CallState: Equatable {
     /// Current call phase.
@@ -162,6 +194,9 @@ public struct CallState: Equatable {
     public var remoteParticipants: [SerenadaRemoteParticipant] = []
     /// Overall connection health.
     public var connectionStatus: SerenadaConnectionStatus = .connected
+    /// Richer signaling-transport state with timing details. Apps that don't
+    /// need the extra detail can stick with ``connectionStatus``.
+    public var signalingState: SignalingState = .connected
     /// Permissions that must be granted before joining, if any.
     public var requiredPermissions: [MediaCapability]?
     /// Current error, if the phase is `.error`.

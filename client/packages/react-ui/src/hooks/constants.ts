@@ -7,6 +7,7 @@ export const IDLE_STATE: CallState = {
     localParticipant: null,
     remoteParticipants: [],
     connectionStatus: 'connected',
+    signalingState: { kind: 'connected' },
     activeTransport: null,
     requiredPermissions: null,
     error: null,

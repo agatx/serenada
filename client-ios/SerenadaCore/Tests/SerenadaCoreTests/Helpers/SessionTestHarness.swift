@@ -73,6 +73,16 @@ final class SessionTestHarness {
         )
     }
 
+    /// Variant that lets a test pass full ``SignalingProviderParticipant``
+    /// records — needed when the test cares about per-participant
+    /// `connectionStatus` (active/suspended), `displayName`, etc.
+    func simulateRoomStateWith(
+        participants: [SignalingProviderParticipant],
+        hostCid: String
+    ) {
+        fakeProvider.simulateRoomState(participants: participants, hostPeerId: hostCid)
+    }
+
     func simulateError(code: String, message: String) {
         fakeProvider.simulateError(code: code, message: message)
     }

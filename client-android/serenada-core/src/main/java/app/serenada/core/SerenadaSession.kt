@@ -212,7 +212,13 @@ class SerenadaSession internal constructor(
         },
         onJoinTimeout = {
             resetResources()
-            updateState(CallState(phase = CallPhase.Error, error = CallError.ConnectionFailed))
+            updateState(
+                CallState(
+                    phase = CallPhase.Error,
+                    error = CallError.ConnectionFailed,
+                    signalingState = SignalingState.Failed(CallError.ConnectionFailed),
+                )
+            )
             delegate?.invoke()?.onSessionEnded(this, EndReason.Error(CallError.ConnectionFailed))
         },
         onJoinRecovery = {
@@ -248,7 +254,13 @@ class SerenadaSession internal constructor(
         onError = { callError ->
             joinFlowCoordinator.clearJoinTimeout()
             resetResources(clearRecovery = shouldClearRecovery(callError))
-            updateState(CallState(phase = CallPhase.Error, error = callError))
+            updateState(
+                CallState(
+                    phase = CallPhase.Error,
+                    error = callError,
+                    signalingState = SignalingState.Failed(callError),
+                )
+            )
             delegate?.invoke()?.onSessionEnded(this, EndReason.Error(callError))
         },
         onRoomEnded = { cleanupCall(EndReason.RemoteEnded) },
@@ -330,6 +342,16 @@ class SerenadaSession internal constructor(
 
     /** Test-only counter incremented each time the gate fires an ICE restart. */
     internal fun postReconnectResyncFireCount(): Int = iceRestartCallsFromGate
+
+    // Wall-clock ms when the local transport last dropped while a roomState
+    // was present (i.e. mid-call). Cleared on reconnect.
+    private var localSuspendedSinceMs: Long? = null
+
+    // After a remote peer transitions to suspended, we start a timer; on
+    // expiry we flip `presumedLost=true` for that CID. Timers cancel when
+    // the peer goes back to active or is removed from the room.
+    private val suspendedPresentationRunnables = mutableMapOf<String, Runnable>()
+    private val presumedLostRemoteCids = mutableSetOf<String>()
     private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private val availableCameraModes: List<LocalCameraMode> = resolveAvailableCameraModes()
@@ -478,6 +500,7 @@ class SerenadaSession internal constructor(
         override fun onConnected(info: ConnectionInfo) {
             runOnMain {
                 joinFlowCoordinator.resetReconnectAttempts()
+                localSuspendedSinceMs = null
                 updateDiagnostics(
                     _diagnostics.value.copy(
                         isSignalingConnected = true,
@@ -485,6 +508,7 @@ class SerenadaSession internal constructor(
                     )
                 )
                 updateConnectionStatusFromSignals()
+                refreshSignalingState()
                 if (reconnectRecoveryPending && currentRoomState != null) {
                     reconnectRecoveryPending = false
                     armPostReconnectResync()
@@ -499,6 +523,9 @@ class SerenadaSession internal constructor(
         override fun onDisconnected(reason: String?) {
             runOnMain {
                 val shouldReconnect = _state.value.phase != CallPhase.Idle
+                if (currentRoomState != null && localSuspendedSinceMs == null) {
+                    localSuspendedSinceMs = clock.nowMs()
+                }
                 updateDiagnostics(
                     _diagnostics.value.copy(
                         isSignalingConnected = false,
@@ -513,6 +540,7 @@ class SerenadaSession internal constructor(
                         joinFlowCoordinator.scheduleReconnect()
                     }
                 }
+                refreshSignalingState()
             }
         }
 
@@ -1084,7 +1112,13 @@ class SerenadaSession internal constructor(
 
             val callError = CallError.ServerError(lastError?.message ?: "Failed to fetch ICE servers")
             resetResources()
-            updateState(CallState(phase = CallPhase.Error, error = callError))
+            updateState(
+                CallState(
+                    phase = CallPhase.Error,
+                    error = callError,
+                    signalingState = SignalingState.Failed(callError),
+                )
+            )
             delegate?.invoke()?.onSessionEnded(this@SerenadaSession, EndReason.Error(callError))
         }
     }
@@ -1113,6 +1147,7 @@ class SerenadaSession internal constructor(
     private fun refreshRemoteParticipants() {
         val myCid = clientId
         val roomParticipants = currentRoomState?.participants
+        reconcileRemoteSuspensionTimers(roomParticipants?.filter { it.cid != myCid } ?: emptyList())
         val orderedRemoteCids = roomParticipants?.map { it.cid }?.filter { it != myCid }
             ?: peerSlots.keys.toList()
         val participantsByCid = roomParticipants?.associateBy { it.cid } ?: emptyMap()
@@ -1120,6 +1155,7 @@ class SerenadaSession internal constructor(
             val slot = peerSlots[cid] ?: return@mapNotNull null
             val participant = participantsByCid[cid]
             val peerState = remoteMediaStates[cid]
+            val signalingStatus = participant?.signalingStatus ?: ParticipantSignalingStatus.ACTIVE
             RemoteParticipant(
                 cid = cid,
                 displayName = participant?.displayName,
@@ -1127,7 +1163,8 @@ class SerenadaSession internal constructor(
                 audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true,
                 videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled(),
                 connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()),
-                signalingStatus = participant?.signalingStatus ?: ParticipantSignalingStatus.ACTIVE,
+                signalingStatus = signalingStatus,
+                presumedLost = signalingStatus == ParticipantSignalingStatus.SUSPENDED && cid in presumedLostRemoteCids,
             )
         }
         val currentState = _state.value
@@ -1180,6 +1217,95 @@ class SerenadaSession internal constructor(
             audioEnabled = _state.value.localAudioEnabled,
             videoEnabled = _state.value.localVideoEnabled,
         )
+    }
+
+    // --- Internal: Suspended-peer presentation ---
+
+    /**
+     * Walks the latest authoritative remote participant list and starts/cancels
+     * per-CID suspended-presentation timers. Cancels cleanly when peers go back
+     * to active or are removed; flips `presumedLost=true` on timer expiry.
+     *
+     * "Already presumed lost" is a sticky state: once the timer has fired, we
+     * don't reschedule a new one if the peer remains suspended across
+     * subsequent room_state updates. The flag clears the moment the peer
+     * transitions back to active or leaves the room.
+     */
+    private fun reconcileRemoteSuspensionTimers(remoteParticipants: List<Participant>) {
+        val seen = remoteParticipants.map { it.cid }.toSet()
+        for (participant in remoteParticipants) {
+            val isSuspended = participant.signalingStatus == ParticipantSignalingStatus.SUSPENDED
+            val hasTimer = participant.cid in suspendedPresentationRunnables
+            val isPresumedLost = participant.cid in presumedLostRemoteCids
+            if (isSuspended) {
+                if (!hasTimer && !isPresumedLost) startRemoteSuspensionTimer(participant.cid)
+            } else {
+                clearRemoteSuspensionTracking(participant.cid)
+            }
+        }
+        // Drop tracking for CIDs that left the room entirely.
+        val tracked = suspendedPresentationRunnables.keys + presumedLostRemoteCids
+        for (cid in tracked.toList()) {
+            if (cid !in seen) clearRemoteSuspensionTracking(cid)
+        }
+    }
+
+    private fun startRemoteSuspensionTimer(cid: String) {
+        val runnable = Runnable {
+            suspendedPresentationRunnables.remove(cid)
+            presumedLostRemoteCids.add(cid)
+            logger?.log(
+                SerenadaLogLevel.INFO,
+                "Session",
+                "Remote $cid presumed lost after ${WebRtcResilienceConstants.PEER_SUSPENDED_UI_TIMEOUT_MS}ms suspended",
+            )
+            refreshRemoteParticipants()
+        }
+        suspendedPresentationRunnables[cid] = runnable
+        handler.postDelayed(runnable, WebRtcResilienceConstants.PEER_SUSPENDED_UI_TIMEOUT_MS)
+    }
+
+    /**
+     * Clear all per-CID suspension state (timer + presumed-lost flag). Called
+     * when a peer transitions back to active, leaves the room, or the session
+     * is reset.
+     */
+    private fun clearRemoteSuspensionTracking(cid: String) {
+        suspendedPresentationRunnables.remove(cid)?.let { handler.removeCallbacks(it) }
+        presumedLostRemoteCids.remove(cid)
+    }
+
+    private fun clearAllRemoteSuspensionTracking() {
+        for (runnable in suspendedPresentationRunnables.values) handler.removeCallbacks(runnable)
+        suspendedPresentationRunnables.clear()
+        presumedLostRemoteCids.clear()
+    }
+
+    /** Test-only count of remote CIDs currently flagged as `presumedLost`. */
+    internal fun presumedLostRemoteCount(): Int = presumedLostRemoteCids.size
+
+    /** Test-only accessor for the local signaling-state surface. */
+    internal fun currentSignalingState(): SignalingState = _state.value.signalingState
+
+    // --- Internal: Local signaling-state computation ---
+
+    private fun computeSignalingState(): SignalingState {
+        val error = _state.value.error
+        if (error != null) return SignalingState.Failed(error)
+        if (_diagnostics.value.isSignalingConnected) return SignalingState.Connected
+        val suspendedSince = localSuspendedSinceMs
+        if (suspendedSince != null) {
+            return SignalingState.Suspended(
+                suspendedSinceMs = suspendedSince,
+                estimatedHardEvictionAtMs = suspendedSince + WebRtcResilienceConstants.SUSPEND_HARD_EVICTION_TIMEOUT_MS,
+            )
+        }
+        return SignalingState.Reconnecting(attempt = joinFlowCoordinator.reconnectAttempts)
+    }
+
+    private fun refreshSignalingState() {
+        val next = computeSignalingState()
+        if (_state.value.signalingState != next) updateState(_state.value.copy(signalingState = next))
     }
 
     // --- Internal: Post-reconnect snapshot gate ---
@@ -1240,6 +1366,8 @@ class SerenadaSession internal constructor(
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
         cancelPostReconnectResync()
+        clearAllRemoteSuspensionTracking()
+        localSuspendedSinceMs = null
         sessionStartTs = null
         if (clearRecovery) recoveryStorage.clear()
         providerScope.coroutineContext.cancelChildren()

@@ -67,6 +67,7 @@
 		B896B31FAF7939AF63947C4C /* FakeSessionSignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC97F9BB82CE31EBF9C084B /* FakeSessionSignaling.swift */; };
 		BC3AE1438258D205BFE66CD2 /* SerenadaiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */; };
 		BD10E73D0A99AF24A662C4F6 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */; };
+		BED32D7AA3653B78E9DE382C /* SessionSuspendedSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A249E2EA4288C34C4B5FFD48 /* SessionSuspendedSurfaceTests.swift */; };
 		C0500F3658A11A038780B5FD /* LoopbackSignalingProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 801D5040B2102E7DFFFDC2B2 /* LoopbackSignalingProviderTests.swift */; };
 		C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9816C392666DC51C1838319 /* RecentCallStoreTests.swift */; };
 		C8363EE39A1335203566D71B /* RoomStatuses.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8B7715C6AFF6FAA67DB5D01 /* RoomStatuses.swift */; };
@@ -196,6 +197,7 @@
 		9DA4F257ABA1CF5875CA4B83 /* RecentCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCall.swift; sourceTree = "<group>"; };
 		9F052EA0D1D083D292B3CF0E /* CameraModeFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraModeFlowTests.swift; sourceTree = "<group>"; };
 		9FC9E71EE9415390DBBFC4A7 /* BackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackoffTests.swift; sourceTree = "<group>"; };
+		A249E2EA4288C34C4B5FFD48 /* SessionSuspendedSurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSuspendedSurfaceTests.swift; sourceTree = "<group>"; };
 		A48285CB0CBEE51504B0674B /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
 		B2B27D4928922728BD684878 /* SavedRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoom.swift; sourceTree = "<group>"; };
 		B56B39E2A60D65FD1477B020 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
@@ -425,6 +427,7 @@
 				8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */,
 				09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */,
 				970E7AEDB3E705CBF2F03E95 /* SessionPostReconnectGateTests.swift */,
+				A249E2EA4288C34C4B5FFD48 /* SessionSuspendedSurfaceTests.swift */,
 				C62ED85E9C29EE8FB7BC0806 /* SignalingClientFallbackTests.swift */,
 				FF2A1B8AEF0CE257BBAB5F0F /* SignalingClientForcePingTests.swift */,
 				1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */,
@@ -834,6 +837,7 @@
 				6E8767096E3E70790EB1CEE5 /* SessionNegotiationTests.swift in Sources */,
 				CB94D71B6D37742D4EAAC565 /* SessionOrchestrationTests.swift in Sources */,
 				AFA7404C26B9F90435638F49 /* SessionPostReconnectGateTests.swift in Sources */,
+				BED32D7AA3653B78E9DE382C /* SessionSuspendedSurfaceTests.swift in Sources */,
 				90E4D65F01CB4CBE8E6CA6EF /* SessionTestHarness.swift in Sources */,
 				D137590CDB7A1FC9C94D3F74 /* SignalingClientFallbackTests.swift in Sources */,
 				CC3D167A630FB82F98509DDF /* SignalingClientForcePingTests.swift in Sources */,

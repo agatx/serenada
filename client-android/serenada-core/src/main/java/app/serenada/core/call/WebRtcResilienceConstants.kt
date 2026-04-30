@@ -45,4 +45,18 @@ object WebRtcResilienceConstants {
     // `room_state` snapshot before falling back to firing ICE restart against
     // the last-known peer map.
     const val EPOCH_RESYNC_TIMEOUT_MS = 5_000L
+
+    // ── Suspended-peer presentation ──────────────────────────────────
+    // After a remote peer transitions to `signalingStatus=SUSPENDED`, the SDK
+    // starts a per-CID UI presentation timer. When this timer expires the
+    // participant is flagged `presumedLost=true` so call UIs can move them
+    // out of the active grid. The peer connection itself stays open so media
+    // can resume immediately if the peer reattaches.
+    const val PEER_SUSPENDED_UI_TIMEOUT_MS = 30_000L
+
+    // ── Server hard-eviction window ──────────────────────────────────
+    // Mirrors `suspendHardEvictionTimeout` on the Go server. Used SDK-side to
+    // compute `estimatedHardEvictionAtMs` for the `SignalingState.Suspended`
+    // surface so apps can render a countdown.
+    const val SUSPEND_HARD_EVICTION_TIMEOUT_MS = 600_000L
 }

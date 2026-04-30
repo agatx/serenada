@@ -30,7 +30,10 @@ public enum PeerConnectionState: String, Equatable, Sendable {
     }
 }
 
-public enum SignalingState: String, Equatable, Sendable {
+/// Mirror of `RTCSignalingState` from libwebrtc. Surfaced via
+/// ``CallDiagnostics/rtcSignalingState`` for SDK consumers that want to
+/// inspect WebRTC-level signaling progress.
+public enum RtcSignalingState: String, Equatable, Sendable {
     case stable = "STABLE"
     case haveLocalOffer = "HAVE_LOCAL_OFFER"
     case haveRemoteOffer = "HAVE_REMOTE_OFFER"
@@ -40,7 +43,7 @@ public enum SignalingState: String, Equatable, Sendable {
     case unknown = "UNKNOWN"
 
     init(rawValueOrUnknown rawValue: String) {
-        self = SignalingState(rawValue: rawValue) ?? .unknown
+        self = RtcSignalingState(rawValue: rawValue) ?? .unknown
     }
 }
 
@@ -62,7 +65,7 @@ public struct CallDiagnostics: Equatable {
     public var isSignalingConnected = false
     public var iceConnectionState: IceConnectionState = .new
     public var peerConnectionState: PeerConnectionState = .new
-    public var rtcSignalingState: SignalingState = .stable
+    public var rtcSignalingState: RtcSignalingState = .stable
     public var activeTransport: String?
     public var realtimeStats: RealtimeCallStats = .empty
     public var callStats = CallStats()
