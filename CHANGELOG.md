@@ -43,8 +43,9 @@ audit and per-failure-mode design notes.
 - Server: dirty-pair tracking. When a relay targets a suspended CID,
   `relay_failed{reason: "target_suspended", targets, of}` is returned to the
   sender and the pair is marked dirty. On the suspended target's reattach,
-  `negotiation_dirty{withCid}` notifies active peers to schedule glare-safe
-  ICE restart for that pair only. SDKs consume both messages.
+  `negotiation_dirty{with}` notifies active peers to schedule glare-safe
+  ICE restart for that pair only (each SDK maps the wire `with` field into
+  an internal `withCid` event property). SDKs consume both messages.
 - Server: room-state epoch + post-reconnect snapshot. Every successful
   `joined` is followed by an authoritative `room_state` snapshot on the new
   transport regardless of whether membership changed, so SDKs can gate ICE
