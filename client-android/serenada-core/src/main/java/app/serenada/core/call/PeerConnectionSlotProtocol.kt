@@ -73,6 +73,15 @@ internal interface PeerConnectionSlotProtocol {
     fun attachRemoteSink(sink: VideoSink)
     fun detachRemoteSink(sink: VideoSink)
     fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit)
+
+    /**
+     * Lightweight stats fetch that extracts only `audioLevel` (W3C webrtc-stats):
+     * the inbound-rtp audio level for the remote participant on this slot, and
+     * the media-source audio level for the locally captured mic. Either may
+     * be null if stats haven't populated yet. The callback thread is not
+     * guaranteed; post to the appropriate handler/executor if needed.
+     */
+    fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit)
     fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy)
 
     /**

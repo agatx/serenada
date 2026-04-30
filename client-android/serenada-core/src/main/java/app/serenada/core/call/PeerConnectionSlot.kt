@@ -419,6 +419,29 @@ internal class PeerConnectionSlot(
         }
     }
 
+    override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) {
+        val pc = peerConnection
+        if (pc == null) {
+            onComplete(null, null)
+            return
+        }
+        pc.getStats { report ->
+            var inbound: Float? = null
+            var mediaSource: Float? = null
+            report.statsMap.values.forEach { stat ->
+                when (stat.type) {
+                    "inbound-rtp" -> if (getMediaKind(stat) == "audio") {
+                        memberDouble(stat, "audioLevel")?.let { inbound = it.toFloat().coerceIn(0f, 1f) }
+                    }
+                    "media-source" -> if (getMediaKind(stat) == "audio") {
+                        memberDouble(stat, "audioLevel")?.let { mediaSource = it.toFloat().coerceIn(0f, 1f) }
+                    }
+                }
+            }
+            onComplete(inbound, mediaSource)
+        }
+    }
+
     override fun isReady(): Boolean = peerConnection != null
 
     override fun isPathDirect(): Boolean? = lastPathIsDirect

@@ -26,6 +26,12 @@ data class CallState(
     val localVideoEnabled: Boolean = true,
     /** Local participant display name, if set. */
     val localDisplayName: String? = null,
+    /**
+     * Smoothed voice activity level (0..1) for the locally captured mic.
+     * Updated at ~10 Hz while the call is active; intended to drive UI
+     * activity indicators. Always 0 when [localAudioEnabled] is false.
+     */
+    val localAudioLevel: Float = 0f,
     /** List of remote participants with their current state. */
     val remoteParticipants: List<RemoteParticipant> = emptyList(),
     /** Network connection status. */

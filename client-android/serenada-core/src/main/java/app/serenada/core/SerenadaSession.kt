@@ -19,6 +19,7 @@ import app.serenada.core.call.SessionClock
 import app.serenada.core.call.RemoteMediaState
 import app.serenada.core.call.resolveCameraModes
 import app.serenada.core.call.SignalingMessageRouter
+import app.serenada.core.call.AudioLevelPoller
 import app.serenada.core.call.StatsPoller
 import app.serenada.core.call.CallAudioSessionController
 import app.serenada.core.call.CallPhase
@@ -254,6 +255,13 @@ class SerenadaSession internal constructor(
             )
         },
         onRefreshRemoteParticipants = { refreshRemoteParticipants() },
+    )
+    private val audioLevelPoller = AudioLevelPoller(
+        handler = handler,
+        statsExecutorProvider = { webRtcStatsExecutor },
+        isActivePhase = { _state.value.phase == CallPhase.InCall },
+        getPeerSlots = { peerSlots.values.toList() },
+        onLevelsUpdated = { localLevel, remoteLevels -> applyAudioLevels(localLevel, remoteLevels) },
     )
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()
     private val peerSlots = mutableMapOf<String, PeerConnectionSlotProtocol>()
@@ -1026,18 +1034,21 @@ class SerenadaSession internal constructor(
         val orderedRemoteCids = roomParticipants?.map { it.cid }?.filter { it != myCid }
             ?: peerSlots.keys.toList()
         val participantsByCid = roomParticipants?.associateBy { it.cid } ?: emptyMap()
+        val previousLevels = _state.value.remoteParticipants.associate { it.cid to it.audioLevel }
         val remoteParticipants = orderedRemoteCids.mapNotNull { cid ->
             val slot = peerSlots[cid] ?: return@mapNotNull null
             val participant = participantsByCid[cid]
             val peerState = remoteMediaStates[cid]
+            val audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true
             RemoteParticipant(
                 cid = cid,
                 displayName = participant?.displayName,
                 peerId = participant?.peerId,
-                audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true,
+                audioEnabled = audioEnabled,
                 videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled(),
                 connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()),
                 signalingStatus = participant?.signalingStatus ?: ParticipantSignalingStatus.ACTIVE,
+                audioLevel = if (audioEnabled) previousLevels[cid] ?: 0f else 0f,
             )
         }
         val currentState = _state.value
@@ -1082,8 +1093,41 @@ class SerenadaSession internal constructor(
 
     // --- Internal: Stats Polling ---
 
-    private fun startRemoteVideoStatePolling() { statsPoller.start() }
-    private fun stopRemoteVideoStatePolling() { statsPoller.stop() }
+    private fun startRemoteVideoStatePolling() {
+        statsPoller.start()
+        audioLevelPoller.start()
+    }
+    private fun stopRemoteVideoStatePolling() {
+        statsPoller.stop()
+        audioLevelPoller.stop()
+    }
+
+    private fun applyAudioLevels(localLevel: Float, remoteLevels: Map<String, Float>) {
+        val current = _state.value
+        val nextLocal = if (current.localAudioEnabled) localLevel else 0f
+        var nextRemote: List<RemoteParticipant>? = null
+        if (current.remoteParticipants.isNotEmpty()) {
+            var remoteChanged = false
+            val updated = current.remoteParticipants.map { participant ->
+                val raw = remoteLevels[participant.cid] ?: 0f
+                val target = if (participant.audioEnabled) raw else 0f
+                if (participant.audioLevel == target) {
+                    participant
+                } else {
+                    remoteChanged = true
+                    participant.copy(audioLevel = target)
+                }
+            }
+            if (remoteChanged) nextRemote = updated
+        }
+        if (nextLocal == current.localAudioLevel && nextRemote == null) return
+        updateState(
+            current.copy(
+                localAudioLevel = nextLocal,
+                remoteParticipants = nextRemote ?: current.remoteParticipants,
+            )
+        )
+    }
 
     private fun broadcastLocalMediaState() {
         signalingMessageRouter.broadcastMediaState(

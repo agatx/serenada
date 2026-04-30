@@ -134,6 +134,7 @@ internal class FakePeerConnectionSlot(
     override fun attachRemoteSink(sink: VideoSink) {}
     override fun detachRemoteSink(sink: VideoSink) {}
     override fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit) { onComplete("fake", null) }
+    override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) { onComplete(null, null) }
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {}
 
     // Test drivers
