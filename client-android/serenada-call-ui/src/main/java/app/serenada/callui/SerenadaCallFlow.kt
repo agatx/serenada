@@ -147,7 +147,7 @@ fun SerenadaCallFlow(
 
     val uiState = rememberCallUiState(state, diagnostics)
     val roomId = state.roomId ?: activeSession.roomId
-    val serverHost = activeSession.host
+    val roomShareUrl = activeSession.roomUrl
     val internalConfig =
         if (config.inviteControlsEnabled && onInviteToRoom == null) {
             config.copy(inviteControlsEnabled = false)
@@ -158,7 +158,7 @@ fun SerenadaCallFlow(
     SerenadaCallFlow(
         uiState = uiState,
         roomId = roomId,
-        serverHost = serverHost,
+        roomShareUrl = roomShareUrl,
         eglContext = activeSession.eglContext(),
         roomName = roomName,
         initialRemoteVideoFitCover = initialRemoteVideoFitCover,
@@ -199,7 +199,10 @@ fun SerenadaCallFlow(
  *
  * @param uiState Current call UI state, typically derived from [CallState].
  * @param roomId The room identifier for the active call.
- * @param serverHost Signaling server host (e.g. `"serenada.app"`).
+ * @param roomShareUrl Shareable room URL (e.g. `"https://serenada.app/call/<roomId>"`) shown in
+ *   the waiting overlay's QR code and share button. Pass `null` (typical when running with a
+ *   custom [app.serenada.core.SignalingProvider] and no Serenada-hosted server) to hide both
+ *   controls. When using the high-level overload, [SerenadaSession.roomUrl] is forwarded here.
  * @param eglContext Shared EGL context for WebRTC video rendering.
  * @param roomName Optional display name shown in the call UI.
  * @param rendererProvider Custom renderer provider for advanced rendering setups.
@@ -235,7 +238,7 @@ fun SerenadaCallFlow(
 fun SerenadaCallFlow(
     uiState: CallUiState,
     roomId: String,
-    serverHost: String,
+    roomShareUrl: String?,
     eglContext: EglBase.Context,
     roomName: String? = null,
     rendererProvider: CallRendererProvider? = null,
@@ -267,9 +270,8 @@ fun SerenadaCallFlow(
     onDismiss: () -> Unit = {},
 ) {
     CallScreen(
-        roomId = roomId,
         uiState = uiState,
-        serverHost = serverHost,
+        roomShareUrl = roomShareUrl,
         eglContext = eglContext,
         initialRemoteVideoFitCover = initialRemoteVideoFitCover,
         config = config,

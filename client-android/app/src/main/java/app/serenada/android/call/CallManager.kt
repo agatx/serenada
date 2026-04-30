@@ -195,11 +195,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
         val roomId = currentRoomId
         val localCid = state.localCid
-        if (!hasNotifiedPushForJoin && roomId != null && localCid != null) {
+        val sessionHost = session.host
+        if (!hasNotifiedPushForJoin && roomId != null && localCid != null && sessionHost != null) {
             hasNotifiedPushForJoin = true
-            pushSubscriptionManager.subscribeRoom(roomId, session.host)
+            pushSubscriptionManager.subscribeRoom(roomId, sessionHost)
             joinSnapshotFeature.prepareSnapshotId(
-                host = session.host,
+                host = sessionHost,
                 roomId = roomId,
                 isVideoEnabled = { activeSession?.state?.value?.localVideoEnabled == true },
                 isJoinAttemptActive = {
@@ -209,7 +210,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 },
             ) { snapshotId ->
                 val endpoint = pushSubscriptionManager.cachedEndpoint()
-                apiClient.notifyRoom(session.host, roomId, localCid, snapshotId, endpoint) { result ->
+                apiClient.notifyRoom(sessionHost, roomId, localCid, snapshotId, endpoint) { result ->
                     result.onFailure { error ->
                         Log.w("CallManager", "Post-join push notify failed", error)
                     }

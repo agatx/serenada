@@ -98,6 +98,7 @@ class SerenadaCoreProviderModeTest {
 
         assertEquals("room-123", session.roomId)
         assertNull(session.roomUrl)
+        assertNull(session.host)
     }
 
     @Test

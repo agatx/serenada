@@ -30,6 +30,17 @@ final class SerenadaCoreProviderModeTests: XCTestCase {
         }
     }
 
+    func testProviderModeSessionExposesNilServerHostAndRoomUrl() {
+        let core = SerenadaCore(config: SerenadaConfig(signalingProvider: FakeSignalingProvider()))
+        let session = core.join(roomId: "room-123")
+
+        XCTAssertEqual(session.roomId, "room-123")
+        XCTAssertNil(session.roomUrl)
+        XCTAssertNil(session.serverHost)
+
+        session.cancelJoin()
+    }
+
     func testCreateRoomIdRequiresServerHostInProviderMode() async {
         let core = SerenadaCore(config: SerenadaConfig(signalingProvider: FakeSignalingProvider()))
 
