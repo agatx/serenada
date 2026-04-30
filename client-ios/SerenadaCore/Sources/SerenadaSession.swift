@@ -752,18 +752,32 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func applyAudioLevels(localLevel: Float, remoteLevels: [String: Float]) {
+        // Compute updates without touching state so we can skip commitSnapshot
+        // entirely when nothing changed. Otherwise this fires the SDK
+        // delegate's `sessionDidChangeState` 10×/sec during sustained silence.
         let nextLocal: Float = state.localParticipant.audioEnabled ? localLevel : 0
-        commitSnapshot { s, _ in
-            if s.localParticipant.audioLevel != nextLocal {
-                s.localParticipant.audioLevel = nextLocal
-            }
-            for index in s.remoteParticipants.indices {
-                let raw = remoteLevels[s.remoteParticipants[index].cid] ?? 0
-                let target: Float = s.remoteParticipants[index].audioEnabled ? raw : 0
-                if s.remoteParticipants[index].audioLevel != target {
-                    s.remoteParticipants[index].audioLevel = target
+        let localChanged = nextLocal != state.localParticipant.audioLevel
+
+        var updatedRemote: [SerenadaRemoteParticipant]?
+        if !state.remoteParticipants.isEmpty {
+            var draft = state.remoteParticipants
+            var anyChanged = false
+            for index in draft.indices {
+                let raw = remoteLevels[draft[index].cid] ?? 0
+                let target: Float = draft[index].audioEnabled ? raw : 0
+                if draft[index].audioLevel != target {
+                    draft[index].audioLevel = target
+                    anyChanged = true
                 }
             }
+            if anyChanged { updatedRemote = draft }
+        }
+
+        guard localChanged || updatedRemote != nil else { return }
+
+        commitSnapshot { s, _ in
+            if localChanged { s.localParticipant.audioLevel = nextLocal }
+            if let updatedRemote { s.remoteParticipants = updatedRemote }
         }
     }
 
