@@ -535,6 +535,36 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
+    public func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(nil, nil)
+            return
+        }
+        peerConnection.statistics { report in
+            var inbound: Float?
+            var mediaSource: Float?
+            for stat in report.statistics.values {
+                switch stat.type {
+                case "inbound-rtp":
+                    if mediaKind(for: stat) == "audio", let level = memberDouble(stat, key: "audioLevel") {
+                        inbound = max(0, min(1, Float(level)))
+                    }
+                case "media-source":
+                    if mediaKind(for: stat) == "audio", let level = memberDouble(stat, key: "audioLevel") {
+                        mediaSource = max(0, min(1, Float(level)))
+                    }
+                default:
+                    break
+                }
+            }
+            Task { @MainActor in onComplete(inbound, mediaSource) }
+        }
+#else
+        onComplete(nil, nil)
+#endif
+    }
+
     public func isReady() -> Bool {
 #if canImport(WebRTC)
         peerConnection != nil

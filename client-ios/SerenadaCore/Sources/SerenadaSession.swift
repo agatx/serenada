@@ -143,6 +143,7 @@ public final class SerenadaSession: ObservableObject {
     private var peerNegotiationEngine: PeerNegotiationEngine?
     private var connectionStatusTracker: ConnectionStatusTracker?
     private var statsPoller: StatsPoller?
+    private var audioLevelPoller: AudioLevelPoller?
 
     // Network
     private let pathMonitor = NWPathMonitor()
@@ -498,6 +499,7 @@ public final class SerenadaSession: ObservableObject {
         userPreferredVideoEnabled = shouldEnableVideo
         applyLocalVideoPreference()
         statsPoller?.start()
+        audioLevelPoller?.start()
 
         joinFlowCoordinator?.clearJoinConnectKickstart()
         joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
@@ -727,15 +729,18 @@ public final class SerenadaSession: ObservableObject {
             commitSnapshot { s, _ in s.remoteParticipants = [] }
             return
         }
+        let previousLevels = Dictionary(uniqueKeysWithValues: state.remoteParticipants.map { ($0.cid, $0.audioLevel) })
         let participants = roomState.participants.filter { $0.cid != clientId }.map { p in
             let slot = peerSlots[p.cid]
             let peerState = remoteMediaStates[p.cid]
+            let audioEnabled = peerState?.audioEnabled ?? p.audioEnabled ?? true
             return SerenadaRemoteParticipant(
                 cid: p.cid, displayName: p.displayName, peerId: p.peerId,
-                audioEnabled: peerState?.audioEnabled ?? p.audioEnabled ?? true,
+                audioEnabled: audioEnabled,
                 videoEnabled: peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
                 connectionState: slot?.getConnectionState() ?? .new,
-                signalingStatus: p.signalingStatus
+                signalingStatus: p.signalingStatus,
+                audioLevel: audioEnabled ? (previousLevels[p.cid] ?? 0) : 0
             )
         }
         let activeCids = Set(participants.map(\.cid))
@@ -743,6 +748,22 @@ public final class SerenadaSession: ObservableObject {
         commitSnapshot { s, d in
             s.remoteParticipants = participants
             if clearContent { d.remoteContentParticipantId = nil; d.remoteContentType = nil }
+        }
+    }
+
+    private func applyAudioLevels(localLevel: Float, remoteLevels: [String: Float]) {
+        let nextLocal: Float = state.localParticipant.audioEnabled ? localLevel : 0
+        commitSnapshot { s, _ in
+            if s.localParticipant.audioLevel != nextLocal {
+                s.localParticipant.audioLevel = nextLocal
+            }
+            for index in s.remoteParticipants.indices {
+                let raw = remoteLevels[s.remoteParticipants[index].cid] ?? 0
+                let target: Float = s.remoteParticipants[index].audioEnabled ? raw : 0
+                if s.remoteParticipants[index].audioLevel != target {
+                    s.remoteParticipants[index].audioLevel = target
+                }
+            }
         }
     }
 
@@ -901,6 +922,7 @@ public final class SerenadaSession: ObservableObject {
 
     private func resetResources() {
         statsPoller?.stop()
+        audioLevelPoller?.stop()
         peerNegotiationEngine?.resetAll()
         signalingProvider.disconnect()
         peerSlots.values.forEach { $0.closePeerConnection() }
@@ -1069,6 +1091,18 @@ public final class SerenadaSession: ObservableObject {
             },
             onStatsUpdated: { [weak self] merged in self?.commitSnapshot { _, d in d.realtimeStats = merged } },
             onRefreshRemoteParticipants: { [weak self] in self?.refreshRemoteParticipants() }
+        )
+
+        audioLevelPoller = AudioLevelPoller(
+            clock: clock,
+            isActivePhase: { [weak self] in self?.internalPhase == .inCall },
+            getPeerSlots: { [weak self] in
+                guard let self else { return [] }
+                return Array(self.peerSlots.values)
+            },
+            onLevelsUpdated: { [weak self] localLevel, remoteLevels in
+                self?.applyAudioLevels(localLevel: localLevel, remoteLevels: remoteLevels)
+            }
         )
 
         peerNegotiationEngine = PeerNegotiationEngine(

@@ -17,6 +17,7 @@ public struct CallUiState: Equatable {
     public var localAudioEnabled: Bool = true
     public var localVideoEnabled: Bool = true
     public var localDisplayName: String?
+    public var localAudioLevel: Float = 0
     public var remoteParticipants: [RemoteParticipant] = []
     public var connectionStatus: ConnectionStatus = .connected
     public var isSignalingConnected: Bool = false
