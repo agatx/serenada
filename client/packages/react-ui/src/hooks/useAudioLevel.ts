@@ -1,19 +1,32 @@
 import { useEffect, useState } from 'react';
 import { AudioLevelMonitor } from '@serenada/core';
 
-/**
- * Returns a smoothed audio level (0..1) for the audio track of the given
- * stream. Returns 0 when `enabled` is false, when the stream has no audio
- * track, or when the Web Audio API is unavailable.
- *
- * Use to drive a voice-activity indicator next to a participant tile.
- */
+let sharedAudioContext: AudioContext | null = null;
+
+function getSharedAudioContext(): AudioContext | undefined {
+    if (sharedAudioContext && sharedAudioContext.state !== 'closed') {
+        return sharedAudioContext;
+    }
+    const Ctx = typeof globalThis !== 'undefined'
+        ? ((globalThis as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext })
+            .AudioContext
+            ?? (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
+        : undefined;
+    if (!Ctx) return undefined;
+    try {
+        sharedAudioContext = new Ctx();
+        return sharedAudioContext;
+    } catch {
+        return undefined;
+    }
+}
+
 export function useAudioLevel(stream: MediaStream | null | undefined, enabled = true): number {
     const [level, setLevel] = useState(0);
 
     useEffect(() => {
         if (!enabled || !stream) return undefined;
-        const monitor = new AudioLevelMonitor(stream);
+        const monitor = new AudioLevelMonitor(stream, { audioContext: getSharedAudioContext() });
         const unsubscribe = monitor.subscribe(setLevel);
         return () => {
             unsubscribe();

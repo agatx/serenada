@@ -15,9 +15,9 @@ const ATTACK_SMOOTHING = 0.4;
 const RELEASE_SMOOTHING = 0.7;
 
 export interface AudioLevelMonitorOptions {
-    /** AnalyserNode smoothingTimeConstant (0..1). Defaults to 0.7. */
+    /** AnalyserNode smoothingTimeConstant (0..1). Defaults to 0.5. */
     smoothing?: number;
-    /** AnalyserNode FFT size — power of two. Defaults to 256. */
+    /** AnalyserNode FFT size — power of two. Defaults to 1024. */
     fftSize?: number;
     /** Subscriber notification interval in ms. Defaults to 100. */
     updateIntervalMs?: number;
@@ -133,7 +133,6 @@ export class AudioLevelMonitor {
             : null;
         if (!setIntervalFn) return;
         this.timer = setIntervalFn(() => this.tick(), this.updateIntervalMs) as unknown as number;
-        this.tick();
     }
 
     private stopLoop(): void {
@@ -147,6 +146,9 @@ export class AudioLevelMonitor {
 
     private tick(): void {
         if (this.disposed || !this.analyser || !this.buffer) return;
+        if (this.context?.state === 'suspended') {
+            void this.context.resume().catch(() => {});
+        }
         this.analyser.getByteTimeDomainData(this.buffer);
         let sumSquares = 0;
         for (let i = 0; i < this.buffer.length; i++) {
