@@ -199,12 +199,10 @@ public final class SerenadaSession: ObservableObject {
     /// Test-only counter incremented each time the gate fires an ICE restart.
     internal var postReconnectResyncFireCount: Int { iceRestartCallsFromGate }
 
-    // #6 — local signaling-state tracking
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
     private var localSuspendedSinceMs: Int64?
 
-    // #3 — per-remote-CID UI presentation timers
     // After a remote peer transitions to suspended, we start a timer; on
     // expiry we flip `presumedLost=true` for that CID. Timers cancel when
     // the peer goes back to active or is removed from the room.
@@ -658,8 +656,8 @@ public final class SerenadaSession: ObservableObject {
         joinFlowCoordinator?.clearAllTimers()
         resetResources(clearRecovery: shouldClearRecovery(for: error))
         internalPhase = .error
-        commitSnapshot()
-        refreshSignalingState()
+        let nextSignalingState = computeSignalingState(connected: false)
+        commitSnapshot { s, _ in s.signalingState = nextSignalingState }
     }
 
     // MARK: - Provider Events
@@ -670,12 +668,13 @@ public final class SerenadaSession: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         localSuspendedSinceMs = nil
-        commitSnapshot { _, d in
+        let nextSignalingState = computeSignalingState(connected: true)
+        commitSnapshot { s, d in
             d.isSignalingConnected = true
             d.activeTransport = info.transport
+            s.signalingState = nextSignalingState
         }
         connectionStatusTracker?.update()
-        refreshSignalingState()
         if let join = pendingJoinRoom {
             pendingJoinRoom = nil
             sendJoin(roomId: join)
@@ -690,12 +689,13 @@ public final class SerenadaSession: ObservableObject {
         if currentRoomState != nil, localSuspendedSinceMs == nil {
             localSuspendedSinceMs = clock.nowMs()
         }
-        commitSnapshot { _, d in
+        let nextSignalingState = computeSignalingState(connected: false)
+        commitSnapshot { s, d in
             d.isSignalingConnected = false
             d.activeTransport = nil
+            s.signalingState = nextSignalingState
         }
         connectionStatusTracker?.update()
-        refreshSignalingState()
         let phase = state.phase
         if phase == .joining || phase == .waiting || phase == .inCall {
             if signalingProvider.capabilities.handlesReconnection {
@@ -1051,6 +1051,7 @@ public final class SerenadaSession: ObservableObject {
 
     private func scheduleReconnect() {
         reconnectAttempts += 1
+        refreshSignalingState()
         let backoff = Backoff.reconnectDelayMs(attempt: reconnectAttempts)
         reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
@@ -1103,7 +1104,7 @@ public final class SerenadaSession: ObservableObject {
         postReconnectResyncTask = nil
     }
 
-    // MARK: - Suspended-peer presentation (#3)
+    // MARK: - Suspended-peer presentation
 
     /// Walks the latest authoritative remote participant list and starts/cancels
     /// per-CID suspended-presentation timers. Cancels cleanly when peers go back
@@ -1175,11 +1176,11 @@ public final class SerenadaSession: ObservableObject {
         presumedLostRemoteCids.removeAll()
     }
 
-    // MARK: - Local signaling state (#6)
+    // MARK: - Local signaling state
 
-    private func computeSignalingState() -> SignalingState {
+    private func computeSignalingState(connected: Bool) -> SignalingState {
         if let error = currentError { return .failed(reason: error) }
-        if diagnostics.isSignalingConnected { return .connected }
+        if connected { return .connected }
         if let suspendedSince = localSuspendedSinceMs {
             return .suspended(
                 suspendedSinceMs: suspendedSince,
@@ -1190,7 +1191,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func refreshSignalingState() {
-        let next = computeSignalingState()
+        let next = computeSignalingState(connected: diagnostics.isSignalingConnected)
         if state.signalingState != next {
             commitSnapshot { s, _ in s.signalingState = next }
         }

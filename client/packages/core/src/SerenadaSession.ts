@@ -255,12 +255,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly availableCameraModes: ConfigurableCameraMode[];
     private userPreferredVideoEnabled: boolean;
 
-    // #6 — local signaling-state tracking
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
     private localSuspendedSinceMs: number | null = null;
 
-    // #3 — per-remote-CID UI presentation timers
     // After a peer transitions to suspended, we start a 30s timer; on expiry
     // we flip `presumedLost=true` for that CID so call UIs can move it out of
     // the active grid. Timers cancel when the peer goes back to active or is
@@ -771,6 +769,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 appPeerId: this.appPeerId,
             };
             this.signaling.connect();
+            this.rebuildState();
         }, delayMs);
     }
 
@@ -857,7 +856,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     ): void {
         const signalingState: SignalingState = error
             ? { kind: 'failed', reason: error.code }
-            : { kind: 'connected' };
+            : this._state.signalingState;
         this._state = {
             phase,
             roomId: this.roomId,
@@ -1129,13 +1128,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private clearAllRemoteSuspensionTracking(): void {
-        const tracked = new Set<string>([
-            ...this.suspendedPresentationTimers.keys(),
-            ...this.presumedLostRemoteCids,
-        ]);
-        for (const cid of tracked) {
-            this.clearRemoteSuspensionTracking(cid);
+        for (const handle of this.suspendedPresentationTimers.values()) {
+            window.clearTimeout(handle);
         }
+        this.suspendedPresentationTimers.clear();
+        this.presumedLostRemoteCids.clear();
     }
 
     private async checkPermissionsAndStartMedia(): Promise<void> {

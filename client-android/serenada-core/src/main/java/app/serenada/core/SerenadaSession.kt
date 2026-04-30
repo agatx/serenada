@@ -343,12 +343,10 @@ class SerenadaSession internal constructor(
     /** Test-only counter incremented each time the gate fires an ICE restart. */
     internal fun postReconnectResyncFireCount(): Int = iceRestartCallsFromGate
 
-    // #6 — local signaling-state tracking
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
     private var localSuspendedSinceMs: Long? = null
 
-    // #3 — per-remote-CID UI presentation timers
     // After a remote peer transitions to suspended, we start a timer; on
     // expiry we flip `presumedLost=true` for that CID. Timers cancel when
     // the peer goes back to active or is removed from the room.
@@ -535,7 +533,6 @@ class SerenadaSession internal constructor(
                     )
                 )
                 updateConnectionStatusFromSignals()
-                refreshSignalingState()
                 if (shouldReconnect) {
                     if (signalingProvider.capabilities.handlesReconnection) {
                         reconnectRecoveryPending = currentRoomState != null
@@ -543,6 +540,7 @@ class SerenadaSession internal constructor(
                         joinFlowCoordinator.scheduleReconnect()
                     }
                 }
+                refreshSignalingState()
             }
         }
 
@@ -1221,7 +1219,7 @@ class SerenadaSession internal constructor(
         )
     }
 
-    // --- Internal: Suspended-peer presentation (#3) ---
+    // --- Internal: Suspended-peer presentation ---
 
     /**
      * Walks the latest authoritative remote participant list and starts/cancels
@@ -1289,7 +1287,7 @@ class SerenadaSession internal constructor(
     /** Test-only accessor for the local signaling-state surface. */
     internal fun currentSignalingState(): SignalingState = _state.value.signalingState
 
-    // --- Internal: Local signaling-state computation (#6) ---
+    // --- Internal: Local signaling-state computation ---
 
     private fun computeSignalingState(): SignalingState {
         val error = _state.value.error

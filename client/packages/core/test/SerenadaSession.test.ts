@@ -875,9 +875,6 @@ describe('SerenadaSession', () => {
         });
     });
 
-    // ---------------------------------------------------------------
-    // Suspended-peer presentation (#3) and SignalingState surface (#6)
-    // ---------------------------------------------------------------
     describe('suspended state surface', () => {
         async function joinWithRemote() {
             harness = new TestSessionHarness();
