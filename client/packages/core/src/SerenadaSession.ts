@@ -273,7 +273,6 @@ export class SerenadaSession implements SerenadaSessionHandle {
     // disconnected (ticks just no-op).
     private mediaLivenessTimer: number | null = null;
     private mediaLivenessEmitInFlight = false;
-    private mediaLivenessEmitCount = 0;
 
     private get isInactive(): boolean {
         return this._destroyed || this.terminated;
@@ -471,6 +470,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearEndingTimer();
         this.clearJoinTimeout();
         this.cancelPostReconnectResync();
+        this.clearAllRemoteSuspensionTracking();
+        this.stopMediaLivenessTimer();
         for (const unsubscribe of this.providerUnsubscribers) {
             unsubscribe();
         }
@@ -1179,7 +1180,6 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const flowing = await this.media.getInboundFlowingCids();
             if (this.isInactive || flowing.length === 0) return;
             this.signaling.broadcast('media_liveness', { cids: flowing });
-            this.mediaLivenessEmitCount += 1;
         } catch (error) {
             this.config.logger?.log(
                 'debug',
@@ -1190,9 +1190,6 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.mediaLivenessEmitInFlight = false;
         }
     }
-
-    /** Test-only counter incremented on each `media_liveness` broadcast. */
-    get mediaLivenessBroadcastCount(): number { return this.mediaLivenessEmitCount; }
 
     private async checkPermissionsAndStartMedia(): Promise<void> {
         if (this.permissionCheckDone || this.permissionCheckInFlight) return;

@@ -544,9 +544,10 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         peerConnection.statistics { report in
             var bytes: Int64 = 0
             for stat in report.statistics.values where stat.type == "inbound-rtp" {
-                if let value = stat.values["bytesReceived"] as? NSNumber {
-                    bytes += value.int64Value
-                }
+                // libwebrtc stat values can arrive as either NSNumber or String.
+                // memberInt64 handles both — using `as? NSNumber` alone would
+                // silently drop the string form and report 0 every tick.
+                bytes += memberInt64(stat, key: "bytesReceived") ?? 0
             }
             Task { @MainActor in onComplete(bytes) }
         }

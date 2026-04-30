@@ -20,9 +20,9 @@ import java.util.concurrent.TimeUnit
  *   - The SDK broadcasts `media_liveness` when inbound bytes advance for a
  *     peer.
  *   - Emission skips peers with no flow.
+ *   - Emission stops after `session.leave()` (terminal cleanup path).
  *   - Emission pauses while transport is disconnected and resumes after
  *     reconnect.
- *   - Emission stops on session reset.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -78,6 +78,29 @@ class SessionMediaLivenessTest {
             "Slot should have been polled at least once",
             (factory.fakeMedia.fakeSlots["remote"]?.collectInboundBytesCalls ?: 0) > 0,
         )
+    }
+
+    @Test
+    fun `stops emitting after session leave`() {
+        factory.advanceToInCallWithTurn(
+            localCid = "alpha",
+            remoteCid = "remote",
+            localJoinedAt = 1,
+            remoteJoinedAt = 2,
+        )
+        factory.fakeMedia.fakeSlots["remote"]?.inboundBytesSample = 1_000
+        ShadowLooper.idleMainLooper(WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        factory.fakeMedia.fakeSlots["remote"]?.inboundBytesSample = 5_000
+        ShadowLooper.idleMainLooper(WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        val baseline = livenessBroadcasts().size
+        assertTrue("Expected at least one broadcast before leave", baseline >= 1)
+
+        factory.session.leave()
+        ShadowLooper.idleMainLooper()
+
+        // Advance well past several would-be tick intervals — no further emits.
+        ShadowLooper.idleMainLooper(WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS * 3, TimeUnit.MILLISECONDS)
+        assertEquals(baseline, livenessBroadcasts().size)
     }
 
     @Test
