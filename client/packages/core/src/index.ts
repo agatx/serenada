@@ -139,6 +139,10 @@ export {
 /** @internal Local video recovery utilities */
 export { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './media/localVideoRecovery.js';
 
+// Audio level monitoring (used by call UI for activity indicators)
+export { AudioLevelMonitor } from './media/AudioLevelMonitor.js';
+export type { AudioLevelMonitorOptions } from './media/AudioLevelMonitor.js';
+
 /** @internal */
 export { createRoomId } from './api/roomApi.js';
 /** @internal */
