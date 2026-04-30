@@ -11,7 +11,10 @@ import (
 
 func postLeave(t *testing.T, hub *Hub, body interface{}) *httptest.ResponseRecorder {
 	t.Helper()
-	raw, _ := json.Marshal(body)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("postLeave: marshal body: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/leave", bytes.NewReader(raw))
 	w := httptest.NewRecorder()
 	handleLeave(hub).ServeHTTP(w, req)

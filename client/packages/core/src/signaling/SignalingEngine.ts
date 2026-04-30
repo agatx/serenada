@@ -24,6 +24,7 @@ import {
     JOIN_RECOVERY_MS,
     JOIN_HARD_TIMEOUT_MS,
     TURN_REFRESH_TRIGGER_RATIO,
+    SUSPEND_HARD_EVICTION_TIMEOUT_MS,
 } from '../constants.js';
 
 export interface SignalingEngineConfig {
@@ -740,9 +741,15 @@ export class SignalingEngine {
         if (!this.currentRoomId || !this.clientId || !this.reconnectToken || !this.sessionStartTs) {
             return;
         }
+        // Fall back to the cross-platform suspendHardEvictionTimeout when
+        // the server didn't surface a token TTL. The Go server's reconnect
+        // token TTL is bound to suspendHardEvictionTimeout (see
+        // signaling.go: reconnectTokenTTL = suspendHardEvictionTimeout), so
+        // mirroring that constant keeps Web aligned with iOS/Android and
+        // the server without local drift.
         const ttl = reconnectTokenTTLMs && reconnectTokenTTLMs > 0
             ? reconnectTokenTTLMs
-            : 10 * 60 * 1000;
+            : SUSPEND_HARD_EVICTION_TIMEOUT_MS;
         saveRecoveryRecord({
             roomId: this.currentRoomId,
             cid: this.clientId,

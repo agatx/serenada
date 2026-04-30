@@ -4,7 +4,7 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.6.3] — 2026-04-30
+## [0.6.6] — 2026-04-30
 
 Resilience hardening release. The SDK now degrades gracefully across long
 signaling drops, post-reconnect peer-set churn, and process death; suspended
