@@ -93,6 +93,18 @@ export class FakeMediaEngine {
         return this.allPathsDirect;
     }
 
+    /**
+     * CIDs returned from the next `getInboundFlowingCids()` call. Tests can
+     * override to assert the periodic `media_liveness` emit picks up the
+     * right list.
+     */
+    inboundFlowingCids: string[] = [];
+    getInboundFlowingCidsCalls = 0;
+    async getInboundFlowingCids(): Promise<string[]> {
+        this.getInboundFlowingCidsCalls += 1;
+        return [...this.inboundFlowingCids];
+    }
+
     cleanupAllPeers(): void {
         this.cleanupAllPeersCalls++;
         this.remoteStreams = new Map();

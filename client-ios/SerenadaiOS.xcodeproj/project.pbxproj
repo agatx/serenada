@@ -29,6 +29,7 @@
 		3A954265ACD7FADB9138DC1B /* AppConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8662332FB191C23A57DDBA4D /* AppConstants.swift */; };
 		3B240DC5B813D930328BDC99 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56B39E2A60D65FD1477B020 /* SampleHandler.swift */; };
 		3EEE808D7CBA63B2652C959F /* AppLaunchOverrides.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */; };
+		4137872C50BFF4B70C29DDED /* SessionMediaLivenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FB457A612C7F7FCB2736B1F /* SessionMediaLivenessTests.swift */; };
 		46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */; };
 		467581ED7FB87064203AA780 /* FakeSignalingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB6EC0967F80C7CB8EB7E9E0 /* FakeSignalingProvider.swift */; };
 		5153383FD16DC779F8EBA4B3 /* JoinFlowCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23CA15C6609960E60FFBCD90 /* JoinFlowCoordinatorTests.swift */; };
@@ -167,6 +168,7 @@
 		3529A15EA2C43DB2F91F46FC /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		367DCC8F4EDC812C9FBA3F02 /* LiveRoomOverride.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveRoomOverride.swift; sourceTree = "<group>"; };
 		3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomStatusesTests.swift; sourceTree = "<group>"; };
+		3FB457A612C7F7FCB2736B1F /* SessionMediaLivenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionMediaLivenessTests.swift; sourceTree = "<group>"; };
 		4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaDiagnosticsTests.swift; sourceTree = "<group>"; };
 		41E34F50FDC1E2F064028B68 /* SessionTestHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTestHarness.swift; sourceTree = "<group>"; };
 		43E2F0452DE65337073894BF /* RecentCallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCallStore.swift; sourceTree = "<group>"; };
@@ -424,6 +426,7 @@
 				2A15CC6B14E97F4E2C37C573 /* SerenadaServerProviderTests.swift */,
 				7830FA5A71601737755C721D /* SerenadaSessionTests.swift */,
 				8815B032D4EFBB62BB976B66 /* SessionDirtyPairTests.swift */,
+				3FB457A612C7F7FCB2736B1F /* SessionMediaLivenessTests.swift */,
 				8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */,
 				09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */,
 				970E7AEDB3E705CBF2F03E95 /* SessionPostReconnectGateTests.swift */,
@@ -834,6 +837,7 @@
 				838D89A84D60CC6245CB2EFC /* SerenadaServerProviderTests.swift in Sources */,
 				A281E4C5D7AE35EEF75A87A8 /* SerenadaSessionTests.swift in Sources */,
 				2BF323F5A22C2952822DE96D /* SessionDirtyPairTests.swift in Sources */,
+				4137872C50BFF4B70C29DDED /* SessionMediaLivenessTests.swift in Sources */,
 				6E8767096E3E70790EB1CEE5 /* SessionNegotiationTests.swift in Sources */,
 				CB94D71B6D37742D4EAAC565 /* SessionOrchestrationTests.swift in Sources */,
 				AFA7404C26B9F90435638F49 /* SessionPostReconnectGateTests.swift in Sources */,

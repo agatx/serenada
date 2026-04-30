@@ -62,7 +62,7 @@ must preserve the core UX model:
 |---|-----------------------------------------------------------|-----------------------------------------------------------|----------|--------|--------|
 | 1 | Negotiation messages missed while peer is suspended       | Stuck call setup, missing media after reconnect           | Critical | M      | Phase 1 (server) · Phase 2 ✅ (SDK consumes `negotiation_dirty` for per-CID ICE restart; `relay_failed` informational) |
 | 2 | Reconnect creates a new CID instead of preserving identity | App thinks it rejoined; peers see duplicate/empty state   | Critical | S      | Phase 1 ✅ |
-| 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 1 (server cleanup gate) · Phase 2 partial (SDK presentation timer landed; periodic media-liveness emission still pending) |
+| 3 | Suspension conflates signaling loss with media death      | Premature teardown risk, ghost UI for dead peers          | High     | M      | Phase 2 ✅ (SDK presentation timer + periodic `media_liveness` emission landed end-to-end) |
 | 4 | ICE restart fires on stale peer map at reconnect          | Offers to ghost CIDs, missing offers to new peers         | High     | S      | Phase 1 (server) · Phase 2 ✅ (SDK snapshot gate landed end-to-end) |
 | 5 | Process death without clean teardown                      | Server holds a slot for a participant that's gone         | High     | M      | Phase 2 ✅ (server `POST /api/leave` + per-platform recovery store + rejoin API) |
 | 6 | No explicit "you are suspended / about to be evicted"     | UI can't show countdown; apps can't make smart choices    | Medium   | S      | Phase 2 ✅ (SDK `signalingState` surface with `Suspended`/`Reconnecting`/`Failed` variants and hard-eviction estimate) |
@@ -301,20 +301,27 @@ the boundary.
 
 ## 3. Suspension conflates signaling loss with media death
 
-**Status (2026-04-29):** Phase 2 partial — SDK presentation timer landed
-end-to-end across Web, Android, and iOS. When a remote peer transitions to
-`signalingStatus="suspended"` in `room_state`, each SDK starts a per-CID
-timer of `peerSuspendedUiTimeoutMs = 30 s` (new shared constant). On
-expiry the SDK flips a new `presumedLost: boolean` field on the
-participant so call UIs can move them out of the active grid. The peer
-connection itself stays open so media can resume immediately if the peer
-reattaches. Cancellation is automatic when the peer reattaches as active
-or leaves the room. The remaining piece — periodic `media_liveness`
-emission from active peers so the server can keep the slot longer for
-peers whose media is still flowing — is still pending and will land in a
-follow-up slice. Server-side support from Phase 1 is unchanged
-(`mediaLivenessFreshnessWindow = 30s`,
-`hardEvictMediaActiveDeferral = 30s`).
+**Status (2026-04-29):** Landed end-to-end across server and all three
+SDKs. When a remote peer transitions to `signalingStatus="suspended"` in
+`room_state`, each SDK starts a per-CID timer of `peerSuspendedUiTimeoutMs
+= 30 s`; on expiry the SDK flips a new `presumedLost: boolean` field on
+the participant so call UIs can move them out of the active grid. The
+peer connection itself stays open so media can resume immediately if the
+peer reattaches. Cancellation is automatic when the peer reattaches as
+active or leaves the room.
+
+Active SDKs also broadcast `media_liveness{cids:[…]}` every
+`mediaLivenessIntervalMs = 10 s` for remote CIDs whose inbound RTP
+`bytesReceived` advanced since the previous sample. Web reads stats
+straight from each `RTCPeerConnection`; Android and iOS use a new
+`PeerConnectionSlot.collectInboundBytes` callback. Emission starts when
+the room transitions to `inCall` (i.e. there's at least one remote peer)
+and pauses while the local transport is disconnected — baseline samples
+are preserved so the next post-reconnect tick can detect flow. The
+server's existing `mediaLivenessFreshnessWindow = 30s` and
+`hardEvictMediaActiveDeferral = 30s` from Phase 1 do the rest of the
+work; a hard-eviction is now deferred whenever any active peer reports
+recent media from a suspended CID.
 
 ### Symptom
 
@@ -1441,6 +1448,46 @@ Out of scope for this document, listed for visibility:
   it deserves a fresh look.
 
 ## Change Log
+
+### 2026-04-29 — Phase 2: media-liveness emission completes #3
+
+- **New shared constant**: `mediaLivenessIntervalMs = 10_000` added to
+  Web, Android, and iOS (validated by
+  `scripts/check-resilience-constants.mjs` — 23 shared constants now
+  match). Mirrors the cadence under the server's 30s freshness window.
+
+- **Per-platform inbound-bytes detection**: Each SDK samples cumulative
+  `inbound-rtp.bytesReceived` per remote CID once per interval and
+  builds the list of "flowing" CIDs (current sample > previous):
+  - Web: `MediaEngine.getInboundFlowingCids()` reads each peer's
+    `RTCPeerConnection.getStats()` and aggregates inbound-rtp bytes.
+  - Android: new `PeerConnectionSlotProtocol.collectInboundBytes`
+    callback wraps `pc.getStats { ... }`.
+  - iOS: new `PeerConnectionSlotProtocol.collectInboundBytes` callback
+    wraps `peerConnection.statistics { ... }`.
+
+- **Periodic broadcast in `SerenadaSession`**: each SDK runs a
+  `mediaLivenessIntervalMs` tick that calls
+  `signalingProvider.broadcast("media_liveness", { cids })` whenever
+  the flowing list is non-empty AND the local transport is connected.
+  Timer starts when the call reaches `inCall` (at least one remote
+  peer); ticks no-op while disconnected (baseline samples are preserved
+  so the next post-reconnect tick can detect flow). Stopped on session
+  reset/destroy.
+
+- **Tests**:
+  - Web `SerenadaSession.test.ts` — 4 new tests covering: broadcasts
+    on flowing CIDs, skips when no flow, pauses while disconnected and
+    resumes after reconnect, stops after destroy. 326 total (was 322).
+  - Android `SessionMediaLivenessTest.kt` — 3 Robolectric tests
+    covering the same matrix.
+  - iOS `SessionMediaLivenessTests.swift` — 3 XCTest cases covering
+    the same matrix using `FakeSessionClock` advances.
+  - Server tests still green; resilience-constants and version-parity
+    checks green.
+
+- **Docs**: `docs/resilience-failure-modes.md` priority table for #3
+  flips to ✅, section status updated, change-log entry added.
 
 ### 2026-04-29 — Phase 2: suspended-state surface (#6) + remote presentation timer (#3 partial)
 

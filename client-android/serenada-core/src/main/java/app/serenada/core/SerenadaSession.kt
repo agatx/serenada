@@ -55,6 +55,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
+import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.EglBase
 import org.webrtc.PeerConnection
@@ -352,6 +353,16 @@ class SerenadaSession internal constructor(
     // the peer goes back to active or is removed from the room.
     private val suspendedPresentationRunnables = mutableMapOf<String, Runnable>()
     private val presumedLostRemoteCids = mutableSetOf<String>()
+
+    // #3 — periodic `media_liveness` emission. Active across the in-call
+    // window so the server can defer hard-eviction of suspended peers whose
+    // media is still flowing locally. Ticks no-op while transport is
+    // disconnected (baseline samples preserved so the next post-reconnect
+    // tick can detect flow).
+    private val lastInboundBytesByCid = mutableMapOf<String, Long>()
+    private var mediaLivenessTickRunnable: Runnable? = null
+    private var mediaLivenessEmitInFlight = false
+    private var mediaLivenessEmitCount = 0
     private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private val availableCameraModes: List<LocalCameraMode> = resolveAvailableCameraModes()
@@ -1142,6 +1153,9 @@ class SerenadaSession internal constructor(
         peerNegotiationEngine.syncPeers(roomState)
         refreshRemoteParticipants()
         updateConnectionStatusFromSignals()
+        // Start media-liveness emission only once we have remote peers — there's
+        // nothing to report when alone in the room.
+        if (phase == CallPhase.InCall) startMediaLivenessTimer()
     }
 
     private fun refreshRemoteParticipants() {
@@ -1287,6 +1301,76 @@ class SerenadaSession internal constructor(
     /** Test-only accessor for the local signaling-state surface. */
     internal fun currentSignalingState(): SignalingState = _state.value.signalingState
 
+    /** Test-only counter incremented on each `media_liveness` broadcast. */
+    internal fun mediaLivenessBroadcastCount(): Int = mediaLivenessEmitCount
+
+    // --- Internal: Media-liveness emission (#3) ---
+
+    /**
+     * Periodic `media_liveness{cids}` broadcast for #3. Started on a
+     * successful join; runs across reconnects (ticks no-op while
+     * disconnected but baseline samples persist so the next post-reconnect
+     * tick can detect flow). Stopped on session reset/destroy.
+     */
+    private fun startMediaLivenessTimer() {
+        if (mediaLivenessTickRunnable != null) return
+        val runnable = object : Runnable {
+            override fun run() {
+                emitMediaLiveness()
+                handler.postDelayed(this, WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS)
+            }
+        }
+        mediaLivenessTickRunnable = runnable
+        handler.postDelayed(runnable, WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS)
+    }
+
+    private fun stopMediaLivenessTimer() {
+        mediaLivenessTickRunnable?.let { handler.removeCallbacks(it) }
+        mediaLivenessTickRunnable = null
+    }
+
+    private fun emitMediaLiveness() {
+        if (_state.value.phase == CallPhase.Idle || _state.value.phase == CallPhase.Ending) return
+        if (mediaLivenessEmitInFlight) return
+        if (!_diagnostics.value.isSignalingConnected) return
+        if (currentRoomState == null) return
+        val slots = peerSlots.toMap()
+        if (slots.isEmpty()) return
+
+        mediaLivenessEmitInFlight = true
+        val newSamples = mutableMapOf<String, Long>()
+        var remaining = slots.size
+        for ((cid, slot) in slots) {
+            slot.collectInboundBytes { bytes ->
+                handler.post {
+                    newSamples[cid] = bytes
+                    remaining -= 1
+                    if (remaining == 0) finalizeMediaLivenessEmit(newSamples)
+                }
+            }
+        }
+    }
+
+    private fun finalizeMediaLivenessEmit(newSamples: Map<String, Long>) {
+        mediaLivenessEmitInFlight = false
+        val flowing = mutableListOf<String>()
+        for ((cid, bytes) in newSamples) {
+            val previous = lastInboundBytesByCid[cid]
+            if (previous != null && bytes > previous) flowing.add(cid)
+            lastInboundBytesByCid[cid] = bytes
+        }
+        // Drop tracking for peers that left the room.
+        val activeCids = peerSlots.keys
+        val stale = lastInboundBytesByCid.keys.filterNot { activeCids.contains(it) }
+        for (cid in stale) lastInboundBytesByCid.remove(cid)
+
+        if (flowing.isEmpty()) return
+        if (!_diagnostics.value.isSignalingConnected) return
+        val payload = JSONObject().apply { put("cids", JSONArray(flowing)) }
+        signalingProvider.broadcast("media_liveness", payload)
+        mediaLivenessEmitCount += 1
+    }
+
     // --- Internal: Local signaling-state computation ---
 
     private fun computeSignalingState(): SignalingState {
@@ -1367,6 +1451,9 @@ class SerenadaSession internal constructor(
         reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
         cancelPostReconnectResync()
         clearAllRemoteSuspensionTracking()
+        stopMediaLivenessTimer()
+        lastInboundBytesByCid.clear()
+        mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = null
         sessionStartTs = null
         if (clearRecovery) recoveryStorage.clear()
