@@ -122,7 +122,12 @@ internal class LocalAudioPipelinePrimer(
             for (stat in report.statsMap.values) {
                 if (stat.type != "media-source") continue
                 if (getMediaKind(stat) != "audio") continue
-                memberDouble(stat, "audioLevel")?.let { level = it.toFloat().coerceIn(0f, 1f) }
+                memberDouble(stat, "audioLevel")?.let { raw ->
+                    // Drop non-finite values rather than letting them poison
+                    // downstream smoothing — `coerceIn` propagates NaN.
+                    val f = raw.toFloat()
+                    if (f.isFinite()) level = f.coerceIn(0f, 1f)
+                }
             }
             onComplete(level)
         }

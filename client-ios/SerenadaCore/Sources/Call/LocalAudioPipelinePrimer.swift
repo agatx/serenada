@@ -133,7 +133,10 @@ final class LocalAudioPipelinePrimer {
             for stat in report.statistics.values {
                 guard stat.type == "media-source", mediaKind(for: stat) == "audio" else { continue }
                 if let raw = memberDouble(stat, key: "audioLevel") {
-                    level = max(0, min(1, Float(raw)))
+                    // Drop non-finite values rather than letting them poison
+                    // downstream smoothing — `min`/`max` propagate NaN.
+                    let f = Float(raw)
+                    if f.isFinite { level = max(0, min(1, f)) }
                 }
             }
             onComplete(level)
