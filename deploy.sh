@@ -159,8 +159,14 @@ COMPOSE_PROJECT=$(basename "$REMOTE_DIR")
 ssh "$VPS_HOST" <<RENEWAL_EOF
 set -e
 
+if [ "\$(id -u)" -ne 0 ]; then
+  SUDO="sudo"
+else
+  SUDO=""
+fi
+
 CERT_CONF="/etc/letsencrypt/renewal/${DOMAIN}.conf"
-if [ ! -f "\$CERT_CONF" ]; then
+if ! \$SUDO test -f "\$CERT_CONF"; then
     echo "⚠️  No certbot renewal config at \$CERT_CONF — bootstrap the cert first (see DEPLOY.md)"
     exit 0
 fi
@@ -177,14 +183,14 @@ fi
 # (SIGUSR2 = re-read TLS certs) so both pick up the new cert without
 # dropping in-flight connections. coturn must be signaled explicitly —
 # it loads certs once at startup and won't notice file changes otherwise.
-mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh <<'HOOK_EOF'
+\$SUDO mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+\$SUDO tee /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh >/dev/null <<'HOOK_EOF'
 #!/bin/bash
 set -e
 docker exec serenada-nginx nginx -s reload || true
 docker kill -s USR2 serenada-coturn || true
 HOOK_EOF
-chmod +x /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh
+\$SUDO chmod +x /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh
 
 # Force renewal to use webroot for zero-downtime. Covers fresh deploys AND any
 # prior config using authenticator=standalone or authenticator=nginx — both of
@@ -192,32 +198,43 @@ chmod +x /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh
 # Re-run certbot (instead of sed-editing the conf) so certbot writes a valid
 # renewal config itself. Reload hooks come from renewal-hooks/deploy/ above,
 # not --deploy-hook, so all renewals fire the same hook script.
-AUTH=\$(awk -F' = ' '/^authenticator/{print \$2; exit}' "\$CERT_CONF")
+#
+# Use --force-renewal (not --keep-until-expiring): the latter can early-exit
+# when the cert isn't due, leaving the renewal config still pointing at
+# standalone/nginx. Force-renewal guarantees certbot rewrites the lineage
+# config with authenticator=webroot. This block only runs once per VPS (the
+# AUTH check skips it on subsequent deploys), so the extra issuance is a
+# one-time cost during migration.
+AUTH=\$(\$SUDO awk -F' = ' '/^authenticator/{print \$2; exit}' "\$CERT_CONF")
 if [ "\$AUTH" != "webroot" ]; then
     echo "🔧 Cert was using authenticator=\$AUTH; reconfiguring to webroot..."
-    DOMAINS=\$(certbot certificates --cert-name "${DOMAIN}" 2>/dev/null \\
+    DOMAINS=\$(\$SUDO certbot certificates --cert-name "${DOMAIN}" 2>/dev/null \\
         | awk -F': ' '/Domains:/{print \$2; exit}')
     [ -z "\$DOMAINS" ] && DOMAINS="${DOMAIN}"
     DOMAIN_ARGS=""
     for d in \$DOMAINS; do DOMAIN_ARGS="\$DOMAIN_ARGS -d \$d"; done
-    certbot certonly --non-interactive \\
+    \$SUDO certbot certonly --non-interactive \\
         --webroot -w "\$WEBROOT_PATH" \\
         --cert-name "${DOMAIN}" \\
         \$DOMAIN_ARGS \\
-        --keep-until-expiring
+        --force-renewal
     echo "✅ Cert renewal switched to webroot"
 fi
 
 # Drop any legacy renew_hook from the cert config (now handled by
 # renewal-hooks/deploy/) to avoid double-running on each renewal.
-sed -i '/^renew_hook = /d' "\$CERT_CONF"
+\$SUDO sed -i '/^renew_hook = /d' "\$CERT_CONF"
 
 # Install weekly cron (Sun 3am), replacing any old certbot entry. The renewal
 # config stores webroot_path; reload hooks live in renewal-hooks/deploy/.
 # Plain 'certbot renew' is enough — no flags belong in the cron line.
+# We use a dedicated cron entry (not the system certbot.timer) so the schedule
+# and command are explicit and visible to operators alongside the rest of the
+# deploy. 'certbot renew' is idempotent, so co-existence with the system timer
+# is harmless if both are enabled.
 if command -v crontab >/dev/null 2>&1; then
     CRON_CMD="0 3 * * 0 certbot renew --quiet"
-    ( crontab -l 2>/dev/null | grep -v 'certbot renew'; echo "\$CRON_CMD" ) | crontab -
+    ( \$SUDO crontab -l 2>/dev/null | grep -v 'certbot renew'; echo "\$CRON_CMD" ) | \$SUDO crontab -
     echo "✅ SSL auto-renewal cron job is configured (weekly, zero-downtime)"
 else
     echo "⚠️  crontab not found — install cron (apt install cron) to enable SSL auto-renewal"
