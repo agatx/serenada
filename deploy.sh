@@ -153,7 +153,7 @@ ssh "$VPS_HOST" "cd $REMOTE_DIR && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build"
 
-# 6. Ensure SSL auto-renewal cron job exists
+# 6. Ensure SSL auto-renewal is configured for webroot (zero-downtime)
 echo "🔒 Checking SSL auto-renewal cron job..."
 COMPOSE_PROJECT=$(basename "$REMOTE_DIR")
 ssh "$VPS_HOST" <<RENEWAL_EOF
@@ -161,27 +161,62 @@ set -e
 
 CERT_CONF="/etc/letsencrypt/renewal/${DOMAIN}.conf"
 if [ ! -f "\$CERT_CONF" ]; then
-    echo "⚠️  No certbot renewal config at \$CERT_CONF — skipping auto-renewal setup"
+    echo "⚠️  No certbot renewal config at \$CERT_CONF — bootstrap the cert first (see DEPLOY.md)"
     exit 0
 fi
 
-# If certbot uses standalone (requires stopping nginx), switch to webroot for zero-downtime
-AUTH=\$(grep '^authenticator' "\$CERT_CONF" | awk '{print \$3}')
-if [ "\$AUTH" = "standalone" ]; then
-    sed -i 's/^authenticator = standalone/authenticator = webroot/' "\$CERT_CONF"
-    if ! grep -q '^\[webroot\]' "\$CERT_CONF"; then
-        printf '\n[webroot]\n${DOMAIN} = /var/www/certbot\n' >> "\$CERT_CONF"
-    fi
-    WEBROOT_PATH=\$(docker volume inspect ${COMPOSE_PROJECT}_certbot-webroot -f '{{.Mountpoint}}')
-    RENEW_FLAGS="--webroot-path \$WEBROOT_PATH"
-    echo "Switched certbot from standalone to webroot"
-else
-    RENEW_FLAGS=""
+WEBROOT_VOL="${COMPOSE_PROJECT}_certbot-webroot"
+WEBROOT_PATH=\$(docker volume inspect "\$WEBROOT_VOL" -f '{{.Mountpoint}}' 2>/dev/null || true)
+if [ -z "\$WEBROOT_PATH" ]; then
+    echo "⚠️  Docker volume \$WEBROOT_VOL not found — is the stack running? Skipping renewal config."
+    exit 0
 fi
 
-# Install weekly cron (Sunday 3am), replacing any old certbot entry
+# Install (or refresh) the post-renewal hook. Runs after every successful
+# 'certbot renew' to reload nginx (graceful) and signal coturn
+# (SIGUSR2 = re-read TLS certs) so both pick up the new cert without
+# dropping in-flight connections. coturn must be signaled explicitly —
+# it loads certs once at startup and won't notice file changes otherwise.
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh <<'HOOK_EOF'
+#!/bin/bash
+set -e
+docker exec serenada-nginx nginx -s reload || true
+docker kill -s USR2 serenada-coturn || true
+HOOK_EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/serenada-reload.sh
+
+# Force renewal to use webroot for zero-downtime. Covers fresh deploys AND any
+# prior config using authenticator=standalone or authenticator=nginx — both of
+# which fail silently when the live nginx runs in Docker on ports 80/443.
+# Re-run certbot (instead of sed-editing the conf) so certbot writes a valid
+# renewal config itself. Reload hooks come from renewal-hooks/deploy/ above,
+# not --deploy-hook, so all renewals fire the same hook script.
+AUTH=\$(awk -F' = ' '/^authenticator/{print \$2; exit}' "\$CERT_CONF")
+if [ "\$AUTH" != "webroot" ]; then
+    echo "🔧 Cert was using authenticator=\$AUTH; reconfiguring to webroot..."
+    DOMAINS=\$(certbot certificates --cert-name "${DOMAIN}" 2>/dev/null \\
+        | awk -F': ' '/Domains:/{print \$2; exit}')
+    [ -z "\$DOMAINS" ] && DOMAINS="${DOMAIN}"
+    DOMAIN_ARGS=""
+    for d in \$DOMAINS; do DOMAIN_ARGS="\$DOMAIN_ARGS -d \$d"; done
+    certbot certonly --non-interactive \\
+        --webroot -w "\$WEBROOT_PATH" \\
+        --cert-name "${DOMAIN}" \\
+        \$DOMAIN_ARGS \\
+        --keep-until-expiring
+    echo "✅ Cert renewal switched to webroot"
+fi
+
+# Drop any legacy renew_hook from the cert config (now handled by
+# renewal-hooks/deploy/) to avoid double-running on each renewal.
+sed -i '/^renew_hook = /d' "\$CERT_CONF"
+
+# Install weekly cron (Sun 3am), replacing any old certbot entry. The renewal
+# config stores webroot_path; reload hooks live in renewal-hooks/deploy/.
+# Plain 'certbot renew' is enough — no flags belong in the cron line.
 if command -v crontab >/dev/null 2>&1; then
-    CRON_CMD="0 3 * * 0 certbot renew --quiet \$RENEW_FLAGS --deploy-hook 'docker exec serenada-nginx nginx -s reload'"
+    CRON_CMD="0 3 * * 0 certbot renew --quiet"
     ( crontab -l 2>/dev/null | grep -v 'certbot renew'; echo "\$CRON_CMD" ) | crontab -
     echo "✅ SSL auto-renewal cron job is configured (weekly, zero-downtime)"
 else

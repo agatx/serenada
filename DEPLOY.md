@@ -115,6 +115,7 @@ Serenada expects Let's Encrypt certificates to be located at `/etc/letsencrypt/l
     sudo certbot certonly --standalone -d your-domain.com
     ```
 3.  The certificates are mounted into the containers via `docker-compose.prod.yml`.
+4.  Run `./deploy.sh` from your local machine. It converts the cert's renewal config to webroot mode (zero-downtime renewals against the live containerized nginx) and registers the deploy-hook to reload nginx after each renewal. **Do not skip this step** — without it, certbot keeps trying to bind ports 80/443 itself, which Docker already owns, and renewals fail silently until the cert expires.
 
 ### 4. Deploying the Stack
 
