@@ -214,7 +214,7 @@ Kotlin + Jetpack Compose + Material3. Three-module Gradle project.
 WebRTC: custom-built AAR from branch-heads/7559_173 in `app/libs/`, verified with SHA-256 checksum.
 
 ### iOS Client (`client-ios/`)
-SwiftUI + Swift 5.10, project generated via XcodeGen (`project.yml`). Two SPM packages + host app.
+SwiftUI + Swift 5.9, project generated via XcodeGen (`project.yml`). Two SPM packages + host app.
 
 **Headless SDK** (`SerenadaCore/` — SPM package):
 - `Sources/SerenadaCore.swift` — entry point (`join()` returns session, `createRoom()` returns `CreateRoomResult(url, roomId)`)
