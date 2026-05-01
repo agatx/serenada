@@ -54,6 +54,7 @@ internal class WebRtcEngine(
     private val appContext = context.applicationContext
     private val audioDeviceModule: AudioDeviceModule = createAudioDeviceModule(appContext)
     private val peerConnectionFactory: PeerConnectionFactory
+    private val audioPipelinePrimer: LocalAudioPipelinePrimer
     private val cameraManager = appContext.getSystemService(CameraManager::class.java)
     private var released = false
 
@@ -117,6 +118,7 @@ internal class WebRtcEngine(
             .setVideoEncoderFactory(encoderFactory)
             .setVideoDecoderFactory(decoderFactory)
             .createPeerConnectionFactory()
+        audioPipelinePrimer = LocalAudioPipelinePrimer(peerConnectionFactory, logger)
     }
 
     private fun enableVerboseWebRtcLoggingIfDebug() {
@@ -194,6 +196,10 @@ internal class WebRtcEngine(
 
     override fun getEglContext(): EglBase.Context = eglBase.eglBaseContext
 
+    override fun collectLocalAudioLevel(onComplete: (Float?) -> Unit) {
+        audioPipelinePrimer.collectAudioLevel(onComplete)
+    }
+
     override fun startLocalMedia() {
         if (released) return
         if (localAudioTrack != null || localVideoTrack != null) return
@@ -202,6 +208,7 @@ internal class WebRtcEngine(
         audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
         localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
         applyAudioTrackHints()
+        localAudioTrack?.let { audioPipelinePrimer.start(it) }
 
         if (cameraController.availableCameraModes.isEmpty()) {
             peerSlots.forEach { slot ->
@@ -236,6 +243,9 @@ internal class WebRtcEngine(
             localSinks.forEach { sink -> track.removeSink(sink) }
             track.dispose()
         }
+        // Tear down the primer before disposing its audio track — closing the
+        // PC first releases the sender's reference to the track.
+        audioPipelinePrimer.stop()
         localAudioTrack?.dispose()
         videoSource?.dispose()
         videoSource = null

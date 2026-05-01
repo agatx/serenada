@@ -4,6 +4,36 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.7] — 2026-05-01
+
+Audio activity indicator now animates while the user is alone in the room
+(Android and iOS), not just after a peer joins. Sensitivity matches the
+in-call behavior because the same WebRTC `media-source.audioLevel` stat
+drives both phases.
+
+### Added
+- Android, iOS: `LocalAudioPipelinePrimer` — a self-loopback peer-connection
+  pair that holds the local audio track so WebRTC's audio capture, AEC/NS/AGC,
+  and `media-source` stat stay active continuously while the user is in a
+  room. The receiver PC's incoming audio is silenced (volume 0 + disabled)
+  so the loopback doesn't echo through the speaker.
+- `SessionMediaEngine.collectLocalAudioLevel(onComplete)` (Android + iOS) —
+  async fetch of the primer's `media-source.audioLevel` stat for the
+  audio-level poller.
+
+### Changed
+- Android, iOS: `AudioLevelPoller` now sources the local mic level from the
+  primer's `media-source` stat (via `collectLocalLevel`) and only consumes
+  inbound levels from peer slots. This unifies the local-level path across
+  Waiting and InCall — the indicator no longer freezes while alone, and
+  resumes immediately after a peer leaves and we're back to alone.
+- Android, iOS: `AudioLevelPoller`'s `isActivePhase` widened from `InCall`
+  only to `InCall || Waiting` so the poller runs during both phases.
+
+### Fixed
+- iOS: audio activity indicator stayed frozen at zero after a peer left the
+  call and the user returned to the Waiting phase.
+
 ## [0.6.6] — 2026-04-30
 
 Resilience hardening release. The SDK now degrades gracefully across long

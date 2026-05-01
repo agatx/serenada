@@ -22,7 +22,11 @@ internal class AudioLevelMonitor {
 
     /** Submit a raw 0..1 level and return the smoothed value. */
     fun update(rawLevel: Float): Float {
-        val raw = rawLevel.coerceIn(0f, 1f)
+        // `coerceIn` uses `<` comparisons that propagate NaN unchanged, so a
+        // non-finite input would slip through the clamp and pin the indicator
+        // to a garbage value. Treat anything non-finite as silence.
+        val sanitized = if (rawLevel.isFinite()) rawLevel else 0f
+        val raw = sanitized.coerceIn(0f, 1f)
         val dbfs = if (raw > 0f) (20.0 * ln(raw.toDouble()) / LN_10).toFloat() else NOISE_FLOOR_DB
         val target = ((dbfs - NOISE_FLOOR_DB) / (SPEECH_PEAK_DB - NOISE_FLOOR_DB))
             .coerceIn(0f, 1f)

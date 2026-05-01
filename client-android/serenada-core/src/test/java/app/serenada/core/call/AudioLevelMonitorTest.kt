@@ -42,6 +42,23 @@ class AudioLevelMonitorTest {
     }
 
     @Test
+    fun treatsNonFiniteInputAsSilence() {
+        // `coerceIn` propagates NaN/Infinity unchanged, which would pin the
+        // smoothed level to a garbage value. The monitor must sanitize.
+        val monitor = AudioLevelMonitor()
+        repeat(5) { monitor.update(1.0f) }
+        val rampedUp = monitor.level
+        assertTrue("expected level to ramp up before the NaN injection", rampedUp > 0f)
+        monitor.update(Float.NaN)
+        assertTrue("expected level to remain finite after NaN, got ${monitor.level}", monitor.level.isFinite())
+        assertTrue("expected level to stay in [0, 1] after NaN, got ${monitor.level}", monitor.level in 0f..1f)
+        monitor.update(Float.POSITIVE_INFINITY)
+        assertTrue("expected level finite after +Inf, got ${monitor.level}", monitor.level.isFinite())
+        monitor.update(Float.NEGATIVE_INFINITY)
+        assertTrue("expected level finite after -Inf, got ${monitor.level}", monitor.level.isFinite())
+    }
+
+    @Test
     fun releasesSlowerThanItAttacks() {
         val attack = AudioLevelMonitor()
         attack.update(1.0f)

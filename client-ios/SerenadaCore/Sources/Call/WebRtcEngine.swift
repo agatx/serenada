@@ -125,6 +125,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
     private var localRenderers: [WeakAnyBox] = []
 #endif
 
+    private var audioPipelinePrimer: LocalAudioPipelinePrimer?
+
     public init(
         onCameraFacingChanged: @escaping (Bool) -> Void,
         onCameraModeChanged: @escaping (LocalCameraMode) -> Void,
@@ -167,7 +169,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
         Self.initializeSslIfNeeded()
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
-        self.peerConnectionFactory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
+        let factory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
+        self.peerConnectionFactory = factory
+        self.audioPipelinePrimer = LocalAudioPipelinePrimer(factory: factory, logger: logger)
 #endif
 
 #if canImport(WebRTC)
@@ -248,6 +252,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
         }
 
         attachTrackToRegisteredRenderers()
+        if let localAudioTrack {
+            audioPipelinePrimer?.start(localAudioTrack: localAudioTrack)
+        }
         peerSlots.forEach { $0.attachLocalTracks(audioTrack: localAudioTrack, videoTrack: localVideoTrack) }
 #else
         cameraController.notifyCameraModeAndFlash()
@@ -264,6 +271,9 @@ internal final class WebRtcEngine: SessionMediaEngine {
 
         screenShareController.stopAllCapturers()
 
+        // Tear down the primer before releasing its audio track reference.
+        audioPipelinePrimer?.stop()
+
         localVideoTrack = nil
         localVideoSource = nil
         cameraController.updateLocalVideoSource(nil)
@@ -276,6 +286,14 @@ internal final class WebRtcEngine: SessionMediaEngine {
         stopLocalMedia()
         peerSlots.forEach { $0.closePeerConnection() }
         peerSlots.removeAll()
+    }
+
+    public func collectLocalAudioLevel(_ onComplete: @escaping @Sendable (Float?) -> Void) {
+        guard let audioPipelinePrimer else {
+            onComplete(nil)
+            return
+        }
+        audioPipelinePrimer.collectAudioLevel(onComplete)
     }
 
     public func setIceServers(_ servers: [IceServerConfig]) {

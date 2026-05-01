@@ -1,19 +1,23 @@
 import Combine
 import Foundation
 
-/// Polls each peer's WebRTC stats every `AudioLevelMonitor.updateIntervalSeconds`
-/// for inbound audio level (remote) and media-source level (local mic),
-/// runs them through per-cid `AudioLevelMonitor`s for dBFS+EMA smoothing,
-/// and reports the smoothed values on the main actor.
+/// Polls the primer peer connection for local `media-source.audioLevel`
+/// (via `collectLocalLevel`) and each peer slot for inbound (remote) level
+/// every `AudioLevelMonitor.updateIntervalSeconds`, runs the raw values
+/// through per-cid `AudioLevelMonitor`s for dBFS+EMA smoothing, and reports
+/// the smoothed values on the main actor.
 ///
-/// Mirrors the Android `AudioLevelPoller.kt` and the web SDK's audio level
-/// machinery — output range is identical so the indicator visual is
-/// consistent across platforms.
+/// The primer keeps WebRTC's audio pipeline live throughout a session, so
+/// the local level is consistent across Waiting and InCall — and works on
+/// the very first tick after a peer leaves and we're back to alone in the
+/// room. Mirrors the web SDK's `AudioLevelMonitor` smoothing pipeline so
+/// the indicator visual is consistent across platforms.
 @MainActor
 final class AudioLevelPoller {
     private let clock: SessionClock
     private let isActivePhase: () -> Bool
     private let getPeerSlots: () -> [any PeerConnectionSlotProtocol]
+    private let collectLocalLevel: (@escaping @Sendable (Float?) -> Void) -> Void
     private let onLevelsUpdated: (_ localLevel: Float, _ remoteLevels: [String: Float]) -> Void
 
     private var pollTimerCancellable: AnyCancellable?
@@ -28,11 +32,13 @@ final class AudioLevelPoller {
         clock: SessionClock,
         isActivePhase: @escaping () -> Bool,
         getPeerSlots: @escaping () -> [any PeerConnectionSlotProtocol],
+        collectLocalLevel: @escaping (@escaping @Sendable (Float?) -> Void) -> Void,
         onLevelsUpdated: @escaping (_ localLevel: Float, _ remoteLevels: [String: Float]) -> Void
     ) {
         self.clock = clock
         self.isActivePhase = isActivePhase
         self.getPeerSlots = getPeerSlots
+        self.collectLocalLevel = collectLocalLevel
         self.onLevelsUpdated = onLevelsUpdated
     }
 
@@ -60,14 +66,6 @@ final class AudioLevelPoller {
         guard pollTimerCancellable != nil, isActivePhase() else { return }
         if requestInFlight { return }
         let slots = getPeerSlots()
-        guard !slots.isEmpty else {
-            // No peers: emit a fully decayed sample so the indicator drops to
-            // silence rather than freezing on the last value.
-            let local = localMonitor.update(rawLevel: 0)
-            let remote = remoteMonitors.mapValues { $0.update(rawLevel: 0) }
-            onLevelsUpdated(local, remote)
-            return
-        }
 
         requestInFlight = true
         let tickGeneration = generation
@@ -76,13 +74,20 @@ final class AudioLevelPoller {
         var rawRemote: [String: Float?] = [:]
         var rawLocal: Float?
 
+        group.enter()
+        collectLocalLevel { level in
+            lock.lock()
+            rawLocal = level
+            lock.unlock()
+            group.leave()
+        }
+
         for slot in slots {
             let cid = slot.remoteCid
             group.enter()
-            slot.collectAudioLevels { inbound, mediaSource in
+            slot.collectAudioLevels { inbound, _ in
                 lock.lock()
                 rawRemote[cid] = inbound
-                if rawLocal == nil, let mediaSource { rawLocal = mediaSource }
                 lock.unlock()
                 group.leave()
             }
