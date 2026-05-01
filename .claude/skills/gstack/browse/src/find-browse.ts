@@ -27,16 +27,21 @@ function getGitRoot(): string | null {
 export function locateBinary(): string | null {
   const root = getGitRoot();
   const home = homedir();
+  const markers = ['.codex', '.agents', '.claude'];
 
   // Workspace-local takes priority (for development)
   if (root) {
-    const local = join(root, '.claude', 'skills', 'gstack', 'browse', 'dist', 'browse');
-    if (existsSync(local)) return local;
+    for (const m of markers) {
+      const local = join(root, m, 'skills', 'gstack', 'browse', 'dist', 'browse');
+      if (existsSync(local)) return local;
+    }
   }
 
   // Global fallback
-  const global = join(home, '.claude', 'skills', 'gstack', 'browse', 'dist', 'browse');
-  if (existsSync(global)) return global;
+  for (const m of markers) {
+    const global = join(home, m, 'skills', 'gstack', 'browse', 'dist', 'browse');
+    if (existsSync(global)) return global;
+  }
 
   return null;
 }
@@ -53,4 +58,12 @@ function main() {
   console.log(bin);
 }
 
-main();
+// Only run main() when this module is the entry point. Without this guard,
+// any test that imports `locateBinary` from this file would have main() fire
+// at module-load time, calling process.exit(1) when no compiled binary
+// exists — killing the test process before any test runs. Surfaced on the
+// windows-free-tests CI lane where the runner has no compiled browse
+// binary (intentional — that lane only builds server-node.mjs).
+if (import.meta.main) {
+  main();
+}

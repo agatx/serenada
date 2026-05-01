@@ -1,0 +1,1 @@
+/Users/alexeygavrilov/Developer/src/connected/.claude/skills/gstack/plan-devex-review/SKILL.md

@@ -325,62 +325,6 @@ Report the exact output — either "READY: <path>" or "NEEDS_SETUP".`,
     try { fs.rmSync(nonGitDir, { recursive: true, force: true }); } catch {}
   }, 60_000);
 
-  testIfSelected('contributor-mode', async () => {
-    const contribDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-contrib-'));
-    const logsDir = path.join(contribDir, 'contributor-logs');
-    fs.mkdirSync(logsDir, { recursive: true });
-
-    // Extract contributor mode instructions from generated SKILL.md
-    const skillMd = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8');
-    const contribStart = skillMd.indexOf('## Contributor Mode');
-    const contribEnd = skillMd.indexOf('\n## ', contribStart + 1);
-    const contribBlock = skillMd.slice(contribStart, contribEnd > 0 ? contribEnd : undefined);
-
-    const result = await runSkillTest({
-      prompt: `You are in contributor mode (_CONTRIB=true).
-
-${contribBlock}
-
-OVERRIDE: Write contributor logs to ${logsDir}/ instead of ~/.gstack/contributor-logs/
-
-Now try this browse command (it will fail — there is no binary at this path):
-/nonexistent/path/browse goto https://example.com
-
-This is a gstack issue (the browse binary is missing/misconfigured).
-File a contributor report about this issue. Then tell me what you filed.`,
-      workingDirectory: contribDir,
-      maxTurns: 8,
-      timeout: 60_000,
-      testName: 'contributor-mode',
-      runId,
-    });
-
-    logCost('contributor mode', result);
-    // Override passed: this test intentionally triggers a browse error (nonexistent binary)
-    // so browseErrors will be non-empty — that's expected, not a failure
-    recordE2E('contributor mode report', 'Skill E2E tests', result, {
-      passed: result.exitReason === 'success',
-    });
-
-    // Verify a contributor log was created with expected format
-    const logFiles = fs.readdirSync(logsDir).filter(f => f.endsWith('.md'));
-    expect(logFiles.length).toBeGreaterThan(0);
-
-    // Verify new reflection-based format
-    const logContent = fs.readFileSync(path.join(logsDir, logFiles[0]), 'utf-8');
-    expect(logContent).toContain('Hey gstack team');
-    expect(logContent).toContain('What I was trying to do');
-    expect(logContent).toContain('What happened instead');
-    expect(logContent).toMatch(/rating/i);
-    // Verify report has repro steps (agent may use "Steps to reproduce", "Repro Steps", etc.)
-    expect(logContent).toMatch(/repro|steps to reproduce|how to reproduce/i);
-    // Verify report has date/version footer (agent may format differently)
-    expect(logContent).toMatch(/date.*2026|2026.*date/i);
-
-    // Clean up
-    try { fs.rmSync(contribDir, { recursive: true, force: true }); } catch {}
-  }, 90_000);
-
   testIfSelected('session-awareness', async () => {
     const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-session-'));
 
@@ -2727,66 +2671,9 @@ describeIfSelected('Test Coverage Audit E2E', ['ship-coverage-audit'], () => {
     copyDirSync(path.join(ROOT, 'ship'), path.join(coverageDir, 'ship'));
     copyDirSync(path.join(ROOT, 'review'), path.join(coverageDir, 'review'));
 
-    // Create a Node.js project WITH test framework but coverage gaps
-    fs.writeFileSync(path.join(coverageDir, 'package.json'), JSON.stringify({
-      name: 'test-coverage-app',
-      version: '1.0.0',
-      type: 'module',
-      scripts: { test: 'echo "no tests yet"' },
-      devDependencies: { vitest: '^1.0.0' },
-    }, null, 2));
-
-    // Create vitest config
-    fs.writeFileSync(path.join(coverageDir, 'vitest.config.ts'),
-      `import { defineConfig } from 'vitest/config';\nexport default defineConfig({ test: {} });\n`);
-
-    fs.writeFileSync(path.join(coverageDir, 'VERSION'), '0.1.0.0\n');
-    fs.writeFileSync(path.join(coverageDir, 'CHANGELOG.md'), '# Changelog\n');
-
-    // Create source file with multiple code paths
-    fs.mkdirSync(path.join(coverageDir, 'src'), { recursive: true });
-    fs.writeFileSync(path.join(coverageDir, 'src', 'billing.ts'), `
-export function processPayment(amount: number, currency: string) {
-  if (amount <= 0) throw new Error('Invalid amount');
-  if (currency !== 'USD' && currency !== 'EUR') throw new Error('Unsupported currency');
-  return { status: 'success', amount, currency };
-}
-
-export function refundPayment(paymentId: string, reason: string) {
-  if (!paymentId) throw new Error('Payment ID required');
-  if (!reason) throw new Error('Reason required');
-  return { status: 'refunded', paymentId, reason };
-}
-`);
-
-    // Create a test directory with ONE test (partial coverage)
-    fs.mkdirSync(path.join(coverageDir, 'test'), { recursive: true });
-    fs.writeFileSync(path.join(coverageDir, 'test', 'billing.test.ts'), `
-import { describe, test, expect } from 'vitest';
-import { processPayment } from '../src/billing';
-
-describe('processPayment', () => {
-  test('processes valid payment', () => {
-    const result = processPayment(100, 'USD');
-    expect(result.status).toBe('success');
-  });
-  // GAP: no test for invalid amount
-  // GAP: no test for unsupported currency
-  // GAP: refundPayment not tested at all
-});
-`);
-
-    // Init git repo with main branch
-    const run = (cmd: string, args: string[]) =>
-      spawnSync(cmd, args, { cwd: coverageDir, stdio: 'pipe', timeout: 5000 });
-    run('git', ['init', '-b', 'main']);
-    run('git', ['config', 'user.email', 'test@test.com']);
-    run('git', ['config', 'user.name', 'Test']);
-    run('git', ['add', '.']);
-    run('git', ['commit', '-m', 'initial commit']);
-
-    // Create feature branch
-    run('git', ['checkout', '-b', 'feature/billing']);
+    // Use shared fixture for billing project with coverage gaps
+    const { createCoverageAuditFixture } = require('./fixtures/coverage-audit-fixture');
+    createCoverageAuditFixture(coverageDir);
   });
 
   afterAll(() => {
@@ -2827,18 +2714,355 @@ Output the diagram directly.`,
 
     // Check output contains coverage diagram elements
     const output = result.output || '';
-    const hasGap = output.includes('GAP') || output.includes('gap') || output.includes('NO TEST');
-    const hasTested = output.includes('TESTED') || output.includes('tested') || output.includes('✓');
-    const hasCoverage = output.includes('COVERAGE') || output.includes('coverage') || output.includes('paths tested');
+    const outputLower = output.toLowerCase();
+    const hasGap = outputLower.includes('gap') || outputLower.includes('no test');
+    const hasTested = outputLower.includes('tested') || output.includes('✓') || output.includes('★');
+    const hasCoverage = outputLower.includes('coverage') || outputLower.includes('paths tested');
 
     console.log(`Output has GAP markers: ${hasGap}`);
     console.log(`Output has TESTED markers: ${hasTested}`);
     console.log(`Output has coverage summary: ${hasCoverage}`);
 
+    // The agent MUST produce a coverage diagram with gap and tested markers
+    expect(hasGap || hasTested).toBe(true);
+
     // At minimum, the agent should have read the source and test files
     const readCalls = result.toolCalls.filter(tc => tc.tool === 'Read');
     expect(readCalls.length).toBeGreaterThan(0);
   }, 180_000);
+});
+
+// --- Review Coverage Audit E2E ---
+
+describeIfSelected('Review Coverage Audit E2E', ['review-coverage-audit'], () => {
+  let reviewCoverageDir: string;
+
+  beforeAll(() => {
+    reviewCoverageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-review-coverage-'));
+
+    // Copy review skill files
+    copyDirSync(path.join(ROOT, 'review'), path.join(reviewCoverageDir, 'review'));
+
+    // Use shared fixture for billing project with coverage gaps
+    const { createCoverageAuditFixture } = require('./fixtures/coverage-audit-fixture');
+    createCoverageAuditFixture(reviewCoverageDir);
+  });
+
+  afterAll(() => {
+    try { fs.rmSync(reviewCoverageDir, { recursive: true, force: true }); } catch {}
+  });
+
+  test('/review Step 4.75 produces coverage diagram', async () => {
+    const result = await runSkillTest({
+      prompt: `Read the file review/SKILL.md for the review workflow instructions.
+
+You are on the feature/billing branch. The base branch is main.
+This is a test project — there is no remote, no PR to create.
+
+ONLY run Step 4.75 (Test Coverage Diagram) from the review workflow.
+Skip all other steps (scope drift, checklist, design review, fix-first, etc.).
+
+The source code is in ${reviewCoverageDir}/src/billing.ts.
+Existing tests are in ${reviewCoverageDir}/test/billing.test.ts.
+
+Produce the ASCII coverage diagram showing which code paths are tested and which have gaps.
+Output the diagram directly.`,
+      workingDirectory: reviewCoverageDir,
+      maxTurns: 15,
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      timeout: 120_000,
+      testName: 'review-coverage-audit',
+      runId,
+    });
+
+    logCost('/review coverage audit', result);
+    recordE2E('/review Step 4.75 coverage audit', 'Review Coverage Audit E2E', result, {
+      passed: result.exitReason === 'success',
+    });
+
+    expect(result.exitReason).toBe('success');
+
+    // Check output contains coverage diagram elements
+    const output = result.output || '';
+    const outputLower = output.toLowerCase();
+    const hasGap = outputLower.includes('gap') || outputLower.includes('no test');
+    const hasTested = outputLower.includes('tested') || output.includes('✓') || output.includes('★');
+    const hasCoverage = outputLower.includes('coverage') || outputLower.includes('paths tested');
+
+    console.log(`Output has GAP markers: ${hasGap}`);
+    console.log(`Output has TESTED markers: ${hasTested}`);
+    console.log(`Output has coverage summary: ${hasCoverage}`);
+
+    // The agent MUST produce a coverage diagram with gap and tested markers
+    expect(hasGap || hasTested).toBe(true);
+
+    // At minimum, the agent should have read the source and test files
+    const readCalls = result.toolCalls.filter(tc => tc.tool === 'Read');
+    expect(readCalls.length).toBeGreaterThan(0);
+  }, 180_000);
+});
+
+// --- Plan Eng Review Coverage Audit E2E ---
+
+describeIfSelected('Plan Eng Review Coverage Audit E2E', ['plan-eng-coverage-audit'], () => {
+  let planCoverageDir: string;
+
+  beforeAll(() => {
+    planCoverageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-plan-coverage-'));
+
+    // Copy plan-eng-review skill files
+    copyDirSync(path.join(ROOT, 'plan-eng-review'), path.join(planCoverageDir, 'plan-eng-review'));
+
+    // Use shared fixture for billing project with coverage gaps
+    const { createCoverageAuditFixture } = require('./fixtures/coverage-audit-fixture');
+    createCoverageAuditFixture(planCoverageDir);
+  });
+
+  afterAll(() => {
+    try { fs.rmSync(planCoverageDir, { recursive: true, force: true }); } catch {}
+  });
+
+  test('/plan-eng-review coverage audit traces plan codepaths', async () => {
+    const result = await runSkillTest({
+      prompt: `Read the file plan-eng-review/SKILL.md for the plan review workflow instructions.
+
+You are on the feature/billing branch. The base branch is main.
+This is a test project — there is no remote, no PR to create.
+
+ONLY run the Test Coverage Audit section from the plan review workflow.
+Skip all other steps (architecture, code quality, performance, etc.).
+
+The source code is in ${planCoverageDir}/src/billing.ts.
+Existing tests are in ${planCoverageDir}/test/billing.test.ts.
+
+Produce the ASCII coverage diagram showing which code paths are tested and which have gaps.
+Output the diagram directly.`,
+      workingDirectory: planCoverageDir,
+      maxTurns: 15,
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      timeout: 120_000,
+      testName: 'plan-eng-coverage-audit',
+      runId,
+    });
+
+    logCost('/plan-eng-review coverage audit', result);
+    recordE2E('/plan-eng-review coverage audit', 'Plan Eng Review Coverage Audit E2E', result, {
+      passed: result.exitReason === 'success',
+    });
+
+    expect(result.exitReason).toBe('success');
+
+    // Check output contains coverage diagram elements
+    const output = result.output || '';
+    const outputLower = output.toLowerCase();
+    const hasGap = outputLower.includes('gap') || outputLower.includes('no test');
+    const hasTested = outputLower.includes('tested') || output.includes('✓') || output.includes('★');
+    const hasCoverage = outputLower.includes('coverage') || outputLower.includes('paths tested');
+
+    console.log(`Output has GAP markers: ${hasGap}`);
+    console.log(`Output has TESTED markers: ${hasTested}`);
+    console.log(`Output has coverage summary: ${hasCoverage}`);
+
+    // The agent MUST produce a coverage diagram with gap and tested markers
+    expect(hasGap || hasTested).toBe(true);
+
+    // At minimum, the agent should have read the source and test files
+    const readCalls = result.toolCalls.filter(tc => tc.tool === 'Read');
+    expect(readCalls.length).toBeGreaterThan(0);
+  }, 180_000);
+});
+
+// --- Triage E2E ---
+
+describeIfSelected('Test Failure Triage E2E', ['ship-triage'], () => {
+  let triageDir: string;
+
+  beforeAll(() => {
+    triageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-triage-'));
+
+    // Copy ship skill files
+    copyDirSync(path.join(ROOT, 'ship'), path.join(triageDir, 'ship'));
+
+    const run = (cmd: string, args: string[]) =>
+      spawnSync(cmd, args, { cwd: triageDir, stdio: 'pipe', timeout: 5000 });
+
+    // Init git repo
+    run('git', ['init', '-b', 'main']);
+    run('git', ['config', 'user.email', 'test@test.com']);
+    run('git', ['config', 'user.name', 'Test']);
+
+    // Create a project with a pre-existing test failure on main
+    fs.writeFileSync(path.join(triageDir, 'package.json'), JSON.stringify({
+      name: 'triage-test-app',
+      version: '1.0.0',
+      scripts: { test: 'node test/run.js' },
+    }, null, 2));
+
+    fs.mkdirSync(path.join(triageDir, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(triageDir, 'test'), { recursive: true });
+
+    // Source with a bug that exists on main (pre-existing)
+    fs.writeFileSync(path.join(triageDir, 'src', 'math.js'), `
+module.exports = {
+  add: (a, b) => a + b,
+  divide: (a, b) => a / b,  // BUG: no zero-division check (pre-existing)
+};
+`);
+
+    // Test file that catches the pre-existing bug
+    fs.writeFileSync(path.join(triageDir, 'test', 'math.test.js'), `
+const { add, divide } = require('../src/math');
+
+// This test passes
+if (add(2, 3) !== 5) { console.error('FAIL: add(2,3) should be 5'); process.exit(1); }
+console.log('PASS: add');
+
+// This test FAILS — pre-existing bug (divide by zero returns Infinity, not an error)
+try {
+  const result = divide(10, 0);
+  if (result === Infinity) { console.error('FAIL: divide(10,0) should throw, got Infinity'); process.exit(1); }
+} catch(e) {
+  console.log('PASS: divide zero check');
+}
+`);
+
+    // Test runner — each test in a subprocess so one failure doesn't kill the other
+    fs.writeFileSync(path.join(triageDir, 'test', 'run.js'), `
+const { execSync } = require('child_process');
+const path = require('path');
+let failures = 0;
+for (const f of ['math.test.js', 'string.test.js']) {
+  try {
+    execSync('node ' + path.join(__dirname, f), { stdio: 'inherit' });
+  } catch (e) {
+    failures++;
+  }
+}
+if (failures > 0) process.exit(1);
+`);
+
+    // Commit on main with the pre-existing bug
+    run('git', ['add', '.']);
+    run('git', ['commit', '-m', 'initial: math utils with tests']);
+
+    // Create feature branch
+    run('git', ['checkout', '-b', 'feature/string-utils']);
+
+    // Add new code with a new bug (in-branch)
+    fs.writeFileSync(path.join(triageDir, 'src', 'string.js'), `
+module.exports = {
+  capitalize: (s) => s.charAt(0).toUpperCase() + s.slice(1),
+  reverse: (s) => s.split('').reverse().join(''),
+  truncate: (s, len) => s.substring(0, len),  // BUG: no null check (in-branch)
+};
+`);
+
+    // Add test that catches the in-branch bug
+    fs.writeFileSync(path.join(triageDir, 'test', 'string.test.js'), `
+const { capitalize, reverse, truncate } = require('../src/string');
+
+if (capitalize('hello') !== 'Hello') { console.error('FAIL: capitalize'); process.exit(1); }
+console.log('PASS: capitalize');
+
+if (reverse('abc') !== 'cba') { console.error('FAIL: reverse'); process.exit(1); }
+console.log('PASS: reverse');
+
+// This test FAILS — in-branch bug (null input causes TypeError)
+try {
+  truncate(null, 5);
+  console.log('PASS: truncate null');
+} catch(e) {
+  console.error('FAIL: truncate(null, 5) threw: ' + e.message);
+  process.exit(1);
+}
+`);
+
+    run('git', ['add', '.']);
+    run('git', ['commit', '-m', 'feat: add string utilities']);
+  });
+
+  afterAll(() => {
+    try { fs.rmSync(triageDir, { recursive: true, force: true }); } catch {}
+  });
+
+  test('/ship triage correctly classifies in-branch vs pre-existing failures', async () => {
+    const result = await runSkillTest({
+      prompt: `Read the file ship/SKILL.md for the ship workflow instructions.
+
+You are on the feature/string-utils branch. The base branch is main.
+This is a test project — there is no remote, no PR to create.
+
+Run the tests first:
+\`\`\`bash
+cd ${triageDir} && node test/run.js
+\`\`\`
+
+The tests will fail. Now run ONLY the Test Failure Ownership Triage (Steps T1-T4) from the ship workflow.
+
+For each failing test, classify it as:
+- **In-branch**: caused by changes on this branch (feature/string-utils)
+- **Pre-existing**: existed before this branch (present on main)
+
+Use git diff origin/main...HEAD (or git diff main...HEAD since there's no remote) to determine which files changed on this branch.
+
+Output your classification for each failure clearly, labeling each as "IN-BRANCH" or "PRE-EXISTING" with your reasoning.
+
+This is a solo repo (REPO_MODE=solo). For pre-existing failures, recommend fixing now.`,
+      workingDirectory: triageDir,
+      maxTurns: 20,
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      timeout: 180_000,
+      testName: 'ship-triage',
+      runId,
+    });
+
+    logCost('/ship triage', result);
+
+    const output = result.output || '';
+    const outputLower = output.toLowerCase();
+
+    // The triage should identify the string/truncate failure as in-branch
+    const hasInBranch = outputLower.includes('in-branch') || outputLower.includes('in branch') || outputLower.includes('introduced');
+    // The triage should identify the math/divide failure as pre-existing
+    const hasPreExisting = outputLower.includes('pre-existing') || outputLower.includes('pre existing') || outputLower.includes('existed before');
+
+    console.log(`Output identifies IN-BRANCH failures: ${hasInBranch}`);
+    console.log(`Output identifies PRE-EXISTING failures: ${hasPreExisting}`);
+
+    // Check that the string/truncate bug is classified as in-branch
+    const mentionsTruncate = outputLower.includes('truncate') || outputLower.includes('string');
+    const mentionsDivide = outputLower.includes('divide') || outputLower.includes('math');
+
+    console.log(`Mentions truncate/string (in-branch bug): ${mentionsTruncate}`);
+    console.log(`Mentions divide/math (pre-existing bug): ${mentionsDivide}`);
+
+    // Verify BOTH failure classes are exercised (not just detected):
+    // The test runner must have actually run both test files
+    const ranMathTest = output.includes('math.test') || output.includes('FAIL: divide');
+    const ranStringTest = output.includes('string.test') || output.includes('FAIL: truncate');
+    console.log(`Ran math test file (pre-existing failure): ${ranMathTest}`);
+    console.log(`Ran string test file (in-branch failure): ${ranStringTest}`);
+
+    recordE2E('/ship triage', 'Test Failure Triage E2E', result, {
+      passed: result.exitReason === 'success' && hasInBranch && hasPreExisting,
+      has_in_branch_classification: hasInBranch,
+      has_pre_existing_classification: hasPreExisting,
+      mentions_truncate: mentionsTruncate,
+      mentions_divide: mentionsDivide,
+      ran_both_test_files: ranMathTest && ranStringTest,
+    });
+
+    expect(result.exitReason).toBe('success');
+    // Must classify at least one failure as in-branch AND one as pre-existing
+    expect(hasInBranch).toBe(true);
+    expect(hasPreExisting).toBe(true);
+    // Must mention the specific bugs
+    expect(mentionsTruncate).toBe(true);
+    expect(mentionsDivide).toBe(true);
+    // Must have actually run both test files (exercises both failure classes)
+    expect(ranMathTest).toBe(true);
+    expect(ranStringTest).toBe(true);
+  }, 240_000);
 });
 
 // --- Codex skill E2E ---
@@ -2909,6 +3133,224 @@ Write the full output (including the GATE verdict) to ${codexDir}/codex-output.m
       expect(hasCodexOutput).toBe(true);
     }
   }, 360_000);
+});
+
+// --- Office Hours Spec Review E2E ---
+
+describeIfSelected('Office Hours Spec Review E2E', ['office-hours-spec-review'], () => {
+  let ohDir: string;
+
+  beforeAll(() => {
+    ohDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-oh-spec-'));
+    const run = (cmd: string, args: string[]) =>
+      spawnSync(cmd, args, { cwd: ohDir, stdio: 'pipe', timeout: 5000 });
+
+    run('git', ['init', '-b', 'main']);
+    run('git', ['config', 'user.email', 'test@test.com']);
+    run('git', ['config', 'user.name', 'Test']);
+    fs.writeFileSync(path.join(ohDir, 'README.md'), '# Test Project\n');
+    run('git', ['add', '.']);
+    run('git', ['commit', '-m', 'init']);
+
+    // Copy office-hours skill
+    fs.mkdirSync(path.join(ohDir, 'office-hours'), { recursive: true });
+    fs.copyFileSync(
+      path.join(ROOT, 'office-hours', 'SKILL.md'),
+      path.join(ohDir, 'office-hours', 'SKILL.md'),
+    );
+  });
+
+  afterAll(() => {
+    try { fs.rmSync(ohDir, { recursive: true, force: true }); } catch {}
+  });
+
+  test('/office-hours SKILL.md contains spec review loop', async () => {
+    const result = await runSkillTest({
+      prompt: `Read office-hours/SKILL.md. I want to understand the spec review loop.
+
+Summarize what the "Spec Review Loop" section does — specifically:
+1. How many dimensions does the reviewer check?
+2. What tool is used to dispatch the reviewer?
+3. What's the maximum number of iterations?
+4. What metrics are tracked?
+
+Write your summary to ${ohDir}/spec-review-summary.md`,
+      workingDirectory: ohDir,
+      maxTurns: 8,
+      timeout: 120_000,
+      testName: 'office-hours-spec-review',
+      runId,
+    });
+
+    logCost('/office-hours spec review', result);
+    recordE2E('/office-hours-spec-review', 'Office Hours Spec Review E2E', result);
+    expect(result.exitReason).toBe('success');
+
+    const summaryPath = path.join(ohDir, 'spec-review-summary.md');
+    if (fs.existsSync(summaryPath)) {
+      const summary = fs.readFileSync(summaryPath, 'utf-8').toLowerCase();
+      // Verify the agent understood the key concepts
+      expect(summary).toMatch(/5.*dimension|dimension.*5|completeness|consistency|clarity|scope|feasibility/);
+      expect(summary).toMatch(/agent|subagent/);
+      expect(summary).toMatch(/3.*iteration|iteration.*3|maximum.*3/);
+    }
+  }, 180_000);
+});
+
+// --- Plan CEO Review Benefits-From E2E ---
+
+describeIfSelected('Plan CEO Review Benefits-From E2E', ['plan-ceo-review-benefits'], () => {
+  let benefitsDir: string;
+
+  beforeAll(() => {
+    benefitsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-benefits-'));
+    const run = (cmd: string, args: string[]) =>
+      spawnSync(cmd, args, { cwd: benefitsDir, stdio: 'pipe', timeout: 5000 });
+
+    run('git', ['init', '-b', 'main']);
+    run('git', ['config', 'user.email', 'test@test.com']);
+    run('git', ['config', 'user.name', 'Test']);
+    fs.writeFileSync(path.join(benefitsDir, 'README.md'), '# Test Project\n');
+    run('git', ['add', '.']);
+    run('git', ['commit', '-m', 'init']);
+
+    // Copy plan-ceo-review skill
+    fs.mkdirSync(path.join(benefitsDir, 'plan-ceo-review'), { recursive: true });
+    fs.copyFileSync(
+      path.join(ROOT, 'plan-ceo-review', 'SKILL.md'),
+      path.join(benefitsDir, 'plan-ceo-review', 'SKILL.md'),
+    );
+  });
+
+  afterAll(() => {
+    try { fs.rmSync(benefitsDir, { recursive: true, force: true }); } catch {}
+  });
+
+  test('/plan-ceo-review SKILL.md contains prerequisite skill offer', async () => {
+    const result = await runSkillTest({
+      prompt: `Read plan-ceo-review/SKILL.md. Search for sections about "Prerequisite" or "office-hours" or "design doc found".
+
+Summarize what happens when no design doc is found — specifically:
+1. Is /office-hours offered as a prerequisite?
+2. What options does the user get?
+3. Is there a mid-session detection for when the user seems lost?
+
+Write your summary to ${benefitsDir}/benefits-summary.md`,
+      workingDirectory: benefitsDir,
+      maxTurns: 8,
+      timeout: 120_000,
+      testName: 'plan-ceo-review-benefits',
+      runId,
+    });
+
+    logCost('/plan-ceo-review benefits-from', result);
+    recordE2E('/plan-ceo-review-benefits', 'Plan CEO Review Benefits-From E2E', result);
+    expect(result.exitReason).toBe('success');
+
+    const summaryPath = path.join(benefitsDir, 'benefits-summary.md');
+    if (fs.existsSync(summaryPath)) {
+      const summary = fs.readFileSync(summaryPath, 'utf-8').toLowerCase();
+      // Verify the agent understood the skill chaining
+      expect(summary).toMatch(/office.hours/);
+      expect(summary).toMatch(/design doc|no design/i);
+    }
+  }, 180_000);
+});
+
+// --- Ship idempotency (#649) ---
+describeIfSelected('Ship idempotency', ['ship-idempotency'], () => {
+  let idempDir: string;
+  const gitRun = (args: string[], cwd: string) =>
+    spawnSync('git', args, { cwd, stdio: 'pipe', timeout: 5000 });
+
+  beforeAll(() => {
+    idempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-e2e-ship-idemp-'));
+
+    // Create git repo with initial commit on main
+    gitRun(['init', '-b', 'main'], idempDir);
+    gitRun(['config', 'user.email', 'test@test.com'], idempDir);
+    gitRun(['config', 'user.name', 'Test'], idempDir);
+
+    fs.writeFileSync(path.join(idempDir, 'app.ts'), 'console.log("v1");\n');
+    fs.writeFileSync(path.join(idempDir, 'VERSION'), '0.1.0.0\n');
+    fs.writeFileSync(path.join(idempDir, 'CHANGELOG.md'), '# Changelog\n');
+    gitRun(['add', '.'], idempDir);
+    gitRun(['commit', '-m', 'initial'], idempDir);
+
+    // Create feature branch with changes
+    gitRun(['checkout', '-b', 'feat/my-feature'], idempDir);
+    fs.writeFileSync(path.join(idempDir, 'app.ts'), 'console.log("v2");\n');
+    gitRun(['add', 'app.ts'], idempDir);
+    gitRun(['commit', '-m', 'feat: update to v2'], idempDir);
+
+    // Simulate prior /ship run: bump VERSION and write CHANGELOG entry
+    fs.writeFileSync(path.join(idempDir, 'VERSION'), '0.2.0.0\n');
+    fs.writeFileSync(path.join(idempDir, 'CHANGELOG.md'),
+      '# Changelog\n\n## [0.2.0.0] — 2026-03-30\n\n- Updated app to v2\n');
+    gitRun(['add', 'VERSION', 'CHANGELOG.md'], idempDir);
+    gitRun(['commit', '-m', 'chore: bump version to 0.2.0.0'], idempDir);
+
+    // Extract just the idempotency-relevant sections from ship/SKILL.md
+    const full = fs.readFileSync(path.join(ROOT, 'ship', 'SKILL.md'), 'utf-8');
+    const step4Start = full.indexOf('## Step 4: Version bump');
+    const step4End = full.indexOf('\n---\n', step4Start);
+    const step7Start = full.indexOf('## Step 7: Push');
+    const step8End = full.indexOf('## Step 8.5');
+    const extracted = [
+      full.slice(step4Start, step4End > step4Start ? step4End : step4Start + 500),
+      full.slice(step7Start, step8End > step7Start ? step8End : step7Start + 500),
+    ].join('\n\n---\n\n');
+    fs.writeFileSync(path.join(idempDir, 'ship-steps.md'), extracted);
+  });
+
+  afterAll(() => {
+    try { fs.rmSync(idempDir, { recursive: true, force: true }); } catch {}
+  });
+
+  testIfSelected('ship-idempotency', async () => {
+    const result = await runSkillTest({
+      prompt: `You are in a git repo on branch feat/my-feature. A prior /ship run already:
+- Bumped VERSION from 0.1.0.0 to 0.2.0.0
+- Wrote a CHANGELOG entry for 0.2.0.0
+- But the push/PR step failed
+
+Read ship-steps.md for the idempotency check instructions from the ship workflow.
+
+Run ONLY the idempotency checks described in Steps 4 and 7. Do NOT actually push or create PRs (there is no remote).
+
+After running the checks, write a report to ${idempDir}/idemp-result.md containing:
+- Whether VERSION was detected as ALREADY_BUMPED or not
+- Whether the push was detected as ALREADY_PUSHED or PUSH_NEEDED
+- The current VERSION value (should still be 0.2.0.0)
+
+Do NOT modify VERSION or CHANGELOG. Only run the detection checks and report.`,
+      workingDirectory: idempDir,
+      maxTurns: 10,
+      timeout: 60_000,
+      testName: 'ship-idempotency',
+      runId,
+    });
+
+    logCost('/ship idempotency', result);
+    recordE2E('/ship idempotency guard', 'Ship idempotency', result);
+    expect(result.exitReason).toBe('success');
+
+    // Verify VERSION was NOT modified
+    const version = fs.readFileSync(path.join(idempDir, 'VERSION'), 'utf-8').trim();
+    expect(version).toBe('0.2.0.0');
+
+    // Verify CHANGELOG was NOT duplicated
+    const changelog = fs.readFileSync(path.join(idempDir, 'CHANGELOG.md'), 'utf-8');
+    const versionEntries = (changelog.match(/## \[0\.2\.0\.0\]/g) || []).length;
+    expect(versionEntries).toBe(1);
+
+    // Check the result report if it was written
+    const reportPath = path.join(idempDir, 'idemp-result.md');
+    if (fs.existsSync(reportPath)) {
+      const report = fs.readFileSync(reportPath, 'utf-8');
+      expect(report.toLowerCase()).toContain('already_bumped');
+    }
+  }, 120_000);
 });
 
 // Module-level afterAll — finalize eval collector after all tests complete

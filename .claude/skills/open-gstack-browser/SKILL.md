@@ -1,0 +1,1 @@
+/Users/alexeygavrilov/Developer/src/connected/.claude/skills/gstack/open-gstack-browser/SKILL.md

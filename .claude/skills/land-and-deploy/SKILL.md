@@ -1,0 +1,1 @@
+/Users/alexeygavrilov/Developer/src/connected/.claude/skills/gstack/land-and-deploy/SKILL.md

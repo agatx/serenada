@@ -197,6 +197,36 @@ describe('resolveServerScript', () => {
   });
 });
 
+describe('resolveNodeServerScript', () => {
+  const { resolveNodeServerScript } = require('../src/cli');
+
+  test('finds server-node.mjs in dist from dev mode', () => {
+    const srcDir = path.resolve(__dirname, '../src');
+    const distFile = path.resolve(srcDir, '..', 'dist', 'server-node.mjs');
+    const fs = require('fs');
+    // Only test if the file exists (it may not be built yet)
+    if (fs.existsSync(distFile)) {
+      const result = resolveNodeServerScript(srcDir, '');
+      expect(result).toBe(distFile);
+    }
+  });
+
+  test('returns null when server-node.mjs does not exist', () => {
+    const result = resolveNodeServerScript('/nonexistent/$bunfs', '/nonexistent/browse');
+    expect(result).toBeNull();
+  });
+
+  test('finds server-node.mjs adjacent to compiled binary', () => {
+    const distDir = path.resolve(__dirname, '../dist');
+    const distFile = path.join(distDir, 'server-node.mjs');
+    const fs = require('fs');
+    if (fs.existsSync(distFile)) {
+      const result = resolveNodeServerScript('/$bunfs/something', path.join(distDir, 'browse'));
+      expect(result).toBe(distFile);
+    }
+  });
+});
+
 describe('version mismatch detection', () => {
   test('detects when versions differ', () => {
     const stateVersion = 'abc123';
@@ -216,5 +246,71 @@ describe('version mismatch detection', () => {
     // Version mismatch only triggers when both are present
     const shouldRestart = currentVersion !== null && stateVersion !== undefined && currentVersion !== stateVersion;
     expect(shouldRestart).toBe(false);
+  });
+});
+
+describe('isServerHealthy', () => {
+  const { isServerHealthy } = require('../src/cli');
+  const http = require('http');
+
+  test('returns true for a healthy server', async () => {
+    const server = http.createServer((_req: any, res: any) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'healthy' }));
+    });
+    await new Promise<void>(resolve => server.listen(0, resolve));
+    const port = server.address().port;
+    try {
+      expect(await isServerHealthy(port)).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('returns false for an unhealthy server', async () => {
+    const server = http.createServer((_req: any, res: any) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'unhealthy' }));
+    });
+    await new Promise<void>(resolve => server.listen(0, resolve));
+    const port = server.address().port;
+    try {
+      expect(await isServerHealthy(port)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
+  test('returns false when server is not running', async () => {
+    // Use a port that's almost certainly not in use
+    expect(await isServerHealthy(59999)).toBe(false);
+  });
+
+  test('returns false on non-200 response', async () => {
+    const server = http.createServer((_req: any, res: any) => {
+      res.writeHead(500);
+      res.end('Internal Server Error');
+    });
+    await new Promise<void>(resolve => server.listen(0, resolve));
+    const port = server.address().port;
+    try {
+      expect(await isServerHealthy(port)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('startup error log', () => {
+  test('write and read error log', () => {
+    const tmpDir = path.join(os.tmpdir(), `browse-error-log-test-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const errorLogPath = path.join(tmpDir, 'browse-startup-error.log');
+    const errorMsg = 'Cannot find module playwright';
+    fs.writeFileSync(errorLogPath, `2026-03-23T00:00:00.000Z ${errorMsg}\n`);
+    const content = fs.readFileSync(errorLogPath, 'utf-8').trim();
+    expect(content).toContain(errorMsg);
+    expect(content).toMatch(/^\d{4}-\d{2}-\d{2}T/); // ISO timestamp prefix
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
