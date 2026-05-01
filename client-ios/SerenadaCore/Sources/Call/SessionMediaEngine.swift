@@ -34,4 +34,9 @@ protocol SessionMediaEngine: AnyObject {
     func setOnScreenShareStopped(_ handler: @escaping () -> Void)
     func setOnZoomFactorChanged(_ handler: @escaping (Double) -> Void)
     func setOnFeatureDegradation(_ handler: @escaping (FeatureDegradationState) -> Void)
+    /// Asynchronously fetches the local audio level from WebRTC's
+    /// `media-source.audioLevel` stat. The implementation keeps a primer
+    /// peer connection alive so this stat is available even before any real
+    /// peer joins. Result is in [0, 1] or `nil` if the stat isn't ready.
+    func collectLocalAudioLevel(_ onComplete: @escaping @Sendable (Float?) -> Void)
 }

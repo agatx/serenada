@@ -104,4 +104,9 @@ final class FakeMediaEngine: SessionMediaEngine {
     func setOnFeatureDegradation(_ handler: @escaping (FeatureDegradationState) -> Void) {
         onFeatureDegradation = handler
     }
+
+    var nextLocalAudioLevel: Float?
+    func collectLocalAudioLevel(_ onComplete: @escaping @Sendable (Float?) -> Void) {
+        onComplete(nextLocalAudioLevel)
+    }
 }

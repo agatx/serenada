@@ -79,4 +79,9 @@ internal class FakeMediaEngine : SessionMediaEngine {
     override fun toggleFlashlight(): Boolean = false
     override fun getEglContext(): EglBase.Context =
         throw UnsupportedOperationException("EGL context not available in tests")
+
+    var nextLocalAudioLevel: Float? = null
+    override fun collectLocalAudioLevel(onComplete: (Float?) -> Unit) {
+        onComplete(nextLocalAudioLevel)
+    }
 }

@@ -37,4 +37,11 @@ internal interface SessionMediaEngine {
     fun adjustWorldCameraZoom(scaleFactor: Float): Boolean
     fun toggleFlashlight(): Boolean
     fun getEglContext(): EglBase.Context
+    /**
+     * Asynchronously fetches the local audio level from WebRTC's
+     * `media-source.audioLevel` stat. The implementation keeps a primer
+     * peer connection alive so this stat is available even before any real
+     * peer joins. Result is in [0, 1] or null if the stat isn't ready.
+     */
+    fun collectLocalAudioLevel(onComplete: (Float?) -> Unit)
 }
