@@ -326,8 +326,12 @@ class SerenadaSession internal constructor(
     private val audioLevelPoller = AudioLevelPoller(
         handler = handler,
         statsExecutorProvider = { webRtcStatsExecutor },
-        isActivePhase = { _state.value.phase == CallPhase.InCall },
+        // Run while local media is live, including the Waiting phase before
+        // a peer joins. The primer peer connection keeps `media-source` stat
+        // available throughout, so sensitivity matches InCall.
+        isActivePhase = { _state.value.phase == CallPhase.Waiting || _state.value.phase == CallPhase.InCall },
         getPeerSlots = { peerSlots.values.toList() },
+        collectLocalLevel = { onComplete -> webRtcEngine.collectLocalAudioLevel(onComplete) },
         onLevelsUpdated = { localLevel, remoteLevels -> applyAudioLevels(localLevel, remoteLevels) },
     )
     private val pendingMessages = java.util.ArrayDeque<SignalingMessage>()

@@ -4,20 +4,24 @@ import android.os.Handler
 import java.util.concurrent.ExecutorService
 
 /**
- * Polls WebRTC stats every [AudioLevelMonitor.UPDATE_INTERVAL_MS] for each
- * peer connection's inbound audio level and the local media-source level,
- * pushes them through per-cid [AudioLevelMonitor]s for dBFS+EMA smoothing,
+ * Polls WebRTC stats every [AudioLevelMonitor.UPDATE_INTERVAL_MS] for the
+ * local media-source level (via [collectLocalAudioLevel]) and each remote
+ * peer's inbound level (via the slot's `collectAudioLevels`), pushes the
+ * raw values through per-cid [AudioLevelMonitor]s for dBFS+EMA smoothing,
  * and reports the results on the main handler.
  *
- * Mirrors the web SDK's `AudioLevelMonitor`, but uses WebRTC stats instead
- * of Web Audio API. The smoothed output range is identical (0..1) so the
- * indicator visual is consistent across platforms.
+ * The local level is sourced from a primer peer connection that stays alive
+ * the entire time the user is in a room, so `media-source.audioLevel`
+ * reads consistently — including the Waiting phase before any real peer
+ * joins. Mirrors the web SDK's `AudioLevelMonitor` smoothing pipeline so
+ * the indicator visual is consistent across platforms.
  */
 internal class AudioLevelPoller(
     private val handler: Handler,
     private val statsExecutorProvider: () -> ExecutorService?,
     private val isActivePhase: () -> Boolean,
     private val getPeerSlots: () -> List<PeerConnectionSlotProtocol>,
+    private val collectLocalLevel: ((Float?) -> Unit) -> Unit,
     private val onLevelsUpdated: (localLevel: Float, remoteLevels: Map<String, Float>) -> Unit,
 ) {
     private val localMonitor = AudioLevelMonitor()
@@ -50,9 +54,9 @@ internal class AudioLevelPoller(
         if (requestInFlight) return
         val slots = getPeerSlots()
         val executor = statsExecutorProvider()?.takeIf { !it.isShutdown }
-        if (slots.isEmpty() || executor == null) {
-            // No peers (or executor torn down): emit a fully decayed sample so the
-            // indicator drops to silence rather than freezing on the last value.
+        if (executor == null) {
+            // Executor torn down mid-session: emit a fully decayed sample so
+            // the indicator drops to silence rather than freezing.
             val local = localMonitor.update(0f)
             val remote = remoteMonitors.mapValues { (_, m) -> m.update(0f) }
             onLevelsUpdated(local, remote)
@@ -67,23 +71,31 @@ internal class AudioLevelPoller(
     }
 
     private fun collectAndReport(slots: List<PeerConnectionSlotProtocol>) {
-        val rawLevels = mutableMapOf<String, Float?>()
+        val rawRemote = mutableMapOf<String, Float?>()
         var rawLocal: Float? = null
-        var remaining = slots.size
-        slots.forEach { slot ->
-            slot.collectAudioLevels { inbound, mediaSource ->
-                synchronized(rawLevels) {
-                    rawLevels[slot.remoteCid] = inbound
-                    // media-source is the same local mic across all peers; take the
-                    // first non-null value seen this round.
-                    if (rawLocal == null && mediaSource != null) rawLocal = mediaSource
-                    remaining -= 1
-                    if (remaining == 0) {
-                        val capturedLocal = rawLocal
-                        val capturedRemote = rawLevels.toMap()
-                        handler.post { applyAndEmit(capturedLocal, capturedRemote) }
-                    }
+        var remaining = slots.size + 1  // +1 for the primer query
+        val sync = Any()
+
+        val finishOne = {
+            synchronized(sync) {
+                remaining -= 1
+                if (remaining == 0) {
+                    val capturedLocal = rawLocal
+                    val capturedRemote = rawRemote.toMap()
+                    handler.post { applyAndEmit(capturedLocal, capturedRemote) }
                 }
+            }
+        }
+
+        collectLocalLevel { level ->
+            synchronized(sync) { rawLocal = level }
+            finishOne()
+        }
+
+        slots.forEach { slot ->
+            slot.collectAudioLevels { inbound, _ ->
+                synchronized(sync) { rawRemote[slot.remoteCid] = inbound }
+                finishOne()
             }
         }
     }

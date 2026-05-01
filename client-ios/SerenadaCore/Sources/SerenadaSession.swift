@@ -1436,10 +1436,24 @@ public final class SerenadaSession: ObservableObject {
 
         audioLevelPoller = AudioLevelPoller(
             clock: clock,
-            isActivePhase: { [weak self] in self?.internalPhase == .inCall },
+            // Run while local media is live, including the Waiting phase
+            // before a peer joins. The primer peer connection keeps
+            // `media-source` stat available throughout, so sensitivity
+            // matches InCall.
+            isActivePhase: { [weak self] in
+                guard let p = self?.internalPhase else { return false }
+                return p == .inCall || p == .waiting
+            },
             getPeerSlots: { [weak self] in
                 guard let self else { return [] }
                 return Array(self.peerSlots.values)
+            },
+            collectLocalLevel: { [weak self] onComplete in
+                guard let self else {
+                    onComplete(nil)
+                    return
+                }
+                self.webRtcEngine.collectLocalAudioLevel(onComplete)
             },
             onLevelsUpdated: { [weak self] localLevel, remoteLevels in
                 self?.applyAudioLevels(localLevel: localLevel, remoteLevels: remoteLevels)
