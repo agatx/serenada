@@ -87,7 +87,27 @@ struct RemoteAvatarView: View {
     @Environment(\.avatarCache) private var cache
 
     var body: some View {
-        let image = peerId.flatMap { cache?.image(for: $0) }
+        if let cache {
+            // `@Environment(\.avatarCache)` reads the cache reference but does not subscribe
+            // to its `objectWillChange`, so when `entries` resolves the surrounding view
+            // tree may not re-render. The inner `RemoteAvatarBodyView` holds the cache as
+            // an `@ObservedObject`, which gives the avatar a real subscription and ensures
+            // the photo appears as soon as the resolver completes.
+            RemoteAvatarBodyView(cache: cache, peerId: peerId, displayName: displayName, size: size)
+        } else {
+            InitialsAvatarView(displayName: displayName, size: size)
+        }
+    }
+}
+
+private struct RemoteAvatarBodyView: View {
+    @ObservedObject var cache: AvatarCache
+    let peerId: String?
+    let displayName: String?
+    let size: CGFloat
+
+    var body: some View {
+        let image = peerId.flatMap { cache.image(for: $0) }
         ZStack {
             Circle().fill(Color(white: 0.16))
             if let image {
@@ -97,18 +117,41 @@ struct RemoteAvatarView: View {
                     .frame(width: size, height: size)
                     .clipShape(Circle())
             } else {
-                let initials = initialsFor(displayName: displayName)
-                Text(initials.isEmpty ? "•" : initials)
-                    .font(.system(size: size * 0.4, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
+                InitialsLabel(displayName: displayName, size: size)
             }
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
         .task(id: peerId) {
-            guard let peerId, let cache else { return }
+            guard let peerId else { return }
             cache.load(peerId: peerId)
         }
+    }
+}
+
+private struct InitialsAvatarView: View {
+    let displayName: String?
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color(white: 0.16))
+            InitialsLabel(displayName: displayName, size: size)
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct InitialsLabel: View {
+    let displayName: String?
+    let size: CGFloat
+
+    var body: some View {
+        let initials = initialsFor(displayName: displayName)
+        Text(initials.isEmpty ? "•" : initials)
+            .font(.system(size: size * 0.4, weight: .semibold))
+            .foregroundColor(.white.opacity(0.85))
     }
 }
 
