@@ -4,6 +4,18 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.8] — 2026-05-02
+
+### Fixed
+- Android: pinch-to-zoom on the local camera in 1:1 calls (world / composite
+  modes) was being absorbed by the participant-name/mute badge overlay added
+  with the call-ergonomics work. The badge sat in a fullscreen sibling Box
+  on top of the local video, and its `clickable` modifier intercepted pinch
+  gestures before they reached the `Modifier.transformable` on the
+  local-large Box. The badge now renders as a child of the same Box that
+  holds the video, mirroring the multi-party tile pattern, so pinch
+  gestures reach the zoom controller. Multi-party was unaffected.
+
 ## [0.6.7] — 2026-05-01
 
 Audio activity indicator now animates while the user is alone in the room
