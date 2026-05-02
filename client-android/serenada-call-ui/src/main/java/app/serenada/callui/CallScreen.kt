@@ -455,18 +455,35 @@ internal fun CallScreen(
                         contentScale = ContentScale.Fit,
                         isMediaOverlay = false
                     )
+                    ParticipantBadge(
+                        modifier = Modifier.align(Alignment.BottomStart),
+                        muted = !uiState.localAudioEnabled,
+                        displayName = uiState.localDisplayName,
+                        audioLevel = uiState.localAudioLevel,
+                    )
                 }
             }
             if (uiState.remoteVideoEnabled) {
-                TextureVideoSurface(
-                    modifier = remoteModifier,
-                    rendererName = "remote-pip",
-                    eglContext = eglContext,
-                    onAttach = attachRemoteSink,
-                    onDetach = detachRemoteSink,
-                    mirror = false,
-                    contentScale = ContentScale.Crop
-                )
+                Box(modifier = remoteModifier) {
+                    TextureVideoSurface(
+                        modifier = Modifier.fillMaxSize(),
+                        rendererName = "remote-pip",
+                        eglContext = eglContext,
+                        onAttach = attachRemoteSink,
+                        onDetach = detachRemoteSink,
+                        mirror = false,
+                        contentScale = ContentScale.Crop
+                    )
+                    val remoteP = uiState.remoteParticipants.firstOrNull()
+                    if (remoteP != null) {
+                        ParticipantBadge(
+                            modifier = Modifier.align(Alignment.BottomStart),
+                            muted = !remoteP.audioEnabled,
+                            displayName = if (!remoteP.videoEnabled) null else remoteP.displayName,
+                            audioLevel = remoteP.audioLevel,
+                        )
+                    }
+                }
             }
         } else {
             val ratio = remoteAspectRatio ?: 0f
@@ -514,18 +531,35 @@ internal fun CallScreen(
                         contentScale = ContentScale.Crop,
                         isMediaOverlay = false
                     )
+                    val remoteP = uiState.remoteParticipants.firstOrNull()
+                    if (remoteP != null) {
+                        ParticipantBadge(
+                            modifier = Modifier.align(Alignment.BottomStart),
+                            muted = !remoteP.audioEnabled,
+                            displayName = if (!remoteP.videoEnabled) null else remoteP.displayName,
+                            audioLevel = remoteP.audioLevel,
+                        )
+                    }
                 }
             }
             if (uiState.localVideoEnabled) {
-                TextureVideoSurface(
-                    modifier = localModifier,
-                    rendererName = "local-pip",
-                    eglContext = eglContext,
-                    onAttach = attachLocalSink,
-                    onDetach = detachLocalSink,
-                    mirror = uiState.isFrontCamera && !uiState.isScreenSharing,
-                    contentScale = if (uiState.isScreenSharing) ContentScale.Fit else ContentScale.Crop
-                )
+                Box(modifier = localModifier) {
+                    TextureVideoSurface(
+                        modifier = Modifier.fillMaxSize(),
+                        rendererName = "local-pip",
+                        eglContext = eglContext,
+                        onAttach = attachLocalSink,
+                        onDetach = detachLocalSink,
+                        mirror = uiState.isFrontCamera && !uiState.isScreenSharing,
+                        contentScale = if (uiState.isScreenSharing) ContentScale.Fit else ContentScale.Crop
+                    )
+                    ParticipantBadge(
+                        modifier = Modifier.align(Alignment.BottomStart),
+                        muted = !uiState.localAudioEnabled,
+                        displayName = uiState.localDisplayName,
+                        audioLevel = uiState.localAudioLevel,
+                    )
+                }
             }
         }
 
@@ -536,6 +570,12 @@ internal fun CallScreen(
                         if (effectiveLocalLarge) resolveString(SerenadaString.CallLocalCameraOff, strings)
                         else resolveString(SerenadaString.CallCameraOff, strings),
                     fontSize = if (effectiveLocalLarge) 16.sp else 10.sp
+                )
+                ParticipantBadge(
+                    modifier = Modifier.align(Alignment.BottomStart),
+                    muted = !uiState.localAudioEnabled,
+                    displayName = uiState.localDisplayName,
+                    audioLevel = uiState.localAudioLevel,
                 )
             }
         }
@@ -558,27 +598,11 @@ internal fun CallScreen(
                     displayName = nameToShow,
                     peerId = remoteP?.peerId,
                 )
-            }
-        }
-
-        if (!isMultiParty) {
-            val remoteP = uiState.remoteParticipants.firstOrNull()
-            Box(modifier = localModifier) {
-                ParticipantBadge(
-                    modifier = Modifier.align(Alignment.BottomStart),
-                    muted = !uiState.localAudioEnabled,
-                    displayName = uiState.localDisplayName,
-                    audioLevel = uiState.localAudioLevel,
-                )
-            }
-            if (remoteP != null) {
-                Box(modifier = remoteModifier) {
-                    val remoteNameForBadge =
-                        if (!remoteP.videoEnabled) null else remoteP.displayName
+                if (remoteP != null) {
                     ParticipantBadge(
                         modifier = Modifier.align(Alignment.BottomStart),
                         muted = !remoteP.audioEnabled,
-                        displayName = remoteNameForBadge,
+                        displayName = if (!remoteP.videoEnabled) null else remoteP.displayName,
                         audioLevel = remoteP.audioLevel,
                     )
                 }
