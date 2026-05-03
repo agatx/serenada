@@ -4,6 +4,25 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.9] — 2026-05-02
+
+### Added
+- iOS: `SerenadaConfig.allowAudioOnlyJoin` (default `true`) lets the SDK join
+  an audio-only call when the user has denied or not yet granted camera
+  permission. The session proceeds without a local video track and the local
+  preview falls back to the audio-only placeholder.
+
+### Changed
+- iOS: world / composite camera modes now render the local preview as the
+  primary surface (matching the existing 1:1 video layout) so the world view
+  is the user's main visual context, and pinch-to-zoom is reachable in both
+  the Waiting and InCall phases.
+
+### Fixed
+- iOS: avatar cache now invalidates correctly when a remote participant's
+  avatar URL changes mid-call, so stale images no longer linger after a peer
+  switches accounts in the same room.
+
 ## [0.6.8] — 2026-05-02
 
 ### Fixed
