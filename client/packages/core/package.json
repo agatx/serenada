@@ -1,6 +1,6 @@
 {
   "name": "@serenada/core",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "Headless WebRTC call engine for 1:1 and mesh multi-party video calls — vanilla TypeScript, no React dependency",
   "type": "module",
   "main": "dist/index.js",
