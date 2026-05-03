@@ -183,6 +183,7 @@ public final class SerenadaSession: ObservableObject {
     private var hasJoinSignalStartedForAttempt = false
     private var hasJoinAcknowledgedCurrentAttempt = false
     private var userPreferredVideoEnabled = true
+    private var cameraPermissionRequestInFlight = false
     private var isVideoPausedByProximity = false
     private var reconnectRecoveryPending = false
     // True between transport reconnect and the first authoritative room_state
@@ -402,9 +403,7 @@ public final class SerenadaSession: ObservableObject {
     /// Toggle local video on or off.
     public func toggleVideo() {
         guard !availableCameraModes.isEmpty else { return }
-        userPreferredVideoEnabled = !state.localParticipant.videoEnabled
-        applyLocalVideoPreference()
-        broadcastLocalMediaState()
+        setVideoEnabled(!state.localParticipant.videoEnabled, broadcastMediaState: true)
     }
 
     /// Cycle to the next camera mode (selfie -> world -> composite).
@@ -432,9 +431,19 @@ public final class SerenadaSession: ObservableObject {
 
     /// Set local video enabled state.
     public func setVideoEnabled(_ enabled: Bool) {
+        setVideoEnabled(enabled, broadcastMediaState: false)
+    }
+
+    private func setVideoEnabled(_ enabled: Bool, broadcastMediaState: Bool) {
         if enabled && availableCameraModes.isEmpty { return }
+        if enabled && !ensureCameraPermissionForVideoEnable(broadcastMediaStateOnGrant: broadcastMediaState) {
+            return
+        }
         userPreferredVideoEnabled = enabled
         applyLocalVideoPreference()
+        if broadcastMediaState {
+            broadcastLocalMediaState()
+        }
     }
 
     /// Start screen sharing via the broadcast upload extension.
@@ -543,7 +552,7 @@ public final class SerenadaSession: ObservableObject {
             d.remoteContentParticipantId = nil; d.remoteContentType = nil; d.realtimeStats = .empty
         }
 
-        let needsCamera = videoCaptureSupported
+        let needsCamera = videoCaptureSupported && config.defaultVideoEnabled
         let required = JoinFlowCoordinator.missingPermissions(includeCamera: needsCamera)
         if !required.isEmpty {
             currentRequiredPermissions = required
@@ -1111,6 +1120,37 @@ public final class SerenadaSession: ObservableObject {
         if shouldPause != isVideoPausedByProximity { isVideoPausedByProximity = shouldPause }
         let effectiveEnabled = webRtcEngine.toggleVideo(userPreferredVideoEnabled && !shouldPause)
         commitSnapshot { s, _ in s.localParticipant.videoEnabled = effectiveEnabled }
+    }
+
+    private func ensureCameraPermissionForVideoEnable(broadcastMediaStateOnGrant: Bool) -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            requestCameraPermissionForVideoEnable(broadcastMediaStateOnGrant: broadcastMediaStateOnGrant)
+            return false
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private func requestCameraPermissionForVideoEnable(broadcastMediaStateOnGrant: Bool) {
+        guard !cameraPermissionRequestInFlight else { return }
+        cameraPermissionRequestInFlight = true
+        AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.cameraPermissionRequestInFlight = false
+                guard granted, self.state.phase != .idle else { return }
+                self.userPreferredVideoEnabled = true
+                self.applyLocalVideoPreference()
+                if broadcastMediaStateOnGrant {
+                    self.broadcastLocalMediaState()
+                }
+            }
+        }
     }
 
     // MARK: - Reconnection

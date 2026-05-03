@@ -123,7 +123,7 @@ SerenadaCallFlow(
 
 - **Initial mode**: the first supported entry of the list is used when media starts.
 - **Flip-camera control**: hidden when only one mode is configured (nothing to cycle to). Also hidden while the local video is turned off.
-- **Video toggle & camera permission**: when the list is empty, the SDK treats the call as audio-only — the video toggle is hidden entirely and the camera is never requested.
+- **Video toggle & camera permission**: when the list is empty, the SDK treats the call as audio-only — the video toggle is hidden entirely and the camera is never requested. When camera modes are present but `defaultVideoEnabled` is `false`, the call joins with video off and requests camera access only if the user enables video.
 
 Platform-unsupported modes are dropped silently (`composite` on web; `composite` on devices without multi-camera support on iOS / Android). If a native camera source still fails at runtime, startup retries the remaining configured modes before continuing audio-only. `screenShare` is rejected — screen sharing is controlled separately.
 

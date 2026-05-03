@@ -22,7 +22,9 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     public let signalingProvider: SignalingProvider?
     /// Whether audio is enabled when joining a call. Defaults to `true`.
     public var defaultAudioEnabled: Bool
-    /// Whether video is enabled when joining a call. Defaults to `true`.
+    /// Whether video is enabled when joining a call. Defaults to `true`. When this is `false`,
+    /// camera permission is not required for the initial join even when camera modes are
+    /// available; the SDK requests camera access lazily if the user enables video later.
     public var defaultVideoEnabled: Bool
     /// Camera modes available in the call UI, in preference order. The first
     /// entry is the initial mode. When only one mode is listed the flip-camera

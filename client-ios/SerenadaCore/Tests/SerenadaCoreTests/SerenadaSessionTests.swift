@@ -50,4 +50,33 @@ final class SerenadaSessionTests: XCTestCase {
         XCTAssertNil(session.roomUrl)
         session.cancelJoin()
     }
+
+    func testDefaultVideoDisabledDoesNotRequireCameraBeforeJoin() async {
+        let provider = FakeSignalingProvider()
+        let media = FakeMediaEngine()
+        let session = SerenadaSession(
+            roomId: "provider-room",
+            config: SerenadaConfig(
+                signalingProvider: provider,
+                defaultVideoEnabled: false,
+                cameraModes: [.selfie, .world]
+            ),
+            initialSignalingProvider: provider,
+            mediaEngine: media
+        )
+
+        await Task.yield()
+        await Task.yield()
+        await Task.yield()
+
+        if session.state.phase == .awaitingPermissions {
+            XCTAssertFalse(session.state.requiredPermissions?.contains(.camera) ?? false)
+            session.resumeJoin()
+            await Task.yield()
+            await Task.yield()
+        }
+
+        XCTAssertEqual(media.startLocalMediaCalls.first, false)
+        session.cancelJoin()
+    }
 }
