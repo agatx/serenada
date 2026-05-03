@@ -32,7 +32,23 @@ func shouldShowRemoteFitButton(phase: CallPhase, remoteVideoEnabled: Bool, isLoc
 // The user's swap preference (`isLocalLarge`) is preserved and reapplied
 // automatically when video comes back on.
 func shouldRenderLocalAsPrimarySurface(phase: CallPhase, isLocalLarge: Bool, localVideoEnabled: Bool) -> Bool {
-    phase == .inCall && isLocalLarge && localVideoEnabled
+    (phase == .waiting || phase == .inCall) && isLocalLarge && localVideoEnabled
+}
+
+func shouldPreferLargeLocalPreview(localCameraMode: LocalCameraMode) -> Bool {
+    localCameraMode == .world || localCameraMode == .composite
+}
+
+func shouldEnablePinchZoom(
+    phase: CallPhase,
+    isScreenSharing: Bool,
+    showLocalAsPrimarySurface: Bool,
+    localCameraMode: LocalCameraMode
+) -> Bool {
+    guard phase == .waiting || phase == .inCall else { return false }
+    guard !isScreenSharing else { return false }
+    guard showLocalAsPrimarySurface else { return false }
+    return localCameraMode.isContentMode
 }
 
 func shouldUseBroadcastPicker(isScreenSharing: Bool, screenShareExtensionBundleId: String?) -> Bool {
@@ -312,6 +328,7 @@ struct CallScreenView: View {
         _remoteVideoFitCover = State(initialValue: initialRemoteVideoFitCover)
         _isControlsAutoHideEnabled = State(initialValue: config.autoHideControls)
         _areControlsVisible = State(initialValue: true)
+        _isLocalLarge = State(initialValue: shouldPreferLargeLocalPreview(localCameraMode: uiState.localCameraMode))
     }
 
     private func str(_ key: SerenadaString) -> String {
@@ -328,15 +345,24 @@ struct CallScreenView: View {
             isLocalLarge: isLocalLarge,
             localVideoEnabled: uiState.localVideoEnabled
         )
-        let isPinchZoomEnabled = shouldEnablePinchZoom(showLocalAsPrimarySurface: showLocalAsPrimarySurface)
+        let isPinchZoomEnabled = shouldEnablePinchZoom(
+            phase: uiState.phase,
+            isScreenSharing: uiState.isScreenSharing,
+            showLocalAsPrimarySurface: showLocalAsPrimarySurface,
+            localCameraMode: uiState.localCameraMode
+        )
         let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
 
         ZStack {
             Color.black.ignoresSafeArea()
 
             if uiState.phase == .waiting {
-                waitingMainSurface
-                smallLocalView
+                if showLocalAsPrimarySurface {
+                    largeLocalView
+                } else {
+                    waitingMainSurface
+                    smallLocalView
+                }
             } else if isMultiParty {
                 MultiPartyStage(
                     remoteParticipants: uiState.remoteParticipants,
@@ -373,16 +399,7 @@ struct CallScreenView: View {
                     }
                 )
             } else if showLocalAsPrimarySurface {
-                ZStack(alignment: .bottomLeading) {
-                    mainVideoSurface(
-                        kind: .local,
-                        videoContentMode: primaryLocalVideoContentMode(localCameraMode: uiState.localCameraMode),
-                        showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
-                        placeholderText: str(.callLocalCameraOff)
-                    )
-                    ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName, audioLevel: uiState.localAudioLevel)
-                }
-                .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
+                largeLocalView
                 smallRemoteView
             } else {
                 let inCall = uiState.phase == .inCall
@@ -414,8 +431,8 @@ struct CallScreenView: View {
             }
             overlays
         }
-        .onChange(of: uiState.isFrontCamera) { isFront in
-            isLocalLarge = !isFront
+        .onChange(of: uiState.localCameraMode) { mode in
+            isLocalLarge = shouldPreferLargeLocalPreview(localCameraMode: mode)
         }
         .onChange(of: uiState.remoteParticipants.map(\.cid)) { remoteCids in
             let active = Set(remoteCids)
@@ -539,6 +556,19 @@ struct CallScreenView: View {
 
     private var waitingMainSurface: some View {
         Color.black.ignoresSafeArea()
+    }
+
+    private var largeLocalView: some View {
+        ZStack(alignment: .bottomLeading) {
+            mainVideoSurface(
+                kind: .local,
+                videoContentMode: primaryLocalVideoContentMode(localCameraMode: uiState.localCameraMode),
+                showPlaceholder: shouldShowLocalVideoPlaceholder(localVideoEnabled: uiState.localVideoEnabled),
+                placeholderText: str(.callLocalCameraOff)
+            )
+            ParticipantBadge(muted: !uiState.localAudioEnabled, displayName: uiState.localDisplayName, audioLevel: uiState.localAudioLevel)
+        }
+        .padding(.bottom, areControlsVisible ? pipBottomPadding(isLandscape: isLandscape, areControlsVisible: true) + 4 : 0)
     }
 
     private var smallLocalView: some View {
@@ -840,13 +870,6 @@ struct CallScreenView: View {
         .frame(maxWidth: 280)
         .background(Color.black.opacity(0.62))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func shouldEnablePinchZoom(showLocalAsPrimarySurface: Bool) -> Bool {
-        if uiState.phase != .inCall { return false }
-        if uiState.isScreenSharing { return false }
-        if !showLocalAsPrimarySurface { return false }
-        return uiState.localCameraMode.isContentMode
     }
 
     private func handleDebugTap() {
