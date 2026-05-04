@@ -1107,11 +1107,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                     )}
 
                     {remoteParticipant0?.videoEnabled === false && (
-                        <div className="video-camera-off-overlay">
+                        <div className={`video-camera-off-overlay${effectiveLocalLarge ? ' compact' : ''}`}>
                             <RemoteAvatar
                                 peerId={remoteParticipant0.peerId}
                                 displayName={remoteParticipant0.displayName}
                                 resolveAvatar={resolveAvatar}
+                                compact={effectiveLocalLarge}
                             />
                             <span className="video-camera-off-label">
                                 {remoteParticipant0.displayName ?? resolveString('cameraOff', strings)}
