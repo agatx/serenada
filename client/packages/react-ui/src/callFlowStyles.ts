@@ -212,13 +212,13 @@ const CALL_FLOW_CSS = `
   display: flex;
   align-items: center;
   justify-content: center;
-  width: clamp(56px, 22cqi, 168px);
-  height: clamp(56px, 22cqi, 168px);
+  width: clamp(45px, 17.6cqi, 134px);
+  height: clamp(45px, 17.6cqi, 134px);
   border-radius: 50%;
   overflow: hidden;
   background: #2a2a2a;
   color: rgba(255, 255, 255, 0.85);
-  font-size: clamp(20px, 8cqi, 64px);
+  font-size: clamp(16px, 6.4cqi, 51px);
   font-weight: 600;
   line-height: 1;
   text-transform: uppercase;
@@ -227,9 +227,9 @@ const CALL_FLOW_CSS = `
 }
 
 [data-serenada-callflow] .serenada-avatar-circle.compact {
-  width: clamp(40px, 16cqi, 96px);
-  height: clamp(40px, 16cqi, 96px);
-  font-size: clamp(14px, 6cqi, 36px);
+  width: clamp(22px, 8.8cqi, 67px);
+  height: clamp(22px, 8.8cqi, 67px);
+  font-size: clamp(8px, 3.2cqi, 26px);
 }
 
 [data-serenada-callflow] .serenada-avatar-circle img {
