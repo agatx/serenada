@@ -111,13 +111,18 @@ internal class TestSessionFactory(
         ShadowLooper.idleMainLooper()
     }
 
-    fun simulateIceCandidateFromRemote(fromCid: String, candidate: String = "candidate:test") {
+    fun simulateIceCandidateFromRemote(
+        fromCid: String,
+        candidate: String = "candidate:test",
+        sdpMid: String? = "0",
+        sdpMLineIndex: Int = 0,
+    ) {
         val payload = JSONObject().apply {
             put("from", fromCid)
             put("candidate", JSONObject().apply {
                 put("candidate", candidate)
-                put("sdpMid", "0")
-                put("sdpMLineIndex", 0)
+                sdpMid?.let { put("sdpMid", it) }
+                put("sdpMLineIndex", sdpMLineIndex)
             })
         }
         fakeProvider.simulateMessage(from = fromCid, type = "ice", payload = payload)

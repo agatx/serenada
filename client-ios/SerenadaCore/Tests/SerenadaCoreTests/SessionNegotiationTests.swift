@@ -133,6 +133,52 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertEqual(fakeSlot?.addedIceCandidates.first?.candidate, "candidate:test")
     }
 
+    func testRemoteIceCandidateWithoutSdpMidIsForwardedWithNilMid() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "local",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        let fakeSlot = harness.fakeMedia.fakeSlots["remote"]
+        XCTAssertNotNil(fakeSlot)
+
+        harness.simulateIceCandidateFromRemote(
+            fromCid: "remote",
+            candidate: "candidate:test-ice",
+            sdpMid: nil,
+            sdpMLineIndex: 1
+        )
+        await waitUntil {
+            fakeSlot?.addedIceCandidates.count == 1
+        }
+
+        XCTAssertNil(fakeSlot?.addedIceCandidates.first?.sdpMid,
+                     "Missing sdpMid should be preserved as nil so WebRTC uses sdpMLineIndex")
+        XCTAssertEqual(fakeSlot?.addedIceCandidates.first?.sdpMLineIndex, 1)
+    }
+
+    func testRemoteIceCandidateWithBlankSdpIsDropped() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "local",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        let fakeSlot = harness.fakeMedia.fakeSlots["remote"]
+        XCTAssertNotNil(fakeSlot)
+
+        harness.simulateIceCandidateFromRemote(fromCid: "remote", candidate: "")
+        harness.simulateIceCandidateFromRemote(fromCid: "remote", candidate: "   ")
+        await harness.yieldToMainActor()
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(fakeSlot?.addedIceCandidates.count, 0,
+                       "Blank ICE candidates must not reach the slot")
+    }
+
     // MARK: - Group 3: Peer Departure
 
     func testPeerLeavesViaRoomState() async throws {

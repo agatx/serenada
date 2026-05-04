@@ -176,13 +176,17 @@ final class PeerNegotiationEngine {
 
         case "ice":
             guard let candidateObject = message.payload?.objectValue?["candidate"]?.objectValue,
-                  let candidate = candidateObject["candidate"]?.stringValue else {
+                  let candidate = candidateObject["candidate"]?.stringValue,
+                  !candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return
             }
+            let sdpMLineIndex = Int32(candidateObject["sdpMLineIndex"]?.intValue ?? 0)
+            let trimmedMid = candidateObject["sdpMid"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sdpMid = trimmedMid.flatMap { $0.isEmpty ? nil : $0 }
             slot.addIceCandidate(
                 IceCandidatePayload(
-                    sdpMid: candidateObject["sdpMid"]?.stringValue,
-                    sdpMLineIndex: Int32(candidateObject["sdpMLineIndex"]?.intValue ?? 0),
+                    sdpMid: sdpMid,
+                    sdpMLineIndex: sdpMLineIndex,
                     candidate: candidate
                 )
             )

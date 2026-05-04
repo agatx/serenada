@@ -79,6 +79,37 @@ class SessionNegotiationTest {
         assertEquals("candidate:test-ice", fakeSlot.addedIceCandidates.first().sdp)
     }
 
+    @Test
+    fun `remote ICE candidate without sdpMid is forwarded with null mid so WebRTC uses m-line index`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+
+        factory.simulateIceCandidateFromRemote(
+            fromCid = "remote",
+            candidate = "candidate:test-ice",
+            sdpMid = null,
+            sdpMLineIndex = 1,
+        )
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull(fakeSlot)
+        assertEquals(1, fakeSlot!!.addedIceCandidates.size)
+        val added = fakeSlot.addedIceCandidates.first()
+        assertNull(added.sdpMid)
+        assertEquals(1, added.sdpMLineIndex)
+    }
+
+    @Test
+    fun `remote ICE candidate with blank sdp is dropped before reaching slot`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+
+        factory.simulateIceCandidateFromRemote(fromCid = "remote", candidate = "")
+        factory.simulateIceCandidateFromRemote(fromCid = "remote", candidate = "   ")
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull(fakeSlot)
+        assertTrue("Blank candidates must not reach the slot", fakeSlot!!.addedIceCandidates.isEmpty())
+    }
+
     // Group 3: Peer Departure
 
     @Test

@@ -353,10 +353,11 @@ internal class PeerConnectionSlot(
     }
 
     override fun addIceCandidate(candidate: IceCandidate) {
+        val safeCandidate = sanitizeIceCandidate(candidate, remoteCid, logger) ?: return
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) {
                 if (pendingIceCandidates.size < WebRtcResilienceConstants.ICE_CANDIDATE_BUFFER_MAX) {
-                    pendingIceCandidates.add(candidate)
+                    pendingIceCandidates.add(safeCandidate)
                 }
                 return
             }
@@ -365,11 +366,11 @@ internal class PeerConnectionSlot(
 
         if (!remoteDescriptionSet) {
             if (pendingIceCandidates.size < WebRtcResilienceConstants.ICE_CANDIDATE_BUFFER_MAX) {
-                pendingIceCandidates.add(candidate)
+                pendingIceCandidates.add(safeCandidate)
             }
             return
         }
-        pc.addIceCandidate(candidate)
+        pc.addIceCandidate(safeCandidate)
     }
 
     override fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)?) {
