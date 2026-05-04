@@ -24,6 +24,7 @@ import {
     type CallStats,
     type ContentSource,
     type LayoutResult,
+    type MediaCapability,
     type SerenadaSessionHandle,
 } from '@serenada/core';
 import { AudioActivityIndicator } from './components/AudioActivityIndicator.js';
@@ -314,6 +315,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const debugTapRef = useRef(0);
     const debugTapTimeoutRef = useRef<number | null>(null);
 
+    const permissionRequester = config?.requestPermissions;
+    const requestPermissions = useCallback((permissions: MediaCapability[]) => {
+        return permissionRequester?.(permissions) ?? SerenadaPermissions.request(permissions);
+    }, [permissionRequester]);
+
     useEffect(() => {
         if (!onStatsUpdate || !session) return;
         const interval = window.setInterval(() => {
@@ -348,7 +354,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         if (!usesInternalSession || !internalSession) return;
         internalSession.onPermissionsRequired = (permissions) => {
             void (async () => {
-                const granted = await SerenadaPermissions.request(permissions);
+                const granted = await requestPermissions(permissions);
                 if (granted) {
                     setPermissionDenied(false);
                     await internalSession.resumeJoin();
@@ -360,7 +366,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         return () => {
             internalSession.onPermissionsRequired = null;
         };
-    }, [internalSession, usesInternalSession]);
+    }, [internalSession, requestPermissions, usesInternalSession]);
 
     useEffect(() => {
         if (localParticipant?.cameraMode !== lastCameraModeRef.current) {
@@ -584,7 +590,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         if (!session) return;
         void (async () => {
             const permissions = effectiveState.requiredPermissions ?? ['camera', 'microphone'];
-            const granted = await SerenadaPermissions.request(permissions);
+            const granted = await requestPermissions(permissions);
             if (granted) {
                 setPermissionDenied(false);
                 await session.resumeJoin();
@@ -592,7 +598,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                 setPermissionDenied(true);
             }
         })();
-    }, [effectiveState.requiredPermissions, session]);
+    }, [effectiveState.requiredPermissions, requestPermissions, session]);
 
     const handleCancel = useCallback(() => {
         session?.cancelJoin();
@@ -612,9 +618,21 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [handleControlsInteraction, session]);
 
     const handleToggleVideo = useCallback(() => {
-        session?.toggleVideo();
-        handleControlsInteraction();
-    }, [handleControlsInteraction, session]);
+        if (!session) return;
+        void (async () => {
+            if (isCameraOff) {
+                const granted = await requestPermissions(['camera']);
+                if (!granted) {
+                    setPermissionDenied(true);
+                    handleControlsInteraction();
+                    return;
+                }
+                setPermissionDenied(false);
+            }
+            session.toggleVideo();
+            handleControlsInteraction();
+        })();
+    }, [handleControlsInteraction, isCameraOff, requestPermissions, session]);
 
     const handleFlipCamera = useCallback(() => {
         handleControlsInteraction();
@@ -802,6 +820,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const overlayContent = (
         <>
             <StatusOverlay connectionStatus={effectiveState.connectionStatus} strings={strings} />
+            {permissionDenied && effectiveState.phase === 'inCall' && (
+                <div className="permission-denied-banner">
+                    {resolveString('permissionDeniedSettings', strings)}
+                </div>
+            )}
             {config?.debugOverlayEnabled && (
                 <div
                     className="debug-toggle-zone"

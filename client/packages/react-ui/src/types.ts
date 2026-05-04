@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { SerenadaSessionHandle, CallStats } from '@serenada/core';
+import type { SerenadaSessionHandle, CallStats, MediaCapability } from '@serenada/core';
 
 // ---------------------------------------------------------------------------
 // Avatar provider (host-supplied)
@@ -44,6 +44,12 @@ export interface SerenadaCallFlowConfig {
      * an initials placeholder derived from their display name.
      */
     avatarProvider?: AvatarProvider;
+    /**
+     * Optional host-app permission requester. Electron/native hosts can use this
+     * to bridge OS-level media permission APIs that may disagree with browser
+     * `navigator.permissions` state.
+     */
+    requestPermissions?: (capabilities: MediaCapability[]) => Promise<boolean>;
 }
 
 export interface SerenadaCallFlowTheme {
@@ -75,6 +81,7 @@ export type SerenadaString =
     | 'permissionCamera'
     | 'permissionMicrophone'
     | 'permissionPrompt'
+    | 'permissionDeniedSettings'
     | 'grantPermissions'
     | 'cancel'
     | 'debugPanel'
@@ -102,6 +109,7 @@ export const serenadaDefaultStrings: Record<SerenadaString, string> = {
     permissionCamera: 'Camera',
     permissionMicrophone: 'Microphone',
     permissionPrompt: 'This app needs access to your camera and microphone to make calls.',
+    permissionDeniedSettings: 'Permission denied. Please allow camera access in system settings.',
     grantPermissions: 'Grant permissions',
     cancel: 'Cancel',
     debugPanel: 'Debug',

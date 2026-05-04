@@ -456,6 +456,23 @@ const CALL_FLOW_CSS = `
   user-select: none;
 }
 
+[data-serenada-callflow] .permission-denied-banner {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  max-width: min(420px, calc(100% - 32px));
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(24, 28, 34, 0.92);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: center;
+  transform: translateX(-50%);
+  z-index: 42;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 [data-serenada-callflow] .waiting-message {
   position: absolute;
   top: 50%;
