@@ -446,22 +446,25 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 
     public func addIceCandidate(_ candidate: IceCandidatePayload) {
 #if canImport(WebRTC)
+        guard let safeCandidate = sanitizeIceCandidate(candidate, remoteCid: remoteCid) else {
+            return
+        }
         guard let peerConnection = peerConnection ?? (ensurePeerConnection() ? self.peerConnection : nil) else {
             return
         }
 
         if peerConnection.remoteDescription == nil {
             if pendingRemoteIceCandidates.count < WebRtcResilience.iceCandidateBufferMax {
-                pendingRemoteIceCandidates.append(candidate)
+                pendingRemoteIceCandidates.append(safeCandidate)
             }
             return
         }
 
         peerConnection.add(
             RTCIceCandidate(
-                sdp: candidate.candidate,
-                sdpMLineIndex: candidate.sdpMLineIndex,
-                sdpMid: candidate.sdpMid
+                sdp: safeCandidate.candidate,
+                sdpMLineIndex: safeCandidate.sdpMLineIndex,
+                sdpMid: safeCandidate.sdpMid
             )
         ) { _ in }
 #endif

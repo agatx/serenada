@@ -353,7 +353,7 @@ internal class PeerConnectionSlot(
     }
 
     override fun addIceCandidate(candidate: IceCandidate) {
-        val safeCandidate = sanitizeIceCandidate(candidate) ?: return
+        val safeCandidate = sanitizeIceCandidate(candidate, remoteCid, logger) ?: return
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) {
                 if (pendingIceCandidates.size < WebRtcResilienceConstants.ICE_CANDIDATE_BUFFER_MAX) {
@@ -518,17 +518,6 @@ internal class PeerConnectionSlot(
         val pending = pendingIceCandidates.toList()
         pendingIceCandidates.clear()
         pending.forEach { pc.addIceCandidate(it) }
-    }
-
-    private fun sanitizeIceCandidate(candidate: IceCandidate): IceCandidate? {
-        val candidateSdp = candidate.sdp?.takeIf { it.isNotBlank() }
-        if (candidateSdp == null) {
-            logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Dropping blank ICE candidate")
-            return null
-        }
-        val sdpMid = candidate.sdpMid?.takeIf { it.isNotBlank() }
-        if (sdpMid != null) return candidate
-        return IceCandidate(candidate.sdpMLineIndex.toString(), candidate.sdpMLineIndex, candidateSdp)
     }
 
     @Synchronized

@@ -145,19 +145,22 @@ final class SessionTestHarness {
     func simulateIceCandidateFromRemote(
         fromCid: String,
         candidate: String = "candidate:1 1 udp 2130706431 192.168.1.1 12345 typ host",
-        sdpMid: String = "0",
+        sdpMid: String? = "0",
         sdpMLineIndex: Int = 0
     ) {
+        var candidateObject: [String: JSONValue] = [
+            "candidate": .string(candidate),
+            "sdpMLineIndex": .number(Double(sdpMLineIndex))
+        ]
+        if let sdpMid {
+            candidateObject["sdpMid"] = .string(sdpMid)
+        }
         fakeProvider.simulateMessage(
             from: fromCid,
             type: "ice",
             payload: [
                 "from": .string(fromCid),
-                "candidate": .object([
-                    "candidate": .string(candidate),
-                    "sdpMid": .string(sdpMid),
-                    "sdpMLineIndex": .number(Double(sdpMLineIndex))
-                ])
+                "candidate": .object(candidateObject)
             ]
         )
     }

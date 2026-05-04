@@ -96,6 +96,18 @@ class SessionNegotiationTest {
         assertEquals("1", fakeSlot.addedIceCandidates.first().sdpMid)
     }
 
+    @Test
+    fun `remote ICE candidate with blank sdp is dropped before reaching slot`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+
+        factory.simulateIceCandidateFromRemote(fromCid = "remote", candidate = "")
+        factory.simulateIceCandidateFromRemote(fromCid = "remote", candidate = "   ")
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull(fakeSlot)
+        assertTrue("Blank candidates must not reach the slot", fakeSlot!!.addedIceCandidates.isEmpty())
+    }
+
     // Group 3: Peer Departure
 
     @Test
