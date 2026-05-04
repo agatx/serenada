@@ -236,20 +236,29 @@ describe('SerenadaSession', () => {
     describe('permission gating', () => {
         // Stub navigator.permissions to return 'prompt' for both camera and microphone.
         // This triggers the awaitingPermissions flow in SerenadaSession.
-        function stubPermissionsPrompt(): () => void {
+        function stubPermissionsPromptWithSpy(): {
+            query: ReturnType<typeof vi.fn>;
+            restore: () => void;
+        } {
             const original = navigator.permissions;
+            const query = vi.fn(() => Promise.resolve({ state: 'prompt' }));
             Object.defineProperty(navigator, 'permissions', {
-                value: {
-                    query: () => Promise.resolve({ state: 'prompt' }),
-                },
+                value: { query },
                 configurable: true,
             });
-            return () => {
-                Object.defineProperty(navigator, 'permissions', {
-                    value: original,
-                    configurable: true,
-                });
+            return {
+                query,
+                restore: () => {
+                    Object.defineProperty(navigator, 'permissions', {
+                        value: original,
+                        configurable: true,
+                    });
+                },
             };
+        }
+
+        function stubPermissionsPrompt(): () => void {
+            return stubPermissionsPromptWithSpy().restore;
         }
 
         it('moves to awaitingPermissions when permissions need prompting', async () => {
@@ -299,6 +308,26 @@ describe('SerenadaSession', () => {
             await vi.advanceTimersByTimeAsync(0);
 
             expect(permissionsCb).toHaveBeenCalled();
+            restore();
+        });
+
+        it('only requests microphone permission when default video is disabled', async () => {
+            const { query, restore } = stubPermissionsPromptWithSpy();
+            harness = new TestSessionHarness({
+                config: { defaultVideoEnabled: false },
+            });
+            const permissionsCb = vi.fn();
+            harness.session.onPermissionsRequired = permissionsCb;
+
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(harness.state.phase).toBe('awaitingPermissions');
+            expect(harness.state.requiredPermissions).toEqual(['microphone']);
+            expect(permissionsCb).toHaveBeenCalledWith(['microphone']);
+            expect(query.mock.calls.map(([descriptor]) => descriptor)).toEqual([
+                { name: 'microphone' },
+            ]);
             restore();
         });
 

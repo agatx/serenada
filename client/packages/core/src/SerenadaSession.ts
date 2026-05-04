@@ -316,6 +316,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 turnsOnly: config.turnsOnly,
                 logger: config.logger,
                 initialFacingMode: initialCameraMode === 'world' ? 'environment' : 'user',
+                initialVideoEnabled: this.userPreferredVideoEnabled,
                 videoCaptureSupported: this.availableCameraModes.length > 0,
             },
             (type, payload, to) => {
@@ -1195,7 +1196,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.permissionCheckDone || this.permissionCheckInFlight) return;
         this.permissionCheckInFlight = true;
 
-        const needsCamera = this.availableCameraModes.length > 0;
+        const needsCamera = this.availableCameraModes.length > 0 && this.userPreferredVideoEnabled;
         const permissionsNeeded: MediaCapability[] = [];
         try {
             if (navigator.permissions) {
