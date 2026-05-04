@@ -232,6 +232,15 @@ const CALL_FLOW_CSS = `
   font-size: clamp(8px, 3.2cqi, 26px);
 }
 
+[data-serenada-callflow] .video-camera-off-overlay.compact {
+  gap: clamp(4px, 1cqi, 12px);
+}
+
+[data-serenada-callflow] .video-camera-off-overlay.compact .video-camera-off-label {
+  font-size: clamp(10px, 2cqi, 18px);
+  padding: 0 8px;
+}
+
 [data-serenada-callflow] .serenada-avatar-circle img {
   width: 100%;
   height: 100%;
