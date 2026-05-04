@@ -30,27 +30,25 @@ class IceCandidateSanitizerTest {
     }
 
     @Test
-    fun `synthesizes sdpMid from sdpMLineIndex when sdpMid is null`() {
+    fun `passes through null sdpMid so WebRTC uses sdpMLineIndex`() {
         val input = IceCandidate(null, 1, "candidate:1 1 udp 2113937151 192.168.1.1 54321 typ host")
         val result = sanitizeIceCandidate(input, remoteCid = "remote-1")
-        assertEquals("1", result?.sdpMid)
-        assertEquals(1, result?.sdpMLineIndex)
-        assertEquals(input.sdp, result?.sdp)
+        assertSame(input, result)
     }
 
     @Test
-    fun `synthesizes sdpMid from sdpMLineIndex when sdpMid is blank`() {
+    fun `normalizes blank sdpMid to null`() {
         val input = IceCandidate("", 2, "candidate:1 1 udp 2113937151 192.168.1.1 54321 typ host")
         val result = sanitizeIceCandidate(input, remoteCid = "remote-1")
-        assertEquals("2", result?.sdpMid)
+        assertNull(result?.sdpMid)
         assertEquals(2, result?.sdpMLineIndex)
         assertEquals(input.sdp, result?.sdp)
     }
 
     @Test
-    fun `synthesizes sdpMid from sdpMLineIndex when sdpMid is whitespace`() {
+    fun `normalizes whitespace sdpMid to null`() {
         val input = IceCandidate("  ", 0, "candidate:1 1 udp 2113937151 192.168.1.1 54321 typ host")
         val result = sanitizeIceCandidate(input, remoteCid = "remote-1")
-        assertEquals("0", result?.sdpMid)
+        assertNull(result?.sdpMid)
     }
 }

@@ -124,7 +124,7 @@ internal class PeerNegotiationEngine(
                 val candidateSdp = candidateJson.optString("candidate", "")
                 if (candidateSdp.isBlank()) return
                 val sdpMLineIndex = candidateJson.optInt("sdpMLineIndex", 0)
-                val sdpMid = candidateJson.optString("sdpMid").ifBlank { sdpMLineIndex.toString() }
+                val sdpMid = candidateJson.optString("sdpMid").takeIf { it.isNotBlank() }
                 val candidate = IceCandidate(
                     sdpMid,
                     sdpMLineIndex,

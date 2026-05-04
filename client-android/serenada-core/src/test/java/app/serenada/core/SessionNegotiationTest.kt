@@ -80,7 +80,7 @@ class SessionNegotiationTest {
     }
 
     @Test
-    fun `remote ICE candidate without sdpMid uses m-line index as safe mid`() {
+    fun `remote ICE candidate without sdpMid is forwarded with null mid so WebRTC uses m-line index`() {
         factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
 
         factory.simulateIceCandidateFromRemote(
@@ -93,7 +93,9 @@ class SessionNegotiationTest {
         val fakeSlot = factory.fakeMedia.fakeSlots["remote"]
         assertNotNull(fakeSlot)
         assertEquals(1, fakeSlot!!.addedIceCandidates.size)
-        assertEquals("1", fakeSlot.addedIceCandidates.first().sdpMid)
+        val added = fakeSlot.addedIceCandidates.first()
+        assertNull(added.sdpMid)
+        assertEquals(1, added.sdpMLineIndex)
     }
 
     @Test

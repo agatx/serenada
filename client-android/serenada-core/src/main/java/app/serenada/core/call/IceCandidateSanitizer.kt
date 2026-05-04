@@ -5,10 +5,10 @@ import app.serenada.core.SerenadaLogger
 import org.webrtc.IceCandidate
 
 /**
- * Drops blank SDP candidates and synthesizes `sdpMid` from `sdpMLineIndex` when
- * the remote omitted it. Native WebRTC rejects candidates with blank or
- * mismatched mid metadata, so we filter at the boundary before they reach the
- * peer connection (or the pending buffer).
+ * Drops blank-SDP candidates and normalizes blank `sdpMid` to null so native
+ * WebRTC falls back to `sdpMLineIndex`. Synthesizing a numeric mid from the
+ * m-line index would mismatch remote SDPs that use named mids (e.g. `audio`),
+ * so we preserve a missing mid rather than fabricate one.
  */
 internal fun sanitizeIceCandidate(
     candidate: IceCandidate,
@@ -21,6 +21,6 @@ internal fun sanitizeIceCandidate(
         return null
     }
     val sdpMid = candidate.sdpMid?.takeIf { it.isNotBlank() }
-    if (sdpMid != null) return candidate
-    return IceCandidate(candidate.sdpMLineIndex.toString(), candidate.sdpMLineIndex, candidateSdp)
+    if (sdpMid == candidate.sdpMid && candidateSdp == candidate.sdp) return candidate
+    return IceCandidate(sdpMid, candidate.sdpMLineIndex, candidateSdp)
 }

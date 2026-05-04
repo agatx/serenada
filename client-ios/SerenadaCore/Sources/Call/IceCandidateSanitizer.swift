@@ -1,9 +1,9 @@
 import Foundation
 
-/// Drops blank SDP candidates and synthesizes `sdpMid` from `sdpMLineIndex`
-/// when the remote omitted it. Native WebRTC rejects candidates with blank or
-/// mismatched mid metadata, so we filter at the boundary before they reach the
-/// peer connection (or the pending buffer).
+/// Drops blank-SDP candidates and normalizes blank `sdpMid` to nil so native
+/// WebRTC falls back to `sdpMLineIndex`. Synthesizing a numeric mid from the
+/// m-line index would mismatch remote SDPs that use named mids (e.g. `audio`),
+/// so we preserve a missing mid rather than fabricate one.
 internal func sanitizeIceCandidate(
     _ candidate: IceCandidatePayload,
     remoteCid: String,
@@ -20,7 +20,7 @@ internal func sanitizeIceCandidate(
         return candidate
     }
     return IceCandidatePayload(
-        sdpMid: String(candidate.sdpMLineIndex),
+        sdpMid: nil,
         sdpMLineIndex: candidate.sdpMLineIndex,
         candidate: candidate.candidate
     )

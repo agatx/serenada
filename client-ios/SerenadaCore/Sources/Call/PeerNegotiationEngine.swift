@@ -181,13 +181,8 @@ final class PeerNegotiationEngine {
                 return
             }
             let sdpMLineIndex = Int32(candidateObject["sdpMLineIndex"]?.intValue ?? 0)
-            let rawSdpMid = candidateObject["sdpMid"]?.stringValue
-            let sdpMid: String
-            if let mid = rawSdpMid?.trimmingCharacters(in: .whitespacesAndNewlines), !mid.isEmpty {
-                sdpMid = mid
-            } else {
-                sdpMid = String(sdpMLineIndex)
-            }
+            let trimmedMid = candidateObject["sdpMid"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sdpMid = trimmedMid.flatMap { $0.isEmpty ? nil : $0 }
             slot.addIceCandidate(
                 IceCandidatePayload(
                     sdpMid: sdpMid,

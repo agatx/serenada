@@ -133,7 +133,7 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertEqual(fakeSlot?.addedIceCandidates.first?.candidate, "candidate:test")
     }
 
-    func testRemoteIceCandidateWithoutSdpMidUsesMLineIndex() async throws {
+    func testRemoteIceCandidateWithoutSdpMidIsForwardedWithNilMid() async throws {
         await harness.advanceToInCallWithTurn(
             localCid: "local",
             remoteCid: "remote",
@@ -154,8 +154,9 @@ final class SessionNegotiationTests: XCTestCase {
             fakeSlot?.addedIceCandidates.count == 1
         }
 
-        XCTAssertEqual(fakeSlot?.addedIceCandidates.first?.sdpMid, "1",
-                       "Missing sdpMid should be synthesized from sdpMLineIndex")
+        XCTAssertNil(fakeSlot?.addedIceCandidates.first?.sdpMid,
+                     "Missing sdpMid should be preserved as nil so WebRTC uses sdpMLineIndex")
+        XCTAssertEqual(fakeSlot?.addedIceCandidates.first?.sdpMLineIndex, 1)
     }
 
     func testRemoteIceCandidateWithBlankSdpIsDropped() async throws {
