@@ -6,6 +6,8 @@ class FakeRtcPeerConnection {
     readonly initialConfiguration: RTCConfiguration;
     readonly configurationUpdates: RTCConfiguration[] = [];
     readonly addedIceCandidates: RTCIceCandidateInit[] = [];
+    readonly senders: FakeRtcRtpSender[] = [];
+    readonly transceivers: FakeRtcRtpTransceiver[] = [];
     signalingState: RTCSignalingState = 'stable';
     remoteDescription: RTCSessionDescriptionInit | null = null;
     localDescription: RTCSessionDescriptionInit | null = null;
@@ -22,8 +24,22 @@ class FakeRtcPeerConnection {
         this.initialConfiguration = configuration;
     }
 
-    addTrack(): void {}
+    addTrack(track: MediaStreamTrack): RTCRtpSender {
+        const sender = new FakeRtcRtpSender(track);
+        this.senders.push(sender);
+        this.transceivers.push(new FakeRtcRtpTransceiver(track.kind as 'audio' | 'video', sender, 'sendrecv'));
+        return sender as unknown as RTCRtpSender;
+    }
+    addTransceiver(kind: 'audio' | 'video', init?: RTCRtpTransceiverInit): RTCRtpTransceiver {
+        const sender = new FakeRtcRtpSender(null);
+        const transceiver = new FakeRtcRtpTransceiver(kind, sender, init?.direction ?? 'sendrecv');
+        this.senders.push(sender);
+        this.transceivers.push(transceiver);
+        return transceiver as unknown as RTCRtpTransceiver;
+    }
     close(): void {}
+    getSenders(): RTCRtpSender[] { return this.senders as unknown as RTCRtpSender[]; }
+    getTransceivers(): RTCRtpTransceiver[] { return this.transceivers as unknown as RTCRtpTransceiver[]; }
     async createOffer(): Promise<RTCSessionDescriptionInit> {
         this.createOfferCalls += 1;
         return {
@@ -61,11 +77,82 @@ class FakeRtcPeerConnection {
     }
 }
 
+class FakeRtcRtpSender {
+    readonly replaceTrackCalls: Array<MediaStreamTrack | null> = [];
+
+    constructor(public track: MediaStreamTrack | null) {}
+
+    async replaceTrack(track: MediaStreamTrack | null): Promise<void> {
+        this.track = track;
+        this.replaceTrackCalls.push(track);
+    }
+}
+
+class FakeRtcRtpTransceiver {
+    readonly receiver: RTCRtpReceiver;
+
+    constructor(
+        kind: 'audio' | 'video',
+        public sender: FakeRtcRtpSender,
+        public direction: RTCRtpTransceiverDirection,
+    ) {
+        this.receiver = {
+            track: createMediaTrack(kind),
+        } as RTCRtpReceiver;
+    }
+}
+
+class FakeMediaStream {
+    private tracks: MediaStreamTrack[];
+
+    constructor(tracks: MediaStreamTrack[] = []) {
+        this.tracks = [...tracks];
+    }
+
+    addTrack(track: MediaStreamTrack): void {
+        this.tracks.push(track);
+    }
+
+    getAudioTracks(): MediaStreamTrack[] {
+        return this.tracks.filter(track => track.kind === 'audio');
+    }
+
+    getVideoTracks(): MediaStreamTrack[] {
+        return this.tracks.filter(track => track.kind === 'video');
+    }
+
+    getTracks(): MediaStreamTrack[] {
+        return [...this.tracks];
+    }
+}
+
+let trackId = 0;
+
+function createMediaTrack(kind: 'audio' | 'video'): MediaStreamTrack {
+    trackId += 1;
+    return {
+        id: `${kind}-${trackId}`,
+        kind,
+        enabled: true,
+        muted: false,
+        readyState: 'live',
+        stop() {},
+    } as MediaStreamTrack;
+}
+
+function createMediaStream(options: { audio?: boolean; video?: boolean } = { audio: true }): MediaStream {
+    const tracks: MediaStreamTrack[] = [];
+    if (options.audio !== false) tracks.push(createMediaTrack('audio'));
+    if (options.video) tracks.push(createMediaTrack('video'));
+    return new FakeMediaStream(tracks) as unknown as MediaStream;
+}
+
 describe('MediaEngine', () => {
     const originalNavigator = globalThis.navigator;
     const originalDocument = globalThis.document;
     const originalWindow = (globalThis as Record<string, unknown>).window;
     const originalRtcPeerConnection = (globalThis as Record<string, unknown>).RTCPeerConnection;
+    const originalMediaStream = (globalThis as Record<string, unknown>).MediaStream;
 
     beforeEach(() => {
         Object.defineProperty(globalThis, 'navigator', {
@@ -85,6 +172,7 @@ describe('MediaEngine', () => {
             clearInterval: (...args: Parameters<typeof globalThis.clearInterval>) => globalThis.clearInterval(...args),
         };
         (globalThis as Record<string, unknown>).RTCPeerConnection = FakeRtcPeerConnection;
+        (globalThis as Record<string, unknown>).MediaStream = FakeMediaStream;
     });
 
     afterEach(() => {
@@ -99,6 +187,7 @@ describe('MediaEngine', () => {
         });
         (globalThis as Record<string, unknown>).window = originalWindow;
         (globalThis as Record<string, unknown>).RTCPeerConnection = originalRtcPeerConnection;
+        (globalThis as Record<string, unknown>).MediaStream = originalMediaStream;
     });
 
     it('applies refreshed ICE servers to existing and future peers', () => {
@@ -145,11 +234,87 @@ describe('MediaEngine', () => {
         expect(peer?.configurationUpdates.at(-1)?.iceServers).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
     });
 
+    it('starts with audio-only media when initial video is disabled', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream());
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+
+        await engine.startLocalMedia();
+
+        expect(getUserMedia).toHaveBeenCalledWith({
+            video: false,
+            audio: expect.objectContaining({
+                echoCancellation: { ideal: true },
+            }),
+        });
+    });
+
+    it('uses the reserved video transceiver when video is enabled after an audio-only start', async () => {
+        const getUserMedia = vi.fn().mockImplementation(async (constraints: MediaStreamConstraints) => {
+            if (constraints.video) {
+                return createMediaStream({ audio: false, video: true });
+            }
+            return createMediaStream();
+        });
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({ initialVideoEnabled: false }, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await engine.startLocalMedia();
+
+        await vi.waitFor(() => {
+            expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(1);
+        });
+        const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+        expect(peer?.senders.map(sender => sender.track?.kind)).toEqual(['audio', undefined]);
+        expect(peer?.transceivers.map(transceiver => `${transceiver.receiver.track.kind}:${transceiver.direction}`)).toEqual(['audio:sendrecv', 'video:sendrecv']);
+        if (peer) {
+            peer.remoteDescription = { type: 'answer', sdp: 'fake-answer-sdp' };
+            peer.signalingState = 'stable';
+        }
+
+        await engine.reacquireVideoTrack();
+
+        expect(getUserMedia).toHaveBeenLastCalledWith({
+            video: { facingMode: 'user' },
+            audio: false,
+        });
+        expect(peer?.senders.map(sender => sender.track?.kind)).toEqual(['audio', 'video']);
+        expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(1);
+    });
+
     it('retries non-host fallback offers after the offer timeout elapses', async () => {
         vi.useFakeTimers();
 
         const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
-        const engine = new MediaEngine({}, (type, payload, to) => {
+        const engine = new MediaEngine({ initialVideoEnabled: false }, (type, payload, to) => {
             sentMessages.push({ type, payload, to });
         });
 
@@ -266,15 +431,28 @@ describe('MediaEngine', () => {
     });
 
     it('uses direct string ordering for offer ownership', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream());
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
         const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
         const localeCompareSpy = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
             throw new Error('should not be called');
         });
-        const engine = new MediaEngine({}, (type, payload, to) => {
+        const engine = new MediaEngine({ initialVideoEnabled: false }, (type, payload, to) => {
             sentMessages.push({ type, payload, to });
         });
 
         engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
         engine.updateRoomState({
             hostCid: 'alpha',
             participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
