@@ -51,3 +51,5 @@ client-ios/Resources/GoogleService-Info.plist
 /client/packages/react-ui/docs/
 /client-android/serenada-webrtc/build
 /.autoplanner
+/client-ios/SerenadaCore/.swiftpm
+/client-ios/SerenadaCallUI/.swiftpm
