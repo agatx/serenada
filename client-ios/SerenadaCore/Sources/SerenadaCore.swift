@@ -38,7 +38,7 @@ public struct CreateRoomResult {
 @MainActor
 public final class SerenadaCore {
     /// SDK version string.
-    public static let version = "0.6.9"
+    public static let version = "0.6.10"
 
     /// SDK configuration.
     public let config: SerenadaConfig

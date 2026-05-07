@@ -4,6 +4,42 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.10] — 2026-05-05
+
+### Added
+- React UI: `SerenadaCallFlowConfig.requestPermissions` lets host apps supply
+  their own permission UI (custom modals, OS-style prompts, deep links into
+  Settings). When unset, the SDK falls back to the built-in
+  `SerenadaPermissions.request` flow.
+- React UI: the in-call video toggle now requests camera permission on demand.
+  Users who joined audio-only (or denied camera at join) can re-enable video
+  later in the call without leaving and rejoining.
+- Web: the SDK reserves a video transceiver on audio-only calls so desktop
+  peers can renegotiate video later in the same session without forcing a
+  full ICE restart.
+
+### Changed
+- Web: call-flow avatar sizes shrunk — the large-view avatar is reduced by
+  20% and the compact (PiP) avatar is now exactly half the size of the large
+  one. Initials and font sizes scale with the circle so they stay centered.
+- Web: in 1:1 calls the remote camera-off overlay now switches to compact
+  styling whenever it lives in the PiP slot (after a local-large swap), and
+  the camera-off label scales down with the avatar instead of dominating the
+  small tile.
+
+### Fixed
+- Android, iOS: ICE candidate handling hardened. Inbound candidates with
+  blank SDP are dropped at the sanitizer boundary, missing `sdpMid` is
+  preserved as null (so WebRTC falls back to `sdpMLineIndex` natively
+  instead of mismatching named mids like `audio`/`video`), and the same
+  sanitizer runs on the buffered-candidate path. Direct unit tests cover
+  the sanitizer on both platforms.
+- Web: the 1:1 waiting overlay (QR + share-link) and the camera-off avatar
+  no longer stack on top of each other when a remote participant is in the
+  room with `videoEnabled=false` but their media stream hasn't arrived yet.
+  The avatar is suppressed while the waiting overlay is showing and takes
+  over once the stream arrives.
+
 ## [0.6.9] — 2026-05-02
 
 ### Added
