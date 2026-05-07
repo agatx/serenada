@@ -8,13 +8,6 @@
 
 ## Installation
 
-Configure npm to resolve the `@agatx` scope from GitHub Packages and provide a GitHub token with `read:packages` access:
-
-```ini
-@agatx:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
 ```bash
 npm install @agatx/serenada-core@0.6.10 @agatx/serenada-react-ui@0.6.10 lucide-react
 ```

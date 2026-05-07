@@ -36,4 +36,6 @@ This script checks that all SDK packages declare the same version.
 
 ## Publishing Web Packages
 
-Web packages publish to GitHub Packages under the `@agatx` scope. Push a `web-release-<version>` tag to publish the current package versions automatically, or run the `Publish web packages` workflow manually. Manual runs default to `npm publish --dry-run`; set `dry_run` to `false` to publish.
+Web packages publish to the public npm registry under the `@agatx` scope. Push a `web-release-<version>` tag to publish the current package versions automatically, or run the `Publish web packages` workflow manually. Manual runs default to `npm publish --dry-run`; set `dry_run` to `false` to publish.
+
+The GitHub Actions workflow uses npm trusted publishing via GitHub Actions OIDC. Each package must have a trusted publisher configured for `agatx/serenada` with the workflow filename `publish-web-packages.yml`. Use `npm publish --access public` for manual publishes.
