@@ -3,6 +3,10 @@
   "compilerOptions": {
     "noEmit": false,
     "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@agatx/serenada-core": ["../core/dist/index.d.ts"]
+    },
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true

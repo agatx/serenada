@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AudioLevelMonitor } from '@serenada/core';
+import { AudioLevelMonitor } from '@agatx/serenada-core';
 
 let sharedAudioContext: AudioContext | null = null;
 

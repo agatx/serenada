@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
-import { SerenadaCallFlow } from '@serenada/react-ui';
-import type { SerenadaString } from '@serenada/react-ui';
-import { SerenadaCore, ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS } from '@serenada/core';
-import type { CallState, SerenadaSessionHandle } from '@serenada/core';
+import { SerenadaCallFlow } from '@agatx/serenada-react-ui';
+import type { SerenadaString } from '@agatx/serenada-react-ui';
+import { SerenadaCore, ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS } from '@agatx/serenada-core';
+import type { CallState, SerenadaSessionHandle } from '@agatx/serenada-core';
 import { useToast } from '../contexts/ToastContext';
 import { saveCall } from '../utils/callHistory';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';

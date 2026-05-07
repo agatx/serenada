@@ -9,8 +9,8 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@serenada/core": ["../../client/packages/core/src/index.ts"],
-      "@serenada/react-ui": ["../../client/packages/react-ui/src/index.ts"]
+      "@agatx/serenada-core": ["../../client/packages/core/src/index.ts"],
+      "@agatx/serenada-react-ui": ["../../client/packages/react-ui/src/index.ts"]
     },
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

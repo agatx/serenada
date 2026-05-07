@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { SerenadaSessionHandle, CallStats, MediaCapability } from '@serenada/core';
+import type { SerenadaSessionHandle, CallStats, MediaCapability } from '@agatx/serenada-core';
 
 // ---------------------------------------------------------------------------
 // Avatar provider (host-supplied)

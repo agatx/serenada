@@ -14,8 +14,8 @@ Serenada SDKs follow [Semantic Versioning 2.0.0](https://semver.org/).
 
 ## Version Synchronization
 All SDK packages share the same version number and are released together:
-- `@serenada/core` (npm)
-- `@serenada/react-ui` (npm)
+- `@agatx/serenada-core` (npm)
+- `@agatx/serenada-react-ui` (npm)
 - `serenada-core` (Maven/AAR)
 - `serenada-call-ui` (Maven/AAR)
 - `SerenadaCore` (SPM)
@@ -33,3 +33,7 @@ node scripts/check-version-parity.mjs
 ```
 
 This script checks that all SDK packages declare the same version.
+
+## Publishing Web Packages
+
+Web packages publish to GitHub Packages under the `@agatx` scope. Push a `web-release-<version>` tag to publish the current package versions automatically, or run the `Publish web packages` workflow manually. Manual runs default to `npm publish --dry-run`; set `dry_run` to `false` to publish.

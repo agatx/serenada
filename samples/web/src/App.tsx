@@ -6,8 +6,8 @@ import {
     type JoinOptions,
     type PeerMessage,
     type SerenadaSessionHandle,
-} from '@serenada/core'
-import { SerenadaCallFlow } from '@serenada/react-ui'
+} from '@agatx/serenada-core'
+import { SerenadaCallFlow } from '@agatx/serenada-react-ui'
 
 const builtInSerenada = createSerenadaCore({ serverHost: 'serenada.app' })
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Serenada is a privacy-focused 1:1 WebRTC video calling application. No accounts, no tracking — just instant peer-to-peer video calls. The architecture follows a **headless SDK + optional UI** pattern across all platforms:
 
-- **Web**: `@serenada/core` (vanilla TS) + `@serenada/react-ui` (React components) + thin app shell
+- **Web**: `@agatx/serenada-core` (vanilla TS) + `@agatx/serenada-react-ui` (React components) + thin app shell
 - **Android**: `serenada-core` (Kotlin library) + `serenada-call-ui` (Compose) + sample app
 - **iOS**: `SerenadaCore` (SPM package) + `SerenadaCallUI` (SPM/SwiftUI) + host app
 - **Server**: Go signaling server

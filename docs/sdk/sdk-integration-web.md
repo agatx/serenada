@@ -3,18 +3,25 @@
 ## Requirements
 
 - Node.js 18+
-- React 18 or 19 (for `@serenada/react-ui`)
+- React 18 or 19 (for `@agatx/serenada-react-ui`)
 - TypeScript 5+ (recommended)
 
 ## Installation
 
-```bash
-npm install @serenada/core@0.6.10 @serenada/react-ui@0.6.10 lucide-react
+Configure npm to resolve the `@agatx` scope from GitHub Packages and provide a GitHub token with `read:packages` access:
+
+```ini
+@agatx:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
 
-`@serenada/core` is framework-agnostic vanilla TypeScript. `@serenada/react-ui` provides ready-made React components.
+```bash
+npm install @agatx/serenada-core@0.6.10 @agatx/serenada-react-ui@0.6.10 lucide-react
+```
 
-`react`, `react-dom`, and `lucide-react` are peer dependencies of `@serenada/react-ui`.
+`@agatx/serenada-core` is framework-agnostic vanilla TypeScript. `@agatx/serenada-react-ui` provides ready-made React components.
+
+`react`, `react-dom`, and `lucide-react` are peer dependencies of `@agatx/serenada-react-ui`.
 
 When you construct `SerenadaCore` directly, provide exactly one of `serverHost` or `signalingProvider`.
 
@@ -23,7 +30,7 @@ For local development within the Serenada monorepo, both packages are configured
 ## Quick Start — URL-First (Simplest)
 
 ```tsx
-import { SerenadaCallFlow } from '@serenada/react-ui'
+import { SerenadaCallFlow } from '@agatx/serenada-react-ui'
 
 function CallPage() {
     const { roomId } = useParams()
@@ -43,8 +50,8 @@ That's it. `SerenadaCallFlow` handles permissions, joining, the in-call UI, and 
 Create a session before rendering UI to observe state early:
 
 ```tsx
-import { createSerenadaCore } from '@serenada/core'
-import { SerenadaCallFlow } from '@serenada/react-ui'
+import { createSerenadaCore } from '@agatx/serenada-core'
+import { SerenadaCallFlow } from '@agatx/serenada-react-ui'
 
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 
@@ -85,8 +92,8 @@ Provider mode is session-first: create a core with `signalingProvider`, then joi
 import {
     SignalingProviderEmitter,
     createSerenadaCore,
-} from '@serenada/core'
-import { SerenadaCallFlow } from '@serenada/react-ui'
+} from '@agatx/serenada-core'
+import { SerenadaCallFlow } from '@agatx/serenada-react-ui'
 
 class DemoProvider extends SignalingProviderEmitter {
     connect() { this.emit('connected', { transport: 'mock' }) }
@@ -115,10 +122,10 @@ const session = core.join({ roomId: 'group-123' })
 
 ## Core-Only Integration (No UI)
 
-Use `@serenada/core` directly for a fully custom UI:
+Use `@agatx/serenada-core` directly for a fully custom UI:
 
 ```typescript
-import { createSerenadaCore } from '@serenada/core'
+import { createSerenadaCore } from '@agatx/serenada-core'
 
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 const session = serenada.join(callUrl)
@@ -163,7 +170,7 @@ If you use `SerenadaCallFlow` and also need peer-message hooks, create the sessi
 For custom React UIs, use the provided hooks:
 
 ```tsx
-import { useSerenadaSession, useCallState } from '@serenada/react-ui'
+import { useSerenadaSession, useCallState } from '@agatx/serenada-react-ui'
 
 function CustomCallUI({ url }: { url: string }) {
     const { session } = useSerenadaSession({
@@ -185,7 +192,7 @@ In URL-first mode, `SerenadaCallFlow` automatically prompts for camera/microphon
 In session-first or core-only mode, the host app owns the permission prompt. Set `session.onPermissionsRequired` before rendering:
 
 ```typescript
-import { SerenadaPermissions } from '@serenada/react-ui'
+import { SerenadaPermissions } from '@agatx/serenada-react-ui'
 
 session.onPermissionsRequired = async (permissions) => {
     const granted = await SerenadaPermissions.request(permissions)
@@ -217,7 +224,7 @@ Use `waitingActions` to render host-app-specific actions below the built-in QR/s
 For home screens or recent-room presence indicators, use `RoomWatcher`:
 
 ```typescript
-import { RoomWatcher, getRoomStatusState } from '@serenada/core'
+import { RoomWatcher, getRoomStatusState } from '@agatx/serenada-core'
 
 const watcher = new RoomWatcher({
     serverHost: 'serenada.app',
@@ -243,7 +250,7 @@ watcher.stop()
 Run device and network checks before a call:
 
 ```typescript
-import { createSerenadaDiagnostics } from '@serenada/core'
+import { createSerenadaDiagnostics } from '@agatx/serenada-core'
 
 const diagnostics = createSerenadaDiagnostics({ serverHost: 'serenada.app' })
 const report = await diagnostics.runAll()  // never prompts
@@ -314,7 +321,7 @@ await diagnostics.validateServerHost()
 By default, the SDK is silent — no log output. To enable logging, pass a `logger` in the config:
 
 ```typescript
-import { createSerenadaCore, ConsoleSerenadaLogger } from '@serenada/core'
+import { createSerenadaCore, ConsoleSerenadaLogger } from '@agatx/serenada-core'
 
 const serenada = createSerenadaCore({
     serverHost: 'serenada.app',
@@ -325,7 +332,7 @@ const serenada = createSerenadaCore({
 `ConsoleSerenadaLogger` is a built-in convenience logger. For production apps, implement the `SerenadaLogger` interface to route SDK logs to your own system:
 
 ```typescript
-import type { SerenadaLogLevel, SerenadaLogger } from '@serenada/core'
+import type { SerenadaLogLevel, SerenadaLogger } from '@agatx/serenada-core'
 
 const logger: SerenadaLogger = {
     log(level: SerenadaLogLevel, tag: string, message: string) {
@@ -362,4 +369,4 @@ See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` inte
 ## Next Steps
 
 - [Feature Toggles, String Overrides & Theming](sdk-customization.md)
-- [API Reference](https://agatx.github.io/serenada/web/core/) — also available for [@serenada/react-ui](https://agatx.github.io/serenada/web/react-ui/)
+- [API Reference](https://agatx.github.io/serenada/web/core/) — also available for [@agatx/serenada-react-ui](https://agatx.github.io/serenada/web/react-ui/)

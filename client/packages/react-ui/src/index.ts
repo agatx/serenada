@@ -1,7 +1,7 @@
 /**
- * @serenada/react-ui — React bindings and pre-built call UI components.
+ * @agatx/serenada-react-ui — React bindings and pre-built call UI components.
  */
-export { SERENADA_CORE_VERSION as SERENADA_UI_VERSION } from '@serenada/core';
+export { SERENADA_CORE_VERSION as SERENADA_UI_VERSION } from '@agatx/serenada-core';
 
 // React hooks
 export { useSerenadaSession } from './hooks/useSerenadaSession.js';

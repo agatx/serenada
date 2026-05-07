@@ -18,17 +18,17 @@ const root = resolve(__dirname, '..');
 
 const sources = [
     {
-        name: '@serenada/core (TS constant)',
+        name: '@agatx/serenada-core (TS constant)',
         file: 'client/packages/core/src/index.ts',
         regex: /SERENADA_CORE_VERSION\s*=\s*'([^']+)'/,
     },
     {
-        name: '@serenada/core (package.json)',
+        name: '@agatx/serenada-core (package.json)',
         file: 'client/packages/core/package.json',
         regex: /"version"\s*:\s*"([^"]+)"/,
     },
     {
-        name: '@serenada/react-ui (package.json)',
+        name: '@agatx/serenada-react-ui (package.json)',
         file: 'client/packages/react-ui/package.json',
         regex: /"version"\s*:\s*"([^"]+)"/,
     },
@@ -53,9 +53,9 @@ const sources = [
         regex: /static\s+let\s+version\s*=\s*"([^"]+)"/,
     },
     {
-        name: '@serenada/react-ui pinned @serenada/core dep',
+        name: '@agatx/serenada-react-ui pinned @agatx/serenada-core dep',
         file: 'client/packages/react-ui/package.json',
-        regex: /"@serenada\/core"\s*:\s*"\^?([^"]+)"/,
+        regex: /"@agatx\/serenada-core"\s*:\s*"\^?([^"]+)"/,
     },
 ];
 

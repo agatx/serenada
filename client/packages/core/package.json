@@ -1,5 +1,5 @@
 {
-  "name": "@serenada/core",
+  "name": "@agatx/serenada-core",
   "version": "0.6.10",
   "description": "Headless WebRTC call engine for 1:1 and mesh multi-party video calls — vanilla TypeScript, no React dependency",
   "type": "module",
@@ -18,14 +18,15 @@
   ],
   "scripts": {
     "build": "tsc",
-    "build:publish": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build:publish": "npm run clean && tsc -p tsconfig.build.json",
     "lint": "eslint src/",
     "test": "vitest run test",
     "prepublishOnly": "npm run build:publish"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/agatx/serenada.git",
+    "url": "git+https://github.com/agatx/serenada.git",
     "directory": "client/packages/core"
   },
   "keywords": [
@@ -36,6 +37,6 @@
   ],
   "license": "MIT",
   "publishConfig": {
-    "access": "public"
+    "registry": "https://npm.pkg.github.com"
   }
 }

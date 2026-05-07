@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bookmark, MoreVertical, Edit2, Trash2, Share2 } from 'lucide-react';
-import { createRoomId, getRoomStatusState, type RoomStatuses } from '@serenada/core';
+import { createRoomId, getRoomStatusState, type RoomStatuses } from '@agatx/serenada-core';
 import type { SaveRoomResult, SavedRoom } from '../utils/savedRooms';
 import { removeRoom, saveRoom } from '../utils/savedRooms';
 import { useTranslation } from 'react-i18next';

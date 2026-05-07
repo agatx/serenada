@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { SerenadaConfig, CallState, SerenadaSessionHandle } from '@serenada/core';
-import { SerenadaCore } from '@serenada/core';
+import type { SerenadaConfig, CallState, SerenadaSessionHandle } from '@agatx/serenada-core';
+import { SerenadaCore } from '@agatx/serenada-core';
 import { useCallState } from './useCallState.js';
 import { EMPTY_STREAMS } from './constants.js';
 

@@ -1,6 +1,6 @@
 import { useSyncExternalStore, useCallback } from 'react';
-import type { CallState } from '@serenada/core';
-import type { SerenadaSessionHandle } from '@serenada/core';
+import type { CallState } from '@agatx/serenada-core';
+import type { SerenadaSessionHandle } from '@agatx/serenada-core';
 import { IDLE_STATE } from './constants.js';
 
 export function useCallState(session: SerenadaSessionHandle | null): CallState {

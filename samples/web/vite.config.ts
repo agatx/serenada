@@ -6,8 +6,8 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@serenada/core': pathResolve(__dirname, '../../client/packages/core/src/index.ts'),
-      '@serenada/react-ui': pathResolve(__dirname, '../../client/packages/react-ui/src/index.ts'),
+      '@agatx/serenada-core': pathResolve(__dirname, '../../client/packages/core/src/index.ts'),
+      '@agatx/serenada-react-ui': pathResolve(__dirname, '../../client/packages/react-ui/src/index.ts'),
     },
   },
   server: {

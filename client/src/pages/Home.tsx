@@ -8,7 +8,7 @@ import type { RecentCall } from '../utils/callHistory';
 import SavedRooms from '../components/SavedRooms';
 import { getSavedRooms } from '../utils/savedRooms';
 import type { SavedRoom } from '../utils/savedRooms';
-import { createRoomId } from '@serenada/core';
+import { createRoomId } from '@agatx/serenada-core';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../contexts/ToastContext';
 import { useRoomStatusWatcher } from '../hooks/useRoomStatusWatcher';

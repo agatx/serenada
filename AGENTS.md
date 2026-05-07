@@ -16,7 +16,7 @@ All client platforms use a **headless SDK + optional UI** pattern:
 - **Server**: `server/` (Go signaling server)
 - **Samples**: `samples/ios/`, `samples/android/`, `samples/web/` (minimal integration examples)
 
-SDK packages must not depend on UI frameworks (no SwiftUI in SerenadaCore, no React in @serenada/core, no Compose in serenada-core).
+SDK packages must not depend on UI frameworks (no SwiftUI in SerenadaCore, no React in @agatx/serenada-core, no Compose in serenada-core).
 
 ## Code
 - Follow existing style and patterns

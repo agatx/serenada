@@ -41,11 +41,11 @@ jobs:
         working-directory: client
         run: npm ci
 
-      - name: Generate @serenada/core docs
+      - name: Generate @agatx/serenada-core docs
         working-directory: client
         run: npx typedoc --options packages/core/typedoc.json
 
-      - name: Generate @serenada/react-ui docs
+      - name: Generate @agatx/serenada-react-ui docs
         working-directory: client
         run: npx typedoc --options packages/react-ui/typedoc.json
 
@@ -225,8 +225,8 @@ jobs:
             <div class="platform">
               <h2>Web (TypeScript)</h2>
               <ul>
-                <li><a href="web/core/">@serenada/core</a> <span class="desc">— Headless WebRTC call engine</span></li>
-                <li><a href="web/react-ui/">@serenada/react-ui</a> <span class="desc">— React UI components</span></li>
+                <li><a href="web/core/">@agatx/serenada-core</a> <span class="desc">— Headless WebRTC call engine</span></li>
+                <li><a href="web/react-ui/">@agatx/serenada-react-ui</a> <span class="desc">— React UI components</span></li>
               </ul>
             </div>
 

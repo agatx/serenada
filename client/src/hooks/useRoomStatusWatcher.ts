@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RoomWatcher, parseTransportOrder, type RoomWatcherState } from '@serenada/core';
+import { RoomWatcher, parseTransportOrder, type RoomWatcherState } from '@agatx/serenada-core';
 import { getConfiguredServerHost } from '../utils/serverHost';
 
 const readWatcherState = (watcher: RoomWatcher): RoomWatcherState => ({

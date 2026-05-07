@@ -1,4 +1,4 @@
-import type { CallState } from '@serenada/core';
+import type { CallState } from '@agatx/serenada-core';
 
 export const IDLE_STATE: CallState = {
     phase: 'idle',

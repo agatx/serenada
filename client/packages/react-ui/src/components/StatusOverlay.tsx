@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import type { ConnectionStatus } from '@serenada/core';
+import type { ConnectionStatus } from '@agatx/serenada-core';
 import type { SerenadaString } from '../types.js';
 import { resolveString } from '../types.js';
 

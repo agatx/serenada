@@ -7,7 +7,7 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@serenada/core": ["../core/src/index.ts"]
+      "@agatx/serenada-core": ["../core/src/index.ts"]
     },
     "strict": true,
     "noEmit": true,

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { CallStats } from '@serenada/core';
+import type { CallStats } from '@agatx/serenada-core';
 import type { SerenadaString } from '../types.js';
 import { resolveString } from '../types.js';
 

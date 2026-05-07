@@ -9,8 +9,8 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@serenada/core": ["packages/core/src/index.ts"],
-      "@serenada/react-ui": ["packages/react-ui/src/index.ts"]
+      "@agatx/serenada-core": ["packages/core/src/index.ts"],
+      "@agatx/serenada-react-ui": ["packages/react-ui/src/index.ts"]
     },
 
     /* Bundler mode */

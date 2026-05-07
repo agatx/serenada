@@ -1,4 +1,4 @@
-import { resolveServerBaseUrl, resolveServerUrls as resolveSdkServerUrls } from '@serenada/core';
+import { resolveServerBaseUrl, resolveServerUrls as resolveSdkServerUrls } from '@agatx/serenada-core';
 
 export const getConfiguredServerHost = (): string => {
     const wsUrl = import.meta.env.VITE_WS_URL;

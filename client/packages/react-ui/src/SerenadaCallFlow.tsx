@@ -26,7 +26,7 @@ import {
     type LayoutResult,
     type MediaCapability,
     type SerenadaSessionHandle,
-} from '@serenada/core';
+} from '@agatx/serenada-core';
 import { AudioActivityIndicator } from './components/AudioActivityIndicator.js';
 import { DebugPanel } from './components/DebugPanel.js';
 import { RemoteAvatar } from './components/RemoteAvatar.js';

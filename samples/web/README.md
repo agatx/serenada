@@ -9,7 +9,7 @@ Minimal web host app demonstrating Serenada SDK integration with React.
 - Starts a custom-provider demo backed by an in-memory `SignalingProvider`
 - Shows provider-mode incremental `peerJoined` events plus `onPeerMessage()` delivery without Serenada transport
 - Runs as a standalone Vite app inside this repository
-- Resolves `@serenada/core` and `@serenada/react-ui` directly from local source in `client/packages/`
+- Resolves `@agatx/serenada-core` and `@agatx/serenada-react-ui` directly from local source in `client/packages/`
 
 ## Run in this repo
 
@@ -33,14 +33,14 @@ npm run build
 If you want to copy the sample into another project instead of using the repo-local package:
 
 ```bash
-npm install @serenada/core @serenada/react-ui lucide-react react react-dom react-qr-code
+npm install @agatx/serenada-core @agatx/serenada-react-ui lucide-react react react-dom react-qr-code
 ```
 
 ## Integration pattern
 
 ```tsx
-import { createSerenadaCore } from '@serenada/core'
-import { SerenadaCallFlow } from '@serenada/react-ui'
+import { createSerenadaCore } from '@agatx/serenada-core'
+import { SerenadaCallFlow } from '@agatx/serenada-react-ui'
 
 // 1. Initialize core
 const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
@@ -62,7 +62,7 @@ Provider mode uses the same SDK package with an injected provider instead of `se
 import {
   SignalingProviderEmitter,
   createSerenadaCore,
-} from '@serenada/core'
+} from '@agatx/serenada-core'
 
 class DemoProvider extends SignalingProviderEmitter {
   connect() { this.emit('connected', { transport: 'mock' }) }
