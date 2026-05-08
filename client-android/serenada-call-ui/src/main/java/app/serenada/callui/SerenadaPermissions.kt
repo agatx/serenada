@@ -12,8 +12,8 @@ object SerenadaPermissions {
         Manifest.permission.RECORD_AUDIO
     )
 
-    fun areGranted(activity: Activity): Boolean {
-        return requiredPermissions.all {
+    fun areGranted(activity: Activity, permissions: Array<String> = requiredPermissions): Boolean {
+        return permissions.all {
             ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED
         }
     }

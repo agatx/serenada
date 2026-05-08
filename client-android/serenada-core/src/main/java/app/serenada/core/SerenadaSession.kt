@@ -684,7 +684,12 @@ class SerenadaSession internal constructor(
     fun toggleVideo() {
         assertMainThread()
         if (!videoCaptureSupported) return
-        userPreferredVideoEnabled = !_state.value.localVideoEnabled
+        val requestedEnabled = !_state.value.localVideoEnabled
+        if (requestedEnabled && !hasCameraPermission() && !_diagnostics.value.isScreenSharing) {
+            requestPermissions(listOf(MediaCapability.CAMERA))
+            return
+        }
+        userPreferredVideoEnabled = requestedEnabled
         applyLocalVideoPreference()
         broadcastLocalMediaState()
     }
@@ -715,7 +720,10 @@ class SerenadaSession internal constructor(
     fun startScreenShare(intent: Intent) {
         assertMainThread()
         if (_diagnostics.value.isScreenSharing) return
+        val wasVideoPreferred = userPreferredVideoEnabled
+        userPreferredVideoEnabled = true
         if (!webRtcEngine.startScreenShare(intent)) {
+            userPreferredVideoEnabled = wasVideoPreferred
             logger?.log(SerenadaLogLevel.WARNING, "Session", "Failed to start screen sharing")
             return
         }
@@ -941,7 +949,7 @@ class SerenadaSession internal constructor(
 
         acquirePerformanceLocks()
         callAudioSessionController.activate()
-        webRtcEngine.startLocalMedia()
+        webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
 
         if (!config.defaultAudioEnabled) webRtcEngine.toggleAudio(false)
         applyLocalVideoPreference()
@@ -953,11 +961,7 @@ class SerenadaSession internal constructor(
     internal fun startWithPermissionCheck() {
         assertMainThread()
         awaitingPermissions = true
-        val permissions = if (videoCaptureSupported) {
-            listOf(MediaCapability.CAMERA, MediaCapability.MICROPHONE)
-        } else {
-            listOf(MediaCapability.MICROPHONE)
-        }
+        val permissions = requiredPermissionsForJoin()
         updateState(
             _state.value.copy(
                 phase = CallPhase.AwaitingPermissions,
@@ -965,10 +969,7 @@ class SerenadaSession internal constructor(
                 requiredPermissions = permissions,
             )
         )
-        handler.post {
-            onPermissionsRequired?.invoke(permissions)
-                ?: delegate?.invoke()?.onPermissionsRequired(this, permissions)
-        }
+        requestPermissions(permissions)
     }
 
     // --- Internal: WebRTC Engine ---
@@ -1608,13 +1609,34 @@ class SerenadaSession internal constructor(
     }
 
     private fun hasRequiredPermissions(): Boolean {
-        val permissions = if (videoCaptureSupported) {
-            REQUIRED_ANDROID_PERMISSIONS
-        } else {
-            AUDIO_ONLY_REQUIRED_PERMISSIONS
-        }
-        return permissions.all { permission ->
+        return androidPermissionsFor(requiredPermissionsForJoin()).all { permission ->
             appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun hasCameraPermission(): Boolean =
+        appContext.checkSelfPermission(android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun requiredPermissionsForJoin(): List<MediaCapability> {
+        val permissions = mutableListOf(MediaCapability.MICROPHONE)
+        if (videoCaptureSupported && userPreferredVideoEnabled) {
+            permissions.add(MediaCapability.CAMERA)
+        }
+        return permissions
+    }
+
+    private fun androidPermissionsFor(capabilities: List<MediaCapability>): List<String> =
+        capabilities.map { capability ->
+            when (capability) {
+                MediaCapability.CAMERA -> android.Manifest.permission.CAMERA
+                MediaCapability.MICROPHONE -> android.Manifest.permission.RECORD_AUDIO
+            }
+        }
+
+    private fun requestPermissions(permissions: List<MediaCapability>) {
+        handler.post {
+            onPermissionsRequired?.invoke(permissions)
+                ?: delegate?.invoke()?.onPermissionsRequired(this, permissions)
         }
     }
 
@@ -1630,12 +1652,5 @@ class SerenadaSession internal constructor(
         // their own; longer is the OS window where Doze / process freeze may
         // have killed the WS.
         const val FOREGROUND_RESUME_MIN_BACKGROUND_MS = 5_000L
-        val REQUIRED_ANDROID_PERMISSIONS = arrayOf(
-            android.Manifest.permission.CAMERA,
-            android.Manifest.permission.RECORD_AUDIO,
-        )
-        val AUDIO_ONLY_REQUIRED_PERMISSIONS = arrayOf(
-            android.Manifest.permission.RECORD_AUDIO,
-        )
     }
 }

@@ -18,6 +18,7 @@ internal class FakeSessionClock(private var currentTimeMs: Long = 0L) : SessionC
 internal class TestSessionFactory(
     val roomId: String = "test-room-id",
     val handlesReconnection: Boolean = false,
+    defaultVideoEnabled: Boolean = true,
     config: SerenadaConfig? = null,
 ) {
     val fakeProvider = FakeSignalingProvider(handlesReconnection = handlesReconnection)
@@ -28,7 +29,10 @@ internal class TestSessionFactory(
     val session: SerenadaSession = SerenadaSession(
         roomId = roomId,
         roomUrl = null,
-        config = config ?: SerenadaConfig(signalingProvider = fakeProvider),
+        config = config ?: SerenadaConfig(
+            signalingProvider = fakeProvider,
+            defaultVideoEnabled = defaultVideoEnabled,
+        ),
         context = RuntimeEnvironment.getApplication(),
         delegate = null,
         okHttpClient = OkHttpClient(),

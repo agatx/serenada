@@ -10,7 +10,7 @@ import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 
 internal interface SessionMediaEngine {
-    fun startLocalMedia()
+    fun startLocalMedia(startVideoCapture: Boolean)
     fun release()
     fun toggleAudio(enabled: Boolean)
     fun toggleVideo(enabled: Boolean): Boolean

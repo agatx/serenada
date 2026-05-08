@@ -200,7 +200,7 @@ internal class WebRtcEngine(
         audioPipelinePrimer.collectAudioLevel(onComplete)
     }
 
-    override fun startLocalMedia() {
+    override fun startLocalMedia(startVideoCapture: Boolean) {
         if (released) return
         if (localAudioTrack != null || localVideoTrack != null) return
         cameraController.resetCameraState()
@@ -219,9 +219,13 @@ internal class WebRtcEngine(
 
         videoSource = peerConnectionFactory.createVideoSource(false)
         cameraController.resetCameraSourceToInitial()
-        val startedVideo = restartVideoCapturerWithFallback(cameraController.currentCameraSource)
+        val startedVideo = startVideoCapture && restartVideoCapturerWithFallback(cameraController.currentCameraSource)
         if (!startedVideo) {
-            logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available; continuing audio-only")
+            if (startVideoCapture) {
+                logger?.log(SerenadaLogLevel.WARNING, "WebRTC", "No camera capturer available; continuing audio-only")
+            } else {
+                logger?.log(SerenadaLogLevel.INFO, "WebRTC", "Camera starts disabled; continuing audio-only")
+            }
         }
         localVideoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
         localVideoTrack?.setEnabled(startedVideo)
