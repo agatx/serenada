@@ -4,6 +4,50 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.11] — 2026-05-08
+
+First version published to public registries, plus Android and web
+catch-up on the audio-only-join story that started in 0.6.9 (iOS) and
+0.6.10 (React UI).
+
+### Added
+- Android: audio-only join. A session created with `defaultVideoEnabled
+  = false` (or with the user toggling video off pre-join) now requests
+  only `MICROPHONE` and starts the call without acquiring the camera.
+  Mirrors `SerenadaConfig.allowAudioOnlyJoin` behavior on iOS.
+- Android: in-call video toggle requests `CAMERA` on demand. Users who
+  joined audio-only — or who denied camera at join — can flip video on
+  later in the same session; the SDK fires the standard
+  `onPermissionsRequired` delegate, and a denied grant leaves the call
+  intact instead of canceling it. Mirrors the React UI behavior added
+  in 0.6.10.
+
+### Changed
+- Web: npm packages renamed `@serenada/core` → `@agatx/serenada-core`
+  and `@serenada/react-ui` → `@agatx/serenada-react-ui`. Consumers
+  upgrading must update their import paths and `package.json`
+  dependencies. The new names match the GitHub org and remove the
+  unscoped-namespace conflict that previously blocked publishing.
+- Web: packages now publish to public npm (`registry.npmjs.org`) on
+  every `web-release-*` git tag, via the new `Publish web packages`
+  GitHub Actions workflow. GitHub Packages remains available as a
+  mirror for internal consumers. Build pipeline runs `npm run clean`
+  before `tsc -p tsconfig.build.json` so stale `dist/` artifacts can't
+  sneak into a release.
+
+### Fixed
+- Web: stopping a screen share that started from an audio-only session
+  no longer triggers a surprise `getUserMedia` camera prompt. The
+  engine now records whether a real camera track was live at the
+  moment the share started; if there wasn't one, `stopScreenShare`
+  swaps the display track out for null instead of acquiring a camera
+  the user never asked for.
+- Web: starting or stopping a screen share now broadcasts
+  `participant_media_state` to peers and rebuilds the local state
+  snapshot, so the remote tile and local UI flip immediately when an
+  audio-only host begins sharing instead of waiting for the next
+  unrelated media event.
+
 ## [0.6.10] — 2026-05-05
 
 ### Added

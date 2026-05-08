@@ -26,7 +26,12 @@ internal class FakeMediaEngine : SessionMediaEngine {
 
     private var _iceServers: List<PeerConnection.IceServer>? = null
 
-    override fun startLocalMedia() { startLocalMediaCalls++ }
+    val startVideoCaptureCalls = mutableListOf<Boolean>()
+
+    override fun startLocalMedia(startVideoCapture: Boolean) {
+        startLocalMediaCalls++
+        startVideoCaptureCalls.add(startVideoCapture)
+    }
     override fun release() { releaseCalls++ }
     override fun toggleAudio(enabled: Boolean) { toggleAudioCalls.add(enabled) }
     override fun toggleVideo(enabled: Boolean): Boolean {

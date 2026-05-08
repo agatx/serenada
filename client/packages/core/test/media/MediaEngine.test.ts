@@ -310,6 +310,85 @@ describe('MediaEngine', () => {
         expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(1);
     });
 
+    it('does not restore camera after stopping screen share that started from audio-only media', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream());
+        const getDisplayMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: false, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    getDisplayMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({ initialVideoEnabled: false }, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await engine.startLocalMedia();
+        const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+        await engine.startScreenShare();
+        expect(engine.localStream?.getVideoTracks()).toHaveLength(1);
+        expect(peer?.senders.map(sender => sender.track?.kind)).toEqual(['audio', 'video']);
+
+        await engine.stopScreenShare();
+
+        expect(getUserMedia).toHaveBeenCalledTimes(1);
+        expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: false });
+        expect(engine.localStream?.getVideoTracks()).toHaveLength(0);
+        expect(peer?.senders.map(sender => sender.track?.kind)).toEqual(['audio', undefined]);
+        expect(sentMessages).toContainEqual({
+            type: 'content_state',
+            payload: { active: false },
+            to: undefined,
+        });
+    });
+
+    it('restores camera after stopping screen share that started with camera video', async () => {
+        const getUserMedia = vi.fn().mockImplementation(async (constraints: MediaStreamConstraints) => {
+            if (constraints.video) {
+                return createMediaStream({ audio: constraints.audio !== false, video: true });
+            }
+            return createMediaStream();
+        });
+        const getDisplayMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: false, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    getDisplayMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({}, () => {});
+
+        await engine.startLocalMedia();
+        await engine.startScreenShare();
+        await engine.stopScreenShare();
+
+        expect(getUserMedia).toHaveBeenLastCalledWith({
+            video: { facingMode: 'user' },
+            audio: false,
+        });
+        expect(engine.localStream?.getVideoTracks()).toHaveLength(1);
+        expect(engine.localStream?.getVideoTracks()[0]?.enabled).toBe(true);
+    });
+
     it('retries non-host fallback offers after the offer timeout elapses', async () => {
         vi.useFakeTimers();
 

@@ -20,6 +20,7 @@ import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaCore
 import app.serenada.core.SerenadaSession
 import app.serenada.core.SerenadaTransport
+import app.serenada.core.call.CallPhase
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -87,15 +88,18 @@ fun SerenadaCallFlow(
     val state by activeSession.state.collectAsState()
     val diagnostics by activeSession.diagnostics.collectAsState()
     var pendingPermissions by remember(activeSession) { mutableStateOf<List<app.serenada.core.MediaCapability>?>(null) }
+    var pendingPermissionPurpose by remember(activeSession) { mutableStateOf<PermissionRequestPurpose?>(null) }
     var hasStarted by remember(activeSession) { mutableStateOf(false) }
 
     val permissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             val granted = result.values.all { it }
+            val purpose = pendingPermissionPurpose
             pendingPermissions = null
+            pendingPermissionPurpose = null
             if (granted) {
-                activeSession.resumeJoin()
-            } else {
+                purpose.applyGrant(activeSession)
+            } else if (purpose == PermissionRequestPurpose.Join) {
                 activeSession.cancelJoin()
             }
         }
@@ -104,6 +108,11 @@ fun SerenadaCallFlow(
         val previousHandler = activeSession.onPermissionsRequired
         if (previousHandler == null && activity != null) {
             activeSession.onPermissionsRequired = { permissions ->
+                pendingPermissionPurpose = if (activeSession.state.value.phase == CallPhase.AwaitingPermissions) {
+                    PermissionRequestPurpose.Join
+                } else {
+                    PermissionRequestPurpose.EnableVideo
+                }
                 pendingPermissions = permissions
             }
         }
@@ -115,14 +124,15 @@ fun SerenadaCallFlow(
     }
 
     LaunchedEffect(state.phase, state.requiredPermissions, activity, activeSession) {
-        if (state.phase == app.serenada.core.call.CallPhase.AwaitingPermissions &&
+        if (state.phase == CallPhase.AwaitingPermissions &&
             state.requiredPermissions.isNotEmpty() &&
             pendingPermissions == null &&
             activeSession.onPermissionsRequired == null
         ) {
+            pendingPermissionPurpose = PermissionRequestPurpose.Join
             pendingPermissions = state.requiredPermissions
         }
-        if (state.phase != app.serenada.core.call.CallPhase.Idle) {
+        if (state.phase != CallPhase.Idle) {
             hasStarted = true
         } else if (hasStarted) {
             onDismiss()
@@ -131,15 +141,20 @@ fun SerenadaCallFlow(
 
     LaunchedEffect(pendingPermissions, activity) {
         val requested = pendingPermissions ?: return@LaunchedEffect
+        val purpose = pendingPermissionPurpose
         val hostActivity = activity ?: run {
-            activeSession.cancelJoin()
+            if (purpose == PermissionRequestPurpose.Join) {
+                activeSession.cancelJoin()
+            }
             pendingPermissions = null
+            pendingPermissionPurpose = null
             return@LaunchedEffect
         }
         val androidPermissions = SerenadaPermissions.permissionsFor(requested)
-        if (androidPermissions.isEmpty() || SerenadaPermissions.areGranted(hostActivity)) {
+        if (androidPermissions.isEmpty() || SerenadaPermissions.areGranted(hostActivity, androidPermissions)) {
             pendingPermissions = null
-            activeSession.resumeJoin()
+            pendingPermissionPurpose = null
+            purpose.applyGrant(activeSession)
         } else {
             permissionLauncher.launch(androidPermissions)
         }
@@ -188,6 +203,19 @@ fun SerenadaCallFlow(
         detachRemoteSink = { sink -> activeSession.detachRemoteSink(sink) },
         onDismiss = onDismiss,
     )
+}
+
+private enum class PermissionRequestPurpose {
+    Join,
+    EnableVideo
+}
+
+private fun PermissionRequestPurpose?.applyGrant(session: SerenadaSession) {
+    when (this) {
+        PermissionRequestPurpose.Join -> session.resumeJoin()
+        PermissionRequestPurpose.EnableVideo -> session.toggleVideo()
+        null -> Unit
+    }
 }
 
 /**

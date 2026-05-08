@@ -33,6 +33,23 @@ if (typeof globalThis.navigator === 'undefined') {
 describe('SerenadaSession', () => {
     let harness: TestSessionHarness;
 
+    function createMediaTrack(kind: 'audio' | 'video', enabled = true): MediaStreamTrack {
+        return {
+            enabled,
+            kind,
+            stop() {},
+        } as MediaStreamTrack;
+    }
+
+    function createMediaStream(options: { audio?: boolean; video?: boolean } = { audio: true }): MediaStream {
+        const audioTrack = options.audio !== false ? createMediaTrack('audio') : undefined;
+        const videoTrack = options.video ? createMediaTrack('video') : undefined;
+        return {
+            getAudioTracks: () => audioTrack ? [audioTrack] : [],
+            getVideoTracks: () => videoTrack ? [videoTrack] : [],
+        } as unknown as MediaStream;
+    }
+
     function expectTerminalTeardown(expectedPhase: 'ending' | 'error' | 'idle'): void {
         expect(harness.state.phase).toBe(expectedPhase);
         expect(harness.state.localParticipant).toBeNull();
@@ -1262,6 +1279,54 @@ describe('SerenadaSession', () => {
                 'error',
                 'Session',
                 'onPeerMessage listener failed for offer: listener failed',
+            );
+        });
+
+        it('broadcasts local media state after screen share starts from audio-only media', async () => {
+            harness = new TestSessionHarness({
+                config: { defaultVideoEnabled: false },
+            });
+            harness.media.startLocalMediaResult = createMediaStream({ audio: true });
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            harness.signaling.broadcastCalls.length = 0;
+            harness.media.startScreenShare = vi.fn(async () => {
+                harness.media.isScreenSharing = true;
+                harness.media.localStream = createMediaStream({ audio: true, video: true });
+            });
+
+            await harness.session.startScreenShare();
+
+            expect(harness.media.startScreenShare).toHaveBeenCalledTimes(1);
+            expect(harness.signaling.broadcastCalls).toContainEqual({
+                type: 'participant_media_state',
+                payload: {
+                    audioEnabled: true,
+                    videoEnabled: true,
+                },
+            });
+            expect(harness.state.localParticipant?.videoEnabled).toBe(true);
+        });
+
+        it('does not rebroadcast local media state when screen share start is a no-op', async () => {
+            harness = new TestSessionHarness();
+            harness.media.startLocalMediaResult = createMediaStream({ audio: true });
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+            harness.signaling.broadcastCalls.length = 0;
+            harness.media.startScreenShare = vi.fn(async () => {
+                // MediaEngine returns without changing isScreenSharing when
+                // screen sharing is unavailable or already inactive.
+            });
+
+            await harness.session.startScreenShare();
+
+            expect(harness.media.startScreenShare).toHaveBeenCalledTimes(1);
+            expect(harness.signaling.broadcastCalls).not.toContainEqual(
+                expect.objectContaining({ type: 'participant_media_state' }),
             );
         });
     });

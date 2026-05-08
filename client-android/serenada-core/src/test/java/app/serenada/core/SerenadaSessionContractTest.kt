@@ -49,6 +49,69 @@ class SerenadaSessionContractTest {
         assertTrue(factory.session.state.value.requiredPermissions.isNotEmpty())
     }
 
+    @Test
+    fun `start with default video disabled requires microphone only`() {
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false)
+
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(CallPhase.AwaitingPermissions, factory.session.state.value.phase)
+        assertEquals(listOf(MediaCapability.MICROPHONE), factory.session.state.value.requiredPermissions)
+    }
+
+    @Test
+    fun `start with default video disabled does not start camera capture`() {
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false)
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(false, factory.fakeMedia.startVideoCaptureCalls.single())
+        assertFalse(factory.session.state.value.localVideoEnabled)
+    }
+
+    @Test
+    fun `turning video on without camera permission requests camera`() {
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false)
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+
+        var requestedPermissions: List<MediaCapability>? = null
+        factory.session.onPermissionsRequired = { requestedPermissions = it }
+
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(listOf(MediaCapability.CAMERA), requestedPermissions)
+        assertTrue(factory.fakeMedia.toggleVideoCalls.none { it })
+        assertFalse(factory.session.state.value.localVideoEnabled)
+    }
+
+    @Test
+    fun `turning video on after camera permission enables camera`() {
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false)
+        val shadowApp = Shadows.shadowOf(RuntimeEnvironment.getApplication())
+        shadowApp.grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+        shadowApp.grantPermissions(android.Manifest.permission.CAMERA)
+
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(true, factory.fakeMedia.toggleVideoCalls.last())
+        assertTrue(factory.session.state.value.localVideoEnabled)
+    }
+
     // ── Join → Joined → Waiting ─────────────────────────────────────
 
     @Test
