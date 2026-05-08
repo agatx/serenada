@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
           scope: '@agatx'
           cache: npm
@@ -67,5 +67,5 @@ jobs:
         env:
           NPM_PUBLISH_FLAGS: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
         run: |
-          npm publish --workspace @agatx/serenada-core --access public ${NPM_PUBLISH_FLAGS}
-          npm publish --workspace @agatx/serenada-react-ui --access public ${NPM_PUBLISH_FLAGS}
+          npm publish --workspace @agatx/serenada-core --access public --provenance ${NPM_PUBLISH_FLAGS}
+          npm publish --workspace @agatx/serenada-react-ui --access public --provenance ${NPM_PUBLISH_FLAGS}
