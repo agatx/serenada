@@ -454,12 +454,22 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /** Start sharing the screen, replacing the camera video track. */
     async startScreenShare(): Promise<void> {
+        const wasScreenSharing = this.media.isScreenSharing;
         await this.media.startScreenShare();
+        if (!this.isInactive && !wasScreenSharing && this.media.isScreenSharing) {
+            this.broadcastLocalMediaState();
+            this.rebuildState();
+        }
     }
 
     /** Stop screen sharing and restore the camera video track. */
     async stopScreenShare(): Promise<void> {
+        const wasScreenSharing = this.media.isScreenSharing;
         await this.media.stopScreenShare();
+        if (!this.isInactive && wasScreenSharing && !this.media.isScreenSharing) {
+            this.broadcastLocalMediaState();
+            this.rebuildState();
+        }
     }
 
     /** Clean up all resources. Call when done with the session. */

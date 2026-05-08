@@ -69,6 +69,7 @@ export class MediaEngine {
     private lastInboundBytesByCid = new Map<string, number>();
     private rtcConfig: RTCConfiguration = DEFAULT_RTC_CONFIG;
     private screenShareTrack: MediaStreamTrack | null = null;
+    private screenShareRestoreVideoEnabled: boolean | null = null;
     private requestingMedia = false;
     private destroyed = false;
     private cameraRecoveryInFlight = false;
@@ -277,6 +278,7 @@ export class MediaEngine {
             this.screenShareTrack.onended = null;
             this.screenShareTrack = null;
         }
+        this.screenShareRestoreVideoEnabled = null;
         if (this.localStream) {
             this.localStream.getTracks().forEach(t => t.stop());
             this.localStream = null;
@@ -322,8 +324,8 @@ export class MediaEngine {
             }
 
             const previousVideoTrack = this.localStream.getVideoTracks()[0];
-            const wasVideoEnabled = previousVideoTrack ? previousVideoTrack.enabled : true;
-            displayTrack.enabled = wasVideoEnabled;
+            this.screenShareRestoreVideoEnabled = previousVideoTrack ? previousVideoTrack.enabled : null;
+            displayTrack.enabled = true;
             if ('contentHint' in displayTrack) {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- contentHint is a valid but untyped browser API
                 try { (displayTrack as any).contentHint = 'detail'; } catch { /* ignore */ }
@@ -338,6 +340,7 @@ export class MediaEngine {
             this.sendSignalingMessage('content_state', { active: true, contentType: 'screenShare' });
             this.notifyChange();
         } catch (err) {
+            this.screenShareRestoreVideoEnabled = null;
             this.logger?.log('error', 'ScreenShare', `Failed to start screen share: ${formatError(err)}`);
         }
     }
@@ -346,6 +349,7 @@ export class MediaEngine {
         if (!this.isScreenSharing) return;
         if (!this.localStream) {
             this.isScreenSharing = false;
+            this.screenShareRestoreVideoEnabled = null;
             this.sendSignalingMessage('content_state', { active: false });
             this.notifyChange();
             return;
@@ -357,16 +361,21 @@ export class MediaEngine {
         }
 
         const previousVideoTrack = this.localStream.getVideoTracks()[0];
-        const wasVideoEnabled = previousVideoTrack ? previousVideoTrack.enabled : true;
+        const restoreVideoEnabled = this.screenShareRestoreVideoEnabled;
 
         try {
-            const cameraTrack = await this.acquireCameraTrack(this.facingMode, wasVideoEnabled);
-            await this.swapLocalVideoTrack(cameraTrack, previousVideoTrack);
+            if (restoreVideoEnabled === null) {
+                await this.swapLocalVideoTrack(null, previousVideoTrack);
+            } else {
+                const cameraTrack = await this.acquireCameraTrack(this.facingMode, restoreVideoEnabled);
+                await this.swapLocalVideoTrack(cameraTrack, previousVideoTrack);
+            }
         } catch (err) {
             this.logger?.log('error', 'ScreenShare', `Failed to stop screen share and restore camera: ${formatError(err)}`);
             await this.swapLocalVideoTrack(null, previousVideoTrack);
         } finally {
             this.isScreenSharing = false;
+            this.screenShareRestoreVideoEnabled = null;
             this.sendSignalingMessage('content_state', { active: false });
             this.notifyChange();
         }
