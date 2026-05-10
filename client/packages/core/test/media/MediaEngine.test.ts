@@ -389,6 +389,66 @@ describe('MediaEngine', () => {
         expect(engine.localStream?.getVideoTracks()[0]?.enabled).toBe(true);
     });
 
+    it('restores camera-off video state after stopping screen share that started with disabled camera', async () => {
+        const getUserMedia = vi.fn().mockImplementation(async (constraints: MediaStreamConstraints) => {
+            if (constraints.video) {
+                return createMediaStream({ audio: constraints.audio !== false, video: true });
+            }
+            return createMediaStream();
+        });
+        const getDisplayMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: false, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    getDisplayMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({}, () => {});
+
+        await engine.startLocalMedia();
+        const cameraTrack = engine.localStream?.getVideoTracks()[0];
+        if (cameraTrack) {
+            cameraTrack.enabled = false;
+        }
+
+        await engine.startScreenShare();
+        await engine.stopScreenShare();
+
+        expect(engine.localStream?.getVideoTracks()).toHaveLength(1);
+        // Camera should remain disabled because screen share recorded
+        // the previous video track's `enabled=false` and restored it.
+        expect(engine.localStream?.getVideoTracks()[0]?.enabled).toBe(false);
+    });
+
+    it('startScreenShare is a no-op when there is no local stream', async () => {
+        const getDisplayMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: false, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getDisplayMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({}, () => {});
+
+        // No startLocalMedia → there is no localStream.
+        await engine.startScreenShare();
+
+        expect(getDisplayMedia).not.toHaveBeenCalled();
+        expect(engine.isScreenSharing).toBe(false);
+        expect(engine.localStream).toBeNull();
+    });
+
     it('retries non-host fallback offers after the offer timeout elapses', async () => {
         vi.useFakeTimers();
 
