@@ -266,6 +266,7 @@ struct CallScreenView: View {
     let onToggleFlashlight: () -> Void
     let onEndCall: () -> Void
     let onInviteToRoom: () async -> Result<Void, Error>
+    let onSnapshotRequested: ((SnapshotSource) -> Void)?
     let rendererProvider: CallRendererProvider
     let initialRemoteVideoFitCover: Bool
     let onRemoteVideoFitChanged: ((Bool) -> Void)?
@@ -302,6 +303,7 @@ struct CallScreenView: View {
         onToggleFlashlight: @escaping () -> Void,
         onEndCall: @escaping () -> Void,
         onInviteToRoom: @escaping () async -> Result<Void, Error>,
+        onSnapshotRequested: ((SnapshotSource) -> Void)? = nil,
         rendererProvider: CallRendererProvider,
         initialRemoteVideoFitCover: Bool = true,
         onRemoteVideoFitChanged: ((Bool) -> Void)? = nil
@@ -322,6 +324,7 @@ struct CallScreenView: View {
         self.onToggleFlashlight = onToggleFlashlight
         self.onEndCall = onEndCall
         self.onInviteToRoom = onInviteToRoom
+        self.onSnapshotRequested = onSnapshotRequested
         self.rendererProvider = rendererProvider
         self.initialRemoteVideoFitCover = initialRemoteVideoFitCover
         self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
@@ -660,8 +663,71 @@ struct CallScreenView: View {
                     .padding(.top, 80)
                     .padding(.leading, 12)
             }
+
+            if shouldShowSnapshotButton {
+                snapshotButton
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: snapshotAlignment)
+                    .padding(snapshotPadding)
+                    .opacity(areControlsVisible ? 1 : 0)
+                    .allowsHitTesting(areControlsVisible)
+                    .accessibilityIdentifier("call.takeSnapshot")
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: areControlsVisible)
+    }
+
+    private var shouldShowSnapshotButton: Bool {
+        config.snapshotEnabled
+            && onSnapshotRequested != nil
+            && currentSnapshotSource != nil
+            && (uiState.phase == .inCall || uiState.phase == .waiting)
+    }
+
+    private var currentSnapshotSource: SnapshotSource? {
+        // Multi-party stage has no single dominant preview unless the user
+        // pins one — without a clear "current large preview", the
+        // short-edge spec doesn't apply, so the shutter stays hidden.
+        if uiState.remoteParticipants.count > 1 {
+            return nil
+        }
+        if isLocalLarge && uiState.localVideoEnabled {
+            return .local
+        }
+        if let remote = uiState.remoteParticipants.first, remote.videoEnabled {
+            return .remote(cid: remote.cid)
+        }
+        return nil
+    }
+
+    private var snapshotAlignment: Alignment {
+        // "Short edge" of the large preview tracks the device orientation
+        // since the preview fills the call container.
+        verticalSizeClass == .compact ? .trailing : .bottom
+    }
+
+    private var snapshotPadding: EdgeInsets {
+        verticalSizeClass == .compact
+            ? EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 28)
+            : EdgeInsets(top: 0, leading: 0, bottom: 130, trailing: 0)
+    }
+
+    private var snapshotButton: some View {
+        Button {
+            guard let source = currentSnapshotSource else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onSnapshotRequested?(source)
+        } label: {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 24, weight: .bold))
+                .frame(width: 64, height: 64)
+                .background(Color.white.opacity(0.92))
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.85), lineWidth: 4))
+                .foregroundStyle(Color.black.opacity(0.78))
+                .shadow(color: Color.black.opacity(0.4), radius: 6, y: 3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(str(.callA11yTakeSnapshot))
     }
 
     private var topStatus: some View {

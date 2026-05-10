@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'react-qr-code';
 import {
+    Camera,
     Copy,
     Maximize2,
     Mic,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import {
     SerenadaCore,
+    SnapshotError,
     clampStageTileAspectRatio,
     computeLayout,
     computeStageLayout,
@@ -26,6 +28,7 @@ import {
     type LayoutResult,
     type MediaCapability,
     type SerenadaSessionHandle,
+    type SnapshotSource,
 } from '@agatx/serenada-core';
 import { AudioActivityIndicator } from './components/AudioActivityIndicator.js';
 import { DebugPanel } from './components/DebugPanel.js';
@@ -215,6 +218,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     waitingActions,
     onDismiss,
     onStatsUpdate,
+    onSnapshotCaptured,
+    onSnapshotError,
 }) => {
     useEffect(() => { ensureCallFlowStyles(); }, []);
 
@@ -668,6 +673,61 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             return next;
         });
     }, [handleControlsInteraction]);
+
+    const snapshotEnabled = config?.snapshotEnabled === true;
+    const [isSnapshotInFlight, setIsSnapshotInFlight] = useState(false);
+
+    // Snapshot source mirrors whichever stream is currently shown large.
+    // Multi-party stage is not yet supported — there is no single "large
+    // preview" until a tile is pinned, so the button stays hidden.
+    const primarySnapshotSource: SnapshotSource | null = useMemo(() => {
+        if (!snapshotEnabled || isMultiParty) return null;
+        if (effectiveLocalLarge) return { kind: 'local' };
+        const cid = remoteStreamEntries[0]?.[0];
+        if (!cid) return null;
+        return { kind: 'remote', cid };
+    }, [snapshotEnabled, isMultiParty, effectiveLocalLarge, remoteStreamEntries]);
+
+    // Match native: anchor button to the device/window short edge so the web
+    // and iOS/Android UIs agree regardless of stream aspect ratio. The
+    // primary preview fills the call container, so window orientation
+    // tracks the rendered short edge.
+    const [isWindowLandscape, setIsWindowLandscape] = useState(() =>
+        typeof window !== 'undefined' && window.innerWidth > window.innerHeight,
+    );
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const handler = () => setIsWindowLandscape(window.innerWidth > window.innerHeight);
+        window.addEventListener('resize', handler);
+        return () => window.removeEventListener('resize', handler);
+    }, []);
+
+    const remotePrimaryParticipant = primarySnapshotSource?.kind === 'remote'
+        ? effectiveState.remoteParticipants.find((p) => p.cid === primarySnapshotSource.cid)
+        : null;
+    const primaryVideoVisible = primarySnapshotSource?.kind === 'local'
+        ? !isCameraOff
+        : remotePrimaryParticipant?.videoEnabled !== false;
+
+    const handleSnapshot = useCallback((event?: React.PointerEvent | React.MouseEvent) => {
+        event?.stopPropagation();
+        handleControlsInteraction();
+        if (!session || !primarySnapshotSource) return;
+        setIsSnapshotInFlight(true);
+        void (async () => {
+            try {
+                const result = await session.captureSnapshot(primarySnapshotSource);
+                onSnapshotCaptured?.(result);
+            } catch (err) {
+                const error = err instanceof SnapshotError
+                    ? err
+                    : new SnapshotError('captureFailed', (err as Error)?.message ?? 'Snapshot failed');
+                onSnapshotError?.(error);
+            } finally {
+                setIsSnapshotInFlight(false);
+            }
+        })();
+    }, [handleControlsInteraction, onSnapshotCaptured, onSnapshotError, primarySnapshotSource, session]);
 
     const remoteStageTiles = useMemo<RemoteStageTile[]>(() => (
         remoteStreamEntries.map(([cid, stream]) => ({
@@ -1187,6 +1247,20 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                     )}
                     <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} stream={localStream} />
                 </div>
+                {snapshotEnabled && primarySnapshotSource && (
+                    <button
+                        type="button"
+                        className={`btn-snapshot ${
+                            isWindowLandscape ? 'orientation-landscape' : 'orientation-portrait'
+                        }`}
+                        onPointerUp={handleSnapshot}
+                        disabled={isSnapshotInFlight || !primaryVideoVisible}
+                        title={resolveString('takeSnapshot', strings)}
+                        aria-label={resolveString('takeSnapshot', strings)}
+                    >
+                        <Camera size={26} />
+                    </button>
+                )}
             </div>
             {controlsBar}
         </div>

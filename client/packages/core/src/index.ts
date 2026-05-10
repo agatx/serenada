@@ -47,7 +47,19 @@ export type {
     RoomWatcherState,
     SerenadaLogLevel,
     SerenadaLogger,
+    SnapshotSource,
+    SnapshotResult,
+    SnapshotErrorCode,
 } from './types.js';
+export {
+    SnapshotError,
+    captureFrameFromStream,
+    SNAPSHOT_FRAME_TIMEOUT_MS,
+} from './media/captureSnapshot.js';
+export type {
+    CapturedFrame,
+    CaptureFrameOptions,
+} from './media/captureSnapshot.js';
 export type { RecoveryRecord } from './recoveryStorage.js';
 export type {
     ProviderCapabilities,

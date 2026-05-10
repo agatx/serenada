@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react';
-import type { SerenadaSessionHandle, CallStats, MediaCapability } from '@agatx/serenada-core';
+import type {
+    SerenadaSessionHandle,
+    CallStats,
+    MediaCapability,
+    SnapshotError,
+    SnapshotResult,
+} from '@agatx/serenada-core';
 
 // ---------------------------------------------------------------------------
 // Avatar provider (host-supplied)
@@ -31,6 +37,14 @@ export interface SerenadaCallFlowConfig {
     screenSharingEnabled?: boolean;
     inviteControlsEnabled?: boolean;
     debugOverlayEnabled?: boolean;
+    /**
+     * When `true`, the call UI shows a circular "photo" button overlaid on
+     * the current large preview, anchored to its short edge (centered on the
+     * bottom for portrait sources, on the right for landscape). The button
+     * captures a snapshot of whichever stream is currently shown large.
+     * Defaults to `false`.
+     */
+    snapshotEnabled?: boolean;
     /**
      * When `true` (default), the call controls bar fades out after a few
      * seconds of idle time and a tap on the stage brings it back. When
@@ -74,6 +88,7 @@ export type SerenadaString =
     | 'flipCamera'
     | 'startScreenShare'
     | 'stopScreenShare'
+    | 'takeSnapshot'
     | 'reconnecting'
     | 'callEnded'
     | 'errorOccurred'
@@ -102,6 +117,7 @@ export const serenadaDefaultStrings: Record<SerenadaString, string> = {
     flipCamera: 'Flip camera',
     startScreenShare: 'Share screen',
     stopScreenShare: 'Stop sharing',
+    takeSnapshot: 'Take photo',
     reconnecting: 'Reconnecting\u2026',
     callEnded: 'Call ended',
     errorOccurred: 'An error occurred',
@@ -150,4 +166,16 @@ export interface CallFlowProps {
     onDismiss?: () => void;
     /** Callback fired when call stats are updated for host-owned diagnostics or bridge code. */
     onStatsUpdate?: (stats: CallStats | null) => void;
+    /**
+     * Called when the user taps the snapshot button (gated by
+     * {@link SerenadaCallFlowConfig.snapshotEnabled}) and a frame is
+     * successfully captured. The blob in `result` is the encoded image.
+     */
+    onSnapshotCaptured?: (result: SnapshotResult) => void;
+    /**
+     * Called when a snapshot capture fails — for example when the underlying
+     * stream has gone inactive. The `code` field on the error narrows the
+     * cause; the call UI itself does not surface a user-visible error.
+     */
+    onSnapshotError?: (error: SnapshotError) => void;
 }

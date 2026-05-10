@@ -119,6 +119,10 @@ export class SerenadaCore {
             setCameraMode: noop,
             startScreenShare: noopAsync,
             stopScreenShare: noopAsync,
+            captureSnapshot: async () => {
+                const { SnapshotError } = await import('./media/captureSnapshot.js');
+                throw new SnapshotError('streamNotActive', 'WebRTC is not supported');
+            },
             resumeJoin: noopAsync,
             cancelJoin: noop,
             destroy: noop,

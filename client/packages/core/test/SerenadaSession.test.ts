@@ -730,6 +730,38 @@ describe('SerenadaSession', () => {
     });
 
     // ---------------------------------------------------------------
+    // Snapshot capture
+    // ---------------------------------------------------------------
+    describe('captureSnapshot', () => {
+        it('rejects with streamNotActive when local stream is missing', async () => {
+            harness = new TestSessionHarness();
+            await expect(harness.session.captureSnapshot()).rejects.toMatchObject({
+                name: 'SnapshotError',
+                code: 'streamNotActive',
+            });
+        });
+
+        it('rejects with streamNotActive when the requested remote stream is unknown', async () => {
+            harness = new TestSessionHarness();
+            // Even after a stream is set, remote map is empty
+            harness.media.localStream = createMediaStream({ video: true });
+            await expect(
+                harness.session.captureSnapshot({ kind: 'remote', cid: 'never-joined' }),
+            ).rejects.toMatchObject({ name: 'SnapshotError', code: 'streamNotActive' });
+        });
+
+        it('rejects with streamNotActive when session has been destroyed', async () => {
+            harness = new TestSessionHarness();
+            harness.media.localStream = createMediaStream({ video: true });
+            harness.session.destroy();
+            await expect(harness.session.captureSnapshot()).rejects.toMatchObject({
+                name: 'SnapshotError',
+                code: 'streamNotActive',
+            });
+        });
+    });
+
+    // ---------------------------------------------------------------
     // Ending Screen
     // ---------------------------------------------------------------
     describe('ending screen', () => {

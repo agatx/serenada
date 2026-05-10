@@ -69,6 +69,7 @@ SDK packages must not depend on UI frameworks (no SwiftUI in SerenadaCore, no Re
     - DEPLOY.md - deployment instructions
     - docs/serenada_protocol_v1.md - protocol specification
     - docs/push-notifications.md - push notifications documentation
+    - docs/snapshot-capture.md - snapshot capture API and call-UI shutter button
 
 ## Testing
 ### Testing the web client

@@ -403,6 +403,57 @@ const CALL_FLOW_CSS = `
   pointer-events: none;
 }
 
+[data-serenada-callflow] .btn-snapshot {
+  position: absolute;
+  z-index: 22;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 4px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: #111827;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  transition: transform 0.15s ease, opacity 0.2s ease, background 0.2s ease;
+}
+
+[data-serenada-callflow] .btn-snapshot.orientation-landscape {
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+[data-serenada-callflow] .btn-snapshot.orientation-landscape:active {
+  transform: translateY(-50%) scale(0.92);
+}
+
+[data-serenada-callflow] .btn-snapshot.orientation-portrait {
+  bottom: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+[data-serenada-callflow] .btn-snapshot.orientation-portrait:active {
+  transform: translateX(-50%) scale(0.92);
+}
+
+[data-serenada-callflow] .btn-snapshot:hover {
+  background: #fff;
+}
+
+[data-serenada-callflow] .btn-snapshot:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+[data-serenada-callflow].controls-hidden .btn-snapshot {
+  opacity: 0;
+  pointer-events: none;
+}
+
 [data-serenada-callflow] .participant-badge {
   position: absolute;
   bottom: 6px;

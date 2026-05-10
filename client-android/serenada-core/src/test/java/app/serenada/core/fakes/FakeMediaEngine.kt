@@ -75,10 +75,16 @@ internal class FakeMediaEngine : SessionMediaEngine {
         removedSlots.add(slot)
     }
 
+    val attachLocalSinkCalls = mutableListOf<VideoSink>()
+    val detachLocalSinkCalls = mutableListOf<VideoSink>()
     override fun attachLocalRenderer(renderer: SurfaceViewRenderer, rendererEvents: RendererCommon.RendererEvents?) {}
     override fun detachLocalRenderer(renderer: SurfaceViewRenderer) {}
-    override fun attachLocalSink(sink: VideoSink) {}
-    override fun detachLocalSink(sink: VideoSink) {}
+    override fun attachLocalSink(sink: VideoSink) {
+        attachLocalSinkCalls += sink
+    }
+    override fun detachLocalSink(sink: VideoSink) {
+        detachLocalSinkCalls += sink
+    }
     override fun initRenderer(renderer: SurfaceViewRenderer, rendererEvents: RendererCommon.RendererEvents?) {}
     override fun adjustWorldCameraZoom(scaleFactor: Float): Boolean = false
     override fun toggleFlashlight(): Boolean = false

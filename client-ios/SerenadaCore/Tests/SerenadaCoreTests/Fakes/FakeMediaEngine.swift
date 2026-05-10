@@ -83,8 +83,14 @@ final class FakeMediaEngine: SessionMediaEngine {
         removedSlots.append(slot)
     }
 
-    func attachLocalRenderer(_ renderer: AnyObject) {}
-    func detachLocalRenderer(_ renderer: AnyObject) {}
+    private(set) var attachLocalRendererCalls: [AnyObject] = []
+    private(set) var detachLocalRendererCalls: [AnyObject] = []
+    func attachLocalRenderer(_ renderer: AnyObject) {
+        attachLocalRendererCalls.append(renderer)
+    }
+    func detachLocalRenderer(_ renderer: AnyObject) {
+        detachLocalRendererCalls.append(renderer)
+    }
 
     func setOnCameraFacingChanged(_ handler: @escaping (Bool) -> Void) {
         onCameraFacingChanged = handler

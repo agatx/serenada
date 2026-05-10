@@ -38,6 +38,7 @@
 		60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */; };
 		6198802831401A13687DDCA9 /* FeedbackScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */; };
 		64A7BCD5402B626283D5F7A7 /* AudioLevelMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CE28EAA8E90B562F29DF6DB /* AudioLevelMonitorTests.swift */; };
+		65AD76EF24108797F74DA6CF /* SnapshotCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF6DFD71F64E86AEEFE9DFDC /* SnapshotCaptureTests.swift */; };
 		6B5F236A91FDD3905C7AFD49 /* IceCandidateSanitizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258D6A80A3E3F6FBE06D77B8 /* IceCandidateSanitizerTests.swift */; };
 		6D7CC8795CCE4899285777B4 /* SerenadaDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */; };
 		6E8767096E3E70790EB1CEE5 /* SessionNegotiationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A65C7CFBDAB1D28D4F50040 /* SessionNegotiationTests.swift */; };
@@ -212,6 +213,7 @@
 		B8DC46B13DBF27F02DA8B2D2 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/Localizable.strings; sourceTree = "<group>"; };
 		BAC97F9BB82CE31EBF9C084B /* FakeSessionSignaling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeSessionSignaling.swift; sourceTree = "<group>"; };
 		BB6EC0967F80C7CB8EB7E9E0 /* FakeSignalingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeSignalingProvider.swift; sourceTree = "<group>"; };
+		BF6DFD71F64E86AEEFE9DFDC /* SnapshotCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotCaptureTests.swift; sourceTree = "<group>"; };
 		C03DA37A007DFCE3DA069244 /* CallScreenStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallScreenStateTests.swift; sourceTree = "<group>"; };
 		C1C9C837439E676ED7F04801 /* BroadcastShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastShared.swift; sourceTree = "<group>"; };
 		C5849DCA4B2F1D0DD0411242 /* PushSubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionManager.swift; sourceTree = "<group>"; };
@@ -444,6 +446,7 @@
 				FF2A1B8AEF0CE257BBAB5F0F /* SignalingClientForcePingTests.swift */,
 				1E1404CBCB96AB880E893C3F /* SignalingMessageTests.swift */,
 				FD06F6B1E706207C4ED2D7DD /* SignalingPayloadsTests.swift */,
+				BF6DFD71F64E86AEEFE9DFDC /* SnapshotCaptureTests.swift */,
 				DA4E5581F6502FD66EEAB5CD /* Fakes */,
 				9E464FDC4DB6B63C2181B47E /* Helpers */,
 			);
@@ -859,6 +862,7 @@
 				CC3D167A630FB82F98509DDF /* SignalingClientForcePingTests.swift in Sources */,
 				60DD419576BB73E40DC4D993 /* SignalingMessageTests.swift in Sources */,
 				887A6F874A06A47C37E73A85 /* SignalingPayloadsTests.swift in Sources */,
+				65AD76EF24108797F74DA6CF /* SnapshotCaptureTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

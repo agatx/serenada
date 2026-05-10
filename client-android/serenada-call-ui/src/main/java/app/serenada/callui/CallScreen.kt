@@ -141,6 +141,7 @@ internal fun CallScreen(
     detachRemoteSink: (VideoSink) -> Unit,
     onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
     onShareLink: (() -> Unit)? = null,
+    onSnapshotRequested: ((app.serenada.core.SnapshotSource) -> Unit)? = null,
 ) {
     // Keep the screen on for the duration of the call
     val activity = LocalContext.current as? Activity
@@ -852,8 +853,67 @@ internal fun CallScreen(
                 }
             }
         }
+
+        // Snapshot button — anchored to the short edge of the large preview
+        // (bottom in portrait, right in landscape). Hidden in multi-party
+        // mode: without a clear "current large preview" the short-edge
+        // anchor has no meaning, so the SDK requires explicit pin first.
+        val snapshotSource: app.serenada.core.SnapshotSource? = when {
+            !config.snapshotEnabled || onSnapshotRequested == null -> null
+            uiState.phase != CallPhase.InCall && uiState.phase != CallPhase.Waiting -> null
+            uiState.remoteParticipants.size > 1 -> null
+            isLocalLarge && uiState.localVideoEnabled -> app.serenada.core.SnapshotSource.Local
+            else -> uiState.remoteParticipants.firstOrNull { it.videoEnabled }
+                ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+        }
+        if (snapshotSource != null && areControlsVisible) {
+            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+            val isLandscape = configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            val alignment = if (isLandscape) Alignment.CenterEnd else Alignment.BottomCenter
+            val padding = if (isLandscape) {
+                PaddingValues(end = 28.dp)
+            } else {
+                PaddingValues(bottom = 150.dp)
+            }
+            val snapshotHandler = onSnapshotRequested
+            if (snapshotHandler != null) {
+                SnapshotShutterButton(
+                    onClick = { snapshotHandler(snapshotSource) },
+                    modifier = Modifier
+                        .align(alignment)
+                        .padding(padding)
+                        .testTag("call.takeSnapshot")
+                )
+            }
+        }
         }
       }
+    }
+}
+
+@Composable
+private fun SnapshotShutterButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = Color.White.copy(alpha = 0.92f),
+        contentColor = Color.Black.copy(alpha = 0.78f),
+        shadowElevation = 6.dp,
+        modifier = modifier
+            .size(64.dp)
+            .border(width = 4.dp, color = Color.White.copy(alpha = 0.85f), shape = CircleShape),
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Icon(
+                imageVector = Icons.Default.PhotoCamera,
+                contentDescription = "Take photo",
+                modifier = Modifier.size(28.dp),
+            )
+        }
     }
 }
 

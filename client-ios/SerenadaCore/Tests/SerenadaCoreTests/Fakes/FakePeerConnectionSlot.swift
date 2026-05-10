@@ -177,12 +177,19 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     func getIceConnectionState() -> String { iceConnectionState }
     func getSignalingState() -> String { signalingState }
     func hasRemoteDescription() -> Bool { remoteDescriptionSet }
-    func isRemoteVideoTrackEnabled() -> Bool { false }
+    var remoteVideoTrackEnabledOverride = false
+    func isRemoteVideoTrackEnabled() -> Bool { remoteVideoTrackEnabledOverride }
 
     // MARK: - Renderer Management
 
-    func attachRemoteRenderer(_ renderer: AnyObject) {}
-    func detachRemoteRenderer(_ renderer: AnyObject) {}
+    private(set) var attachRemoteRendererCalls: [AnyObject] = []
+    private(set) var detachRemoteRendererCalls: [AnyObject] = []
+    func attachRemoteRenderer(_ renderer: AnyObject) {
+        attachRemoteRendererCalls.append(renderer)
+    }
+    func detachRemoteRenderer(_ renderer: AnyObject) {
+        detachRemoteRendererCalls.append(renderer)
+    }
 
     // MARK: - Stats
 

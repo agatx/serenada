@@ -20,6 +20,8 @@ public struct SerenadaCallFlow: View {
     private let strings: [SerenadaString: String]?
     private let onDismiss: (() -> Void)?
     private var onCallEnded: ((EndReason) -> Void)?
+    private var onSnapshotCaptured: ((SnapshotResult) -> Void)?
+    private var onSnapshotError: ((SnapshotError) -> Void)?
 
     @Environment(\.serenadaTheme) private var theme
 
@@ -91,7 +93,9 @@ public struct SerenadaCallFlow: View {
                     config: config,
                     strings: strings,
                     onDismiss: onDismiss,
-                    onCallEnded: onCallEnded
+                    onCallEnded: onCallEnded,
+                    onSnapshotCaptured: onSnapshotCaptured,
+                    onSnapshotError: onSnapshotError
                 )
 
             case .sessionFirst(let params):
@@ -100,7 +104,9 @@ public struct SerenadaCallFlow: View {
                     config: config,
                     strings: strings,
                     onDismiss: onDismiss,
-                    onCallEnded: onCallEnded
+                    onCallEnded: onCallEnded,
+                    onSnapshotCaptured: onSnapshotCaptured,
+                    onSnapshotError: onSnapshotError
                 )
             }
         }
@@ -111,6 +117,22 @@ public struct SerenadaCallFlow: View {
     public func onCallEnded(_ handler: @escaping (EndReason) -> Void) -> SerenadaCallFlow {
         var copy = self
         copy.onCallEnded = handler
+        return copy
+    }
+
+    /// Callback fired when the user taps the snapshot shutter (gated by
+    /// `SerenadaCallFlowConfig.snapshotEnabled`) and a frame is captured.
+    public func onSnapshotCaptured(_ handler: @escaping (SnapshotResult) -> Void) -> SerenadaCallFlow {
+        var copy = self
+        copy.onSnapshotCaptured = handler
+        return copy
+    }
+
+    /// Callback fired when a snapshot capture fails — for example because the
+    /// chosen stream's video is off.
+    public func onSnapshotError(_ handler: @escaping (SnapshotError) -> Void) -> SerenadaCallFlow {
+        var copy = self
+        copy.onSnapshotError = handler
         return copy
     }
 }
@@ -124,6 +146,8 @@ private struct URLFirstCallFlow: View {
     let strings: [SerenadaString: String]?
     let onDismiss: (() -> Void)?
     let onCallEnded: ((EndReason) -> Void)?
+    let onSnapshotCaptured: ((SnapshotResult) -> Void)?
+    let onSnapshotError: ((SnapshotError) -> Void)?
 
     @State private var session: SerenadaSession?
     @State private var core: SerenadaCore?
@@ -142,7 +166,9 @@ private struct URLFirstCallFlow: View {
                     config: config,
                     strings: strings,
                     onDismiss: onDismiss,
-                    onCallEnded: onCallEnded
+                    onCallEnded: onCallEnded,
+                    onSnapshotCaptured: onSnapshotCaptured,
+                    onSnapshotError: onSnapshotError
                 )
             } else {
                 ProgressView()
@@ -178,6 +204,8 @@ private struct SessionFirstCallFlow: View {
     let strings: [SerenadaString: String]?
     let onDismiss: (() -> Void)?
     let onCallEnded: ((EndReason) -> Void)?
+    let onSnapshotCaptured: ((SnapshotResult) -> Void)?
+    let onSnapshotError: ((SnapshotError) -> Void)?
 
     @ObservedObject private var session: SerenadaSession
 
@@ -186,13 +214,17 @@ private struct SessionFirstCallFlow: View {
         config: SerenadaCallFlowConfig,
         strings: [SerenadaString: String]?,
         onDismiss: (() -> Void)?,
-        onCallEnded: ((EndReason) -> Void)?
+        onCallEnded: ((EndReason) -> Void)?,
+        onSnapshotCaptured: ((SnapshotResult) -> Void)? = nil,
+        onSnapshotError: ((SnapshotError) -> Void)? = nil
     ) {
         self.params = params
         self.config = config
         self.strings = strings
         self.onDismiss = onDismiss
         self.onCallEnded = onCallEnded
+        self.onSnapshotCaptured = onSnapshotCaptured
+        self.onSnapshotError = onSnapshotError
         _session = ObservedObject(wrappedValue: params.session)
     }
 
@@ -265,6 +297,7 @@ private struct SessionFirstCallFlow: View {
                     onInviteToRoom: params.onInviteToRoom ?? {
                         .failure(NSError(domain: "SerenadaCallUI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Not implemented"]))
                     },
+                    onSnapshotRequested: makeSnapshotHandler(),
                     rendererProvider: session,
                     initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
                     onRemoteVideoFitChanged: params.onRemoteVideoFitChanged
@@ -294,6 +327,28 @@ private struct SessionFirstCallFlow: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.black)
+            }
+        }
+    }
+
+    private func makeSnapshotHandler() -> ((SnapshotSource) -> Void)? {
+        guard config.snapshotEnabled,
+              onSnapshotCaptured != nil || onSnapshotError != nil else {
+            return nil
+        }
+        let session = self.session
+        let onCaptured = onSnapshotCaptured
+        let onError = onSnapshotError
+        return { source in
+            Task { @MainActor in
+                do {
+                    let result = try await session.captureSnapshot(source: source)
+                    onCaptured?(result)
+                } catch let snapshotError as SnapshotError {
+                    onError?(snapshotError)
+                } catch {
+                    onError?(.captureFailed(error.localizedDescription))
+                }
             }
         }
     }
