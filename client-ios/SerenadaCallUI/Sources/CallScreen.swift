@@ -685,9 +685,17 @@ struct CallScreenView: View {
 
     private var currentSnapshotSource: SnapshotSource? {
         // Multi-party stage has no single dominant preview unless the user
-        // pins one — without a clear "current large preview", the
-        // short-edge spec doesn't apply, so the shutter stays hidden.
-        if uiState.remoteParticipants.count > 1 {
+        // pins one. With a pinned tile the stage layout treats that
+        // participant as the large preview, so the shutter targets them.
+        if isMultiParty {
+            guard let pinned = pinnedParticipantId else { return nil }
+            if pinned == uiState.localCid, uiState.localVideoEnabled {
+                return .local
+            }
+            if let remote = uiState.remoteParticipants.first(where: { $0.cid == pinned }),
+               remote.videoEnabled {
+                return .remote(cid: remote.cid)
+            }
             return nil
         }
         if isLocalLarge && uiState.localVideoEnabled {

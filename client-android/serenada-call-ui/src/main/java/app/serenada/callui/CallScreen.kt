@@ -855,13 +855,24 @@ internal fun CallScreen(
         }
 
         // Snapshot button — anchored to the short edge of the large preview
-        // (bottom in portrait, right in landscape). Hidden in multi-party
-        // mode: without a clear "current large preview" the short-edge
-        // anchor has no meaning, so the SDK requires explicit pin first.
+        // (bottom in portrait, right in landscape). In multi-party mode the
+        // shutter targets the pinned tile, since the stage layout treats
+        // that participant as the dominant preview. Without a pin there is
+        // no clear "current large preview", so the shutter stays hidden.
         val snapshotSource: app.serenada.core.SnapshotSource? = when {
             !config.snapshotEnabled || onSnapshotRequested == null -> null
             uiState.phase != CallPhase.InCall && uiState.phase != CallPhase.Waiting -> null
-            uiState.remoteParticipants.size > 1 -> null
+            isMultiParty -> {
+                val pinned = pinnedParticipantId
+                when {
+                    pinned == null -> null
+                    pinned == uiState.localCid && uiState.localVideoEnabled ->
+                        app.serenada.core.SnapshotSource.Local
+                    else -> uiState.remoteParticipants
+                        .firstOrNull { it.cid == pinned && it.videoEnabled }
+                        ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+                }
+            }
             isLocalLarge && uiState.localVideoEnabled -> app.serenada.core.SnapshotSource.Local
             else -> uiState.remoteParticipants.firstOrNull { it.videoEnabled }
                 ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }

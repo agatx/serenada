@@ -678,15 +678,29 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const [isSnapshotInFlight, setIsSnapshotInFlight] = useState(false);
 
     // Snapshot source mirrors whichever stream is currently shown large.
-    // Multi-party stage is not yet supported — there is no single "large
-    // preview" until a tile is pinned, so the button stays hidden.
+    // In 1:1 that's localStream when the user has swapped to local-large,
+    // otherwise the only remote stream. In multi-party there is no single
+    // "large preview" until a tile is pinned — pinned tiles render as the
+    // dominant stage tile and the shutter captures from that participant.
     const primarySnapshotSource: SnapshotSource | null = useMemo(() => {
-        if (!snapshotEnabled || isMultiParty) return null;
+        if (!snapshotEnabled) return null;
+        if (isMultiParty) {
+            if (!pinnedParticipantId) return null;
+            if (pinnedParticipantId === localParticipant?.cid) return { kind: 'local' };
+            return { kind: 'remote', cid: pinnedParticipantId };
+        }
         if (effectiveLocalLarge) return { kind: 'local' };
         const cid = remoteStreamEntries[0]?.[0];
         if (!cid) return null;
         return { kind: 'remote', cid };
-    }, [snapshotEnabled, isMultiParty, effectiveLocalLarge, remoteStreamEntries]);
+    }, [
+        snapshotEnabled,
+        isMultiParty,
+        pinnedParticipantId,
+        localParticipant?.cid,
+        effectiveLocalLarge,
+        remoteStreamEntries,
+    ]);
 
     // Match native: anchor button to the device/window short edge so the web
     // and iOS/Android UIs agree regardless of stream aspect ratio. The
@@ -935,6 +949,25 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         </>
     );
 
+    const snapshotButton = snapshotEnabled && primarySnapshotSource ? (
+        <button
+            type="button"
+            className={`btn-snapshot ${
+                isWindowLandscape ? 'orientation-landscape' : 'orientation-portrait'
+            }`}
+            // `onClick` so keyboard activation (Enter / Space) works for
+            // assistive tech; `onPointerUp` only stops the pointer event
+            // from bubbling into the screen's tap-to-toggle-controls handler.
+            onClick={handleSnapshot}
+            onPointerUp={(event) => event.stopPropagation()}
+            disabled={isSnapshotInFlight || !primaryVideoVisible}
+            title={resolveString('takeSnapshot', strings)}
+            aria-label={resolveString('takeSnapshot', strings)}
+        >
+            <Camera size={26} />
+        </button>
+    ) : null;
+
     const controlsBar = (
         <div
             className="controls-bar"
@@ -1154,6 +1187,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} stream={localStream} />
                         </div>
                     )}
+                    {snapshotButton}
                 </div>
                 {controlsBar}
             </div>
@@ -1247,25 +1281,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                     )}
                     <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} stream={localStream} />
                 </div>
-                {snapshotEnabled && primarySnapshotSource && (
-                    <button
-                        type="button"
-                        className={`btn-snapshot ${
-                            isWindowLandscape ? 'orientation-landscape' : 'orientation-portrait'
-                        }`}
-                        // `onClick` so keyboard activation (Enter / Space)
-                        // works for assistive tech; `onPointerUp` only stops
-                        // the pointer event from bubbling into the screen's
-                        // tap-to-toggle-controls handler.
-                        onClick={handleSnapshot}
-                        onPointerUp={(event) => event.stopPropagation()}
-                        disabled={isSnapshotInFlight || !primaryVideoVisible}
-                        title={resolveString('takeSnapshot', strings)}
-                        aria-label={resolveString('takeSnapshot', strings)}
-                    >
-                        <Camera size={26} />
-                    </button>
-                )}
+                {snapshotButton}
             </div>
             {controlsBar}
         </div>
