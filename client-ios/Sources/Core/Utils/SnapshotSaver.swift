@@ -47,9 +47,9 @@ extension SnapshotSaver.Failure {
     var toastDescription: String {
         switch self {
         case .decodeFailed:
-            return "Could not decode snapshot"
+            return L10n.snapshotReasonDecodeFailed
         case .authorizationDenied:
-            return "Photos permission denied"
+            return L10n.snapshotReasonPermissionDenied
         case .saveFailed(let error):
             return error.localizedDescription
         }
@@ -60,15 +60,15 @@ extension SnapshotError {
     var toastDescription: String {
         switch self {
         case .streamNotActive:
-            return "video is off"
+            return L10n.snapshotReasonNoVideo
         case .noVideoTrack:
-            return "no video track"
+            return L10n.snapshotReasonNoTrack
         case .captureTimeout:
-            return "capture timed out"
+            return L10n.snapshotReasonTimeout
         case .captureFailed(let reason):
             return reason
         case .unsupportedSource:
-            return "unsupported source"
+            return L10n.snapshotReasonUnsupported
         }
     }
 }

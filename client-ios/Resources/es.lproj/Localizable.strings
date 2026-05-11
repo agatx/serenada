@@ -68,6 +68,16 @@
 "call_invite_sent" = "Invitación enviada";
 "call_invite_failed" = "No se pudo enviar la invitación";
 
+"snapshot_saved_to_photos" = "Guardada en Fotos";
+"snapshot_failed" = "Captura fallida";
+"snapshot_reason_no_video" = "vídeo desactivado";
+"snapshot_reason_no_track" = "sin pista de vídeo";
+"snapshot_reason_timeout" = "tiempo de captura agotado";
+"snapshot_reason_unsupported" = "fuente no compatible";
+"snapshot_reason_decode_failed" = "no se pudo decodificar la captura";
+"snapshot_reason_permission_denied" = "Permiso de Fotos denegado";
+"call_a11y_take_snapshot" = "Tomar foto";
+
 "camera_enabled" = "Cámara activada";
 "camera_enabled_info" = "Activar cámara al unirse a una llamada";
 "microphone_enabled" = "Micrófono activado";

@@ -147,6 +147,12 @@
     <string name="call_invite_to_room">Позвать в звонок</string>
     <string name="call_invite_sent">Приглашение отправлено</string>
     <string name="call_invite_failed">Не удалось отправить приглашение</string>
+    <string name="snapshot_saved">Снимок сохранён в Pictures/Serenada</string>
+    <string name="snapshot_save_failed">Не удалось сохранить снимок: %1$s</string>
+    <string name="snapshot_failed_with_reason">Не удалось сделать снимок: %1$s</string>
+    <string name="snapshot_reason_no_video">видео выключено</string>
+    <string name="snapshot_reason_timeout">превышено время ожидания кадра</string>
+    <string name="snapshot_reason_unsupported">неподдерживаемый источник</string>
     <string name="push_notification_invite_body">Вас позвали в комнату.</string>
     <string name="settings_invites_title">Приглашения</string>
     <string name="settings_invite_notifications">Уведомления о приглашениях</string>

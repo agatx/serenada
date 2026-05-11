@@ -30,15 +30,13 @@ final class CallManager: ObservableObject {
     private var snapshotBannerTask: Task<Void, Never>?
 
     func presentSnapshotToast(saved: Bool, reason: String?) {
-        let defaultSuccess = "Saved to Photos"
-        let defaultFailure = "Snapshot failed"
         let message: String
         if saved {
-            message = reason ?? defaultSuccess
+            message = reason ?? L10n.snapshotSavedToPhotos
         } else if let reason {
-            message = "\(defaultFailure): \(reason)"
+            message = "\(L10n.snapshotFailed): \(reason)"
         } else {
-            message = defaultFailure
+            message = L10n.snapshotFailed
         }
         snapshotBanner = SnapshotBanner(success: saved, message: message)
         snapshotBannerTask?.cancel()

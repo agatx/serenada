@@ -640,17 +640,23 @@ const CallRoom: React.FC = () => {
             anchor.click();
             anchor.remove();
         } finally {
-            // Revoke after one tick to give the browser time to start the download.
+            // Revoke after one tick to give the browser time to start the
+            // download. We cannot confirm the user actually saved it
+            // (`download` is best-effort and not honored on every mobile
+            // browser), so the toast intentionally says "ready" rather
+            // than asserting that it was saved.
             window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
-        showToast('success', t('snapshot_saved') || 'Snapshot downloaded');
+        showToast('success', t('snapshot_ready'));
     }, [showToast, t]);
 
     const handleSnapshotError = useCallback((error: SnapshotError) => {
         const reason = error.code === 'streamNotActive'
-            ? (t('snapshot_no_video') || 'video is off')
-            : error.code;
-        showToast('error', (t('snapshot_failed') || 'Snapshot failed') + ': ' + reason);
+            ? t('snapshot_reason_no_video')
+            : error.code === 'captureTimeout'
+                ? t('snapshot_reason_timeout')
+                : error.code;
+        showToast('error', `${t('snapshot_failed')}: ${reason}`);
     }, [showToast, t]);
 
     return (

@@ -68,6 +68,16 @@
 "call_invite_sent" = "Invite sent";
 "call_invite_failed" = "Failed to send invite";
 
+"snapshot_saved_to_photos" = "Saved to Photos";
+"snapshot_failed" = "Snapshot failed";
+"snapshot_reason_no_video" = "video is off";
+"snapshot_reason_no_track" = "no video track";
+"snapshot_reason_timeout" = "capture timed out";
+"snapshot_reason_unsupported" = "unsupported source";
+"snapshot_reason_decode_failed" = "could not decode snapshot";
+"snapshot_reason_permission_denied" = "Photos permission denied";
+"call_a11y_take_snapshot" = "Take photo";
+
 "camera_enabled" = "Camera enabled";
 "camera_enabled_info" = "Turn on camera when joining a call";
 "microphone_enabled" = "Microphone enabled";

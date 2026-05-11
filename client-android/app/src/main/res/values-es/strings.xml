@@ -146,6 +146,12 @@
     <string name="call_invite_to_room">Invitar a la llamada</string>
     <string name="call_invite_sent">Invitación enviada</string>
     <string name="call_invite_failed">No se pudo enviar la invitación</string>
+    <string name="snapshot_saved">Captura guardada en Pictures/Serenada</string>
+    <string name="snapshot_save_failed">No se pudo guardar la captura: %1$s</string>
+    <string name="snapshot_failed_with_reason">Captura fallida: %1$s</string>
+    <string name="snapshot_reason_no_video">vídeo desactivado</string>
+    <string name="snapshot_reason_timeout">tiempo de captura agotado</string>
+    <string name="snapshot_reason_unsupported">fuente no compatible</string>
     <string name="push_notification_invite_body">Te invitaron a una sala.</string>
     <string name="settings_invites_title">Invitaciones</string>
     <string name="settings_invite_notifications">Notificaciones de invitación</string>

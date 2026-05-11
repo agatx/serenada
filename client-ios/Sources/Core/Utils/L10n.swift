@@ -197,6 +197,15 @@ enum L10n {
 
     static var commonBack: String { text("common_back") }
 
+    static var snapshotSavedToPhotos: String { text("snapshot_saved_to_photos") }
+    static var snapshotFailed: String { text("snapshot_failed") }
+    static var snapshotReasonNoVideo: String { text("snapshot_reason_no_video") }
+    static var snapshotReasonNoTrack: String { text("snapshot_reason_no_track") }
+    static var snapshotReasonTimeout: String { text("snapshot_reason_timeout") }
+    static var snapshotReasonUnsupported: String { text("snapshot_reason_unsupported") }
+    static var snapshotReasonDecodeFailed: String { text("snapshot_reason_decode_failed") }
+    static var snapshotReasonPermissionDenied: String { text("snapshot_reason_permission_denied") }
+
     /// Builds a SerenadaString override dictionary from the app's current locale.
     static var serenadaCallStrings: [SerenadaString: String] {
         [
@@ -224,6 +233,7 @@ enum L10n {
             .callA11yShareInvite: text("call_a11y_share_invite"),
             .callA11yVideoFit: text("call_a11y_video_fit"),
             .callA11yVideoFill: text("call_a11y_video_fill"),
+            .callA11yTakeSnapshot: text("call_a11y_take_snapshot"),
             .callErrorGeneric: text("call_error_generic"),
             .callJoining: text("call_joining"),
             .callEnded: text("call_ended"),
