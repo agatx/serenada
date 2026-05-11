@@ -97,7 +97,10 @@ internal class FrameSnapshotCapture(
 
         cont.invokeOnCancellation {
             if (completed.compareAndSet(false, true)) {
-                handler.post { detachSink(sink) }
+                handler.post {
+                    timeoutRunnable?.let { handler.removeCallbacks(it) }
+                    detachSink(sink)
+                }
             }
         }
 

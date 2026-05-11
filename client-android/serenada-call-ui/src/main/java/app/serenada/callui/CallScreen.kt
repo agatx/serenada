@@ -880,6 +880,7 @@ internal fun CallScreen(
             if (snapshotHandler != null) {
                 SnapshotShutterButton(
                     onClick = { snapshotHandler(snapshotSource) },
+                    contentDescription = resolveString(SerenadaString.CallTakeSnapshot, strings),
                     modifier = Modifier
                         .align(alignment)
                         .padding(padding)
@@ -895,6 +896,7 @@ internal fun CallScreen(
 @Composable
 private fun SnapshotShutterButton(
     onClick: () -> Unit,
+    contentDescription: String,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -910,7 +912,7 @@ private fun SnapshotShutterButton(
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             Icon(
                 imageVector = Icons.Default.PhotoCamera,
-                contentDescription = "Take photo",
+                contentDescription = contentDescription,
                 modifier = Modifier.size(28.dp),
             )
         }

@@ -1253,7 +1253,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                         className={`btn-snapshot ${
                             isWindowLandscape ? 'orientation-landscape' : 'orientation-portrait'
                         }`}
-                        onPointerUp={handleSnapshot}
+                        // `onClick` so keyboard activation (Enter / Space)
+                        // works for assistive tech; `onPointerUp` only stops
+                        // the pointer event from bubbling into the screen's
+                        // tap-to-toggle-controls handler.
+                        onClick={handleSnapshot}
+                        onPointerUp={(event) => event.stopPropagation()}
                         disabled={isSnapshotInFlight || !primaryVideoVisible}
                         title={resolveString('takeSnapshot', strings)}
                         aria-label={resolveString('takeSnapshot', strings)}
