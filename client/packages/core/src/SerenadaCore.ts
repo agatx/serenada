@@ -6,6 +6,7 @@ import type { ResolvedSerenadaConfig } from './configValidation.js';
 import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
 import { SerenadaServerProvider } from './SerenadaServerProvider.js';
 import type { PeerMessage, SignalingProvider } from './SignalingProvider.js';
+import { SnapshotError } from './media/captureSnapshot.js';
 import {
     clearRecoveryRecord,
     loadRecoveryRecord,
@@ -120,7 +121,6 @@ export class SerenadaCore {
             startScreenShare: noopAsync,
             stopScreenShare: noopAsync,
             captureSnapshot: async () => {
-                const { SnapshotError } = await import('./media/captureSnapshot.js');
                 throw new SnapshotError('streamNotActive', 'WebRTC is not supported');
             },
             resumeJoin: noopAsync,
