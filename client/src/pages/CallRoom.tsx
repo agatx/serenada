@@ -519,6 +519,41 @@ const CallRoom: React.FC = () => {
         }
     }, [isSubscribed, roomId, showToast, vapidKey]);
 
+    const handleSnapshotCaptured = useCallback((result: SnapshotResult) => {
+        const ts = new Date(result.timestampMs);
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        const filename = `serenada-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}` +
+            `-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.jpg`;
+        const url = URL.createObjectURL(result.blob);
+        try {
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = filename;
+            anchor.rel = 'noopener';
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+        } finally {
+            // Revoke after one tick to give the browser time to start the
+            // download. We cannot confirm the user actually saved it
+            // (`download` is best-effort and not honored on every mobile
+            // browser), so the toast intentionally says "ready" rather
+            // than asserting that it was saved.
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        showToast('success', t('snapshot_ready'));
+    }, [showToast, t]);
+
+    const handleSnapshotError = useCallback((error: SnapshotError) => {
+        const reason = error.code === 'streamNotActive'
+            ? t('snapshot_reason_no_video')
+            : error.code === 'captureTimeout'
+                ? t('snapshot_reason_timeout')
+                : error.code;
+        showToast('error', `${t('snapshot_failed')}: ${reason}`);
+    }, [showToast, t]);
+
     if (!roomId) {
         navigate('/');
         return null;
@@ -623,41 +658,6 @@ const CallRoom: React.FC = () => {
             )}
         </>
     );
-
-    const handleSnapshotCaptured = useCallback((result: SnapshotResult) => {
-        const ts = new Date(result.timestampMs);
-        const pad = (n: number) => n.toString().padStart(2, '0');
-        const filename = `serenada-${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}` +
-            `-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.jpg`;
-        const url = URL.createObjectURL(result.blob);
-        try {
-            const anchor = document.createElement('a');
-            anchor.href = url;
-            anchor.download = filename;
-            anchor.rel = 'noopener';
-            anchor.style.display = 'none';
-            document.body.appendChild(anchor);
-            anchor.click();
-            anchor.remove();
-        } finally {
-            // Revoke after one tick to give the browser time to start the
-            // download. We cannot confirm the user actually saved it
-            // (`download` is best-effort and not honored on every mobile
-            // browser), so the toast intentionally says "ready" rather
-            // than asserting that it was saved.
-            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
-        showToast('success', t('snapshot_ready'));
-    }, [showToast, t]);
-
-    const handleSnapshotError = useCallback((error: SnapshotError) => {
-        const reason = error.code === 'streamNotActive'
-            ? t('snapshot_reason_no_video')
-            : error.code === 'captureTimeout'
-                ? t('snapshot_reason_timeout')
-                : error.code;
-        showToast('error', `${t('snapshot_failed')}: ${reason}`);
-    }, [showToast, t]);
 
     return (
         <SerenadaCallFlow
