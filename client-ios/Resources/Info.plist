@@ -30,6 +30,8 @@
 	<string>Serenada may access local network interfaces for call connectivity checks.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Serenada needs microphone access for audio calls.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Serenada saves call snapshots to your photo library when you tap the shutter button.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

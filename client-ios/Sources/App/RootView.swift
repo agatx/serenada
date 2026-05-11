@@ -53,7 +53,7 @@ struct RootView: View {
             return .join
         }()
 
-        ZStack {
+        ZStack(alignment: .top) {
             switch currentScreen {
             case .join:
                 JoinScreen(
@@ -106,7 +106,8 @@ struct RootView: View {
                         config: SerenadaCallFlowConfig(
                             screenSharingEnabled: true,
                             inviteControlsEnabled: true,
-                            debugOverlayEnabled: true
+                            debugOverlayEnabled: true,
+                            snapshotEnabled: true
                         ),
                         strings: L10n.serenadaCallStrings,
                         onInviteToRoom: { await callManager.inviteToCurrentRoom() },
@@ -115,6 +116,25 @@ struct RootView: View {
                         },
                         onDismiss: { callManager.dismissActiveCall() }
                     )
+                    .onSnapshotCaptured { result in
+                        SnapshotSaver.save(jpegData: result.jpegData) { outcome in
+                            switch outcome {
+                            case .success:
+                                callManager.presentSnapshotToast(saved: true, reason: nil)
+                            case .failure(let failure):
+                                callManager.presentSnapshotToast(
+                                    saved: false,
+                                    reason: failure.toastDescription
+                                )
+                            }
+                        }
+                    }
+                    .onSnapshotError { error in
+                        callManager.presentSnapshotToast(
+                            saved: false,
+                            reason: error.toastDescription
+                        )
+                    }
                 }
 
             case .error:
@@ -125,7 +145,15 @@ struct RootView: View {
                     }
                 )
             }
+
+            if let banner = callManager.snapshotBanner {
+                SnapshotBannerView(banner: banner)
+                    .padding(.top, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(50)
+            }
         }
+        .animation(.easeInOut(duration: 0.24), value: callManager.snapshotBanner)
         .animation(.easeInOut(duration: 0.24), value: currentScreen)
         .onAppear {
             hostInput = callManager.serverHost
@@ -267,5 +295,24 @@ struct RootView: View {
                 settingsSaveInProgress = false
             }
         }
+    }
+}
+
+private struct SnapshotBannerView: View {
+    let banner: CallManager.SnapshotBanner
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: banner.success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            Text(banner.message)
+                .font(.subheadline.weight(.medium))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .foregroundStyle(banner.success ? Color.primary : Color.red)
+        .shadow(color: Color.black.opacity(0.25), radius: 8, y: 3)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		020878B7FEDCAC4D331E914F /* SnapshotSaver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4403AD1CCCE81251BF5DDDA2 /* SnapshotSaver.swift */; };
 		03021554EADCBAE157B71297 /* PushSubscriptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5849DCA4B2F1D0DD0411242 /* PushSubscriptionManager.swift */; };
 		0361CD790E1AFC86D02CF4F6 /* FakeAudioController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2247BFD0D693E4041DAF16 /* FakeAudioController.swift */; };
 		0587ECB1D9436E518EF012E9 /* FakeAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F42A2D07ED2383049D7227F /* FakeAPIClient.swift */; };
@@ -177,6 +178,7 @@
 		4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaDiagnosticsTests.swift; sourceTree = "<group>"; };
 		41E34F50FDC1E2F064028B68 /* SessionTestHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTestHarness.swift; sourceTree = "<group>"; };
 		43E2F0452DE65337073894BF /* RecentCallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCallStore.swift; sourceTree = "<group>"; };
+		4403AD1CCCE81251BF5DDDA2 /* SnapshotSaver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotSaver.swift; sourceTree = "<group>"; };
 		461DCF4D9C695C2B6051BF91 /* FakeMediaEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeMediaEngine.swift; sourceTree = "<group>"; };
 		47CAF324C3A37900C769BB9F /* FeedbackScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackScreen.swift; sourceTree = "<group>"; };
 		4D4E0E538F82CE87BE4FDB24 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = SerenadaCallUI; sourceTree = SOURCE_ROOT; };
@@ -306,6 +308,7 @@
 			children = (
 				F23DE54D45BE4A11790E34B3 /* L10n.swift */,
 				F8B7715C6AFF6FAA67DB5D01 /* RoomStatuses.swift */,
+				4403AD1CCCE81251BF5DDDA2 /* SnapshotSaver.swift */,
 			);
 			path = Utils;
 			sourceTree = "<group>";
@@ -802,6 +805,7 @@
 				BC3AE1438258D205BFE66CD2 /* SerenadaiOSApp.swift in Sources */,
 				EE8328B7F79EEA681164E7ED /* SettingsScreen.swift in Sources */,
 				9342C14683CA7530772F5F93 /* SettingsStore.swift in Sources */,
+				020878B7FEDCAC4D331E914F /* SnapshotSaver.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
