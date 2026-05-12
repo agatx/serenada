@@ -184,13 +184,17 @@ private func i420ToCVPixelBuffer(_ i420: RTCI420BufferProtocol) -> CVPixelBuffer
     let width = Int(i420.width)
     let height = Int(i420.height)
     guard width > 0, height > 0 else { return nil }
+    // NV12 (BiPlanar Y + interleaved UV) is iOS's native YUV layout and the
+    // one CIImage will actually render through `createCGImage`. The 3-plane
+    // 420YpCbCr8Planar format is not IOSurface-compatible, so CIImage
+    // silently produces no output and the snapshot capture times out.
     var buffer: CVPixelBuffer?
     let attrs: [String: Any] = [kCVPixelBufferIOSurfacePropertiesKey as String: [:]]
     let status = CVPixelBufferCreate(
         kCFAllocatorDefault,
         width,
         height,
-        kCVPixelFormatType_420YpCbCr8Planar,
+        kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
         attrs as CFDictionary,
         &buffer
     )
@@ -199,22 +203,37 @@ private func i420ToCVPixelBuffer(_ i420: RTCI420BufferProtocol) -> CVPixelBuffer
     CVPixelBufferLockBaseAddress(pb, [])
     defer { CVPixelBufferUnlockBaseAddress(pb, []) }
 
-    func copyPlane(src: UnsafePointer<UInt8>, srcStride: Int, planeIndex: Int, planeWidth: Int, planeHeight: Int) {
-        guard let dst = CVPixelBufferGetBaseAddressOfPlane(pb, planeIndex) else { return }
-        let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, planeIndex)
-        let dstBytes = dst.assumingMemoryBound(to: UInt8.self)
-        for row in 0..<planeHeight {
-            let srcRow = src.advanced(by: row * srcStride)
-            let dstRow = dstBytes.advanced(by: row * dstStride)
-            memcpy(dstRow, srcRow, planeWidth)
-        }
+    guard let yDst = CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+          let uvDst = CVPixelBufferGetBaseAddressOfPlane(pb, 1) else {
+        return nil
+    }
+    let yStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+    let uvStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
+    let yBytes = yDst.assumingMemoryBound(to: UInt8.self)
+    let uvBytes = uvDst.assumingMemoryBound(to: UInt8.self)
+
+    let srcYStride = Int(i420.strideY)
+    for row in 0..<height {
+        memcpy(
+            yBytes.advanced(by: row * yStride),
+            i420.dataY.advanced(by: row * srcYStride),
+            width
+        )
     }
 
-    copyPlane(src: i420.dataY, srcStride: Int(i420.strideY), planeIndex: 0, planeWidth: width, planeHeight: height)
     let chromaWidth = width / 2
     let chromaHeight = height / 2
-    copyPlane(src: i420.dataU, srcStride: Int(i420.strideU), planeIndex: 1, planeWidth: chromaWidth, planeHeight: chromaHeight)
-    copyPlane(src: i420.dataV, srcStride: Int(i420.strideV), planeIndex: 2, planeWidth: chromaWidth, planeHeight: chromaHeight)
+    let strideU = Int(i420.strideU)
+    let strideV = Int(i420.strideV)
+    for row in 0..<chromaHeight {
+        let srcURow = i420.dataU.advanced(by: row * strideU)
+        let srcVRow = i420.dataV.advanced(by: row * strideV)
+        let dstRow = uvBytes.advanced(by: row * uvStride)
+        for x in 0..<chromaWidth {
+            dstRow[x * 2] = srcURow[x]
+            dstRow[x * 2 + 1] = srcVRow[x]
+        }
+    }
 
     return pb
 }
