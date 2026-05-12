@@ -2,7 +2,7 @@
  * @agatx/serenada-core — headless call engine.
  * Vanilla TypeScript — no React dependency.
  */
-export const SERENADA_CORE_VERSION = '0.6.11';
+export const SERENADA_CORE_VERSION = '0.6.12';
 
 // Public API
 export { SerenadaCore } from './SerenadaCore.js';
@@ -47,7 +47,19 @@ export type {
     RoomWatcherState,
     SerenadaLogLevel,
     SerenadaLogger,
+    SnapshotSource,
+    SnapshotResult,
+    SnapshotErrorCode,
 } from './types.js';
+export {
+    SnapshotError,
+    captureFrameFromStream,
+    SNAPSHOT_FRAME_TIMEOUT_MS,
+} from './media/captureSnapshot.js';
+export type {
+    CapturedFrame,
+    CaptureFrameOptions,
+} from './media/captureSnapshot.js';
 export type { RecoveryRecord } from './recoveryStorage.js';
 export type {
     ProviderCapabilities,

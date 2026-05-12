@@ -68,6 +68,16 @@
 "call_invite_sent" = "Invitation envoyée";
 "call_invite_failed" = "Échec de l’envoi de l’invitation";
 
+"snapshot_saved_to_photos" = "Enregistré dans Photos";
+"snapshot_failed" = "Échec de la capture";
+"snapshot_reason_no_video" = "la vidéo est désactivée";
+"snapshot_reason_no_track" = "aucune piste vidéo";
+"snapshot_reason_timeout" = "délai de capture expiré";
+"snapshot_reason_unsupported" = "source non prise en charge";
+"snapshot_reason_decode_failed" = "impossible de décoder la capture";
+"snapshot_reason_permission_denied" = "Autorisation Photos refusée";
+"call_a11y_take_snapshot" = "Prendre une photo";
+
 "camera_enabled" = "Caméra activée";
 "camera_enabled_info" = "Activer la caméra à l’entrée d’un appel";
 "microphone_enabled" = "Microphone activé";

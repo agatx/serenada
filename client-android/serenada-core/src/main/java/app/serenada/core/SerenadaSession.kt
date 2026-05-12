@@ -16,6 +16,7 @@ import android.os.PowerManager
 import app.serenada.core.call.dedupeParticipants
 import app.serenada.core.call.resolveHostPeerId
 import app.serenada.core.call.ConnectionStatusTracker
+import app.serenada.core.call.FrameSnapshotCapture
 import app.serenada.core.call.JoinFlowCoordinator
 import app.serenada.core.call.LiveSessionClock
 import app.serenada.core.call.PeerNegotiationEngine
@@ -753,6 +754,49 @@ class SerenadaSession internal constructor(
             attachLocalSink = { sink -> webRtcEngine.attachLocalSink(sink) },
             detachLocalSink = { sink -> webRtcEngine.detachLocalSink(sink) },
         ).capture(onResult)
+    }
+
+    /**
+     * Capture the current video frame from the chosen stream as JPEG bytes
+     * at the source track's full intrinsic resolution.
+     *
+     * Throws [SnapshotError.StreamNotActive] when the chosen stream's video
+     * is off or the participant is not connected, [SnapshotError.CaptureTimeout]
+     * if no frame arrives within the resilience window, or
+     * [SnapshotError.CaptureFailed] for encode errors.
+     */
+    suspend fun captureSnapshot(source: SnapshotSource = SnapshotSource.Local): SnapshotResult {
+        assertMainThread()
+        val attachSink: (org.webrtc.VideoSink) -> Unit
+        val detachSink: (org.webrtc.VideoSink) -> Unit
+
+        when (source) {
+            SnapshotSource.Local -> {
+                val phase = _state.value.phase
+                if (!_state.value.localVideoEnabled ||
+                    (phase != CallPhase.InCall && phase != CallPhase.Waiting)
+                ) {
+                    throw SnapshotError.StreamNotActive
+                }
+                attachSink = { sink -> webRtcEngine.attachLocalSink(sink) }
+                detachSink = { sink -> webRtcEngine.detachLocalSink(sink) }
+            }
+            is SnapshotSource.Remote -> {
+                val slot = peerSlots[source.cid] ?: throw SnapshotError.StreamNotActive
+                if (!slot.isRemoteVideoTrackEnabled()) {
+                    throw SnapshotError.StreamNotActive
+                }
+                attachSink = { sink -> slot.attachRemoteSink(sink) }
+                detachSink = { sink -> slot.detachRemoteSink(sink) }
+            }
+        }
+
+        return FrameSnapshotCapture(
+            handler = handler,
+            source = source,
+            attachSink = attachSink,
+            detachSink = detachSink,
+        ).capture()
     }
 
     /** Resume joining after camera/microphone permissions have been granted. */

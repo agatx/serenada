@@ -36,8 +36,8 @@ android {
         applicationId = "app.serenada.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.4.0"
+        versionCode = 14
+        versionName = "0.4.1"
         buildConfigField("String", "FIREBASE_APP_ID", asBuildConfigString(firebaseAppId))
         buildConfigField("String", "FIREBASE_API_KEY", asBuildConfigString(firebaseApiKey))
         buildConfigField("String", "FIREBASE_PROJECT_ID", asBuildConfigString(firebaseProjectId))

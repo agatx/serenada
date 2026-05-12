@@ -403,6 +403,54 @@ const CALL_FLOW_CSS = `
   pointer-events: none;
 }
 
+[data-serenada-callflow] .btn-snapshot {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 22;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(22, 27, 34, 0.6);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+
+[data-serenada-callflow] .btn-snapshot.cascade-landscape {
+  right: 74px;
+}
+
+[data-serenada-callflow] .btn-snapshot.cascade-portrait {
+  top: 74px;
+}
+
+[data-serenada-callflow] .btn-snapshot:hover {
+  transform: scale(1.05);
+  border-color: var(--serenada-accent);
+  color: var(--serenada-accent);
+}
+
+[data-serenada-callflow] .btn-snapshot:active {
+  transform: scale(0.95);
+}
+
+[data-serenada-callflow] .btn-snapshot:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+[data-serenada-callflow].controls-hidden .btn-snapshot {
+  opacity: 0;
+  pointer-events: none;
+}
+
 [data-serenada-callflow] .participant-badge {
   position: absolute;
   bottom: 6px;

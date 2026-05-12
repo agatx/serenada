@@ -124,15 +124,22 @@ internal class FakePeerConnectionSlot(
     override fun getIceConnectionState(): PeerConnection.IceConnectionState = iceConnectionState
     override fun getSignalingState(): PeerConnection.SignalingState = signalingState
     override fun hasRemoteDescription(): Boolean = remoteDescriptionSet
-    override fun isRemoteVideoTrackEnabled(): Boolean = false
+    var remoteVideoTrackEnabledOverride = false
+    override fun isRemoteVideoTrackEnabled(): Boolean = remoteVideoTrackEnabledOverride
 
     var pathDirectOverride: Boolean? = null
 
     // Renderer/stats stubs
+    val attachRemoteSinkCalls = mutableListOf<VideoSink>()
+    val detachRemoteSinkCalls = mutableListOf<VideoSink>()
     override fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {}
     override fun detachRemoteRenderer(renderer: SurfaceViewRenderer) {}
-    override fun attachRemoteSink(sink: VideoSink) {}
-    override fun detachRemoteSink(sink: VideoSink) {}
+    override fun attachRemoteSink(sink: VideoSink) {
+        attachRemoteSinkCalls += sink
+    }
+    override fun detachRemoteSink(sink: VideoSink) {
+        detachRemoteSinkCalls += sink
+    }
     override fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit) { onComplete("fake", null) }
     /** Cumulative inbound bytes returned from the next `collectInboundBytes()` call. */
     var inboundBytesSample: Long = 0L

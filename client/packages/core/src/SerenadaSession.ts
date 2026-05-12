@@ -10,7 +10,14 @@ import type {
     SerenadaConfig,
     SerenadaSessionHandle,
     SignalingState,
+    SnapshotResult,
+    SnapshotSource,
 } from './types.js';
+import {
+    captureFrameFromStream,
+    resolveSnapshotStream,
+    SnapshotError,
+} from './media/captureSnapshot.js';
 import { resolveCameraModes } from './cameraModes.js';
 import type {
     ConnectionInfo,
@@ -470,6 +477,34 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.broadcastLocalMediaState();
             this.rebuildState();
         }
+    }
+
+    /**
+     * Capture the current video frame from the chosen stream as an
+     * `image/jpeg` Blob at the source track's full intrinsic resolution.
+     * Rejects with a `SnapshotError` if the stream is missing/inactive,
+     * the chosen participant has video off, or no frame arrives in time.
+     */
+    async captureSnapshot(source: SnapshotSource = { kind: 'local' }): Promise<SnapshotResult> {
+        if (this.isInactive) {
+            throw new SnapshotError('streamNotActive', 'Session is not active');
+        }
+        if (source.kind === 'local') {
+            if (this._state.localParticipant?.videoEnabled !== true) {
+                throw new SnapshotError('streamNotActive', 'Local video is not enabled');
+            }
+        } else if (source.kind === 'remote') {
+            const participant = this._state.remoteParticipants.find((p) => p.cid === source.cid);
+            if (!participant) {
+                throw new SnapshotError('streamNotActive', `Remote participant ${source.cid} is not joined`);
+            }
+            if (!participant.videoEnabled) {
+                throw new SnapshotError('streamNotActive', `Remote participant ${source.cid} has video off`);
+            }
+        }
+        const stream = resolveSnapshotStream(source, this.media.localStream, this.media.remoteStreams);
+        const { blob, width, height } = await captureFrameFromStream(stream);
+        return { blob, width, height, timestampMs: Date.now(), source };
     }
 
     /** Clean up all resources. Call when done with the session. */

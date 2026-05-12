@@ -14,13 +14,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.rememberCoroutineScope
 import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallState
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaCore
 import app.serenada.core.SerenadaSession
 import app.serenada.core.SerenadaTransport
+import app.serenada.core.SnapshotError
+import app.serenada.core.SnapshotResult
+import app.serenada.core.SnapshotSource
 import app.serenada.core.call.CallPhase
+import kotlinx.coroutines.launch
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -65,10 +70,13 @@ fun SerenadaCallFlow(
     onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
     onStartScreenShare: ((Intent) -> Unit)? = null,
     onStopScreenShare: (() -> Unit)? = null,
+    onSnapshotCaptured: ((SnapshotResult) -> Unit)? = null,
+    onSnapshotError: ((SnapshotError) -> Unit)? = null,
     onDismiss: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
+    val coroutineScope = rememberCoroutineScope()
     val ownedSession =
         remember(url, session, context.applicationContext) {
             session ?: url
@@ -201,6 +209,22 @@ fun SerenadaCallFlow(
         detachRemoteSinkForCid = { cid, sink -> activeSession.detachRemoteSinkForCid(cid, sink) },
         attachRemoteSink = { sink -> activeSession.attachRemoteSink(sink) },
         detachRemoteSink = { sink -> activeSession.detachRemoteSink(sink) },
+        onSnapshotRequested = if (config.snapshotEnabled && (onSnapshotCaptured != null || onSnapshotError != null)) {
+            { source ->
+                coroutineScope.launch {
+                    try {
+                        val result = activeSession.captureSnapshot(source)
+                        onSnapshotCaptured?.invoke(result)
+                    } catch (error: SnapshotError) {
+                        onSnapshotError?.invoke(error)
+                    } catch (error: Throwable) {
+                        onSnapshotError?.invoke(SnapshotError.CaptureFailed(error.message ?: error.toString()))
+                    }
+                }
+            }
+        } else {
+            null
+        },
         onDismiss = onDismiss,
     )
 }
@@ -295,6 +319,7 @@ fun SerenadaCallFlow(
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit,
+    onSnapshotRequested: ((SnapshotSource) -> Unit)? = null,
     onDismiss: () -> Unit = {},
 ) {
     CallScreen(
@@ -326,6 +351,7 @@ fun SerenadaCallFlow(
         detachRemoteSinkForCid = detachRemoteSinkForCid,
         attachRemoteSink = attachRemoteSink,
         detachRemoteSink = detachRemoteSink,
+        onSnapshotRequested = onSnapshotRequested,
     )
 }
 

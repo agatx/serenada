@@ -101,6 +101,36 @@ export interface CallError {
 }
 
 /**
+ * Source for a video snapshot — either the local stream or a specific remote
+ * participant's stream identified by their per-call CID.
+ */
+export type SnapshotSource =
+    | { kind: 'local' }
+    | { kind: 'remote'; cid: string };
+
+/** Error codes returned by {@link SerenadaSessionHandle.captureSnapshot}. */
+export type SnapshotErrorCode =
+    | 'streamNotActive'
+    | 'noVideoTrack'
+    | 'captureTimeout'
+    | 'captureFailed'
+    | 'unsupportedSource';
+
+/**
+ * Result of a successful video snapshot. The blob holds the encoded image
+ * (`image/jpeg` by default) at the source video track's full intrinsic
+ * resolution — `width` and `height` are pixels, not CSS units.
+ */
+export interface SnapshotResult {
+    blob: Blob;
+    width: number;
+    height: number;
+    /** Wall-clock time the snapshot was decoded, from `Date.now()`. */
+    timestampMs: number;
+    source: SnapshotSource;
+}
+
+/**
  * Richer view of the local signaling transport state. Apps can use this to
  * render reconnect spinners, "you have been disconnected" UI, and a hard-
  * eviction countdown when applicable. {@link CallState.connectionStatus}
@@ -200,6 +230,13 @@ export interface SerenadaSessionHandle {
     setCameraMode(mode: CameraMode): void;
     startScreenShare(): Promise<void>;
     stopScreenShare(): Promise<void>;
+    /**
+     * Capture the current video frame from the chosen stream at full
+     * intrinsic resolution. Defaults to the local stream. Rejects with a
+     * `SnapshotError` (code `'streamNotActive'`) when the stream is missing
+     * or has no live video track.
+     */
+    captureSnapshot(source?: SnapshotSource): Promise<SnapshotResult>;
     resumeJoin(): Promise<void>;
     cancelJoin(): void;
     destroy(): void;

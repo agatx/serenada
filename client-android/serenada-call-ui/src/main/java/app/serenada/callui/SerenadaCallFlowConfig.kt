@@ -11,6 +11,13 @@ data class SerenadaCallFlowConfig(
      */
     val autoHideControls: Boolean = true,
     /**
+     * When `true`, the call UI shows a circular shutter button anchored to
+     * the short edge of the current large preview (bottom in portrait,
+     * right in landscape). Tapping it captures the visible stream via
+     * `SerenadaSession.captureSnapshot`. Defaults to `false`.
+     */
+    val snapshotEnabled: Boolean = false,
+    /**
      * Optional resolver that returns an avatar for a remote participant's
      * host-supplied `peerId` (passed to `SerenadaCore.join`). When unset or
      * when `peerId` is absent on the participant, the call UI shows an

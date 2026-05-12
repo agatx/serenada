@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'react-qr-code';
 import {
+    Camera,
     Copy,
     Maximize2,
     Mic,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import {
     SerenadaCore,
+    SnapshotError,
     clampStageTileAspectRatio,
     computeLayout,
     computeStageLayout,
@@ -26,6 +28,7 @@ import {
     type LayoutResult,
     type MediaCapability,
     type SerenadaSessionHandle,
+    type SnapshotSource,
 } from '@agatx/serenada-core';
 import { AudioActivityIndicator } from './components/AudioActivityIndicator.js';
 import { DebugPanel } from './components/DebugPanel.js';
@@ -215,6 +218,8 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     waitingActions,
     onDismiss,
     onStatsUpdate,
+    onSnapshotCaptured,
+    onSnapshotError,
 }) => {
     useEffect(() => { ensureCallFlowStyles(); }, []);
 
@@ -669,6 +674,75 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         });
     }, [handleControlsInteraction]);
 
+    const snapshotEnabled = config?.snapshotEnabled === true;
+    const [isSnapshotInFlight, setIsSnapshotInFlight] = useState(false);
+
+    // Snapshot source mirrors whichever stream is currently shown large.
+    // In 1:1 that's localStream when the user has swapped to local-large,
+    // otherwise the only remote stream. In multi-party there is no single
+    // "large preview" until a tile is pinned — pinned tiles render as the
+    // dominant stage tile and the shutter captures from that participant.
+    const primarySnapshotSource: SnapshotSource | null = useMemo(() => {
+        if (!snapshotEnabled) return null;
+        if (isMultiParty) {
+            if (!pinnedParticipantId) return null;
+            if (pinnedParticipantId === localParticipant?.cid) return { kind: 'local' };
+            return { kind: 'remote', cid: pinnedParticipantId };
+        }
+        if (effectiveLocalLarge) return { kind: 'local' };
+        const cid = remoteStreamEntries[0]?.[0];
+        if (!cid) return null;
+        return { kind: 'remote', cid };
+    }, [
+        snapshotEnabled,
+        isMultiParty,
+        pinnedParticipantId,
+        localParticipant?.cid,
+        effectiveLocalLarge,
+        remoteStreamEntries,
+    ]);
+
+    // Match native: anchor button to the device/window short edge so the web
+    // and iOS/Android UIs agree regardless of stream aspect ratio. The
+    // primary preview fills the call container, so window orientation
+    // tracks the rendered short edge.
+    const [isWindowLandscape, setIsWindowLandscape] = useState(() =>
+        typeof window !== 'undefined' && window.innerWidth > window.innerHeight,
+    );
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const handler = () => setIsWindowLandscape(window.innerWidth > window.innerHeight);
+        window.addEventListener('resize', handler);
+        return () => window.removeEventListener('resize', handler);
+    }, []);
+
+    const remotePrimaryParticipant = primarySnapshotSource?.kind === 'remote'
+        ? effectiveState.remoteParticipants.find((p) => p.cid === primarySnapshotSource.cid)
+        : null;
+    const primaryVideoVisible = primarySnapshotSource?.kind === 'local'
+        ? !isCameraOff
+        : remotePrimaryParticipant?.videoEnabled !== false;
+
+    const handleSnapshot = useCallback((event?: React.PointerEvent | React.MouseEvent) => {
+        event?.stopPropagation();
+        handleControlsInteraction();
+        if (!session || !primarySnapshotSource) return;
+        setIsSnapshotInFlight(true);
+        void (async () => {
+            try {
+                const result = await session.captureSnapshot(primarySnapshotSource);
+                onSnapshotCaptured?.(result);
+            } catch (err) {
+                const error = err instanceof SnapshotError
+                    ? err
+                    : new SnapshotError('captureFailed', (err as Error)?.message ?? 'Snapshot failed');
+                onSnapshotError?.(error);
+            } finally {
+                setIsSnapshotInFlight(false);
+            }
+        })();
+    }, [handleControlsInteraction, onSnapshotCaptured, onSnapshotError, primarySnapshotSource, session]);
+
     const remoteStageTiles = useMemo<RemoteStageTile[]>(() => (
         remoteStreamEntries.map(([cid, stream]) => ({
             cid,
@@ -874,6 +948,37 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             )}
         </>
     );
+
+    // True when btn-zoom (fit/cover) renders in the same top-right corner as
+    // the snapshot button on the large view: 1:1 with remote in the primary
+    // tile, or any pinned multi-party stage. In those cases the snapshot
+    // cascades — down in portrait, left in landscape — so it doesn't overlap.
+    const cornerHasCompanion = !!primarySnapshotSource && (
+        isMultiParty
+            || (primarySnapshotSource.kind === 'remote' && remoteStream != null)
+    );
+
+    const snapshotButton = snapshotEnabled && primarySnapshotSource ? (
+        <button
+            type="button"
+            className={`btn-snapshot${
+                cornerHasCompanion
+                    ? isWindowLandscape ? ' cascade-landscape' : ' cascade-portrait'
+                    : ''
+            }`}
+            // `onClick` so keyboard activation (Enter / Space) works for
+            // assistive tech; `onPointerUp` only stops the pointer event
+            // from bubbling into the screen's tap-to-toggle-controls handler.
+            onClick={handleSnapshot}
+            onPointerUp={(event) => event.stopPropagation()}
+            disabled={isSnapshotInFlight || !primaryVideoVisible}
+            title={resolveString('takeSnapshot', strings)}
+            aria-label={resolveString('takeSnapshot', strings)}
+            data-testid="call.takeSnapshot"
+        >
+            <Camera size={20} />
+        </button>
+    ) : null;
 
     const controlsBar = (
         <div
@@ -1094,6 +1199,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                             <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} stream={localStream} />
                         </div>
                     )}
+                    {snapshotButton}
                 </div>
                 {controlsBar}
             </div>
@@ -1187,6 +1293,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                     )}
                     <ParticipantBadge muted={isMuted} displayName={localParticipant?.displayName} stream={localStream} />
                 </div>
+                {snapshotButton}
             </div>
             {controlsBar}
         </div>

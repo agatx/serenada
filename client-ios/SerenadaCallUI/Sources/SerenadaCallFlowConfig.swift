@@ -17,6 +17,12 @@ public struct SerenadaCallFlowConfig {
     /// `false`, the controls are always visible and the idle timer never runs.
     public var autoHideControls: Bool
 
+    /// When `true`, the call UI shows a circular shutter button anchored to
+    /// the short edge of the current large preview (bottom in portrait,
+    /// right in landscape). Tapping it captures the visible stream.
+    /// Defaults to `false`.
+    public var snapshotEnabled: Bool
+
     /// Optional resolver that returns an avatar for a remote participant's
     /// host-supplied `peerId` (passed to `SerenadaCore.join`). When unset or
     /// when `peerId` is absent on the participant, the call UI shows an
@@ -28,12 +34,14 @@ public struct SerenadaCallFlowConfig {
         inviteControlsEnabled: Bool = true,
         debugOverlayEnabled: Bool = false,
         autoHideControls: Bool = true,
+        snapshotEnabled: Bool = false,
         avatarProvider: AvatarProvider? = nil
     ) {
         self.screenSharingEnabled = screenSharingEnabled
         self.inviteControlsEnabled = inviteControlsEnabled
         self.debugOverlayEnabled = debugOverlayEnabled
         self.autoHideControls = autoHideControls
+        self.snapshotEnabled = snapshotEnabled
         self.avatarProvider = avatarProvider
     }
 }

@@ -463,6 +463,53 @@ public final class SerenadaSession: ObservableObject {
 
     /// Stop screen sharing.
     public func stopScreenShare() { _ = webRtcEngine.stopScreenShare() }
+
+    /// Capture the current video frame from the chosen stream as JPEG data
+    /// at the source track's full intrinsic resolution.
+    ///
+    /// - Parameter source: `.local` for the user's own stream, `.remote(cid:)`
+    ///   for a specific participant. Defaults to `.local`.
+    /// - Throws: `SnapshotError.streamNotActive` when the chosen stream's
+    ///   video is off or the participant is not connected;
+    ///   `SnapshotError.captureTimeout` when no frame arrives within the
+    ///   resilience window; `SnapshotError.captureFailed` for encode errors.
+    public func captureSnapshot(source: SnapshotSource = .local) async throws -> SnapshotResult {
+        let timestampMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let engine = webRtcEngine
+        let attachRenderer: @MainActor (AnyObject) -> Void
+        let detachRenderer: @MainActor (AnyObject) -> Void
+
+        switch source {
+        case .local:
+            guard state.localParticipant.videoEnabled,
+                  internalPhase == .inCall || internalPhase == .waiting else {
+                throw SnapshotError.streamNotActive
+            }
+            attachRenderer = { renderer in engine.attachLocalRenderer(renderer) }
+            detachRenderer = { renderer in engine.detachLocalRenderer(renderer) }
+        case .remote(let cid):
+            guard let slot = peerSlots[cid], slot.isRemoteVideoTrackEnabled() else {
+                throw SnapshotError.streamNotActive
+            }
+            let capturedSlot = slot
+            attachRenderer = { renderer in capturedSlot.attachRemoteRenderer(renderer) }
+            detachRenderer = { renderer in capturedSlot.detachRemoteRenderer(renderer) }
+        }
+
+        let capturer = FrameSnapshotCapturer(
+            attachRenderer: attachRenderer,
+            detachRenderer: detachRenderer
+        )
+        let frame = try await capturer.capture(timeoutMs: WebRtcResilience.snapshotPrepareTimeoutMs)
+        return SnapshotResult(
+            jpegData: frame.jpegData,
+            width: frame.width,
+            height: frame.height,
+            timestampMs: timestampMs,
+            source: source
+        )
+    }
+
     public func setHdVideoExperimentalEnabled(_ enabled: Bool) { webRtcEngine.setHdVideoExperimentalEnabled(enabled) }
     /// Toggle the device flashlight. Returns whether the flashlight is now on.
     @discardableResult public func toggleFlashlight() -> Bool { webRtcEngine.toggleFlashlight() }

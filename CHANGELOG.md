@@ -4,6 +4,46 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.12] — 2026-05-09
+
+Full-resolution snapshot capture across web, iOS, and Android.
+
+### Added
+- Web, Android, iOS: full-resolution snapshot capture. The SDK pulls
+  a still frame straight from the WebRTC video track (local camera,
+  remote participant, or screen share) at native resolution rather
+  than from the rendered view, so captures stay pixel-perfect even
+  when the UI is scaled, cropped, or letterboxed. Tests cover all
+  three platforms.
+- React UI, iOS UI, Android UI: in-call snapshot shutter on the
+  primary tile and on pinned multi-party tiles. Disabled while a
+  capture is in flight, hidden until the primary tile has a video
+  surface.
+- React UI: `data-testid="call.takeSnapshot"` and accessibility
+  labels on the shutter so host apps and tests can target it
+  reliably.
+- Host apps: snapshot integrations. Each platform's host app handles
+  the captured frame (save to camera roll on iOS / Android, download
+  on web), keeping the SDK itself headless.
+
+### Changed
+- Web, iOS, Android: shutter button cascades away from the fit/cover
+  ("btn-zoom") toggle when both share the same corner of the large
+  preview — that's the 1:1 remote-in-primary case and any pinned
+  multi-party tile. Cascade direction tracks the live orientation:
+  down in portrait, left in landscape. Web shutter icon shrunk
+  26 → 20 so it doesn't dominate small tiles.
+
+### Fixed
+- iOS SDK: snapshot capture from a remote I420 video track no longer
+  times out. Frames are now converted via NV12 before encoding,
+  matching the path WebRTC's iOS surfaces actually serve.
+- Web SDK: `useCallback`s for snapshot wiring are now hoisted above
+  the `CallRoom` early-return branches so the React hooks order
+  stays consistent when the route renders without a session.
+- iOS SDK: build cleanup — dropped the unused import that surfaced as
+  a compiler warning after the snapshot integration landed.
+
 ## [0.6.11] — 2026-05-08
 
 First version published to public registries, plus Android and web

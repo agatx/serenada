@@ -128,6 +128,12 @@
     <string name="call_invite_sent">Invite sent</string>
     <string name="call_invite_failed">Failed to send invite</string>
     <string name="call_share_link_chooser">Share call link</string>
+    <string name="snapshot_saved">Snapshot saved to Pictures/Serenada</string>
+    <string name="snapshot_save_failed">Snapshot saved to library failed: %1$s</string>
+    <string name="snapshot_failed_with_reason">Snapshot failed: %1$s</string>
+    <string name="snapshot_reason_no_video">video is off</string>
+    <string name="snapshot_reason_timeout">capture timed out</string>
+    <string name="snapshot_reason_unsupported">unsupported source</string>
 
     <string name="notification_call_title">Serenada call</string>
     <string name="notification_call_status_channel">Call status</string>

@@ -266,6 +266,7 @@ struct CallScreenView: View {
     let onToggleFlashlight: () -> Void
     let onEndCall: () -> Void
     let onInviteToRoom: () async -> Result<Void, Error>
+    let onSnapshotRequested: ((SnapshotSource) -> Void)?
     let rendererProvider: CallRendererProvider
     let initialRemoteVideoFitCover: Bool
     let onRemoteVideoFitChanged: ((Bool) -> Void)?
@@ -302,6 +303,7 @@ struct CallScreenView: View {
         onToggleFlashlight: @escaping () -> Void,
         onEndCall: @escaping () -> Void,
         onInviteToRoom: @escaping () async -> Result<Void, Error>,
+        onSnapshotRequested: ((SnapshotSource) -> Void)? = nil,
         rendererProvider: CallRendererProvider,
         initialRemoteVideoFitCover: Bool = true,
         onRemoteVideoFitChanged: ((Bool) -> Void)? = nil
@@ -322,6 +324,7 @@ struct CallScreenView: View {
         self.onToggleFlashlight = onToggleFlashlight
         self.onEndCall = onEndCall
         self.onInviteToRoom = onInviteToRoom
+        self.onSnapshotRequested = onSnapshotRequested
         self.rendererProvider = rendererProvider
         self.initialRemoteVideoFitCover = initialRemoteVideoFitCover
         self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
@@ -660,8 +663,62 @@ struct CallScreenView: View {
                     .padding(.top, 80)
                     .padding(.leading, 12)
             }
+
         }
         .animation(.easeInOut(duration: 0.2), value: areControlsVisible)
+    }
+
+    private var shouldShowSnapshotButton: Bool {
+        config.snapshotEnabled
+            && onSnapshotRequested != nil
+            && currentSnapshotSource != nil
+            && (uiState.phase == .inCall || uiState.phase == .waiting)
+    }
+
+    private var currentSnapshotSource: SnapshotSource? {
+        // Multi-party stage has no single dominant preview unless the user
+        // pins one. With a pinned tile the stage layout treats that
+        // participant as the large preview, so the shutter targets them.
+        if isMultiParty {
+            guard let pinned = pinnedParticipantId else { return nil }
+            if pinned == uiState.localCid, uiState.localVideoEnabled {
+                return .local
+            }
+            if let remote = uiState.remoteParticipants.first(where: { $0.cid == pinned }),
+               remote.videoEnabled {
+                return .remote(cid: remote.cid)
+            }
+            return nil
+        }
+        if isLocalLarge && uiState.localVideoEnabled {
+            return .local
+        }
+        if let remote = uiState.remoteParticipants.first, remote.videoEnabled {
+            return .remote(cid: remote.cid)
+        }
+        return nil
+    }
+
+    private var hasOtherTopRightCornerButtons: Bool {
+        let shareShown = uiState.phase == .waiting
+            && config.inviteControlsEnabled
+            && shareLinkURL != nil
+        let fitCoverShown = shouldShowRemoteFitButton(
+            phase: uiState.phase,
+            remoteVideoEnabled: uiState.remoteVideoEnabled,
+            isLocalLarge: isLocalLarge,
+            localVideoEnabled: uiState.localVideoEnabled
+        ) && !isMultiParty
+        return uiState.isFlashAvailable || shareShown || fitCoverShown
+    }
+
+    private var snapshotIconButton: some View {
+        iconButton(system: "camera.fill", accessibilityLabel: str(.callA11yTakeSnapshot)) {
+            guard let source = currentSnapshotSource else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onSnapshotRequested?(source)
+        }
+        .accessibilityIdentifier("call.takeSnapshot")
     }
 
     private var topStatus: some View {
@@ -690,6 +747,13 @@ struct CallScreenView: View {
 
                 Spacer()
 
+                // Landscape (or empty corner) keeps the cascade on the same row, so the
+                // snapshot button sits to the left of any companion icons in the corner.
+                if shouldShowSnapshotButton && (isLandscape || !hasOtherTopRightCornerButtons) {
+                    snapshotIconButton
+                        .opacity(autoHideOpacity)
+                }
+
                 if uiState.isFlashAvailable {
                     iconButton(system: uiState.isFlashEnabled ? "flashlight.on.fill" : "flashlight.off.fill", accessibilityLabel: uiState.isFlashEnabled ? str(.callA11yFlashlightOn) : str(.callA11yFlashlightOff)) {
                         onToggleFlashlight()
@@ -714,6 +778,17 @@ struct CallScreenView: View {
                             remoteVideoFitCover.toggle()
                         }
                     }
+                }
+            }
+
+            // Portrait drops the snapshot button below the corner cluster when
+            // companions are present, so the camera icon doesn't fight the
+            // flashlight/fit/share button for the same anchor.
+            if shouldShowSnapshotButton && !isLandscape && hasOtherTopRightCornerButtons {
+                HStack(spacing: 8) {
+                    Spacer()
+                    snapshotIconButton
+                        .opacity(autoHideOpacity)
                 }
             }
 

@@ -28,10 +28,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import app.serenada.android.R
 import app.serenada.android.call.CallManager
+import app.serenada.android.call.SnapshotSaver
 import app.serenada.android.i18n.buildSerenadaCallStrings
 import app.serenada.callui.SerenadaCallFlow
 import app.serenada.callui.SerenadaCallFlowConfig
+import app.serenada.core.SnapshotError
 import app.serenada.core.call.CallPhase
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 private enum class RootScreen {
     Join,
@@ -338,6 +342,7 @@ fun SerenadaAppRoot(
                 }
                 RootScreen.Call -> {
                     activeSession?.let { session ->
+                        val snapshotScope = rememberCoroutineScope()
                         SerenadaCallFlow(
                             session = session,
                             initialRemoteVideoFitCover = callManager.isRemoteVideoFitCover,
@@ -345,8 +350,46 @@ fun SerenadaAppRoot(
                                 screenSharingEnabled = true,
                                 inviteControlsEnabled = true,
                                 debugOverlayEnabled = true,
+                                snapshotEnabled = true,
                             ),
                             strings = buildSerenadaCallStrings(context),
+                            onSnapshotCaptured = { result ->
+                                snapshotScope.launch {
+                                    val outcome = SnapshotSaver.save(
+                                        context = context,
+                                        jpeg = result.jpeg,
+                                        timestampMs = result.timestampMs,
+                                    )
+                                    when (outcome) {
+                                        is SnapshotSaver.Result.Success ->
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                context.getString(R.string.snapshot_saved),
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        is SnapshotSaver.Result.Failure ->
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                context.getString(R.string.snapshot_save_failed, outcome.reason),
+                                                android.widget.Toast.LENGTH_LONG,
+                                            ).show()
+                                    }
+                                }
+                            },
+                            onSnapshotError = { error ->
+                                val reason = when (error) {
+                                    is SnapshotError.StreamNotActive -> context.getString(R.string.snapshot_reason_no_video)
+                                    is SnapshotError.NoVideoTrack -> context.getString(R.string.snapshot_reason_no_video)
+                                    is SnapshotError.CaptureTimeout -> context.getString(R.string.snapshot_reason_timeout)
+                                    is SnapshotError.CaptureFailed -> error.reason
+                                    is SnapshotError.UnsupportedSource -> context.getString(R.string.snapshot_reason_unsupported)
+                                }
+                                android.widget.Toast.makeText(
+                                    context,
+                                    context.getString(R.string.snapshot_failed_with_reason, reason),
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                            },
                             onInviteToRoom = {
                                 callManager.inviteToCurrentRoom { result ->
                                     result

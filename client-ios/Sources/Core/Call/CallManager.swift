@@ -19,6 +19,34 @@ final class CallManager: ObservableObject {
     @Published private(set) var savedRooms: [SavedRoom] = []
     @Published private(set) var roomStatuses: [String: RoomOccupancy] = [:]
     @Published private(set) var activeSession: SerenadaSession?
+    @Published var snapshotBanner: SnapshotBanner?
+
+    struct SnapshotBanner: Identifiable, Equatable {
+        let id = UUID()
+        let success: Bool
+        let message: String
+    }
+
+    private var snapshotBannerTask: Task<Void, Never>?
+
+    func presentSnapshotToast(saved: Bool, reason: String?) {
+        let message: String
+        if saved {
+            message = reason ?? L10n.snapshotSavedToPhotos
+        } else if let reason {
+            message = "\(L10n.snapshotFailed): \(reason)"
+        } else {
+            message = L10n.snapshotFailed
+        }
+        snapshotBanner = SnapshotBanner(success: saved, message: message)
+        snapshotBannerTask?.cancel()
+        snapshotBannerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if !Task.isCancelled {
+                self?.snapshotBanner = nil
+            }
+        }
+    }
 
     var locale: Locale {
         if selectedLanguage == AppConstants.languageAuto {
