@@ -664,14 +664,6 @@ struct CallScreenView: View {
                     .padding(.leading, 12)
             }
 
-            if shouldShowSnapshotButton {
-                snapshotButton
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: snapshotAlignment)
-                    .padding(snapshotPadding)
-                    .opacity(areControlsVisible ? 1 : 0)
-                    .allowsHitTesting(areControlsVisible)
-                    .accessibilityIdentifier("call.takeSnapshot")
-            }
         }
         .animation(.easeInOut(duration: 0.2), value: areControlsVisible)
     }
@@ -707,35 +699,26 @@ struct CallScreenView: View {
         return nil
     }
 
-    private var snapshotAlignment: Alignment {
-        // "Short edge" of the large preview tracks the device orientation
-        // since the preview fills the call container.
-        verticalSizeClass == .compact ? .trailing : .bottom
+    private var hasOtherTopRightCornerButtons: Bool {
+        let shareShown = uiState.phase == .waiting
+            && config.inviteControlsEnabled
+            && shareLinkURL != nil
+        let fitCoverShown = shouldShowRemoteFitButton(
+            phase: uiState.phase,
+            remoteVideoEnabled: uiState.remoteVideoEnabled,
+            isLocalLarge: isLocalLarge,
+            localVideoEnabled: uiState.localVideoEnabled
+        ) && !isMultiParty
+        return uiState.isFlashAvailable || shareShown || fitCoverShown
     }
 
-    private var snapshotPadding: EdgeInsets {
-        verticalSizeClass == .compact
-            ? EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 28)
-            : EdgeInsets(top: 0, leading: 0, bottom: 130, trailing: 0)
-    }
-
-    private var snapshotButton: some View {
-        Button {
+    private var snapshotIconButton: some View {
+        iconButton(system: "camera.fill", accessibilityLabel: str(.callA11yTakeSnapshot)) {
             guard let source = currentSnapshotSource else { return }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onSnapshotRequested?(source)
-        } label: {
-            Image(systemName: "camera.fill")
-                .font(.system(size: 24, weight: .bold))
-                .frame(width: 64, height: 64)
-                .background(Color.white.opacity(0.92))
-                .clipShape(Circle())
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.85), lineWidth: 4))
-                .foregroundStyle(Color.black.opacity(0.78))
-                .shadow(color: Color.black.opacity(0.4), radius: 6, y: 3)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(str(.callA11yTakeSnapshot))
+        .accessibilityIdentifier("call.takeSnapshot")
     }
 
     private var topStatus: some View {
@@ -764,6 +747,13 @@ struct CallScreenView: View {
 
                 Spacer()
 
+                // Landscape (or empty corner) keeps the cascade on the same row, so the
+                // snapshot button sits to the left of any companion icons in the corner.
+                if shouldShowSnapshotButton && (isLandscape || !hasOtherTopRightCornerButtons) {
+                    snapshotIconButton
+                        .opacity(autoHideOpacity)
+                }
+
                 if uiState.isFlashAvailable {
                     iconButton(system: uiState.isFlashEnabled ? "flashlight.on.fill" : "flashlight.off.fill", accessibilityLabel: uiState.isFlashEnabled ? str(.callA11yFlashlightOn) : str(.callA11yFlashlightOff)) {
                         onToggleFlashlight()
@@ -788,6 +778,17 @@ struct CallScreenView: View {
                             remoteVideoFitCover.toggle()
                         }
                     }
+                }
+            }
+
+            // Portrait drops the snapshot button below the corner cluster when
+            // companions are present, so the camera icon doesn't fight the
+            // flashlight/fit/share button for the same anchor.
+            if shouldShowSnapshotButton && !isLandscape && hasOtherTopRightCornerButtons {
+                HStack(spacing: 8) {
+                    Spacer()
+                    snapshotIconButton
+                        .opacity(autoHideOpacity)
                 }
             }
 

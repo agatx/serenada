@@ -693,22 +693,49 @@ internal fun CallScreen(
                     isWorldOrCompositeMode &&
                     uiState.isFlashAvailable
         val showRemoteFitButton = uiState.remoteVideoEnabled && !effectiveLocalLarge && !isMultiParty
-        if (showFlashButton || showRemoteFitButton) {
-            Column(
-                modifier =
-                    Modifier.align(Alignment.TopEnd)
-                        .statusBarsPadding()
-                        .padding(top = 16.dp, end = 16.dp)
-                        .zIndex(2f),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                horizontalAlignment = Alignment.End
-            ) {
+
+        // Snapshot lives in the same top-right cluster as flashlight/fit so the
+        // shutter inherits the corner anchor. In multi-party mode the source
+        // tracks the pinned tile, since the stage layout treats that
+        // participant as the dominant preview. Without a pin there is no
+        // clear "current large preview", so the shutter stays hidden.
+        val snapshotSource: app.serenada.core.SnapshotSource? = when {
+            !config.snapshotEnabled || onSnapshotRequested == null -> null
+            uiState.phase != CallPhase.InCall && uiState.phase != CallPhase.Waiting -> null
+            isMultiParty -> {
+                val pinned = pinnedParticipantId
+                when {
+                    pinned == null -> null
+                    pinned == uiState.localCid && uiState.localVideoEnabled ->
+                        app.serenada.core.SnapshotSource.Local
+                    else -> uiState.remoteParticipants
+                        .firstOrNull { it.cid == pinned && it.videoEnabled }
+                        ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+                }
+            }
+            isLocalLarge && uiState.localVideoEnabled -> app.serenada.core.SnapshotSource.Local
+            else -> uiState.remoteParticipants.firstOrNull { it.videoEnabled }
+                ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+        }
+        val snapshotHandler = onSnapshotRequested
+        val showSnapshotButton =
+            snapshotSource != null && snapshotHandler != null && areControlsVisible
+
+        if (showFlashButton || showRemoteFitButton || showSnapshotButton) {
+            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+            val isLandscape = configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            val cornerModifier = Modifier.align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 16.dp, end = 16.dp)
+                .zIndex(2f)
+
+            val flashlightIcon: @Composable () -> Unit = {
                 if (showFlashButton) {
                     IconButton(
                         onClick = onToggleFlashlight,
-                        modifier =
-                            Modifier.size(44.dp)
-                                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                        modifier = Modifier.size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
                     ) {
                         Icon(
                             imageVector =
@@ -719,7 +746,9 @@ internal fun CallScreen(
                         )
                     }
                 }
+            }
 
+            val fitIcon: @Composable () -> Unit = {
                 if (showRemoteFitButton) {
                     IconButton(
                         onClick = {
@@ -727,9 +756,8 @@ internal fun CallScreen(
                             remoteVideoFitCover = next
                             onRemoteVideoFitChanged?.invoke(next)
                         },
-                        modifier =
-                            Modifier.size(44.dp)
-                                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                        modifier = Modifier.size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
                     ) {
                         Icon(
                             imageVector =
@@ -739,6 +767,45 @@ internal fun CallScreen(
                             tint = Color.White
                         )
                     }
+                }
+            }
+
+            val snapshotIcon: @Composable () -> Unit = {
+                if (showSnapshotButton && snapshotHandler != null && snapshotSource != null) {
+                    IconButton(
+                        onClick = { snapshotHandler(snapshotSource) },
+                        modifier = Modifier.size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            .testTag("call.takeSnapshot")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoCamera,
+                            contentDescription = resolveString(SerenadaString.CallTakeSnapshot, strings),
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+
+            if (isLandscape) {
+                Row(
+                    modifier = cornerModifier,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    snapshotIcon()
+                    flashlightIcon()
+                    fitIcon()
+                }
+            } else {
+                Column(
+                    modifier = cornerModifier,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    flashlightIcon()
+                    fitIcon()
+                    snapshotIcon()
                 }
             }
         }
@@ -854,79 +921,8 @@ internal fun CallScreen(
             }
         }
 
-        // Snapshot button — anchored to the short edge of the large preview
-        // (bottom in portrait, right in landscape). In multi-party mode the
-        // shutter targets the pinned tile, since the stage layout treats
-        // that participant as the dominant preview. Without a pin there is
-        // no clear "current large preview", so the shutter stays hidden.
-        val snapshotSource: app.serenada.core.SnapshotSource? = when {
-            !config.snapshotEnabled || onSnapshotRequested == null -> null
-            uiState.phase != CallPhase.InCall && uiState.phase != CallPhase.Waiting -> null
-            isMultiParty -> {
-                val pinned = pinnedParticipantId
-                when {
-                    pinned == null -> null
-                    pinned == uiState.localCid && uiState.localVideoEnabled ->
-                        app.serenada.core.SnapshotSource.Local
-                    else -> uiState.remoteParticipants
-                        .firstOrNull { it.cid == pinned && it.videoEnabled }
-                        ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
-                }
-            }
-            isLocalLarge && uiState.localVideoEnabled -> app.serenada.core.SnapshotSource.Local
-            else -> uiState.remoteParticipants.firstOrNull { it.videoEnabled }
-                ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
-        }
-        if (snapshotSource != null && areControlsVisible) {
-            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-            val isLandscape = configuration.orientation ==
-                android.content.res.Configuration.ORIENTATION_LANDSCAPE
-            val alignment = if (isLandscape) Alignment.CenterEnd else Alignment.BottomCenter
-            val padding = if (isLandscape) {
-                PaddingValues(end = 28.dp)
-            } else {
-                PaddingValues(bottom = 150.dp)
-            }
-            val snapshotHandler = onSnapshotRequested
-            if (snapshotHandler != null) {
-                SnapshotShutterButton(
-                    onClick = { snapshotHandler(snapshotSource) },
-                    contentDescription = resolveString(SerenadaString.CallTakeSnapshot, strings),
-                    modifier = Modifier
-                        .align(alignment)
-                        .padding(padding)
-                        .testTag("call.takeSnapshot")
-                )
-            }
-        }
         }
       }
-    }
-}
-
-@Composable
-private fun SnapshotShutterButton(
-    onClick: () -> Unit,
-    contentDescription: String,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = Color.White.copy(alpha = 0.92f),
-        contentColor = Color.Black.copy(alpha = 0.78f),
-        shadowElevation = 6.dp,
-        modifier = modifier
-            .size(64.dp)
-            .border(width = 4.dp, color = Color.White.copy(alpha = 0.85f), shape = CircleShape),
-    ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Icon(
-                imageVector = Icons.Default.PhotoCamera,
-                contentDescription = contentDescription,
-                modifier = Modifier.size(28.dp),
-            )
-        }
     }
 }
 

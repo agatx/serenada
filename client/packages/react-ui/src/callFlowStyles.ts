@@ -405,48 +405,45 @@ const CALL_FLOW_CSS = `
 
 [data-serenada-callflow] .btn-snapshot {
   position: absolute;
+  top: 20px;
+  right: 20px;
   z-index: 22;
-  width: 64px;
-  height: 64px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 4px solid rgba(255, 255, 255, 0.85);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.92);
-  color: #111827;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(22, 27, 34, 0.6);
+  color: #fff;
   cursor: pointer;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-  transition: transform 0.15s ease, opacity 0.2s ease, background 0.2s ease;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
 }
 
-[data-serenada-callflow] .btn-snapshot.orientation-landscape {
-  right: 24px;
-  top: 50%;
-  transform: translateY(-50%);
+[data-serenada-callflow] .btn-snapshot.cascade-landscape {
+  right: 74px;
 }
 
-[data-serenada-callflow] .btn-snapshot.orientation-landscape:active {
-  transform: translateY(-50%) scale(0.92);
-}
-
-[data-serenada-callflow] .btn-snapshot.orientation-portrait {
-  bottom: 110px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-[data-serenada-callflow] .btn-snapshot.orientation-portrait:active {
-  transform: translateX(-50%) scale(0.92);
+[data-serenada-callflow] .btn-snapshot.cascade-portrait {
+  top: 74px;
 }
 
 [data-serenada-callflow] .btn-snapshot:hover {
-  background: #fff;
+  transform: scale(1.05);
+  border-color: var(--serenada-accent);
+  color: var(--serenada-accent);
+}
+
+[data-serenada-callflow] .btn-snapshot:active {
+  transform: scale(0.95);
 }
 
 [data-serenada-callflow] .btn-snapshot:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  transform: none;
 }
 
 [data-serenada-callflow].controls-hidden .btn-snapshot {

@@ -949,11 +949,22 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         </>
     );
 
+    // True when btn-zoom (fit/cover) renders in the same top-right corner as
+    // the snapshot button on the large view: 1:1 with remote in the primary
+    // tile, or any pinned multi-party stage. In those cases the snapshot
+    // cascades — down in portrait, left in landscape — so it doesn't overlap.
+    const cornerHasCompanion = !!primarySnapshotSource && (
+        isMultiParty
+            || (primarySnapshotSource.kind === 'remote' && remoteStream != null)
+    );
+
     const snapshotButton = snapshotEnabled && primarySnapshotSource ? (
         <button
             type="button"
-            className={`btn-snapshot ${
-                isWindowLandscape ? 'orientation-landscape' : 'orientation-portrait'
+            className={`btn-snapshot${
+                cornerHasCompanion
+                    ? isWindowLandscape ? ' cascade-landscape' : ' cascade-portrait'
+                    : ''
             }`}
             // `onClick` so keyboard activation (Enter / Space) works for
             // assistive tech; `onPointerUp` only stops the pointer event
@@ -963,8 +974,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             disabled={isSnapshotInFlight || !primaryVideoVisible}
             title={resolveString('takeSnapshot', strings)}
             aria-label={resolveString('takeSnapshot', strings)}
+            data-testid="call.takeSnapshot"
         >
-            <Camera size={26} />
+            <Camera size={20} />
         </button>
     ) : null;
 
