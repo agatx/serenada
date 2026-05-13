@@ -860,14 +860,14 @@ struct CallScreenView: View {
                 onToggleAudio()
             }
 
-            if !uiState.availableCameraModes.isEmpty {
+            if config.videoEnabled && !uiState.availableCameraModes.isEmpty {
                 iconButton(system: uiState.localVideoEnabled ? "video.fill" : "video.slash.fill", accessibilityLabel: uiState.localVideoEnabled ? str(.callA11yVideoOn) : str(.callA11yVideoOff)) {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     onToggleVideo()
                 }
             }
 
-            if uiState.availableCameraModes.count > 1 && uiState.localVideoEnabled {
+            if config.videoEnabled && uiState.availableCameraModes.count > 1 && uiState.localVideoEnabled {
                 iconButton(system: "camera.rotate.fill", accessibilityLabel: str(.callA11yFlipCamera)) {
                     onFlipCamera()
                 }

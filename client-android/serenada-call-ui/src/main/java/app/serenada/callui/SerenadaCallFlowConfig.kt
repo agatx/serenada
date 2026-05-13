@@ -24,4 +24,14 @@ data class SerenadaCallFlowConfig(
      * initials placeholder derived from their display name.
      */
     val avatarProvider: AvatarProvider? = null,
+    /**
+     * When `true` (default), the call UI shows the video on/off and camera
+     * mode (flip) controls and the SDK requests camera permission on join.
+     * When `false`, both controls are hidden and — for URL-first call flows
+     * — the internally-created session is configured with no camera modes so
+     * the camera is never requested. For session-first usage, host apps that
+     * want a fully audio-only call should also pass `cameraModes = emptyList()`
+     * to the `SerenadaConfig` used to build the session.
+     */
+    val videoEnabled: Boolean = true,
 )

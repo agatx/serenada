@@ -869,7 +869,7 @@ internal fun CallScreen(
                             else Color.Red
                     )
 
-                    if (uiState.availableCameraModes.isNotEmpty()) {
+                    if (config.videoEnabled && uiState.availableCameraModes.isNotEmpty()) {
                         ControlButton(
                             onClick = onToggleVideo,
                             icon =
@@ -881,7 +881,7 @@ internal fun CallScreen(
                         )
                     }
 
-                    if (uiState.availableCameraModes.size > 1 && uiState.localVideoEnabled) {
+                    if (config.videoEnabled && uiState.availableCameraModes.size > 1 && uiState.localVideoEnabled) {
                         ControlButton(
                             onClick = onFlipCamera,
                             icon = Icons.Default.FlipCameraIos,

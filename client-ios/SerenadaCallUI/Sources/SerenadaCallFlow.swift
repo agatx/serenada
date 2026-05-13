@@ -177,7 +177,11 @@ private struct URLFirstCallFlow: View {
             }
         }
         .task {
-            let newCore = SerenadaCore(config: serenadaConfig)
+            var effectiveConfig = serenadaConfig
+            if !config.videoEnabled {
+                effectiveConfig.cameraModes = []
+            }
+            let newCore = SerenadaCore(config: effectiveConfig)
             core = newCore
             let newSession = newCore.join(url: url)
             newSession.onPermissionsRequired = { permissions in

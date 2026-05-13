@@ -29,13 +29,23 @@ public struct SerenadaCallFlowConfig {
     /// initials placeholder derived from their display name.
     public var avatarProvider: AvatarProvider?
 
+    /// When `true` (default), the call UI shows the video on/off and camera
+    /// mode (flip) controls and the SDK requests camera permission on join.
+    /// When `false`, both controls are hidden and — for URL-first call flows
+    /// — the internally-created session is configured with no camera modes so
+    /// the camera is never requested. For session-first usage, host apps that
+    /// want a fully audio-only call should also pass `cameraModes: []` to the
+    /// `SerenadaConfig` used to build the session.
+    public var videoEnabled: Bool
+
     public init(
         screenSharingEnabled: Bool = true,
         inviteControlsEnabled: Bool = true,
         debugOverlayEnabled: Bool = false,
         autoHideControls: Bool = true,
         snapshotEnabled: Bool = false,
-        avatarProvider: AvatarProvider? = nil
+        avatarProvider: AvatarProvider? = nil,
+        videoEnabled: Bool = true
     ) {
         self.screenSharingEnabled = screenSharingEnabled
         self.inviteControlsEnabled = inviteControlsEnabled
@@ -43,5 +53,6 @@ public struct SerenadaCallFlowConfig {
         self.autoHideControls = autoHideControls
         self.snapshotEnabled = snapshotEnabled
         self.avatarProvider = avatarProvider
+        self.videoEnabled = videoEnabled
     }
 }

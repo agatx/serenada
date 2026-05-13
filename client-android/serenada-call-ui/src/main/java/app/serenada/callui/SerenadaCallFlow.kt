@@ -86,6 +86,7 @@ fun SerenadaCallFlow(
                         config = SerenadaConfig(
                             serverHost = resolveServerHost(callUrl),
                             transports = defaultTransports(),
+                            cameraModes = if (config.videoEnabled) null else emptyList(),
                         ),
                         context = context.applicationContext,
                     ).join(callUrl)
