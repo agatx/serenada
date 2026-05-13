@@ -66,6 +66,7 @@ Provider mode does not expose Serenada server helpers. These APIs require `serve
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `screenSharingEnabled` | Bool | `true` | Show/hide the screen-share control when the current browser/device supports screen capture |
+| `videoEnabled` | Bool | `true` | When `true`, the video on/off and camera-mode (flip) controls appear and the SDK requests camera permission on join. When `false`, both controls are hidden and URL-first call flows configure the internally-created session with no camera modes (camera is never requested). Session-first hosts that want audio-only should also pass `cameraModes: []` to `SerenadaConfig`. |
 | `inviteControlsEnabled` | Bool | `true` | Show/hide the built-in QR code and share-link UI in the waiting screen |
 | `debugOverlayEnabled` | Bool | `false` | Show/hide the in-call debug toggle and diagnostics panel |
 | `autoHideControls` | Bool | `true` | When `true`, the call controls bar fades out after a few seconds of idle time and a tap on the stage brings it back. When `false`, the controls stay visible for the entire call and the idle timer never runs. |
@@ -79,7 +80,8 @@ SerenadaCallFlow(
         screenSharingEnabled: false,
         inviteControlsEnabled: false,
         debugOverlayEnabled: true,
-        autoHideControls: false
+        autoHideControls: false,
+        videoEnabled: false
     ),
     onDismiss: { dismiss() }
 )
@@ -95,6 +97,7 @@ SerenadaCallFlow(
         inviteControlsEnabled = false,
         debugOverlayEnabled = true,
         autoHideControls = false,
+        videoEnabled = false,
     ),
     onDismiss = { navController.popBackStack() }
 )
@@ -110,6 +113,7 @@ SerenadaCallFlow(
         inviteControlsEnabled: false,
         debugOverlayEnabled: true,
         autoHideControls: false,
+        videoEnabled: false,
     }}
     onDismiss={() => navigate('/')}
 />

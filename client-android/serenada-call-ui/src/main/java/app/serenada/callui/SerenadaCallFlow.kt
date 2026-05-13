@@ -78,7 +78,7 @@ fun SerenadaCallFlow(
     val activity = context as? Activity
     val coroutineScope = rememberCoroutineScope()
     val ownedSession =
-        remember(url, session, context.applicationContext) {
+        remember(url, session, context.applicationContext, config.videoEnabled) {
             session ?: url
                 ?.takeIf { it.isNotBlank() }
                 ?.let { callUrl ->
@@ -86,6 +86,7 @@ fun SerenadaCallFlow(
                         config = SerenadaConfig(
                             serverHost = resolveServerHost(callUrl),
                             transports = defaultTransports(),
+                            cameraModes = if (config.videoEnabled) null else emptyList(),
                         ),
                         context = context.applicationContext,
                     ).join(callUrl)

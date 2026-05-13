@@ -226,6 +226,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const internalSessionRef = useRef<SerenadaSessionHandle | null>(null);
     const [internalSession, setInternalSession] = useState<SerenadaSessionHandle | null>(null);
     const usesInternalSession = !externalSession;
+    const videoEnabledConfig = config?.videoEnabled !== false;
 
     useEffect(() => {
         if (externalSession || !url) return;
@@ -237,7 +238,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             return;
         }
 
-        const core = new SerenadaCore({ serverHost: host });
+        const core = new SerenadaCore(
+            videoEnabledConfig
+                ? { serverHost: host }
+                : { serverHost: host, cameraModes: [] },
+        );
         const sess = core.join(url);
         internalSessionRef.current = sess;
         // eslint-disable-next-line react-hooks/set-state-in-effect -- internal SDK session is initialized from the URL-first effect
@@ -248,7 +253,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             internalSessionRef.current = null;
             setInternalSession(null);
         };
-    }, [externalSession, serverHost, url]);
+    }, [externalSession, serverHost, url, videoEnabledConfig]);
 
     const session: SerenadaSessionHandle | null = externalSession ?? internalSession;
     const state = useCallState(session ?? null);
@@ -277,8 +282,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const isMuted = localParticipant?.audioEnabled === false;
     const canScreenShare = session?.canScreenShare === true && !isMobileBrowser();
     const availableCameraModes = localParticipant?.availableCameraModes ?? [];
-    const videoCaptureSupported = availableCameraModes.length > 0;
-    const canFlipCamera = session?.hasMultipleCameras === true
+    const videoCaptureSupported = videoEnabledConfig && availableCameraModes.length > 0;
+    const canFlipCamera = videoEnabledConfig
+        && session?.hasMultipleCameras === true
         && availableCameraModes.length > 1
         && localParticipant?.videoEnabled === true;
     const showScreenShareControl = config?.screenSharingEnabled !== false && canScreenShare;
