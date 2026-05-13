@@ -253,7 +253,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             internalSessionRef.current = null;
             setInternalSession(null);
         };
-    }, [externalSession, serverHost, url, videoEnabledConfig]);
+        // videoEnabledConfig is intentionally omitted: it's read once at session
+        // creation. Toggling it mid-call would destroy and rejoin the session,
+        // dropping the call. Host apps that need to change videoEnabled at
+        // runtime should remount this component.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [externalSession, serverHost, url]);
 
     const session: SerenadaSessionHandle | null = externalSession ?? internalSession;
     const state = useCallState(session ?? null);
