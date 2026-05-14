@@ -693,24 +693,36 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     // otherwise the only remote stream. In multi-party there is no single
     // "large preview" until a tile is pinned — pinned tiles render as the
     // dominant stage tile and the shutter captures from that participant.
+    // When the source's video is off we return null so the button is hidden,
+    // matching Android/iOS (rather than rendering a disabled shutter).
     const primarySnapshotSource: SnapshotSource | null = useMemo(() => {
         if (!snapshotEnabled) return null;
         if (isMultiParty) {
             if (!pinnedParticipantId) return null;
-            if (pinnedParticipantId === localParticipant?.cid) return { kind: 'local' };
-            return { kind: 'remote', cid: pinnedParticipantId };
+            if (pinnedParticipantId === localParticipant?.cid) {
+                return isCameraOff ? null : { kind: 'local' };
+            }
+            const pinnedRemote = effectiveState.remoteParticipants.find(
+                (p) => p.cid === pinnedParticipantId,
+            );
+            if (!pinnedRemote || pinnedRemote.videoEnabled === false) return null;
+            return { kind: 'remote', cid: pinnedRemote.cid };
         }
         if (effectiveLocalLarge) return { kind: 'local' };
         const cid = remoteStreamEntries[0]?.[0];
         if (!cid) return null;
+        const remoteParticipant = effectiveState.remoteParticipants.find((p) => p.cid === cid);
+        if (remoteParticipant?.videoEnabled === false) return null;
         return { kind: 'remote', cid };
     }, [
         snapshotEnabled,
         isMultiParty,
         pinnedParticipantId,
         localParticipant?.cid,
+        isCameraOff,
         effectiveLocalLarge,
         remoteStreamEntries,
+        effectiveState.remoteParticipants,
     ]);
 
     // Match native: anchor button to the device/window short edge so the web
@@ -726,13 +738,6 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         window.addEventListener('resize', handler);
         return () => window.removeEventListener('resize', handler);
     }, []);
-
-    const remotePrimaryParticipant = primarySnapshotSource?.kind === 'remote'
-        ? effectiveState.remoteParticipants.find((p) => p.cid === primarySnapshotSource.cid)
-        : null;
-    const primaryVideoVisible = primarySnapshotSource?.kind === 'local'
-        ? !isCameraOff
-        : remotePrimaryParticipant?.videoEnabled !== false;
 
     const handleSnapshot = useCallback((event?: React.PointerEvent | React.MouseEvent) => {
         event?.stopPropagation();
@@ -982,7 +987,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             // from bubbling into the screen's tap-to-toggle-controls handler.
             onClick={handleSnapshot}
             onPointerUp={(event) => event.stopPropagation()}
-            disabled={isSnapshotInFlight || !primaryVideoVisible}
+            disabled={isSnapshotInFlight}
             title={resolveString('takeSnapshot', strings)}
             aria-label={resolveString('takeSnapshot', strings)}
             data-testid="call.takeSnapshot"
