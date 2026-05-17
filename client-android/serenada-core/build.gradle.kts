@@ -111,7 +111,7 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 }
 
 dependencies {
-    api("", name = webRtcArtifactId, ext = "aar")
+    api(":$webRtcArtifactId@aar")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     testImplementation("junit:junit:4.13.2")

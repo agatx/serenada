@@ -3,7 +3,8 @@
 ## Requirements
 
 - Android API 24+ (Android 7.0)
-- Kotlin 1.9+
+- Gradle 9.5+ with Android Gradle Plugin 9.2+
+- Kotlin 2.3.21+
 - Jetpack Compose (BOM 2024.10.00+)
 
 ## Installation
