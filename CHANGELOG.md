@@ -4,6 +4,16 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.13] — 2026-05-16
+
+Android build toolchain refresh.
+
+### Changed
+- Android SDK and sample apps: upgraded to Gradle 9.5.0, Android Gradle
+  Plugin 9.2.0, and Kotlin 2.3.21. Compose modules now use the Kotlin
+  Compose compiler plugin required for Kotlin 2.x and AGP 9 built-in
+  Kotlin support.
+
 ## [0.6.12] — 2026-05-09
 
 Full-resolution snapshot capture across web, iOS, and Android.
