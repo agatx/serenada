@@ -2,7 +2,7 @@
  * @agatx/serenada-core — headless call engine.
  * Vanilla TypeScript — no React dependency.
  */
-export const SERENADA_CORE_VERSION = '0.6.12';
+export const SERENADA_CORE_VERSION = '0.6.13';
 
 // Public API
 export { SerenadaCore } from './SerenadaCore.js';

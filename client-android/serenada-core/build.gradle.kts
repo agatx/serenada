@@ -5,7 +5,6 @@ import org.gradle.api.publish.tasks.GenerateModuleMetadata
 
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.dokka")
     `maven-publish`
 }
@@ -51,7 +50,7 @@ fun sha256Of(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-val sdkVersion = "0.6.12"
+val sdkVersion = "0.6.13"
 val mavenGroupId = "app.serenada"
 val webRtcArtifactId = "libwebrtc-7559_173-universal"
 val localWebRtcAarPath = "libs/$webRtcArtifactId.aar"
@@ -84,10 +83,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     publishing {
@@ -178,7 +173,7 @@ afterEvaluate {
                             dependenciesNode = dependenciesNode,
                             groupId = "org.jetbrains.kotlin",
                             artifactId = "kotlin-stdlib",
-                            version = "1.9.25",
+                            version = "2.3.21",
                             scope = "compile",
                         )
                         appendPomDependency(
