@@ -1,6 +1,7 @@
 import java.io.File
 import java.security.MessageDigest
 import groovy.util.Node
+import org.jetbrains.dokka.gradle.DokkaTask
 import org.gradle.api.publish.tasks.GenerateModuleMetadata
 
 plugins {
@@ -120,6 +121,12 @@ dependencies {
 
 tasks.withType<GenerateModuleMetadata>().matching { it.name == "generateMetadataFileForReleasePublication" }.configureEach {
     enabled = false
+}
+
+tasks.withType<DokkaTask>().configureEach {
+    dokkaSourceSets.maybeCreate("main").apply {
+        sourceRoots.from(file("src/main/java"))
+    }
 }
 
 afterEvaluate {
