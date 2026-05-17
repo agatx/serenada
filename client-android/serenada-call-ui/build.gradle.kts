@@ -1,3 +1,5 @@
+import org.jetbrains.dokka.gradle.DokkaTask
+
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -40,6 +42,12 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("com.google.zxing:core:3.5.3")
+}
+
+tasks.withType<DokkaTask>().configureEach {
+    dokkaSourceSets.maybeCreate("main").apply {
+        sourceRoots.from(file("src/main/java"))
+    }
 }
 
 afterEvaluate {
