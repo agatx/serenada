@@ -192,6 +192,17 @@ func InitPushService() error {
 		fcm:        fcmService,
 	}
 
+	go func() {
+		// Run once on startup
+		cleanupOldSnapshots(10 * time.Minute)
+
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanupOldSnapshots(10 * time.Minute)
+		}
+	}()
+
 	log.Printf("[PUSH] PushService initialized with SQLite persistence at %s", dbPath)
 	return nil
 }
@@ -881,7 +892,6 @@ func handlePushSnapshot(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to save snapshot metadata", http.StatusInternalServerError)
 			return
 		}
-		cleanupOldSnapshots(10 * time.Minute)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{

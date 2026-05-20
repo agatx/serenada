@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -64,14 +65,13 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	ip := getClientIP(r)
 	client := &Client{hub: hub, send: make(chan []byte, 256), sid: sid, ip: ip, transport: TransportSSE}
 	existing := hub.getClientBySID(sid)
-	if existing != nil {
-		// TODO(#7): SID-based replaceClient is currently a participant
-		// takeover risk for in-room sessions — anyone who learns the SID can
-		// inherit the participant's identity. The proper fix is the pending
-		// unauthenticated SSE + `resumeSse` protocol described in
-		// docs/resilience-failure-modes.md. Hardening here is gated on the
-		// SDKs gaining the `resumeSse` envelope first to avoid breaking
-		// legitimate SSE reconnects in transit. Tracked for Phase 2.
+	isPending := false
+	if existing != nil && existing.rid != "" {
+		// Potential participant takeover. Place in pendingTakeovers.
+		hub.registerPendingTakeover(sid, client)
+		isPending = true
+	} else if existing != nil {
+		// Existing is not in a room, safe to replace directly.
 		hub.replaceClient(existing, client)
 	} else {
 		hub.registerClient(client)
@@ -80,7 +80,7 @@ func serveSSE(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	stats.IncConnectionSuccess("sse")
 	hub.markSSESeen(client)
 
-	log.Printf("[SSE] Client %s connected", client.sid)
+	log.Printf("[SSE] Client %s connected (pending=%t)", client.sid, isPending)
 
 	if _, err := w.Write([]byte(": ready\n\n")); err != nil {
 		hub.handleDisconnectSSE(client)
@@ -102,8 +102,10 @@ func handleSSEPost(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := hub.getClientBySID(sid)
-	if client == nil {
+	existing := hub.getClientBySID(sid)
+	pending := hub.getPendingTakeover(sid)
+
+	if existing == nil && pending == nil {
 		http.Error(w, "Unknown SSE session", http.StatusGone)
 		return
 	}
@@ -118,6 +120,59 @@ func handleSSEPost(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		http.Error(w, "Empty request body", http.StatusBadRequest)
 		return
+	}
+
+	// If there is a pending takeover connection, validate the reconnect token
+	// inside the incoming join message before promoting the takeover.
+	if pending != nil && existing != nil {
+		var msg Message
+		if err := json.Unmarshal(body, &msg); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		if msg.V != 1 {
+			http.Error(w, "Unsupported version", http.StatusBadRequest)
+			return
+		}
+
+		if msg.Type != "join" {
+			http.Error(w, "Unauthorized session takeover", http.StatusUnauthorized)
+			return
+		}
+
+		var joinPayload struct {
+			ReconnectCID   string `json:"reconnectCid"`
+			ReconnectToken string `json:"reconnectToken"`
+		}
+		if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
+			http.Error(w, "Invalid join payload", http.StatusBadRequest)
+			return
+		}
+
+		if joinPayload.ReconnectCID == "" || joinPayload.ReconnectToken == "" {
+			http.Error(w, "Missing reconnect credentials for takeover", http.StatusUnauthorized)
+			return
+		}
+
+		valid, _ := validateReconnectToken(joinPayload.ReconnectToken, joinPayload.ReconnectCID, msg.RID)
+		if !valid {
+			log.Printf("[SSE] Rejecting session takeover for SID %s: invalid reconnect token", sid)
+			http.Error(w, "Invalid reconnect token", http.StatusUnauthorized)
+			return
+		}
+
+		log.Printf("[SSE] Session takeover authorized for SID %s (CID: %s)", sid, joinPayload.ReconnectCID)
+		hub.replaceClient(existing, pending)
+		hub.removePendingTakeover(sid)
+		existing = nil // Now pending is replaced and registered; use pending.
+	}
+
+	var client *Client
+	if pending != nil {
+		client = pending
+	} else {
+		client = existing
 	}
 
 	hub.markSSESeen(client)
@@ -180,6 +235,13 @@ func (h *Hub) handleDisconnectSSE(c *Client) {
 		h.mu.Unlock()
 		return
 	}
+	// Also clean up from pendingTakeovers if it was there
+	h.mu.Lock()
+	if h.pendingTakeovers[c.sid] == c {
+		delete(h.pendingTakeovers, c.sid)
+	}
+	h.mu.Unlock()
+
 	stats.IncDisconnect("sse")
 	go h.delayDisconnectSSE(c)
 }

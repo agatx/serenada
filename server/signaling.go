@@ -242,6 +242,7 @@ type Hub struct {
 	mu                   sync.RWMutex
 	clients              map[*Client]bool
 	clientsBySID         map[string]*Client
+	pendingTakeovers     map[string]*Client
 	maxParticipantsLimit int // server-wide ceiling for room capacity
 }
 
@@ -606,6 +607,7 @@ func newHub(maxParticipantsLimit int) *Hub {
 		tombstones:           make(map[string]*roomTombstone),
 		clients:              make(map[*Client]bool),
 		clientsBySID:         make(map[string]*Client),
+		pendingTakeovers:     make(map[string]*Client),
 		maxParticipantsLimit: maxParticipantsLimit,
 	}
 }
@@ -669,6 +671,25 @@ func (h *Hub) getClientBySID(sid string) *Client {
 	client := h.clientsBySID[sid]
 	h.mu.RUnlock()
 	return client
+}
+
+func (h *Hub) registerPendingTakeover(sid string, c *Client) {
+	h.mu.Lock()
+	h.pendingTakeovers[sid] = c
+	h.mu.Unlock()
+}
+
+func (h *Hub) getPendingTakeover(sid string) *Client {
+	h.mu.RLock()
+	c := h.pendingTakeovers[sid]
+	h.mu.RUnlock()
+	return c
+}
+
+func (h *Hub) removePendingTakeover(sid string) {
+	h.mu.Lock()
+	delete(h.pendingTakeovers, sid)
+	h.mu.Unlock()
 }
 
 func (h *Hub) isClientActive(c *Client) bool {
