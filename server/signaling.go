@@ -1308,7 +1308,7 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 	// Broadcast room_ended
 	endPayload, _ := json.Marshal(map[string]string{
 		"by":     c.cid,
-		"reason": tombstoneReasonEndedByHost,
+		"reason": "host_ended",
 	})
 	endMsg := Message{
 		V:       1,
