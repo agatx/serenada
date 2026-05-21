@@ -32,6 +32,7 @@ import app.serenada.android.call.SnapshotSaver
 import app.serenada.android.i18n.buildSerenadaCallStrings
 import app.serenada.callui.SerenadaCallFlow
 import app.serenada.callui.SerenadaCallFlowConfig
+import app.serenada.callui.SerenadaCallUiVariant
 import app.serenada.core.SnapshotError
 import app.serenada.core.call.CallPhase
 import androidx.compose.runtime.rememberCoroutineScope
@@ -347,6 +348,7 @@ fun SerenadaAppRoot(
                             session = session,
                             initialRemoteVideoFitCover = callManager.isRemoteVideoFitCover,
                             config = SerenadaCallFlowConfig(
+                                uiVariant = SerenadaCallUiVariant.Frontline,
                                 screenSharingEnabled = true,
                                 inviteControlsEnabled = true,
                                 debugOverlayEnabled = true,

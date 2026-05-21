@@ -68,6 +68,30 @@ fun CallScreen(url: String) {
 
 That's it. `SerenadaCallFlow` handles permissions, joining, the in-call UI, and cleanup.
 
+### Optional Frontline UI
+
+Android can opt into a frontline call layout while keeping the same call-flow API:
+
+```kotlin
+import app.serenada.callui.SerenadaCallFlow
+import app.serenada.callui.SerenadaCallFlowConfig
+import app.serenada.callui.SerenadaCallUiVariant
+
+@Composable
+fun FrontlineCallScreen(url: String) {
+    SerenadaCallFlow(
+        url = url,
+        config = SerenadaCallFlowConfig(
+            uiVariant = SerenadaCallUiVariant.Frontline,
+            snapshotEnabled = true,
+        ),
+        onDismiss = { navController.popBackStack() }
+    )
+}
+```
+
+URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE)` on the `SerenadaConfig` used to create the session. When `Frontline` is selected, Android keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
+
 ## Session-First (Pre-Observation)
 
 Create a session before presenting UI to observe state early:
@@ -389,7 +413,7 @@ val config = SerenadaConfig(
 )
 ```
 
-See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` interacts with the call-flow controls.
+See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` interacts with the call-flow controls, and [Android Frontline Variant](sdk-customization.md#android-frontline-variant) for the audio-first frontline call UI.
 
 ## Next Steps
 
