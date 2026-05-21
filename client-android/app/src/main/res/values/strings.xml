@@ -61,6 +61,9 @@
     <string name="settings_display_name">Display name</string>
     <string name="settings_display_name_placeholder">Your name (optional)</string>
     <string name="settings_call_defaults">Call defaults</string>
+    <string name="settings_call_screen_style">Call screen style</string>
+    <string name="settings_call_screen_style_standard">Standard</string>
+    <string name="settings_call_screen_style_frontline">Frontline</string>
     <string name="settings_hd_video_experimental">HD Video (experimental)</string>
     <string name="settings_hd_video_experimental_info">Enable higher-quality camera and composite modes. May increase CPU usage.</string>
     <string name="settings_error_invalid_server_host">This host is unreachable or is not a Serenada server.</string>
@@ -121,6 +124,7 @@
     <string name="call_taking_longer_than_usual">Taking longer than usual...</string>
     <string name="call_toggle_flashlight">Toggle flashlight</string>
     <string name="call_toggle_video_fit">Toggle video fit</string>
+    <string name="call_take_snapshot">Take photo</string>
     <string name="call_waiting_overlay">Waiting for someone to join...</string>
     <string name="call_qr_code">QR code</string>
     <string name="call_share_invitation">Share invitation</string>
@@ -134,6 +138,21 @@
     <string name="snapshot_reason_no_video">video is off</string>
     <string name="snapshot_reason_timeout">capture timed out</string>
     <string name="snapshot_reason_unsupported">unsupported source</string>
+    <string name="frontline_you">You</string>
+    <string name="frontline_waiting">Waiting</string>
+    <string name="frontline_video">VIDEO</string>
+    <string name="frontline_video_on">VIDEO ON</string>
+    <string name="frontline_mute">MUTE</string>
+    <string name="frontline_more">MORE</string>
+    <string name="frontline_end">END</string>
+    <string name="frontline_flip_camera">Flip camera</string>
+    <string name="frontline_stop_screen_share">Stop screen share</string>
+    <string name="frontline_share_screen">Share screen</string>
+    <string name="frontline_return_to_camera">Return to camera</string>
+    <string name="frontline_show_your_phone">Show your phone</string>
+    <string name="frontline_invite_subtitle">Bring in another teammate</string>
+    <string name="frontline_share_link_subtitle">Send the call link</string>
+    <string name="frontline_close">Close</string>
 
     <string name="notification_call_title">Serenada call</string>
     <string name="notification_call_status_channel">Call status</string>

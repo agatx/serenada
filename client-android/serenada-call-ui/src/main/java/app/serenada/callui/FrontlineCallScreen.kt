@@ -79,14 +79,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -131,7 +125,6 @@ private val FrontlineAccent = Color(0xFF15BF54)
 private val FrontlineDanger = Color(0xFFF5564B)
 private val FrontlineDim = Color(0xFFA1A1AA)
 private val FrontlineSheet = Color(0xFF15161A)
-private const val FRONTLINE_VIDEO_CONFIRM_MS = 3_000L
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
 private const val FRONTLINE_MORE_BUTTON_HEIGHT_TO_WIDTH_RATIO = 1.62f
@@ -191,7 +184,6 @@ internal fun FrontlineCallScreen(
         }
     }
 
-    var videoConfirming by rememberSaveable { mutableStateOf(false) }
     var pipSwapped by rememberSaveable { mutableStateOf(false) }
     var isMoreSheetVisible by rememberSaveable { mutableStateOf(false) }
     var showSnapshotFlash by remember { mutableStateOf(false) }
@@ -203,18 +195,6 @@ internal fun FrontlineCallScreen(
     var selectedSpotlightId by rememberSaveable { mutableStateOf<String?>(null) }
     var lastVideoStartedParticipantId by rememberSaveable { mutableStateOf<String?>(null) }
     var previousRemoteVideoEnabled by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
-
-    LaunchedEffect(videoConfirming) {
-        if (videoConfirming) {
-            delay(FRONTLINE_VIDEO_CONFIRM_MS)
-            videoConfirming = false
-        }
-    }
-    LaunchedEffect(uiState.localVideoEnabled) {
-        if (uiState.localVideoEnabled) {
-            videoConfirming = false
-        }
-    }
 
     val localContentMode =
         uiState.localCameraMode == LocalCameraMode.WORLD ||
@@ -416,6 +396,7 @@ internal fun FrontlineCallScreen(
                             detachLocalSink = detachLocalSink,
                             attachRemoteSink = attachRemoteSink,
                             detachRemoteSink = detachRemoteSink,
+                            strings = strings,
                             modifier = modifier,
                         )
                     }
@@ -457,7 +438,6 @@ internal fun FrontlineCallScreen(
                         )
                         FrontlineControlsPanel(
                             uiState = uiState,
-                            videoConfirming = videoConfirming,
                             isLandscape = true,
                             isTabletLandscape = isTabletLandscape,
                             panelWidth = panelWidth,
@@ -470,18 +450,10 @@ internal fun FrontlineCallScreen(
                             pipInPanel = pipInPanel,
                             pip = pip,
                             onVideoTap = {
-                                when {
-                                    uiState.localVideoEnabled -> {
-                                        videoConfirming = false
-                                        pipSwapped = false
-                                        onToggleVideo()
-                                    }
-                                    videoConfirming -> {
-                                        videoConfirming = false
-                                        onToggleVideo()
-                                    }
-                                    else -> videoConfirming = true
+                                if (uiState.localVideoEnabled) {
+                                    pipSwapped = false
                                 }
+                                onToggleVideo()
                             },
                             onToggleAudio = onToggleAudio,
                             onFlipCamera = onFlipCamera,
@@ -489,6 +461,7 @@ internal fun FrontlineCallScreen(
                             onSnapshotFlash = { showSnapshotFlash = true },
                             onMore = { isMoreSheetVisible = true },
                             onEndCall = onEndCall,
+                            strings = strings,
                             modifier = Modifier.width(panelWidth).fillMaxHeight(),
                         )
                     }
@@ -528,7 +501,6 @@ internal fun FrontlineCallScreen(
                         )
                         FrontlineControlsPanel(
                             uiState = uiState,
-                            videoConfirming = videoConfirming,
                             isLandscape = false,
                             isTabletLandscape = false,
                             panelWidth = panelWidth,
@@ -541,18 +513,10 @@ internal fun FrontlineCallScreen(
                             pipInPanel = false,
                             pip = pip,
                             onVideoTap = {
-                                when {
-                                    uiState.localVideoEnabled -> {
-                                        videoConfirming = false
-                                        pipSwapped = false
-                                        onToggleVideo()
-                                    }
-                                    videoConfirming -> {
-                                        videoConfirming = false
-                                        onToggleVideo()
-                                    }
-                                    else -> videoConfirming = true
+                                if (uiState.localVideoEnabled) {
+                                    pipSwapped = false
                                 }
+                                onToggleVideo()
                             },
                             onToggleAudio = onToggleAudio,
                             onFlipCamera = onFlipCamera,
@@ -560,6 +524,7 @@ internal fun FrontlineCallScreen(
                             onSnapshotFlash = { showSnapshotFlash = true },
                             onMore = { isMoreSheetVisible = true },
                             onEndCall = onEndCall,
+                            strings = strings,
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -656,6 +621,7 @@ internal fun FrontlineCallScreen(
                     inviteEnabled = config.inviteControlsEnabled,
                     shareEnabled = config.inviteControlsEnabled && shareLinkAction != null,
                     isScreenSharing = uiState.isScreenSharing,
+                    strings = strings,
                     onDismiss = { isMoreSheetVisible = false },
                     onToggleScreenShare = {
                         isMoreSheetVisible = false
@@ -723,6 +689,7 @@ private fun FrontlineContentArea(
             !isCallSurfacePhase -> {
                 FrontlinePhaseSurface(
                     uiState = uiState,
+                    strings = strings,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -734,6 +701,7 @@ private fun FrontlineContentArea(
                     localZoomTransformState = localZoomTransformState,
                     attachLocalRenderer = attachLocalRenderer,
                     detachLocalRenderer = detachLocalRenderer,
+                    strings = strings,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -805,7 +773,7 @@ private fun FrontlineContentArea(
                     )
         if (showLargeFeedChip) {
             FrontlineNameChip(
-                label = if (chipIsLocal) "You" else remoteDisplayName(remote),
+                label = if (chipIsLocal) localDisplayName(uiState, strings) else remoteDisplayName(remote),
                 muted = if (chipIsLocal) !uiState.localAudioEnabled else remote?.audioEnabled == false,
                 audioLevel = if (chipIsLocal) uiState.localAudioLevel else remote?.audioLevel ?: 0f,
                 broadcasting = false,
@@ -830,30 +798,31 @@ private fun FrontlineContentArea(
 @Composable
 private fun FrontlinePhaseSurface(
     uiState: CallUiState,
+    strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
     val title = when (uiState.phase) {
-        CallPhase.CreatingRoom -> "Creating call"
-        CallPhase.AwaitingPermissions -> "Waiting for permissions"
-        CallPhase.Joining -> "Joining call"
-        CallPhase.Ending -> "Ending call"
-        CallPhase.Error -> uiState.errorMessageText?.takeIf { it.isNotBlank() } ?: "Call failed"
-        CallPhase.Idle -> "Call ended"
-        CallPhase.Waiting -> "Waiting"
-        CallPhase.InCall -> "Connected"
-    }
-    val subtitle = when (uiState.phase) {
-        CallPhase.AwaitingPermissions -> "Allow microphone and camera access to continue"
-        CallPhase.Error -> "End the call and try again"
-        CallPhase.Idle -> "The session is no longer active"
-        else -> null
+        CallPhase.CreatingRoom,
+        CallPhase.AwaitingPermissions,
+        CallPhase.Joining,
+        CallPhase.Ending,
+        CallPhase.Idle -> resolveString(SerenadaString.CallWaitingShort, strings)
+        CallPhase.Error -> uiState.errorMessageText?.takeIf { it.isNotBlank() }
+            ?: resolveString(SerenadaString.CallWaitingShort, strings)
+        CallPhase.Waiting -> resolveString(SerenadaString.FrontlineWaiting, strings)
+        CallPhase.InCall -> resolveString(SerenadaString.CallWaitingShort, strings)
     }
     Column(
         modifier = modifier.padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        FrontlineLocalAvatar(size = 124.dp, fontSize = 48.sp, displayName = uiState.localDisplayName)
+        FrontlineLocalAvatar(
+            size = 124.dp,
+            fontSize = 48.sp,
+            displayName = uiState.localDisplayName,
+            strings = strings,
+        )
         Spacer(Modifier.height(22.dp))
         Text(
             text = title,
@@ -862,15 +831,6 @@ private fun FrontlinePhaseSurface(
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
         )
-        if (subtitle != null) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                text = subtitle,
-                color = FrontlineDim,
-                fontSize = 16.sp,
-                textAlign = TextAlign.Center,
-            )
-        }
     }
 }
 
@@ -1089,7 +1049,7 @@ private fun FrontlineLayoutTile(
     modifier: Modifier = Modifier,
 ) {
     val displayName =
-        if (isLocal) uiState.localDisplayName?.takeIf { it.isNotBlank() } ?: "You"
+        if (isLocal) localDisplayName(uiState, strings)
         else remoteDisplayName(remote)
     val muted = if (isLocal) !uiState.localAudioEnabled else remote?.audioEnabled == false
     val audioLevel = if (isLocal) uiState.localAudioLevel else remote?.audioLevel ?: 0f
@@ -1268,11 +1228,15 @@ private fun FrontlineLargeSurface(
         else -> {
             val waitingForRemote = uiState.isFrontlineWaitingForRemote()
             if (waitingForRemote) {
-                FrontlineWaitingLarge(modifier = modifier)
+                FrontlineWaitingLarge(
+                    strings = strings,
+                    modifier = modifier,
+                )
             } else {
                 FrontlineAudioLarge(
                     remote = remote,
                     elapsedLabel = rememberFrontlineCallTimer(uiState.callStartedAtMs),
+                    strings = strings,
                     modifier = modifier,
                 )
             }
@@ -1282,6 +1246,7 @@ private fun FrontlineLargeSurface(
 
 @Composable
 private fun FrontlineWaitingLarge(
+    strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -1291,7 +1256,7 @@ private fun FrontlineWaitingLarge(
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "Waiting",
+            text = resolveString(SerenadaString.FrontlineWaiting, strings),
             color = Color.White,
             fontSize = 34.sp,
             fontWeight = FontWeight.Bold,
@@ -1308,6 +1273,7 @@ private fun FrontlineWaitingSurface(
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
     attachLocalRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
+    strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -1340,7 +1306,10 @@ private fun FrontlineWaitingSurface(
                 )
             }
         }
-        FrontlineWaitingLarge(modifier = Modifier.fillMaxSize())
+        FrontlineWaitingLarge(
+            strings = strings,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
@@ -1348,6 +1317,7 @@ private fun FrontlineWaitingSurface(
 private fun FrontlineAudioLarge(
     remote: RemoteParticipant?,
     elapsedLabel: String,
+    strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
     val name = remoteDisplayName(remote)
@@ -1375,15 +1345,17 @@ private fun FrontlineAudioLarge(
                 audioLevel = remote?.audioLevel ?: 0f,
                 size = 22.dp,
             )
-            Text(
-                text = name,
-                color = Color.White,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (name.isNotBlank()) {
+                Text(
+                    text = name,
+                    color = Color.White,
+                    fontSize = 34.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Spacer(Modifier.height(10.dp))
         Text(
@@ -1409,6 +1381,7 @@ private fun FrontlinePip(
     detachLocalSink: (VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit,
+    strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
     val showsLocal = feed == FrontlineFeed.Local
@@ -1451,7 +1424,11 @@ private fun FrontlinePip(
             else -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (showsLocal) {
-                        FrontlineLocalAvatar(size = 74.dp, fontSize = 34.sp)
+                        FrontlineLocalAvatar(
+                            size = 74.dp,
+                            fontSize = 34.sp,
+                            strings = strings,
+                        )
                     } else {
                         FrontlineAvatar(
                             peerId = remote?.peerId,
@@ -1482,7 +1459,7 @@ private fun FrontlinePip(
             }
         }
         FrontlineNameChip(
-            label = if (showsLocal) "You" else remoteDisplayName(remote),
+            label = if (showsLocal) localDisplayName(uiState, strings) else remoteDisplayName(remote),
             muted = if (showsLocal) !uiState.localAudioEnabled else remote?.audioEnabled == false,
             audioLevel = if (showsLocal) uiState.localAudioLevel else remote?.audioLevel ?: 0f,
             broadcasting = false,
@@ -1497,7 +1474,6 @@ private fun FrontlinePip(
 @Composable
 private fun FrontlineControlsPanel(
     uiState: CallUiState,
-    videoConfirming: Boolean,
     isLandscape: Boolean,
     isTabletLandscape: Boolean,
     panelWidth: Dp,
@@ -1516,6 +1492,7 @@ private fun FrontlineControlsPanel(
     onSnapshotFlash: () -> Unit,
     onMore: () -> Unit,
     onEndCall: () -> Unit,
+    strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
     val panelPadding = if (isLandscape) {
@@ -1553,11 +1530,11 @@ private fun FrontlineControlsPanel(
                 onToggleFlashlight = onToggleFlashlight,
                 onSnapshotFlash = onSnapshotFlash,
                 onFlipCamera = onFlipCamera,
+                strings = strings,
             )
 
             FrontlineControlGrid(
                 uiState = uiState,
-                videoConfirming = videoConfirming,
                 isLandscape = isLandscape,
                 isTablet = isTabletLandscape || (!isLandscape && panelWidth >= 320.dp),
                 videoControlsEnabled = videoControlsEnabled,
@@ -1565,6 +1542,7 @@ private fun FrontlineControlsPanel(
                 onVideoTap = onVideoTap,
                 onToggleAudio = onToggleAudio,
                 onMore = onMore,
+                strings = strings,
             )
         } else {
             Spacer(Modifier.height(if (isLandscape) 24.dp else 12.dp))
@@ -1573,6 +1551,7 @@ private fun FrontlineControlsPanel(
         FrontlineEndButton(
             height = 56.dp,
             onClick = onEndCall,
+            strings = strings,
         )
 
         if (isLandscape && !pipInPanel) {
@@ -1591,6 +1570,7 @@ private fun FrontlinePreviewActions(
     onToggleFlashlight: () -> Unit,
     onSnapshotFlash: () -> Unit,
     onFlipCamera: () -> Unit,
+    strings: Map<SerenadaString, String>?,
 ) {
     val visible = uiState.localVideoEnabled
     if (!visible && !reserveWhenHidden) return
@@ -1615,7 +1595,7 @@ private fun FrontlinePreviewActions(
             icon = if (uiState.isFlashEnabled) Icons.Default.FlashlightOn else Icons.Default.FlashlightOff,
             active = uiState.isFlashEnabled && flashEnabled,
             enabled = flashEnabled,
-            contentDescription = resolveString(SerenadaString.CallToggleFlashlight, null),
+            contentDescription = resolveString(SerenadaString.CallToggleFlashlight, strings),
             onClick = onToggleFlashlight,
         )
         Spacer(Modifier.width(22.dp))
@@ -1624,7 +1604,7 @@ private fun FrontlinePreviewActions(
             size = 72.dp,
             icon = Icons.Default.PhotoCamera,
             primary = true,
-            contentDescription = resolveString(SerenadaString.CallTakeSnapshot, null),
+            contentDescription = resolveString(SerenadaString.CallTakeSnapshot, strings),
             onClick = {
                 val source = snapshotSource
                 val handler = snapshotHandler
@@ -1640,7 +1620,7 @@ private fun FrontlinePreviewActions(
             visible = showFlip,
             size = 56.dp,
             icon = Icons.Default.FlipCameraIos,
-            contentDescription = "Flip camera",
+            contentDescription = resolveString(SerenadaString.FrontlineFlipCamera, strings),
             onClick = onFlipCamera,
         )
     }
@@ -1699,7 +1679,6 @@ private fun FrontlineRoundActionButton(
 @Composable
 private fun FrontlineControlGrid(
     uiState: CallUiState,
-    videoConfirming: Boolean,
     isLandscape: Boolean,
     isTablet: Boolean,
     videoControlsEnabled: Boolean,
@@ -1707,6 +1686,7 @@ private fun FrontlineControlGrid(
     onVideoTap: () -> Unit,
     onToggleAudio: () -> Unit,
     onMore: () -> Unit,
+    strings: Map<SerenadaString, String>?,
 ) {
     val buttonHeight = when {
         isTablet -> 86.dp
@@ -1720,16 +1700,19 @@ private fun FrontlineControlGrid(
     ) {
         if (videoControlsEnabled) {
             FrontlineGridButton(
-                label = if (uiState.localVideoEnabled) "VIDEO ON" else "VIDEO",
+                label = if (uiState.localVideoEnabled) {
+                    resolveString(SerenadaString.FrontlineVideoOn, strings)
+                } else {
+                    resolveString(SerenadaString.FrontlineVideo, strings)
+                },
                 icon = if (uiState.localVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
                 active = uiState.localVideoEnabled,
-                confirming = videoConfirming,
                 onClick = onVideoTap,
                 modifier = Modifier.weight(1f).height(buttonHeight),
             )
         }
         FrontlineGridButton(
-            label = "MUTE",
+            label = resolveString(SerenadaString.FrontlineMute, strings),
             icon = if (uiState.localAudioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
             danger = !uiState.localAudioEnabled,
             onClick = onToggleAudio,
@@ -1737,7 +1720,7 @@ private fun FrontlineControlGrid(
         )
         if (showMoreButton) {
             FrontlineGridButton(
-                label = "MORE",
+                label = resolveString(SerenadaString.FrontlineMore, strings),
                 icon = Icons.Default.MoreVert,
                 onClick = onMore,
                 showLabel = false,
@@ -1755,7 +1738,6 @@ private fun FrontlineGridButton(
     modifier: Modifier = Modifier,
     active: Boolean = false,
     danger: Boolean = false,
-    confirming: Boolean = false,
     showLabel: Boolean = true,
 ) {
     val background = when {
@@ -1766,85 +1748,39 @@ private fun FrontlineGridButton(
     val foreground = if (active) Color.Black else Color.White
     Surface(
         modifier = modifier
-            .frontlineGridOutline(confirming)
+            .border(
+                width = 1.5.dp,
+                color = FrontlineBorder,
+                shape = RoundedCornerShape(14.dp),
+            )
             .clickable(onClick = onClick),
         color = background,
         shape = RoundedCornerShape(14.dp),
     ) {
-        Box(Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    tint = foreground,
-                    modifier = Modifier.size(24.dp),
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = foreground,
+                modifier = Modifier.size(24.dp),
+            )
+            if (showLabel) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = label,
+                    color = foreground,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                if (showLabel) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = label,
-                        color = foreground,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            if (confirming) {
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 4.dp)
-                        .clickable(onClick = onClick),
-                    color = Color.Black,
-                    shape = RoundedCornerShape(10.dp),
-                ) {
-                    Text(
-                        text = "TAP AGAIN",
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.sp,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                    )
-                }
             }
         }
-    }
-}
-
-private fun Modifier.frontlineGridOutline(confirming: Boolean): Modifier {
-    val shape = RoundedCornerShape(14.dp)
-    if (!confirming) {
-        return border(
-            width = 1.5.dp,
-            color = FrontlineBorder,
-            shape = shape,
-        )
-    }
-    return drawWithContent {
-        drawContent()
-        val strokeWidth = 2.dp.toPx()
-        val inset = strokeWidth / 2f
-        drawRoundRect(
-            color = Color.White,
-            topLeft = Offset(inset, inset),
-            size = Size(size.width - strokeWidth, size.height - strokeWidth),
-            cornerRadius = CornerRadius(14.dp.toPx(), 14.dp.toPx()),
-            style = Stroke(
-                width = strokeWidth,
-                pathEffect = PathEffect.dashPathEffect(
-                    intervals = floatArrayOf(8.dp.toPx(), 6.dp.toPx()),
-                    phase = 0f,
-                ),
-            ),
-        )
     }
 }
 
@@ -1853,6 +1789,7 @@ private fun FrontlineEndButton(
     height: Dp,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
+    strings: Map<SerenadaString, String>?,
 ) {
     Box(
         modifier = modifier
@@ -1878,7 +1815,7 @@ private fun FrontlineEndButton(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = "END",
+                text = resolveString(SerenadaString.FrontlineEnd, strings),
                 color = Color.White,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.ExtraBold,
@@ -1895,6 +1832,7 @@ private fun FrontlineMoreSheet(
     inviteEnabled: Boolean,
     shareEnabled: Boolean,
     isScreenSharing: Boolean,
+    strings: Map<SerenadaString, String>?,
     onDismiss: () -> Unit,
     onToggleScreenShare: () -> Unit,
     onInvite: () -> Unit,
@@ -1935,36 +1873,36 @@ private fun FrontlineMoreSheet(
                             .clip(RoundedCornerShape(2.dp))
                             .background(Color.White.copy(alpha = 0.24f))
                     )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = "MORE",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.sp,
-                    )
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(18.dp))
                     if (screenSharingEnabled) {
                         FrontlineSheetItem(
                             icon = if (isScreenSharing) Icons.AutoMirrored.Filled.StopScreenShare else Icons.AutoMirrored.Filled.ScreenShare,
-                            title = if (isScreenSharing) "Stop screen share" else "Share screen",
-                            subtitle = if (isScreenSharing) "Return to camera" else "Show your phone",
+                            title = if (isScreenSharing) {
+                                resolveString(SerenadaString.FrontlineStopScreenShare, strings)
+                            } else {
+                                resolveString(SerenadaString.FrontlineShareScreen, strings)
+                            },
+                            subtitle = if (isScreenSharing) {
+                                resolveString(SerenadaString.FrontlineReturnToCamera, strings)
+                            } else {
+                                resolveString(SerenadaString.FrontlineShowYourPhone, strings)
+                            },
                             onClick = onToggleScreenShare,
                         )
                     }
                     if (inviteEnabled) {
                         FrontlineSheetItem(
                             icon = Icons.Default.NotificationsActive,
-                            title = "Invite to call",
-                            subtitle = "Bring in another teammate",
+                            title = resolveString(SerenadaString.CallInviteToRoom, strings),
+                            subtitle = resolveString(SerenadaString.FrontlineInviteSubtitle, strings),
                             onClick = onInvite,
                         )
                     }
                     if (shareEnabled) {
                         FrontlineSheetItem(
                             icon = Icons.Default.Share,
-                            title = resolveString(SerenadaString.CallShareInvitation, null),
-                            subtitle = "Send the call link",
+                            title = resolveString(SerenadaString.CallShareInvitation, strings),
+                            subtitle = resolveString(SerenadaString.FrontlineShareLinkSubtitle, strings),
                             onClick = onShare,
                         )
                     }
@@ -1984,7 +1922,11 @@ private fun FrontlineMoreSheet(
                         ) {
                             Icon(Icons.Default.Close, contentDescription = null, tint = Color.White)
                             Spacer(Modifier.width(8.dp))
-                            Text("Close", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = resolveString(SerenadaString.FrontlineClose, strings),
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
                 }
@@ -2063,14 +2005,16 @@ private fun FrontlineNameChip(
             audioLevel = audioLevel,
             size = 14.dp,
         )
-        Text(
-            text = label,
-            color = if (broadcasting) FrontlineAccent else Color.White,
-            fontSize = if (compact) 11.sp else 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (label.isNotBlank()) {
+            Text(
+                text = label,
+                color = if (broadcasting) FrontlineAccent else Color.White,
+                fontSize = if (compact) 11.sp else 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -2127,6 +2071,7 @@ private fun FrontlineLocalAvatar(
     size: Dp,
     fontSize: androidx.compose.ui.unit.TextUnit,
     displayName: String? = null,
+    strings: Map<SerenadaString, String>? = null,
 ) {
     Box(
         modifier = Modifier
@@ -2136,7 +2081,7 @@ private fun FrontlineLocalAvatar(
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = initialsFor(displayName).ifBlank { "You" },
+            text = initialsFor(displayName).ifBlank { resolveString(SerenadaString.FrontlineYou, strings) },
             color = Color.White,
             fontSize = fontSize,
             fontWeight = FontWeight.ExtraBold,
@@ -2161,8 +2106,14 @@ private fun rememberFrontlineCallTimer(startedAtMs: Long?): String {
     return String.format(Locale.US, "%02d:%02d", minutes, seconds)
 }
 
+private fun localDisplayName(uiState: CallUiState, strings: Map<SerenadaString, String>?): String {
+    return uiState.localDisplayName?.takeIf { it.isNotBlank() }
+        ?: resolveString(SerenadaString.FrontlineYou, strings)
+}
+
 private fun remoteDisplayName(remote: RemoteParticipant?): String {
-    return remote?.displayName?.takeIf { it.isNotBlank() } ?: "Participant"
+    return remote?.displayName?.takeIf { it.isNotBlank() }
+        ?: ""
 }
 
 private fun String.frontlineContentSpotlightId(): String = "$FRONTLINE_CONTENT_SPOTLIGHT_PREFIX$this"

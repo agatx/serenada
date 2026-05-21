@@ -326,7 +326,9 @@ Available string keys:
 - `CallWaitingShort`, `CallReconnecting`, `CallTakingLongerThanUsual`
 - `CallWaitingOverlay`
 - `CallShareLinkChooser`, `CallShareInvitation`, `CallInviteToRoom`
-- `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`
+- `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`, `CallTakeSnapshot`
+- Android Frontline: `FrontlineYou`, `FrontlineWaiting`, `FrontlineVideo`, `FrontlineVideoOn`, `FrontlineMute`, `FrontlineMore`, `FrontlineEnd`, `FrontlineFlipCamera`
+- Android Frontline: `FrontlineStopScreenShare`, `FrontlineShareScreen`, `FrontlineReturnToCamera`, `FrontlineShowYourPhone`, `FrontlineInviteSubtitle`, `FrontlineShareLinkSubtitle`, `FrontlineClose`
 
 ### Web
 

@@ -19,6 +19,7 @@ import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.HostApiClient
 import app.serenada.android.push.PushSubscriptionManager
 import app.serenada.android.service.CallService
+import app.serenada.callui.SerenadaCallUiVariant
 import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallState
 import app.serenada.core.RoomOccupancy
@@ -69,6 +70,9 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     private val _isHdVideoExperimentalEnabled =
         mutableStateOf(settingsStore.isHdVideoExperimentalEnabled)
     val isHdVideoExperimentalEnabled: State<Boolean> = _isHdVideoExperimentalEnabled
+
+    private val _callUiVariant = mutableStateOf(settingsStore.callUiVariant)
+    val callUiVariant: State<SerenadaCallUiVariant> = _callUiVariant
 
     private val _recentCalls = mutableStateOf<List<RecentCall>>(emptyList())
     val recentCalls: State<List<RecentCall>> = _recentCalls
@@ -344,6 +348,11 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     fun updateHdVideoExperimental(enabled: Boolean) {
         settingsStore.isHdVideoExperimentalEnabled = enabled
         _isHdVideoExperimentalEnabled.value = enabled
+    }
+
+    fun updateCallUiVariant(variant: SerenadaCallUiVariant) {
+        settingsStore.callUiVariant = variant
+        _callUiVariant.value = variant
     }
 
     fun updateSavedRoomsShownFirst(enabled: Boolean) {
