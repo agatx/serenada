@@ -2270,7 +2270,7 @@ private class RendererContainer(
 }
 
 @Composable
-internal fun VideoPlaceholder(
+private fun VideoPlaceholder(
     text: String,
     fontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
     displayName: String? = null,
@@ -2331,7 +2331,7 @@ internal fun VideoPlaceholder(
 }
 
 @Composable
-internal fun ParticipantBadge(
+private fun ParticipantBadge(
     modifier: Modifier = Modifier,
     muted: Boolean = false,
     displayName: String? = null,
@@ -2392,7 +2392,7 @@ private fun generateQrCode(text: String): Bitmap? {
     }
 }
 
-private fun shareLink(context: Context, text: String, chooserTitle: String) {
+internal fun shareLink(context: Context, text: String, chooserTitle: String) {
     val intent =
         Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

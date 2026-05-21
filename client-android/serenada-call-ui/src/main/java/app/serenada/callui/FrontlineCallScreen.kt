@@ -254,9 +254,9 @@ internal fun FrontlineCallScreen(
         onShareLink != null -> onShareLink
         roomLink != null -> {
             {
-                shareFrontlineCallLink(
+                shareLink(
                     context = context,
-                    link = roomLink,
+                    text = roomLink,
                     chooserTitle = resolveString(SerenadaString.CallShareLinkChooser, strings),
                 )
             }
@@ -2126,15 +2126,3 @@ private fun CallUiState.isFrontlineWaitingForRemote(): Boolean {
         remoteParticipants.isEmpty()
 }
 
-private fun shareFrontlineCallLink(
-    context: Context,
-    link: String,
-    chooserTitle: String,
-) {
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_TEXT, link)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    context.startActivity(Intent.createChooser(intent, chooserTitle))
-}

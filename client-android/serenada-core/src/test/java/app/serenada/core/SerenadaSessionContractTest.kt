@@ -221,6 +221,56 @@ class SerenadaSessionContractTest {
         assertTrue(factory.session.state.value.remoteParticipants.isEmpty())
     }
 
+    // ── callStartedAtMs propagation ─────────────────────────────────
+
+    @Test
+    fun `join populates callStartedAtMs with wall-clock time`() {
+        val before = System.currentTimeMillis()
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+        val after = System.currentTimeMillis()
+
+        val startedAt = factory.session.state.value.callStartedAtMs
+        assertNotNull("callStartedAtMs should be set during join", startedAt)
+        assertTrue(
+            "callStartedAtMs ($startedAt) should be in [$before..$after]",
+            startedAt!! in before..after,
+        )
+    }
+
+    @Test
+    fun `plausible participant joinedAt overwrites callStartedAtMs`() {
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        val plausibleJoinedAt = 1_700_000_000_000L
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to plausibleJoinedAt),
+        )
+
+        assertEquals(plausibleJoinedAt, factory.session.state.value.callStartedAtMs)
+    }
+
+    @Test
+    fun `implausible participant joinedAt does not overwrite callStartedAtMs`() {
+        val before = System.currentTimeMillis()
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to 1L),
+        )
+
+        val startedAt = factory.session.state.value.callStartedAtMs
+        assertNotNull(startedAt)
+        assertTrue(
+            "Implausible joinedAt should be ignored; got $startedAt",
+            startedAt!! >= before,
+        )
+    }
+
     // ── Reconnect on close ──────────────────────────────────────────
 
     @Test
