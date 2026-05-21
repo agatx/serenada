@@ -83,7 +83,7 @@ fun SerenadaCallFlow(
     val coroutineScope = rememberCoroutineScope()
     val isFrontlineVariant = config.uiVariant == SerenadaCallUiVariant.Frontline
     val ownedSession =
-        remember(url, session, context.applicationContext, config.videoEnabled, config.uiVariant) {
+        remember(url, session, context.applicationContext) {
             session ?: url
                 ?.takeIf { it.isNotBlank() }
                 ?.let { callUrl ->

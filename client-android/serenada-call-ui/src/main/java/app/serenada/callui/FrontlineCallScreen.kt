@@ -1019,6 +1019,46 @@ private fun FrontlineMultiPartyStage(
                     )
                 }
             }
+
+            layout.localPip?.let { pip ->
+                val pipWidth = with(density) { pip.frame.width.toDp() }
+                val pipHeight = with(density) { pip.frame.height.toDp() }
+                val pipX = with(density) { pip.frame.x.toDp() }
+                val pipY = with(density) { pip.frame.y.toDp() }
+                val pipCornerRadius = with(density) { pip.cornerRadius.toDp() }
+                key(pip.participantId, "pip") {
+                    FrontlineLayoutTile(
+                        tileId = pip.participantId,
+                        isLocal = true,
+                        isContentTile = false,
+                        isLocalContent = false,
+                        remote = null,
+                        uiState = uiState,
+                        eglContext = eglContext,
+                        localContentMode = localContentMode,
+                        localZoomTransformState = localZoomTransformState,
+                        localRendererEvents = localRendererEvents,
+                        remoteRendererEvents = null,
+                        attachLocalSink = attachLocalSink,
+                        detachLocalSink = detachLocalSink,
+                        attachRemoteSinkForCid = attachRemoteSinkForCid,
+                        detachRemoteSinkForCid = detachRemoteSinkForCid,
+                        contentScale = if (pip.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                        pinned = false,
+                        onSelect = { onSelectedSpotlightIdChanged(pip.participantId) },
+                        onTogglePinned = {
+                            onPinnedSpotlightIdChanged(
+                                if (pip.participantId == pinnedSpotlightId) null else pip.participantId
+                            )
+                        },
+                        strings = strings,
+                        modifier = Modifier
+                            .offset(x = pipX, y = pipY)
+                            .size(width = pipWidth, height = pipHeight)
+                            .clip(RoundedCornerShape(pipCornerRadius)),
+                    )
+                }
+            }
         }
     }
 }
