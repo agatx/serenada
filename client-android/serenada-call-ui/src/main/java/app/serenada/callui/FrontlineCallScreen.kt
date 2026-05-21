@@ -38,7 +38,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -134,6 +133,8 @@ private val FrontlineDim = Color(0xFFA1A1AA)
 private val FrontlineSheet = Color(0xFF15161A)
 private const val FRONTLINE_VIDEO_CONFIRM_MS = 3_000L
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
+private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
+private const val FRONTLINE_MORE_BUTTON_HEIGHT_TO_WIDTH_RATIO = 1.62f
 
 private enum class FrontlineFeed {
     Local,
@@ -198,7 +199,10 @@ internal fun FrontlineCallScreen(
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
-    var pinnedParticipantId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pinnedSpotlightId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedSpotlightId by rememberSaveable { mutableStateOf<String?>(null) }
+    var lastVideoStartedParticipantId by rememberSaveable { mutableStateOf<String?>(null) }
+    var previousRemoteVideoEnabled by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
 
     LaunchedEffect(videoConfirming) {
         if (videoConfirming) {
@@ -216,6 +220,18 @@ internal fun FrontlineCallScreen(
         uiState.localCameraMode == LocalCameraMode.WORLD ||
             uiState.localCameraMode == LocalCameraMode.COMPOSITE ||
             uiState.isScreenSharing
+    val localSpotlightId = uiState.localCid ?: "local"
+    val activeContentOwnerId = when {
+        uiState.isScreenSharing -> localSpotlightId
+        uiState.localVideoEnabled &&
+            (
+                uiState.localCameraMode == LocalCameraMode.WORLD ||
+                    uiState.localCameraMode == LocalCameraMode.COMPOSITE
+                ) -> localSpotlightId
+        uiState.remoteContentCid != null -> uiState.remoteContentCid
+        else -> null
+    }
+    val activeContentSpotlightId = activeContentOwnerId?.frontlineContentSpotlightId()
     val isCallSurfacePhase =
         uiState.phase == CallPhase.InCall || uiState.phase == CallPhase.Waiting
     val remote = uiState.remoteParticipants.firstOrNull()
@@ -288,17 +304,43 @@ internal fun FrontlineCallScreen(
     val showReconnectingBadge =
         uiState.phase == CallPhase.InCall &&
             uiState.connectionStatus != ConnectionStatus.Connected
-    LaunchedEffect(uiState.localCid, uiState.remoteParticipants.map { it.cid }) {
+    LaunchedEffect(activeContentSpotlightId) {
+        if (activeContentSpotlightId != null) {
+            selectedSpotlightId = activeContentSpotlightId
+        } else {
+            if (selectedSpotlightId.isFrontlineContentSpotlightId()) selectedSpotlightId = null
+            if (pinnedSpotlightId.isFrontlineContentSpotlightId()) pinnedSpotlightId = null
+        }
+    }
+    LaunchedEffect(uiState.remoteParticipants.map { it.cid to it.videoEnabled }) {
+        val nextRemoteVideoEnabled = uiState.remoteParticipants.associate { it.cid to it.videoEnabled }
+        if (previousRemoteVideoEnabled.isNotEmpty()) {
+            uiState.remoteParticipants
+                .lastOrNull { participant ->
+                    participant.videoEnabled && previousRemoteVideoEnabled[participant.cid] != true
+                }
+                ?.let { participant -> lastVideoStartedParticipantId = participant.cid }
+        }
+        previousRemoteVideoEnabled = nextRemoteVideoEnabled
+    }
+    LaunchedEffect(
+        uiState.localCid,
+        uiState.localVideoEnabled,
+        uiState.remoteParticipants.map { it.cid to it.videoEnabled },
+        activeContentSpotlightId,
+    ) {
         val activeCids = uiState.remoteParticipants.map { it.cid }.toSet()
+        val activeSpotlightIds = activeCids + localSpotlightId + listOfNotNull(activeContentSpotlightId)
         remoteTileAspectRatios.keys
             .filter { it !in activeCids }
             .forEach { remoteTileAspectRatios.remove(it) }
+        if (pinnedSpotlightId != null && pinnedSpotlightId !in activeSpotlightIds) pinnedSpotlightId = null
+        if (selectedSpotlightId != null && selectedSpotlightId !in activeSpotlightIds) selectedSpotlightId = null
         if (
-            pinnedParticipantId != null &&
-                pinnedParticipantId != uiState.localCid &&
-                pinnedParticipantId !in activeCids
+            lastVideoStartedParticipantId != null &&
+                uiState.remoteParticipants.none { it.cid == lastVideoStartedParticipantId && it.videoEnabled }
         ) {
-            pinnedParticipantId = null
+            lastVideoStartedParticipantId = null
         }
     }
     val debugSections = remember(
@@ -394,8 +436,12 @@ internal fun FrontlineCallScreen(
                             remoteRendererEvents = remoteRendererEvents,
                             localAspectRatio = localAspectRatio ?: 0f,
                             remoteAspectRatios = remoteTileAspectRatios,
-                            pinnedParticipantId = pinnedParticipantId,
-                            onPinnedParticipantIdChanged = { pinnedParticipantId = it },
+                            activeContentSpotlightId = activeContentSpotlightId,
+                            pinnedSpotlightId = pinnedSpotlightId,
+                            selectedSpotlightId = selectedSpotlightId,
+                            lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                            onPinnedSpotlightIdChanged = { pinnedSpotlightId = it },
+                            onSelectedSpotlightIdChanged = { selectedSpotlightId = it },
                             localZoomTransformState = localZoomTransformState,
                             attachLocalRenderer = attachLocalRenderer,
                             detachLocalRenderer = detachLocalRenderer,
@@ -461,8 +507,12 @@ internal fun FrontlineCallScreen(
                             remoteRendererEvents = remoteRendererEvents,
                             localAspectRatio = localAspectRatio ?: 0f,
                             remoteAspectRatios = remoteTileAspectRatios,
-                            pinnedParticipantId = pinnedParticipantId,
-                            onPinnedParticipantIdChanged = { pinnedParticipantId = it },
+                            activeContentSpotlightId = activeContentSpotlightId,
+                            pinnedSpotlightId = pinnedSpotlightId,
+                            selectedSpotlightId = selectedSpotlightId,
+                            lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                            onPinnedSpotlightIdChanged = { pinnedSpotlightId = it },
+                            onSelectedSpotlightIdChanged = { selectedSpotlightId = it },
                             localZoomTransformState = localZoomTransformState,
                             attachLocalRenderer = attachLocalRenderer,
                             detachLocalRenderer = detachLocalRenderer,
@@ -644,8 +694,12 @@ private fun FrontlineContentArea(
     remoteRendererEvents: RendererCommon.RendererEvents,
     localAspectRatio: Float,
     remoteAspectRatios: MutableMap<String, Float>,
-    pinnedParticipantId: String?,
-    onPinnedParticipantIdChanged: (String?) -> Unit,
+    activeContentSpotlightId: String?,
+    pinnedSpotlightId: String?,
+    selectedSpotlightId: String?,
+    lastVideoStartedParticipantId: String?,
+    onPinnedSpotlightIdChanged: (String?) -> Unit,
+    onSelectedSpotlightIdChanged: (String?) -> Unit,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
     attachLocalRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
@@ -690,8 +744,12 @@ private fun FrontlineContentArea(
                     eglContext = eglContext,
                     localAspectRatio = localAspectRatio,
                     remoteAspectRatios = remoteAspectRatios,
-                    pinnedParticipantId = pinnedParticipantId,
-                    onPinnedParticipantIdChanged = onPinnedParticipantIdChanged,
+                    activeContentSpotlightId = activeContentSpotlightId,
+                    pinnedSpotlightId = pinnedSpotlightId,
+                    selectedSpotlightId = selectedSpotlightId,
+                    lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                    onPinnedSpotlightIdChanged = onPinnedSpotlightIdChanged,
+                    onSelectedSpotlightIdChanged = onSelectedSpotlightIdChanged,
                     localZoomTransformState = localZoomTransformState,
                     localRendererEvents = localRendererEvents,
                     attachLocalSink = attachLocalSink,
@@ -823,8 +881,12 @@ private fun FrontlineMultiPartyStage(
     eglContext: EglBase.Context,
     localAspectRatio: Float,
     remoteAspectRatios: MutableMap<String, Float>,
-    pinnedParticipantId: String?,
-    onPinnedParticipantIdChanged: (String?) -> Unit,
+    activeContentSpotlightId: String?,
+    pinnedSpotlightId: String?,
+    selectedSpotlightId: String?,
+    lastVideoStartedParticipantId: String?,
+    onPinnedSpotlightIdChanged: (String?) -> Unit,
+    onSelectedSpotlightIdChanged: (String?) -> Unit,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
     localRendererEvents: RendererCommon.RendererEvents,
     attachLocalSink: (VideoSink) -> Unit,
@@ -838,8 +900,9 @@ private fun FrontlineMultiPartyStage(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val localId = uiState.localCid ?: "local"
     val hasLocalContent = localContentMode
+    val activeContentOwnerId = activeContentSpotlightId?.removePrefix(FRONTLINE_CONTENT_SPOTLIGHT_PREFIX)
     val contentSource = when {
-        hasLocalContent -> {
+        hasLocalContent && activeContentOwnerId == localId -> {
             val type = when {
                 uiState.isScreenSharing -> ContentType.SCREEN_SHARE
                 uiState.localCameraMode == LocalCameraMode.WORLD -> ContentType.WORLD_CAMERA
@@ -851,16 +914,29 @@ private fun FrontlineMultiPartyStage(
                 aspectRatio = localAspectRatio.takeIf { it > 0f },
             )
         }
-        uiState.remoteContentCid != null -> ContentSource(
+        uiState.remoteContentCid != null && activeContentOwnerId == uiState.remoteContentCid -> ContentSource(
             type = ContentType.fromWire(uiState.remoteContentType),
             ownerParticipantId = uiState.remoteContentCid,
             aspectRatio = remoteAspectRatios[uiState.remoteContentCid],
         )
         else -> null
     }
-    val defaultPrimaryParticipantId = uiState.remoteParticipants.firstOrNull()?.cid ?: localId
-    val effectivePinnedParticipantId =
-        if (contentSource == null) pinnedParticipantId ?: defaultPrimaryParticipantId else null
+    val participantIds = remember(localId, uiState.remoteParticipants) {
+        uiState.remoteParticipants.map { it.cid }.toSet() + localId
+    }
+    val availableSpotlightIds = participantIds + listOfNotNull(activeContentSpotlightId)
+    val defaultPrimaryParticipantId =
+        lastVideoStartedParticipantId?.takeIf { id -> id in participantIds }
+            ?: uiState.remoteParticipants.firstOrNull()?.cid
+            ?: localId
+    val effectiveSpotlightId =
+        pinnedSpotlightId?.takeIf { it in availableSpotlightIds }
+            ?: selectedSpotlightId?.takeIf { it in availableSpotlightIds }
+            ?: defaultPrimaryParticipantId
+    val spotlightIsContent =
+        contentSource != null &&
+            activeContentSpotlightId != null &&
+            effectiveSpotlightId == activeContentSpotlightId
 
     BoxWithConstraints(modifier = modifier) {
         val viewportWidthPx = with(density) { maxWidth.toPx() }
@@ -873,10 +949,12 @@ private fun FrontlineMultiPartyStage(
             localAspectRatio,
             uiState.remoteParticipants,
             remoteAspectRatios.toMap(),
-            effectivePinnedParticipantId,
+            activeContentSpotlightId,
+            effectiveSpotlightId,
+            spotlightIsContent,
             contentSource,
         ) {
-            val participants =
+            val baseParticipants =
                 uiState.remoteParticipants.map { participant ->
                     SceneParticipant(
                         id = participant.cid,
@@ -890,6 +968,17 @@ private fun FrontlineMultiPartyStage(
                     videoEnabled = uiState.localVideoEnabled,
                     videoAspectRatio = localAspectRatio.takeIf { it > 0f },
                 )
+            val participants =
+                if (contentSource != null && activeContentSpotlightId != null && !spotlightIsContent) {
+                    baseParticipants + SceneParticipant(
+                        id = activeContentSpotlightId,
+                        role = ParticipantRole.REMOTE,
+                        videoEnabled = true,
+                        videoAspectRatio = contentSource.aspectRatio,
+                    )
+                } else {
+                    baseParticipants
+                }
 
             computeLayout(
                 CallScene(
@@ -899,8 +988,8 @@ private fun FrontlineMultiPartyStage(
                     participants = participants,
                     localParticipantId = localId,
                     activeSpeakerId = null,
-                    pinnedParticipantId = effectivePinnedParticipantId,
-                    contentSource = contentSource,
+                    pinnedParticipantId = if (spotlightIsContent) null else effectiveSpotlightId,
+                    contentSource = if (spotlightIsContent) contentSource else null,
                     userPrefs = UserLayoutPrefs(dominantFit = FitMode.COVER),
                 )
             )
@@ -909,9 +998,15 @@ private fun FrontlineMultiPartyStage(
         Box(modifier = Modifier.fillMaxSize()) {
             layout.tiles.sortedBy { it.zOrder }.forEach { tile ->
                 key(tile.id, tile.type) {
-                    val isContentTile = tile.type == OccupantType.CONTENT_SOURCE
-                    val contentOwnerCid = contentSource?.ownerParticipantId
-                    val isLocal = tile.id == localId
+                    val isSyntheticContentTile = activeContentSpotlightId != null && tile.id == activeContentSpotlightId
+                    val isContentTile = tile.type == OccupantType.CONTENT_SOURCE || isSyntheticContentTile
+                    val contentOwnerCid = if (isContentTile) contentSource?.ownerParticipantId else null
+                    val tileSpotlightId = if (isContentTile && activeContentSpotlightId != null) {
+                        activeContentSpotlightId
+                    } else {
+                        tile.id
+                    }
+                    val isLocal = tile.id == localId && !isContentTile
                     val isLocalContent = isContentTile && contentOwnerCid == localId
                     val isRemoteContent = isContentTile && contentOwnerCid != null && contentOwnerCid != localId
                     val remote = if (isRemoteContent) {
@@ -949,13 +1044,12 @@ private fun FrontlineMultiPartyStage(
                         attachRemoteSinkForCid = attachRemoteSinkForCid,
                         detachRemoteSinkForCid = detachRemoteSinkForCid,
                         contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
-                        pinned = tile.id == pinnedParticipantId && !isContentTile,
+                        pinned = tileSpotlightId == pinnedSpotlightId,
+                        onSelect = { onSelectedSpotlightIdChanged(tileSpotlightId) },
                         onTogglePinned = {
-                            if (!isContentTile) {
-                                onPinnedParticipantIdChanged(
-                                    if (tile.id == pinnedParticipantId) null else tile.id
-                                )
-                            }
+                            onPinnedSpotlightIdChanged(
+                                if (tileSpotlightId == pinnedSpotlightId) null else tileSpotlightId
+                            )
                         },
                         strings = strings,
                         modifier = Modifier
@@ -989,6 +1083,7 @@ private fun FrontlineLayoutTile(
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     contentScale: ContentScale,
     pinned: Boolean,
+    onSelect: () -> Unit,
     onTogglePinned: () -> Unit,
     strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
@@ -1011,7 +1106,7 @@ private fun FrontlineLayoutTile(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onLongClick = onTogglePinned,
-                onClick = {},
+                onClick = onSelect,
             )
     ) {
         when {
@@ -1037,7 +1132,6 @@ private fun FrontlineLayoutTile(
                         isLocal = true,
                         participant = null,
                         displayName = displayName,
-                        text = resolveString(SerenadaString.CallCameraOff, strings),
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -1058,7 +1152,6 @@ private fun FrontlineLayoutTile(
                     isLocal = false,
                     participant = remote,
                     displayName = displayName,
-                    text = resolveString(SerenadaString.CallVideoOff, strings),
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -1102,7 +1195,6 @@ private fun FrontlineCameraOffTile(
     isLocal: Boolean,
     participant: RemoteParticipant?,
     displayName: String,
-    text: String,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1121,14 +1213,6 @@ private fun FrontlineCameraOffTile(
                 borderWidth = 0.dp,
             )
         }
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = text,
-            color = FrontlineDim,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center,
-        )
     }
 }
 
@@ -1515,10 +1599,12 @@ private fun FrontlinePreviewActions(
     val showSnapshot = visible && snapshotSource != null && snapshotHandler != null
     val showFlip = visible && uiState.availableCameraModes.size > 1
     val rowHeight = if (compact) 84.dp else 92.dp
+    val bottomBalancePadding = if (compact) 12.dp else 14.dp
     Row(
         modifier = Modifier
             .height(rowHeight)
             .fillMaxWidth()
+            .padding(bottom = bottomBalancePadding)
             .alpha(if (visible) 1f else 0f),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -1627,45 +1713,36 @@ private fun FrontlineControlGrid(
         isLandscape -> 68.dp
         else -> 74.dp
     }
-    Column(
+    val moreButtonWidth = (buttonHeight.value / FRONTLINE_MORE_BUTTON_HEIGHT_TO_WIDTH_RATIO).dp
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (videoControlsEnabled) {
-                FrontlineGridButton(
-                    label = if (uiState.localVideoEnabled) "VIDEO ON" else "VIDEO",
-                    icon = if (uiState.localVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                    active = uiState.localVideoEnabled,
-                    confirming = videoConfirming,
-                    onClick = onVideoTap,
-                    modifier = Modifier.weight(1f).height(buttonHeight),
-                )
-            }
+        if (videoControlsEnabled) {
             FrontlineGridButton(
-                label = "MUTE",
-                icon = if (uiState.localAudioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
-                danger = !uiState.localAudioEnabled,
-                onClick = onToggleAudio,
+                label = if (uiState.localVideoEnabled) "VIDEO ON" else "VIDEO",
+                icon = if (uiState.localVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                active = uiState.localVideoEnabled,
+                confirming = videoConfirming,
+                onClick = onVideoTap,
                 modifier = Modifier.weight(1f).height(buttonHeight),
             )
         }
+        FrontlineGridButton(
+            label = "MUTE",
+            icon = if (uiState.localAudioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
+            danger = !uiState.localAudioEnabled,
+            onClick = onToggleAudio,
+            modifier = Modifier.weight(1f).height(buttonHeight),
+        )
         if (showMoreButton) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FrontlineGridButton(
-                    label = "MORE",
-                    icon = Icons.Default.MoreVert,
-                    onClick = onMore,
-                    modifier = Modifier.weight(1f).height(buttonHeight),
-                )
-                Spacer(Modifier.weight(1f))
-            }
+            FrontlineGridButton(
+                label = "MORE",
+                icon = Icons.Default.MoreVert,
+                onClick = onMore,
+                showLabel = false,
+                modifier = Modifier.width(moreButtonWidth).height(buttonHeight),
+            )
         }
     }
 }
@@ -1679,6 +1756,7 @@ private fun FrontlineGridButton(
     active: Boolean = false,
     danger: Boolean = false,
     confirming: Boolean = false,
+    showLabel: Boolean = true,
 ) {
     val background = when {
         active -> FrontlineAccent
@@ -1705,16 +1783,18 @@ private fun FrontlineGridButton(
                     tint = foreground,
                     modifier = Modifier.size(24.dp),
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = label,
-                    color = foreground,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (showLabel) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = label,
+                        color = foreground,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 1.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (confirming) {
                 Surface(
@@ -1776,7 +1856,8 @@ private fun FrontlineEndButton(
 ) {
     Box(
         modifier = modifier
-            .requiredSize(width = 140.dp, height = height)
+            .fillMaxWidth()
+            .height(height)
             .shadow(12.dp, RoundedCornerShape(16.dp))
             .clip(RoundedCornerShape(16.dp))
             .background(FrontlineDanger)
@@ -2083,6 +2164,11 @@ private fun rememberFrontlineCallTimer(startedAtMs: Long?): String {
 private fun remoteDisplayName(remote: RemoteParticipant?): String {
     return remote?.displayName?.takeIf { it.isNotBlank() } ?: "Participant"
 }
+
+private fun String.frontlineContentSpotlightId(): String = "$FRONTLINE_CONTENT_SPOTLIGHT_PREFIX$this"
+
+private fun String?.isFrontlineContentSpotlightId(): Boolean =
+    this?.startsWith(FRONTLINE_CONTENT_SPOTLIGHT_PREFIX) == true
 
 private fun CallUiState.isFrontlineWaitingForRemote(): Boolean {
     return (phase == CallPhase.Waiting || phase == CallPhase.InCall) &&
