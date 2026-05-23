@@ -111,6 +111,15 @@ public final class SerenadaSession: ObservableObject {
     /// Real-time connection diagnostics.
     @Published public private(set) var diagnostics = CallDiagnostics()
 
+    /// Available audio devices.
+    @Published public private(set) var availableAudioDevices: [AudioDevice] = []
+    /// Current selected or active audio device.
+    @Published public private(set) var currentAudioDevice: AudioDevice?
+    /// Whether the microphone is muted (either by user action, external interruption, or missing route).
+    @Published public private(set) var isMicMuted: Bool = false
+    /// Whether the microphone is muted by an external audio session interruption (e.g. PTT).
+    @Published public private(set) var isMicMutedByExternalAudio: Bool = false
+
     /// Room identifier for this session.
     public let roomId: String
     /// Full URL for this room, if available.
@@ -137,6 +146,12 @@ public final class SerenadaSession: ObservableObject {
     private let providerDelegateProxy: SignalingProviderDelegateProxy
     private let webRtcEngine: SessionMediaEngine
     private let callAudioSessionController: SessionAudioController
+    private let audioCoordinator: SerenadaAudioCoordinator
+    private var audioCoordinatorCapabilities: AudioCoordinatorCapabilities?
+    private var coordinatorTasks: [Task<Void, Never>] = []
+    private var userMuted = false
+    private var externalAudioMuted = false
+    private var routeInputAvailable = true
     private let apiClient: SessionAPIClient
     private let clock: SessionClock
     private let config: SerenadaConfig
@@ -247,7 +262,9 @@ public final class SerenadaSession: ObservableObject {
                 defaultVideoEnabled: config.defaultVideoEnabled,
                 cameraModes: config.cameraModes,
                 transports: config.transports,
-                proximityMonitoringEnabled: config.proximityMonitoringEnabled
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled,
+                audioCoordinator: config.audioCoordinator,
+                audioIntent: config.audioIntent
             )
             : config
         self.init(
@@ -309,10 +326,13 @@ public final class SerenadaSession: ObservableObject {
             preconditionFailure("Provide exactly one of serverHost or signalingProvider")
         }
         self.providerDelegateProxy = SignalingProviderDelegateProxy(session: nil)
-        self.callAudioSessionController = audioController ?? CallAudioSessionController(
+        let defaultController = DefaultAudioCoordinator(
             proximityMonitoringEnabled: config.proximityMonitoringEnabled,
             onProximityChanged: { _ in }, onAudioEnvironmentChanged: {}, logger: logger
         )
+        self.audioCoordinator = config.audioCoordinator ?? defaultController
+        self.callAudioSessionController = audioController ?? (config.audioCoordinator.map { CustomAudioCoordinatorAdapter(coordinator: $0, proximityMonitoringEnabled: config.proximityMonitoringEnabled) } ?? defaultController)
+
         self.webRtcEngine = mediaEngine ?? WebRtcEngine(
             onCameraFacingChanged: { _ in }, onCameraModeChanged: { _ in },
             onFlashlightStateChanged: { _, _ in }, onScreenShareStopped: {},
@@ -325,6 +345,38 @@ public final class SerenadaSession: ObservableObject {
         signalingProvider.delegate = providerDelegateProxy
         configureRuntimeBridges()
         buildSubEngines()
+
+        // Start observing coordinator streams
+        let coordinator = self.audioCoordinator
+        let availableDevicesTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await devices in coordinator.availableDevices {
+                self.availableAudioDevices = devices
+            }
+        }
+
+        let effectiveInputTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await device in coordinator.effectiveInputDevice {
+                self.routeInputAvailable = (device != nil)
+                self.updateEffectiveMicState()
+            }
+        }
+
+        let effectiveOutputTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await device in coordinator.effectiveOutputDevice {
+                self.currentAudioDevice = device
+            }
+        }
+
+        let eventsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await event in coordinator.events {
+                self.handleCoordinatorEvent(event)
+            }
+        }
+        self.coordinatorTasks = [availableDevicesTask, effectiveInputTask, effectiveOutputTask, eventsTask]
 
         // Skip periodic TURN refresh while every peer is on a direct ICE path —
         // the credentials go unused and the call survives arbitrary-length
@@ -372,6 +424,7 @@ public final class SerenadaSession: ObservableObject {
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
         mediaLivenessTask?.cancel()
+        coordinatorTasks.forEach { $0.cancel() }
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
     }
@@ -394,10 +447,7 @@ public final class SerenadaSession: ObservableObject {
 
     /// Toggle local audio on or off.
     public func toggleAudio() {
-        let enabled = !state.localParticipant.audioEnabled
-        webRtcEngine.toggleAudio(enabled)
-        commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
-        broadcastLocalMediaState()
+        setMicMuted(!userMuted)
     }
 
     /// Toggle local video on or off.
@@ -424,9 +474,78 @@ public final class SerenadaSession: ObservableObject {
 
     /// Set local audio enabled state.
     public func setAudioEnabled(_ enabled: Bool) {
-        webRtcEngine.toggleAudio(enabled)
-        commitSnapshot { s, _ in s.localParticipant.audioEnabled = enabled }
+        setMicMuted(!enabled)
+    }
+
+    /// Select a specific audio device for routing.
+    public func selectAudioDevice(_ device: AudioDevice) {
+        Task {
+            do {
+                try await audioCoordinator.applyRouting(device)
+            } catch {
+                logger?.log(.error, tag: "Audio", "Failed to apply routing to device \(device.displayName): \(error)")
+            }
+        }
+    }
+
+    /// Set microphone muted state.
+    public func setMicMuted(_ muted: Bool) {
+        self.userMuted = muted
+        self.updateEffectiveMicState()
+        Task {
+            try? await audioCoordinator.setMicMuted(muted)
+        }
         broadcastLocalMediaState()
+    }
+
+    private func updateEffectiveMicState() {
+        let effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
+        webRtcEngine.toggleAudio(effectiveEnabled)
+        commitSnapshot { s, _ in s.localParticipant.audioEnabled = !self.userMuted }
+        self.isMicMuted = self.userMuted || self.externalAudioMuted || !self.routeInputAvailable
+        self.isMicMutedByExternalAudio = self.externalAudioMuted
+    }
+
+    private func handleCoordinatorEvent(_ event: AudioCoordinatorEvent) {
+        switch event {
+        case .availableDevicesChanged(let devices):
+            self.availableAudioDevices = devices
+        case .effectiveRouteChanged(let input, let output):
+            self.routeInputAvailable = (input != nil)
+            self.currentAudioDevice = output
+            self.updateEffectiveMicState()
+        case .audioSessionInterrupted(let reason):
+            if config.audioIntent.muteOwnMicDuringExternalAudio {
+                self.externalAudioMuted = true
+                self.updateEffectiveMicState()
+            }
+            if config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+                peerSlots.values.forEach { $0.duckPlayback(ducked: true) }
+            }
+            if let capabilities = self.audioCoordinatorCapabilities, capabilities.pttPolicy == .preempt {
+                self.cleanupCall(reason: .localLeft, transitionToEnding: false)
+            }
+        case .audioSessionResumed:
+            self.externalAudioMuted = false
+            self.updateEffectiveMicState()
+            if config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+                peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
+            }
+        case .inputUnavailable:
+            self.routeInputAvailable = false
+            self.updateEffectiveMicState()
+        case .inputAvailable:
+            self.routeInputAvailable = true
+            self.updateEffectiveMicState()
+        case .focusLost(let transient):
+            if config.audioIntent.muteOwnMicDuringExternalAudio {
+                self.externalAudioMuted = true
+                self.updateEffectiveMicState()
+            }
+        case .focusRegained:
+            self.externalAudioMuted = false
+            self.updateEffectiveMicState()
+        }
     }
 
     /// Set local video enabled state.
@@ -623,9 +742,19 @@ public final class SerenadaSession: ObservableObject {
             s.localParticipant.videoEnabled = shouldEnableVideo
         }
 
+        do {
+            let caps = try await audioCoordinator.activateCallSession(intent: config.audioIntent)
+            self.audioCoordinatorCapabilities = caps
+        } catch {
+            logger?.log(.error, tag: "Audio", "Failed to activate audio session: \(error)")
+            handleError(.unknown("Audio session activation failed: \(error.localizedDescription)"))
+            return
+        }
+
         callAudioSessionController.activate()
         webRtcEngine.startLocalMedia(preferVideo: shouldEnableVideo)
-        if !shouldEnableAudio { webRtcEngine.toggleAudio(false) }
+        self.userMuted = !shouldEnableAudio
+        self.updateEffectiveMicState()
 
         userPreferredVideoEnabled = shouldEnableVideo
         applyLocalVideoPreference()
@@ -1109,6 +1238,10 @@ public final class SerenadaSession: ObservableObject {
         peerSlots.removeAll()
         webRtcEngine.release()
         callAudioSessionController.deactivate()
+        let coordinator = self.audioCoordinator
+        Task {
+            await coordinator.deactivateCallSession()
+        }
 
         currentRoomState = nil; clientId = nil; hostCid = nil
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
@@ -1558,7 +1691,12 @@ public final class SerenadaSession: ObservableObject {
             hasIceServers: { [weak self] in self?.webRtcEngine.hasIceServers() ?? false },
             getSlot: { [weak self] cid in self?.peerSlots[cid] },
             getAllSlots: { [weak self] in self?.peerSlots ?? [:] },
-            setSlot: { [weak self] cid, slot in self?.peerSlots[cid] = slot },
+            setSlot: { [weak self] cid, slot in
+                self?.peerSlots[cid] = slot
+                if let self, self.externalAudioMuted, self.config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+                    slot.duckPlayback(ducked: true)
+                }
+            },
             removeSlotEntry: { [weak self] cid in self?.peerSlots.removeValue(forKey: cid) },
             createSlotViaEngine: { [weak self] remoteCid, onLocalIce, onRemoteVideo, onConnState, onIceConnState, onSigState, onRenegotiation in
                 self?.webRtcEngine.createSlot(
@@ -1701,3 +1839,65 @@ public final class SerenadaSession: ObservableObject {
     /// Used when the server did not surface `reconnectTokenTTLMs`.
     private static let defaultRecoveryTokenTTLMs: Int64 = 10 * 60 * 1000
 }
+
+@MainActor
+private final class CustomAudioCoordinatorAdapter: SessionAudioController {
+    private let coordinator: SerenadaAudioCoordinator
+    private let proximityMonitoringEnabled: Bool
+    private var proximityMonitoringActive = false
+    private var isProximityNear = false
+    private var onAudioEnvironmentChanged: (() -> Void)?
+
+    init(coordinator: SerenadaAudioCoordinator, proximityMonitoringEnabled: Bool) {
+        self.coordinator = coordinator
+        self.proximityMonitoringEnabled = proximityMonitoringEnabled
+    }
+
+    func activate() {
+        if proximityMonitoringEnabled {
+            startProximityMonitoring()
+        }
+    }
+
+    func deactivate() {
+        stopProximityMonitoring()
+    }
+
+    func shouldPauseVideoForProximity(isScreenSharing: Bool) -> Bool {
+        return proximityMonitoringActive && isProximityNear && !isScreenSharing
+    }
+
+    func setOnAudioEnvironmentChanged(_ handler: @escaping () -> Void) {
+        onAudioEnvironmentChanged = handler
+    }
+
+    private func startProximityMonitoring() {
+        guard !proximityMonitoringActive else { return }
+        UIDevice.current.isProximityMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleProximityStateChange(_:)),
+            name: UIDevice.proximityStateDidChangeNotification,
+            object: nil
+        )
+        proximityMonitoringActive = true
+        isProximityNear = UIDevice.current.proximityState
+    }
+
+    private func stopProximityMonitoring() {
+        guard proximityMonitoringActive else { return }
+        NotificationCenter.default.removeObserver(self, name: UIDevice.proximityStateDidChangeNotification, object: nil)
+        UIDevice.current.isProximityMonitoringEnabled = false
+        proximityMonitoringActive = false
+        isProximityNear = false
+    }
+
+    @objc private func handleProximityStateChange(_ notification: Notification) {
+        guard proximityMonitoringActive else { return }
+        let near = UIDevice.current.proximityState
+        guard near != isProximityNear else { return }
+        isProximityNear = near
+        onAudioEnvironmentChanged?()
+    }
+}
+

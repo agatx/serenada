@@ -44,6 +44,7 @@ internal interface PeerConnectionSlotProtocol {
     fun setIceServers(servers: List<PeerConnection.IceServer>)
     fun ensurePeerConnection(): Boolean
     fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?)
+    fun setAudioTrack(track: AudioTrack?)
     fun closePeerConnection()
     fun createOffer(
         iceRestart: Boolean = false,
@@ -66,6 +67,7 @@ internal interface PeerConnectionSlotProtocol {
     fun getSignalingState(): PeerConnection.SignalingState
     fun hasRemoteDescription(): Boolean
     fun isRemoteVideoTrackEnabled(): Boolean
+    fun duckPlayback(ducked: Boolean)
 
     // Renderer/stats
     fun attachRemoteRenderer(renderer: SurfaceViewRenderer)

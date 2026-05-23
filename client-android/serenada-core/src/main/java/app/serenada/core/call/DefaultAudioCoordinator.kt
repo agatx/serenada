@@ -14,15 +14,21 @@ import android.os.Build
 import android.os.Handler
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 
-internal class CallAudioSessionController(
+class DefaultAudioCoordinator(
     context: Context,
     private val handler: Handler,
     private val proximityMonitoringEnabled: Boolean,
     private val onProximityChanged: (Boolean) -> Unit,
     private val onAudioEnvironmentChanged: () -> Unit,
     private val logger: SerenadaLogger? = null,
-) : SessionAudioController {
+) : SessionAudioController, SerenadaAudioCoordinator {
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
@@ -39,8 +45,25 @@ internal class CallAudioSessionController(
     private var audioDeviceMonitoringActive = false
     private var bluetoothScoActive = false
 
+    private val _availableDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
+    override val availableDevices: StateFlow<List<AudioDevice>> = _availableDevices.asStateFlow()
+
+    private val _effectiveInputDevice = MutableStateFlow<AudioDevice?>(null)
+    override val effectiveInputDevice: StateFlow<AudioDevice?> = _effectiveInputDevice.asStateFlow()
+
+    private val _effectiveOutputDevice = MutableStateFlow<AudioDevice?>(null)
+    override val effectiveOutputDevice: StateFlow<AudioDevice?> = _effectiveOutputDevice.asStateFlow()
+
+    private val _events = MutableSharedFlow<AudioCoordinatorEvent>(extraBufferCapacity = 64)
+    override val events: SharedFlow<AudioCoordinatorEvent> = _events.asSharedFlow()
+
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus changed: $focusChange")
+        if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT || focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+            _events.tryEmit(AudioCoordinatorEvent.FocusLost(focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT))
+        } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
+            _events.tryEmit(AudioCoordinatorEvent.FocusRegained)
+        }
     }
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
@@ -82,6 +105,7 @@ internal class CallAudioSessionController(
             if (proximityMonitoringEnabled) {
                 startProximityMonitoring()
             }
+            updateDevicesAndRoute()
             applyCallAudioRouting()
             onAudioEnvironmentChanged()
         }.onSuccess {
@@ -126,10 +150,55 @@ internal class CallAudioSessionController(
             !isBluetoothHeadsetConnected()
     }
 
+    // MARK: - SerenadaAudioCoordinator Conformance
+
+    override suspend fun activateCallSession(intent: AudioIntent): AudioCoordinatorCapabilities {
+        activate()
+        return AudioCoordinatorCapabilities(
+            pttPolicy = PttPolicy.BLOCK,
+            canShareInput = true,
+            sessionOwnership = SessionOwnership.SDK_OWNED,
+            supportedDeviceKinds = listOf(
+                AudioDeviceKind.WiredHeadset,
+                AudioDeviceKind.Bluetooth(BluetoothProfile.UNKNOWN),
+                AudioDeviceKind.Speakerphone,
+                AudioDeviceKind.Earpiece
+            )
+        )
+    }
+
+    override suspend fun deactivateCallSession() {
+        deactivate()
+    }
+
+    override suspend fun applyRouting(device: AudioDevice) {
+        when (device.kind) {
+            is AudioDeviceKind.Speakerphone -> routeAudioToSpeaker()
+            is AudioDeviceKind.Earpiece -> routeAudioToEarpiece()
+            is AudioDeviceKind.Bluetooth -> routeAudioToBluetooth()
+            else -> applyCallAudioRouting()
+        }
+    }
+
+    override suspend fun setMicMuted(muted: Boolean) {
+        audioManager.isMicrophoneMute = muted
+    }
+
+    override suspend fun suspendCapture() {
+        // No-op for default coordinator
+    }
+
+    override suspend fun resumeCapture() {
+        // No-op for default coordinator
+    }
+
     private fun onAudioDevicesChanged() {
         if (!audioSessionActive) return
+        updateDevicesAndRoute()
         applyCallAudioRouting()
         onAudioEnvironmentChanged()
+
+        _events.tryEmit(AudioCoordinatorEvent.EffectiveRouteChanged(_effectiveInputDevice.value, _effectiveOutputDevice.value))
     }
 
     private fun startProximityMonitoring() {
@@ -362,5 +431,51 @@ internal class CallAudioSessionController(
         }.onFailure { error ->
             logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to abandon audio focus: ${error.message}")
         }
+    }
+
+    private fun mapDeviceInfo(info: AudioDeviceInfo, status: AudioDeviceStatus = AudioDeviceStatus.AVAILABLE): AudioDevice {
+        val kind = when (info.type) {
+            AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> AudioDeviceKind.WiredHeadset
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> AudioDeviceKind.Bluetooth(BluetoothProfile.HFP)
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> AudioDeviceKind.Bluetooth(BluetoothProfile.A2DP)
+            AudioDeviceInfo.TYPE_BLE_HEADSET -> AudioDeviceKind.Bluetooth(BluetoothProfile.BLE)
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> AudioDeviceKind.Speakerphone
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> AudioDeviceKind.Earpiece
+            AudioDeviceInfo.TYPE_AUX_LINE -> AudioDeviceKind.CarAudio
+            AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_ACCESSORY, AudioDeviceInfo.TYPE_USB_HEADSET -> AudioDeviceKind.Usb
+            else -> AudioDeviceKind.Other
+        }
+        val direction = if (info.isSource) AudioDeviceDirection.INPUT else AudioDeviceDirection.OUTPUT
+        return AudioDevice(
+            id = info.id.toString(),
+            displayName = info.productName.toString(),
+            kind = kind,
+            direction = direction,
+            status = status
+        )
+    }
+
+    private fun updateDevicesAndRoute() {
+        val allDevices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS)
+        val list = allDevices.map { mapDeviceInfo(it, AudioDeviceStatus.AVAILABLE) }
+
+        val activeOutput = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.communicationDevice?.let { mapDeviceInfo(it, AudioDeviceStatus.ACTIVE) }
+        } else {
+            if (isSpeakerphoneEnabled()) {
+                list.firstOrNull { it.kind is AudioDeviceKind.Speakerphone }?.copy(status = AudioDeviceStatus.ACTIVE)
+            } else if (audioManager.isBluetoothScoOn) {
+                list.firstOrNull { it.kind is AudioDeviceKind.Bluetooth }?.copy(status = AudioDeviceStatus.ACTIVE)
+            } else {
+                list.firstOrNull { it.kind is AudioDeviceKind.Earpiece }?.copy(status = AudioDeviceStatus.ACTIVE)
+            }
+        }
+
+        val activeInput = list.firstOrNull { it.direction == AudioDeviceDirection.INPUT && it.status == AudioDeviceStatus.ACTIVE }
+            ?: list.firstOrNull { it.direction == AudioDeviceDirection.INPUT }
+
+        _availableDevices.value = list
+        _effectiveInputDevice.value = activeInput
+        _effectiveOutputDevice.value = activeOutput
     }
 }

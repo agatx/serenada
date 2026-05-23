@@ -33,6 +33,8 @@ internal class FakeMediaEngine : SessionMediaEngine {
         startVideoCaptureCalls.add(startVideoCapture)
     }
     override fun release() { releaseCalls++ }
+    override fun suspendCapture() {}
+    override fun resumeCapture() {}
     override fun toggleAudio(enabled: Boolean) { toggleAudioCalls.add(enabled) }
     override fun toggleVideo(enabled: Boolean): Boolean {
         toggleVideoCalls.add(enabled)

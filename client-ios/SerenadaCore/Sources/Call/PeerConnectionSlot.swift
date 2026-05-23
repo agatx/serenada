@@ -638,6 +638,17 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         false
 #endif
     }
+
+    public func duckPlayback(ducked: Bool) {
+#if canImport(WebRTC)
+        guard let peerConnection = peerConnection else { return }
+        for receiver in peerConnection.receivers {
+            if let audioTrack = receiver.track as? RTCAudioTrack {
+                audioTrack.source.volume = ducked ? 0.15 : 1.0
+            }
+        }
+#endif
+    }
 }
 
 #if canImport(WebRTC)

@@ -73,7 +73,9 @@ internal class FakePeerConnectionSlot(
     }
     override fun ensurePeerConnection(): Boolean { ensurePeerConnectionCalls++; return true }
     override fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {}
+    override fun setAudioTrack(track: AudioTrack?) {}
     override fun closePeerConnection() { closePeerConnectionCalled = true }
+    override fun duckPlayback(ducked: Boolean) {}
 
     override fun createOffer(iceRestart: Boolean, onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)?): Boolean {
         createOfferCalls++

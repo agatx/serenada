@@ -226,6 +226,18 @@ internal class PeerConnectionSlot(
         }
     }
 
+    override fun setAudioTrack(track: AudioTrack?) {
+        localAudioTrack = track
+        val pc = peerConnection ?: return
+        val sender = pc.senders.firstOrNull { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }
+        if (sender != null) {
+            sender.setTrack(track, false)
+        } else if (track != null) {
+            pc.addTrack(track, listOf("serenada"))
+            applyAudioSenderParameters(pc)
+        }
+    }
+
     override fun closePeerConnection() {
         offerTimeoutTask = null
         iceRestartTask = null
@@ -478,6 +490,16 @@ internal class PeerConnectionSlot(
         val track = remoteVideoTrack ?: return false
         if (!track.enabled()) return false
         return !remoteBlackFrameAnalyzer.isVideoConsideredOff()
+    }
+
+    override fun duckPlayback(ducked: Boolean) {
+        val pc = peerConnection ?: return
+        for (receiver in pc.receivers) {
+            val track = receiver.track()
+            if (track is AudioTrack) {
+                track.setVolume(if (ducked) 0.15 else 1.0)
+            }
+        }
     }
 
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {

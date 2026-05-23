@@ -55,6 +55,7 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func getSignalingState() -> String
     func hasRemoteDescription() -> Bool
     func isRemoteVideoTrackEnabled() -> Bool
+    func duckPlayback(ducked: Bool)
 
     /// Last observed path type for the selected ICE candidate pair: `true`
     /// for direct (host/srflx/prflx), `false` for relayed through TURN,

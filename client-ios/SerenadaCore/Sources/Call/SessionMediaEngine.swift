@@ -6,6 +6,8 @@ protocol SessionMediaEngine: AnyObject {
     func startLocalMedia(preferVideo: Bool)
     func release()
     func toggleAudio(_ enabled: Bool)
+    func suspendCapture() async throws
+    func resumeCapture() async throws
     @discardableResult func toggleVideo(_ enabled: Bool) -> Bool
     func flipCamera()
     func setHdVideoExperimentalEnabled(_ enabled: Bool)

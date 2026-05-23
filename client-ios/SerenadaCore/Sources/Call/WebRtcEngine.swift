@@ -167,6 +167,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
 
 #if canImport(WebRTC)
         Self.initializeSslIfNeeded()
+        RTCAudioSession.sharedInstance().useManualAudio = true
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
         let factory = RTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
@@ -234,6 +235,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
         guard let factory = peerConnectionFactory else { return }
         guard localAudioTrack == nil && localVideoTrack == nil else { return }
 
+        RTCAudioSession.sharedInstance().isAudioEnabled = true
+
         localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
         localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
 
@@ -279,6 +282,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
         cameraController.updateLocalVideoSource(nil)
         localAudioTrack = nil
         localAudioSource = nil
+        RTCAudioSession.sharedInstance().isAudioEnabled = false
 #endif
     }
 
@@ -348,6 +352,14 @@ internal final class WebRtcEngine: SessionMediaEngine {
 #if canImport(WebRTC)
         localAudioTrack?.isEnabled = enabled
 #endif
+    }
+
+    public func suspendCapture() async throws {
+        // No-op scaffolding on iOS
+    }
+
+    public func resumeCapture() async throws {
+        // No-op scaffolding on iOS
     }
 
     @discardableResult

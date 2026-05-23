@@ -296,6 +296,28 @@ internal class WebRtcEngine(
         localAudioTrack?.setEnabled(enabled)
     }
 
+    override fun suspendCapture() {
+        if (released) return
+        audioPipelinePrimer.stop()
+        localAudioTrack?.setEnabled(false)
+        localAudioTrack?.dispose()
+        audioSource?.dispose()
+        audioSource = null
+        localAudioTrack = null
+        peerSlots.forEach { it.setAudioTrack(null) }
+    }
+
+    override fun resumeCapture() {
+        if (released) return
+        if (localAudioTrack != null) return
+        val audioConstraints = org.webrtc.MediaConstraints()
+        audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+        localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
+        applyAudioTrackHints()
+        localAudioTrack?.let { audioPipelinePrimer.start(it) }
+        peerSlots.forEach { it.setAudioTrack(localAudioTrack) }
+    }
+
     override fun toggleVideo(enabled: Boolean): Boolean {
         if (enabled && cameraController.availableCameraModes.isEmpty() && !screenShareController.isScreenSharing) {
             localVideoTrack?.setEnabled(false)

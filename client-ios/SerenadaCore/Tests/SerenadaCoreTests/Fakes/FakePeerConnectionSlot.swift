@@ -179,6 +179,10 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     func hasRemoteDescription() -> Bool { remoteDescriptionSet }
     var remoteVideoTrackEnabledOverride = false
     func isRemoteVideoTrackEnabled() -> Bool { remoteVideoTrackEnabledOverride }
+    private(set) var duckedPlayback = false
+    func duckPlayback(ducked: Bool) {
+        duckedPlayback = ducked
+    }
 
     // MARK: - Renderer Management
 
