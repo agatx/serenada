@@ -28,6 +28,33 @@ triggers:
   - is this worth building
   - help me think through
   - office hours
+gbrain:
+  schema: 1
+  context_queries:
+    - id: prior-sessions
+      kind: list
+      filter:
+        type: ceo-plan
+        tags_contains: "repo:{repo_slug}"
+      sort: updated_at_desc
+      limit: 5
+      render_as: "## Prior office-hours sessions in this repo"
+    - id: builder-profile
+      kind: filesystem
+      glob: "~/.gstack/builder-profile.jsonl"
+      tail: 1
+      render_as: "## Your builder profile snapshot"
+    - id: design-doc-history
+      kind: filesystem
+      glob: "~/.gstack/projects/{repo_slug}/*-design-*.md"
+      sort: mtime_desc
+      limit: 3
+      render_as: "## Recent design docs for this project"
+    - id: prior-eureka
+      kind: filesystem
+      glob: "~/.gstack/analytics/eureka.jsonl"
+      tail: 5
+      render_as: "## Recent eureka moments"
 ---
 
 {{PREAMBLE}}
@@ -411,9 +438,11 @@ Rules:
 - One can be **creative/lateral** (unexpected approach, different framing of the problem).
 - If the second opinion (Codex or Claude subagent) proposed a prototype in Phase 3.5, consider using it as a starting point for the creative/lateral approach.
 
-**RECOMMENDATION:** Choose [X] because [one-line reason].
+**RECOMMENDATION:** Choose [X] because [one-line reason mapped to the founder's stated goal].
 
-Present via AskUserQuestion. Do NOT proceed without user approval of the approach.
+Emit ONE AskUserQuestion that lists every alternative (A/B and optionally C) as numbered options, using the preamble's AskUserQuestion Format section. The AskUserQuestion call is a tool_use, not prose — write the question text and call the tool.
+
+**STOP.** Do NOT proceed to Phase 4.5 (Founder Signal Synthesis), Phase 5 (Design Doc), Phase 6 (Closing), or any design-doc generation until the user responds. A "clearly winning approach" is still an approach decision and still needs explicit user approval before it lands in the design doc. Writing the recommendation in chat prose and continuing forward is the failure mode this gate exists to prevent.
 
 ---
 
