@@ -69,6 +69,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
@@ -219,7 +221,11 @@ class SerenadaSession internal constructor(
     private var audioCoordinatorCapabilities: AudioCoordinatorCapabilities? = null
     private var userMuted = false
     private var externalAudioMuted = false
+    private var playbackDuckingActive = false
     private var routeInputAvailable = true
+    private var sessionActivated = false
+    private val audioCoordinatorMutex = Mutex()
+    private val audioCoordinatorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val connectionStatusTracker = ConnectionStatusTracker(
         handler = handler,
         getPhase = { _state.value.phase },
@@ -448,7 +454,7 @@ class SerenadaSession internal constructor(
             getAllSlots = { peerSlots.toMap() },
             setSlot = { cid: String, slot: PeerConnectionSlotProtocol ->
                 peerSlots[cid] = slot
-                if (externalAudioMuted && config.audioIntent.duckOwnPlaybackDuringExternalAudio) {
+                if (playbackDuckingActive) {
                     slot.duckPlayback(true)
                 }
             },
@@ -555,6 +561,7 @@ class SerenadaSession internal constructor(
         }
         providerScope.launch {
             audioCoordinator.effectiveInputDevice.collect { device ->
+                if (!sessionActivated) return@collect
                 routeInputAvailable = (device != null)
                 updateEffectiveMicState()
             }
@@ -1058,16 +1065,20 @@ class SerenadaSession internal constructor(
         acquirePerformanceLocks()
         providerScope.launch {
             try {
-                val caps = audioCoordinator.activateCallSession(config.audioIntent)
+                val caps = audioCoordinatorMutex.withLock {
+                    audioCoordinator.activateCallSession(config.audioIntent)
+                }
                 audioCoordinatorCapabilities = caps
                 callAudioSessionController.activate()
                 webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
                 userMuted = !config.defaultAudioEnabled
+                sessionActivated = true
                 updateEffectiveMicState()
                 applyLocalVideoPreference()
                 startRemoteVideoStatePolling()
                 joinFlowCoordinator.ensureSignalingConnection()
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to activate audio session: ${e.message}")
                 handleError(CallError.Unknown(e.message ?: "Audio session activation failed"))
             }
@@ -1623,8 +1634,10 @@ class SerenadaSession internal constructor(
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
         callAudioSessionController.deactivate()
-        CoroutineScope(Dispatchers.Main).launch {
-            audioCoordinator.deactivateCallSession()
+        audioCoordinatorScope.launch {
+            audioCoordinatorMutex.withLock {
+                audioCoordinator.deactivateCallSession()
+            }
         }
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
@@ -1647,6 +1660,10 @@ class SerenadaSession internal constructor(
         mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = null
         sessionStartTs = null
+        sessionActivated = false
+        playbackDuckingActive = false
+        externalAudioMuted = false
+        routeInputAvailable = true
         if (clearRecovery) recoveryStorage.clear()
         providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
@@ -1784,17 +1801,23 @@ class SerenadaSession internal constructor(
         providerScope.launch {
             runCatching {
                 audioCoordinator.setMicMuted(muted)
+            }.onFailure { e ->
+                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to set mic muted state on coordinator to $muted: ${e.message}")
             }
         }
     }
 
     private fun updateEffectiveMicState() {
         val effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
-        webRtcEngine.toggleAudio(effectiveEnabled)
+        if (sessionActivated) {
+            webRtcEngine.toggleAudio(effectiveEnabled)
+        }
         updateState(_state.value.copy(localAudioEnabled = effectiveEnabled))
         _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
         _isMicMutedByExternalAudio.value = externalAudioMuted
-        broadcastLocalMediaState()
+        if (sessionActivated) {
+            broadcastLocalMediaState()
+        }
     }
 
     private fun handleCoordinatorEvent(event: AudioCoordinatorEvent) {
@@ -1813,10 +1836,14 @@ class SerenadaSession internal constructor(
                     updateEffectiveMicState()
                 }
                 if (config.audioIntent.duckOwnPlaybackDuringExternalAudio) {
+                    playbackDuckingActive = true
                     peerSlots.values.forEach { it.duckPlayback(true) }
                 }
                 val caps = audioCoordinatorCapabilities
                 if (caps != null && caps.pttPolicy == PttPolicy.PREEMPT) {
+                    if (currentRoomState != null || _diagnostics.value.isSignalingConnected) {
+                        signalingProvider.leaveRoom()
+                    }
                     cleanupCall(EndReason.LocalLeft)
                 }
             }
@@ -1824,6 +1851,7 @@ class SerenadaSession internal constructor(
                 externalAudioMuted = false
                 updateEffectiveMicState()
                 if (config.audioIntent.duckOwnPlaybackDuringExternalAudio) {
+                    playbackDuckingActive = false
                     peerSlots.values.forEach { it.duckPlayback(false) }
                 }
             }

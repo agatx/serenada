@@ -148,10 +148,13 @@ public final class SerenadaSession: ObservableObject {
     private let callAudioSessionController: SessionAudioController
     private let audioCoordinator: SerenadaAudioCoordinator
     private var audioCoordinatorCapabilities: AudioCoordinatorCapabilities?
+    private var audioCoordinatorLifecycleTask: Task<Void, Never>?
     private var coordinatorTasks: [Task<Void, Never>] = []
     private var userMuted = false
     private var externalAudioMuted = false
+    private var playbackDuckingActive = false
     private var routeInputAvailable = true
+    private var sessionActivated = false
     private let apiClient: SessionAPIClient
     private let clock: SessionClock
     private let config: SerenadaConfig
@@ -359,6 +362,7 @@ public final class SerenadaSession: ObservableObject {
         let effectiveInputTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await device in coordinator.effectiveInputDevice {
+                guard self.sessionActivated else { continue }
                 self.routeInputAvailable = (device != nil)
                 self.updateEffectiveMicState()
             }
@@ -425,6 +429,7 @@ public final class SerenadaSession: ObservableObject {
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
         mediaLivenessTask?.cancel()
+        audioCoordinatorLifecycleTask?.cancel()
         coordinatorTasks.forEach { $0.cancel() }
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
@@ -494,17 +499,25 @@ public final class SerenadaSession: ObservableObject {
         self.userMuted = muted
         self.updateEffectiveMicState()
         Task {
-            try? await audioCoordinator.setMicMuted(muted)
+            do {
+                try await audioCoordinator.setMicMuted(muted)
+            } catch (let error) {
+                logger?.log(.error, tag: "Audio", "Failed to set mic muted state on coordinator to \(muted): \(error)")
+            }
         }
     }
 
     private func updateEffectiveMicState() {
         let effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
-        webRtcEngine.toggleAudio(effectiveEnabled)
+        if sessionActivated {
+            webRtcEngine.toggleAudio(effectiveEnabled)
+        }
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = effectiveEnabled }
         self.isMicMuted = self.userMuted || self.externalAudioMuted || !self.routeInputAvailable
         self.isMicMutedByExternalAudio = self.externalAudioMuted
-        broadcastLocalMediaState()
+        if sessionActivated {
+            broadcastLocalMediaState()
+        }
     }
 
     private func handleCoordinatorEvent(_ event: AudioCoordinatorEvent) {
@@ -521,22 +534,47 @@ public final class SerenadaSession: ObservableObject {
                 self.updateEffectiveMicState()
             }
             if config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+                playbackDuckingActive = true
                 peerSlots.values.forEach { $0.duckPlayback(ducked: true) }
             }
             if let capabilities = self.audioCoordinatorCapabilities, capabilities.pttPolicy == .preempt {
+                if currentRoomState != nil || diagnostics.isSignalingConnected {
+                    signalingProvider.leaveRoom()
+                }
                 self.cleanupCall(reason: .localLeft, transitionToEnding: false)
             }
         case .audioSessionResumed:
             self.externalAudioMuted = false
             self.updateEffectiveMicState()
             if config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+                playbackDuckingActive = false
                 peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
             }
         case .inputUnavailable:
             self.routeInputAvailable = false
+            if self.audioCoordinatorCapabilities?.canShareInput == false {
+                Task {
+                    do {
+                        try await self.webRtcEngine.suspendCapture()
+                        try await self.audioCoordinator.suspendCapture()
+                    } catch {
+                        self.logger?.log(.error, tag: "Audio", "Failed to suspend capture: \(error)")
+                    }
+                }
+            }
             self.updateEffectiveMicState()
         case .inputAvailable:
             self.routeInputAvailable = true
+            if self.audioCoordinatorCapabilities?.canShareInput == false {
+                Task {
+                    do {
+                        try await self.webRtcEngine.resumeCapture()
+                        try await self.audioCoordinator.resumeCapture()
+                    } catch {
+                        self.logger?.log(.error, tag: "Audio", "Failed to resume capture: \(error)")
+                    }
+                }
+            }
             self.updateEffectiveMicState()
         case .focusLost:
             if config.audioIntent.muteOwnMicDuringExternalAudio {
@@ -746,8 +784,11 @@ public final class SerenadaSession: ObservableObject {
             s.localParticipant.videoEnabled = shouldEnableVideo
         }
 
+        joinFlowCoordinator?.clearJoinConnectKickstart()
+        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
+
         do {
-            let caps = try await audioCoordinator.activateCallSession(intent: config.audioIntent)
+            let caps = try await activateAudioCoordinator()
             self.audioCoordinatorCapabilities = caps
         } catch {
             logger?.log(.error, tag: "Audio", "Failed to activate audio session: \(error)")
@@ -758,6 +799,7 @@ public final class SerenadaSession: ObservableObject {
         callAudioSessionController.activate()
         webRtcEngine.startLocalMedia(preferVideo: shouldEnableVideo)
         self.userMuted = !shouldEnableAudio
+        self.sessionActivated = true
         self.updateEffectiveMicState()
 
         userPreferredVideoEnabled = shouldEnableVideo
@@ -765,10 +807,27 @@ public final class SerenadaSession: ObservableObject {
         statsPoller?.start()
         audioLevelPoller?.start()
 
-        joinFlowCoordinator?.clearJoinConnectKickstart()
-        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
         joinFlowCoordinator?.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
         ensureSignalingConnection()
+    }
+
+    private func activateAudioCoordinator() async throws -> AudioCoordinatorCapabilities {
+        if let previous = audioCoordinatorLifecycleTask {
+            await previous.value
+        }
+        return try await audioCoordinator.activateCallSession(intent: config.audioIntent)
+    }
+
+    private func deactivateAudioCoordinator() {
+        let previous = audioCoordinatorLifecycleTask
+        let coordinator = audioCoordinator
+        let task = Task {
+            if let previous {
+                await previous.value
+            }
+            await coordinator.deactivateCallSession()
+        }
+        audioCoordinatorLifecycleTask = task
     }
 
     private func ensureSignalingConnection() {
@@ -1249,10 +1308,7 @@ public final class SerenadaSession: ObservableObject {
         peerSlots.removeAll()
         webRtcEngine.release()
         callAudioSessionController.deactivate()
-        let coordinator = self.audioCoordinator
-        Task {
-            await coordinator.deactivateCallSession()
-        }
+        deactivateAudioCoordinator()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
@@ -1269,6 +1325,11 @@ public final class SerenadaSession: ObservableObject {
         iceFetchGeneration += 1
         sessionStartTs = nil
         callStartedAtMs = nil
+        sessionActivated = false
+        playbackDuckingActive = false
+        externalAudioMuted = false
+        routeInputAvailable = true
+        audioCoordinatorCapabilities = nil
         if clearRecovery { recoveryStorage.clear() }
 
         let videoCaptureSupported = !availableCameraModes.isEmpty
@@ -1706,7 +1767,7 @@ public final class SerenadaSession: ObservableObject {
             getAllSlots: { [weak self] in self?.peerSlots ?? [:] },
             setSlot: { [weak self] cid, slot in
                 self?.peerSlots[cid] = slot
-                if let self, self.externalAudioMuted, self.config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+                if let self, self.playbackDuckingActive {
                     slot.duckPlayback(ducked: true)
                 }
             },
@@ -1878,7 +1939,7 @@ private final class CustomAudioCoordinatorAdapter: SessionAudioController {
         if proximityMonitoringEnabled {
             startProximityMonitoring()
         }
-        streamTask = Task { [weak self] in
+        streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await device in coordinator.effectiveOutputDevice {
                 self.currentOutputDevice = device
@@ -1927,11 +1988,12 @@ private final class CustomAudioCoordinatorAdapter: SessionAudioController {
     }
 
     @objc private func handleProximityStateChange(_ notification: Notification) {
-        guard proximityMonitoringActive else { return }
-        let near = UIDevice.current.proximityState
-        guard near != isProximityNear else { return }
-        isProximityNear = near
-        onAudioEnvironmentChanged?()
+        Task { @MainActor [weak self] in
+            guard let self, self.proximityMonitoringActive else { return }
+            let near = UIDevice.current.proximityState
+            guard near != self.isProximityNear else { return }
+            self.isProximityNear = near
+            self.onAudioEnvironmentChanged?()
+        }
     }
 }
-

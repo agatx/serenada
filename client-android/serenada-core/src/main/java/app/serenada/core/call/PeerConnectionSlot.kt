@@ -13,6 +13,7 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RTCStats
 import org.webrtc.RTCStatsReport
 import org.webrtc.RtpParameters
+import org.webrtc.RtpSender
 import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceViewRenderer
@@ -35,6 +36,7 @@ internal class PeerConnectionSlot(
     private val applyAudioSenderParameters: (PeerConnection) -> Unit,
     private val currentVideoSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy,
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
+    private val peerConnectionDisposeQueue: PeerConnectionDisposeQueue,
     private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
     private companion object {
@@ -125,10 +127,11 @@ internal class PeerConnectionSlot(
     override fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
     override fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
-    private val disposeHandler = Handler(Looper.getMainLooper())
     @Volatile private var isClosing = false
     private var peerConnection: PeerConnection? = null
+    private var audioSender: RtpSender? = null
     private var remoteVideoTrack: VideoTrack? = null
+    private var playbackDucked = false
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()
@@ -182,6 +185,9 @@ internal class PeerConnectionSlot(
             override fun onTrack(transceiver: RtpTransceiver?) {
                 if (!isCurrentPeerConnection(observerPeerConnection)) return
                 val track = transceiver?.receiver?.track()
+                if (track is AudioTrack) {
+                    track.setVolume(if (playbackDucked) 0.15 else 1.0)
+                }
                 if (track is VideoTrack) {
                     remoteVideoTrack?.removeSink(remoteVideoStateSink)
                     remoteSinks.forEach { sink -> remoteVideoTrack?.removeSink(sink) }
@@ -237,7 +243,7 @@ internal class PeerConnectionSlot(
         } ?: return
 
         if (audioTrack != null && pc.senders.none { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }) {
-            pc.addTrack(audioTrack, listOf("serenada"))
+            audioSender = pc.addTrack(audioTrack, listOf("serenada"))
             applyAudioSenderParameters(pc)
         }
         if (videoTrack != null && pc.senders.none { it.track()?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND }) {
@@ -249,11 +255,12 @@ internal class PeerConnectionSlot(
     override fun setAudioTrack(track: AudioTrack?) {
         localAudioTrack = track
         val pc = peerConnection ?: return
-        val sender = pc.senders.firstOrNull { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }
+        val sender = audioSender ?: pc.senders.firstOrNull { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }
+            ?.also { audioSender = it }
         if (sender != null) {
             sender.setTrack(track, false)
         } else if (track != null) {
-            pc.addTrack(track, listOf("serenada"))
+            audioSender = pc.addTrack(track, listOf("serenada"))
             applyAudioSenderParameters(pc)
         }
     }
@@ -273,6 +280,7 @@ internal class PeerConnectionSlot(
         remoteSinks.forEach { sink -> track?.removeSink(sink) }
         remoteSinks.clear()
         remoteVideoTrack = null
+        audioSender = null
         remoteBlackFrameAnalyzer.onTrackDetached()
         remoteDescriptionSet = false
         pendingIceCandidates.clear()
@@ -557,6 +565,7 @@ internal class PeerConnectionSlot(
     }
 
     override fun duckPlayback(ducked: Boolean) {
+        playbackDucked = ducked
         val pc = peerConnection ?: return
         for (receiver in pc.receivers) {
             val track = receiver.track()
@@ -610,7 +619,7 @@ internal class PeerConnectionSlot(
                 }
         }
         if (deferDispose) {
-            disposeHandler.postDelayed(dispose, DEFERRED_DISPOSE_DELAY_MS)
+            peerConnectionDisposeQueue.postDelayed(dispose, DEFERRED_DISPOSE_DELAY_MS)
         } else {
             dispose.run()
         }
@@ -1021,4 +1030,33 @@ internal class PeerConnectionSlot(
         return mimeType.removePrefix("video/")
     }
 
+}
+
+internal class PeerConnectionDisposeQueue(
+    private val handler: Handler = Handler(Looper.getMainLooper()),
+) {
+    private val pending = LinkedHashSet<Runnable>()
+
+    @Synchronized
+    fun postDelayed(dispose: Runnable, delayMs: Long) {
+        lateinit var wrapper: Runnable
+        wrapper = Runnable {
+            synchronized(this) {
+                pending.remove(wrapper)
+            }
+            dispose.run()
+        }
+        pending.add(wrapper)
+        handler.postDelayed(wrapper, delayMs)
+    }
+
+    fun flush() {
+        val runnables = synchronized(this) {
+            pending.toList().also { pending.clear() }
+        }
+        for (runnable in runnables) {
+            handler.removeCallbacks(runnable)
+            runnable.run()
+        }
+    }
 }

@@ -15,6 +15,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public private(set) var iceRestartTask: Task<Void, Never>?
     public private(set) var nonHostFallbackTask: Task<Void, Never>?
     public private(set) var nonHostFallbackAttempts = 0
+    private var playbackDucked = false
 
     // MARK: - Offer Lifecycle
 
@@ -258,6 +259,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                     self.remoteVideoTrack = track
                     self.attachRemoteTrackToRegisteredRenderers()
                     self.onRemoteVideoTrack(self.remoteCid, track)
+                }
+            },
+            onRemoteAudioTrack: { [weak self] track in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.applyPlaybackDuck(to: track)
                 }
             }
         )
@@ -640,11 +647,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     }
 
     public func duckPlayback(ducked: Bool) {
+        playbackDucked = ducked
 #if canImport(WebRTC)
         guard let peerConnection = peerConnection else { return }
         for receiver in peerConnection.receivers {
             if let audioTrack = receiver.track as? RTCAudioTrack {
-                audioTrack.source.volume = ducked ? 0.15 : 1.0
+                applyPlaybackDuck(to: audioTrack)
             }
         }
 #endif
@@ -653,6 +661,10 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 
 #if canImport(WebRTC)
 private extension PeerConnectionSlot {
+    private func applyPlaybackDuck(to track: RTCAudioTrack) {
+        track.source.volume = playbackDucked ? 0.15 : 1.0
+    }
+
     private func ensureReceiveTransceivers(on peerConnection: RTCPeerConnection) {
         if peerConnection.transceivers.contains(where: { $0.mediaType == .audio }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
@@ -972,6 +984,7 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     private let onSignalingState: (RTCSignalingState) -> Void
     private let onRenegotiationNeeded: () -> Void
     private let onRemoteVideoTrack: (RTCVideoTrack?) -> Void
+    private let onRemoteAudioTrack: (RTCAudioTrack) -> Void
 
     init(
         onIceCandidate: @escaping (RTCIceCandidate) -> Void,
@@ -979,7 +992,8 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         onIceConnectionState: @escaping (RTCIceConnectionState) -> Void,
         onSignalingState: @escaping (RTCSignalingState) -> Void,
         onRenegotiationNeeded: @escaping () -> Void,
-        onRemoteVideoTrack: @escaping (RTCVideoTrack?) -> Void
+        onRemoteVideoTrack: @escaping (RTCVideoTrack?) -> Void,
+        onRemoteAudioTrack: @escaping (RTCAudioTrack) -> Void
     ) {
         self.onIceCandidate = onIceCandidate
         self.onConnectionState = onConnectionState
@@ -987,6 +1001,7 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         self.onSignalingState = onSignalingState
         self.onRenegotiationNeeded = onRenegotiationNeeded
         self.onRemoteVideoTrack = onRemoteVideoTrack
+        self.onRemoteAudioTrack = onRemoteAudioTrack
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
@@ -994,6 +1009,9 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+        if let track = stream.audioTracks.first {
+            onRemoteAudioTrack(track)
+        }
         onRemoteVideoTrack(stream.videoTracks.first)
     }
 
@@ -1018,7 +1036,9 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {
-        if let track = rtpReceiver.track as? RTCVideoTrack {
+        if let track = rtpReceiver.track as? RTCAudioTrack {
+            onRemoteAudioTrack(track)
+        } else if let track = rtpReceiver.track as? RTCVideoTrack {
             onRemoteVideoTrack(track)
         }
     }

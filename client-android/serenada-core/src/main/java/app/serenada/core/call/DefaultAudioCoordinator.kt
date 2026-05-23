@@ -59,10 +59,34 @@ class DefaultAudioCoordinator(
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus changed: $focusChange")
-        if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT || focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-            _events.tryEmit(AudioCoordinatorEvent.FocusLost(focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT))
-        } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
-            _events.tryEmit(AudioCoordinatorEvent.FocusRegained)
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                _events.tryEmit(AudioCoordinatorEvent.FocusLost(true))
+                _events.tryEmit(AudioCoordinatorEvent.AudioSessionInterrupted(InterruptionReason.SYSTEM_AUDIO))
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                _events.tryEmit(AudioCoordinatorEvent.FocusLost(true))
+                _events.tryEmit(AudioCoordinatorEvent.AudioSessionInterrupted(InterruptionReason.SYSTEM_AUDIO))
+            }
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                audioFocusGranted = false
+                _events.tryEmit(AudioCoordinatorEvent.FocusLost(false))
+                _events.tryEmit(AudioCoordinatorEvent.AudioSessionInterrupted(InterruptionReason.SYSTEM_AUDIO))
+                handler.post {
+                    if (!audioSessionActive) return@post
+                    requestAudioFocus()
+                    if (audioFocusGranted) {
+                        _events.tryEmit(AudioCoordinatorEvent.FocusRegained)
+                        _events.tryEmit(AudioCoordinatorEvent.AudioSessionResumed)
+                    }
+                }
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                audioFocusGranted = true
+                _events.tryEmit(AudioCoordinatorEvent.FocusRegained)
+                _events.tryEmit(AudioCoordinatorEvent.AudioSessionResumed)
+            }
+            else -> Unit
         }
     }
 
@@ -182,6 +206,15 @@ class DefaultAudioCoordinator(
 
     override suspend fun setMicMuted(muted: Boolean) {
         // No-op to avoid mutating process-global AudioManager.isMicrophoneMute
+        if (!muted) {
+            ensureAudioFocus()
+        }
+    }
+
+    private fun ensureAudioFocus() {
+        if (!audioFocusGranted) {
+            requestAudioFocus()
+        }
     }
 
     override suspend fun suspendCapture() {
@@ -500,5 +533,6 @@ class DefaultAudioCoordinator(
         _availableDevices.value = updatedList
         _effectiveInputDevice.value = activeInput
         _effectiveOutputDevice.value = activeOutput
+        _events.tryEmit(AudioCoordinatorEvent.AvailableDevicesChanged(updatedList))
     }
 }

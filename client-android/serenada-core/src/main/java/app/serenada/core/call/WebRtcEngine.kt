@@ -65,6 +65,7 @@ internal class WebRtcEngine(
 
     private val localSinks = LinkedHashSet<VideoSink>()
     private val peerSlots = LinkedHashSet<PeerConnectionSlot>()
+    private val peerConnectionDisposeQueue = PeerConnectionDisposeQueue()
 
     private var iceServers: List<PeerConnection.IceServer>? = null
     private val initializedRenderers =
@@ -262,11 +263,12 @@ internal class WebRtcEngine(
     override fun release() {
         if (released) return
         released = true
-        stopLocalMedia()
         peerSlots.toList().forEach { slot ->
             slot.closePeerConnection()
         }
         peerSlots.clear()
+        peerConnectionDisposeQueue.flush()
+        stopLocalMedia()
         localSinks.clear()
         runCatching { peerConnectionFactory.dispose() }
         runCatching { audioDeviceModule.release() }
@@ -299,12 +301,12 @@ internal class WebRtcEngine(
     override fun suspendCapture() {
         if (released) return
         audioPipelinePrimer.stop()
+        peerSlots.forEach { it.setAudioTrack(null) }
         localAudioTrack?.setEnabled(false)
         localAudioTrack?.dispose()
         audioSource?.dispose()
         audioSource = null
         localAudioTrack = null
-        peerSlots.forEach { it.setAudioTrack(null) }
     }
 
     override fun resumeCapture() {
@@ -416,6 +418,7 @@ internal class WebRtcEngine(
             applyAudioSenderParameters = ::applyAudioSenderParameters,
             currentVideoSenderPolicy = ::activeVideoSenderPolicy,
             isRemoteBlackFrameAnalysisEnabled = { isRemoteBlackFrameAnalysisEnabled },
+            peerConnectionDisposeQueue = peerConnectionDisposeQueue,
             logger = logger,
         )
         peerSlots.add(slot)
