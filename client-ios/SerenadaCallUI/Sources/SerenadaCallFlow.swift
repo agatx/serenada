@@ -180,6 +180,9 @@ private struct URLFirstCallFlow: View {
             var effectiveConfig = serenadaConfig
             if !config.videoEnabled {
                 effectiveConfig.cameraModes = []
+            } else if config.uiVariant == .frontline {
+                effectiveConfig.defaultVideoEnabled = false
+                effectiveConfig.cameraModes = [.world, .selfie, .composite]
             }
             let newCore = SerenadaCore(config: effectiveConfig)
             core = newCore
@@ -239,98 +242,162 @@ private struct SessionFirstCallFlow: View {
         Group {
             switch phase {
             case .idle, .joining:
-                VStack(spacing: 16) {
-                    ProgressView()
-                    Text(resolveString(.callJoining, overrides: strings))
-                        .foregroundStyle(.white)
+                if config.uiVariant == .frontline {
+                    frontlineCallScreen(state: state)
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text(resolveString(.callJoining, overrides: strings))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
 
             case .awaitingPermissions:
-                VStack(spacing: 16) {
-                    Text(resolveString(.callPermissionsRequired, overrides: strings))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                    Button("Grant Access") {
-                        Task {
-                            let granted = await SerenadaPermissions.request(
-                                state.requiredPermissions ?? [.camera, .microphone]
-                            )
-                            if granted {
-                                session.resumeJoin()
-                            } else {
-                                session.cancelJoin()
+                if config.uiVariant == .frontline {
+                    frontlineCallScreen(state: state)
+                } else {
+                    VStack(spacing: 16) {
+                        Text(resolveString(.callPermissionsRequired, overrides: strings))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                        Button(resolveString(.callGrantAccess, overrides: strings)) {
+                            requestPermissions(state: state)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+                }
+
+            case .waiting, .inCall:
+                if config.uiVariant == .frontline {
+                    frontlineCallScreen(state: state)
+                } else {
+                    // Session-first mode renders through bridge using session as renderer provider
+                    CallScreenView(
+                        roomId: session.roomId,
+                        uiState: mapSessionToUiState(session),
+                        roomShareURL: session.roomUrl,
+                        screenShareExtensionBundleId: session.screenShareExtensionBundleId,
+                        roomName: params.roomName,
+                        config: config,
+                        strings: strings,
+                        onToggleAudio: { session.toggleAudio() },
+                        onToggleVideo: { session.toggleVideo() },
+                        onFlipCamera: { session.flipCamera() },
+                        onToggleScreenShare: toggleScreenShare,
+                        onAdjustCameraZoom: { _ = session.adjustCameraZoom(by: $0) },
+                        onResetCameraZoom: { _ = session.resetCameraZoom() },
+                        onToggleFlashlight: { _ = session.toggleFlashlight() },
+                        onEndCall: endCall,
+                        onInviteToRoom: inviteToRoom,
+                        onSnapshotRequested: makeSnapshotHandler(),
+                        rendererProvider: session,
+                        initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
+                        onRemoteVideoFitChanged: params.onRemoteVideoFitChanged
+                    )
+                }
+
+            case .ending:
+                if config.uiVariant == .frontline {
+                    frontlineCallScreen(state: state)
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                                 onDismiss?()
                             }
                         }
+                } else {
+                    VStack(spacing: 16) {
+                        Text(resolveString(.callEnded, overrides: strings))
+                            .foregroundStyle(.white)
                     }
-                    .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-
-            case .waiting, .inCall:
-                // Session-first mode renders through bridge using session as renderer provider
-                CallScreenView(
-                    roomId: session.roomId,
-                    uiState: mapSessionToUiState(session),
-                    roomShareURL: session.roomUrl,
-                    screenShareExtensionBundleId: session.screenShareExtensionBundleId,
-                    roomName: params.roomName,
-                    config: config,
-                    strings: strings,
-                    onToggleAudio: { session.toggleAudio() },
-                    onToggleVideo: { session.toggleVideo() },
-                    onFlipCamera: { session.flipCamera() },
-                    onToggleScreenShare: {
-                        if session.state.localParticipant.cameraMode == .screenShare {
-                            session.stopScreenShare()
-                        } else {
-                            session.startScreenShare()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            onDismiss?()
                         }
-                    },
-                    onAdjustCameraZoom: { _ = session.adjustCameraZoom(by: $0) },
-                    onResetCameraZoom: { _ = session.resetCameraZoom() },
-                    onToggleFlashlight: { _ = session.toggleFlashlight() },
-                    onEndCall: {
-                        session.leave()
-                        onCallEnded?(.localLeft)
-                        onDismiss?()
-                    },
-                    onInviteToRoom: params.onInviteToRoom ?? {
-                        .failure(NSError(domain: "SerenadaCallUI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Not implemented"]))
-                    },
-                    onSnapshotRequested: makeSnapshotHandler(),
-                    rendererProvider: session,
-                    initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
-                    onRemoteVideoFitChanged: params.onRemoteVideoFitChanged
-                )
-
-            case .ending:
-                VStack(spacing: 16) {
-                    Text(resolveString(.callEnded, overrides: strings))
-                        .foregroundStyle(.white)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        onDismiss?()
                     }
                 }
 
             case .error:
-                VStack(spacing: 16) {
-                    Text(resolveString(.callErrorGeneric, overrides: strings))
-                        .foregroundStyle(.white)
-                    if let onDismiss {
-                        Button("Dismiss") { onDismiss() }
-                            .buttonStyle(.borderedProminent)
+                if config.uiVariant == .frontline {
+                    frontlineCallScreen(state: state)
+                } else {
+                    VStack(spacing: 16) {
+                        Text(resolveString(.callErrorGeneric, overrides: strings))
+                            .foregroundStyle(.white)
+                        if let onDismiss {
+                            Button(resolveString(.callDismiss, overrides: strings)) { onDismiss() }
+                                .buttonStyle(.borderedProminent)
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
+            }
+        }
+    }
+
+    private func frontlineCallScreen(state: CallState) -> some View {
+        FrontlineCallScreenView(
+            roomId: session.roomId,
+            uiState: mapSessionToUiState(session),
+            sessionPhase: state.phase,
+            roomShareURL: session.roomUrl,
+            screenShareExtensionBundleId: session.screenShareExtensionBundleId,
+            roomName: params.roomName,
+            config: config,
+            strings: strings,
+            onToggleAudio: { session.toggleAudio() },
+            onToggleVideo: { session.toggleVideo() },
+            onFlipCamera: { session.flipCamera() },
+            onToggleScreenShare: toggleScreenShare,
+            onAdjustCameraZoom: { _ = session.adjustCameraZoom(by: $0) },
+            onResetCameraZoom: { _ = session.resetCameraZoom() },
+            onToggleFlashlight: { _ = session.toggleFlashlight() },
+            onEndCall: endCall,
+            onInviteToRoom: inviteToRoom,
+            onRequestPermissions: { requestPermissions(state: state) },
+            onDismiss: onDismiss,
+            onSnapshotRequested: makeSnapshotHandler(),
+            rendererProvider: session
+        )
+    }
+
+    private func toggleScreenShare() {
+        if session.state.localParticipant.cameraMode == .screenShare {
+            session.stopScreenShare()
+        } else {
+            session.startScreenShare()
+        }
+    }
+
+    private func endCall() {
+        session.leave()
+        onCallEnded?(.localLeft)
+        onDismiss?()
+    }
+
+    private func inviteToRoom() async -> Result<Void, Error> {
+        if let onInviteToRoom = params.onInviteToRoom {
+            return await onInviteToRoom()
+        }
+        return .failure(NSError(domain: "SerenadaCallUI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Not implemented"]))
+    }
+
+    private func requestPermissions(state: CallState) {
+        Task {
+            let granted = await SerenadaPermissions.request(
+                state.requiredPermissions ?? [.camera, .microphone]
+            )
+            if granted {
+                session.resumeJoin()
+            } else {
+                session.cancelJoin()
+                onDismiss?()
             }
         }
     }
@@ -385,6 +452,7 @@ private struct SessionFirstCallFlow: View {
         uiState.isFlashEnabled = diagnostics.isFlashEnabled
         uiState.remoteContentCid = diagnostics.remoteContentParticipantId
         uiState.remoteContentType = diagnostics.remoteContentType
+        uiState.callStartedAtMs = state.callStartedAtMs
         // Hide presumed-lost remotes from the call grid — the SDK keeps their
         // peer connections open in case they reattach, but the active grid
         // should not display them. Host apps wanting different presentation

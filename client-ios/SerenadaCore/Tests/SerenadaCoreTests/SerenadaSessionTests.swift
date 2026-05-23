@@ -79,4 +79,44 @@ final class SerenadaSessionTests: XCTestCase {
         XCTAssertEqual(media.startLocalMediaCalls.first, false)
         session.cancelJoin()
     }
+
+    func testAdjustCameraZoomAllowedWhileWaitingWithContentCamera() async {
+        let provider = FakeSignalingProvider()
+        let media = FakeMediaEngine()
+        let session = SerenadaSession(
+            roomId: "provider-room",
+            config: SerenadaConfig(
+                signalingProvider: provider,
+                cameraModes: [.world]
+            ),
+            initialSignalingProvider: provider,
+            mediaEngine: media
+        )
+
+        await yieldToMainActor()
+        if session.state.phase == .awaitingPermissions {
+            session.resumeJoin()
+            await yieldToMainActor()
+        }
+        provider.simulateConnected()
+        provider.simulateJoined(
+            peerId: "local-cid-1",
+            participants: [SignalingProviderParticipant(peerId: "local-cid-1", joinedAt: 1)],
+            hostPeerId: "local-cid-1"
+        )
+        await yieldToMainActor()
+
+        XCTAssertEqual(session.state.phase, .waiting)
+        XCTAssertEqual(session.state.localParticipant.cameraMode, .world)
+        XCTAssertEqual(session.adjustCameraZoom(by: 1.2), 1.25)
+        XCTAssertEqual(media.adjustCaptureZoomCalls, [1.2])
+        session.cancelJoin()
+    }
+
+    private func yieldToMainActor() async {
+        await Task.yield()
+        await Task.yield()
+        await Task.yield()
+        await Task.yield()
+    }
 }

@@ -34,6 +34,23 @@ public enum SerenadaString: String, CaseIterable {
     case callPermissionsRequired
     case callPermissionsCamera
     case callPermissionsMicrophone
+    case callGrantAccess
+    case callDismiss
+    case frontlineYou
+    case frontlineWaiting
+    case frontlineVideo
+    case frontlineVideoOn
+    case frontlineMute
+    case frontlineMore
+    case frontlineEnd
+    case frontlineFlipCamera
+    case frontlineStopScreenShare
+    case frontlineShareScreen
+    case frontlineReturnToCamera
+    case frontlineShowYourPhone
+    case frontlineInviteSubtitle
+    case frontlineShareLinkSubtitle
+    case frontlineClose
 }
 
 /// Default English strings for SerenadaCallUI.
@@ -69,6 +86,23 @@ public let serenadaDefaultStrings: [SerenadaString: String] = [
     .callPermissionsRequired: "Camera and microphone access are required",
     .callPermissionsCamera: "Camera",
     .callPermissionsMicrophone: "Microphone",
+    .callGrantAccess: "Grant Access",
+    .callDismiss: "Dismiss",
+    .frontlineYou: "You",
+    .frontlineWaiting: "Waiting",
+    .frontlineVideo: "Video",
+    .frontlineVideoOn: "Video on",
+    .frontlineMute: "Mute",
+    .frontlineMore: "More",
+    .frontlineEnd: "End",
+    .frontlineFlipCamera: "Flip camera",
+    .frontlineStopScreenShare: "Stop screen share",
+    .frontlineShareScreen: "Share screen",
+    .frontlineReturnToCamera: "Return to camera",
+    .frontlineShowYourPhone: "Show your phone screen",
+    .frontlineInviteSubtitle: "Send a live-call notification",
+    .frontlineShareLinkSubtitle: "Copy or share the room link",
+    .frontlineClose: "Close",
 ]
 
 /// Resolves a string key, checking overrides first, then falling back to English defaults.

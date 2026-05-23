@@ -159,4 +159,80 @@ final class CallScreenStateTests: XCTestCase {
             )
         )
     }
+
+    func testFrontlineWaitingOnlyWhenCallSurfaceHasNoRemoteParticipants() {
+        var state = CallUiState()
+        state.phase = .waiting
+        XCTAssertTrue(frontlineIsWaitingForRemote(state))
+
+        state.remoteParticipants = [
+            RemoteParticipant(cid: "r1", videoEnabled: false, connectionState: .new)
+        ]
+        XCTAssertFalse(frontlineIsWaitingForRemote(state))
+
+        state.phase = .joining
+        state.remoteParticipants = []
+        XCTAssertFalse(frontlineIsWaitingForRemote(state))
+    }
+
+    func testFrontlineLargeLocalPreviewMatchesContentModeAndPipSwap() {
+        XCTAssertTrue(frontlineUsesLargeLocalPreview(localVideoEnabled: true, localCameraMode: .world, isScreenSharing: false, pipSwapped: false))
+        XCTAssertFalse(frontlineUsesLargeLocalPreview(localVideoEnabled: true, localCameraMode: .world, isScreenSharing: false, pipSwapped: true))
+        XCTAssertFalse(frontlineUsesLargeLocalPreview(localVideoEnabled: true, localCameraMode: .selfie, isScreenSharing: false, pipSwapped: false))
+        XCTAssertTrue(frontlineUsesLargeLocalPreview(localVideoEnabled: true, localCameraMode: .selfie, isScreenSharing: false, pipSwapped: true))
+        XCTAssertTrue(frontlineUsesLargeLocalPreview(localVideoEnabled: true, localCameraMode: .selfie, isScreenSharing: true, pipSwapped: false))
+        XCTAssertFalse(frontlineUsesLargeLocalPreview(localVideoEnabled: false, localCameraMode: .world, isScreenSharing: false, pipSwapped: false))
+    }
+
+    func testFrontlineZoomEligibilityAllowsWaitingAndInCallContentCameraOnly() {
+        XCTAssertTrue(frontlineAllowsLocalCameraZoom(phase: .waiting, localVideoEnabled: true, localCameraMode: .world, isScreenSharing: false))
+        XCTAssertTrue(frontlineAllowsLocalCameraZoom(phase: .inCall, localVideoEnabled: true, localCameraMode: .composite, isScreenSharing: false))
+        XCTAssertFalse(frontlineAllowsLocalCameraZoom(phase: .joining, localVideoEnabled: true, localCameraMode: .world, isScreenSharing: false))
+        XCTAssertFalse(frontlineAllowsLocalCameraZoom(phase: .inCall, localVideoEnabled: true, localCameraMode: .selfie, isScreenSharing: false))
+        XCTAssertFalse(frontlineAllowsLocalCameraZoom(phase: .inCall, localVideoEnabled: false, localCameraMode: .world, isScreenSharing: false))
+        XCTAssertFalse(frontlineAllowsLocalCameraZoom(phase: .inCall, localVideoEnabled: true, localCameraMode: .world, isScreenSharing: true))
+    }
+
+    func testFrontlineStageOmitsNormalLocalTileWhenLocalContentIsInFilmstrip() {
+        XCTAssertFalse(
+            frontlineIncludesNormalLocalStageTile(
+                localSpotlightId: "local",
+                activeContentOwnerId: "local",
+                contentTileIsSpotlight: false
+            )
+        )
+        XCTAssertTrue(
+            frontlineIncludesNormalLocalStageTile(
+                localSpotlightId: "local",
+                activeContentOwnerId: "local",
+                contentTileIsSpotlight: true
+            )
+        )
+        XCTAssertTrue(
+            frontlineIncludesNormalLocalStageTile(
+                localSpotlightId: "local",
+                activeContentOwnerId: "remote",
+                contentTileIsSpotlight: false
+            )
+        )
+        XCTAssertTrue(
+            frontlineIncludesNormalLocalStageTile(
+                localSpotlightId: "local",
+                activeContentOwnerId: nil,
+                contentTileIsSpotlight: false
+            )
+        )
+    }
+
+    func testFrontlineSnapshotPrefersLocalThenFirstRemoteVideo() {
+        let remotes = [
+            RemoteParticipant(cid: "r1", videoEnabled: false, connectionState: .new),
+            RemoteParticipant(cid: "r2", videoEnabled: true, connectionState: .new)
+        ]
+
+        XCTAssertNil(frontlineSnapshotSource(snapshotEnabled: false, localVideoEnabled: true, remoteParticipants: remotes))
+        XCTAssertEqual(frontlineSnapshotSource(snapshotEnabled: true, localVideoEnabled: true, remoteParticipants: remotes), .local)
+        XCTAssertEqual(frontlineSnapshotSource(snapshotEnabled: true, localVideoEnabled: false, remoteParticipants: remotes), .remote(cid: "r2"))
+        XCTAssertNil(frontlineSnapshotSource(snapshotEnabled: true, localVideoEnabled: false, remoteParticipants: []))
+    }
 }

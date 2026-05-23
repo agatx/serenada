@@ -107,7 +107,8 @@ struct RootView: View {
                             screenSharingEnabled: true,
                             inviteControlsEnabled: true,
                             debugOverlayEnabled: true,
-                            snapshotEnabled: true
+                            snapshotEnabled: true,
+                            uiVariant: callManager.callUiVariant
                         ),
                         strings: L10n.serenadaCallStrings,
                         onInviteToRoom: { await callManager.inviteToCurrentRoom() },
@@ -189,6 +190,7 @@ struct RootView: View {
                     isDefaultCameraEnabled: callManager.isDefaultCameraEnabled,
                     isDefaultMicrophoneEnabled: callManager.isDefaultMicrophoneEnabled,
                     isHdVideoExperimentalEnabled: callManager.isHdVideoExperimentalEnabled,
+                    callUiVariant: callManager.callUiVariant,
                     areSavedRoomsShownFirst: callManager.areSavedRoomsShownFirst,
                     areRoomInviteNotificationsEnabled: callManager.areRoomInviteNotificationsEnabled,
                     showFeedback: $showFeedback,
@@ -199,6 +201,7 @@ struct RootView: View {
                     onDefaultCameraChange: { callManager.updateDefaultCamera($0) },
                     onDefaultMicrophoneChange: { callManager.updateDefaultMicrophone($0) },
                     onHdVideoExperimentalChange: { callManager.updateHdVideoExperimental($0) },
+                    onCallUiVariantChange: { callManager.updateCallUiVariant($0) },
                     onSavedRoomsShownFirstChange: { callManager.updateSavedRoomsShownFirst($0) },
                     onRoomInviteNotificationsChange: { callManager.updateRoomInviteNotifications($0) },
                     onDisplayNameChange: { callManager.updateDisplayName($0) }

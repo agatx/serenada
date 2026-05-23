@@ -51,6 +51,23 @@ struct CallView: View {
 
 That's it. `SerenadaCallFlow` handles permissions, joining, the in-call UI, and cleanup.
 
+### Optional Frontline UI
+
+iOS can opt into the frontline call layout while keeping the same call-flow API:
+
+```swift
+SerenadaCallFlow(
+    url: url,
+    config: SerenadaCallFlowConfig(
+        uiVariant: .frontline,
+        snapshotEnabled: true
+    ),
+    onDismiss: { dismiss() }
+)
+```
+
+URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = [.world, .selfie, .composite]` on the `SerenadaConfig` used to create the session. When `frontline` is selected, iOS keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
+
 ## Session-First (Pre-Observation)
 
 Create a session before presenting UI to observe state early:
@@ -316,7 +333,7 @@ let config = SerenadaConfig(
 )
 ```
 
-See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` interacts with the call-flow controls.
+See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` interacts with the call-flow controls, and [Frontline Variant](sdk-customization.md#android-and-ios-frontline-variant) for the audio-first frontline call UI.
 
 ## Next Steps
 

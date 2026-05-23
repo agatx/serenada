@@ -17,6 +17,9 @@
 "settings_language_french" = "French";
 "settings_display_name" = "Display name";
 "settings_display_name_placeholder" = "Your name (optional)";
+"settings_call_screen_style" = "Call screen style";
+"settings_call_screen_style_standard" = "Standard";
+"settings_call_screen_style_frontline" = "Frontline";
 "settings_call_defaults" = "Call defaults";
 "settings_hd_video_experimental" = "HD Video (experimental)";
 "settings_hd_video_experimental_info" = "Enable higher-quality camera modes. May increase CPU usage.";
@@ -166,9 +169,26 @@
 "call_permissions_required" = "Camera and microphone access are required";
 "call_permissions_camera" = "Camera";
 "call_permissions_microphone" = "Microphone";
+"call_grant_access" = "Grant Access";
+"call_dismiss" = "Dismiss";
 "call_error_generic" = "Something went wrong";
 "call_joining" = "Joining...";
 "call_ended" = "Call ended";
+"frontline_you" = "You";
+"frontline_waiting" = "Waiting";
+"frontline_video" = "Video";
+"frontline_video_on" = "Video on";
+"frontline_mute" = "Mute";
+"frontline_more" = "More";
+"frontline_end" = "End";
+"frontline_flip_camera" = "Flip camera";
+"frontline_stop_screen_share" = "Stop screen share";
+"frontline_share_screen" = "Share screen";
+"frontline_return_to_camera" = "Return to camera";
+"frontline_show_your_phone" = "Show your phone screen";
+"frontline_invite_subtitle" = "Send a live-call notification";
+"frontline_share_link_subtitle" = "Copy or share the room link";
+"frontline_close" = "Close";
 
 "feedback_title" = "Feedback";
 "feedback_send_action" = "Send Feedback";

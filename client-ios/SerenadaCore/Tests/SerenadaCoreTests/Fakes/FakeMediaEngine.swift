@@ -45,7 +45,12 @@ final class FakeMediaEngine: SessionMediaEngine {
     @discardableResult func toggleFlashlight() -> Bool { false }
     func startScreenShare(onComplete: ((Bool) -> Void)?) -> Bool { false }
     func stopScreenShare() -> Bool { false }
-    @discardableResult func adjustCaptureZoom(by scaleDelta: CGFloat) -> Double? { nil }
+    private(set) var adjustCaptureZoomCalls: [CGFloat] = []
+    var adjustCaptureZoomResult: Double? = 1.25
+    @discardableResult func adjustCaptureZoom(by scaleDelta: CGFloat) -> Double? {
+        adjustCaptureZoomCalls.append(scaleDelta)
+        return adjustCaptureZoomResult
+    }
     @discardableResult func resetCaptureZoom() -> Double { 1.0 }
 
     func setIceServers(_ servers: [IceServerConfig]) {

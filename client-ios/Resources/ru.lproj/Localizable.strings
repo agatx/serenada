@@ -17,6 +17,9 @@
 "settings_language_french" = "Французский";
 "settings_display_name" = "Отображаемое имя";
 "settings_display_name_placeholder" = "Ваше имя (необязательно)";
+"settings_call_screen_style" = "Стиль экрана звонка";
+"settings_call_screen_style_standard" = "Стандартный";
+"settings_call_screen_style_frontline" = "Frontline";
 "settings_call_defaults" = "Параметры звонка";
 "settings_hd_video_experimental" = "HD видео (экспериментально)";
 "settings_hd_video_experimental_info" = "Включает более качественные режимы камеры. Может повысить нагрузку на CPU.";
@@ -166,9 +169,26 @@
 "call_permissions_required" = "Требуется доступ к камере и микрофону";
 "call_permissions_camera" = "Камера";
 "call_permissions_microphone" = "Микрофон";
+"call_grant_access" = "Разрешить доступ";
+"call_dismiss" = "Закрыть";
 "call_error_generic" = "Что-то пошло не так";
 "call_joining" = "Подключение...";
 "call_ended" = "Звонок завершён";
+"frontline_you" = "Вы";
+"frontline_waiting" = "Ожидание";
+"frontline_video" = "Видео";
+"frontline_video_on" = "Видео вкл.";
+"frontline_mute" = "Микрофон";
+"frontline_more" = "Еще";
+"frontline_end" = "Завершить";
+"frontline_flip_camera" = "Переключить камеру";
+"frontline_stop_screen_share" = "Остановить демонстрацию экрана";
+"frontline_share_screen" = "Показать экран";
+"frontline_return_to_camera" = "Вернуться к камере";
+"frontline_show_your_phone" = "Показать экран телефона";
+"frontline_invite_subtitle" = "Отправить уведомление о звонке";
+"frontline_share_link_subtitle" = "Скопировать или отправить ссылку на комнату";
+"frontline_close" = "Закрыть";
 
 "feedback_title" = "Отзыв";
 "feedback_send_action" = "Отправить отзыв";

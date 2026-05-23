@@ -227,6 +227,7 @@ public final class SerenadaSession: ObservableObject {
 
     private let recoveryStorage: RecoveryStorage
     private var sessionStartTs: Int64?
+    private var callStartedAtMs: Int64?
 
     public convenience init(
         roomId: String,
@@ -517,7 +518,8 @@ public final class SerenadaSession: ObservableObject {
     /// Adjust camera zoom by a relative scale delta. Returns the new zoom factor, or nil if inactive.
     @discardableResult
     public func adjustCameraZoom(by scaleDelta: CGFloat) -> Double? {
-        guard internalPhase == .inCall, state.localParticipant.cameraMode.isContentMode else { return nil }
+        guard (internalPhase == .inCall || internalPhase == .waiting),
+              state.localParticipant.cameraMode.isContentMode else { return nil }
         return webRtcEngine.adjustCaptureZoom(by: scaleDelta)
     }
 
@@ -529,6 +531,7 @@ public final class SerenadaSession: ObservableObject {
         currentRequiredPermissions = nil
         currentError = nil
         internalPhase = .joining
+        callStartedAtMs = Self.nowMs()
         commitSnapshot()
         Task { @MainActor [weak self] in
             await self?.prepareMediaAndConnect()
@@ -609,6 +612,7 @@ public final class SerenadaSession: ObservableObject {
             delegateProvider?()?.sessionRequiresPermissions(self, permissions: required)
             return
         }
+        callStartedAtMs = Self.nowMs()
         await prepareMediaAndConnect()
     }
 
@@ -861,6 +865,13 @@ public final class SerenadaSession: ObservableObject {
         let count = max(1, roomState.participants.count)
         let phase: CallPhase = count <= 1 ? .waiting : .inCall
         if phase != .joining { joinFlowCoordinator?.clearJoinTimeout() }
+        let localJoinedAtMs = roomState.participants
+            .first(where: { $0.cid == clientId })?
+            .joinedAt
+            .flatMap { Self.isPlausibleJoinedAtMs($0, nowMs: Self.nowMs()) ? $0 : nil }
+        if let localJoinedAtMs {
+            callStartedAtMs = localJoinedAtMs
+        }
 
         internalPhase = phase
         participantCount = count
@@ -1124,6 +1135,7 @@ public final class SerenadaSession: ObservableObject {
         connectionStatusTracker?.cancelTimer()
         iceFetchGeneration += 1
         sessionStartTs = nil
+        callStartedAtMs = nil
         if clearRecovery { recoveryStorage.clear() }
 
         let videoCaptureSupported = !availableCameraModes.isEmpty
@@ -1425,6 +1437,7 @@ public final class SerenadaSession: ObservableObject {
         nextState.phase = currentRequiredPermissions != nil ? .awaitingPermissions : mapPhase(internalPhase)
         nextState.roomId = roomId; nextState.roomUrl = roomUrl
         nextState.error = currentError; nextState.requiredPermissions = currentRequiredPermissions
+        nextState.callStartedAtMs = callStartedAtMs
         nextDiag.callStats = CallStats(from: nextDiag.realtimeStats)
         if nextState != state { state = nextState }
         if nextDiag != diagnostics { diagnostics = nextDiag }
@@ -1697,7 +1710,13 @@ public final class SerenadaSession: ObservableObject {
         Int64(Date().timeIntervalSince1970 * 1000)
     }
 
+    private static func isPlausibleJoinedAtMs(_ joinedAtMs: Int64, nowMs: Int64) -> Bool {
+        joinedAtMs >= plausibleEpochMs && joinedAtMs <= nowMs + joinedAtFutureSkewMs
+    }
+
     /// Matches the server's `reconnectTokenTTL` (= `suspendHardEvictionTimeout`).
     /// Used when the server did not surface `reconnectTokenTTLMs`.
     private static let defaultRecoveryTokenTTLMs: Int64 = 10 * 60 * 1000
+    private static let plausibleEpochMs: Int64 = 946_684_800_000
+    private static let joinedAtFutureSkewMs: Int64 = 5 * 60 * 1000
 }
