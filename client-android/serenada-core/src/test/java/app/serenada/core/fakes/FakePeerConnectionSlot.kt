@@ -42,6 +42,7 @@ internal class FakePeerConnectionSlot(
     val appliedIceServerUrls = mutableListOf<List<String>>()
     var rollbackCalls = 0; private set
     var closePeerConnectionCalled = false; private set
+    var closePeerConnectionDeferredDispose = false; private set
     var ensurePeerConnectionCalls = 0; private set
 
     // Offer lifecycle
@@ -74,7 +75,10 @@ internal class FakePeerConnectionSlot(
     override fun ensurePeerConnection(): Boolean { ensurePeerConnectionCalls++; return true }
     override fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {}
     override fun setAudioTrack(track: AudioTrack?) {}
-    override fun closePeerConnection() { closePeerConnectionCalled = true }
+    override fun closePeerConnection(deferDispose: Boolean) {
+        closePeerConnectionCalled = true
+        closePeerConnectionDeferredDispose = deferDispose
+    }
     override fun duckPlayback(ducked: Boolean) {}
 
     override fun createOffer(iceRestart: Boolean, onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)?): Boolean {

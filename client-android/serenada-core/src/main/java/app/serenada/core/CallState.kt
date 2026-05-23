@@ -54,6 +54,8 @@ data class CallState(
     val isHost: Boolean = false,
     /** Number of participants currently in the call. */
     val participantCount: Int = 0,
+    /** Wall-clock timestamp in milliseconds when the local participant joined this call. */
+    val callStartedAtMs: Long? = null,
     /** Whether local audio is currently enabled. */
     val localAudioEnabled: Boolean = true,
     /** Whether local video is currently enabled. */

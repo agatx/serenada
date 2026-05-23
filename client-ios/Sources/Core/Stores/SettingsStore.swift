@@ -1,4 +1,5 @@
 import Foundation
+import SerenadaCallUI
 
 final class SettingsStore {
     private enum Key {
@@ -13,6 +14,7 @@ final class SettingsStore {
         static let roomInviteNotificationsEnabled = "room_invite_notifications_enabled"
         static let remoteVideoFitCover = "remote_video_fit_cover"
         static let displayName = "display_name"
+        static let callUiVariant = "call_ui_variant"
     }
 
     private let defaults: UserDefaults
@@ -143,6 +145,15 @@ final class SettingsStore {
         }
     }
 
+    var callUiVariant: SerenadaCallUiVariant {
+        get {
+            normalizeCallUiVariant(defaults.string(forKey: Key.callUiVariant))
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Key.callUiVariant)
+        }
+    }
+
     func normalizeLanguage(_ raw: String?) -> String {
         guard let raw else { return AppConstants.languageAuto }
         let value = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,6 +161,11 @@ final class SettingsStore {
             return value
         }
         return AppConstants.languageAuto
+    }
+
+    func normalizeCallUiVariant(_ raw: String?) -> SerenadaCallUiVariant {
+        guard let raw else { return .standard }
+        return SerenadaCallUiVariant(rawValue: raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)) ?? .standard
     }
 
     private static func defaultStore() -> UserDefaults {

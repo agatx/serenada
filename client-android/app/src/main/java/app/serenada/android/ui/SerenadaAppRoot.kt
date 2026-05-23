@@ -60,6 +60,7 @@ fun SerenadaAppRoot(
     val areSavedRoomsShownFirst by callManager.areSavedRoomsShownFirst
     val areRoomInviteNotificationsEnabled by callManager.areRoomInviteNotificationsEnabled
     val displayName by callManager.displayName
+    val callUiVariant by callManager.callUiVariant
     val roomStatuses by callManager.roomStatuses
     val activeSession by callManager.sessionState
     val context = LocalContext.current
@@ -273,12 +274,14 @@ fun SerenadaAppRoot(
                         isDefaultCameraEnabled = callManager.isDefaultCameraEnabled.value,
                         isDefaultMicrophoneEnabled = callManager.isDefaultMicrophoneEnabled.value,
                         isHdVideoExperimentalEnabled = callManager.isHdVideoExperimentalEnabled.value,
+                        callUiVariant = callUiVariant,
                         areSavedRoomsShownFirst = areSavedRoomsShownFirst,
                         areRoomInviteNotificationsEnabled = areRoomInviteNotificationsEnabled,
                         onDisplayNameChange = { callManager.updateDisplayName(it) },
                         onDefaultCameraChange = { callManager.updateDefaultCamera(it) },
                         onDefaultMicrophoneChange = { callManager.updateDefaultMicrophone(it) },
                         onHdVideoExperimentalChange = { callManager.updateHdVideoExperimental(it) },
+                        onCallUiVariantChange = { callManager.updateCallUiVariant(it) },
                         onSavedRoomsShownFirstChange = { callManager.updateSavedRoomsShownFirst(it) },
                         onRoomInviteNotificationsChange = { callManager.updateRoomInviteNotifications(it) },
                         onOpenDiagnostics = {
@@ -347,6 +350,7 @@ fun SerenadaAppRoot(
                             session = session,
                             initialRemoteVideoFitCover = callManager.isRemoteVideoFitCover,
                             config = SerenadaCallFlowConfig(
+                                uiVariant = callUiVariant,
                                 screenSharingEnabled = true,
                                 inviteControlsEnabled = true,
                                 debugOverlayEnabled = true,

@@ -2,6 +2,7 @@ package app.serenada.core
 
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.WebRtcResilienceConstants
+import app.serenada.core.fakes.FakePeerConnectionSlot
 import app.serenada.core.fakes.TestSessionFactory
 import org.junit.After
 import org.junit.Assert.*
@@ -124,6 +125,31 @@ class SessionNegotiationTest {
 
         assertEquals(CallPhase.Waiting, factory.session.state.value.phase)
         assertTrue("Slot should be removed", factory.fakeMedia.removedSlots.isNotEmpty())
+        val removedSlot = factory.fakeMedia.removedSlots.single() as FakePeerConnectionSlot
+        assertTrue("Removed slot should be closed", removedSlot.closePeerConnectionCalled)
+        assertTrue("Peer departure should defer native dispose", removedSlot.closePeerConnectionDeferredDispose)
+    }
+
+    @Test
+    fun `late signaling from departed peer does not recreate slot`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+        val removedPeerSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull(removedPeerSlot)
+
+        factory.simulateRoomState(
+            participants = listOf("alpha" to 1L),
+            hostCid = "alpha",
+        )
+
+        val answersBefore = factory.fakeProvider.sentMessages("answer").size
+        val createdSlotsBefore = factory.fakeMedia.createdSlotCids.size
+        factory.simulateIceCandidateFromRemote("remote", "candidate:late")
+        factory.simulateOfferFromRemote("remote", "late-offer-sdp")
+
+        assertFalse("Departed peer slot should stay removed", factory.fakeMedia.fakeSlots.containsKey("remote"))
+        assertEquals("Late signaling must not create a new slot", createdSlotsBefore, factory.fakeMedia.createdSlotCids.size)
+        assertEquals("Late offer must not be answered", answersBefore, factory.fakeProvider.sentMessages("answer").size)
+        assertTrue("Original slot should stay untouched by late ICE", removedPeerSlot!!.addedIceCandidates.isEmpty())
     }
 
     // Group 4: Pending Message Buffering

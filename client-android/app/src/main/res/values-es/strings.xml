@@ -59,6 +59,9 @@
     <string name="settings_language_french">Français</string>
     <string name="settings_language_help">Automático usa el idioma del dispositivo. Los idiomas no compatibles vuelven a inglés.</string>
     <string name="settings_call_defaults">Ajustes de llamada</string>
+    <string name="settings_call_screen_style">Estilo de pantalla de llamada</string>
+    <string name="settings_call_screen_style_standard">Estándar</string>
+    <string name="settings_call_screen_style_frontline">Frontline</string>
     <string name="settings_hd_video_experimental">Video HD (experimental)</string>
     <string name="settings_hd_video_experimental_info">Activa mayor calidad para cámara y modo compuesto. Puede aumentar el uso de CPU.</string>
     <string name="settings_error_invalid_server_host">Este host no responde o no parece un servidor Serenada.</string>

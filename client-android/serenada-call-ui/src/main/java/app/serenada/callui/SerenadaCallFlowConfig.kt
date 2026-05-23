@@ -1,6 +1,12 @@
 package app.serenada.callui
 
+enum class SerenadaCallUiVariant {
+    Standard,
+    Frontline,
+}
+
 data class SerenadaCallFlowConfig(
+    val uiVariant: SerenadaCallUiVariant = SerenadaCallUiVariant.Standard,
     val screenSharingEnabled: Boolean = true,
     val inviteControlsEnabled: Boolean = true,
     val debugOverlayEnabled: Boolean = false,

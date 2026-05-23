@@ -98,6 +98,7 @@ public final class SerenadaCore {
                 signalingProvider: nil,
                 defaultAudioEnabled: config.defaultAudioEnabled,
                 defaultVideoEnabled: config.defaultVideoEnabled,
+                cameraModes: config.cameraModes,
                 transports: config.transports,
                 proximityMonitoringEnabled: config.proximityMonitoringEnabled
             )

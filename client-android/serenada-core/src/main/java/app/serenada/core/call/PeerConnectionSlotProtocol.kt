@@ -45,7 +45,7 @@ internal interface PeerConnectionSlotProtocol {
     fun ensurePeerConnection(): Boolean
     fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?)
     fun setAudioTrack(track: AudioTrack?)
-    fun closePeerConnection()
+    fun closePeerConnection(deferDispose: Boolean = false)
     fun createOffer(
         iceRestart: Boolean = false,
         onSdp: (String) -> Unit,
