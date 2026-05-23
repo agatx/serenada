@@ -65,6 +65,7 @@ Provider mode does not expose Serenada server helpers. These APIs require `serve
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
+| `uiVariant` | `SerenadaCallUiVariant` | `Standard` | Android-only. Selects the visual presentation for the prebuilt call UI. `Frontline` uses an audio-first layout optimized for large touch targets and field use, and keeps Frontline styling across lifecycle, 1:1, and multi-party states. |
 | `screenSharingEnabled` | Bool | `true` | Show/hide the screen-share control when the current browser/device supports screen capture |
 | `videoEnabled` | Bool | `true` | When `true`, the video on/off and camera-mode (flip) controls appear and the SDK requests camera permission on join. When `false`, both controls are hidden and URL-first call flows configure the internally-created session with no camera modes (camera is never requested). Session-first hosts that want audio-only should also pass `cameraModes: []` to `SerenadaConfig`. |
 | `inviteControlsEnabled` | Bool | `true` | Show/hide the built-in QR code and share-link UI in the waiting screen |
@@ -93,6 +94,7 @@ SerenadaCallFlow(
 SerenadaCallFlow(
     url = url,
     config = SerenadaCallFlowConfig(
+        uiVariant = SerenadaCallUiVariant.Frontline,
         screenSharingEnabled = false,
         inviteControlsEnabled = false,
         debugOverlayEnabled = true,
@@ -120,6 +122,42 @@ SerenadaCallFlow(
 ```
 
 `inviteControlsEnabled` only hides the built-in invite UI. Any custom `waitingActions` still render.
+
+### Android Frontline Variant
+
+`SerenadaCallUiVariant.Frontline` is an opt-in Android call UI for frontline workflows. It keeps the same SDK/session contract as the standard UI, but changes the presentation to an audio-first screen with larger controls, local-camera preview actions, multi-party Frontline tiles, Frontline lifecycle states, and a More sheet for supported secondary actions.
+
+For URL-first calls, the call flow configures the internally-created session as audio-first and world-camera-first:
+
+```kotlin
+SerenadaCallFlow(
+    url = url,
+    config = SerenadaCallFlowConfig(
+        uiVariant = SerenadaCallUiVariant.Frontline,
+        snapshotEnabled = true,
+    ),
+)
+```
+
+For session-first calls, configure the session the same way before passing it to the call UI:
+
+```kotlin
+val serenada = SerenadaCore(
+    config = SerenadaConfig(
+        serverHost = "serenada.app",
+        defaultVideoEnabled = false,
+        cameraModes = listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE),
+    ),
+    context = context,
+)
+
+SerenadaCallFlow(
+    session = serenada.join(url),
+    config = SerenadaCallFlowConfig(uiVariant = SerenadaCallUiVariant.Frontline),
+)
+```
+
+Frontline v1 hides controls that are not backed by the SDK call UI contract today, including speaker/earpiece switching, audio route picker, report-quality, and placeholder add-person flows. Screen sharing, invite/share actions, mute, video, camera mode, flashlight, snapshot, PiP swap, end call, debug overlay, reconnect badge, and local pinch zoom use existing SDK callbacks. The standard waiting-screen QR code is not shown in the Frontline variant.
 
 ## Camera Modes
 
@@ -288,7 +326,9 @@ Available string keys:
 - `CallWaitingShort`, `CallReconnecting`, `CallTakingLongerThanUsual`
 - `CallWaitingOverlay`
 - `CallShareLinkChooser`, `CallShareInvitation`, `CallInviteToRoom`
-- `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`
+- `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`, `CallTakeSnapshot`
+- Android Frontline: `FrontlineYou`, `FrontlineWaiting`, `FrontlineVideo`, `FrontlineVideoOn`, `FrontlineMute`, `FrontlineMore`, `FrontlineEnd`, `FrontlineFlipCamera`
+- Android Frontline: `FrontlineStopScreenShare`, `FrontlineShareScreen`, `FrontlineReturnToCamera`, `FrontlineShowYourPhone`, `FrontlineInviteSubtitle`, `FrontlineShareLinkSubtitle`, `FrontlineClose`
 
 ### Web
 

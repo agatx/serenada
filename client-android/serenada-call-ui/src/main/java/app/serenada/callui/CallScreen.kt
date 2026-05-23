@@ -927,7 +927,7 @@ internal fun CallScreen(
 }
 
 @Composable
-private fun DebugPanel(
+internal fun DebugPanel(
     sections: List<DebugPanelSection>,
     modifier: Modifier = Modifier
 ) {
@@ -985,20 +985,20 @@ private fun DebugPanel(
     }
 }
 
-private enum class DebugStatus {
+internal enum class DebugStatus {
     GOOD,
     WARN,
     BAD,
     NA
 }
 
-private data class DebugPanelMetric(
+internal data class DebugPanelMetric(
     val label: String,
     val value: String,
     val status: DebugStatus
 )
 
-private data class DebugPanelSection(
+internal data class DebugPanelSection(
     val title: String,
     val metrics: List<DebugPanelMetric>
 )
@@ -1075,7 +1075,7 @@ private fun debugDotColor(status: DebugStatus): Color {
     }
 }
 
-private fun buildDebugPanelSections(
+internal fun buildDebugPanelSections(
     isConnected: Boolean,
     activeTransport: String?,
     iceConnectionState: String,
@@ -1430,7 +1430,7 @@ private fun WaitingOverlay(
     }
 }
 
-private fun aspectRatioRendererEvents(
+internal fun aspectRatioRendererEvents(
     handler: android.os.Handler,
     onAspectRatioChanged: (Float) -> Unit,
 ): RendererCommon.RendererEvents = object : RendererCommon.RendererEvents {
@@ -1998,7 +1998,7 @@ private fun RemoteParticipantStageTile(
 }
 
 @Composable
-private fun TextureVideoSurface(
+internal fun TextureVideoSurface(
     modifier: Modifier,
     rendererName: String,
     eglContext: EglBase.Context,
@@ -2038,7 +2038,7 @@ private fun TextureVideoSurface(
 }
 
 @Composable
-private fun VideoSurface(
+internal fun VideoSurface(
     modifier: Modifier,
     viewKey: Any,
     onAttach: (SurfaceViewRenderer) -> Unit,
@@ -2392,7 +2392,7 @@ private fun generateQrCode(text: String): Bitmap? {
     }
 }
 
-private fun shareLink(context: Context, text: String, chooserTitle: String) {
+internal fun shareLink(context: Context, text: String, chooserTitle: String) {
     val intent =
         Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

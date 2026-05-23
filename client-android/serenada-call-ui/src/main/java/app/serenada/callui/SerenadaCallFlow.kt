@@ -25,11 +25,15 @@ import app.serenada.core.SnapshotError
 import app.serenada.core.SnapshotResult
 import app.serenada.core.SnapshotSource
 import app.serenada.core.call.CallPhase
+import app.serenada.core.call.LocalCameraMode
 import kotlinx.coroutines.launch
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoSink
+
+private val FRONTLINE_CAMERA_MODES =
+    listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE)
 
 /**
  * Pre-built call flow that manages the full call lifecycle.
@@ -77,6 +81,7 @@ fun SerenadaCallFlow(
     val context = LocalContext.current
     val activity = context as? Activity
     val coroutineScope = rememberCoroutineScope()
+    val isFrontlineVariant = config.uiVariant == SerenadaCallUiVariant.Frontline
     val ownedSession =
         remember(url, session, context.applicationContext) {
             session ?: url
@@ -85,8 +90,13 @@ fun SerenadaCallFlow(
                     SerenadaCore(
                         config = SerenadaConfig(
                             serverHost = resolveServerHost(callUrl),
+                            defaultVideoEnabled = !isFrontlineVariant,
                             transports = defaultTransports(),
-                            cameraModes = if (config.videoEnabled) null else emptyList(),
+                            cameraModes = when {
+                                !config.videoEnabled -> emptyList()
+                                isFrontlineVariant -> FRONTLINE_CAMERA_MODES
+                                else -> null
+                            },
                         ),
                         context = context.applicationContext,
                     ).join(callUrl)
@@ -323,37 +333,69 @@ fun SerenadaCallFlow(
     onSnapshotRequested: ((SnapshotSource) -> Unit)? = null,
     onDismiss: () -> Unit = {},
 ) {
-    CallScreen(
-        uiState = uiState,
-        roomShareUrl = roomShareUrl,
-        eglContext = eglContext,
-        initialRemoteVideoFitCover = initialRemoteVideoFitCover,
-        config = config,
-        theme = theme,
-        strings = strings,
-        onToggleAudio = onToggleAudio,
-        onToggleVideo = onToggleVideo,
-        onFlipCamera = onFlipCamera,
-        onToggleFlashlight = onToggleFlashlight,
-        onLocalPinchZoom = onLocalPinchZoom,
-        onEndCall = onEndCall,
-        onShareLink = onShareLink,
-        onInviteToRoom = onInviteToRoom,
-        onRemoteVideoFitChanged = onRemoteVideoFitChanged,
-        onStartScreenShare = onStartScreenShare,
-        onStopScreenShare = onStopScreenShare,
-        attachLocalRenderer = attachLocalRenderer,
-        detachLocalRenderer = detachLocalRenderer,
-        attachLocalSink = attachLocalSink,
-        detachLocalSink = detachLocalSink,
-        attachRemoteRenderer = attachRemoteRenderer,
-        detachRemoteRenderer = detachRemoteRenderer,
-        attachRemoteSinkForCid = attachRemoteSinkForCid,
-        detachRemoteSinkForCid = detachRemoteSinkForCid,
-        attachRemoteSink = attachRemoteSink,
-        detachRemoteSink = detachRemoteSink,
-        onSnapshotRequested = onSnapshotRequested,
-    )
+    if (config.uiVariant == SerenadaCallUiVariant.Frontline) {
+        FrontlineCallScreen(
+            uiState = uiState,
+            roomShareUrl = roomShareUrl,
+            eglContext = eglContext,
+            config = config,
+            theme = theme,
+            strings = strings,
+            onToggleAudio = onToggleAudio,
+            onToggleVideo = onToggleVideo,
+            onFlipCamera = onFlipCamera,
+            onToggleFlashlight = onToggleFlashlight,
+            onLocalPinchZoom = onLocalPinchZoom,
+            onEndCall = onEndCall,
+            onShareLink = onShareLink,
+            onInviteToRoom = onInviteToRoom,
+            onStartScreenShare = onStartScreenShare,
+            onStopScreenShare = onStopScreenShare,
+            attachLocalRenderer = attachLocalRenderer,
+            detachLocalRenderer = detachLocalRenderer,
+            attachLocalSink = attachLocalSink,
+            detachLocalSink = detachLocalSink,
+            attachRemoteRenderer = attachRemoteRenderer,
+            detachRemoteRenderer = detachRemoteRenderer,
+            attachRemoteSinkForCid = attachRemoteSinkForCid,
+            detachRemoteSinkForCid = detachRemoteSinkForCid,
+            attachRemoteSink = attachRemoteSink,
+            detachRemoteSink = detachRemoteSink,
+            onSnapshotRequested = onSnapshotRequested,
+        )
+    } else {
+        CallScreen(
+            uiState = uiState,
+            roomShareUrl = roomShareUrl,
+            eglContext = eglContext,
+            initialRemoteVideoFitCover = initialRemoteVideoFitCover,
+            config = config,
+            theme = theme,
+            strings = strings,
+            onToggleAudio = onToggleAudio,
+            onToggleVideo = onToggleVideo,
+            onFlipCamera = onFlipCamera,
+            onToggleFlashlight = onToggleFlashlight,
+            onLocalPinchZoom = onLocalPinchZoom,
+            onEndCall = onEndCall,
+            onShareLink = onShareLink,
+            onInviteToRoom = onInviteToRoom,
+            onRemoteVideoFitChanged = onRemoteVideoFitChanged,
+            onStartScreenShare = onStartScreenShare,
+            onStopScreenShare = onStopScreenShare,
+            attachLocalRenderer = attachLocalRenderer,
+            detachLocalRenderer = detachLocalRenderer,
+            attachLocalSink = attachLocalSink,
+            detachLocalSink = detachLocalSink,
+            attachRemoteRenderer = attachRemoteRenderer,
+            detachRemoteRenderer = detachRemoteRenderer,
+            attachRemoteSinkForCid = attachRemoteSinkForCid,
+            detachRemoteSinkForCid = detachRemoteSinkForCid,
+            attachRemoteSink = attachRemoteSink,
+            detachRemoteSink = detachRemoteSink,
+            onSnapshotRequested = onSnapshotRequested,
+        )
+    }
 }
 
 @Composable
@@ -375,6 +417,7 @@ private fun rememberCallUiState(
             errorMessageText = state.error?.displayMessage,
             isHost = state.isHost,
             participantCount = 1 + visibleRemotes.size,
+            callStartedAtMs = state.callStartedAtMs,
             localAudioEnabled = state.localAudioEnabled,
             localVideoEnabled = state.localVideoEnabled,
             localDisplayName = state.localDisplayName,

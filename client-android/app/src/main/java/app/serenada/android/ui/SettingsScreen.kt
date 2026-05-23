@@ -58,6 +58,7 @@ import app.serenada.android.BuildConfig
 import app.serenada.android.R
 import app.serenada.android.data.SettingsStore
 import app.serenada.android.network.HostApiClient
+import app.serenada.callui.SerenadaCallUiVariant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,6 +75,7 @@ fun SettingsScreen(
     isDefaultCameraEnabled: Boolean,
     isDefaultMicrophoneEnabled: Boolean,
     isHdVideoExperimentalEnabled: Boolean,
+    callUiVariant: SerenadaCallUiVariant,
     areSavedRoomsShownFirst: Boolean,
     areRoomInviteNotificationsEnabled: Boolean,
     hostError: String?,
@@ -84,6 +86,7 @@ fun SettingsScreen(
     onDefaultCameraChange: (Boolean) -> Unit,
     onDefaultMicrophoneChange: (Boolean) -> Unit,
     onHdVideoExperimentalChange: (Boolean) -> Unit,
+    onCallUiVariantChange: (SerenadaCallUiVariant) -> Unit,
     onSavedRoomsShownFirstChange: (Boolean) -> Unit,
     onRoomInviteNotificationsChange: (Boolean) -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -322,6 +325,22 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
                         singleLine = true
+                    )
+                }
+
+                SettingsSection(
+                    title = stringResource(R.string.settings_call_screen_style)
+                ) {
+                    HostOptionRow(
+                        selected = callUiVariant == SerenadaCallUiVariant.Standard,
+                        label = stringResource(R.string.settings_call_screen_style_standard),
+                        onClick = { onCallUiVariantChange(SerenadaCallUiVariant.Standard) }
+                    )
+
+                    HostOptionRow(
+                        selected = callUiVariant == SerenadaCallUiVariant.Frontline,
+                        label = stringResource(R.string.settings_call_screen_style_frontline),
+                        onClick = { onCallUiVariantChange(SerenadaCallUiVariant.Frontline) }
                     )
                 }
 

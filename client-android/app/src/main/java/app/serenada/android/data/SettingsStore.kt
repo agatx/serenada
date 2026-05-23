@@ -2,6 +2,7 @@ package app.serenada.android.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import app.serenada.callui.SerenadaCallUiVariant
 
 class SettingsStore(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("serenada_settings", Context.MODE_PRIVATE)
@@ -82,6 +83,12 @@ class SettingsStore(context: Context) {
             prefs.edit().putBoolean(KEY_REMOTE_VIDEO_FIT_COVER, value).apply()
         }
 
+    var callUiVariant: SerenadaCallUiVariant
+        get() = normalizeCallUiVariant(prefs.getString(KEY_CALL_UI_VARIANT, null))
+        set(value) {
+            prefs.edit().putString(KEY_CALL_UI_VARIANT, value.name).apply()
+        }
+
     var displayName: String
         get() = prefs.getString(KEY_DISPLAY_NAME, "") ?: ""
         set(value) {
@@ -117,12 +124,20 @@ class SettingsStore(context: Context) {
         private const val KEY_SAVED_ROOMS_SHOWN_FIRST = "saved_rooms_shown_first"
         private const val KEY_ROOM_INVITE_NOTIFICATIONS_ENABLED = "room_invite_notifications_enabled"
         private const val KEY_REMOTE_VIDEO_FIT_COVER = "remote_video_fit_cover"
+        private const val KEY_CALL_UI_VARIANT = "call_ui_variant"
         private const val KEY_DISPLAY_NAME = "display_name"
 
         fun normalizeLanguage(value: String?): String =
             when (value) {
                 LANGUAGE_AUTO, LANGUAGE_EN, LANGUAGE_RU, LANGUAGE_ES, LANGUAGE_FR -> value
                 else -> LANGUAGE_AUTO
+            }
+
+        fun normalizeCallUiVariant(value: String?): SerenadaCallUiVariant =
+            if (value?.trim()?.equals(SerenadaCallUiVariant.Frontline.name, ignoreCase = true) == true) {
+                SerenadaCallUiVariant.Frontline
+            } else {
+                SerenadaCallUiVariant.Standard
             }
     }
 }

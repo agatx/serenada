@@ -15,6 +15,21 @@ enum class SerenadaString {
     CallToggleFlashlight,
     CallToggleVideoFit,
     CallTakeSnapshot,
+    FrontlineYou,
+    FrontlineWaiting,
+    FrontlineVideo,
+    FrontlineVideoOn,
+    FrontlineMute,
+    FrontlineMore,
+    FrontlineEnd,
+    FrontlineFlipCamera,
+    FrontlineStopScreenShare,
+    FrontlineShareScreen,
+    FrontlineReturnToCamera,
+    FrontlineShowYourPhone,
+    FrontlineInviteSubtitle,
+    FrontlineShareLinkSubtitle,
+    FrontlineClose,
 }
 
 val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
@@ -32,6 +47,21 @@ val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
     SerenadaString.CallToggleFlashlight to "Toggle flashlight",
     SerenadaString.CallToggleVideoFit to "Toggle video fit",
     SerenadaString.CallTakeSnapshot to "Take photo",
+    SerenadaString.FrontlineYou to "You",
+    SerenadaString.FrontlineWaiting to "Waiting",
+    SerenadaString.FrontlineVideo to "VIDEO",
+    SerenadaString.FrontlineVideoOn to "VIDEO ON",
+    SerenadaString.FrontlineMute to "MUTE",
+    SerenadaString.FrontlineMore to "MORE",
+    SerenadaString.FrontlineEnd to "END",
+    SerenadaString.FrontlineFlipCamera to "Flip camera",
+    SerenadaString.FrontlineStopScreenShare to "Stop screen share",
+    SerenadaString.FrontlineShareScreen to "Share screen",
+    SerenadaString.FrontlineReturnToCamera to "Return to camera",
+    SerenadaString.FrontlineShowYourPhone to "Show your phone",
+    SerenadaString.FrontlineInviteSubtitle to "Bring in another teammate",
+    SerenadaString.FrontlineShareLinkSubtitle to "Send the call link",
+    SerenadaString.FrontlineClose to "Close",
 )
 
 fun resolveString(key: SerenadaString, overrides: Map<SerenadaString, String>?): String {

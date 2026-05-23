@@ -15,6 +15,7 @@ data class CallUiState(
     val errorMessageText: String? = null,
     val isHost: Boolean = false,
     val participantCount: Int = 0,
+    val callStartedAtMs: Long? = null,
     val localAudioEnabled: Boolean = true,
     val localVideoEnabled: Boolean = true,
     val localDisplayName: String? = null,

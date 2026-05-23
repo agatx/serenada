@@ -978,6 +978,7 @@ class SerenadaSession internal constructor(
                 phase = CallPhase.Joining,
                 roomId = roomId,
                 error = null,
+                callStartedAtMs = callStartTimeMs,
                 localAudioEnabled = config.defaultAudioEnabled,
                 localVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled,
                 localDisplayName = displayName,
@@ -1216,12 +1217,17 @@ class SerenadaSession internal constructor(
         val isHostNow = clientId != null && clientId == roomState.hostCid
         val phase = if (count <= 1) CallPhase.Waiting else CallPhase.InCall
         if (phase != CallPhase.Joining) joinFlowCoordinator.clearJoinTimeout()
+        val localJoinedAtMs = roomState.participants
+            .firstOrNull { it.cid == clientId }
+            ?.joinedAt
+            ?.takeIf { isPlausibleJoinedAtMs(it, System.currentTimeMillis()) }
 
         updateState(
             _state.value.copy(
                 phase = phase,
                 isHost = isHostNow,
                 participantCount = count,
+                callStartedAtMs = localJoinedAtMs ?: _state.value.callStartedAtMs,
             )
         )
 
@@ -1684,9 +1690,16 @@ class SerenadaSession internal constructor(
         }
     }
 
+    private fun isPlausibleJoinedAtMs(joinedAtMs: Long, nowMs: Long): Boolean {
+        return joinedAtMs >= PLAUSIBLE_EPOCH_MS &&
+            joinedAtMs <= nowMs + JOINED_AT_FUTURE_SKEW_MS
+    }
+
     private companion object {
         const val TAG = "SerenadaSession"
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
+        const val PLAUSIBLE_EPOCH_MS = 946_684_800_000L // 2000-01-01T00:00:00Z
+        const val JOINED_AT_FUTURE_SKEW_MS = 5L * 60L * 1000L
         // Matches the server's reconnectTokenTTL (= suspendHardEvictionTimeout).
         // The recovery record stops offering rejoin past this window because
         // the persisted token would no longer be honored anyway.
