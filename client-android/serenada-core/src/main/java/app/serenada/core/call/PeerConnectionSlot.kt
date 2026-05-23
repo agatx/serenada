@@ -1040,9 +1040,14 @@ internal class PeerConnectionDisposeQueue(
     private val pending = LinkedHashSet<Runnable>()
     private val flushThread = HandlerThread("serenada-pc-dispose").apply { start() }
     private val flushHandler = Handler(flushThread.looper)
+    @Volatile private var isShutdown = false
 
     @Synchronized
     fun postDelayed(dispose: Runnable, delayMs: Long) {
+        if (isShutdown) {
+            dispose.run()
+            return
+        }
         lateinit var wrapper: Runnable
         wrapper = Runnable {
             synchronized(this) {
@@ -1054,12 +1059,13 @@ internal class PeerConnectionDisposeQueue(
         handler.postDelayed(wrapper, delayMs)
     }
 
-    fun flush(onDrained: (() -> Unit)? = null) {
+    fun flush(shutdownAfterDrain: Boolean = false, onDrained: (() -> Unit)? = null) {
         val runnables = synchronized(this) {
             pending.toList().also { pending.clear() }
         }
         if (runnables.isEmpty()) {
             onDrained?.invoke()
+            if (shutdownAfterDrain) shutdown()
             return
         }
         val remaining = AtomicInteger(runnables.size)
@@ -1069,8 +1075,15 @@ internal class PeerConnectionDisposeQueue(
                 runnable.run()
                 if (remaining.decrementAndGet() == 0) {
                     onDrained?.invoke()
+                    if (shutdownAfterDrain) shutdown()
                 }
             }
         }
+    }
+
+    private fun shutdown() {
+        if (isShutdown) return
+        isShutdown = true
+        flushThread.quitSafely()
     }
 }

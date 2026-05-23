@@ -269,7 +269,7 @@ internal class WebRtcEngine(
         peerSlots.clear()
         stopLocalMedia()
         localSinks.clear()
-        peerConnectionDisposeQueue.flush {
+        peerConnectionDisposeQueue.flush(shutdownAfterDrain = true) {
             runCatching { peerConnectionFactory.dispose() }
             runCatching { audioDeviceModule.release() }
         }

@@ -319,6 +319,9 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
                 self.emitEvent(.audioSessionInterrupted(reason: .systemAudio))
             case .ended:
                 do {
+                    // Try to restore call audio even when iOS omits shouldResume.
+                    // If another owner still holds audio, activation fails and the
+                    // session remains externally muted while we log the failure.
                     try self.audioSession.setActive(true)
                     self.emitEvent(.audioSessionResumed)
                 } catch {
