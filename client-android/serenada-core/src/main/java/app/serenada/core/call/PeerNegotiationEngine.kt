@@ -94,6 +94,13 @@ internal class PeerNegotiationEngine(
 
     fun processSignalingPayload(msg: SignalingMessage) {
         val fromCid = msg.payload?.optString("from").orEmpty().ifBlank { return }
+        val roomState = getCurrentRoomState()
+        val localCid = getClientId()
+        if (fromCid == localCid) return
+        if (roomState != null && roomState.participants.none { it.cid == fromCid }) {
+            logger?.log(SerenadaLogLevel.DEBUG, TAG, "Ignoring ${msg.type} from departed peer $fromCid")
+            return
+        }
         val slot = getOrCreateSlot(fromCid)
         if (!slot.isReady() && !slot.ensurePeerConnection()) {
             return
@@ -239,7 +246,7 @@ internal class PeerNegotiationEngine(
         clearNonHostOfferFallback(remoteCid)
         val slot = removeSlotEntry(remoteCid) ?: return
         engineRemoveSlot(slot)
-        slot.closePeerConnection()
+        slot.closePeerConnection(deferDispose = true)
     }
 
     // --- Offer Logic ---

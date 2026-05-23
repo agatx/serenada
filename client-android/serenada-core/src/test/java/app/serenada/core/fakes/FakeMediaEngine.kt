@@ -73,6 +73,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
 
     override fun removeSlot(slot: PeerConnectionSlotProtocol) {
         removedSlots.add(slot)
+        fakeSlots.remove(slot.remoteCid)
     }
 
     val attachLocalSinkCalls = mutableListOf<VideoSink>()
