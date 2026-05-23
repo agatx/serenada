@@ -413,7 +413,7 @@ val config = SerenadaConfig(
 )
 ```
 
-See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` interacts with the call-flow controls, and [Android Frontline Variant](sdk-customization.md#android-frontline-variant) for the audio-first frontline call UI.
+See [Camera Modes](sdk-customization.md#camera-modes) for how `cameraModes` interacts with the call-flow controls, and [Frontline Variant](sdk-customization.md#android-and-ios-frontline-variant) for the audio-first frontline call UI.
 
 ## Next Steps
 
