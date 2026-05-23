@@ -1,5 +1,7 @@
 package app.serenada.core.call
 
+import android.os.Handler
+import android.os.Looper
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
 import org.webrtc.AudioTrack
@@ -35,6 +37,10 @@ internal class PeerConnectionSlot(
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
     private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
+    private companion object {
+        const val DEFERRED_DISPOSE_DELAY_MS = 250L
+    }
+
     private data class MediaTotals(
         var inboundPacketsReceived: Long = 0L,
         var inboundPacketsLost: Long = 0L,
@@ -119,6 +125,8 @@ internal class PeerConnectionSlot(
     override fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
     override fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
+    private val disposeHandler = Handler(Looper.getMainLooper())
+    @Volatile private var isClosing = false
     private var peerConnection: PeerConnection? = null
     private var remoteVideoTrack: VideoTrack? = null
     private var remoteDescriptionSet = false
@@ -130,16 +138,18 @@ internal class PeerConnectionSlot(
     private val freezeSamples = mutableListOf<FreezeSample>()
     private val remoteBlackFrameAnalyzer = RemoteBlackFrameAnalyzer()
     private val remoteVideoStateSink = VideoSink { frame ->
-        val stateChanged = remoteBlackFrameAnalyzer.onFrame(
-            frame = frame,
-            blackFrameAnalysisEnabled = isRemoteBlackFrameAnalysisEnabled()
-        )
-        if (stateChanged) {
-            logger?.log(
-                SerenadaLogLevel.DEBUG,
-                "PeerConnection",
-                "[RemoteVideo][$remoteCid] syntheticBlack=${remoteBlackFrameAnalyzer.isSyntheticBlackDetected()} trackEnabled=${remoteVideoTrack?.enabled()}"
+        if (!isClosing) {
+            val stateChanged = remoteBlackFrameAnalyzer.onFrame(
+                frame = frame,
+                blackFrameAnalysisEnabled = isRemoteBlackFrameAnalysisEnabled()
             )
+            if (stateChanged) {
+                logger?.log(
+                    SerenadaLogLevel.DEBUG,
+                    "PeerConnection",
+                    "[RemoteVideo][$remoteCid] syntheticBlack=${remoteBlackFrameAnalyzer.isSyntheticBlackDetected()} trackEnabled=${remoteVideoTrack?.enabled()}"
+                )
+            }
         }
     }
 
@@ -149,23 +159,28 @@ internal class PeerConnectionSlot(
     }
 
     override fun ensurePeerConnection(): Boolean {
+        if (isClosing) return false
         if (peerConnection != null) return true
         val f = factory ?: return false
         val servers = iceServers ?: return false
         val config = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
+        var observerPeerConnection: PeerConnection? = null
         val pc = f.createPeerConnection(config, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {
+                if (!isCurrentPeerConnection(observerPeerConnection)) return
                 onLocalIceCandidate(remoteCid, candidate)
             }
 
             override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+                if (!isCurrentPeerConnection(observerPeerConnection)) return
                 logger?.log(SerenadaLogLevel.DEBUG, "PeerConnection", "[$remoteCid] Connection state: $newState")
                 onConnectionStateChange(remoteCid, newState)
             }
 
             override fun onTrack(transceiver: RtpTransceiver?) {
+                if (!isCurrentPeerConnection(observerPeerConnection)) return
                 val track = transceiver?.receiver?.track()
                 if (track is VideoTrack) {
                     remoteVideoTrack?.removeSink(remoteVideoStateSink)
@@ -179,16 +194,19 @@ internal class PeerConnectionSlot(
             }
 
             override fun onSignalingChange(newState: PeerConnection.SignalingState) {
+                if (!isCurrentPeerConnection(observerPeerConnection)) return
                 logger?.log(SerenadaLogLevel.DEBUG, "PeerConnection", "[$remoteCid] Signaling state: $newState")
                 onSignalingStateChange(remoteCid, newState)
             }
 
             override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
+                if (!isCurrentPeerConnection(observerPeerConnection)) return
                 logger?.log(SerenadaLogLevel.DEBUG, "PeerConnection", "[$remoteCid] ICE state: $newState")
                 onIceConnectionStateChange(remoteCid, newState)
             }
 
             override fun onRenegotiationNeeded() {
+                if (!isCurrentPeerConnection(observerPeerConnection)) return
                 onRenegotiationNeeded(remoteCid)
             }
 
@@ -200,6 +218,7 @@ internal class PeerConnectionSlot(
             override fun onDataChannel(dc: org.webrtc.DataChannel) = Unit
         }) ?: return false
 
+        observerPeerConnection = pc
         peerConnection = pc
         attachLocalTracks(localAudioTrack, localVideoTrack)
         ensureReceiveTransceivers(pc)
@@ -209,6 +228,7 @@ internal class PeerConnectionSlot(
     }
 
     override fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {
+        if (isClosing) return
         localAudioTrack = audioTrack
         localVideoTrack = videoTrack
         val pc = peerConnection ?: run {
@@ -226,15 +246,19 @@ internal class PeerConnectionSlot(
         }
     }
 
-    override fun closePeerConnection() {
+    override fun closePeerConnection(deferDispose: Boolean) {
+        if (isClosing && peerConnection == null) return
+        isClosing = true
         offerTimeoutTask = null
         iceRestartTask = null
         nonHostFallbackTask = null
-        peerConnection?.close()
-        peerConnection?.dispose()
+        isMakingOffer = false
+        pendingIceRestart = false
+        val pc = peerConnection
         peerConnection = null
-        remoteVideoTrack?.removeSink(remoteVideoStateSink)
-        remoteSinks.forEach { sink -> remoteVideoTrack?.removeSink(sink) }
+        val track = remoteVideoTrack
+        track?.removeSink(remoteVideoStateSink)
+        remoteSinks.forEach { sink -> track?.removeSink(sink) }
         remoteSinks.clear()
         remoteVideoTrack = null
         remoteBlackFrameAnalyzer.onTrackDetached()
@@ -243,6 +267,10 @@ internal class PeerConnectionSlot(
         lastRealtimeStatsSample = null
         freezeSamples.clear()
         onRemoteVideoTrack(remoteCid, null)
+        pc?.let {
+            closePeerConnectionSafely(it)
+            disposePeerConnectionSafely(it, deferDispose)
+        }
     }
 
     override fun createOffer(
@@ -250,6 +278,7 @@ internal class PeerConnectionSlot(
         onSdp: (String) -> Unit,
         onComplete: ((Boolean) -> Unit)?,
     ): Boolean {
+        if (isClosing) return false
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) return false
             peerConnection
@@ -265,17 +294,20 @@ internal class PeerConnectionSlot(
         }
         pc.createOffer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(desc: SessionDescription?) {
+                if (!isCurrentPeerConnection(pc)) return
                 if (desc == null) {
                     onComplete?.invoke(false)
                     return
                 }
                 pc.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
+                        if (!isCurrentPeerConnection(pc)) return
                         onSdp(desc.description)
                         onComplete?.invoke(true)
                     }
 
                     override fun onSetFailure(error: String?) {
+                        if (!isCurrentPeerConnection(pc)) return
                         logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local offer: $error")
                         onComplete?.invoke(false)
                     }
@@ -283,6 +315,7 @@ internal class PeerConnectionSlot(
             }
 
             override fun onCreateFailure(error: String?) {
+                if (!isCurrentPeerConnection(pc)) return
                 logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Offer creation failed: $error")
                 onComplete?.invoke(false)
             }
@@ -291,6 +324,10 @@ internal class PeerConnectionSlot(
     }
 
     override fun createAnswer(onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)?) {
+        if (isClosing) {
+            onComplete?.invoke(false)
+            return
+        }
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) {
                 onComplete?.invoke(false)
@@ -305,17 +342,20 @@ internal class PeerConnectionSlot(
         val constraints = MediaConstraints()
         pc.createAnswer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(desc: SessionDescription?) {
+                if (!isCurrentPeerConnection(pc)) return
                 if (desc == null) {
                     onComplete?.invoke(false)
                     return
                 }
                 pc.setLocalDescription(object : SdpObserverAdapter() {
                     override fun onSetSuccess() {
+                        if (!isCurrentPeerConnection(pc)) return
                         onSdp(desc.description)
                         onComplete?.invoke(true)
                     }
 
                     override fun onSetFailure(error: String?) {
+                        if (!isCurrentPeerConnection(pc)) return
                         logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set local answer: $error")
                         onComplete?.invoke(false)
                     }
@@ -323,6 +363,7 @@ internal class PeerConnectionSlot(
             }
 
             override fun onCreateFailure(error: String?) {
+                if (!isCurrentPeerConnection(pc)) return
                 logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Answer creation failed: $error")
                 onComplete?.invoke(false)
             }
@@ -334,6 +375,7 @@ internal class PeerConnectionSlot(
         sdp: String,
         onComplete: (() -> Unit)?,
     ) {
+        if (isClosing) return
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) return
             peerConnection
@@ -341,18 +383,21 @@ internal class PeerConnectionSlot(
         val desc = SessionDescription(type, sdp)
         pc.setRemoteDescription(object : SdpObserverAdapter() {
             override fun onSetSuccess() {
+                if (!isCurrentPeerConnection(pc)) return
                 remoteDescriptionSet = true
                 flushPendingIceCandidates()
                 onComplete?.invoke()
             }
 
             override fun onSetFailure(error: String?) {
+                if (!isCurrentPeerConnection(pc)) return
                 logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set remote description ($type): $error")
             }
         }, desc)
     }
 
     override fun addIceCandidate(candidate: IceCandidate) {
+        if (isClosing) return
         val safeCandidate = sanitizeIceCandidate(candidate, remoteCid, logger) ?: return
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) {
@@ -374,14 +419,20 @@ internal class PeerConnectionSlot(
     }
 
     override fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)?) {
+        if (isClosing) {
+            onComplete?.invoke(false)
+            return
+        }
         val pc = peerConnection ?: return
         val desc = SessionDescription(SessionDescription.Type.ROLLBACK, "")
         pc.setLocalDescription(object : SdpObserverAdapter() {
             override fun onSetSuccess() {
+                if (!isCurrentPeerConnection(pc)) return
                 onComplete?.invoke(true)
             }
 
             override fun onSetFailure(error: String?) {
+                if (!isCurrentPeerConnection(pc)) return
                 logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to rollback local description: $error")
                 onComplete?.invoke(false)
             }
@@ -397,6 +448,7 @@ internal class PeerConnectionSlot(
     }
 
     override fun attachRemoteSink(sink: VideoSink) {
+        if (isClosing) return
         if (!remoteSinks.add(sink)) return
         remoteVideoTrack?.addSink(sink)
     }
@@ -407,6 +459,10 @@ internal class PeerConnectionSlot(
     }
 
     override fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit) {
+        if (isClosing) {
+            onComplete("pc=closing remote=$remoteCid", null)
+            return
+        }
         val pc = peerConnection
         if (pc == null) {
             onComplete("pc=none remote=$remoteCid", null)
@@ -421,6 +477,10 @@ internal class PeerConnectionSlot(
     }
 
     override fun collectInboundBytes(onComplete: (Long) -> Unit) {
+        if (isClosing) {
+            onComplete(0L)
+            return
+        }
         val pc = peerConnection
         if (pc == null) {
             onComplete(0L)
@@ -437,6 +497,10 @@ internal class PeerConnectionSlot(
     }
 
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) {
+        if (isClosing) {
+            onComplete(null, null)
+            return
+        }
         val pc = peerConnection
         if (pc == null) {
             onComplete(null, null)
@@ -459,20 +523,20 @@ internal class PeerConnectionSlot(
         }
     }
 
-    override fun isReady(): Boolean = peerConnection != null
+    override fun isReady(): Boolean = !isClosing && peerConnection != null
 
     override fun isPathDirect(): Boolean? = lastPathIsDirect
 
     override fun getConnectionState(): PeerConnection.PeerConnectionState =
-        peerConnection?.connectionState() ?: PeerConnection.PeerConnectionState.NEW
+        if (isClosing) PeerConnection.PeerConnectionState.CLOSED else peerConnection?.connectionState() ?: PeerConnection.PeerConnectionState.NEW
 
     override fun getIceConnectionState(): PeerConnection.IceConnectionState =
-        peerConnection?.iceConnectionState() ?: PeerConnection.IceConnectionState.NEW
+        if (isClosing) PeerConnection.IceConnectionState.CLOSED else peerConnection?.iceConnectionState() ?: PeerConnection.IceConnectionState.NEW
 
     override fun getSignalingState(): PeerConnection.SignalingState =
-        peerConnection?.signalingState() ?: PeerConnection.SignalingState.STABLE
+        if (isClosing) PeerConnection.SignalingState.CLOSED else peerConnection?.signalingState() ?: PeerConnection.SignalingState.STABLE
 
-    override fun hasRemoteDescription(): Boolean = remoteDescriptionSet || peerConnection?.remoteDescription != null
+    override fun hasRemoteDescription(): Boolean = !isClosing && (remoteDescriptionSet || peerConnection?.remoteDescription != null)
 
     override fun isRemoteVideoTrackEnabled(): Boolean {
         val track = remoteVideoTrack ?: return false
@@ -481,6 +545,7 @@ internal class PeerConnectionSlot(
     }
 
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
+        if (isClosing) return
         val pc = peerConnection ?: return
         val sender = pc.senders.firstOrNull { it.track()?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND } ?: return
         try {
@@ -494,6 +559,38 @@ internal class PeerConnectionSlot(
             sender.setParameters(params)
         } catch (e: Exception) {
             logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to apply video sender parameters: ${e.message}")
+        }
+    }
+
+    private fun isCurrentPeerConnection(pc: PeerConnection?): Boolean =
+        !isClosing && pc != null && peerConnection === pc
+
+    private fun closePeerConnectionSafely(pc: PeerConnection) {
+        runCatching { pc.close() }
+            .onFailure { error ->
+                logger?.log(
+                    SerenadaLogLevel.WARNING,
+                    "PeerConnection",
+                    "[$remoteCid] Failed to close peer connection: ${error.message}",
+                )
+            }
+    }
+
+    private fun disposePeerConnectionSafely(pc: PeerConnection, deferDispose: Boolean) {
+        val dispose = Runnable {
+            runCatching { pc.dispose() }
+                .onFailure { error ->
+                    logger?.log(
+                        SerenadaLogLevel.WARNING,
+                        "PeerConnection",
+                        "[$remoteCid] Failed to dispose peer connection: ${error.message}",
+                    )
+                }
+        }
+        if (deferDispose) {
+            disposeHandler.postDelayed(dispose, DEFERRED_DISPOSE_DELAY_MS)
+        } else {
+            dispose.run()
         }
     }
 

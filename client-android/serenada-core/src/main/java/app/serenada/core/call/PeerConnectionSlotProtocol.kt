@@ -44,7 +44,7 @@ internal interface PeerConnectionSlotProtocol {
     fun setIceServers(servers: List<PeerConnection.IceServer>)
     fun ensurePeerConnection(): Boolean
     fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?)
-    fun closePeerConnection()
+    fun closePeerConnection(deferDispose: Boolean = false)
     fun createOffer(
         iceRestart: Boolean = false,
         onSdp: (String) -> Unit,
