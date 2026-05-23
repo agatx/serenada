@@ -271,6 +271,27 @@ class SerenadaSessionContractTest {
         )
     }
 
+    @Test
+    fun `future participant joinedAt does not overwrite callStartedAtMs`() {
+        val before = System.currentTimeMillis()
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+
+        val futureJoinedAt = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(1)
+        factory.simulateJoinedResponse(
+            cid = "my-cid",
+            participants = listOf("my-cid" to futureJoinedAt),
+        )
+
+        val startedAt = factory.session.state.value.callStartedAtMs
+        assertNotNull(startedAt)
+        assertNotEquals(futureJoinedAt, startedAt)
+        assertTrue(
+            "Future joinedAt should be ignored; got $startedAt",
+            startedAt!! in before..System.currentTimeMillis(),
+        )
+    }
+
     // ── Reconnect on close ──────────────────────────────────────────
 
     @Test

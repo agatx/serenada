@@ -1220,7 +1220,7 @@ class SerenadaSession internal constructor(
         val localJoinedAtMs = roomState.participants
             .firstOrNull { it.cid == clientId }
             ?.joinedAt
-            ?.takeIf { it >= PLAUSIBLE_EPOCH_MS }
+            ?.takeIf { isPlausibleJoinedAtMs(it, System.currentTimeMillis()) }
 
         updateState(
             _state.value.copy(
@@ -1690,10 +1690,16 @@ class SerenadaSession internal constructor(
         }
     }
 
+    private fun isPlausibleJoinedAtMs(joinedAtMs: Long, nowMs: Long): Boolean {
+        return joinedAtMs >= PLAUSIBLE_EPOCH_MS &&
+            joinedAtMs <= nowMs + JOINED_AT_FUTURE_SKEW_MS
+    }
+
     private companion object {
         const val TAG = "SerenadaSession"
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         const val PLAUSIBLE_EPOCH_MS = 946_684_800_000L // 2000-01-01T00:00:00Z
+        const val JOINED_AT_FUTURE_SKEW_MS = 5L * 60L * 1000L
         // Matches the server's reconnectTokenTTL (= suspendHardEvictionTimeout).
         // The recovery record stops offering rejoin past this window because
         // the persisted token would no longer be honored anyway.

@@ -134,9 +134,10 @@ class SettingsStore(context: Context) {
             }
 
         fun normalizeCallUiVariant(value: String?): SerenadaCallUiVariant =
-            when (value?.trim()?.lowercase()) {
-                SerenadaCallUiVariant.Frontline.name.lowercase() -> SerenadaCallUiVariant.Frontline
-                else -> SerenadaCallUiVariant.Standard
+            if (value?.trim()?.equals(SerenadaCallUiVariant.Frontline.name, ignoreCase = true) == true) {
+                SerenadaCallUiVariant.Frontline
+            } else {
+                SerenadaCallUiVariant.Standard
             }
     }
 }

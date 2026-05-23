@@ -2165,4 +2165,3 @@ private fun CallUiState.isFrontlineWaitingForRemote(): Boolean {
     return (phase == CallPhase.Waiting || phase == CallPhase.InCall) &&
         remoteParticipants.isEmpty()
 }
-
