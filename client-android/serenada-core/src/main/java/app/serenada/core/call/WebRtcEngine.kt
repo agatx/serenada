@@ -267,11 +267,12 @@ internal class WebRtcEngine(
             slot.closePeerConnection()
         }
         peerSlots.clear()
-        peerConnectionDisposeQueue.flush()
         stopLocalMedia()
         localSinks.clear()
-        runCatching { peerConnectionFactory.dispose() }
-        runCatching { audioDeviceModule.release() }
+        peerConnectionDisposeQueue.flush {
+            runCatching { peerConnectionFactory.dispose() }
+            runCatching { audioDeviceModule.release() }
+        }
         // eglBase is owned by SerenadaSession and outlives the engine — do not release it here.
     }
 

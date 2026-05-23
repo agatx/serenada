@@ -5,6 +5,7 @@ import android.os.HandlerThread
 import android.os.Looper
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
+import java.util.concurrent.atomic.AtomicInteger
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
@@ -1053,13 +1054,23 @@ internal class PeerConnectionDisposeQueue(
         handler.postDelayed(wrapper, delayMs)
     }
 
-    fun flush() {
+    fun flush(onDrained: (() -> Unit)? = null) {
         val runnables = synchronized(this) {
             pending.toList().also { pending.clear() }
         }
+        if (runnables.isEmpty()) {
+            onDrained?.invoke()
+            return
+        }
+        val remaining = AtomicInteger(runnables.size)
         for (runnable in runnables) {
             handler.removeCallbacks(runnable)
-            flushHandler.post(runnable)
+            flushHandler.post {
+                runnable.run()
+                if (remaining.decrementAndGet() == 0) {
+                    onDrained?.invoke()
+                }
+            }
         }
     }
 }
