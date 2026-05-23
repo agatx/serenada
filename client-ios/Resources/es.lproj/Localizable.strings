@@ -17,6 +17,9 @@
 "settings_language_french" = "Francés";
 "settings_display_name" = "Nombre para mostrar";
 "settings_display_name_placeholder" = "Tu nombre (opcional)";
+"settings_call_screen_style" = "Estilo de pantalla de llamada";
+"settings_call_screen_style_standard" = "Estándar";
+"settings_call_screen_style_frontline" = "Frontline";
 "settings_call_defaults" = "Valores por defecto de llamada";
 "settings_hd_video_experimental" = "Video HD (experimental)";
 "settings_hd_video_experimental_info" = "Activa modos de cámara de mayor calidad. Puede aumentar el uso de CPU.";
@@ -166,9 +169,26 @@
 "call_permissions_required" = "Se requiere acceso a la cámara y al micrófono";
 "call_permissions_camera" = "Cámara";
 "call_permissions_microphone" = "Micrófono";
+"call_grant_access" = "Conceder acceso";
+"call_dismiss" = "Cerrar";
 "call_error_generic" = "Algo salió mal";
 "call_joining" = "Uniéndose...";
 "call_ended" = "Llamada finalizada";
+"frontline_you" = "Tú";
+"frontline_waiting" = "Esperando";
+"frontline_video" = "Video";
+"frontline_video_on" = "Video activo";
+"frontline_mute" = "Silenciar";
+"frontline_more" = "Más";
+"frontline_end" = "Finalizar";
+"frontline_flip_camera" = "Cambiar cámara";
+"frontline_stop_screen_share" = "Detener pantalla compartida";
+"frontline_share_screen" = "Compartir pantalla";
+"frontline_return_to_camera" = "Volver a la cámara";
+"frontline_show_your_phone" = "Mostrar la pantalla del teléfono";
+"frontline_invite_subtitle" = "Enviar una notificación de llamada";
+"frontline_share_link_subtitle" = "Copiar o compartir el enlace de sala";
+"frontline_close" = "Cerrar";
 
 "feedback_title" = "Comentarios";
 "feedback_send_action" = "Enviar comentarios";

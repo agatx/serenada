@@ -1,3 +1,4 @@
+import SerenadaCallUI
 import SwiftUI
 
 struct SettingsScreen: View {
@@ -9,6 +10,7 @@ struct SettingsScreen: View {
     let isDefaultCameraEnabled: Bool
     let isDefaultMicrophoneEnabled: Bool
     let isHdVideoExperimentalEnabled: Bool
+    let callUiVariant: SerenadaCallUiVariant
     let areSavedRoomsShownFirst: Bool
     let areRoomInviteNotificationsEnabled: Bool
     @Binding var showFeedback: Bool
@@ -19,6 +21,7 @@ struct SettingsScreen: View {
     let onDefaultCameraChange: (Bool) -> Void
     let onDefaultMicrophoneChange: (Bool) -> Void
     let onHdVideoExperimentalChange: (Bool) -> Void
+    let onCallUiVariantChange: (SerenadaCallUiVariant) -> Void
     let onSavedRoomsShownFirstChange: (Bool) -> Void
     let onRoomInviteNotificationsChange: (Bool) -> Void
     let onDisplayNameChange: (String) -> Void
@@ -99,6 +102,17 @@ struct SettingsScreen: View {
                         }
                         onDisplayNameChange(clamped)
                     }
+            }
+
+            Section(L10n.settingsCallScreenStyle) {
+                Picker(L10n.settingsCallScreenStyle, selection: Binding(
+                    get: { callUiVariant },
+                    set: { onCallUiVariantChange($0) }
+                )) {
+                    Text(L10n.settingsCallScreenStyleStandard).tag(SerenadaCallUiVariant.standard)
+                    Text(L10n.settingsCallScreenStyleFrontline).tag(SerenadaCallUiVariant.frontline)
+                }
+                .pickerStyle(.segmented)
             }
 
             Section(L10n.settingsCallDefaults) {

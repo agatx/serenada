@@ -213,6 +213,8 @@ public struct CallState: Equatable {
     public var requiredPermissions: [MediaCapability]?
     /// Current error, if the phase is `.error`.
     public var error: CallError?
+    /// Wall-clock timestamp in milliseconds when the local participant joined this call.
+    public var callStartedAtMs: Int64?
 
     public init() {}
 }

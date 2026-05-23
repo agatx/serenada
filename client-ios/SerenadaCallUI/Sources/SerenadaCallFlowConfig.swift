@@ -1,5 +1,11 @@
 import Foundation
 
+/// Visual presentation used by the prebuilt Serenada call UI.
+public enum SerenadaCallUiVariant: String, CaseIterable {
+    case standard
+    case frontline
+}
+
 /// Configuration for SerenadaCallFlow feature toggles.
 /// When a feature is disabled, the corresponding control is removed from the UI entirely.
 public struct SerenadaCallFlowConfig {
@@ -38,6 +44,10 @@ public struct SerenadaCallFlowConfig {
     /// `SerenadaConfig` used to build the session.
     public var videoEnabled: Bool
 
+    /// Selects the prebuilt visual presentation. Defaults to the existing
+    /// standard call UI.
+    public var uiVariant: SerenadaCallUiVariant
+
     public init(
         screenSharingEnabled: Bool = true,
         inviteControlsEnabled: Bool = true,
@@ -45,7 +55,8 @@ public struct SerenadaCallFlowConfig {
         autoHideControls: Bool = true,
         snapshotEnabled: Bool = false,
         avatarProvider: AvatarProvider? = nil,
-        videoEnabled: Bool = true
+        videoEnabled: Bool = true,
+        uiVariant: SerenadaCallUiVariant = .standard
     ) {
         self.screenSharingEnabled = screenSharingEnabled
         self.inviteControlsEnabled = inviteControlsEnabled
@@ -54,5 +65,6 @@ public struct SerenadaCallFlowConfig {
         self.snapshotEnabled = snapshotEnabled
         self.avatarProvider = avatarProvider
         self.videoEnabled = videoEnabled
+        self.uiVariant = uiVariant
     }
 }

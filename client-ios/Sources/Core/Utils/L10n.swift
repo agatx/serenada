@@ -75,6 +75,9 @@ enum L10n {
     static var settingsLanguageFrench: String { text("settings_language_french") }
     static var settingsDisplayName: String { text("settings_display_name") }
     static var settingsDisplayNamePlaceholder: String { text("settings_display_name_placeholder") }
+    static var settingsCallScreenStyle: String { text("settings_call_screen_style") }
+    static var settingsCallScreenStyleStandard: String { text("settings_call_screen_style_standard") }
+    static var settingsCallScreenStyleFrontline: String { text("settings_call_screen_style_frontline") }
     static var settingsCallDefaults: String { text("settings_call_defaults") }
     static var settingsCameraEnabled: String { text("camera_enabled") }
     static var settingsCameraEnabledInfo: String { text("camera_enabled_info") }
@@ -240,6 +243,23 @@ enum L10n {
             .callPermissionsRequired: text("call_permissions_required"),
             .callPermissionsCamera: text("call_permissions_camera"),
             .callPermissionsMicrophone: text("call_permissions_microphone"),
+            .callGrantAccess: text("call_grant_access"),
+            .callDismiss: text("call_dismiss"),
+            .frontlineYou: text("frontline_you"),
+            .frontlineWaiting: text("frontline_waiting"),
+            .frontlineVideo: text("frontline_video"),
+            .frontlineVideoOn: text("frontline_video_on"),
+            .frontlineMute: text("frontline_mute"),
+            .frontlineMore: text("frontline_more"),
+            .frontlineEnd: text("frontline_end"),
+            .frontlineFlipCamera: text("frontline_flip_camera"),
+            .frontlineStopScreenShare: text("frontline_stop_screen_share"),
+            .frontlineShareScreen: text("frontline_share_screen"),
+            .frontlineReturnToCamera: text("frontline_return_to_camera"),
+            .frontlineShowYourPhone: text("frontline_show_your_phone"),
+            .frontlineInviteSubtitle: text("frontline_invite_subtitle"),
+            .frontlineShareLinkSubtitle: text("frontline_share_link_subtitle"),
+            .frontlineClose: text("frontline_close"),
         ]
     }
 }

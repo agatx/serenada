@@ -11,6 +11,7 @@ final class CallManager: ObservableObject {
     @Published private(set) var isDefaultCameraEnabled: Bool
     @Published private(set) var isDefaultMicrophoneEnabled: Bool
     @Published private(set) var isHdVideoExperimentalEnabled: Bool
+    @Published private(set) var callUiVariant: SerenadaCallUiVariant
     @Published private(set) var areSavedRoomsShownFirst: Bool
     @Published private(set) var areRoomInviteNotificationsEnabled: Bool
     @Published private(set) var displayName: String
@@ -100,6 +101,7 @@ final class CallManager: ObservableObject {
         self.isDefaultCameraEnabled = settingsStore.isDefaultCameraEnabled
         self.isDefaultMicrophoneEnabled = settingsStore.isDefaultMicrophoneEnabled
         self.isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled
+        self.callUiVariant = settingsStore.callUiVariant
         self.areSavedRoomsShownFirst = settingsStore.areSavedRoomsShownFirst
         self.areRoomInviteNotificationsEnabled = settingsStore.areRoomInviteNotificationsEnabled
         self.displayName = settingsStore.displayName
@@ -181,6 +183,11 @@ final class CallManager: ObservableObject {
         settingsStore.isHdVideoExperimentalEnabled = enabled
         isHdVideoExperimentalEnabled = enabled
         activeSession?.setHdVideoExperimentalEnabled(enabled)
+    }
+
+    func updateCallUiVariant(_ variant: SerenadaCallUiVariant) {
+        settingsStore.callUiVariant = variant
+        callUiVariant = variant
     }
 
     func updateSavedRoomsShownFirst(_ enabled: Bool) {
@@ -411,11 +418,14 @@ final class CallManager: ObservableObject {
     }
 
     private func makeSerenadaCore(host: String) -> SerenadaCore {
+        let frontline = settingsStore.callUiVariant == .frontline
+        let cameraModes: [LocalCameraMode]? = frontline ? [.world, .selfie, .composite] : nil
         let core = SerenadaCore(
             config: SerenadaConfig(
                 serverHost: host,
                 defaultAudioEnabled: settingsStore.isDefaultMicrophoneEnabled,
-                defaultVideoEnabled: settingsStore.isDefaultCameraEnabled,
+                defaultVideoEnabled: frontline ? false : settingsStore.isDefaultCameraEnabled,
+                cameraModes: cameraModes,
                 proximityMonitoringEnabled: true
             )
         )
@@ -483,12 +493,17 @@ final class CallManager: ObservableObject {
         next.participantCount = participantCount
         next.localAudioEnabled = state.localParticipant.audioEnabled
         next.localVideoEnabled = state.localParticipant.videoEnabled
+        next.localDisplayName = state.localParticipant.displayName
+        next.localAudioLevel = state.localParticipant.audioLevel
         next.remoteParticipants = state.remoteParticipants.map {
             RemoteParticipant(
                 cid: $0.cid,
                 displayName: $0.displayName,
+                peerId: $0.peerId,
+                audioEnabled: $0.audioEnabled,
                 videoEnabled: $0.videoEnabled,
-                connectionState: $0.connectionState
+                connectionState: $0.connectionState,
+                audioLevel: $0.audioLevel
             )
         }
         next.connectionStatus = mapSessionConnectionStatus(state.connectionStatus)
@@ -501,11 +516,13 @@ final class CallManager: ObservableObject {
         next.isFrontCamera = diagnostics.isFrontCamera
         next.isScreenSharing = diagnostics.isScreenSharing
         next.localCameraMode = state.localParticipant.cameraMode
+        next.availableCameraModes = state.localParticipant.availableCameraModes
         next.cameraZoomFactor = diagnostics.cameraZoomFactor
         next.isFlashAvailable = diagnostics.isFlashAvailable
         next.isFlashEnabled = diagnostics.isFlashEnabled
         next.remoteContentCid = diagnostics.remoteContentParticipantId
         next.remoteContentType = diagnostics.remoteContentType
+        next.callStartedAtMs = state.callStartedAtMs
         uiState = next
 
         if state.phase == .error {
