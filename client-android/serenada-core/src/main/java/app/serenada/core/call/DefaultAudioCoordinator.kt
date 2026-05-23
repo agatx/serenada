@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class DefaultAudioCoordinator(
+internal class DefaultAudioCoordinator(
     context: Context,
     private val handler: Handler,
     private val proximityMonitoringEnabled: Boolean,

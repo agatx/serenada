@@ -196,6 +196,45 @@ session.end()     // terminates room for all
 - `state` for app-facing lifecycle, participants, permissions, and errors
 - `diagnostics` for transport state, low-level WebRTC state, stats, and feature degradation details
 
+## Pluggable Audio Coordinators
+
+By default, `SerenadaCore` manages `AVAudioSession`, route changes, and proximity behavior with an internal coordinator. Apps that already own process-wide audio state, such as push-to-talk hosts, can inject a custom `SerenadaAudioCoordinator`:
+
+```swift
+let serenada = SerenadaCore(
+    config: SerenadaConfig(
+        serverHost: "serenada.app",
+        audioCoordinator: MyAudioCoordinator(),
+        audioIntent: AudioIntent(
+            supportsVideo: true,
+            muteOwnMicDuringExternalAudio: true,
+            duckOwnPlaybackDuringExternalAudio: true
+        )
+    )
+)
+```
+
+Custom coordinators implement `SerenadaAudioCoordinator`. They activate and deactivate call audio, apply route selections, publish `availableDevices`, `effectiveInputDevice`, `effectiveOutputDevice`, and emit `AudioCoordinatorEvent` values for interruptions, resume, focus changes, and input availability.
+
+The concrete default coordinator is internal SDK behavior, not a supported public class to instantiate. Leave `audioCoordinator` as `nil` to use it.
+
+Custom UIs can observe and control the active coordinator through the session:
+
+```swift
+session.$availableAudioDevices.sink { devices in
+    // Render route picker.
+}
+
+session.$isMicMutedByExternalAudio.sink { mutedByExternalAudio in
+    // Show a distinct push-to-talk or external-audio mute state if needed.
+}
+
+session.selectAudioDevice(device)
+session.setMicMuted(true)
+```
+
+`isMicMuted` is the effective mute state: user mute, coordinator-driven external mute, and missing input route all count as muted. `isMicMutedByExternalAudio` isolates the coordinator-driven portion so the host can distinguish user mute from push-to-talk or other external audio.
+
 ## Permissions Handling
 
 In URL-first mode, `SerenadaCallFlow` automatically prompts for camera/microphone permissions.
@@ -329,7 +368,9 @@ let config = SerenadaConfig(
     defaultAudioEnabled: true,        // mic on at join (default)
     defaultVideoEnabled: true,        // camera on at join (default)
     cameraModes: [.selfie, .world, .composite], // available modes & cycle order; empty = audio-only (default: all supported modes)
-    transports: [.ws, .sse]           // transport priority (default)
+    transports: [.ws, .sse],          // transport priority (default)
+    audioCoordinator: nil,            // custom SerenadaAudioCoordinator, or internal default
+    audioIntent: AudioIntent()        // audio policy passed to the coordinator
 )
 ```
 

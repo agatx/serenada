@@ -82,7 +82,7 @@ private final class EventHolder<T>: @unchecked Sendable {
 }
 
 @MainActor
-public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoordinator, SessionAudioController, @unchecked Sendable {
+final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoordinator, SessionAudioController, @unchecked Sendable {
     private let availableDevicesHolder = ContinuationHolder<[AudioDevice]>(initialValue: [])
     private let effectiveInputDeviceHolder = ContinuationHolder<AudioDevice?>(initialValue: nil)
     private let effectiveOutputDeviceHolder = ContinuationHolder<AudioDevice?>(initialValue: nil)
@@ -100,7 +100,7 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
     private var isProximityNear = false
     private var pinnedOutputKind: AudioDeviceKind?
 
-    public init(
+    init(
         proximityMonitoringEnabled: Bool,
         onProximityChanged: @escaping (Bool) -> Void,
         onAudioEnvironmentChanged: @escaping () -> Void,
@@ -113,15 +113,15 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
         super.init()
     }
 
-    public func setOnProximityChanged(_ handler: @escaping (Bool) -> Void) {
+    func setOnProximityChanged(_ handler: @escaping (Bool) -> Void) {
         onProximityChanged = handler
     }
 
-    public func setOnAudioEnvironmentChanged(_ handler: @escaping () -> Void) {
+    func setOnAudioEnvironmentChanged(_ handler: @escaping () -> Void) {
         onAudioEnvironmentChanged = handler
     }
 
-    public func activate() {
+    func activate() {
         guard !audioSessionActive else { return }
         audioSessionActive = true
 
@@ -145,7 +145,7 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
         onAudioEnvironmentChanged()
     }
 
-    public func deactivate() {
+    func deactivate() {
         guard audioSessionActive else {
             stopProximityMonitoring()
             return
@@ -163,13 +163,13 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
         }
     }
 
-    public func shouldPauseVideoForProximity(isScreenSharing: Bool) -> Bool {
+    func shouldPauseVideoForProximity(isScreenSharing: Bool) -> Bool {
         proximityMonitoringActive && isProximityNear && !isScreenSharing && !isBluetoothHeadsetConnected()
     }
 
     // MARK: - SerenadaAudioCoordinator Conformance
 
-    public func activateCallSession(intent: AudioIntent) async throws -> AudioCoordinatorCapabilities {
+    func activateCallSession(intent: AudioIntent) async throws -> AudioCoordinatorCapabilities {
         activate()
         return AudioCoordinatorCapabilities(
             pttPolicy: .block,
@@ -179,11 +179,11 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
         )
     }
 
-    public func deactivateCallSession() async {
+    func deactivateCallSession() async {
         deactivate()
     }
 
-    public func applyRouting(_ device: AudioDevice) async throws {
+    func applyRouting(_ device: AudioDevice) async throws {
         if device.direction == .output || device.direction == .both {
             pinnedOutputKind = device.kind
             try applyOutputRoute(for: device.kind)
@@ -192,31 +192,31 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
         onAudioEnvironmentChanged()
     }
 
-    public func setMicMuted(_ muted: Bool) async throws {
+    func setMicMuted(_ muted: Bool) async throws {
         // No-op for default coordinator
     }
 
-    public func suspendCapture() async throws {
+    func suspendCapture() async throws {
         // No-op for default coordinator
     }
 
-    public func resumeCapture() async throws {
+    func resumeCapture() async throws {
         // No-op for default coordinator
     }
 
-    public var availableDevices: AsyncStream<[AudioDevice]> {
+    var availableDevices: AsyncStream<[AudioDevice]> {
         availableDevicesHolder.makeStream()
     }
 
-    public var effectiveInputDevice: AsyncStream<AudioDevice?> {
+    var effectiveInputDevice: AsyncStream<AudioDevice?> {
         effectiveInputDeviceHolder.makeStream()
     }
 
-    public var effectiveOutputDevice: AsyncStream<AudioDevice?> {
+    var effectiveOutputDevice: AsyncStream<AudioDevice?> {
         effectiveOutputDeviceHolder.makeStream()
     }
 
-    public var events: AsyncStream<AudioCoordinatorEvent> {
+    var events: AsyncStream<AudioCoordinatorEvent> {
         eventsHolder.makeStream()
     }
 

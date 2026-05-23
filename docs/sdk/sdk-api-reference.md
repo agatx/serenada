@@ -93,6 +93,25 @@ The web SDK exposes `session.onPeerMessage(callback)` for transport-agnostic pee
 
 `subscribeToMessages()` is not part of the public web API surface anymore. The supported public hook is `onPeerMessage(...)`.
 
+### Audio coordinator APIs
+
+Android and iOS expose a pluggable audio coordination surface for hosts that need to own process-wide audio policy. The supported public surface is:
+
+- `SerenadaConfig.audioCoordinator`: optional custom `SerenadaAudioCoordinator`.
+- `SerenadaConfig.audioIntent`: `AudioIntent` passed to the coordinator during call activation.
+- `SerenadaAudioCoordinator`: protocol/interface for activation, deactivation, route selection, mic mute notification, capture suspend/resume, route streams, and coordinator events.
+- Model types: `AudioDevice`, `AudioDeviceKind`, `AudioDeviceDirection`, `AudioDeviceStatus`, `BluetoothProfile`, `AudioIntent`, `AudioCoordinatorCapabilities`, `PttPolicy`, `SessionOwnership`, `InterruptionReason`, and `AudioCoordinatorEvent`.
+- `SerenadaSession.availableAudioDevices`: coordinator-published route list.
+- `SerenadaSession.currentAudioDevice`: selected or active output route.
+- `SerenadaSession.isMicMuted`: effective microphone mute state.
+- `SerenadaSession.isMicMutedByExternalAudio`: external-audio portion of the mute state.
+- `SerenadaSession.selectAudioDevice(...)`: route selection request.
+- `SerenadaSession.setMicMuted(...)`: user-requested microphone mute state.
+
+The SDK's default audio coordinator is internal implementation detail. To use default behavior, leave `audioCoordinator` unset. To customize behavior, implement `SerenadaAudioCoordinator` and inject it through `SerenadaConfig`.
+
+`isMicMuted` is composed from user mute, external-audio mute, and input-route availability. `isMicMutedByExternalAudio` lets host UIs distinguish push-to-talk or other coordinator-driven interruptions from a manual user mute.
+
 ### Diagnostics
 
 Diagnostics now distinguish between provider-safe TURN probing and server-only connectivity checks:

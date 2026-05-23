@@ -102,7 +102,7 @@ private final class SignalingProviderDelegateProxy: SignalingProviderDelegate {
     }
 }
 
-/// Represents an active call session. Created via ``SerenadaCore/join(url:)`` or ``SerenadaCore/createRoom()``.
+/// Represents an active call session. Created via ``SerenadaCore/join(url:displayName:peerId:)`` or ``SerenadaCore/createRoom()``.
 /// Publishes state via `@Published` properties for SwiftUI integration.
 @MainActor
 public final class SerenadaSession: ObservableObject {
@@ -111,13 +111,13 @@ public final class SerenadaSession: ObservableObject {
     /// Real-time connection diagnostics.
     @Published public private(set) var diagnostics = CallDiagnostics()
 
-    /// Available audio devices.
+    /// Audio routes currently published by the active coordinator.
     @Published public private(set) var availableAudioDevices: [AudioDevice] = []
-    /// Current selected or active audio device.
+    /// Current selected or active output route, or nil when no route is available yet.
     @Published public private(set) var currentAudioDevice: AudioDevice?
-    /// Whether the microphone is muted (either by user action, external interruption, or missing route).
+    /// Whether the microphone is effectively muted by user action, external audio, or missing input.
     @Published public private(set) var isMicMuted: Bool = false
-    /// Whether the microphone is muted by an external audio session interruption (e.g. PTT).
+    /// Whether the microphone is muted specifically because external audio, such as push-to-talk, is active.
     @Published public private(set) var isMicMutedByExternalAudio: Bool = false
 
     /// Room identifier for this session.
@@ -485,7 +485,9 @@ public final class SerenadaSession: ObservableObject {
         setMicMuted(!enabled)
     }
 
-    /// Select a specific audio device for routing.
+    /// Request routing to a coordinator-published audio device.
+    ///
+    /// The call is asynchronous; failures are logged and the current route is left unchanged.
     public func selectAudioDevice(_ device: AudioDevice) {
         Task {
             do {
@@ -496,7 +498,9 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    /// Set microphone muted state.
+    /// Set the user-requested microphone mute state.
+    ///
+    /// The effective mute state may still be true when external audio is active or no input route is available.
     public func setMicMuted(_ muted: Bool) {
         self.userMuted = muted
         self.updateEffectiveMicState()

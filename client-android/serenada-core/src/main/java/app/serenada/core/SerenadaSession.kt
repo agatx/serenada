@@ -126,19 +126,19 @@ class SerenadaSession internal constructor(
     val diagnostics: StateFlow<CallDiagnostics> = _diagnostics.asStateFlow()
 
     private val _availableAudioDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
-    /** Available audio devices. */
+    /** Audio routes currently published by the active coordinator. */
     val availableAudioDevices: StateFlow<List<AudioDevice>> = _availableAudioDevices.asStateFlow()
 
     private val _currentAudioDevice = MutableStateFlow<AudioDevice?>(null)
-    /** Current selected or active audio device. */
+    /** Current selected or active output route, or null when no route is available yet. */
     val currentAudioDevice: StateFlow<AudioDevice?> = _currentAudioDevice.asStateFlow()
 
     private val _isMicMuted = MutableStateFlow(false)
-    /** Whether the microphone is muted (either by user action, external interruption, or missing route). */
+    /** Whether the microphone is effectively muted by user action, external audio, or missing input. */
     val isMicMuted: StateFlow<Boolean> = _isMicMuted.asStateFlow()
 
     private val _isMicMutedByExternalAudio = MutableStateFlow(false)
-    /** Whether the microphone is muted by an external audio session interruption (e.g. PTT). */
+    /** Whether the microphone is muted specifically because external audio, such as push-to-talk, is active. */
     val isMicMutedByExternalAudio: StateFlow<Boolean> = _isMicMutedByExternalAudio.asStateFlow()
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -1781,7 +1781,11 @@ class SerenadaSession internal constructor(
         }
     }
 
-    /** Select a specific audio device for routing. */
+    /**
+     * Request routing to a coordinator-published audio device.
+     *
+     * The call is asynchronous; failures are logged and the current route is left unchanged.
+     */
     fun selectAudioDevice(device: AudioDevice) {
         assertMainThread()
         providerScope.launch {
@@ -1793,7 +1797,11 @@ class SerenadaSession internal constructor(
         }
     }
 
-    /** Set microphone muted state. */
+    /**
+     * Set the user-requested microphone mute state.
+     *
+     * The effective mute state may still be true when external audio is active or no input route is available.
+     */
     fun setMicMuted(muted: Boolean) {
         assertMainThread()
         userMuted = muted

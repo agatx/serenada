@@ -39,9 +39,9 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     /// Whether the proximity sensor is used to switch audio to the earpiece and pause video.
     /// Defaults to `false`.
     public var proximityMonitoringEnabled: Bool
-    /// Custom audio coordinator. If `nil`, the default audio coordinator is used.
+    /// Custom audio coordinator. If `nil`, the SDK uses its internal default coordinator.
     public var audioCoordinator: SerenadaAudioCoordinator?
-    /// Audio session intent settings.
+    /// Audio policy passed to the coordinator when a call session activates.
     public var audioIntent: AudioIntent
 
     public init(

@@ -39,9 +39,9 @@ data class SerenadaConfig(
     val transports: List<SerenadaTransport> = listOf(SerenadaTransport.WS, SerenadaTransport.SSE),
     /** Whether the proximity sensor is used to switch audio to the earpiece and pause video (default false). */
     val proximityMonitoringEnabled: Boolean = false,
-    /** Custom audio coordinator. If null, the default coordinator is used. */
+    /** Custom audio coordinator. If null, the SDK uses its internal default coordinator. */
     val audioCoordinator: SerenadaAudioCoordinator? = null,
-    /** Audio intent settings. */
+    /** Audio policy passed to the coordinator when a call session activates. */
     val audioIntent: AudioIntent = AudioIntent(),
 )
 

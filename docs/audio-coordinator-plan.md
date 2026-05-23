@@ -123,7 +123,7 @@ Hosts that require zero leak should publish `pttPolicy: .block` (no PTT while a 
 - Reporting external events: route changes, interruptions, focus loss
 - Publishing static capabilities once on call activation (PTT policy, input-sharing support, session-ownership model)
 
-The SDK ships a `DefaultAudioCoordinator` that does exactly what `CallAudioSessionController` does today. Most apps use it. Behavior unchanged.
+The SDK uses an internal default coordinator that does exactly what `CallAudioSessionController` does today. Most apps use it by leaving `audioCoordinator` unset. Behavior unchanged.
 
 ### Data Model
 
@@ -202,7 +202,7 @@ PttPolicy:
   - block            // host promises PTT will not fire while a call is active
 
 SessionOwnership:
-  - sdkOwned         // coordinator is DefaultAudioCoordinator; SDK drives activation
+  - sdkOwned         // SDK internal default coordinator drives activation
   - hostOwned        // coordinator owns activation (e.g., Zello AudioSessionManager)
   - systemOwned      // OS framework owns activation (e.g., iOS PushToTalk while channel active)
 
@@ -229,7 +229,7 @@ public protocol SerenadaAudioCoordinator: AnyObject, Sendable {
 }
 
 public struct SerenadaConfig {
-    public var audioCoordinator: SerenadaAudioCoordinator?  // nil = DefaultAudioCoordinator
+    public var audioCoordinator: SerenadaAudioCoordinator?  // nil = SDK internal default
     public var audioIntent: AudioIntent                     // defaults shown above
     // ... existing fields
 }
@@ -312,7 +312,7 @@ On iOS, the SDK also configures `RTCAudioSession.useManualAudio = true` at SDK i
 
 ```
 App: SerenadaCore.join(url, config)                  // audioCoordinator: nil
-SDK: Instantiates DefaultAudioCoordinator
+SDK: Instantiates internal default coordinator
 SDK: caps = await coordinator.activateCallSession(intent: video=true, prox=true)
   Default iOS:     setCategory(.playAndRecord, .voiceChat, [.allowBluetooth, ...])
                    setActive(true)
@@ -470,7 +470,7 @@ Sequenced so each step is shippable and verifiable in isolation.
 ### Step 1: Internal Refactor, iOS
 
 - Extract the `SerenadaAudioCoordinator` protocol from the existing internal `SessionAudioController` in `SerenadaCore/Sources/SerenadaSession.swift`
-- Move `CallAudioSessionController` to conform as `DefaultAudioCoordinator`
+- Move `CallAudioSessionController` to an internal default coordinator that conforms to `SerenadaAudioCoordinator`
 - Introduce `RTCAudioSession.useManualAudio = true` at SDK init; gate `isAudioEnabled` on coordinator state
 - Migrate route-change subscription from `CallAudioSessionController` into the coordinator's responsibility surface
 - Add capture suspend/resume scaffolding to the internal media engine interface (no-op default impl)
@@ -478,7 +478,7 @@ Sequenced so each step is shippable and verifiable in isolation.
 
 ### Step 2: Internal Refactor, Android
 
-- Same extraction in `client-android/serenada-core/`. `CallAudioSessionController` becomes `DefaultAudioCoordinator`.
+- Same extraction in `client-android/serenada-core/`. `CallAudioSessionController` becomes the internal default coordinator.
 - Add `suspendCapture` / `resumeCapture` to `SessionMediaEngine` and `WebRtcEngine`. Default impl stops/starts the `JavaAudioDeviceModule` audio input on Android. Test that round-trip resume returns audio within an acceptable window.
 - Verify standalone behavior unchanged.
 
