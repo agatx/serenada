@@ -125,6 +125,7 @@ private val FrontlineAccent = Color(0xFF15BF54)
 private val FrontlineDanger = Color(0xFFF5564B)
 private val FrontlineDim = Color(0xFFA1A1AA)
 private val FrontlineSheet = Color(0xFF15161A)
+private val FrontlineStageLocalAccentWidth = 2.5.dp
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
 private const val FRONTLINE_MORE_BUTTON_HEIGHT_TO_WIDTH_RATIO = 1.62f
@@ -922,12 +923,24 @@ private fun FrontlineMultiPartyStage(
                         videoEnabled = participant.videoEnabled,
                         videoAspectRatio = remoteAspectRatios[participant.cid],
                     )
-                } + SceneParticipant(
-                    id = localId,
-                    role = ParticipantRole.LOCAL,
-                    videoEnabled = uiState.localVideoEnabled,
-                    videoAspectRatio = localAspectRatio.takeIf { it > 0f },
-                )
+                } + if (
+                    frontlineIncludesNormalLocalStageTile(
+                        localSpotlightId = localId,
+                        activeContentOwnerId = contentSource?.ownerParticipantId,
+                        contentTileIsSpotlight = spotlightIsContent,
+                    )
+                ) {
+                    listOf(
+                        SceneParticipant(
+                            id = localId,
+                            role = ParticipantRole.LOCAL,
+                            videoEnabled = uiState.localVideoEnabled,
+                            videoAspectRatio = localAspectRatio.takeIf { it > 0f },
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
             val participants =
                 if (contentSource != null && activeContentSpotlightId != null && !spotlightIsContent) {
                     baseParticipants + SceneParticipant(
@@ -1004,6 +1017,7 @@ private fun FrontlineMultiPartyStage(
                         attachRemoteSinkForCid = attachRemoteSinkForCid,
                         detachRemoteSinkForCid = detachRemoteSinkForCid,
                         contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                        cornerRadius = tileCornerRadius,
                         pinned = tileSpotlightId == pinnedSpotlightId,
                         onSelect = { onSelectedSpotlightIdChanged(tileSpotlightId) },
                         onTogglePinned = {
@@ -1044,6 +1058,7 @@ private fun FrontlineMultiPartyStage(
                         attachRemoteSinkForCid = attachRemoteSinkForCid,
                         detachRemoteSinkForCid = detachRemoteSinkForCid,
                         contentScale = if (pip.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                        cornerRadius = pipCornerRadius,
                         pinned = false,
                         onSelect = { onSelectedSpotlightIdChanged(pip.participantId) },
                         onTogglePinned = {
@@ -1082,6 +1097,7 @@ private fun FrontlineLayoutTile(
     attachRemoteSinkForCid: (String, VideoSink) -> Unit,
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     contentScale: ContentScale,
+    cornerRadius: Dp,
     pinned: Boolean,
     onSelect: () -> Unit,
     onTogglePinned: () -> Unit,
@@ -1097,6 +1113,8 @@ private fun FrontlineLayoutTile(
         isLocal || isLocalContent -> uiState.localVideoEnabled || uiState.isScreenSharing
         else -> remote?.videoEnabled == true
     }
+    val showLocalVideoAccent = (isLocal || isLocalContent) && uiState.localVideoEnabled
+    val tileShape = RoundedCornerShape(cornerRadius)
 
     Box(
         modifier = modifier
@@ -1185,6 +1203,14 @@ private fun FrontlineLayoutTile(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(6.dp),
+            )
+        }
+
+        if (showLocalVideoAccent) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(FrontlineStageLocalAccentWidth, FrontlineAccent, tileShape),
             )
         }
     }
@@ -2155,6 +2181,12 @@ private fun remoteDisplayName(remote: RemoteParticipant?): String {
     return remote?.displayName?.takeIf { it.isNotBlank() }
         ?: ""
 }
+
+private fun frontlineIncludesNormalLocalStageTile(
+    localSpotlightId: String,
+    activeContentOwnerId: String?,
+    contentTileIsSpotlight: Boolean,
+): Boolean = activeContentOwnerId != localSpotlightId || contentTileIsSpotlight
 
 private fun String.frontlineContentSpotlightId(): String = "$FRONTLINE_CONTENT_SPOTLIGHT_PREFIX$this"
 
