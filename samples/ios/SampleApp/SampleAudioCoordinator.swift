@@ -39,13 +39,14 @@ public final class SampleAudioCoordinator: SerenadaAudioCoordinator, @unchecked 
         lock.lock()
         activeOutput = device
         let currentOutputContinuations = Array(outputContinuations.values)
+        let currentInput = activeInput
         lock.unlock()
         
         for c in currentOutputContinuations {
             c.yield(device)
         }
         
-        emit(.effectiveRouteChanged(input: activeInput, output: device))
+        emit(.effectiveRouteChanged(input: currentInput, output: device))
     }
 
     public func setMicMuted(_ muted: Bool) async throws {

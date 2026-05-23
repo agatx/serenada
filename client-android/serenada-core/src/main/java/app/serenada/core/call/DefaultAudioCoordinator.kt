@@ -181,7 +181,7 @@ class DefaultAudioCoordinator(
     }
 
     override suspend fun setMicMuted(muted: Boolean) {
-        audioManager.isMicrophoneMute = muted
+        // No-op to avoid mutating process-global AudioManager.isMicrophoneMute
     }
 
     override suspend fun suspendCapture() {
@@ -445,7 +445,13 @@ class DefaultAudioCoordinator(
             AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_ACCESSORY, AudioDeviceInfo.TYPE_USB_HEADSET -> AudioDeviceKind.Usb
             else -> AudioDeviceKind.Other
         }
-        val direction = if (info.isSource) AudioDeviceDirection.INPUT else AudioDeviceDirection.OUTPUT
+        val direction = if (info.isSource && info.isSink) {
+            AudioDeviceDirection.BOTH
+        } else if (info.isSource) {
+            AudioDeviceDirection.INPUT
+        } else {
+            AudioDeviceDirection.OUTPUT
+        }
         return AudioDevice(
             id = info.id.toString(),
             displayName = info.productName.toString(),
@@ -466,15 +472,32 @@ class DefaultAudioCoordinator(
                 list.firstOrNull { it.kind is AudioDeviceKind.Speakerphone }?.copy(status = AudioDeviceStatus.ACTIVE)
             } else if (audioManager.isBluetoothScoOn) {
                 list.firstOrNull { it.kind is AudioDeviceKind.Bluetooth }?.copy(status = AudioDeviceStatus.ACTIVE)
+            } else if (allDevices.any { it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES }) {
+                list.firstOrNull { it.kind is AudioDeviceKind.WiredHeadset }?.copy(status = AudioDeviceStatus.ACTIVE)
+            } else if (allDevices.any { it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }) {
+                list.firstOrNull { it.kind is AudioDeviceKind.Usb }?.copy(status = AudioDeviceStatus.ACTIVE)
             } else {
                 list.firstOrNull { it.kind is AudioDeviceKind.Earpiece }?.copy(status = AudioDeviceStatus.ACTIVE)
             }
         }
 
-        val activeInput = list.firstOrNull { it.direction == AudioDeviceDirection.INPUT && it.status == AudioDeviceStatus.ACTIVE }
-            ?: list.firstOrNull { it.direction == AudioDeviceDirection.INPUT }
+        val activeInput = if (activeOutput != null && (activeOutput.kind is AudioDeviceKind.Bluetooth || activeOutput.kind is AudioDeviceKind.WiredHeadset || activeOutput.kind is AudioDeviceKind.Usb)) {
+            list.firstOrNull { it.direction == AudioDeviceDirection.INPUT && it.kind == activeOutput.kind }?.copy(status = AudioDeviceStatus.ACTIVE)
+                ?: list.firstOrNull { it.direction == AudioDeviceDirection.INPUT }?.copy(status = AudioDeviceStatus.ACTIVE)
+        } else {
+            list.firstOrNull { it.direction == AudioDeviceDirection.INPUT && it.kind is AudioDeviceKind.Earpiece }?.copy(status = AudioDeviceStatus.ACTIVE)
+                ?: list.firstOrNull { it.direction == AudioDeviceDirection.INPUT }?.copy(status = AudioDeviceStatus.ACTIVE)
+        }
 
-        _availableDevices.value = list
+        val updatedList = list.map { device ->
+            if (device.id == activeOutput?.id || device.id == activeInput?.id) {
+                device.copy(status = AudioDeviceStatus.ACTIVE)
+            } else {
+                device
+            }
+        }
+
+        _availableDevices.value = updatedList
         _effectiveInputDevice.value = activeInput
         _effectiveOutputDevice.value = activeOutput
     }

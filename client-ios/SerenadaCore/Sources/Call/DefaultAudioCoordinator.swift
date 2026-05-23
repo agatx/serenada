@@ -72,7 +72,7 @@ private final class EventHolder<T>: @unchecked Sendable {
 }
 
 @MainActor
-public final class DefaultAudioCoordinator: NSObject, SerenadaAudioCoordinator, SessionAudioController, @unchecked Sendable {
+public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoordinator, SessionAudioController, @unchecked Sendable {
     private let availableDevicesHolder = ContinuationHolder<[AudioDevice]>(initialValue: [])
     private let effectiveInputDeviceHolder = ContinuationHolder<AudioDevice?>(initialValue: nil)
     private let effectiveOutputDeviceHolder = ContinuationHolder<AudioDevice?>(initialValue: nil)
@@ -260,8 +260,8 @@ public final class DefaultAudioCoordinator: NSObject, SerenadaAudioCoordinator, 
 
         let inputs = audioSession.currentRoute.inputs
         let outputs = audioSession.currentRoute.outputs
-        let activeInput = inputs.first.map { mapPortToAudioDevice($0, status: .active) }
-        let activeOutput = outputs.first.map { mapPortToAudioDevice($0, status: .active) }
+        let activeInput = inputs.first.map { mapPortToAudioDevice($0, direction: .input, status: .active) }
+        let activeOutput = outputs.first.map { mapPortToAudioDevice($0, direction: .output, status: .active) }
         emitEvent(.effectiveRouteChanged(input: activeInput, output: activeOutput))
     }
 
@@ -315,7 +315,11 @@ public final class DefaultAudioCoordinator: NSObject, SerenadaAudioCoordinator, 
         }
     }
 
-    private func mapPortToAudioDevice(_ port: AVAudioSessionPortDescription, status: AudioDeviceStatus = .available) -> AudioDevice {
+    private func mapPortToAudioDevice(
+        _ port: AVAudioSessionPortDescription,
+        direction: AudioDeviceDirection,
+        status: AudioDeviceStatus = .available
+    ) -> AudioDevice {
         let kind: AudioDeviceKind
         switch port.portType {
         case .bluetoothHFP:
@@ -338,8 +342,6 @@ public final class DefaultAudioCoordinator: NSObject, SerenadaAudioCoordinator, 
             kind = .other
         }
 
-        let direction: AudioDeviceDirection = port.portType == .builtInMic || port.portType == .headsetMic ? .input : .output
-
         return AudioDevice(
             id: port.uid,
             displayName: port.portName,
@@ -355,16 +357,45 @@ public final class DefaultAudioCoordinator: NSObject, SerenadaAudioCoordinator, 
         var devices = [AudioDevice]()
 
         for port in audioSession.availableInputs ?? [] {
-            let isActive = route.inputs.contains { $0.uid == port.uid }
-            devices.append(mapPortToAudioDevice(port, status: isActive ? .active : .available))
+            let isActiveInput = route.inputs.contains { $0.uid == port.uid }
+            let inputDevice = mapPortToAudioDevice(port, direction: .input, status: isActiveInput ? .active : .available)
+            devices.append(inputDevice)
+            
+            if port.portType == .bluetoothHFP || port.portType == .headsetMic || port.portType == .usbAudio {
+                let isActiveOutput = route.outputs.contains { $0.uid == port.uid }
+                let outputDevice = mapPortToAudioDevice(port, direction: .output, status: isActiveOutput ? .active : .available)
+                devices.append(outputDevice)
+            }
         }
+
+        let isSpeakerActive = route.outputs.contains { $0.portType == .builtInSpeaker }
+        let speakerDevice = AudioDevice(
+            id: "speaker",
+            displayName: "Speaker",
+            kind: .speakerphone,
+            direction: .output,
+            status: isSpeakerActive ? .active : .available
+        )
+        devices.append(speakerDevice)
+
+        let isEarpieceActive = route.outputs.contains { $0.portType == .builtInReceiver }
+        let earpieceDevice = AudioDevice(
+            id: "earpiece",
+            displayName: "Earpiece",
+            kind: .earpiece,
+            direction: .output,
+            status: isEarpieceActive ? .active : .available
+        )
+        devices.append(earpieceDevice)
 
         for port in route.outputs {
-            devices.append(mapPortToAudioDevice(port, status: .active))
+            if port.portType != .builtInSpeaker && port.portType != .builtInReceiver && port.portType != .bluetoothHFP && port.portType != .usbAudio {
+                devices.append(mapPortToAudioDevice(port, direction: .output, status: .active))
+            }
         }
 
-        let activeInput = route.inputs.first.map { mapPortToAudioDevice($0, status: .active) }
-        let activeOutput = route.outputs.first.map { mapPortToAudioDevice($0, status: .active) }
+        let activeInput = route.inputs.first.map { mapPortToAudioDevice($0, direction: .input, status: .active) }
+        let activeOutput = route.outputs.first.map { mapPortToAudioDevice($0, direction: .output, status: .active) }
 
         availableDevicesHolder.update(devices)
         effectiveInputDeviceHolder.update(activeInput)

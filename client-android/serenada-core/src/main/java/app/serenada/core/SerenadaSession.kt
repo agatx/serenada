@@ -1786,15 +1786,15 @@ class SerenadaSession internal constructor(
                 audioCoordinator.setMicMuted(muted)
             }
         }
-        broadcastLocalMediaState()
     }
 
     private fun updateEffectiveMicState() {
         val effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
         webRtcEngine.toggleAudio(effectiveEnabled)
-        updateState(_state.value.copy(localAudioEnabled = !userMuted))
+        updateState(_state.value.copy(localAudioEnabled = effectiveEnabled))
         _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
         _isMicMutedByExternalAudio.value = externalAudioMuted
+        broadcastLocalMediaState()
     }
 
     private fun handleCoordinatorEvent(event: AudioCoordinatorEvent) {
@@ -1829,21 +1829,23 @@ class SerenadaSession internal constructor(
             }
             is AudioCoordinatorEvent.InputUnavailable -> {
                 routeInputAvailable = false
-                updateEffectiveMicState()
                 if (audioCoordinatorCapabilities?.canShareInput == false) {
+                    webRtcEngine.suspendCapture()
                     providerScope.launch {
                         runCatching { audioCoordinator.suspendCapture() }
                     }
                 }
+                updateEffectiveMicState()
             }
             is AudioCoordinatorEvent.InputAvailable -> {
                 routeInputAvailable = true
-                updateEffectiveMicState()
                 if (audioCoordinatorCapabilities?.canShareInput == false) {
+                    webRtcEngine.resumeCapture()
                     providerScope.launch {
                         runCatching { audioCoordinator.resumeCapture() }
                     }
                 }
+                updateEffectiveMicState()
             }
             is AudioCoordinatorEvent.FocusLost -> {
                 if (config.audioIntent.muteOwnMicDuringExternalAudio) {

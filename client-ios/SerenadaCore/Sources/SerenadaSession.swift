@@ -496,15 +496,15 @@ public final class SerenadaSession: ObservableObject {
         Task {
             try? await audioCoordinator.setMicMuted(muted)
         }
-        broadcastLocalMediaState()
     }
 
     private func updateEffectiveMicState() {
         let effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
         webRtcEngine.toggleAudio(effectiveEnabled)
-        commitSnapshot { s, _ in s.localParticipant.audioEnabled = !self.userMuted }
+        commitSnapshot { s, _ in s.localParticipant.audioEnabled = effectiveEnabled }
         self.isMicMuted = self.userMuted || self.externalAudioMuted || !self.routeInputAvailable
         self.isMicMutedByExternalAudio = self.externalAudioMuted
+        broadcastLocalMediaState()
     }
 
     private func handleCoordinatorEvent(_ event: AudioCoordinatorEvent) {
@@ -515,7 +515,7 @@ public final class SerenadaSession: ObservableObject {
             self.routeInputAvailable = (input != nil)
             self.currentAudioDevice = output
             self.updateEffectiveMicState()
-        case .audioSessionInterrupted(let reason):
+        case .audioSessionInterrupted:
             if config.audioIntent.muteOwnMicDuringExternalAudio {
                 self.externalAudioMuted = true
                 self.updateEffectiveMicState()
@@ -538,7 +538,7 @@ public final class SerenadaSession: ObservableObject {
         case .inputAvailable:
             self.routeInputAvailable = true
             self.updateEffectiveMicState()
-        case .focusLost(let transient):
+        case .focusLost:
             if config.audioIntent.muteOwnMicDuringExternalAudio {
                 self.externalAudioMuted = true
                 self.updateEffectiveMicState()
@@ -1865,6 +1865,8 @@ private final class CustomAudioCoordinatorAdapter: SessionAudioController {
     private let proximityMonitoringEnabled: Bool
     private var proximityMonitoringActive = false
     private var isProximityNear = false
+    private var currentOutputDevice: AudioDevice?
+    private var streamTask: Task<Void, Never>?
     private var onAudioEnvironmentChanged: (() -> Void)?
 
     init(coordinator: SerenadaAudioCoordinator, proximityMonitoringEnabled: Bool) {
@@ -1876,14 +1878,27 @@ private final class CustomAudioCoordinatorAdapter: SessionAudioController {
         if proximityMonitoringEnabled {
             startProximityMonitoring()
         }
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            for await device in coordinator.effectiveOutputDevice {
+                self.currentOutputDevice = device
+                self.onAudioEnvironmentChanged?()
+            }
+        }
     }
 
     func deactivate() {
         stopProximityMonitoring()
+        streamTask?.cancel()
+        streamTask = nil
     }
 
     func shouldPauseVideoForProximity(isScreenSharing: Bool) -> Bool {
-        return proximityMonitoringActive && isProximityNear && !isScreenSharing
+        var isBluetooth = false
+        if case .bluetooth = currentOutputDevice?.kind {
+            isBluetooth = true
+        }
+        return proximityMonitoringActive && isProximityNear && !isScreenSharing && !isBluetooth
     }
 
     func setOnAudioEnvironmentChanged(_ handler: @escaping () -> Void) {
