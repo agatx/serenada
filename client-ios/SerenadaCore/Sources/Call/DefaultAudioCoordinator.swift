@@ -1,6 +1,9 @@
 import AVFoundation
 import Foundation
 import UIKit
+#if canImport(WebRTC)
+@preconcurrency import WebRTC
+#endif
 
 private final class ContinuationHolder<T>: @unchecked Sendable {
     private let lock = NSLock()
@@ -38,6 +41,13 @@ private final class ContinuationHolder<T>: @unchecked Sendable {
                 self.lock.unlock()
             }
         }
+    }
+
+    var value: T {
+        lock.lock()
+        let value = currentValue
+        lock.unlock()
+        return value
     }
 }
 
@@ -308,13 +318,11 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
             case .began:
                 self.emitEvent(.audioSessionInterrupted(reason: .systemAudio))
             case .ended:
-                if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-                    let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                    if options.contains(.shouldResume) {
-                        self.emitEvent(.audioSessionResumed)
-                    }
-                } else {
+                do {
+                    try self.audioSession.setActive(true)
                     self.emitEvent(.audioSessionResumed)
+                } catch {
+                    self.logger?.log(.error, tag: "Audio", "failed to reactivate audio session after interruption: \(error)")
                 }
             @unknown default:
                 break
@@ -332,6 +340,11 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
                     options: [.allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
                 )
                 try self.audioSession.setActive(true)
+#if canImport(WebRTC)
+                let rtcAudioSession = RTCAudioSession.sharedInstance()
+                rtcAudioSession.isAudioEnabled = false
+                rtcAudioSession.isAudioEnabled = true
+#endif
                 self.updateDevicesAndRoute()
                 self.applyCallAudioRouting()
                 self.onAudioEnvironmentChanged()
@@ -346,12 +359,15 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
         guard audioSessionActive else { return }
 
         if let pinnedOutputKind {
-            do {
-                try applyOutputRoute(for: pinnedOutputKind)
-            } catch {
-                logger?.log(.error, tag: "Audio", "pinned route apply failed: \(error)")
+            if isPinnedOutputKindAvailable(pinnedOutputKind) {
+                do {
+                    try applyOutputRoute(for: pinnedOutputKind)
+                } catch {
+                    logger?.log(.error, tag: "Audio", "pinned route apply failed: \(error)")
+                }
+                return
             }
-            return
+            self.pinnedOutputKind = nil
         }
 
         if isBluetoothHeadsetConnected() {
@@ -394,6 +410,17 @@ public final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAu
                 return true
             default:
                 return false
+            }
+        }
+    }
+
+    private func isPinnedOutputKindAvailable(_ kind: AudioDeviceKind) -> Bool {
+        switch kind {
+        case .speakerphone, .earpiece:
+            return true
+        default:
+            return availableDevicesHolder.value.contains { device in
+                (device.direction == .output || device.direction == .both) && device.kind == kind
             }
         }
     }

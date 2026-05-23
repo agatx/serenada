@@ -1,6 +1,7 @@
 package app.serenada.core.call
 
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
@@ -1036,6 +1037,8 @@ internal class PeerConnectionDisposeQueue(
     private val handler: Handler = Handler(Looper.getMainLooper()),
 ) {
     private val pending = LinkedHashSet<Runnable>()
+    private val flushThread = HandlerThread("serenada-pc-dispose").apply { start() }
+    private val flushHandler = Handler(flushThread.looper)
 
     @Synchronized
     fun postDelayed(dispose: Runnable, delayMs: Long) {
@@ -1056,7 +1059,7 @@ internal class PeerConnectionDisposeQueue(
         }
         for (runnable in runnables) {
             handler.removeCallbacks(runnable)
-            runnable.run()
+            flushHandler.post(runnable)
         }
     }
 }

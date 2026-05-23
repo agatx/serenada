@@ -1876,14 +1876,22 @@ class SerenadaSession internal constructor(
                 updateEffectiveMicState()
             }
             is AudioCoordinatorEvent.FocusLost -> {
-                if (config.audioIntent.muteOwnMicDuringExternalAudio) {
+                if (!event.transient && config.audioIntent.muteOwnMicDuringExternalAudio) {
                     externalAudioMuted = true
                     updateEffectiveMicState()
+                }
+                if (event.transient && config.audioIntent.duckOwnPlaybackDuringExternalAudio) {
+                    playbackDuckingActive = true
+                    peerSlots.values.forEach { it.duckPlayback(true) }
                 }
             }
             is AudioCoordinatorEvent.FocusRegained -> {
                 externalAudioMuted = false
                 updateEffectiveMicState()
+                if (playbackDuckingActive) {
+                    playbackDuckingActive = false
+                    peerSlots.values.forEach { it.duckPlayback(false) }
+                }
             }
         }
     }

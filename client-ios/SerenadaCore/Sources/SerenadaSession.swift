@@ -149,6 +149,7 @@ public final class SerenadaSession: ObservableObject {
     private let audioCoordinator: SerenadaAudioCoordinator
     private var audioCoordinatorCapabilities: AudioCoordinatorCapabilities?
     private var audioCoordinatorLifecycleTask: Task<Void, Never>?
+    private var joinLifecycleTask: Task<Void, Never>?
     private var coordinatorTasks: [Task<Void, Never>] = []
     private var userMuted = false
     private var externalAudioMuted = false
@@ -408,7 +409,7 @@ public final class SerenadaSession: ObservableObject {
         }
         startNetworkMonitoring()
 
-        Task { @MainActor [weak self] in
+        joinLifecycleTask = Task { @MainActor [weak self] in
             await self?.beginJoinIfNeeded()
         }
     }
@@ -429,6 +430,7 @@ public final class SerenadaSession: ObservableObject {
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
         mediaLivenessTask?.cancel()
+        joinLifecycleTask?.cancel()
         audioCoordinatorLifecycleTask?.cancel()
         coordinatorTasks.forEach { $0.cancel() }
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
@@ -576,14 +578,22 @@ public final class SerenadaSession: ObservableObject {
                 }
             }
             self.updateEffectiveMicState()
-        case .focusLost:
-            if config.audioIntent.muteOwnMicDuringExternalAudio {
+        case .focusLost(let transient):
+            if !transient && config.audioIntent.muteOwnMicDuringExternalAudio {
                 self.externalAudioMuted = true
                 self.updateEffectiveMicState()
+            }
+            if transient && config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+                playbackDuckingActive = true
+                peerSlots.values.forEach { $0.duckPlayback(ducked: true) }
             }
         case .focusRegained:
             self.externalAudioMuted = false
             self.updateEffectiveMicState()
+            if playbackDuckingActive {
+                playbackDuckingActive = false
+                peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
+            }
         }
     }
 
@@ -690,7 +700,8 @@ public final class SerenadaSession: ObservableObject {
         internalPhase = .joining
         callStartedAtMs = Self.nowMs()
         commitSnapshot()
-        Task { @MainActor [weak self] in
+        joinLifecycleTask?.cancel()
+        joinLifecycleTask = Task { @MainActor [weak self] in
             await self?.prepareMediaAndConnect()
         }
     }
@@ -789,7 +800,10 @@ public final class SerenadaSession: ObservableObject {
 
         do {
             let caps = try await activateAudioCoordinator()
+            try Task.checkCancellation()
             self.audioCoordinatorCapabilities = caps
+        } catch is CancellationError {
+            return
         } catch {
             logger?.log(.error, tag: "Audio", "Failed to activate audio session: \(error)")
             handleError(.unknown("Audio session activation failed: \(error.localizedDescription)"))
@@ -1300,6 +1314,8 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func resetResources(clearRecovery: Bool = false) {
+        joinLifecycleTask?.cancel()
+        joinLifecycleTask = nil
         statsPoller?.stop()
         audioLevelPoller?.stop()
         peerNegotiationEngine?.resetAll()

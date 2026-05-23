@@ -66,7 +66,6 @@ class DefaultAudioCoordinator(
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 _events.tryEmit(AudioCoordinatorEvent.FocusLost(true))
-                _events.tryEmit(AudioCoordinatorEvent.AudioSessionInterrupted(InterruptionReason.SYSTEM_AUDIO))
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
                 audioFocusGranted = false
@@ -75,10 +74,6 @@ class DefaultAudioCoordinator(
                 handler.post {
                     if (!audioSessionActive) return@post
                     requestAudioFocus()
-                    if (audioFocusGranted) {
-                        _events.tryEmit(AudioCoordinatorEvent.FocusRegained)
-                        _events.tryEmit(AudioCoordinatorEvent.AudioSessionResumed)
-                    }
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {

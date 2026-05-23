@@ -1,6 +1,39 @@
 @testable import SerenadaCore
 import XCTest
 
+private final class BlockingAudioCoordinator: @unchecked Sendable, SerenadaAudioCoordinator {
+    private(set) var activateCalls = 0
+    private var activationContinuation: CheckedContinuation<AudioCoordinatorCapabilities, Error>?
+
+    func activateCallSession(intent: AudioIntent) async throws -> AudioCoordinatorCapabilities {
+        activateCalls += 1
+        return try await withCheckedThrowingContinuation { continuation in
+            activationContinuation = continuation
+        }
+    }
+
+    func finishActivation() {
+        activationContinuation?.resume(returning: AudioCoordinatorCapabilities(
+            pttPolicy: .block,
+            canShareInput: true,
+            sessionOwnership: .sdkOwned,
+            supportedDeviceKinds: []
+        ))
+        activationContinuation = nil
+    }
+
+    func deactivateCallSession() async {}
+    func applyRouting(_ device: AudioDevice) async throws {}
+    func setMicMuted(_ muted: Bool) async throws {}
+    func suspendCapture() async throws {}
+    func resumeCapture() async throws {}
+
+    var availableDevices: AsyncStream<[AudioDevice]> { AsyncStream { _ in } }
+    var effectiveInputDevice: AsyncStream<AudioDevice?> { AsyncStream { _ in } }
+    var effectiveOutputDevice: AsyncStream<AudioDevice?> { AsyncStream { _ in } }
+    var events: AsyncStream<AudioCoordinatorEvent> { AsyncStream { _ in } }
+}
+
 @MainActor
 final class SerenadaSessionTests: XCTestCase {
     func testJoinUrlUsesDeepLinkHostInsteadOfDefaultConfigHost() {
@@ -113,10 +146,48 @@ final class SerenadaSessionTests: XCTestCase {
         session.cancelJoin()
     }
 
+    func testCancelJoinPreventsPendingAudioActivationFromStartingMedia() async {
+        let provider = FakeSignalingProvider()
+        let media = FakeMediaEngine()
+        let coordinator = BlockingAudioCoordinator()
+        let session = SerenadaSession(
+            roomId: "provider-room",
+            config: SerenadaConfig(
+                signalingProvider: provider,
+                defaultAudioEnabled: false,
+                defaultVideoEnabled: false,
+                audioCoordinator: coordinator
+            ),
+            initialSignalingProvider: provider,
+            mediaEngine: media
+        )
+
+        await waitUntil { coordinator.activateCalls == 1 }
+        session.cancelJoin()
+        coordinator.finishActivation()
+        await yieldToMainActor()
+
+        XCTAssertEqual(session.state.phase, .idle)
+        XCTAssertTrue(media.startLocalMediaCalls.isEmpty)
+        XCTAssertEqual(provider.connectCalls, 0)
+    }
+
     private func yieldToMainActor() async {
         await Task.yield()
         await Task.yield()
         await Task.yield()
         await Task.yield()
+    }
+
+    private func waitUntil(
+        attempts: Int = 32,
+        condition: () -> Bool
+    ) async {
+        for _ in 0..<attempts {
+            if condition() {
+                return
+            }
+            await yieldToMainActor()
+        }
     }
 }
