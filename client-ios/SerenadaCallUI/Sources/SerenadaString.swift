@@ -46,10 +46,6 @@ public enum SerenadaString: String, CaseIterable {
     case frontlineFlipCamera
     case frontlineStopScreenShare
     case frontlineShareScreen
-    case frontlineReturnToCamera
-    case frontlineShowYourPhone
-    case frontlineInviteSubtitle
-    case frontlineShareLinkSubtitle
     case frontlineClose
 }
 
@@ -98,10 +94,6 @@ public let serenadaDefaultStrings: [SerenadaString: String] = [
     .frontlineFlipCamera: "Flip camera",
     .frontlineStopScreenShare: "Stop screen share",
     .frontlineShareScreen: "Share screen",
-    .frontlineReturnToCamera: "Return to camera",
-    .frontlineShowYourPhone: "Show your phone screen",
-    .frontlineInviteSubtitle: "Send a live-call notification",
-    .frontlineShareLinkSubtitle: "Copy or share the room link",
     .frontlineClose: "Close",
 ]
 

@@ -184,10 +184,6 @@
 "frontline_flip_camera" = "Переключить камеру";
 "frontline_stop_screen_share" = "Остановить демонстрацию экрана";
 "frontline_share_screen" = "Показать экран";
-"frontline_return_to_camera" = "Вернуться к камере";
-"frontline_show_your_phone" = "Показать экран телефона";
-"frontline_invite_subtitle" = "Отправить уведомление о звонке";
-"frontline_share_link_subtitle" = "Скопировать или отправить ссылку на комнату";
 "frontline_close" = "Закрыть";
 
 "feedback_title" = "Отзыв";

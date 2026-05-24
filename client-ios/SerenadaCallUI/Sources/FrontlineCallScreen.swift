@@ -11,6 +11,7 @@ private let frontlineAccent = Color(red: 0x15 / 255, green: 0xBF / 255, blue: 0x
 private let frontlineDanger = Color(red: 0xF5 / 255, green: 0x56 / 255, blue: 0x4B / 255)
 private let frontlineDim = Color(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xAA / 255)
 private let frontlineSheet = Color(red: 0x15 / 255, green: 0x16 / 255, blue: 0x1A / 255)
+private let frontlineSheetRow = Color.white.opacity(0.09)
 private let frontlineContentSpotlightPrefix = "content:"
 private let frontlineMoreButtonHeightToWidthRatio: CGFloat = 1.62
 private let frontlineLargeVideoAccentLineWidth: CGFloat = 3
@@ -1125,9 +1126,6 @@ private struct FrontlineMoreSheet: View {
                         title: isScreenSharing
                             ? resolveString(.frontlineStopScreenShare, overrides: strings)
                             : resolveString(.frontlineShareScreen, overrides: strings),
-                        subtitle: isScreenSharing
-                            ? resolveString(.frontlineReturnToCamera, overrides: strings)
-                            : resolveString(.frontlineShowYourPhone, overrides: strings),
                         onClick: screenShareAction
                     )
                     .overlay {
@@ -1147,7 +1145,6 @@ private struct FrontlineMoreSheet: View {
                     FrontlineSheetItem(
                         systemImage: "bell.badge.fill",
                         title: resolveString(.callInviteToRoom, overrides: strings),
-                        subtitle: resolveString(.frontlineInviteSubtitle, overrides: strings),
                         onClick: onInvite
                     )
                 }
@@ -1156,7 +1153,6 @@ private struct FrontlineMoreSheet: View {
                     FrontlineSheetItem(
                         systemImage: "square.and.arrow.up",
                         title: resolveString(.callShareInvitation, overrides: strings),
-                        subtitle: resolveString(.frontlineShareLinkSubtitle, overrides: strings),
                         onClick: onShare
                     )
                 }
@@ -1197,7 +1193,6 @@ private struct FrontlineMoreSheet: View {
 private struct FrontlineSheetItem: View {
     let systemImage: String
     let title: String
-    let subtitle: String
     let onClick: () -> Void
 
     var body: some View {
@@ -1207,25 +1202,22 @@ private struct FrontlineSheetItem: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 38, height: 38)
-                    .background(Color.white.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundStyle(frontlineDim)
-                        .lineLimit(1)
-                }
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+            .background(frontlineSheetRow)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
+        .padding(.vertical, 5)
     }
 }
 
