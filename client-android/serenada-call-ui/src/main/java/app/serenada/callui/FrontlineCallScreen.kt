@@ -2055,7 +2055,7 @@ private fun FrontlineSheetItem(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Icon(
-            icon,
+            imageVector = icon,
             contentDescription = null,
             tint = Color.White,
             modifier = Modifier
