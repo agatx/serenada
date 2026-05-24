@@ -2043,34 +2043,39 @@ private fun FrontlineSheetItem(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(16.dp)
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp)
-            .clip(shape)
-            .background(FrontlineSheetRow)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(vertical = 5.dp),
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = Color.White,
+        Row(
             modifier = Modifier
-                .size(38.dp)
-                .padding(8.dp),
-        )
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+                .fillMaxWidth()
+                .clip(shape)
+                .background(FrontlineSheetRow)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier
+                    .size(38.dp)
+                    .padding(8.dp),
+            )
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
