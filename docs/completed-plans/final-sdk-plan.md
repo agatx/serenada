@@ -172,7 +172,7 @@ call-ui does not include a diagnostics screen (that's a product feature, not a c
 
 ### 6. WebRTC binary: bundled
 
-The custom WebRTC build (branch-heads/7559_173) is bundled with core. This is standard practice for video SDKs and eliminates integration complexity. The custom build is essential for composite camera and other Serenada-specific features.
+The custom WebRTC build (branch-heads/7827) is bundled with core. This is standard practice for video SDKs and eliminates integration complexity. The custom build is essential for composite camera and other Serenada-specific features.
 
 ### 7. Versioning: core and call-ui ship together
 

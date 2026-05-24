@@ -33,7 +33,7 @@ Executable, code-level plan for landing the SDK improvements in [`serenada-sdk-p
 - **`PeerAudioLevels` and `AudioLevelSmoother` are owned by L1-2a**, not L1-Integrate, so the policy file compiles standalone. Resolves review P1-6.
 - **L0+ ownership widened**: damp body lives in `WebRtcEngine.dampLocalAudio()` near `toggleAudio` ([WebRtcEngine.kt:281](client-android/serenada-core/src/main/java/app/serenada/core/call/WebRtcEngine.kt)); `SessionMediaEngine` interface gets the method; `FakeMediaEngine` ([FakeMediaEngine.kt](client-android/serenada-core/src/test/java/app/serenada/core/fakes/FakeMediaEngine.kt)) records calls for tests. Resolves review P1-7.
 - **L2-Integrate also owns `SessionAudioController.kt`** to widen the route surface ([SessionAudioController.kt](client-android/serenada-core/src/main/java/app/serenada/core/call/SessionAudioController.kt)). Resolves review P1-8.
-- **VP9 `scalabilityMode` is dropped** from `SimulcastTransceiverBuilder`. The current `libwebrtc-7559_173` AAR's `RtpParameters.Encoding` doesn't expose that field; we ship 3-layer simulcast on the existing encoding params and leave SVC for a later AAR bump. Resolves review P1-9.
+- **VP9 `scalabilityMode` is dropped** from `SimulcastTransceiverBuilder`. The bundled `libwebrtc-7827` AAR's Java `RtpParameters.Encoding` still doesn't expose that field; we ship 3-layer simulcast on the existing encoding params and leave SVC for a later Java API exposure. Resolves review P1-9.
 - **Test deps add `kotlinx-coroutines-test`** in API-Lock (`testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")`). Resolves review P2-10.
 - **`AudioQualityAutoPolicy` is named explicitly** as the holder of FEC AUTO thresholds + dwell, alongside `SdpAudioPolicy`. Resolves review P2-11.
 - **`assertNoEngineRefs` is wired into `:serenada-call-ui:check`** so V1 actually runs the guard. Resolves review P2-12.
@@ -663,7 +663,7 @@ var onIceRestarted: ((reason: String) -> Unit)? = null
 
 All `*a` tracks land **only new files** with **no edits to shared big files**.
 
-- **L2-1a Simulcast.** `SimulcastTransceiverBuilder.kt` returns `RtpTransceiver.RtpTransceiverInit` for a given `VideoQualityConfig` (from API-Lock) — three encoding params with `maxBitrateBps` / `scaleResolutionDownBy` / `active`. **No `scalabilityMode`** (resolves review P1-9): the current `libwebrtc-7559_173` AAR's `RtpParameters.Encoding` does not expose that field, and AAR bumps are out of scope for this plan. VP9 SVC is deferred. Tested with `SimulcastTransceiverBuilderTest.kt`.
+- **L2-1a Simulcast.** `SimulcastTransceiverBuilder.kt` returns `RtpTransceiver.RtpTransceiverInit` for a given `VideoQualityConfig` (from API-Lock) — three encoding params with `maxBitrateBps` / `scaleResolutionDownBy` / `active`. **No `scalabilityMode`** (resolves review P1-9): the bundled `libwebrtc-7827` AAR's Java `RtpParameters.Encoding` does not expose that field. VP9 SVC is deferred. Tested with `SimulcastTransceiverBuilderTest.kt`.
 - **L2-2a Opus FEC + DTX.** `SdpAudioPolicy.kt` — pure SDP munger, fmtp-only, idempotent (consumes API-Lock `AudioQualityConfig`, default `dtx = OFF`). `AudioQualityAutoPolicy.kt` — pure stats→action policy with the FEC AUTO thresholds (5 s loss > 0.5% engages; 30 s sustained < 0.2% disengages); L2-Integrate calls it from the slow-lane stats hook to drive renegotiation (resolves review P2-11). Tests: `SdpAudioPolicyTest.kt` (golden SDPs in `src/test/resources/sdp/`), `AudioQualityAutoPolicyTest.kt` (hysteresis + dwell), `OpusInteropHarnessTest.kt` (API-Lock harness round-trip).
 - **L2-3a Opus RED.** `SdpRedPolicy.kt` — PT allocator (96–127, avoid existing PTs), m-line PT-list rewrite, `red/48000/2` rtpmap, `<red-pt> <opus-pt>/<opus-pt>` fmtp. Tests: `SdpRedPolicyTest.kt` (golden + PT-collision matrix) + `RedRoundTripHarnessTest.kt`. Default off; stays off this plan's lifetime.
 - **L2-4a AEC/NS/AGC.** `AudioDeviceModuleBuilder.kt` — interface seam wrapping `JavaAudioDeviceModule.builder()` (consumes API-Lock `AudioProcessingConfig`). Tests: `AudioDeviceModuleBuilderTest.kt`.
@@ -859,7 +859,7 @@ Media features are covered by:
 
 ### A23. Implement VP9 SVC via `scalabilityMode`
 
-**Rejected (review P1-9, iteration 7).** `libwebrtc-7559_173` ([build.gradle.kts:56](client-android/serenada-core/build.gradle.kts)) doesn't expose `scalabilityMode` on `RtpParameters.Encoding`. AAR bumps are out of scope. SVC is deferred; this plan ships 3-layer simulcast on the existing encoding params.
+**Rejected (review P1-9, iteration 7).** `libwebrtc-7827` ([build.gradle.kts:56](client-android/serenada-core/build.gradle.kts)) doesn't expose `scalabilityMode` on Java `RtpParameters.Encoding`. SVC is deferred; this plan ships 3-layer simulcast on the existing encoding params.
 
 ### A24. `QualityScorer` as a stateful object holding EWMA internally
 

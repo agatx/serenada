@@ -72,9 +72,9 @@ The native Android app lives in `client-android/`.
 1. Open `client-android/` in Android Studio.
 2. Sync Gradle.
 3. Run on a device or emulator (minSdk 26).
-4. Default WebRTC provider is `local7559` (`client-android/serenada-core/libs/libwebrtc-7559_173-universal.aar`).
-5. Rebuild the patched libwebrtc AAR on Linux with `bash tools/build_libwebrtc_android_7559.sh`.
-6. When updating that AAR, regenerate `client-android/serenada-core/libs/libwebrtc-7559_173-universal.aar.sha256` (Gradle now verifies it before build).
+4. Default WebRTC provider is `local7827` (`client-android/serenada-core/libs/libwebrtc-7827-universal.aar`).
+5. Rebuild the patched libwebrtc AAR on Linux with `bash tools/build_libwebrtc_android_7827.sh`.
+6. When updating that AAR, regenerate `client-android/serenada-core/libs/libwebrtc-7827-universal.aar.sha256` (Gradle now verifies it before build).
 
 By default the app targets `https://serenada.app`, and the server host can be changed in Settings.
 The Android app language can also be set in Settings: `Auto (default)`, `English`, `Русский`, `Español`, `Français`. `Auto` follows the device language and falls back to English.
@@ -93,7 +93,7 @@ The native iOS app lives in `client-ios/`.
 4. Run `SerenadaiOS` on iOS 16+ simulator/device.
 5. Build and vendor pinned WebRTC XCFramework:
    ```bash
-   bash tools/build_libwebrtc_ios_7559.sh
+   bash tools/build_libwebrtc_ios_7827.sh
    ```
    This script also patches `rtc_base/ssl_roots.h` from the current root bundle (same approach as Android) and strips dSYMs by default to keep repository artifact size manageable.
 6. If you replace `client-ios/Vendor/WebRTC/WebRTC.xcframework` manually, regenerate checksum:
