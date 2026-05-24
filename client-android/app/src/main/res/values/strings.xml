@@ -148,11 +148,15 @@
     <string name="frontline_flip_camera">Flip camera</string>
     <string name="frontline_stop_screen_share">Stop screen share</string>
     <string name="frontline_share_screen">Share screen</string>
-    <string name="frontline_return_to_camera">Return to camera</string>
-    <string name="frontline_show_your_phone">Show your phone</string>
-    <string name="frontline_invite_subtitle">Bring in another teammate</string>
-    <string name="frontline_share_link_subtitle">Send the call link</string>
     <string name="frontline_close">Close</string>
+    <string name="frontline_audio_route">Audio</string>
+    <string name="frontline_audio_speaker">Speaker</string>
+    <string name="frontline_audio_earpiece">Phone</string>
+    <string name="frontline_audio_headset">Headset</string>
+    <string name="frontline_audio_bluetooth">Bluetooth</string>
+    <string name="frontline_audio_car">Car audio</string>
+    <string name="frontline_audio_usb">USB audio</string>
+    <string name="frontline_audio_unknown">Audio</string>
 
     <string name="notification_call_title">Serenada call</string>
     <string name="notification_call_status_channel">Call status</string>

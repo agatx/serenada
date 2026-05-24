@@ -351,6 +351,8 @@ private struct SessionFirstCallFlow: View {
             roomName: params.roomName,
             config: config,
             strings: strings,
+            availableAudioDevices: session.availableAudioDevices,
+            currentAudioDevice: session.currentAudioDevice,
             onToggleAudio: { session.toggleAudio() },
             onToggleVideo: { session.toggleVideo() },
             onFlipCamera: { session.flipCamera() },

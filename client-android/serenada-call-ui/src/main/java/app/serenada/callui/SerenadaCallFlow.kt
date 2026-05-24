@@ -24,6 +24,7 @@ import app.serenada.core.SerenadaTransport
 import app.serenada.core.SnapshotError
 import app.serenada.core.SnapshotResult
 import app.serenada.core.SnapshotSource
+import app.serenada.core.call.AudioDevice
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.LocalCameraMode
 import kotlinx.coroutines.launch
@@ -106,6 +107,8 @@ fun SerenadaCallFlow(
     val activeSession = ownedSession ?: return
     val state by activeSession.state.collectAsState()
     val diagnostics by activeSession.diagnostics.collectAsState()
+    val availableAudioDevices by activeSession.availableAudioDevices.collectAsState()
+    val currentAudioDevice by activeSession.currentAudioDevice.collectAsState()
     var pendingPermissions by remember(activeSession) { mutableStateOf<List<app.serenada.core.MediaCapability>?>(null) }
     var pendingPermissionPurpose by remember(activeSession) { mutableStateOf<PermissionRequestPurpose?>(null) }
     var hasStarted by remember(activeSession) { mutableStateOf(false) }
@@ -199,12 +202,15 @@ fun SerenadaCallFlow(
         config = internalConfig,
         theme = theme,
         strings = strings,
+        availableAudioDevices = availableAudioDevices,
+        currentAudioDevice = currentAudioDevice,
         onToggleAudio = { activeSession.toggleAudio() },
         onToggleVideo = { activeSession.toggleVideo() },
         onFlipCamera = { activeSession.flipCamera() },
         onToggleFlashlight = { activeSession.toggleFlashlight() },
         onLocalPinchZoom = { scaleFactor -> activeSession.adjustLocalCameraZoom(scaleFactor) },
         onEndCall = { activeSession.leave() },
+        onSelectAudioDevice = { device -> activeSession.selectAudioDevice(device) },
         onShareLink = onShareLink,
         onInviteToRoom = { onInviteToRoom?.invoke() },
         onRemoteVideoFitChanged = onRemoteVideoFitChanged,
@@ -273,12 +279,15 @@ private fun PermissionRequestPurpose?.applyGrant(session: SerenadaSession) {
  * @param config Feature flags controlling which UI controls are shown.
  * @param theme Visual customisation (colors, shapes, typography).
  * @param strings Localized string overrides keyed by [SerenadaString].
+ * @param availableAudioDevices Coordinator-published output routes available to the call UI.
+ * @param currentAudioDevice Currently selected or active output route, if known.
  * @param onToggleAudio Called when the user toggles the microphone.
  * @param onToggleVideo Called when the user toggles the camera.
  * @param onFlipCamera Called when the user cycles the camera mode.
  * @param onToggleFlashlight Called when the user toggles the flashlight.
  * @param onLocalPinchZoom Called with the scale factor when the user pinch-zooms the local video.
  * @param onEndCall Called when the user taps the end-call button.
+ * @param onSelectAudioDevice Called when the user picks an audio route.
  * @param onShareLink Called when the user taps the share-link control. Pass `null` to hide it.
  * @param onInviteToRoom Called when the user taps the invite control.
  * @param onRemoteVideoFitChanged Called when the user toggles remote video fit/fill mode.
@@ -309,12 +318,15 @@ fun SerenadaCallFlow(
     config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
     theme: SerenadaCallFlowTheme = SerenadaCallFlowTheme(),
     strings: Map<SerenadaString, String>? = null,
+    availableAudioDevices: List<AudioDevice> = emptyList(),
+    currentAudioDevice: AudioDevice? = null,
     onToggleAudio: () -> Unit,
     onToggleVideo: () -> Unit,
     onFlipCamera: () -> Unit,
     onToggleFlashlight: () -> Unit = {},
     onLocalPinchZoom: (Float) -> Unit = {},
     onEndCall: () -> Unit,
+    onSelectAudioDevice: (AudioDevice) -> Unit = {},
     onShareLink: (() -> Unit)? = null,
     onInviteToRoom: () -> Unit = {},
     onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
@@ -341,12 +353,15 @@ fun SerenadaCallFlow(
             config = config,
             theme = theme,
             strings = strings,
+            availableAudioDevices = availableAudioDevices,
+            currentAudioDevice = currentAudioDevice,
             onToggleAudio = onToggleAudio,
             onToggleVideo = onToggleVideo,
             onFlipCamera = onFlipCamera,
             onToggleFlashlight = onToggleFlashlight,
             onLocalPinchZoom = onLocalPinchZoom,
             onEndCall = onEndCall,
+            onSelectAudioDevice = onSelectAudioDevice,
             onShareLink = onShareLink,
             onInviteToRoom = onInviteToRoom,
             onStartScreenShare = onStartScreenShare,

@@ -66,7 +66,7 @@ SerenadaCallFlow(
 )
 ```
 
-URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = [.world, .selfie, .composite]` on the `SerenadaConfig` used to create the session. When `frontline` is selected, iOS keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
+URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = [.world, .selfie, .composite]` on the `SerenadaConfig` used to create the session. When `frontline` is selected, iOS keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. The More sheet shows the current audio route first and opens Apple's system audio route picker through `MPVolumeView`. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
 
 ## Session-First (Pre-Observation)
 

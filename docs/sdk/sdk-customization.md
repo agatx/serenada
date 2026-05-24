@@ -183,7 +183,7 @@ SerenadaCallFlow(
 )
 ```
 
-Frontline v1 hides controls that are not backed by the SDK call UI contract today, including speaker/earpiece switching, audio route picker, report-quality, and placeholder add-person flows. Screen sharing, invite/share actions, mute, video, camera mode, flashlight, snapshot, PiP swap, end call, debug overlay, reconnect badge, and local pinch zoom use existing SDK callbacks. The standard waiting-screen QR code is not shown in the Frontline variant.
+Frontline v1 shows the current audio route as the first More sheet item. Android opens a simple checkmarked route picker backed by `availableAudioDevices`, `currentAudioDevice`, and `selectAudioDevice(...)`; iOS opens Apple's system route picker through `MPVolumeView` because iOS does not expose an Android-style public communication-route selection UI for apps to fully own. Built-in earpiece routes are labeled as "Phone"; named external routes such as Bluetooth devices use the device name when the coordinator provides one. Controls that are not backed by the SDK call UI contract today, including report-quality and placeholder add-person flows, remain hidden. Screen sharing, invite/share actions, mute, video, camera mode, flashlight, snapshot, PiP swap, end call, debug overlay, reconnect badge, and local pinch zoom use existing SDK callbacks. The standard waiting-screen QR code is not shown in the Frontline variant.
 
 ## Camera Modes
 
@@ -354,7 +354,8 @@ Available string keys:
 - `CallShareLinkChooser`, `CallShareInvitation`, `CallInviteToRoom`
 - `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`, `CallTakeSnapshot`
 - Native Frontline: `FrontlineYou` / `frontlineYou`, `FrontlineWaiting` / `frontlineWaiting`, `FrontlineVideo` / `frontlineVideo`, `FrontlineVideoOn` / `frontlineVideoOn`, `FrontlineMute` / `frontlineMute`, `FrontlineMore` / `frontlineMore`, `FrontlineEnd` / `frontlineEnd`, `FrontlineFlipCamera` / `frontlineFlipCamera`
-- Native Frontline: `FrontlineStopScreenShare` / `frontlineStopScreenShare`, `FrontlineShareScreen` / `frontlineShareScreen`, `FrontlineReturnToCamera` / `frontlineReturnToCamera`, `FrontlineShowYourPhone` / `frontlineShowYourPhone`, `FrontlineInviteSubtitle` / `frontlineInviteSubtitle`, `FrontlineShareLinkSubtitle` / `frontlineShareLinkSubtitle`, `FrontlineClose` / `frontlineClose`
+- Native Frontline: `FrontlineStopScreenShare` / `frontlineStopScreenShare`, `FrontlineShareScreen` / `frontlineShareScreen`, `FrontlineClose` / `frontlineClose`
+- Native Frontline audio routes: `FrontlineAudioRoute` / `frontlineAudioRoute`, `FrontlineAudioSpeaker` / `frontlineAudioSpeaker`, `FrontlineAudioEarpiece` / `frontlineAudioEarpiece`, `FrontlineAudioHeadset` / `frontlineAudioHeadset`, `FrontlineAudioBluetooth` / `frontlineAudioBluetooth`, `FrontlineAudioCar` / `frontlineAudioCar`, `FrontlineAudioUsb` / `frontlineAudioUsb`, `FrontlineAudioUnknown` / `frontlineAudioUnknown`
 
 ### Web
 

@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.Executor
 
 internal class DefaultAudioCoordinator(
     context: Context,
@@ -43,7 +44,12 @@ internal class DefaultAudioCoordinator(
     private var proximityMonitoringActive = false
     private var isProximityNear = false
     private var audioDeviceMonitoringActive = false
+    private var communicationDeviceChangedListener: Any? = null
     private var bluetoothScoActive = false
+    private var pinnedOutputKind: AudioDeviceKind? = null
+    private val communicationDeviceExecutor = Executor { command ->
+        handler.post(command)
+    }
 
     private val _availableDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
     override val availableDevices: StateFlow<List<AudioDevice>> = _availableDevices.asStateFlow()
@@ -104,7 +110,9 @@ internal class DefaultAudioCoordinator(
             isProximityNear = near
             onProximityChanged(near)
             applyCallAudioRouting()
+            updateDevicesAndRoute()
             onAudioEnvironmentChanged()
+            _events.tryEmit(AudioCoordinatorEvent.EffectiveRouteChanged(_effectiveInputDevice.value, _effectiveOutputDevice.value))
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -126,6 +134,7 @@ internal class DefaultAudioCoordinator(
             }
             updateDevicesAndRoute()
             applyCallAudioRouting()
+            updateDevicesAndRoute()
             onAudioEnvironmentChanged()
         }.onSuccess {
             logger?.log(
@@ -144,6 +153,7 @@ internal class DefaultAudioCoordinator(
             return
         }
         audioSessionActive = false
+        pinnedOutputKind = null
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
         runCatching {
@@ -191,12 +201,35 @@ internal class DefaultAudioCoordinator(
     }
 
     override suspend fun applyRouting(device: AudioDevice) {
-        when (device.kind) {
+        if (!device.isOutputRoute()) return
+        pinnedOutputKind = device.kind
+        applyOutputRoute(device.kind)
+        refreshDevicesAndRouteFromSystem()
+    }
+
+    private fun applyOutputRoute(kind: AudioDeviceKind) {
+        when (kind) {
             is AudioDeviceKind.Speakerphone -> routeAudioToSpeaker()
             is AudioDeviceKind.Earpiece -> routeAudioToEarpiece()
             is AudioDeviceKind.Bluetooth -> routeAudioToBluetooth()
-            else -> applyCallAudioRouting()
+            else -> routeAudioToExternal(kind)
         }
+        scheduleRouteRefreshFromSystem()
+    }
+
+    private fun scheduleRouteRefreshFromSystem() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        handler.postDelayed(
+            { refreshDevicesAndRouteFromSystem() },
+            COMMUNICATION_ROUTE_REFRESH_DELAY_MS
+        )
+    }
+
+    private fun refreshDevicesAndRouteFromSystem() {
+        if (!audioSessionActive) return
+        updateDevicesAndRoute()
+        onAudioEnvironmentChanged()
+        _events.tryEmit(AudioCoordinatorEvent.EffectiveRouteChanged(_effectiveInputDevice.value, _effectiveOutputDevice.value))
     }
 
     override suspend fun setMicMuted(muted: Boolean) {
@@ -224,9 +257,11 @@ internal class DefaultAudioCoordinator(
         if (!audioSessionActive) return
         updateDevicesAndRoute()
         applyCallAudioRouting()
-        onAudioEnvironmentChanged()
+        refreshDevicesAndRouteFromSystem()
+    }
 
-        _events.tryEmit(AudioCoordinatorEvent.EffectiveRouteChanged(_effectiveInputDevice.value, _effectiveOutputDevice.value))
+    private fun onCommunicationDeviceChanged() {
+        refreshDevicesAndRouteFromSystem()
     }
 
     private fun startProximityMonitoring() {
@@ -265,27 +300,65 @@ internal class DefaultAudioCoordinator(
     }
 
     private fun startAudioDeviceMonitoring() {
-        if (audioDeviceMonitoringActive) return
-        runCatching {
-            audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler)
-            audioDeviceMonitoringActive = true
-        }.onFailure { error ->
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to register audio device callback: ${error.message}")
+        if (!audioDeviceMonitoringActive) {
+            runCatching {
+                audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler)
+                audioDeviceMonitoringActive = true
+            }.onFailure { error ->
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to register audio device callback: ${error.message}")
+            }
         }
+        startCommunicationDeviceMonitoring()
     }
 
     private fun stopAudioDeviceMonitoring() {
-        if (!audioDeviceMonitoringActive) return
-        runCatching {
-            audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
-        }.onFailure { error ->
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to unregister audio device callback: ${error.message}")
+        stopCommunicationDeviceMonitoring()
+        if (audioDeviceMonitoringActive) {
+            runCatching {
+                audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+            }.onFailure { error ->
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to unregister audio device callback: ${error.message}")
+            }
+            audioDeviceMonitoringActive = false
         }
-        audioDeviceMonitoringActive = false
+    }
+
+    private fun startCommunicationDeviceMonitoring() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || communicationDeviceChangedListener != null) return
+        val listener = AudioManager.OnCommunicationDeviceChangedListener {
+            onCommunicationDeviceChanged()
+        }
+        runCatching {
+            audioManager.addOnCommunicationDeviceChangedListener(communicationDeviceExecutor, listener)
+            communicationDeviceChangedListener = listener
+        }.onFailure { error ->
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to register communication device callback: ${error.message}")
+        }
+    }
+
+    private fun stopCommunicationDeviceMonitoring() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            communicationDeviceChangedListener = null
+            return
+        }
+        val listener = communicationDeviceChangedListener as? AudioManager.OnCommunicationDeviceChangedListener ?: return
+        runCatching {
+            audioManager.removeOnCommunicationDeviceChangedListener(listener)
+        }.onFailure { error ->
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to unregister communication device callback: ${error.message}")
+        }
+        communicationDeviceChangedListener = null
     }
 
     private fun applyCallAudioRouting() {
         if (!audioSessionActive) return
+        pinnedOutputKind?.let { kind ->
+            if (isPinnedOutputKindAvailable(kind)) {
+                applyOutputRoute(kind)
+                return
+            }
+            pinnedOutputKind = null
+        }
         if (isBluetoothHeadsetConnected()) {
             routeAudioToBluetooth()
             return
@@ -333,10 +406,29 @@ internal class DefaultAudioCoordinator(
         setSpeakerphoneEnabled(true)
     }
 
+    private fun routeAudioToExternal(kind: AudioDeviceKind) {
+        setLegacyBluetoothScoRouting(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!setCommunicationDevice(kind)) {
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to route audio to external device kind=$kind")
+            }
+            return
+        }
+        setSpeakerphoneEnabled(false)
+    }
+
     private fun setCommunicationDevice(type: Int): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
         val device = audioManager.availableCommunicationDevices.firstOrNull { it.type == type }
             ?: return false
+        return audioManager.setCommunicationDevice(device)
+    }
+
+    private fun setCommunicationDevice(kind: AudioDeviceKind): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        val device = audioManager.availableCommunicationDevices.firstOrNull { info ->
+            deviceKindMatches(mapDeviceKind(info.type), kind)
+        } ?: return false
         return audioManager.setCommunicationDevice(device)
     }
 
@@ -412,6 +504,12 @@ internal class DefaultAudioCoordinator(
         }
     }
 
+    private fun isPinnedOutputKindAvailable(kind: AudioDeviceKind): Boolean {
+        return _availableDevices.value.any { device ->
+            device.isOutputRoute() && deviceKindMatches(device.kind, kind)
+        }
+    }
+
     private fun requestAudioFocus() {
         val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val request =
@@ -461,8 +559,8 @@ internal class DefaultAudioCoordinator(
         }
     }
 
-    private fun mapDeviceInfo(info: AudioDeviceInfo, status: AudioDeviceStatus = AudioDeviceStatus.AVAILABLE): AudioDevice {
-        val kind = when (info.type) {
+    private fun mapDeviceKind(type: Int): AudioDeviceKind {
+        return when (type) {
             AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> AudioDeviceKind.WiredHeadset
             AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> AudioDeviceKind.Bluetooth(BluetoothProfile.HFP)
             AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> AudioDeviceKind.Bluetooth(BluetoothProfile.A2DP)
@@ -473,25 +571,61 @@ internal class DefaultAudioCoordinator(
             AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_ACCESSORY, AudioDeviceInfo.TYPE_USB_HEADSET -> AudioDeviceKind.Usb
             else -> AudioDeviceKind.Other
         }
-        val direction = if (info.isSource && info.isSink) {
+    }
+
+    private fun mapDeviceDirection(info: AudioDeviceInfo): AudioDeviceDirection {
+        return if (info.isSource && info.isSink) {
             AudioDeviceDirection.BOTH
         } else if (info.isSource) {
             AudioDeviceDirection.INPUT
         } else {
             AudioDeviceDirection.OUTPUT
         }
+    }
+
+    private fun mapDeviceInfo(info: AudioDeviceInfo, status: AudioDeviceStatus = AudioDeviceStatus.AVAILABLE): AudioDevice {
+        val kind = mapDeviceKind(info.type)
         return AudioDevice(
             id = info.id.toString(),
             displayName = info.productName.toString(),
             kind = kind,
-            direction = direction,
+            direction = mapDeviceDirection(info),
             status = status
         )
     }
 
+    private fun AudioDevice.isOutputRoute(): Boolean {
+        return direction == AudioDeviceDirection.OUTPUT || direction == AudioDeviceDirection.BOTH
+    }
+
+    private fun deviceKindMatches(actual: AudioDeviceKind, expected: AudioDeviceKind): Boolean {
+        return when {
+            actual is AudioDeviceKind.Bluetooth && expected is AudioDeviceKind.Bluetooth -> true
+            else -> actual == expected
+        }
+    }
+
+    private fun AudioDeviceInfo.isPublishableRoute(communicationDevices: List<AudioDeviceInfo>): Boolean {
+        val direction = mapDeviceDirection(this)
+        if (direction == AudioDeviceDirection.INPUT) return true
+        if (mapDeviceKind(type) !is AudioDeviceKind.Other) return true
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return communicationDevices.any { it.id == id }
+    }
+
     private fun updateDevicesAndRoute() {
-        val allDevices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS)
-        val list = allDevices.map { mapDeviceInfo(it, AudioDeviceStatus.AVAILABLE) }
+        val allDevices = audioManager
+            .getDevices(AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS)
+            .toList()
+        val communicationDevices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.availableCommunicationDevices
+        } else {
+            emptyList()
+        }
+        val list = (allDevices + communicationDevices)
+            .distinctBy { it.id }
+            .filter { it.isPublishableRoute(communicationDevices) }
+            .map { mapDeviceInfo(it, AudioDeviceStatus.AVAILABLE) }
 
         val activeOutput = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.communicationDevice?.let { mapDeviceInfo(it, AudioDeviceStatus.ACTIVE) }
@@ -529,5 +663,9 @@ internal class DefaultAudioCoordinator(
         _effectiveInputDevice.value = activeInput
         _effectiveOutputDevice.value = activeOutput
         _events.tryEmit(AudioCoordinatorEvent.AvailableDevicesChanged(updatedList))
+    }
+
+    private companion object {
+        private const val COMMUNICATION_ROUTE_REFRESH_DELAY_MS = 300L
     }
 }

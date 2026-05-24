@@ -46,18 +46,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.StopScreenShare
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.FlashlightOff
 import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.FlipCameraIos
+import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Icon
@@ -81,6 +88,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -105,6 +113,11 @@ import app.serenada.core.layout.SceneParticipant
 import app.serenada.core.layout.UserLayoutPrefs
 import app.serenada.core.layout.clampStageTileAspectRatio
 import app.serenada.core.layout.computeLayout
+import app.serenada.core.call.AudioDevice
+import app.serenada.core.call.AudioDeviceDirection
+import app.serenada.core.call.AudioDeviceKind
+import app.serenada.core.call.AudioDeviceStatus
+import app.serenada.core.call.BluetoothProfile
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.LocalCameraMode
@@ -125,6 +138,7 @@ private val FrontlineAccent = Color(0xFF15BF54)
 private val FrontlineDanger = Color(0xFFF5564B)
 private val FrontlineDim = Color(0xFFA1A1AA)
 private val FrontlineSheet = Color(0xFF15161A)
+private val FrontlineSheetRow = Color.White.copy(alpha = 0.09f)
 private val FrontlineStageLocalAccentWidth = 2.5.dp
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
@@ -143,12 +157,15 @@ internal fun FrontlineCallScreen(
     config: SerenadaCallFlowConfig,
     theme: SerenadaCallFlowTheme,
     strings: Map<SerenadaString, String>?,
+    availableAudioDevices: List<AudioDevice>,
+    currentAudioDevice: AudioDevice?,
     onToggleAudio: () -> Unit,
     onToggleVideo: () -> Unit,
     onFlipCamera: () -> Unit,
     onToggleFlashlight: () -> Unit,
     onLocalPinchZoom: (Float) -> Unit,
     onEndCall: () -> Unit,
+    onSelectAudioDevice: (AudioDevice) -> Unit,
     onShareLink: (() -> Unit)?,
     onInviteToRoom: () -> Unit,
     onStartScreenShare: (Intent) -> Unit,
@@ -187,6 +204,7 @@ internal fun FrontlineCallScreen(
 
     var pipSwapped by rememberSaveable { mutableStateOf(false) }
     var isMoreSheetVisible by rememberSaveable { mutableStateOf(false) }
+    var isAudioRouteSheetVisible by rememberSaveable { mutableStateOf(false) }
     var showSnapshotFlash by remember { mutableStateOf(false) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
@@ -264,9 +282,16 @@ internal fun FrontlineCallScreen(
         }
         else -> null
     }
+    val currentAudioRoute = remember(currentAudioDevice, availableAudioDevices) {
+        frontlineCurrentAudioRoute(currentAudioDevice, availableAudioDevices)
+    }
+    val audioRouteOptions = remember(currentAudioDevice, availableAudioDevices) {
+        frontlineAudioRouteOptions(currentAudioDevice, availableAudioDevices)
+    }
+    val showAudioRouteControl = currentAudioRoute != null || audioRouteOptions.isNotEmpty()
     val showMoreButton =
         isCallSurfacePhase &&
-            (config.screenSharingEnabled || config.inviteControlsEnabled)
+            (showAudioRouteControl || config.screenSharingEnabled || config.inviteControlsEnabled)
     val snapshotSource =
         if (
             config.snapshotEnabled &&
@@ -618,12 +643,18 @@ internal fun FrontlineCallScreen(
 
                 FrontlineMoreSheet(
                     visible = isMoreSheetVisible,
+                    audioRouteDevice = currentAudioRoute,
+                    audioRouteOptions = audioRouteOptions,
                     screenSharingEnabled = config.screenSharingEnabled,
                     inviteEnabled = config.inviteControlsEnabled,
                     shareEnabled = config.inviteControlsEnabled && shareLinkAction != null,
                     isScreenSharing = uiState.isScreenSharing,
                     strings = strings,
                     onDismiss = { isMoreSheetVisible = false },
+                    onAudioRoute = {
+                        isMoreSheetVisible = false
+                        isAudioRouteSheetVisible = true
+                    },
                     onToggleScreenShare = {
                         isMoreSheetVisible = false
                         if (uiState.isScreenSharing) {
@@ -641,6 +672,18 @@ internal fun FrontlineCallScreen(
                         shareLinkAction?.invoke()
                     },
                     modifier = Modifier.zIndex(8f),
+                )
+                FrontlineAudioRouteSheet(
+                    visible = isAudioRouteSheetVisible,
+                    devices = audioRouteOptions,
+                    currentDevice = currentAudioRoute,
+                    strings = strings,
+                    onDismiss = { isAudioRouteSheetVisible = false },
+                    onSelect = { device ->
+                        isAudioRouteSheetVisible = false
+                        onSelectAudioDevice(device)
+                    },
+                    modifier = Modifier.zIndex(9f),
                 )
             }
         }
@@ -1894,12 +1937,15 @@ private fun FrontlineEndButton(
 @Composable
 private fun FrontlineMoreSheet(
     visible: Boolean,
+    audioRouteDevice: AudioDevice?,
+    audioRouteOptions: List<AudioDevice>,
     screenSharingEnabled: Boolean,
     inviteEnabled: Boolean,
     shareEnabled: Boolean,
     isScreenSharing: Boolean,
     strings: Map<SerenadaString, String>?,
     onDismiss: () -> Unit,
+    onAudioRoute: () -> Unit,
     onToggleScreenShare: () -> Unit,
     onInvite: () -> Unit,
     onShare: () -> Unit,
@@ -1940,6 +1986,14 @@ private fun FrontlineMoreSheet(
                             .background(Color.White.copy(alpha = 0.24f))
                     )
                     Spacer(Modifier.height(18.dp))
+                    if (audioRouteDevice != null || audioRouteOptions.isNotEmpty()) {
+                        FrontlineSheetItem(
+                            icon = frontlineAudioRouteIcon(audioRouteDevice?.kind),
+                            title = audioRouteDevice?.frontlineAudioRouteLabel(strings)
+                                ?: resolveString(SerenadaString.FrontlineAudioRoute, strings),
+                            onClick = onAudioRoute,
+                        )
+                    }
                     if (screenSharingEnabled) {
                         FrontlineSheetItem(
                             icon = if (isScreenSharing) Icons.AutoMirrored.Filled.StopScreenShare else Icons.AutoMirrored.Filled.ScreenShare,
@@ -1948,11 +2002,6 @@ private fun FrontlineMoreSheet(
                             } else {
                                 resolveString(SerenadaString.FrontlineShareScreen, strings)
                             },
-                            subtitle = if (isScreenSharing) {
-                                resolveString(SerenadaString.FrontlineReturnToCamera, strings)
-                            } else {
-                                resolveString(SerenadaString.FrontlineShowYourPhone, strings)
-                            },
                             onClick = onToggleScreenShare,
                         )
                     }
@@ -1960,7 +2009,6 @@ private fun FrontlineMoreSheet(
                         FrontlineSheetItem(
                             icon = Icons.Default.NotificationsActive,
                             title = resolveString(SerenadaString.CallInviteToRoom, strings),
-                            subtitle = resolveString(SerenadaString.FrontlineInviteSubtitle, strings),
                             onClick = onInvite,
                         )
                     }
@@ -1968,7 +2016,6 @@ private fun FrontlineMoreSheet(
                         FrontlineSheetItem(
                             icon = Icons.Default.Share,
                             title = resolveString(SerenadaString.CallShareInvitation, strings),
-                            subtitle = resolveString(SerenadaString.FrontlineShareLinkSubtitle, strings),
                             onClick = onShare,
                         )
                     }
@@ -2002,45 +2049,341 @@ private fun FrontlineMoreSheet(
 }
 
 @Composable
-private fun FrontlineSheetItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
+private fun FrontlineAudioRouteSheet(
+    visible: Boolean,
+    devices: List<AudioDevice>,
+    currentDevice: AudioDevice?,
+    strings: Map<SerenadaString, String>?,
+    onDismiss: () -> Unit,
+    onSelect: (AudioDevice) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier.fillMaxSize(),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .clickable(onClick = onDismiss)
+            )
+            AnimatedVisibility(
+                visible = visible,
+                enter = slideInVertically(initialOffsetY = { it }),
+                exit = slideOutVertically(targetOffsetY = { it }),
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                        .background(FrontlineSheet)
+                        .padding(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier
+                            .size(width = 36.dp, height = 4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color.White.copy(alpha = 0.24f))
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        text = resolveString(SerenadaString.FrontlineAudioRoute, strings),
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    devices.forEach { device ->
+                        key(device.frontlineAudioRouteKey()) {
+                            FrontlineAudioRouteItem(
+                                device = device,
+                                selected = device.frontlineAudioRouteKey() == currentDevice?.frontlineAudioRouteKey() ||
+                                    (currentDevice == null && device.status == AudioDeviceStatus.ACTIVE),
+                                strings = strings,
+                                onClick = { onSelect(device) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .clickable(onClick = onDismiss),
+                        color = Color.White.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, tint = Color.White)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = resolveString(SerenadaString.FrontlineClose, strings),
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FrontlineAudioRouteItem(
+    device: AudioDevice,
+    selected: Boolean,
+    strings: Map<SerenadaString, String>?,
     onClick: () -> Unit,
 ) {
+    val title = device.frontlineAudioRouteLabel(strings)
+    val shape = RoundedCornerShape(16.dp)
+    val contentColor = if (selected) Color.Black else Color.White
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .padding(vertical = 5.dp)
+            .clip(shape)
+            .background(if (selected) FrontlineAccent else FrontlineSheetRow)
             .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 10.dp),
+            .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(38.dp),
-            color = Color.White.copy(alpha = 0.08f),
-            shape = RoundedCornerShape(10.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+        Icon(
+            frontlineAudioRouteIcon(device.kind),
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier
+                .size(38.dp)
+                .padding(8.dp),
+        )
+        Text(
+            text = title,
+            color = contentColor,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Icon(
+                Icons.Default.Check,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(22.dp),
+            )
+        } else {
+            Spacer(Modifier.size(22.dp))
+        }
+    }
+}
+
+@Composable
+private fun FrontlineSheetItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp)
+            .clip(shape)
+            .background(FrontlineSheetRow)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier
+                .size(38.dp)
+                .padding(8.dp),
+        )
+        Text(
+            text = title,
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+private fun frontlineCurrentAudioRoute(
+    currentAudioDevice: AudioDevice?,
+    availableAudioDevices: List<AudioDevice>,
+): AudioDevice? {
+    val currentKey = currentAudioDevice?.takeIf { it.isFrontlineOutputRoute() }?.frontlineAudioRouteKey()
+    val options = frontlineAudioRouteOptions(currentAudioDevice, availableAudioDevices)
+    return options.frontlinePreferredActiveAudioRoute()
+        ?: currentKey?.let { key ->
+            options.firstOrNull { it.frontlineAudioRouteKey() == key }
+        }
+}
+
+private fun frontlineAudioRouteOptions(
+    currentAudioDevice: AudioDevice?,
+    availableAudioDevices: List<AudioDevice>,
+): List<AudioDevice> {
+    val candidates = buildList {
+        addAll(availableAudioDevices)
+        currentAudioDevice?.let(::add)
+    }
+        .filter { it.isFrontlineOutputRoute() }
+    val activeKeys = candidates
+        .filter { it.status == AudioDeviceStatus.ACTIVE || it == currentAudioDevice }
+        .map { it.frontlineAudioRouteKey() }
+        .toSet()
+    val devicesByRoute = linkedMapOf<String, AudioDevice>()
+    candidates.forEach { device ->
+        val key = device.frontlineAudioRouteKey()
+        val existing = devicesByRoute[key]
+        devicesByRoute[key] = if (existing == null) {
+            device
+        } else {
+            existing.frontlinePreferredAudioRouteDisplay(device)
+        }
+    }
+    return devicesByRoute.values
+        .map { device ->
+            if (device.frontlineAudioRouteKey() in activeKeys) {
+                device.copy(status = AudioDeviceStatus.ACTIVE)
+            } else {
+                device
             }
         }
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = subtitle,
-                color = FrontlineDim,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        .sortedWith(
+            compareBy<AudioDevice> { it.frontlineAudioRouteSortRank() }
+                .thenBy { it.frontlineAudioRouteSortLabel().lowercase(Locale.ROOT) }
+        )
+}
+
+private fun AudioDevice.isFrontlineOutputRoute(): Boolean {
+    return direction == AudioDeviceDirection.OUTPUT || direction == AudioDeviceDirection.BOTH
+}
+
+private fun List<AudioDevice>.frontlinePreferredActiveAudioRoute(): AudioDevice? {
+    return filter { it.status == AudioDeviceStatus.ACTIVE }
+        .minWithOrNull(
+            compareBy<AudioDevice> { it.frontlineAudioRouteActiveRank() }
+                .thenBy { it.frontlineAudioRouteSortLabel().lowercase(Locale.ROOT) }
+        )
+}
+
+private fun AudioDevice.frontlineAudioRouteActiveRank(): Int {
+    return when (kind) {
+        is AudioDeviceKind.Bluetooth -> 0
+        is AudioDeviceKind.WiredHeadset -> 1
+        is AudioDeviceKind.CarAudio,
+        is AudioDeviceKind.Usb -> 2
+        is AudioDeviceKind.Speakerphone -> 3
+        is AudioDeviceKind.Earpiece -> 4
+        is AudioDeviceKind.Other -> 5
+    }
+}
+
+private fun AudioDevice.frontlineAudioRouteKey(): String {
+    val routeName = displayName.trim()
+    val fallback = id.ifBlank { routeName }
+    return when (kind) {
+        is AudioDeviceKind.Speakerphone -> "speakerphone"
+        is AudioDeviceKind.Earpiece -> "earpiece"
+        is AudioDeviceKind.Bluetooth -> "bluetooth"
+        is AudioDeviceKind.WiredHeadset -> "wired"
+        is AudioDeviceKind.CarAudio -> "car:$fallback"
+        is AudioDeviceKind.Usb -> "usb:$fallback"
+        is AudioDeviceKind.Other -> "other:$fallback"
+    }
+}
+
+private fun AudioDevice.frontlineAudioRouteSortRank(): Int {
+    return when (kind) {
+        is AudioDeviceKind.Speakerphone -> 0
+        is AudioDeviceKind.Earpiece -> 1
+        is AudioDeviceKind.Bluetooth -> 2
+        is AudioDeviceKind.WiredHeadset -> 3
+        is AudioDeviceKind.CarAudio,
+        is AudioDeviceKind.Usb,
+        is AudioDeviceKind.Other -> 4
+    }
+}
+
+private fun AudioDevice.frontlineAudioRouteSortLabel(): String {
+    return displayName.trim().ifBlank { id }
+}
+
+private fun AudioDevice.frontlinePreferredAudioRouteDisplay(candidate: AudioDevice): AudioDevice {
+    val existingRank = frontlineAudioRouteDisplayRank()
+    val candidateRank = candidate.frontlineAudioRouteDisplayRank()
+    return when {
+        candidateRank < existingRank -> candidate
+        candidateRank > existingRank -> this
+        candidate.status == AudioDeviceStatus.ACTIVE && status != AudioDeviceStatus.ACTIVE -> candidate
+        else -> this
+    }
+}
+
+private fun AudioDevice.frontlineAudioRouteDisplayRank(): Int {
+    val hasName = displayName.trim().isNotEmpty()
+    return when (val kind = kind) {
+        is AudioDeviceKind.Bluetooth -> when (kind.profile) {
+            BluetoothProfile.A2DP,
+            BluetoothProfile.BLE -> if (hasName) 0 else 3
+            BluetoothProfile.UNKNOWN -> if (hasName) 1 else 4
+            BluetoothProfile.HFP -> if (hasName) 2 else 5
         }
+        is AudioDeviceKind.Speakerphone,
+        is AudioDeviceKind.Earpiece -> 0
+        is AudioDeviceKind.WiredHeadset,
+        is AudioDeviceKind.CarAudio,
+        is AudioDeviceKind.Usb,
+        is AudioDeviceKind.Other -> if (hasName) 0 else 1
+    }
+}
+
+private fun AudioDevice.frontlineAudioRouteLabel(strings: Map<SerenadaString, String>?): String {
+    val routeName = displayName.trim().takeIf { it.isNotEmpty() }
+    return when (kind) {
+        is AudioDeviceKind.Speakerphone -> resolveString(SerenadaString.FrontlineAudioSpeaker, strings)
+        is AudioDeviceKind.Earpiece -> resolveString(SerenadaString.FrontlineAudioEarpiece, strings)
+        is AudioDeviceKind.WiredHeadset -> routeName ?: resolveString(SerenadaString.FrontlineAudioHeadset, strings)
+        is AudioDeviceKind.Bluetooth -> routeName ?: resolveString(SerenadaString.FrontlineAudioBluetooth, strings)
+        is AudioDeviceKind.CarAudio -> routeName ?: resolveString(SerenadaString.FrontlineAudioCar, strings)
+        is AudioDeviceKind.Usb -> routeName ?: resolveString(SerenadaString.FrontlineAudioUsb, strings)
+        is AudioDeviceKind.Other -> routeName
+            ?: resolveString(SerenadaString.FrontlineAudioUnknown, strings)
+    }
+}
+
+private fun frontlineAudioRouteIcon(kind: AudioDeviceKind?): ImageVector {
+    return when (kind) {
+        is AudioDeviceKind.Speakerphone -> Icons.AutoMirrored.Filled.VolumeUp
+        is AudioDeviceKind.Earpiece -> Icons.Default.PhoneInTalk
+        is AudioDeviceKind.WiredHeadset -> Icons.Default.Headset
+        is AudioDeviceKind.Bluetooth -> Icons.Default.Bluetooth
+        is AudioDeviceKind.CarAudio -> Icons.Default.DirectionsCar
+        is AudioDeviceKind.Usb -> Icons.Default.Usb
+        is AudioDeviceKind.Other, null -> Icons.AutoMirrored.Filled.VolumeUp
     }
 }
 

@@ -25,11 +25,23 @@ enum class SerenadaString {
     FrontlineFlipCamera,
     FrontlineStopScreenShare,
     FrontlineShareScreen,
-    FrontlineReturnToCamera,
-    FrontlineShowYourPhone,
-    FrontlineInviteSubtitle,
-    FrontlineShareLinkSubtitle,
     FrontlineClose,
+    /** Header for Frontline audio route selection. */
+    FrontlineAudioRoute,
+    /** Frontline audio route label for speakerphone output. */
+    FrontlineAudioSpeaker,
+    /** Frontline audio route label for built-in phone/earpiece output. */
+    FrontlineAudioEarpiece,
+    /** Frontline audio route label for wired headset output. */
+    FrontlineAudioHeadset,
+    /** Frontline audio route label for Bluetooth output. */
+    FrontlineAudioBluetooth,
+    /** Frontline audio route label for car audio output. */
+    FrontlineAudioCar,
+    /** Frontline audio route label for USB audio output. */
+    FrontlineAudioUsb,
+    /** Frontline audio route fallback label for unknown output routes. */
+    FrontlineAudioUnknown,
 }
 
 val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
@@ -57,11 +69,15 @@ val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
     SerenadaString.FrontlineFlipCamera to "Flip camera",
     SerenadaString.FrontlineStopScreenShare to "Stop screen share",
     SerenadaString.FrontlineShareScreen to "Share screen",
-    SerenadaString.FrontlineReturnToCamera to "Return to camera",
-    SerenadaString.FrontlineShowYourPhone to "Show your phone",
-    SerenadaString.FrontlineInviteSubtitle to "Bring in another teammate",
-    SerenadaString.FrontlineShareLinkSubtitle to "Send the call link",
     SerenadaString.FrontlineClose to "Close",
+    SerenadaString.FrontlineAudioRoute to "Audio",
+    SerenadaString.FrontlineAudioSpeaker to "Speaker",
+    SerenadaString.FrontlineAudioEarpiece to "Phone",
+    SerenadaString.FrontlineAudioHeadset to "Headset",
+    SerenadaString.FrontlineAudioBluetooth to "Bluetooth",
+    SerenadaString.FrontlineAudioCar to "Car audio",
+    SerenadaString.FrontlineAudioUsb to "USB audio",
+    SerenadaString.FrontlineAudioUnknown to "Audio",
 )
 
 fun resolveString(key: SerenadaString, overrides: Map<SerenadaString, String>?): String {

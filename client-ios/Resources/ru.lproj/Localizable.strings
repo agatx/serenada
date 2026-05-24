@@ -184,11 +184,15 @@
 "frontline_flip_camera" = "Переключить камеру";
 "frontline_stop_screen_share" = "Остановить демонстрацию экрана";
 "frontline_share_screen" = "Показать экран";
-"frontline_return_to_camera" = "Вернуться к камере";
-"frontline_show_your_phone" = "Показать экран телефона";
-"frontline_invite_subtitle" = "Отправить уведомление о звонке";
-"frontline_share_link_subtitle" = "Скопировать или отправить ссылку на комнату";
 "frontline_close" = "Закрыть";
+"frontline_audio_route" = "Аудио";
+"frontline_audio_speaker" = "Динамик";
+"frontline_audio_earpiece" = "Телефон";
+"frontline_audio_headset" = "Гарнитура";
+"frontline_audio_bluetooth" = "Bluetooth";
+"frontline_audio_car" = "Автоаудио";
+"frontline_audio_usb" = "USB-аудио";
+"frontline_audio_unknown" = "Аудио";
 
 "feedback_title" = "Отзыв";
 "feedback_send_action" = "Отправить отзыв";

@@ -46,11 +46,23 @@ public enum SerenadaString: String, CaseIterable {
     case frontlineFlipCamera
     case frontlineStopScreenShare
     case frontlineShareScreen
-    case frontlineReturnToCamera
-    case frontlineShowYourPhone
-    case frontlineInviteSubtitle
-    case frontlineShareLinkSubtitle
     case frontlineClose
+    /// Header for Frontline audio route selection.
+    case frontlineAudioRoute
+    /// Frontline audio route label for speakerphone output.
+    case frontlineAudioSpeaker
+    /// Frontline audio route label for built-in phone/earpiece output.
+    case frontlineAudioEarpiece
+    /// Frontline audio route label for wired headset output.
+    case frontlineAudioHeadset
+    /// Frontline audio route label for Bluetooth output.
+    case frontlineAudioBluetooth
+    /// Frontline audio route label for car audio output.
+    case frontlineAudioCar
+    /// Frontline audio route label for USB audio output.
+    case frontlineAudioUsb
+    /// Frontline audio route fallback label for unknown output routes.
+    case frontlineAudioUnknown
 }
 
 /// Default English strings for SerenadaCallUI.
@@ -98,11 +110,15 @@ public let serenadaDefaultStrings: [SerenadaString: String] = [
     .frontlineFlipCamera: "Flip camera",
     .frontlineStopScreenShare: "Stop screen share",
     .frontlineShareScreen: "Share screen",
-    .frontlineReturnToCamera: "Return to camera",
-    .frontlineShowYourPhone: "Show your phone screen",
-    .frontlineInviteSubtitle: "Send a live-call notification",
-    .frontlineShareLinkSubtitle: "Copy or share the room link",
     .frontlineClose: "Close",
+    .frontlineAudioRoute: "Audio",
+    .frontlineAudioSpeaker: "Speaker",
+    .frontlineAudioEarpiece: "Phone",
+    .frontlineAudioHeadset: "Headset",
+    .frontlineAudioBluetooth: "Bluetooth",
+    .frontlineAudioCar: "Car audio",
+    .frontlineAudioUsb: "USB audio",
+    .frontlineAudioUnknown: "Audio",
 ]
 
 /// Resolves a string key, checking overrides first, then falling back to English defaults.

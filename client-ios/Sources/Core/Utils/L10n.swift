@@ -255,11 +255,15 @@ enum L10n {
             .frontlineFlipCamera: text("frontline_flip_camera"),
             .frontlineStopScreenShare: text("frontline_stop_screen_share"),
             .frontlineShareScreen: text("frontline_share_screen"),
-            .frontlineReturnToCamera: text("frontline_return_to_camera"),
-            .frontlineShowYourPhone: text("frontline_show_your_phone"),
-            .frontlineInviteSubtitle: text("frontline_invite_subtitle"),
-            .frontlineShareLinkSubtitle: text("frontline_share_link_subtitle"),
             .frontlineClose: text("frontline_close"),
+            .frontlineAudioRoute: text("frontline_audio_route"),
+            .frontlineAudioSpeaker: text("frontline_audio_speaker"),
+            .frontlineAudioEarpiece: text("frontline_audio_earpiece"),
+            .frontlineAudioHeadset: text("frontline_audio_headset"),
+            .frontlineAudioBluetooth: text("frontline_audio_bluetooth"),
+            .frontlineAudioCar: text("frontline_audio_car"),
+            .frontlineAudioUsb: text("frontline_audio_usb"),
+            .frontlineAudioUnknown: text("frontline_audio_unknown"),
         ]
     }
 }
