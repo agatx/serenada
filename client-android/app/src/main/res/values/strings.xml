@@ -148,10 +148,6 @@
     <string name="frontline_flip_camera">Flip camera</string>
     <string name="frontline_stop_screen_share">Stop screen share</string>
     <string name="frontline_share_screen">Share screen</string>
-    <string name="frontline_return_to_camera">Return to camera</string>
-    <string name="frontline_show_your_phone">Show your phone</string>
-    <string name="frontline_invite_subtitle">Bring in another teammate</string>
-    <string name="frontline_share_link_subtitle">Send the call link</string>
     <string name="frontline_close">Close</string>
 
     <string name="notification_call_title">Serenada call</string>

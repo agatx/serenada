@@ -29,9 +29,5 @@ fun buildSerenadaCallStrings(context: Context): Map<SerenadaString, String> = ma
     SerenadaString.FrontlineFlipCamera to context.getString(R.string.frontline_flip_camera),
     SerenadaString.FrontlineStopScreenShare to context.getString(R.string.frontline_stop_screen_share),
     SerenadaString.FrontlineShareScreen to context.getString(R.string.frontline_share_screen),
-    SerenadaString.FrontlineReturnToCamera to context.getString(R.string.frontline_return_to_camera),
-    SerenadaString.FrontlineShowYourPhone to context.getString(R.string.frontline_show_your_phone),
-    SerenadaString.FrontlineInviteSubtitle to context.getString(R.string.frontline_invite_subtitle),
-    SerenadaString.FrontlineShareLinkSubtitle to context.getString(R.string.frontline_share_link_subtitle),
     SerenadaString.FrontlineClose to context.getString(R.string.frontline_close),
 )
