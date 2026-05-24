@@ -355,7 +355,7 @@ Available string keys:
 - `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`, `CallTakeSnapshot`
 - Native Frontline: `FrontlineYou` / `frontlineYou`, `FrontlineWaiting` / `frontlineWaiting`, `FrontlineVideo` / `frontlineVideo`, `FrontlineVideoOn` / `frontlineVideoOn`, `FrontlineMute` / `frontlineMute`, `FrontlineMore` / `frontlineMore`, `FrontlineEnd` / `frontlineEnd`, `FrontlineFlipCamera` / `frontlineFlipCamera`
 - Native Frontline: `FrontlineStopScreenShare` / `frontlineStopScreenShare`, `FrontlineShareScreen` / `frontlineShareScreen`, `FrontlineClose` / `frontlineClose`
-- Native Frontline audio routes: `FrontlineAudioRoute` / `frontlineAudioRoute`, `FrontlineAudioSpeaker` / `frontlineAudioSpeaker`, `FrontlineAudioEarpiece` / `frontlineAudioEarpiece`, `FrontlineAudioHeadset` / `frontlineAudioHeadset`, `FrontlineAudioBluetooth` / `frontlineAudioBluetooth`, `FrontlineAudioCar` / `frontlineAudioCar`, `FrontlineAudioUsb` / `frontlineAudioUsb`, `FrontlineAudioUnknown` / `frontlineAudioUnknown`
+- Native Call audio routes: `CallAudioRoute` / `callAudioRoute`, `CallAudioSpeaker` / `callAudioSpeaker`, `CallAudioPhone` / `callAudioPhone`, `CallAudioHeadset` / `callAudioHeadset`, `CallAudioBluetooth` / `callAudioBluetooth`, `CallAudioCar` / `callAudioCar`, `CallAudioUsb` / `callAudioUsb`, `CallAudioUnknown` / `callAudioUnknown`
 
 ### Web
 

@@ -256,14 +256,14 @@ enum L10n {
             .frontlineStopScreenShare: text("frontline_stop_screen_share"),
             .frontlineShareScreen: text("frontline_share_screen"),
             .frontlineClose: text("frontline_close"),
-            .frontlineAudioRoute: text("frontline_audio_route"),
-            .frontlineAudioSpeaker: text("frontline_audio_speaker"),
-            .frontlineAudioEarpiece: text("frontline_audio_earpiece"),
-            .frontlineAudioHeadset: text("frontline_audio_headset"),
-            .frontlineAudioBluetooth: text("frontline_audio_bluetooth"),
-            .frontlineAudioCar: text("frontline_audio_car"),
-            .frontlineAudioUsb: text("frontline_audio_usb"),
-            .frontlineAudioUnknown: text("frontline_audio_unknown"),
+            .callAudioRoute: text("call_audio_route"),
+            .callAudioSpeaker: text("call_audio_speaker"),
+            .callAudioPhone: text("call_audio_phone"),
+            .callAudioHeadset: text("call_audio_headset"),
+            .callAudioBluetooth: text("call_audio_bluetooth"),
+            .callAudioCar: text("call_audio_car"),
+            .callAudioUsb: text("call_audio_usb"),
+            .callAudioUnknown: text("call_audio_unknown"),
         ]
     }
 }

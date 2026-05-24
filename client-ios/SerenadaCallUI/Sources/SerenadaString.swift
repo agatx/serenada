@@ -47,22 +47,22 @@ public enum SerenadaString: String, CaseIterable {
     case frontlineStopScreenShare
     case frontlineShareScreen
     case frontlineClose
-    /// Header for Frontline audio route selection.
-    case frontlineAudioRoute
-    /// Frontline audio route label for speakerphone output.
-    case frontlineAudioSpeaker
-    /// Frontline audio route label for built-in phone/earpiece output.
-    case frontlineAudioEarpiece
-    /// Frontline audio route label for wired headset output.
-    case frontlineAudioHeadset
-    /// Frontline audio route label for Bluetooth output.
-    case frontlineAudioBluetooth
-    /// Frontline audio route label for car audio output.
-    case frontlineAudioCar
-    /// Frontline audio route label for USB audio output.
-    case frontlineAudioUsb
-    /// Frontline audio route fallback label for unknown output routes.
-    case frontlineAudioUnknown
+    /// Header for Call audio route selection.
+    case callAudioRoute
+    /// Call audio route label for speakerphone output.
+    case callAudioSpeaker
+    /// Call audio route label for built-in phone/earpiece output.
+    case callAudioPhone
+    /// Call audio route label for wired headset output.
+    case callAudioHeadset
+    /// Call audio route label for Bluetooth output.
+    case callAudioBluetooth
+    /// Call audio route label for car audio output.
+    case callAudioCar
+    /// Call audio route label for USB audio output.
+    case callAudioUsb
+    /// Call audio route fallback label for unknown output routes.
+    case callAudioUnknown
 }
 
 /// Default English strings for SerenadaCallUI.
@@ -111,14 +111,14 @@ public let serenadaDefaultStrings: [SerenadaString: String] = [
     .frontlineStopScreenShare: "Stop screen share",
     .frontlineShareScreen: "Share screen",
     .frontlineClose: "Close",
-    .frontlineAudioRoute: "Audio",
-    .frontlineAudioSpeaker: "Speaker",
-    .frontlineAudioEarpiece: "Phone",
-    .frontlineAudioHeadset: "Headset",
-    .frontlineAudioBluetooth: "Bluetooth",
-    .frontlineAudioCar: "Car audio",
-    .frontlineAudioUsb: "USB audio",
-    .frontlineAudioUnknown: "Audio",
+    .callAudioRoute: "Audio",
+    .callAudioSpeaker: "Speaker",
+    .callAudioPhone: "Phone",
+    .callAudioHeadset: "Headset",
+    .callAudioBluetooth: "Bluetooth",
+    .callAudioCar: "Car audio",
+    .callAudioUsb: "USB audio",
+    .callAudioUnknown: "Audio",
 ]
 
 /// Resolves a string key, checking overrides first, then falling back to English defaults.

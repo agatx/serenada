@@ -26,22 +26,22 @@ enum class SerenadaString {
     FrontlineStopScreenShare,
     FrontlineShareScreen,
     FrontlineClose,
-    /** Header for Frontline audio route selection. */
-    FrontlineAudioRoute,
-    /** Frontline audio route label for speakerphone output. */
-    FrontlineAudioSpeaker,
-    /** Frontline audio route label for built-in phone/earpiece output. */
-    FrontlineAudioEarpiece,
-    /** Frontline audio route label for wired headset output. */
-    FrontlineAudioHeadset,
-    /** Frontline audio route label for Bluetooth output. */
-    FrontlineAudioBluetooth,
-    /** Frontline audio route label for car audio output. */
-    FrontlineAudioCar,
-    /** Frontline audio route label for USB audio output. */
-    FrontlineAudioUsb,
-    /** Frontline audio route fallback label for unknown output routes. */
-    FrontlineAudioUnknown,
+    /** Header for Call audio route selection. */
+    CallAudioRoute,
+    /** Call audio route label for speakerphone output. */
+    CallAudioSpeaker,
+    /** Call audio route label for built-in phone/earpiece output. */
+    CallAudioPhone,
+    /** Call audio route label for wired headset output. */
+    CallAudioHeadset,
+    /** Call audio route label for Bluetooth output. */
+    CallAudioBluetooth,
+    /** Call audio route label for car audio output. */
+    CallAudioCar,
+    /** Call audio route label for USB audio output. */
+    CallAudioUsb,
+    /** Call audio route fallback label for unknown output routes. */
+    CallAudioUnknown,
 }
 
 val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
@@ -70,14 +70,14 @@ val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
     SerenadaString.FrontlineStopScreenShare to "Stop screen share",
     SerenadaString.FrontlineShareScreen to "Share screen",
     SerenadaString.FrontlineClose to "Close",
-    SerenadaString.FrontlineAudioRoute to "Audio",
-    SerenadaString.FrontlineAudioSpeaker to "Speaker",
-    SerenadaString.FrontlineAudioEarpiece to "Phone",
-    SerenadaString.FrontlineAudioHeadset to "Headset",
-    SerenadaString.FrontlineAudioBluetooth to "Bluetooth",
-    SerenadaString.FrontlineAudioCar to "Car audio",
-    SerenadaString.FrontlineAudioUsb to "USB audio",
-    SerenadaString.FrontlineAudioUnknown to "Audio",
+    SerenadaString.CallAudioRoute to "Audio",
+    SerenadaString.CallAudioSpeaker to "Speaker",
+    SerenadaString.CallAudioPhone to "Phone",
+    SerenadaString.CallAudioHeadset to "Headset",
+    SerenadaString.CallAudioBluetooth to "Bluetooth",
+    SerenadaString.CallAudioCar to "Car audio",
+    SerenadaString.CallAudioUsb to "USB audio",
+    SerenadaString.CallAudioUnknown to "Audio",
 )
 
 fun resolveString(key: SerenadaString, overrides: Map<SerenadaString, String>?): String {

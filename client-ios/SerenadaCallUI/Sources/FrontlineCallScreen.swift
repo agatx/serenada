@@ -1,4 +1,3 @@
-import MediaPlayer
 import ReplayKit
 import SerenadaCore
 import SwiftUI
@@ -18,7 +17,6 @@ private let frontlineMoreButtonHeightToWidthRatio: CGFloat = 1.62
 private let frontlineLargeVideoAccentLineWidth: CGFloat = 3
 private let frontlinePipVideoAccentLineWidth: CGFloat = 2.5
 private let frontlinePipBorderLineWidth: CGFloat = 1.5
-private let frontlineSystemRoutePickerWillPresentNotification = Notification.Name("app.serenada.audio.systemRoutePickerWillPresent")
 
 private enum FrontlineFeed {
     case local
@@ -291,7 +289,7 @@ struct FrontlineCallScreenView: View {
     }
 
     private var currentAudioRoute: AudioDevice? {
-        frontlineCurrentAudioRoute(currentAudioDevice: currentAudioDevice, availableAudioDevices: availableAudioDevices)
+        currentCallAudioRoute(currentAudioDevice: currentAudioDevice, availableAudioDevices: availableAudioDevices)
     }
 
     @ViewBuilder
@@ -593,7 +591,7 @@ struct FrontlineCallScreenView: View {
                     onDismiss: { isMoreSheetVisible = false },
                     onAudioRoute: {
                         isMoreSheetVisible = false
-                        NotificationCenter.default.post(name: frontlineSystemRoutePickerWillPresentNotification, object: nil)
+                        NotificationCenter.default.post(name: callSystemRoutePickerWillPresentNotification, object: nil)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                             audioRoutePickerTriggerCount += 1
                         }
@@ -623,7 +621,7 @@ struct FrontlineCallScreenView: View {
     }
 
     private var systemAudioRoutePicker: some View {
-        FrontlineSystemAudioRoutePicker(triggerCount: audioRoutePickerTriggerCount)
+        CallSystemAudioRoutePicker(triggerCount: audioRoutePickerTriggerCount)
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
@@ -667,221 +665,6 @@ private func frontlinePipSize(containerWidth: CGFloat, inPanel: Bool) -> CGSize 
 
 private func remoteDisplayName(_ remote: RemoteParticipant?) -> String {
     remote?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-}
-
-private func frontlineCurrentAudioRoute(
-    currentAudioDevice: AudioDevice?,
-    availableAudioDevices: [AudioDevice]
-) -> AudioDevice? {
-    let currentKey = currentAudioDevice.flatMap { device in
-        device.isFrontlineOutputRoute ? frontlineAudioRouteKey(device) : nil
-    }
-    let options = frontlineAudioRouteOptions(
-        currentAudioDevice: currentAudioDevice,
-        availableAudioDevices: availableAudioDevices
-    )
-    if let activeRoute = frontlinePreferredActiveAudioRoute(options) {
-        return activeRoute
-    }
-    if let currentKey, let currentRoute = options.first(where: { frontlineAudioRouteKey($0) == currentKey }) {
-        return currentRoute
-    }
-    return nil
-}
-
-private func frontlineAudioRouteOptions(
-    currentAudioDevice: AudioDevice?,
-    availableAudioDevices: [AudioDevice]
-) -> [AudioDevice] {
-    let candidates = (availableAudioDevices + [currentAudioDevice].compactMap { $0 })
-        .filter(\.isFrontlineOutputRoute)
-    let activeKeys = Set(
-        candidates
-            .filter { $0.status == .active || $0 == currentAudioDevice }
-            .map(frontlineAudioRouteKey)
-    )
-    var devicesByRoute: [String: AudioDevice] = [:]
-    for device in candidates {
-        let key = frontlineAudioRouteKey(device)
-        if let existing = devicesByRoute[key] {
-            devicesByRoute[key] = frontlinePreferredAudioRouteDisplay(existing, candidate: device)
-        } else {
-            devicesByRoute[key] = device
-        }
-    }
-    return devicesByRoute.values
-        .map { device in
-            activeKeys.contains(frontlineAudioRouteKey(device))
-                ? frontlineAudioRouteWithStatus(device, .active)
-                : device
-        }
-        .sorted { lhs, rhs in
-            let lhsRank = frontlineAudioRouteSortRank(lhs.kind)
-            let rhsRank = frontlineAudioRouteSortRank(rhs.kind)
-            if lhsRank != rhsRank { return lhsRank < rhsRank }
-            return frontlineAudioRouteSortLabel(lhs).localizedCaseInsensitiveCompare(
-                frontlineAudioRouteSortLabel(rhs)
-            ) == .orderedAscending
-        }
-}
-
-private func frontlineAudioRouteLabel(_ device: AudioDevice, strings: [SerenadaString: String]?) -> String {
-    let routeName = device.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    func routeNameOr(_ key: SerenadaString) -> String {
-        routeName.isEmpty ? resolveString(key, overrides: strings) : routeName
-    }
-
-    switch device.kind {
-    case .speakerphone:
-        return resolveString(.frontlineAudioSpeaker, overrides: strings)
-    case .earpiece:
-        return resolveString(.frontlineAudioEarpiece, overrides: strings)
-    case .wiredHeadset:
-        return routeNameOr(.frontlineAudioHeadset)
-    case .bluetooth(_):
-        return routeNameOr(.frontlineAudioBluetooth)
-    case .carAudio:
-        return routeNameOr(.frontlineAudioCar)
-    case .usb:
-        return routeNameOr(.frontlineAudioUsb)
-    case .other:
-        return routeNameOr(.frontlineAudioUnknown)
-    }
-}
-
-private func frontlineAudioRouteSystemImage(_ kind: AudioDeviceKind?) -> String {
-    switch kind {
-    case .speakerphone:
-        return "speaker.wave.2.fill"
-    case .earpiece:
-        return "phone.fill"
-    case .wiredHeadset:
-        return "headphones"
-    case .bluetooth(_):
-        return "dot.radiowaves.left.and.right"
-    case .carAudio:
-        return "car.fill"
-    case .usb:
-        return "cable.connector"
-    case .other, nil:
-        return "speaker.wave.2.fill"
-    }
-}
-
-private func frontlineAudioRouteKey(_ device: AudioDevice) -> String {
-    let routeName = device.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    let fallback = device.id.isEmpty ? routeName : device.id
-
-    switch device.kind {
-    case .speakerphone:
-        return "speakerphone"
-    case .earpiece:
-        return "earpiece"
-    case .wiredHeadset:
-        return "wired"
-    case .bluetooth(_):
-        return "bluetooth"
-    case .carAudio:
-        return "car:\(fallback)"
-    case .usb:
-        return "usb:\(fallback)"
-    case .other:
-        return "other:\(fallback)"
-    }
-}
-
-private func frontlineAudioRouteSortRank(_ kind: AudioDeviceKind) -> Int {
-    switch kind {
-    case .speakerphone:
-        return 0
-    case .earpiece:
-        return 1
-    case .bluetooth(_):
-        return 2
-    case .wiredHeadset:
-        return 3
-    case .carAudio, .usb, .other:
-        return 4
-    }
-}
-
-private func frontlineAudioRouteSortLabel(_ device: AudioDevice) -> String {
-    let routeName = device.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-    return routeName.isEmpty ? device.id : routeName
-}
-
-private func frontlinePreferredActiveAudioRoute(_ devices: [AudioDevice]) -> AudioDevice? {
-    devices
-        .filter { $0.status == .active }
-        .min { lhs, rhs in
-            let lhsRank = frontlineAudioRouteActiveRank(lhs.kind)
-            let rhsRank = frontlineAudioRouteActiveRank(rhs.kind)
-            if lhsRank != rhsRank { return lhsRank < rhsRank }
-            return frontlineAudioRouteSortLabel(lhs).localizedCaseInsensitiveCompare(
-                frontlineAudioRouteSortLabel(rhs)
-            ) == .orderedAscending
-        }
-}
-
-private func frontlineAudioRouteActiveRank(_ kind: AudioDeviceKind) -> Int {
-    switch kind {
-    case .bluetooth(_):
-        return 0
-    case .wiredHeadset:
-        return 1
-    case .carAudio, .usb:
-        return 2
-    case .speakerphone:
-        return 3
-    case .earpiece:
-        return 4
-    case .other:
-        return 5
-    }
-}
-
-private func frontlinePreferredAudioRouteDisplay(_ existing: AudioDevice, candidate: AudioDevice) -> AudioDevice {
-    let existingRank = frontlineAudioRouteDisplayRank(existing)
-    let candidateRank = frontlineAudioRouteDisplayRank(candidate)
-    if candidateRank < existingRank { return candidate }
-    if candidateRank > existingRank { return existing }
-    if candidate.status == .active && existing.status != .active { return candidate }
-    return existing
-}
-
-private func frontlineAudioRouteDisplayRank(_ device: AudioDevice) -> Int {
-    let hasName = !device.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    switch device.kind {
-    case .bluetooth(let profile):
-        switch profile {
-        case .a2dp, .ble:
-            return hasName ? 0 : 3
-        case .unknown:
-            return hasName ? 1 : 4
-        case .hfp:
-            return hasName ? 2 : 5
-        }
-    case .speakerphone, .earpiece:
-        return 0
-    case .wiredHeadset, .carAudio, .usb, .other:
-        return hasName ? 0 : 1
-    }
-}
-
-private func frontlineAudioRouteWithStatus(_ device: AudioDevice, _ status: AudioDeviceStatus) -> AudioDevice {
-    AudioDevice(
-        id: device.id,
-        displayName: device.displayName,
-        kind: device.kind,
-        direction: device.direction,
-        status: status
-    )
-}
-
-private extension AudioDevice {
-    var isFrontlineOutputRoute: Bool {
-        direction == .output || direction == .both
-    }
 }
 
 private extension String {
@@ -1369,9 +1152,9 @@ private struct FrontlineMoreSheet: View {
                     .padding(.bottom, 18)
 
                 FrontlineSheetItem(
-                    systemImage: frontlineAudioRouteSystemImage(audioRouteDevice?.kind),
-                    title: audioRouteDevice.map { frontlineAudioRouteLabel($0, strings: strings) }
-                        ?? resolveString(.frontlineAudioRoute, overrides: strings),
+                    systemImage: callAudioRouteSystemImage(audioRouteDevice?.kind),
+                    title: audioRouteDevice.map { callAudioRouteLabel($0, strings: strings) }
+                        ?? resolveString(.callAudioRoute, overrides: strings),
                     onClick: onAudioRoute
                 )
                 .accessibilityIdentifier("call.frontline.more.audio")
@@ -1474,74 +1257,6 @@ private struct FrontlineSheetItem: View {
         }
         .buttonStyle(.plain)
         .padding(.vertical, 5)
-    }
-}
-
-private struct FrontlineSystemAudioRoutePicker: UIViewRepresentable {
-    let triggerCount: Int
-
-    func makeUIView(context: Context) -> FrontlineSystemAudioRoutePickerView {
-        FrontlineSystemAudioRoutePickerView()
-    }
-
-    func updateUIView(_ uiView: FrontlineSystemAudioRoutePickerView, context: Context) {
-        uiView.triggerIfNeeded(triggerCount)
-    }
-}
-
-private final class FrontlineSystemAudioRoutePickerView: UIView {
-    private let volumeView = MPVolumeView(frame: .zero)
-    private var lastTriggerCount = 0
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        volumeView.showsVolumeSlider = false
-        volumeView.alpha = 0.02
-        addSubview(volumeView)
-        volumeView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            volumeView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            volumeView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            volumeView.topAnchor.constraint(equalTo: topAnchor),
-            volumeView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func triggerIfNeeded(_ triggerCount: Int) {
-        guard triggerCount != lastTriggerCount else { return }
-        lastTriggerCount = triggerCount
-        triggerRouteButton(attempt: 0)
-    }
-
-    private func triggerRouteButton(attempt: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.05)) { [weak self] in
-            guard let self else { return }
-            guard let button = self.findRouteButton(in: self.volumeView) else {
-                if attempt < 4 {
-                    self.triggerRouteButton(attempt: attempt + 1)
-                }
-                return
-            }
-            button.sendActions(for: .touchUpInside)
-        }
-    }
-
-    private func findRouteButton(in view: UIView) -> UIButton? {
-        if let button = view as? UIButton {
-            return button
-        }
-        for subview in view.subviews {
-            if let button = findRouteButton(in: subview) {
-                return button
-            }
-        }
-        return nil
     }
 }
 

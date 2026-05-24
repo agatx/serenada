@@ -7,7 +7,7 @@ import UIKit
 
 private let callAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .mixWithOthers]
 private let phoneAudioSessionOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
-private let systemRoutePickerWillPresentNotification = Notification.Name("app.serenada.audio.systemRoutePickerWillPresent")
+private let callSystemRoutePickerWillPresentNotification = Notification.Name("app.serenada.audio.systemRoutePickerWillPresent")
 
 private final class ContinuationHolder<T>: @unchecked Sendable {
     private let lock = NSLock()
@@ -274,7 +274,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleSystemRoutePickerWillPresent(_:)),
-            name: systemRoutePickerWillPresentNotification,
+            name: callSystemRoutePickerWillPresentNotification,
             object: nil
         )
     }
@@ -283,7 +283,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
-        NotificationCenter.default.removeObserver(self, name: systemRoutePickerWillPresentNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: callSystemRoutePickerWillPresentNotification, object: nil)
     }
 
     private func startProximityMonitoring() {
