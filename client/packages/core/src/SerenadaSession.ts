@@ -66,6 +66,8 @@ function mapErrorCode(serverCode: string): CallErrorCode {
             return 'roomFull';
         case 'ROOM_ENDED':
             return 'roomEnded';
+        case 'INVALID_RECONNECT_TOKEN':
+            return 'sessionExpired';
         case 'CONNECTION_FAILED':
             return 'connectionFailed';
         case 'ICE_SERVER_FETCH_FAILED':
@@ -74,7 +76,6 @@ function mapErrorCode(serverCode: string): CallErrorCode {
         case 'UNSUPPORTED_VERSION':
         case 'INVALID_ROOM_ID':
         case 'SERVER_NOT_CONFIGURED':
-        case 'INVALID_RECONNECT_TOKEN':
         case 'TURN_REFRESH_FAILED':
         case 'NOT_IN_ROOM':
         case 'NOT_HOST':

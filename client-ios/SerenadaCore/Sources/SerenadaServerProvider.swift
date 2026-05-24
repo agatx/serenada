@@ -13,6 +13,7 @@ internal final class SerenadaServerProvider: SignalingProvider {
     @MainActor private var turnManager: TurnManager?
     @MainActor private var reconnectAttempts = 0
     @MainActor private var reconnectTask: Task<Void, Never>?
+    @MainActor private var reconnectTokenRefreshTask: Task<Void, Never>?
     @MainActor private var currentRoomId: String?
     @MainActor private var currentMaxParticipants = 4
     @MainActor private var currentReconnectPeerId: String?
@@ -20,6 +21,7 @@ internal final class SerenadaServerProvider: SignalingProvider {
     @MainActor private var currentAppPeerId: String?
     @MainActor private var currentTurnToken: String?
     @MainActor private var reconnectToken: String?
+    @MainActor private var reconnectTokenTTLMs: Int64?
     @MainActor private var clientId: String?
     @MainActor private var currentHostPeerId: String?
     @MainActor private var previousParticipants: [String: SignalingProviderParticipant] = [:]
@@ -210,6 +212,9 @@ extension SerenadaServerProvider: SignalingClientListener {
         case "error":
             let payload = ErrorPayload(from: message.payload)
             let code = payload.code ?? "UNKNOWN"
+            if code == "INVALID_RECONNECT_TOKEN", retryFreshJoinAfterInvalidReconnectToken() {
+                return
+            }
             // Terminal codes that invalidate persisted reconnect authority.
             // Drop the stored token so a future join cannot try to reclaim
             // the (gone) slot.
@@ -225,6 +230,18 @@ extension SerenadaServerProvider: SignalingClientListener {
         case "turn-refreshed":
             currentTurnToken = SignalingMessageRouter.turnToken(from: message.payload)
             turnManager?.handleTurnRefreshed(payload: message.payload)
+        case "reconnect-token-refreshed":
+            if let payload = ReconnectTokenRefreshedPayload(from: message.payload) {
+                reconnectToken = payload.reconnectToken
+                reconnectTokenTTLMs = payload.reconnectTokenTTLMs ?? Int64(WebRtcResilience.reconnectTokenTtlFallbackMs)
+                scheduleReconnectTokenRefresh(ttlMs: reconnectTokenTTLMs)
+                delegate?.signalingProviderDidRefreshReconnectToken(
+                    ReconnectTokenRefreshedEvent(
+                        reconnectToken: payload.reconnectToken,
+                        reconnectTokenTTLMs: reconnectTokenTTLMs
+                    )
+                )
+            }
         case "offer", "answer", "ice", "content_state", "participant_media_state":
             emitPeerMessage(message)
         case "negotiation_dirty":
@@ -247,6 +264,7 @@ extension SerenadaServerProvider: SignalingClientListener {
     }
 
     func onClosed(reason: String) {
+        clearReconnectTokenRefresh()
         delegate?.signalingProviderDidDisconnect(reason: reason)
         guard !closedByClient, currentRoomId != nil else { return }
         pendingJoinRoomId = currentRoomId
@@ -271,6 +289,10 @@ private extension SerenadaServerProvider {
         // participant alongside our suspended record.
         currentReconnectPeerId = peerId
         reconnectToken = payload.reconnectToken ?? reconnectToken
+        reconnectTokenTTLMs = payload.reconnectTokenTTLMs.map(Int64.init) ?? reconnectTokenTTLMs
+        if payload.reconnectToken != nil {
+            scheduleReconnectTokenRefresh(ttlMs: reconnectTokenTTLMs ?? Int64(WebRtcResilience.reconnectTokenTtlFallbackMs))
+        }
         currentHostPeerId = payload.hostCid
         currentTurnToken = payload.turnToken
         if let ttl = payload.turnTokenTTLMs {
@@ -434,8 +456,51 @@ private extension SerenadaServerProvider {
         reconnectTask = nil
     }
 
+    func clearReconnectAuthorityForFreshJoin() {
+        clearReconnectTokenRefresh()
+        currentReconnectPeerId = nil
+        reconnectToken = nil
+        reconnectTokenTTLMs = nil
+        clientId = nil
+    }
+
+    func retryFreshJoinAfterInvalidReconnectToken() -> Bool {
+        guard let roomId = currentRoomId else { return false }
+        logger?.log(.warning, tag: "Signaling", "Reconnect token rejected; retrying as a fresh join")
+        clearReconnectAuthorityForFreshJoin()
+        sendJoin(roomId: roomId)
+        return true
+    }
+
+    func scheduleReconnectTokenRefresh(ttlMs: Int64?) {
+        clearReconnectTokenRefresh()
+        let ttl = ttlMs.flatMap { $0 > 0 ? $0 : nil } ?? Int64(WebRtcResilience.reconnectTokenTtlFallbackMs)
+        guard signaling.isConnected(), currentRoomId != nil, reconnectToken?.isEmpty == false else { return }
+        let delayMs: Int64
+        if ttl > Int64(WebRtcResilience.reconnectTokenRefreshLeewayMs) {
+            delayMs = ttl - Int64(WebRtcResilience.reconnectTokenRefreshLeewayMs)
+        } else {
+            delayMs = max(30_000, ttl / 2)
+        }
+        reconnectTokenRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            try? await self.clock.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self.signaling.isConnected(), self.currentRoomId != nil, self.reconnectToken?.isEmpty == false else { return }
+                self.sendRawMessage(type: "reconnect-token-refresh")
+            }
+        }
+    }
+
+    func clearReconnectTokenRefresh() {
+        reconnectTokenRefreshTask?.cancel()
+        reconnectTokenRefreshTask = nil
+    }
+
     func clearRoomState() {
         clearReconnect()
+        clearReconnectTokenRefresh()
         turnManager?.cancelRefresh()
         currentRoomId = nil
         currentReconnectPeerId = nil
@@ -444,6 +509,7 @@ private extension SerenadaServerProvider {
         previousParticipants = [:]
         clientId = nil
         reconnectToken = nil
+        reconnectTokenTTLMs = nil
     }
 
     func dedupeProviderParticipants(

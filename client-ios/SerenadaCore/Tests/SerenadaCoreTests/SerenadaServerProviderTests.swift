@@ -11,6 +11,8 @@ final class SerenadaServerProviderTests: XCTestCase {
         var peerLeftEvents: [PeerEvent] = []
         var peerMessages: [PeerMessage] = []
         var roomEndedEvents: [RoomEndedEvent] = []
+        var errorEvents: [ErrorEvent] = []
+        var reconnectTokenRefreshedEvents: [ReconnectTokenRefreshedEvent] = []
 
         func signalingProviderDidConnect(_ info: ConnectionInfo) {
             connectionInfos.append(info)
@@ -39,10 +41,19 @@ final class SerenadaServerProviderTests: XCTestCase {
         func signalingProviderDidEndRoom(_ event: RoomEndedEvent) {
             roomEndedEvents.append(event)
         }
+
+        func signalingProviderDidReceiveError(_ event: ErrorEvent) {
+            errorEvents.append(event)
+        }
+
+        func signalingProviderDidRefreshReconnectToken(_ event: ReconnectTokenRefreshedEvent) {
+            reconnectTokenRefreshedEvents.append(event)
+        }
     }
 
     private var signaling: FakeSessionSignaling!
     private var apiClient: FakeAPIClient!
+    private var fakeClock: FakeSessionClock!
     private var delegate: RecordingDelegate!
     private var provider: SerenadaServerProvider!
 
@@ -50,11 +61,13 @@ final class SerenadaServerProviderTests: XCTestCase {
         super.setUp()
         signaling = FakeSessionSignaling()
         apiClient = FakeAPIClient()
+        fakeClock = FakeSessionClock()
         delegate = RecordingDelegate()
         provider = SerenadaServerProvider(
             serverHost: "serenada.app",
             apiClient: apiClient,
-            signaling: signaling
+            signaling: signaling,
+            clock: fakeClock
         )
         provider.delegate = delegate
     }
@@ -63,6 +76,7 @@ final class SerenadaServerProviderTests: XCTestCase {
         provider.disconnect()
         provider = nil
         delegate = nil
+        fakeClock = nil
         apiClient = nil
         signaling = nil
         super.tearDown()
@@ -116,6 +130,117 @@ final class SerenadaServerProviderTests: XCTestCase {
         XCTAssertEqual(rejoin.type, "join")
         XCTAssertEqual(rejoin.payload?.objectValue?["reconnectCid"]?.stringValue, "server-assigned")
         XCTAssertEqual(rejoin.payload?.objectValue?["reconnectToken"]?.stringValue, "token-xyz")
+    }
+
+    func testReconnectTokenRefreshIsScheduledTenMinutesBeforeExpiry() async throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        signaling.simulateOpen(activeTransport: "ws")
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "joined",
+                rid: "room-1",
+                cid: "server-assigned",
+                payload: .object([
+                    "reconnectToken": .string("token-1"),
+                    "reconnectTokenTTLMs": .number(1_200_000),
+                    "participants": .array([
+                        .object(["cid": .string("server-assigned")])
+                    ])
+                ])
+            )
+        )
+        signaling.clearSentMessages()
+        await Task.yield()
+
+        await fakeClock.advance(byMs: 599_999)
+        XCTAssertFalse(signaling.sentMessages.contains { $0.type == "reconnect-token-refresh" })
+
+        await fakeClock.advance(byMs: 1)
+        XCTAssertEqual(signaling.sentMessages.filter { $0.type == "reconnect-token-refresh" }.count, 1)
+    }
+
+    func testReconnectTokenRefreshedUpdatesTokenUsedByNextAutoRejoin() throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        signaling.simulateOpen(activeTransport: "ws")
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "joined",
+                rid: "room-1",
+                cid: "server-assigned",
+                payload: .object([
+                    "reconnectToken": .string("token-1"),
+                    "reconnectTokenTTLMs": .number(1_200_000),
+                    "participants": .array([
+                        .object(["cid": .string("server-assigned")])
+                    ])
+                ])
+            )
+        )
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "reconnect-token-refreshed",
+                rid: "room-1",
+                payload: .object([
+                    "reconnectToken": .string("token-2"),
+                    "reconnectTokenTTLMs": .number(1_200_000)
+                ])
+            )
+        )
+        XCTAssertEqual(delegate.reconnectTokenRefreshedEvents.count, 1)
+        XCTAssertEqual(delegate.reconnectTokenRefreshedEvents.first?.reconnectToken, "token-2")
+        signaling.clearSentMessages()
+
+        signaling.simulateClosed()
+        signaling.simulateOpen(activeTransport: "ws")
+
+        let rejoin = try XCTUnwrap(signaling.sentMessages.last)
+        XCTAssertEqual(rejoin.payload?.objectValue?["reconnectCid"]?.stringValue, "server-assigned")
+        XCTAssertEqual(rejoin.payload?.objectValue?["reconnectToken"]?.stringValue, "token-2")
+    }
+
+    func testInvalidReconnectTokenRetriesAsFreshJoinWithoutSurfacingError() throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        signaling.simulateOpen(activeTransport: "ws")
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "joined",
+                rid: "room-1",
+                cid: "server-assigned",
+                payload: .object([
+                    "reconnectToken": .string("expired-token"),
+                    "reconnectTokenTTLMs": .number(1_200_000),
+                    "participants": .array([
+                        .object(["cid": .string("server-assigned")])
+                    ])
+                ])
+            )
+        )
+
+        signaling.clearSentMessages()
+        signaling.simulateClosed()
+        signaling.simulateOpen(activeTransport: "ws")
+        let reconnectJoin = try XCTUnwrap(signaling.sentMessages.last)
+        XCTAssertEqual(reconnectJoin.payload?.objectValue?["reconnectCid"]?.stringValue, "server-assigned")
+        XCTAssertEqual(reconnectJoin.payload?.objectValue?["reconnectToken"]?.stringValue, "expired-token")
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "error",
+                rid: "room-1",
+                payload: .object([
+                    "code": .string("INVALID_RECONNECT_TOKEN"),
+                    "message": .string("Reconnect token validation failed")
+                ])
+            )
+        )
+
+        let freshJoin = try XCTUnwrap(signaling.sentMessages.last)
+        XCTAssertEqual(freshJoin.type, "join")
+        XCTAssertNil(freshJoin.payload?.objectValue?["reconnectCid"]?.stringValue)
+        XCTAssertNil(freshJoin.payload?.objectValue?["reconnectToken"]?.stringValue)
+        XCTAssertTrue(delegate.errorEvents.isEmpty)
     }
 
     func testJoinedTurnTokenIsUsedForIceServerFetch() async throws {

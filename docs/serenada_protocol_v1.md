@@ -172,7 +172,7 @@ Acknowledges join success and provides room state.
     "turnToken": "T-abc123yz...",
     "turnTokenExpiresAt": 1735174800,
     "reconnectToken": "ab12...c3.1735174800",
-    "reconnectTokenTTLMs": 600000,
+    "reconnectTokenTTLMs": 1200000,
     "epoch": 7,
     "reconnect": "reattached"
   }
@@ -186,7 +186,7 @@ Acknowledges join success and provides room state.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 - `reconnectToken` *(string, optional)*: opaque proof bound to `(cid, rid, expiresAt)` that the SDK persists and presents on a future `join` to reattach or recover the same CID. Format is implementation-defined; clients should treat it as opaque.
-- `reconnectTokenTTLMs` *(number, optional)*: how long (ms) the server will accept this reconnect token. SDKs that persist the token across launches should clear it once the window has elapsed.
+- `reconnectTokenTTLMs` *(number, optional)*: how long (ms) the server will accept this reconnect token. Current servers issue 20-minute reconnect tokens. SDKs that persist the token across launches should clear it once the window has elapsed.
 - `epoch` *(number, optional)*: monotonic room state epoch advanced by the server on every membership-mutating operation. SDKs gate ICE restart on receiving an authoritative post-reconnect snapshot rather than acting on a stale in-memory peer map.
 - `reconnect` *(string, optional)*: outcome of this join. Values: `"fresh"` (server created a new participant identity — CID may be new), `"reattached"` (server attached the new transport to a still-present participant slot), `"recovered"` (the previous participant record was gone but the reconnect token still validated, so the server recreated the record with the requested CID). Older servers may omit this field; SDKs should treat absent as `"fresh"`.
 
@@ -194,12 +194,40 @@ Acknowledges join success and provides room state.
 - Store `sid`, `cid`, and `turnToken`.
 - Immediately fetch ICE servers using the `turnToken` via the `token` query param on `/api/turn-credentials`.
 - Persist `reconnectToken` (with `reconnectTokenTTLMs`) so a future join can reattach or recover identity.
+- While connected, refresh `reconnectToken` 10 minutes before expiration by sending `reconnect-token-refresh`. This leaves roughly the server suspend window for reconnect if the transport drops just before the scheduled refresh.
 - For `"reattached"`/`"recovered"` outcomes, keep media-active `RTCPeerConnection`s in place; renegotiate only for pairs the server flags via `negotiation_dirty` (section 4.10) or that the SDK considers stale based on local heuristics.
 - For `"fresh"` outcomes, the SDK may treat the call as ground-up new; an existing `RTCPeerConnection` should still only be torn down if no media has flowed recently.
 - Wait for the authoritative `room_state` snapshot the server emits immediately after `joined` before scheduling renegotiation against this transport's view of the peer set.
 - If another participant is already present, proceed to WebRTC negotiation using the rules in section 5.
 
 The server emits an authoritative `room_state` (section 4.3) immediately after every successful `joined`, even when membership did not change during the outage. SDKs use that broadcast as the reliable post-reconnect sync point.
+
+---
+
+### 4.2.1 `reconnect-token-refresh` (client → server) and `reconnect-token-refreshed` (server → client)
+Active participants refresh reconnect authority before the current token expires. This refresh is independent of TURN refresh; TURN refresh may be skipped when all peer paths are direct.
+
+Client request:
+
+```json
+{ "v": 1, "type": "reconnect-token-refresh", "rid": "AbC123", "cid": "C-a1b2..." }
+```
+
+Server response:
+
+```json
+{
+  "v": 1,
+  "type": "reconnect-token-refreshed",
+  "rid": "AbC123",
+  "payload": {
+    "reconnectToken": "de45...f6.1735175400",
+    "reconnectTokenTTLMs": 1200000
+  }
+}
+```
+
+The server only honors this request from the currently attached transport for the participant CID. SDKs should replace their stored reconnect token, update persisted recovery expiry, and schedule the next refresh 10 minutes before the new expiration.
 
 ---
 
@@ -489,7 +517,7 @@ Standard error message.
 - `NOT_HOST` — non-host attempted `end_room`
 - `SERVER_NOT_CONFIGURED` — room ID secret missing on server
 - `INVALID_ROOM_ID` — room ID failed validation
-- `INVALID_RECONNECT_TOKEN` — supplied `reconnectToken` failed signature/expiry validation. SDKs MUST clear persisted reconnect state and surface a dedicated terminal error (e.g. `sessionExpired`) instead of looping reconnect attempts.
+- `INVALID_RECONNECT_TOKEN` — supplied `reconnectToken` failed signature/expiry validation. SDKs MUST clear persisted reconnect state. If the room is still intended to be joined, SDKs SHOULD automatically retry `join` without `reconnectCid`/`reconnectToken`; otherwise they may surface a dedicated terminal error (e.g. `sessionExpired`). When an expired-but-valid token targets a suspended participant, the server removes that stale record before returning this error so the fresh retry does not create a self-ghost.
 - `ROOM_ENDED` — the room was explicitly ended (host `end_room`) within the server-side tombstone window. Returned to a reconnect attempt that presents valid reconnect authority for a now-gone room. Payload may include `"reason": "ended_by_host"`. SDKs MUST treat this as terminal and clear persisted reconnect state.
 - `INTERNAL` — unexpected server error
 
@@ -759,6 +787,11 @@ For `offer`, `answer`, `ice`:
   transport to the existing record. If the window expires, the server
   removes the participant and broadcasts a final `room_state` so peers tear
   down. The recommended hard-eviction window is at least 10 minutes.
+- If every participant in a room is suspended (no active signaling transports
+  remain), the server may delete the room after a short grace period. Current
+  servers use 10 seconds. This prevents ghost-only rooms from holding
+  occupancy for the full hard-eviction window when nobody is alive to observe
+  media liveness.
 - On explicit `leave` or `end_room`: remove the participant immediately (no
   suspend window).
 - If room becomes empty (including after hard eviction): delete room.

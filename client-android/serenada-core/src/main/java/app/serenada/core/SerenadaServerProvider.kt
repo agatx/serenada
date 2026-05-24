@@ -10,6 +10,7 @@ import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.call.toErrorPayload
 import app.serenada.core.call.toJoinedPayload
 import app.serenada.core.call.toNegotiationDirtyPayload
+import app.serenada.core.call.toReconnectTokenRefreshedPayload
 import app.serenada.core.call.toRelayFailedPayload
 import app.serenada.core.call.toRoomStatePayload
 import app.serenada.core.network.CoreApiClient
@@ -51,6 +52,7 @@ internal class SerenadaServerProvider(
     private var reconnectAttempts = 0
     private var reconnectRunnable: Runnable? = null
     private var turnRefreshRunnable: Runnable? = null
+    private var reconnectTokenRefreshRunnable: Runnable? = null
     // Absolute expiry timestamp (wall clock ms) for the current TURN creds.
     // Used by the skip path to compute remaining lifetime for recheck pacing.
     private var turnTokenExpiresAtMs: Long = 0
@@ -66,6 +68,7 @@ internal class SerenadaServerProvider(
     private var currentReconnectPeerId: String? = null
     private var currentTurnToken: String? = null
     private var reconnectToken: String? = null
+    private var reconnectTokenTTLMs: Long? = null
     private var clientId: String? = null
     private var currentHostPeerId: String? = null
     private var previousParticipants = linkedMapOf<String, SignalingProviderParticipant>()
@@ -83,6 +86,7 @@ internal class SerenadaServerProvider(
         closedByClient = true
         clearReconnect()
         clearTurnRefresh()
+        clearReconnectTokenRefresh()
         pendingJoinRoomId = null
         previousParticipants.clear()
         signaling.close()
@@ -167,6 +171,7 @@ internal class SerenadaServerProvider(
         }
 
         override fun onClosed(reason: String) {
+            clearReconnectTokenRefresh()
             listener?.onDisconnected(reason)
             if (!closedByClient && currentRoomId != null) {
                 pendingJoinRoomId = currentRoomId
@@ -186,15 +191,15 @@ internal class SerenadaServerProvider(
             "room_ended" -> {
                 val endedBy = message.payload?.optString("by").orEmpty().ifBlank { currentHostPeerId }
                 val reason = message.payload?.optString("reason").orEmpty().ifBlank { "room ended" }
-                clearReconnect()
-                clearTurnRefresh()
-                currentRoomId = null
-                previousParticipants.clear()
+                clearRoomState()
                 listener?.onRoomEnded(RoomEndedEvent(by = endedBy, reason = reason))
             }
             "error" -> {
                 message.payload.toErrorPayload()?.let { payload ->
                     val code = payload.code ?: "UNKNOWN"
+                    if (code == "INVALID_RECONNECT_TOKEN" && retryFreshJoinAfterInvalidReconnectToken()) {
+                        return
+                    }
                     // Terminal codes that invalidate persisted reconnect
                     // authority. Drop the stored token so a future join can
                     // not try to reclaim the (gone) slot.
@@ -208,6 +213,18 @@ internal class SerenadaServerProvider(
                         )
                     )
                 }
+            }
+            "reconnect-token-refreshed" -> {
+                val payload = message.payload.toReconnectTokenRefreshedPayload() ?: return
+                reconnectToken = payload.reconnectToken
+                reconnectTokenTTLMs = payload.reconnectTokenTTLMs ?: WebRtcResilienceConstants.RECONNECT_TOKEN_TTL_FALLBACK_MS
+                scheduleReconnectTokenRefresh(reconnectTokenTTLMs)
+                listener?.onReconnectTokenRefreshed(
+                    ReconnectTokenRefreshedEvent(
+                        reconnectToken = payload.reconnectToken,
+                        reconnectTokenTTLMs = reconnectTokenTTLMs,
+                    )
+                )
             }
             "turn-refreshed" -> {
                 currentTurnToken = message.payload?.optString("turnToken").orEmpty().ifBlank { null }
@@ -258,6 +275,10 @@ internal class SerenadaServerProvider(
         // participant alongside our suspended record.
         currentReconnectPeerId = peerId
         reconnectToken = payload.reconnectToken ?: reconnectToken
+        reconnectTokenTTLMs = payload.reconnectTokenTTLMs ?: reconnectTokenTTLMs
+        if (payload.reconnectToken != null) {
+            scheduleReconnectTokenRefresh(reconnectTokenTTLMs ?: WebRtcResilienceConstants.RECONNECT_TOKEN_TTL_FALLBACK_MS)
+        }
         currentHostPeerId = payload.hostCid
         currentTurnToken = payload.turnToken
         payload.turnTokenTTLMs?.let { scheduleTurnRefresh(it) } ?: clearTurnRefresh()
@@ -273,6 +294,8 @@ internal class SerenadaServerProvider(
                 maxParticipants = payload.maxParticipants,
                 epoch = payload.epoch,
                 reconnectOutcome = payload.reconnect.toProviderOutcome(),
+                reconnectToken = reconnectToken,
+                reconnectTokenTTLMs = reconnectTokenTTLMs,
             )
         )
     }
@@ -381,6 +404,7 @@ internal class SerenadaServerProvider(
     private fun clearRoomState() {
         clearReconnect()
         clearTurnRefresh()
+        clearReconnectTokenRefresh()
         currentRoomId = null
         currentReconnectPeerId = null
         currentTurnToken = null
@@ -388,6 +412,7 @@ internal class SerenadaServerProvider(
         previousParticipants.clear()
         clientId = null
         reconnectToken = null
+        reconnectTokenTTLMs = null
     }
 
     private fun scheduleReconnect() {
@@ -410,6 +435,45 @@ internal class SerenadaServerProvider(
     private fun clearReconnect() {
         reconnectRunnable?.let { handler.removeCallbacks(it) }
         reconnectRunnable = null
+    }
+
+    private fun clearReconnectAuthorityForFreshJoin() {
+        clearReconnectTokenRefresh()
+        currentReconnectPeerId = null
+        reconnectToken = null
+        reconnectTokenTTLMs = null
+        clientId = null
+    }
+
+    private fun retryFreshJoinAfterInvalidReconnectToken(): Boolean {
+        val roomId = currentRoomId ?: return false
+        logger?.log(SerenadaLogLevel.WARNING, "Signaling", "Reconnect token rejected; retrying as a fresh join")
+        clearReconnectAuthorityForFreshJoin()
+        sendJoin(roomId)
+        return true
+    }
+
+    private fun scheduleReconnectTokenRefresh(ttlMs: Long?) {
+        clearReconnectTokenRefresh()
+        val ttl = ttlMs?.takeIf { it > 0 } ?: WebRtcResilienceConstants.RECONNECT_TOKEN_TTL_FALLBACK_MS
+        if (!signaling.isConnected() || currentRoomId == null || reconnectToken.isNullOrBlank()) return
+        val delayMs = if (ttl > WebRtcResilienceConstants.RECONNECT_TOKEN_REFRESH_LEEWAY_MS) {
+            ttl - WebRtcResilienceConstants.RECONNECT_TOKEN_REFRESH_LEEWAY_MS
+        } else {
+            maxOf(30_000L, ttl / 2)
+        }
+        val runnable = Runnable {
+            reconnectTokenRefreshRunnable = null
+            if (!signaling.isConnected() || currentRoomId == null || reconnectToken.isNullOrBlank()) return@Runnable
+            sendRawMessage(type = "reconnect-token-refresh")
+        }
+        reconnectTokenRefreshRunnable = runnable
+        handler.postDelayed(runnable, delayMs)
+    }
+
+    private fun clearReconnectTokenRefresh() {
+        reconnectTokenRefreshRunnable?.let { handler.removeCallbacks(it) }
+        reconnectTokenRefreshRunnable = null
     }
 
     private fun scheduleTurnRefresh(ttlMs: Long, delayOverrideMs: Long? = null) {

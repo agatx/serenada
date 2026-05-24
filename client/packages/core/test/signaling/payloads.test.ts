@@ -4,6 +4,7 @@ import {
     parseRoomStatePayload,
     parseErrorPayload,
     parseTurnRefreshedPayload,
+    parseReconnectTokenRefreshedPayload,
     parseOfferPayload,
     parseAnswerPayload,
     parseIceCandidatePayload,
@@ -205,6 +206,26 @@ describe('parseTurnRefreshedPayload', () => {
         expect(parseTurnRefreshedPayload({ turnToken: 't', extra: 1 })).toEqual({
             turnToken: 't',
             turnTokenTTLMs: undefined,
+        });
+    });
+});
+
+describe('parseReconnectTokenRefreshedPayload', () => {
+    it('returns typed object for valid payload', () => {
+        expect(parseReconnectTokenRefreshedPayload({ reconnectToken: 'rt', reconnectTokenTTLMs: 1_200_000 })).toEqual({
+            reconnectToken: 'rt',
+            reconnectTokenTTLMs: 1_200_000,
+        });
+    });
+
+    it('returns null when reconnectToken is missing', () => {
+        expect(parseReconnectTokenRefreshedPayload({ reconnectTokenTTLMs: 1_200_000 })).toBeNull();
+    });
+
+    it('omits reconnectTokenTTLMs when it has wrong type', () => {
+        expect(parseReconnectTokenRefreshedPayload({ reconnectToken: 'rt', reconnectTokenTTLMs: 'bad' })).toEqual({
+            reconnectToken: 'rt',
+            reconnectTokenTTLMs: undefined,
         });
     });
 });

@@ -100,6 +100,12 @@ private final class SignalingProviderDelegateProxy: SignalingProviderDelegate {
             session?.handleProviderRelayFailed(event)
         }
     }
+
+    func signalingProviderDidRefreshReconnectToken(_ event: ReconnectTokenRefreshedEvent) {
+        Task { @MainActor [weak session] in
+            session?.handleProviderReconnectTokenRefreshed(event)
+        }
+    }
 }
 
 /// Represents an active call session. Created via ``SerenadaCore/join(url:)`` or ``SerenadaCore/createRoom()``.
@@ -794,6 +800,10 @@ public final class SerenadaSession: ObservableObject {
     fileprivate func handleProviderJoined(_ event: JoinedEvent) {
         currentError = nil
         signalingMessageRouter?.processJoinedEvent(event)
+        persistRecoveryRecord(token: event.reconnectToken, ttlMs: event.reconnectTokenTTLMs)
+    }
+
+    fileprivate func handleProviderReconnectTokenRefreshed(_ event: ReconnectTokenRefreshedEvent) {
         persistRecoveryRecord(token: event.reconnectToken, ttlMs: event.reconnectTokenTTLMs)
     }
 
@@ -1714,9 +1724,8 @@ public final class SerenadaSession: ObservableObject {
         joinedAtMs >= plausibleEpochMs && joinedAtMs <= nowMs + joinedAtFutureSkewMs
     }
 
-    /// Matches the server's `reconnectTokenTTL` (= `suspendHardEvictionTimeout`).
     /// Used when the server did not surface `reconnectTokenTTLMs`.
-    private static let defaultRecoveryTokenTTLMs: Int64 = 10 * 60 * 1000
+    private static let defaultRecoveryTokenTTLMs: Int64 = Int64(WebRtcResilience.reconnectTokenTtlFallbackMs)
     private static let plausibleEpochMs: Int64 = 946_684_800_000
     private static let joinedAtFutureSkewMs: Int64 = 5 * 60 * 1000
 }

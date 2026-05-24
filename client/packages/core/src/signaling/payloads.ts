@@ -57,6 +57,11 @@ export interface TurnRefreshedPayload {
     turnTokenTTLMs?: number;
 }
 
+export interface ReconnectTokenRefreshedPayload {
+    reconnectToken: string;
+    reconnectTokenTTLMs?: number;
+}
+
 export interface OfferPayload {
     from: string;
     sdp: string;
@@ -177,6 +182,15 @@ export function parseTurnRefreshedPayload(raw: Record<string, unknown> | undefin
     return {
         turnToken: raw.turnToken,
         turnTokenTTLMs: typeof raw.turnTokenTTLMs === 'number' ? raw.turnTokenTTLMs : undefined,
+    };
+}
+
+export function parseReconnectTokenRefreshedPayload(raw: Record<string, unknown> | undefined): ReconnectTokenRefreshedPayload | null {
+    if (!raw) return null;
+    if (typeof raw.reconnectToken !== 'string') return null;
+    return {
+        reconnectToken: raw.reconnectToken,
+        reconnectTokenTTLMs: typeof raw.reconnectTokenTTLMs === 'number' ? raw.reconnectTokenTTLMs : undefined,
     };
 }
 

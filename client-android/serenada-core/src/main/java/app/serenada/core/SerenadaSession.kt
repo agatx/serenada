@@ -236,10 +236,11 @@ class SerenadaSession internal constructor(
     private val signalingMessageRouter = SignalingMessageRouter(
         getClientId = { clientId },
         getHostCid = { hostCid },
-        onJoined = { cid, _, roomState, _, _, newReconnectToken ->
+        onJoined = { cid, _, roomState, _, _, newReconnectToken, newReconnectTokenTTL ->
             clientId = cid
             updateState(_state.value.copy(localCid = clientId))
             newReconnectToken?.let { reconnectToken = it }
+            newReconnectTokenTTL?.let { reconnectTokenTTLMs = it }
             if (roomState != null) {
                 currentRoomState = roomState
                 hostCid = roomState.hostCid
@@ -340,6 +341,7 @@ class SerenadaSession internal constructor(
     private val peerNegotiationEngine: PeerNegotiationEngine
     private val signalingProvider: SignalingProvider
     private var reconnectToken: String? = null
+    private var reconnectTokenTTLMs: Long? = null
     private var reconnectRecoveryPending = false
     // True between transport reconnect and the first authoritative room_state
     // snapshot; gates ICE restart so it runs against a confirmed peer set.
@@ -651,6 +653,14 @@ class SerenadaSession internal constructor(
                     "Session",
                     "RX relay_failed reason=${event.reason} of=${event.of ?: "n/a"} targets=${event.targets.joinToString(",")}",
                 )
+            }
+        }
+
+        override fun onReconnectTokenRefreshed(event: ReconnectTokenRefreshedEvent) {
+            runOnMain {
+                reconnectToken = event.reconnectToken
+                event.reconnectTokenTTLMs?.let { reconnectTokenTTLMs = it }
+                persistRecoveryRecord()
             }
         }
     }
@@ -1565,7 +1575,7 @@ class SerenadaSession internal constructor(
         pendingJoinRoom = null; pendingMessages.clear(); remoteMediaStates.clear()
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = config.defaultVideoEnabled; isVideoPausedByProximity = false
-        reconnectToken = null; reconnectRecoveryPending = false; hasInitialIceServers = false
+        reconnectToken = null; reconnectTokenTTLMs = null; reconnectRecoveryPending = false; hasInitialIceServers = false
         cancelPostReconnectResync()
         clearAllRemoteSuspensionTracking()
         stopMediaLivenessTimer()
@@ -1595,7 +1605,7 @@ class SerenadaSession internal constructor(
         val cid = clientId ?: return
         val token = reconnectToken ?: return
         if (sessionStartTs == null) sessionStartTs = clock.nowMs()
-        val ttlMs = RecoveryTokenTTLMs
+        val ttlMs = reconnectTokenTTLMs ?: WebRtcResilienceConstants.RECONNECT_TOKEN_TTL_FALLBACK_MS
         val record = RecoveryRecord(
             roomId = roomId,
             cid = cid,
@@ -1700,10 +1710,6 @@ class SerenadaSession internal constructor(
         const val CPU_WAKE_LOCK_TAG = "serenada:call-cpu"
         const val PLAUSIBLE_EPOCH_MS = 946_684_800_000L // 2000-01-01T00:00:00Z
         const val JOINED_AT_FUTURE_SKEW_MS = 5L * 60L * 1000L
-        // Matches the server's reconnectTokenTTL (= suspendHardEvictionTimeout).
-        // The recovery record stops offering rejoin past this window because
-        // the persisted token would no longer be honored anyway.
-        const val RecoveryTokenTTLMs = 10L * 60L * 1000L
         // Background duration that triggers a foreground force-ping. Anything
         // shorter is short enough that pings would have noticed the failure on
         // their own; longer is the OS window where Doze / process freeze may

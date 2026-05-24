@@ -29,6 +29,10 @@ export const TURN_FETCH_TIMEOUT_MS = 2000;
 export const TURN_REFRESH_TRIGGER_RATIO = 0.8;
 export const ICE_FETCH_RETRY_DELAYS_MS = [0, 1000, 2000, 4000];
 
+// Reconnect token
+export const RECONNECT_TOKEN_TTL_FALLBACK_MS = 1200000;
+export const RECONNECT_TOKEN_REFRESH_LEEWAY_MS = 600000;
+
 // Session
 export const ENDING_SCREEN_MS = 3000;
 
