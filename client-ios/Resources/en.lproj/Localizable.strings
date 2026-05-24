@@ -184,10 +184,6 @@
 "frontline_flip_camera" = "Flip camera";
 "frontline_stop_screen_share" = "Stop screen share";
 "frontline_share_screen" = "Share screen";
-"frontline_return_to_camera" = "Return to camera";
-"frontline_show_your_phone" = "Show your phone screen";
-"frontline_invite_subtitle" = "Send a live-call notification";
-"frontline_share_link_subtitle" = "Copy or share the room link";
 "frontline_close" = "Close";
 
 "feedback_title" = "Feedback";

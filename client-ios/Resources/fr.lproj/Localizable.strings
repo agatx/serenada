@@ -184,10 +184,6 @@
 "frontline_flip_camera" = "Basculer la caméra";
 "frontline_stop_screen_share" = "Arrêter le partage d’écran";
 "frontline_share_screen" = "Partager l’écran";
-"frontline_return_to_camera" = "Revenir à la caméra";
-"frontline_show_your_phone" = "Afficher l’écran du téléphone";
-"frontline_invite_subtitle" = "Envoyer une notification d’appel";
-"frontline_share_link_subtitle" = "Copier ou partager le lien de salle";
 "frontline_close" = "Fermer";
 
 "feedback_title" = "Retour";

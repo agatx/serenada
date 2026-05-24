@@ -255,10 +255,6 @@ enum L10n {
             .frontlineFlipCamera: text("frontline_flip_camera"),
             .frontlineStopScreenShare: text("frontline_stop_screen_share"),
             .frontlineShareScreen: text("frontline_share_screen"),
-            .frontlineReturnToCamera: text("frontline_return_to_camera"),
-            .frontlineShowYourPhone: text("frontline_show_your_phone"),
-            .frontlineInviteSubtitle: text("frontline_invite_subtitle"),
-            .frontlineShareLinkSubtitle: text("frontline_share_link_subtitle"),
             .frontlineClose: text("frontline_close"),
         ]
     }

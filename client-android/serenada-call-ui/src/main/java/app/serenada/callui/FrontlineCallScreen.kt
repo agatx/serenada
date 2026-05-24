@@ -125,6 +125,7 @@ private val FrontlineAccent = Color(0xFF15BF54)
 private val FrontlineDanger = Color(0xFFF5564B)
 private val FrontlineDim = Color(0xFFA1A1AA)
 private val FrontlineSheet = Color(0xFF15161A)
+private val FrontlineSheetRow = Color.White.copy(alpha = 0.09f)
 private val FrontlineStageLocalAccentWidth = 2.5.dp
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
@@ -1948,11 +1949,6 @@ private fun FrontlineMoreSheet(
                             } else {
                                 resolveString(SerenadaString.FrontlineShareScreen, strings)
                             },
-                            subtitle = if (isScreenSharing) {
-                                resolveString(SerenadaString.FrontlineReturnToCamera, strings)
-                            } else {
-                                resolveString(SerenadaString.FrontlineShowYourPhone, strings)
-                            },
                             onClick = onToggleScreenShare,
                         )
                     }
@@ -1960,7 +1956,6 @@ private fun FrontlineMoreSheet(
                         FrontlineSheetItem(
                             icon = Icons.Default.NotificationsActive,
                             title = resolveString(SerenadaString.CallInviteToRoom, strings),
-                            subtitle = resolveString(SerenadaString.FrontlineInviteSubtitle, strings),
                             onClick = onInvite,
                         )
                     }
@@ -1968,7 +1963,6 @@ private fun FrontlineMoreSheet(
                         FrontlineSheetItem(
                             icon = Icons.Default.Share,
                             title = resolveString(SerenadaString.CallShareInvitation, strings),
-                            subtitle = resolveString(SerenadaString.FrontlineShareLinkSubtitle, strings),
                             onClick = onShare,
                         )
                     }
@@ -2005,40 +1999,40 @@ private fun FrontlineMoreSheet(
 private fun FrontlineSheetItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
-    subtitle: String,
     onClick: () -> Unit,
 ) {
-    Row(
+    val shape = RoundedCornerShape(16.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(vertical = 5.dp),
     ) {
-        Surface(
-            modifier = Modifier.size(38.dp),
-            color = Color.White.copy(alpha = 0.08f),
-            shape = RoundedCornerShape(10.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(FrontlineSheetRow)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
-            }
-        }
-        Column(Modifier.weight(1f)) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier
+                    .size(38.dp)
+                    .padding(8.dp),
+            )
             Text(
                 text = title,
                 color = Color.White,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = subtitle,
-                color = FrontlineDim,
-                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
         }
     }

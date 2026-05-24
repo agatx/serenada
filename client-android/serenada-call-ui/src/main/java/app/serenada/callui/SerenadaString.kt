@@ -25,10 +25,6 @@ enum class SerenadaString {
     FrontlineFlipCamera,
     FrontlineStopScreenShare,
     FrontlineShareScreen,
-    FrontlineReturnToCamera,
-    FrontlineShowYourPhone,
-    FrontlineInviteSubtitle,
-    FrontlineShareLinkSubtitle,
     FrontlineClose,
 }
 
@@ -57,10 +53,6 @@ val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
     SerenadaString.FrontlineFlipCamera to "Flip camera",
     SerenadaString.FrontlineStopScreenShare to "Stop screen share",
     SerenadaString.FrontlineShareScreen to "Share screen",
-    SerenadaString.FrontlineReturnToCamera to "Return to camera",
-    SerenadaString.FrontlineShowYourPhone to "Show your phone",
-    SerenadaString.FrontlineInviteSubtitle to "Bring in another teammate",
-    SerenadaString.FrontlineShareLinkSubtitle to "Send the call link",
     SerenadaString.FrontlineClose to "Close",
 )
 

@@ -354,7 +354,7 @@ Available string keys:
 - `CallShareLinkChooser`, `CallShareInvitation`, `CallInviteToRoom`
 - `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`, `CallTakeSnapshot`
 - Native Frontline: `FrontlineYou` / `frontlineYou`, `FrontlineWaiting` / `frontlineWaiting`, `FrontlineVideo` / `frontlineVideo`, `FrontlineVideoOn` / `frontlineVideoOn`, `FrontlineMute` / `frontlineMute`, `FrontlineMore` / `frontlineMore`, `FrontlineEnd` / `frontlineEnd`, `FrontlineFlipCamera` / `frontlineFlipCamera`
-- Native Frontline: `FrontlineStopScreenShare` / `frontlineStopScreenShare`, `FrontlineShareScreen` / `frontlineShareScreen`, `FrontlineReturnToCamera` / `frontlineReturnToCamera`, `FrontlineShowYourPhone` / `frontlineShowYourPhone`, `FrontlineInviteSubtitle` / `frontlineInviteSubtitle`, `FrontlineShareLinkSubtitle` / `frontlineShareLinkSubtitle`, `FrontlineClose` / `frontlineClose`
+- Native Frontline: `FrontlineStopScreenShare` / `frontlineStopScreenShare`, `FrontlineShareScreen` / `frontlineShareScreen`, `FrontlineClose` / `frontlineClose`
 
 ### Web
 
