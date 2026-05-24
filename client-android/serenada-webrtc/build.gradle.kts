@@ -32,7 +32,7 @@ fun sha256Of(file: File): String {
 }
 
 val sdkVersion = "0.6.13"
-val webRtcArtifactId = "libwebrtc-7559_173-universal"
+val webRtcArtifactId = "libwebrtc-7827-universal"
 val localWebRtcAarPath = "../serenada-core/libs/$webRtcArtifactId.aar"
 val localWebRtcAarFile = file(localWebRtcAarPath)
 val localWebRtcAarSha256File = file("$localWebRtcAarPath.sha256")
