@@ -33,6 +33,11 @@ public enum WebRtcResilience {
     public static let turnRefreshTriggerRatio = 0.8
     public static let iceFetchRetryDelaysMs = [0, 1_000, 2_000, 4_000]
 
+    // MARK: - Reconnect Token
+
+    public static let reconnectTokenTtlFallbackMs = 1_200_000
+    public static let reconnectTokenRefreshLeewayMs = 600_000
+
     // MARK: - Snapshot
 
     public static let snapshotPrepareTimeoutMs = 2_000

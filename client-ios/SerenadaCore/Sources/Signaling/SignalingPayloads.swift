@@ -149,6 +149,18 @@ struct NegotiationDirtyPayload {
     }
 }
 
+struct ReconnectTokenRefreshedPayload {
+    let reconnectToken: String
+    let reconnectTokenTTLMs: Int64?
+
+    init?(from payload: JSONValue?) {
+        guard let obj = payload?.objectValue else { return nil }
+        guard let token = obj["reconnectToken"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else { return nil }
+        reconnectToken = token
+        reconnectTokenTTLMs = obj["reconnectTokenTTLMs"]?.intValue.map(Int64.init)
+    }
+}
+
 /// Payload for "error" message — server reports an error.
 struct ErrorPayload {
     let code: String?

@@ -27,6 +27,7 @@ class SignalingPayloadsTest {
             put("turnToken", "tok123")
             put("turnTokenTTLMs", 60000L)
             put("reconnectToken", "rk-abc")
+            put("reconnectTokenTTLMs", 1_200_000L)
             put("maxParticipants", 4)
             put("participants", JSONArray().apply {
                 put(JSONObject().apply { put("cid", "C-host"); put("joinedAt", 1000) })
@@ -39,6 +40,7 @@ class SignalingPayloadsTest {
         assertEquals("tok123", payload.turnToken)
         assertEquals(60000L, payload.turnTokenTTLMs)
         assertEquals("rk-abc", payload.reconnectToken)
+        assertEquals(1_200_000L, payload.reconnectTokenTTLMs)
         assertEquals(4, payload.maxParticipants)
         assertEquals(2, payload.participants.size)
         assertEquals("C-host", payload.participants[0].cid)
@@ -64,6 +66,24 @@ class SignalingPayloadsTest {
         val json = JSONObject().apply { put("turnTokenTTLMs", 0) }
         val payload = json.toJoinedPayload()
         assertNull(payload!!.turnTokenTTLMs)
+    }
+
+    @Test
+    fun toReconnectTokenRefreshedPayload_fullParse() {
+        val json = JSONObject().apply {
+            put("reconnectToken", "rk-new")
+            put("reconnectTokenTTLMs", 1_200_000L)
+        }
+        val payload = json.toReconnectTokenRefreshedPayload()
+        assertNotNull(payload)
+        assertEquals("rk-new", payload!!.reconnectToken)
+        assertEquals(1_200_000L, payload.reconnectTokenTTLMs)
+    }
+
+    @Test
+    fun toReconnectTokenRefreshedPayload_missingTokenReturnsNull() {
+        val json = JSONObject().apply { put("reconnectTokenTTLMs", 1_200_000L) }
+        assertNull(json.toReconnectTokenRefreshedPayload())
     }
 
     // ---------------------------------------------------------------

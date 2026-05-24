@@ -56,6 +56,11 @@ internal data class NegotiationDirtyPayload(
     val withCid: String,
 )
 
+internal data class ReconnectTokenRefreshedPayload(
+    val reconnectToken: String,
+    val reconnectTokenTTLMs: Long?,
+)
+
 // --- Extension parsers ---
 
 internal fun JSONObject?.toJoinedPayload(): JoinedPayload? {
@@ -113,6 +118,15 @@ internal fun JSONObject?.toNegotiationDirtyPayload(): NegotiationDirtyPayload? {
     this ?: return null
     val withCid = optString("with").ifBlank { return null }
     return NegotiationDirtyPayload(withCid = withCid)
+}
+
+internal fun JSONObject?.toReconnectTokenRefreshedPayload(): ReconnectTokenRefreshedPayload? {
+    this ?: return null
+    val token = optString("reconnectToken").ifBlank { return null }
+    return ReconnectTokenRefreshedPayload(
+        reconnectToken = token,
+        reconnectTokenTTLMs = if (has("reconnectTokenTTLMs")) optLong("reconnectTokenTTLMs", 0).takeIf { it > 0 } else null,
+    )
 }
 
 internal fun JSONObject?.toContentStatePayload(): ContentStatePayload? {

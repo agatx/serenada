@@ -9,6 +9,7 @@ import {
     parseRoomStatePayload,
     parseErrorPayload,
     parseTurnRefreshedPayload,
+    parseReconnectTokenRefreshedPayload,
     parseRelayFailedPayload,
     parseNegotiationDirtyPayload,
 } from './payloads.js';
@@ -24,7 +25,8 @@ import {
     JOIN_RECOVERY_MS,
     JOIN_HARD_TIMEOUT_MS,
     TURN_REFRESH_TRIGGER_RATIO,
-    SUSPEND_HARD_EVICTION_TIMEOUT_MS,
+    RECONNECT_TOKEN_TTL_FALLBACK_MS,
+    RECONNECT_TOKEN_REFRESH_LEEWAY_MS,
 } from '../constants.js';
 
 export interface SignalingEngineConfig {
@@ -86,6 +88,7 @@ export class SignalingEngine {
     private needsRejoin = false;
     private reconnectToken: string | null = null;
     private reconnectTokenRoomId: string | null = null;
+    private reconnectTokenTTLMs: number | null = null;
     private lastPongAt = Date.now();
     private missedPongs = 0;
     private wsConsecutiveFailures = 0;
@@ -96,6 +99,7 @@ export class SignalingEngine {
     private joinRecoveryTimer: number | null = null;
     private joinHardTimeout: number | null = null;
     private turnRefreshTimer: number | null = null;
+    private reconnectTokenRefreshTimer: number | null = null;
     private pingInterval: number | null = null;
     private reconnectTimeout: number | null = null;
     private reconnectAttempts = 0;
@@ -133,6 +137,7 @@ export class SignalingEngine {
         this.clearJoinTimers();
         this.clearPingInterval();
         this.clearTurnRefreshTimer();
+        this.clearReconnectTokenRefreshTimer();
         this.awaitingPostReconnectSnapshot = false;
         this.epochAtDisconnect = null;
         if (this.transport) {
@@ -251,6 +256,7 @@ export class SignalingEngine {
         this.turnToken = null;
         this.turnTokenTTLMs = null;
         this.turnTokenExpiresAtMs = null;
+        this.clearReconnectTokenRefreshTimer();
         this.lastReconnectOutcome = null;
         this.lastEpoch = null;
         this.awaitingPostReconnectSnapshot = false;
@@ -320,7 +326,9 @@ export class SignalingEngine {
                 if (joined.reconnectToken) {
                     this.reconnectToken = joined.reconnectToken;
                     this.reconnectTokenRoomId = msg.rid || this.currentRoomId;
+                    this.reconnectTokenTTLMs = joined.reconnectTokenTTLMs ?? RECONNECT_TOKEN_TTL_FALLBACK_MS;
                     this.persistReconnectStorage();
+                    this.scheduleReconnectTokenRefresh(this.reconnectTokenTTLMs);
                 }
                 this.persistClientId();
                 if (this.sessionStartTs === null) {
@@ -346,6 +354,19 @@ export class SignalingEngine {
                         this.scheduleTurnRefresh();
                     }
                     this.logger?.log('debug', 'Signaling', 'TURN credentials refreshed');
+                }
+                break;
+            }
+            case 'reconnect-token-refreshed': {
+                const refreshed = parseReconnectTokenRefreshedPayload(msg.payload);
+                if (refreshed) {
+                    this.reconnectToken = refreshed.reconnectToken;
+                    this.reconnectTokenRoomId = msg.rid || this.currentRoomId;
+                    this.reconnectTokenTTLMs = refreshed.reconnectTokenTTLMs ?? RECONNECT_TOKEN_TTL_FALLBACK_MS;
+                    this.persistReconnectStorage();
+                    this.persistRecoveryRecord(this.reconnectTokenTTLMs);
+                    this.scheduleReconnectTokenRefresh(this.reconnectTokenTTLMs);
+                    this.logger?.log('debug', 'Signaling', 'Reconnect token refreshed');
                 }
                 break;
             }
@@ -408,6 +429,9 @@ export class SignalingEngine {
             case 'error': {
                 const errorPayload = parseErrorPayload(msg.payload);
                 if (errorPayload) {
+                    if (errorPayload.code === 'INVALID_RECONNECT_TOKEN' && this.retryFreshJoinAfterInvalidReconnectToken(msg.rid)) {
+                        return;
+                    }
                     this.error = errorPayload;
                     // Terminal errors that invalidate persisted reconnect
                     // state. The session is over for this CID — clear the
@@ -481,6 +505,8 @@ export class SignalingEngine {
                 this.isConnected = false;
                 this.activeTransport = null;
                 this.clearPingInterval();
+                this.clearTurnRefreshTimer();
+                this.clearReconnectTokenRefreshTimer();
                 if (targetKind === 'ws') {
                     this.wsConsecutiveFailures++;
                 }
@@ -657,6 +683,13 @@ export class SignalingEngine {
         if (this.turnRefreshTimer !== null) { window.clearTimeout(this.turnRefreshTimer); this.turnRefreshTimer = null; }
     }
 
+    private clearReconnectTokenRefreshTimer(): void {
+        if (this.reconnectTokenRefreshTimer !== null) {
+            window.clearTimeout(this.reconnectTokenRefreshTimer);
+            this.reconnectTokenRefreshTimer = null;
+        }
+    }
+
     private clearReconnectTimeout(): void {
         if (this.reconnectTimeout !== null) { window.clearTimeout(this.reconnectTimeout); this.reconnectTimeout = null; }
     }
@@ -671,6 +704,7 @@ export class SignalingEngine {
     // server `room_ended`, terminal error codes, etc.
     private resetForTerminal(): void {
         this.clearJoinTimers();
+        this.clearReconnectTokenRefreshTimer();
         this.roomState = null;
         this.currentRoomId = null;
         this.needsRejoin = false;
@@ -729,8 +763,61 @@ export class SignalingEngine {
         }
         this.reconnectToken = null;
         this.reconnectTokenRoomId = null;
+        this.reconnectTokenTTLMs = null;
         this.sessionStartTs = null;
         clearRecoveryRecord();
+    }
+
+    private clearReconnectAuthorityForFreshJoin(): void {
+        this.clearReconnectTokenRefreshTimer();
+        try {
+            window.sessionStorage.removeItem(this.storageKeyClientId);
+            window.sessionStorage.removeItem(this.storageKeyReconnectToken);
+            window.sessionStorage.removeItem(this.storageKeyReconnectTokenRoom);
+        } catch (err) {
+            this.logger?.log('warning', 'Signaling', `Failed to clear reconnect authority: ${err}`);
+        }
+        this.clientId = null;
+        this.lastClientId = null;
+        this.reconnectToken = null;
+        this.reconnectTokenRoomId = null;
+        this.reconnectTokenTTLMs = null;
+        this.sessionStartTs = null;
+        clearRecoveryRecord();
+    }
+
+    private retryFreshJoinAfterInvalidReconnectToken(rid: string | undefined): boolean {
+        const roomId = rid || this.currentRoomId;
+        if (!roomId) {
+            return false;
+        }
+        this.logger?.log('warning', 'Signaling', 'Reconnect token rejected; retrying as a fresh join');
+        this.error = null;
+        this.clearJoinTimers();
+        this.clearReconnectAuthorityForFreshJoin();
+        this.joinRoom(roomId, {
+            createMaxParticipants: this.lastCreateMaxParticipants,
+            displayName: this.lastDisplayName,
+            peerId: this.lastPeerId,
+        });
+        return true;
+    }
+
+    private scheduleReconnectTokenRefresh(ttlMs: number | null | undefined): void {
+        this.clearReconnectTokenRefreshTimer();
+        if (!this.isConnected || !this.currentRoomId || !this.reconnectToken) return;
+
+        const ttl = ttlMs && ttlMs > 0 ? ttlMs : RECONNECT_TOKEN_TTL_FALLBACK_MS;
+        const delay = ttl > RECONNECT_TOKEN_REFRESH_LEEWAY_MS
+            ? ttl - RECONNECT_TOKEN_REFRESH_LEEWAY_MS
+            : Math.max(30_000, ttl / 2);
+        this.logger?.log('debug', 'Signaling', `Scheduling reconnect token refresh in ${Math.round(delay / 1000)}s`);
+        this.reconnectTokenRefreshTimer = window.setTimeout(() => {
+            this.reconnectTokenRefreshTimer = null;
+            if (!this.isConnected || !this.currentRoomId || !this.reconnectToken) return;
+            this.logger?.log('debug', 'Signaling', 'Sending reconnect-token-refresh request');
+            this.sendMessage('reconnect-token-refresh');
+        }, delay);
     }
 
     // Snapshots the in-memory reconnect state into the cross-launch
@@ -741,15 +828,11 @@ export class SignalingEngine {
         if (!this.currentRoomId || !this.clientId || !this.reconnectToken || !this.sessionStartTs) {
             return;
         }
-        // Fall back to the cross-platform suspendHardEvictionTimeout when
-        // the server didn't surface a token TTL. The Go server's reconnect
-        // token TTL is bound to suspendHardEvictionTimeout (see
-        // signaling.go: reconnectTokenTTL = suspendHardEvictionTimeout), so
-        // mirroring that constant keeps Web aligned with iOS/Android and
-        // the server without local drift.
+        // Fall back to the cross-platform reconnect-token TTL when the
+        // server did not surface a token TTL.
         const ttl = reconnectTokenTTLMs && reconnectTokenTTLMs > 0
             ? reconnectTokenTTLMs
-            : SUSPEND_HARD_EVICTION_TIMEOUT_MS;
+            : RECONNECT_TOKEN_TTL_FALLBACK_MS;
         saveRecoveryRecord({
             roomId: this.currentRoomId,
             cid: this.clientId,

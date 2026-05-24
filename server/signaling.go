@@ -35,11 +35,17 @@ const turnTokenTTL = 15 * time.Minute
 // timeout the record is evicted and peers tear down.
 const suspendHardEvictionTimeout = 10 * time.Minute
 
+// noActiveRoomTimeout bounds how long a room can contain only suspended
+// participants. With no attached transports left, there is nobody to observe
+// media liveness, so keeping ghost-only rooms around for the full suspend
+// window just leaves stale occupancy visible to watchers.
+const noActiveRoomTimeout = 10 * time.Second
+
 // reconnectTokenTTL bounds how long a reconnect token can be used to reattach
-// or recover a participant identity. Capped at the same window the server
-// preserves participant records so that a token never outlives the slot it can
-// reclaim.
-const reconnectTokenTTL = suspendHardEvictionTimeout
+// or recover a participant identity. It intentionally exceeds the suspend
+// window: active clients refresh before expiry, leaving roughly one suspend
+// window of validity if the transport drops just before the refresh.
+const reconnectTokenTTL = 20 * time.Minute
 
 // roomTombstoneTTL is the window during which an explicitly-ended room is
 // remembered with a structured reason. Reconnect attempts with a valid
@@ -137,8 +143,16 @@ func validateReconnectToken(token, cid, rid string) (ok bool, expired bool) {
 	}
 	dot := strings.LastIndexByte(token, '.')
 	if dot < 0 {
-		// Pre-expiry-format tokens — clients carrying these need to refresh.
-		return false, true
+		// Legacy tokens were HMAC(cid|rid) without an embedded expiry. Accept
+		// them only as expired-but-authentic so the caller can clear the stale
+		// suspended slot without letting the token reattach indefinitely.
+		mac := hmac.New(sha256.New, secret)
+		mac.Write([]byte(cid + "|" + rid))
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if hmac.Equal([]byte(expected), []byte(token)) {
+			return false, true
+		}
+		return false, false
 	}
 	macHex := token[:dot]
 	expStr := token[dot+1:]
@@ -284,7 +298,10 @@ type Room struct {
 	// observe media flowing from suspended CID X" — the trigger for fast-path
 	// ghost eviction.
 	mediaLivenessReporters map[string]int64
-	mu                     sync.Mutex
+	// noActiveTimer fires when every participant in the room is suspended.
+	// It deletes the room if nobody reattaches within noActiveRoomTimeout.
+	noActiveTimer *time.Timer
+	mu            sync.Mutex
 }
 
 // bumpEpoch increments the room state epoch. Caller must hold r.mu. Returns
@@ -473,6 +490,13 @@ func (r *Room) activeClients() []*Client {
 	return out
 }
 
+func (r *Room) cancelNoActiveTimer() {
+	if r.noActiveTimer != nil {
+		r.noActiveTimer.Stop()
+		r.noActiveTimer = nil
+	}
+}
+
 // attachParticipant inserts a new active participant for (cid, client) and
 // stamps JoinedAt. Called only during a fresh join (not a reconnect).
 func (r *Room) attachParticipant(cid string, client *Client, joinedAtMs int64) *roomParticipant {
@@ -483,6 +507,7 @@ func (r *Room) attachParticipant(cid string, client *Client, joinedAtMs int64) *
 	}
 	r.byCID[cid] = p
 	r.byClient[client] = cid
+	r.cancelNoActiveTimer()
 	return p
 }
 
@@ -497,6 +522,7 @@ func (r *Room) reattachClient(p *roomParticipant, client *Client) {
 		p.hardEvictionTimer = nil
 	}
 	r.byClient[client] = p.CID
+	r.cancelNoActiveTimer()
 }
 
 // detachClient detaches the attached *Client from the participant record
@@ -833,6 +859,8 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 		h.handleWatchRooms(c, msg)
 	case "turn-refresh":
 		h.handleTurnRefresh(c, msg)
+	case "reconnect-token-refresh":
+		h.handleReconnectTokenRefresh(c, msg)
 	case "offer", "answer", "ice", "content_state":
 		// log.Printf("[%s] Relay from %s to room %s", msg.Type, c.cid, c.rid) // verbose
 		h.handleRelay(c, msg)
@@ -908,6 +936,9 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		valid, expired := validateReconnectToken(reconnectToken, reconnectCID, rid)
 		if !valid {
 			log.Printf("[JOIN] Invalid reconnectToken for CID %s from client %s (expired=%t)", reconnectCID, c.sid, expired)
+			if expired {
+				h.evictSuspendedParticipantForExpiredReconnect(rid, reconnectCID)
+			}
 			c.sendError(rid, "INVALID_RECONNECT_TOKEN", "Reconnect token validation failed")
 			return
 		}
@@ -1027,6 +1058,7 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 				p.hardEvictionTimer = time.AfterFunc(suspendHardEvictionTimeout, func() {
 					h.hardEvictSuspended(room, reconnectCID)
 				})
+				h.armNoActiveRoomTimerLocked(room)
 			}
 			// Do not clear c.cid / c.rid: other goroutines read them without
 			// synchronization. The room indexes (byCID / byClient) are the
@@ -1253,6 +1285,91 @@ func (h *Hub) handleTurnRefresh(c *Client, msg Message) {
 	log.Printf("[TURN-REFRESH] Refreshed TURN credentials for client %s (CID: %s) in room %s", c.sid, c.cid, c.rid)
 }
 
+func (h *Hub) handleReconnectTokenRefresh(c *Client, msg Message) {
+	if !h.isActiveParticipant(c) {
+		rid := c.rid
+		if rid == "" {
+			rid = msg.RID
+		}
+		c.sendError(rid, "NOT_IN_ROOM", "Must be in a room to refresh reconnect token")
+		return
+	}
+
+	token := issueReconnectToken(c.cid, c.rid)
+	if token == "" {
+		log.Printf("[RECONNECT-TOKEN-REFRESH] Failed to issue reconnect token for client %s (CID: %s)", c.sid, c.cid)
+		c.sendError(msg.RID, "RECONNECT_TOKEN_REFRESH_FAILED", "Failed to refresh reconnect token")
+		return
+	}
+
+	payload := map[string]interface{}{
+		"reconnectToken":      token,
+		"reconnectTokenTTLMs": int64(reconnectTokenTTL / time.Millisecond),
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	c.sendMessage(Message{
+		V:       1,
+		Type:    "reconnect-token-refreshed",
+		RID:     c.rid,
+		Payload: payloadBytes,
+	})
+	log.Printf("[RECONNECT-TOKEN-REFRESH] Refreshed reconnect token for client %s (CID: %s) in room %s", c.sid, c.cid, c.rid)
+}
+
+// armNoActiveRoomTimerLocked starts the room-level cleanup timer once the last
+// active transport has dropped. Caller must hold room.mu.
+func (h *Hub) armNoActiveRoomTimerLocked(room *Room) {
+	if len(room.byClient) > 0 || len(room.byCID) == 0 || room.noActiveTimer != nil {
+		return
+	}
+	rid := room.RID
+	room.noActiveTimer = time.AfterFunc(noActiveRoomTimeout, func() {
+		h.cleanupRoomIfNoActive(room)
+	})
+	log.Printf("[ROOM_CLEANUP] Room %s has no active participants; deleting in %s if nobody reconnects", rid, noActiveRoomTimeout)
+}
+
+func (h *Hub) cleanupRoomIfNoActive(room *Room) {
+	rid := room.RID
+
+	h.mu.Lock()
+	if h.rooms[rid] != room {
+		h.mu.Unlock()
+		return
+	}
+
+	room.mu.Lock()
+	if len(room.byClient) > 0 {
+		room.noActiveTimer = nil
+		room.mu.Unlock()
+		h.mu.Unlock()
+		return
+	}
+
+	suspendedCount := len(room.byCID)
+	for _, p := range room.byCID {
+		if p.hardEvictionTimer != nil {
+			p.hardEvictionTimer.Stop()
+			p.hardEvictionTimer = nil
+		}
+	}
+	room.cancelNoActiveTimer()
+	delete(h.rooms, rid)
+
+	room.byCID = make(map[string]*roomParticipant)
+	room.byClient = make(map[*Client]string)
+	room.HostCID = ""
+	room.negotiationDirty = nil
+	room.mediaLiveness = nil
+	room.mediaLivenessReporters = nil
+	room.mu.Unlock()
+	h.mu.Unlock()
+
+	log.Printf("[ROOM_CLEANUP] Deleted room %s after %s with no active participants (suspended=%d)", rid, noActiveRoomTimeout, suspendedCount)
+	h.broadcastRoomStatusUpdate(rid)
+}
+
 // isActiveParticipant returns true iff c is the transport currently attached
 // to a participant in c.rid. Protects handlers against stale c.rid / c.cid
 // fields left behind on a rejected reconnect socket — those fields are kept
@@ -1320,6 +1437,7 @@ func (h *Hub) handleEndRoom(c *Client, msg Message) {
 			p.hardEvictionTimer = nil
 		}
 	}
+	room.cancelNoActiveTimer()
 	room.bumpEpoch()
 
 	room.mu.Unlock() // Unlock before sending
@@ -1698,6 +1816,9 @@ func (h *Hub) suspendClientInRoom(c *Client) {
 	})
 
 	activeCount := len(room.byClient)
+	if activeCount == 0 {
+		h.armNoActiveRoomTimerLocked(room)
+	}
 	room.mu.Unlock()
 
 	// Do not clear c.cid / c.rid: other goroutines read them without
@@ -1759,12 +1880,63 @@ func (h *Hub) hardEvictSuspended(room *Room, cid string) {
 	room.bumpEpoch()
 
 	isEmpty := room.participantCount() == 0
+	if !isEmpty && len(room.byClient) == 0 {
+		h.armNoActiveRoomTimerLocked(room)
+	}
 	room.mu.Unlock()
 
 	if isEmpty {
 		log.Printf("[HARD_EVICT] Room %s is now empty. Deleting room.", rid)
 		h.mu.Lock()
 		delete(h.rooms, rid)
+		h.mu.Unlock()
+	} else {
+		h.broadcastRoomState(room)
+	}
+	h.broadcastRoomStatusUpdate(rid)
+}
+
+// evictSuspendedParticipantForExpiredReconnect removes a suspended record
+// when a reconnect attempt proves it belongs to the same CID/RID but its
+// token has aged out. The caller has already validated the token signature;
+// do not call this for malformed or unsigned tokens.
+func (h *Hub) evictSuspendedParticipantForExpiredReconnect(rid, cid string) {
+	if rid == "" || cid == "" {
+		return
+	}
+
+	h.mu.RLock()
+	room, exists := h.rooms[rid]
+	h.mu.RUnlock()
+	if !exists {
+		return
+	}
+
+	room.mu.Lock()
+	p := room.participantByCID(cid)
+	if p == nil || p.Client != nil {
+		room.mu.Unlock()
+		return
+	}
+
+	log.Printf("[RECONNECT] Evicting suspended CID %s in room %s after expired reconnect token", cid, rid)
+	room.removeParticipant(cid)
+	room.dropCIDFromDirty(cid)
+	room.dropMediaLivenessFor(cid)
+	room.transferHostIfNeeded(cid)
+	room.bumpEpoch()
+
+	isEmpty := room.participantCount() == 0
+	if !isEmpty && len(room.byClient) == 0 {
+		h.armNoActiveRoomTimerLocked(room)
+	}
+	room.mu.Unlock()
+
+	if isEmpty {
+		h.mu.Lock()
+		if h.rooms[rid] == room {
+			delete(h.rooms, rid)
+		}
 		h.mu.Unlock()
 	} else {
 		h.broadcastRoomState(room)
@@ -1811,6 +1983,9 @@ func (h *Hub) removeClientFromRoom(c *Client) {
 	room.transferHostIfNeeded(cid)
 
 	isEmpty := room.participantCount() == 0
+	if !isEmpty && len(room.byClient) == 0 {
+		h.armNoActiveRoomTimerLocked(room)
+	}
 	room.mu.Unlock()
 
 	if isEmpty {
@@ -1856,6 +2031,9 @@ func (h *Hub) evictByLeave(rid, cid string) {
 	room.transferHostIfNeeded(cid)
 	room.bumpEpoch()
 	isEmpty := room.participantCount() == 0
+	if !isEmpty && len(room.byClient) == 0 {
+		h.armNoActiveRoomTimerLocked(room)
+	}
 	room.mu.Unlock()
 
 	if attachedClient != nil {

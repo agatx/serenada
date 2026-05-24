@@ -66,6 +66,10 @@ data class JoinedEvent(
     val epoch: Long? = null,
     /** How the server treated this join. Null means an older provider that did not surface this field. */
     val reconnectOutcome: JoinReconnectOutcome? = null,
+    /** Server-issued reconnect token from `joined.reconnectToken`. */
+    val reconnectToken: String? = null,
+    /** How long (ms) the server is willing to honor `reconnectToken`. */
+    val reconnectTokenTTLMs: Long? = null,
 )
 
 data class RoomStateEvent(
@@ -119,6 +123,11 @@ data class RelayFailedEvent(
     val targets: List<String>,
     /** Original signaling type that failed, e.g. `"offer" | "answer" | "ice"`. */
     val of: String? = null,
+)
+
+data class ReconnectTokenRefreshedEvent(
+    val reconnectToken: String,
+    val reconnectTokenTTLMs: Long? = null,
 )
 
 /**
@@ -176,5 +185,6 @@ interface SignalingProvider {
         fun onIceServersChanged(iceServers: List<PeerConnection.IceServer>) {}
         fun onNegotiationDirty(event: NegotiationDirtyEvent) {}
         fun onRelayFailed(event: RelayFailedEvent) {}
+        fun onReconnectTokenRefreshed(event: ReconnectTokenRefreshedEvent) {}
     }
 }

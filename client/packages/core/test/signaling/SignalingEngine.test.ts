@@ -74,6 +74,16 @@ function lastTransport(): FakeTransport {
     return t;
 }
 
+function advanceTimersWithPongs(transport: FakeTransport, totalMs: number): void {
+    let remaining = totalMs;
+    while (remaining > 0) {
+        const step = Math.min(12_000, remaining);
+        vi.advanceTimersByTime(step);
+        transport.simulateMessage({ v: 1, type: 'pong' });
+        remaining -= step;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 1. Transport fallback — WS never connected → immediate SSE fallback
 // ---------------------------------------------------------------------------
@@ -272,6 +282,99 @@ describe('auto-rejoin on reconnect', () => {
         const joinMsgs2 = ws2.sentMessages.filter(m => m.type === 'join');
         expect(joinMsgs2).toHaveLength(1);
         expect(joinMsgs2[0].rid).toBe('room-abc');
+
+        engine.destroy();
+    });
+
+    it('refreshes reconnect token 10 minutes before expiration', () => {
+        const engine = createEngine(['ws']);
+        engine.connect();
+        const ws = lastTransport();
+        ws.simulateOpen();
+
+        engine.joinRoom('room-abc');
+        ws.simulateMessage({
+            v: 1,
+            type: 'joined',
+            cid: 'c1',
+            rid: 'room-abc',
+            payload: {
+                hostCid: 'c1',
+                participants: [{ cid: 'c1' }],
+                reconnectToken: 'rt-1',
+                reconnectTokenTTLMs: 1_200_000,
+            },
+        });
+
+        advanceTimersWithPongs(ws, 599_999);
+        expect(ws.sentMessages.filter(m => m.type === 'reconnect-token-refresh')).toHaveLength(0);
+
+        advanceTimersWithPongs(ws, 1);
+        expect(ws.sentMessages.filter(m => m.type === 'reconnect-token-refresh')).toHaveLength(1);
+
+        ws.simulateMessage({
+            v: 1,
+            type: 'reconnect-token-refreshed',
+            rid: 'room-abc',
+            payload: {
+                reconnectToken: 'rt-2',
+                reconnectTokenTTLMs: 1_200_000,
+            },
+        });
+
+        advanceTimersWithPongs(ws, 600_000);
+        expect(ws.sentMessages.filter(m => m.type === 'reconnect-token-refresh')).toHaveLength(2);
+
+        engine.destroy();
+    });
+
+    it('retries as a fresh join when reconnect token is rejected', () => {
+        const engine = createEngine(['ws']);
+        engine.connect();
+        const ws1 = lastTransport();
+        ws1.simulateOpen();
+
+        engine.joinRoom('room-abc');
+        ws1.simulateMessage({
+            v: 1,
+            type: 'joined',
+            cid: 'c1',
+            rid: 'room-abc',
+            payload: {
+                hostCid: 'c1',
+                participants: [{ cid: 'c1' }],
+                reconnectToken: 'expired-token',
+                reconnectTokenTTLMs: 1_200_000,
+            },
+        });
+
+        ws1.simulateClose('error');
+        vi.advanceTimersByTime(500);
+        const ws2 = lastTransport();
+        ws2.simulateOpen();
+
+        const reconnectJoin = ws2.sentMessages.find(m => m.type === 'join');
+        expect(reconnectJoin?.payload).toMatchObject({
+            reconnectCid: 'c1',
+            reconnectToken: 'expired-token',
+        });
+
+        ws2.simulateMessage({
+            v: 1,
+            type: 'error',
+            rid: 'room-abc',
+            payload: {
+                code: 'INVALID_RECONNECT_TOKEN',
+                message: 'Reconnect token validation failed',
+            },
+        });
+
+        const joins = ws2.sentMessages.filter(m => m.type === 'join');
+        expect(joins).toHaveLength(2);
+        expect(joins[1].rid).toBe('room-abc');
+        expect(joins[1].payload).not.toHaveProperty('reconnectCid');
+        expect(joins[1].payload).not.toHaveProperty('reconnectToken');
+        expect(engine.error).toBeNull();
 
         engine.destroy();
     });
