@@ -118,7 +118,7 @@ func callAudioRouteKey(_ device: AudioDevice) -> String {
     case .wiredHeadset:
         return "wired"
     case .bluetooth(_):
-        return "bluetooth"
+        return "bluetooth:\(fallback)"
     case .carAudio:
         return "car:\(fallback)"
     case .usb:
@@ -192,11 +192,11 @@ private func callAudioRouteDisplayRank(_ device: AudioDevice) -> Int {
     switch device.kind {
     case .bluetooth(let profile):
         switch profile {
-        case .a2dp, .ble:
+        case .hfp, .ble:
             return hasName ? 0 : 3
         case .unknown:
             return hasName ? 1 : 4
-        case .hfp:
+        case .a2dp:
             return hasName ? 2 : 5
         }
     case .speakerphone, .earpiece:

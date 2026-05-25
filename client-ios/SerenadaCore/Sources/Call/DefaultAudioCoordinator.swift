@@ -8,6 +8,11 @@ import UIKit
 private let callAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .mixWithOthers]
 private let phoneAudioSessionOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
 
+private struct OutputRouteRequest: Equatable {
+    let id: String
+    let kind: AudioDeviceKind
+}
+
 private final class ContinuationHolder<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<T>.Continuation] = [:]
@@ -102,7 +107,10 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     private var audioSessionActive = false
     private var proximityMonitoringActive = false
     private var isProximityNear = false
-    private var pinnedOutputKind: AudioDeviceKind?
+    private var pinnedOutputDevice: AudioDevice?
+    private var pinnedOutputRouteInventory: Set<String>?
+    private var builtInReceiverRouteObserved = false
+    private var pendingManagedOutputRequest: OutputRouteRequest?
 
     init(
         proximityMonitoringEnabled: Bool,
@@ -156,7 +164,8 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
 
         audioSessionActive = false
-        pinnedOutputKind = nil
+        pinnedOutputDevice = nil
+        pinnedOutputRouteInventory = nil
         stopAudioRouteMonitoring()
         stopProximityMonitoring()
 
@@ -183,12 +192,15 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
     func applyRouting(_ device: AudioDevice) async throws {
         if device.direction == .output || device.direction == .both {
-            let previousPinnedOutputKind = pinnedOutputKind
-            pinnedOutputKind = device.kind
+            let previousPinnedOutputDevice = pinnedOutputDevice
+            let previousPinnedOutputRouteInventory = pinnedOutputRouteInventory
+            pinnedOutputDevice = device
+            pinnedOutputRouteInventory = currentOutputRouteInventory()
             do {
-                try await applyUserSelectedOutputRoute(for: device.kind)
+                try await applyUserSelectedOutputRoute(for: device)
             } catch {
-                pinnedOutputKind = previousPinnedOutputKind
+                pinnedOutputDevice = previousPinnedOutputDevice
+                pinnedOutputRouteInventory = previousPinnedOutputRouteInventory
                 throw error
             }
         }
@@ -359,40 +371,62 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     private func applyCallAudioRouting() {
         guard audioSessionActive else { return }
 
-        if let pinnedOutputKind {
-            if isPinnedOutputKindAvailable(pinnedOutputKind) {
-                do {
-                    try applyManagedOutputRoute(for: pinnedOutputKind)
-                } catch {
-                    logger?.log(.error, tag: "Audio", "pinned route apply failed: \(error)")
-                }
+        clearPinnedOutputIfRouteInventoryChanged()
+
+        if let pinnedOutputDevice {
+            if isPinnedOutputDeviceAvailable(pinnedOutputDevice) {
+                requestManagedOutputRoute(for: pinnedOutputDevice, failureContext: "pinned")
                 return
             }
-            self.pinnedOutputKind = nil
+            self.pinnedOutputDevice = nil
+            pinnedOutputRouteInventory = nil
         }
 
-        if isBluetoothHeadsetConnected() || isBluetoothHeadsetAvailable() {
-            do {
-                try applyBluetoothRoutePreference()
-            } catch {
-                logger?.log(.error, tag: "Audio", "bluetooth route apply failed: \(error)")
+        let preferredDevice = preferredAutomaticOutputDevice()
+        requestManagedOutputRoute(for: preferredDevice, failureContext: "automatic")
+    }
+
+    private func preferredAutomaticOutputDevice() -> AudioDevice {
+        if let bluetoothDevice = preferredBluetoothOutputDevice() {
+            return bluetoothDevice
+        }
+        if let externalDevice = preferredExternalOutputDevice() {
+            return externalDevice
+        }
+        if hasBuiltInReceiverRoute && proximityMonitoringActive && isProximityNear {
+            return availableOutputDevice(kind: .earpiece)
+        }
+        return availableOutputDevice(kind: .speakerphone)
+    }
+
+    private func preferredBluetoothOutputDevice() -> AudioDevice? {
+        let bluetoothDevices = availableDevicesHolder.value.filter { device in
+            (device.direction == .output || device.direction == .both) && device.kind.isBluetooth
+        }
+        return bluetoothDevices.first { $0.status == .active }
+            ?? bluetoothDevices.first { $0.kind.isBluetoothHandsFree }
+            ?? bluetoothDevices.first { $0.kind.isBluetoothLowEnergy }
+            ?? bluetoothDevices.first
+    }
+
+    private func preferredExternalOutputDevice() -> AudioDevice? {
+        availableDevicesHolder.value
+            .filter { device in
+                (device.direction == .output || device.direction == .both) && device.kind.isExternalOutputRoute
             }
-            return
-        }
-
-        if proximityMonitoringActive && isProximityNear {
-            do {
-                try audioSession.overrideOutputAudioPort(.none)
-            } catch {
-                logger?.log(.error, tag: "Audio", "earpiece route apply failed: \(error)")
+            .min { lhs, rhs in
+                let lhsRank = automaticRouteRank(lhs.kind)
+                let rhsRank = automaticRouteRank(rhs.kind)
+                if lhsRank != rhsRank { return lhsRank < rhsRank }
+                return outputRouteInventoryKey(lhs) < outputRouteInventoryKey(rhs)
             }
-            return
-        }
+    }
 
-        do {
-            try audioSession.overrideOutputAudioPort(.speaker)
-        } catch {
-            logger?.log(.error, tag: "Audio", "speaker route apply failed: \(error)")
+    private func clearPinnedOutputIfRouteInventoryChanged() {
+        guard let pinnedOutputRouteInventory else { return }
+        if pinnedOutputRouteInventory != currentOutputRouteInventory() {
+            pinnedOutputDevice = nil
+            self.pinnedOutputRouteInventory = nil
         }
     }
 
@@ -404,26 +438,79 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
     }
 
-    private func applyBluetoothRoutePreference() throws {
-        try applyManagedOutputRoute(for: .bluetooth(profile: .hfp))
+    private func requestManagedOutputRoute(for device: AudioDevice, failureContext: String) {
+        let request = OutputRouteRequest(id: device.id, kind: device.kind)
+        guard pendingManagedOutputRequest != request else { return }
+        guard !isOutputRouteActive(for: device) else { return }
+        pendingManagedOutputRequest = request
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.applyUserSelectedOutputRoute(for: device)
+            } catch {
+                self.logger?.log(.error, tag: "Audio", "\(failureContext) route apply failed: \(error)")
+            }
+            if self.pendingManagedOutputRequest == request {
+                self.pendingManagedOutputRequest = nil
+            }
+        }
     }
 
-    private func applyManagedOutputRoute(for kind: AudioDeviceKind) throws {
-#if canImport(WebRTC)
-        let rtcAudioSession = RTCAudioSession.sharedInstance()
-        rtcAudioSession.lockForConfiguration()
-        defer { rtcAudioSession.unlockForConfiguration() }
-        try Self.applyUserSelectedOutputRoute(
-            for: kind,
-            audioSession: audioSession,
-            rtcAudioSession: rtcAudioSession
+    private func isOutputRouteActive(for device: AudioDevice) -> Bool {
+        let outputs = audioSession.currentRoute.outputs
+        switch device.kind {
+        case .speakerphone:
+            return outputs.contains { $0.portType == .builtInSpeaker }
+        case .earpiece:
+            return outputs.contains { $0.portType == .builtInReceiver }
+        case .bluetooth:
+            return outputs.contains { output in
+                output.uid == device.id || (device.id.isEmpty && output.portType.isBluetoothRoute)
+            }
+        case .wiredHeadset:
+            return outputs.contains { output in
+                output.uid == device.id || (device.id.isEmpty && (output.portType == .headphones || output.portType == .headsetMic))
+            }
+        case .carAudio:
+            return outputs.contains { output in output.uid == device.id || (device.id.isEmpty && output.portType == .carAudio) }
+        case .usb:
+            return outputs.contains { output in output.uid == device.id || (device.id.isEmpty && output.portType == .usbAudio) }
+        case .other:
+            return false
+        }
+    }
+
+    private func currentOutputRouteInventory() -> Set<String> {
+        Set(
+            availableDevicesHolder.value
+                .filter { $0.direction == .output || $0.direction == .both }
+                .map(outputRouteInventoryKey)
         )
-#else
-        try applyOutputRoute(for: kind)
-#endif
     }
 
-    private func applyUserSelectedOutputRoute(for kind: AudioDeviceKind) async throws {
+    private func outputRouteInventoryKey(_ device: AudioDevice) -> String {
+        let routeName = device.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = device.id.isEmpty ? routeName : device.id
+        switch device.kind {
+        case .speakerphone:
+            return "speakerphone"
+        case .earpiece:
+            return "earpiece"
+        case .bluetooth(_):
+            return "bluetooth:\(fallback)"
+        case .wiredHeadset:
+            return "wired"
+        case .carAudio:
+            return "car:\(fallback)"
+        case .usb:
+            return "usb:\(fallback)"
+        case .other:
+            return "other:\(fallback)"
+        }
+    }
+
+    private func applyUserSelectedOutputRoute(for device: AudioDevice) async throws {
 #if canImport(WebRTC)
         let queue = routeConfigurationQueue
         let audioSession = audioSession
@@ -434,7 +521,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
                 defer { rtcAudioSession.unlockForConfiguration() }
 
                 do {
-                    try Self.applyUserSelectedOutputRoute(for: kind, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
+                    try Self.applyUserSelectedOutputRoute(for: device, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
                     continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
@@ -442,16 +529,17 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             }
         }
 #else
-        try applyOutputRoute(for: kind)
+        try applyOutputRoute(for: device.kind)
 #endif
     }
 
 #if canImport(WebRTC)
     private nonisolated static func applyUserSelectedOutputRoute(
-        for kind: AudioDeviceKind,
+        for device: AudioDevice,
         audioSession: AVAudioSession,
         rtcAudioSession: RTCAudioSession
     ) throws {
+        let kind = device.kind
         let options = kind == .earpiece ? phoneAudioSessionOptions : callAudioSessionOptions
         try rtcAudioSessionSetCallCategory(options: options, rtcAudioSession: rtcAudioSession)
 
@@ -462,10 +550,12 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             try rtcAudioSessionSetPreferredInput(.builtInMic, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
             try rtcAudioSessionOverrideOutput(.none, rtcAudioSession: rtcAudioSession)
         case .bluetooth(_):
-            try rtcAudioSessionSetPreferredInput(.bluetoothHFP, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
+            let input = audioSession.availableInputs?.first { $0.uid == device.id && $0.portType == .bluetoothHFP }
+            try rtcAudioSessionSetPreferredInput(input, fallbackPortType: .bluetoothHFP, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
             try rtcAudioSessionOverrideOutput(.none, rtcAudioSession: rtcAudioSession)
         case .wiredHeadset:
-            try rtcAudioSessionSetPreferredInput(.headsetMic, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
+            let input = audioSession.availableInputs?.first { $0.uid == device.id && $0.portType == .headsetMic }
+            try rtcAudioSessionSetPreferredInput(input, fallbackPortType: .headsetMic, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
             try rtcAudioSessionOverrideOutput(.none, rtcAudioSession: rtcAudioSession)
         default:
             try rtcAudioSessionOverrideOutput(.none, rtcAudioSession: rtcAudioSession)
@@ -489,17 +579,17 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         rtcAudioSession: RTCAudioSession
     ) throws {
         let input = audioSession.availableInputs?.first { $0.portType == portType }
-        try rtcAudioSessionSetPreferredInput(input, portType: portType, rtcAudioSession: rtcAudioSession)
+        try rtcAudioSessionSetPreferredInput(input, fallbackPortType: portType, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
     }
 
     private nonisolated static func rtcAudioSessionSetPreferredInput(
         _ input: AVAudioSessionPortDescription?,
-        portType: AVAudioSession.Port,
+        fallbackPortType: AVAudioSession.Port,
+        audioSession: AVAudioSession,
         rtcAudioSession: RTCAudioSession
     ) throws {
-        guard let input else {
-            throw audioRouteError("missing preferred input \(portType.rawValue)")
-        }
+        let input = input ?? audioSession.availableInputs?.first { $0.portType == fallbackPortType }
+        guard let input else { throw audioRouteError("missing preferred input \(fallbackPortType.rawValue)") }
         try rtcAudioSession.setPreferredInput(input)
     }
 
@@ -526,19 +616,15 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
     }
 
-    private func isBluetoothHeadsetAvailable() -> Bool {
-        audioSession.availableInputs?.contains { input in
-            input.portType == .bluetoothHFP
-        } ?? false
-    }
-
-    private func isPinnedOutputKindAvailable(_ kind: AudioDeviceKind) -> Bool {
-        switch kind {
-        case .speakerphone, .earpiece:
+    private func isPinnedOutputDeviceAvailable(_ pinnedDevice: AudioDevice) -> Bool {
+        switch pinnedDevice.kind {
+        case .speakerphone:
             return true
+        case .earpiece:
+            return hasBuiltInReceiverRoute
         default:
             return availableDevicesHolder.value.contains { device in
-                (device.direction == .output || device.direction == .both) && device.kind == kind
+                (device.direction == .output || device.direction == .both) && outputRouteInventoryKey(device) == outputRouteInventoryKey(pinnedDevice)
             }
         }
     }
@@ -579,8 +665,15 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         )
     }
 
+    private var hasBuiltInReceiverRoute: Bool {
+        builtInReceiverRouteObserved || audioSession.currentRoute.outputs.contains { $0.portType == .builtInReceiver }
+    }
+
     private func updateDevicesAndRoute() {
         let route = audioSession.currentRoute
+        if route.outputs.contains(where: { $0.portType == .builtInReceiver }) {
+            builtInReceiverRouteObserved = true
+        }
 
         var devices = [AudioDevice]()
 
@@ -606,15 +699,17 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         )
         devices.append(speakerDevice)
 
-        let isEarpieceActive = route.outputs.contains { $0.portType == .builtInReceiver }
-        let earpieceDevice = AudioDevice(
-            id: "earpiece",
-            displayName: "Earpiece",
-            kind: .earpiece,
-            direction: .output,
-            status: isEarpieceActive ? .active : .available
-        )
-        devices.append(earpieceDevice)
+        if hasBuiltInReceiverRoute {
+            let isEarpieceActive = route.outputs.contains { $0.portType == .builtInReceiver }
+            let earpieceDevice = AudioDevice(
+                id: "earpiece",
+                displayName: "Earpiece",
+                kind: .earpiece,
+                direction: .output,
+                status: isEarpieceActive ? .active : .available
+            )
+            devices.append(earpieceDevice)
+        }
 
         for port in route.outputs {
             if port.portType != .builtInSpeaker && port.portType != .builtInReceiver && port.portType != .bluetoothHFP && port.portType != .usbAudio {
@@ -633,5 +728,100 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
     private func emitEvent(_ event: AudioCoordinatorEvent) {
         eventsHolder.emit(event)
+    }
+
+    private func availableOutputDevice(kind: AudioDeviceKind) -> AudioDevice {
+        availableDevicesHolder.value.first { device in
+            (device.direction == .output || device.direction == .both) && device.kind == kind
+        } ?? AudioDevice(
+            id: kind.defaultOutputId,
+            displayName: kind.defaultOutputDisplayName,
+            kind: kind,
+            direction: .output,
+            status: .available
+        )
+    }
+}
+
+private extension AudioDeviceKind {
+    var isExternalOutputRoute: Bool {
+        switch self {
+        case .wiredHeadset, .carAudio, .usb, .other:
+            return true
+        case .bluetooth, .speakerphone, .earpiece:
+            return false
+        }
+    }
+
+    var isBluetooth: Bool {
+        if case .bluetooth = self { return true }
+        return false
+    }
+
+    var isBluetoothHandsFree: Bool {
+        if case .bluetooth(profile: .hfp) = self { return true }
+        return false
+    }
+
+    var isBluetoothLowEnergy: Bool {
+        if case .bluetooth(profile: .ble) = self { return true }
+        return false
+    }
+
+    var defaultOutputId: String {
+        switch self {
+        case .speakerphone:
+            return "speaker"
+        case .earpiece:
+            return "earpiece"
+        case .bluetooth:
+            return "bluetooth"
+        case .wiredHeadset:
+            return "wired"
+        case .carAudio:
+            return "car"
+        case .usb:
+            return "usb"
+        case .other:
+            return "other"
+        }
+    }
+
+    var defaultOutputDisplayName: String {
+        switch self {
+        case .speakerphone:
+            return "Speaker"
+        case .earpiece:
+            return "Earpiece"
+        case .bluetooth:
+            return "Bluetooth"
+        case .wiredHeadset:
+            return "Headset"
+        case .carAudio:
+            return "Car audio"
+        case .usb:
+            return "USB audio"
+        case .other:
+            return "Audio"
+        }
+    }
+}
+
+private extension AVAudioSession.Port {
+    var isBluetoothRoute: Bool {
+        self == .bluetoothHFP || self == .bluetoothA2DP || self == .bluetoothLE
+    }
+}
+
+private func automaticRouteRank(_ kind: AudioDeviceKind) -> Int {
+    switch kind {
+    case .wiredHeadset:
+        return 0
+    case .carAudio, .usb:
+        return 1
+    case .other:
+        return 2
+    case .bluetooth, .speakerphone, .earpiece:
+        return 3
     }
 }

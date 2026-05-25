@@ -46,7 +46,8 @@ internal class DefaultAudioCoordinator(
     private var audioDeviceMonitoringActive = false
     private var communicationDeviceChangedListener: Any? = null
     private var bluetoothScoActive = false
-    private var pinnedOutputKind: AudioDeviceKind? = null
+    private var pinnedOutputDevice: AudioDevice? = null
+    private var pinnedOutputRouteInventory: Set<String>? = null
     private val communicationDeviceExecutor = Executor { command ->
         handler.post(command)
     }
@@ -151,7 +152,8 @@ internal class DefaultAudioCoordinator(
             return
         }
         audioSessionActive = false
-        pinnedOutputKind = null
+        pinnedOutputDevice = null
+        pinnedOutputRouteInventory = null
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
         runCatching {
@@ -189,17 +191,18 @@ internal class DefaultAudioCoordinator(
 
     override suspend fun applyRouting(device: AudioDevice) {
         if (!device.isOutputRoute()) return
-        pinnedOutputKind = device.kind
-        applyOutputRoute(device.kind)
+        pinnedOutputDevice = device
+        pinnedOutputRouteInventory = currentOutputRouteInventory()
+        applyOutputRoute(device)
         refreshDevicesAndRouteFromSystem()
     }
 
-    private fun applyOutputRoute(kind: AudioDeviceKind) {
-        when (kind) {
+    private fun applyOutputRoute(device: AudioDevice) {
+        when (device.kind) {
             is AudioDeviceKind.Speakerphone -> routeAudioToSpeaker()
             is AudioDeviceKind.Earpiece -> routeAudioToEarpiece()
-            is AudioDeviceKind.Bluetooth -> routeAudioToBluetooth()
-            else -> routeAudioToExternal(kind)
+            is AudioDeviceKind.Bluetooth -> routeAudioToBluetooth(device)
+            else -> routeAudioToExternal(device)
         }
         scheduleRouteRefreshFromSystem()
     }
@@ -331,27 +334,57 @@ internal class DefaultAudioCoordinator(
 
     private fun applyCallAudioRouting() {
         if (!audioSessionActive) return
-        pinnedOutputKind?.let { kind ->
-            if (isPinnedOutputKindAvailable(kind)) {
-                applyOutputRoute(kind)
+        clearPinnedOutputIfRouteInventoryChanged()
+        pinnedOutputDevice?.let { device ->
+            if (isPinnedOutputDeviceAvailable(device)) {
+                applyOutputRoute(device)
                 return
             }
-            pinnedOutputKind = null
+            pinnedOutputDevice = null
+            pinnedOutputRouteInventory = null
         }
-        if (isBluetoothHeadsetConnected()) {
-            routeAudioToBluetooth()
-            return
-        }
-        if (proximityMonitoringActive && isProximityNear) {
-            routeAudioToEarpiece()
-            return
-        }
-        routeAudioToSpeaker()
+        applyOutputRoute(preferredAutomaticOutputDevice())
     }
 
-    private fun routeAudioToBluetooth() {
+    private fun preferredAutomaticOutputDevice(): AudioDevice {
+        preferredBluetoothOutputDevice()?.let { return it }
+        preferredExternalOutputDevice()?.let { return it }
+        if (proximityMonitoringActive && isProximityNear) {
+            return availableOutputDevice(AudioDeviceKind.Earpiece)
+        }
+        return availableOutputDevice(AudioDeviceKind.Speakerphone)
+    }
+
+    private fun preferredBluetoothOutputDevice(): AudioDevice? {
+        val bluetoothDevices = _availableDevices.value
+            .filter { it.isOutputRoute() && it.kind is AudioDeviceKind.Bluetooth }
+        return bluetoothDevices.firstOrNull { it.status == AudioDeviceStatus.ACTIVE }
+            ?: bluetoothDevices.firstOrNull { (it.kind as? AudioDeviceKind.Bluetooth)?.profile == BluetoothProfile.HFP }
+            ?: bluetoothDevices.firstOrNull { (it.kind as? AudioDeviceKind.Bluetooth)?.profile == BluetoothProfile.BLE }
+            ?: bluetoothDevices.firstOrNull()
+    }
+
+    private fun preferredExternalOutputDevice(): AudioDevice? {
+        return _availableDevices.value
+            .filter { it.isOutputRoute() && it.kind.isExternalOutputRoute() }
+            .minWithOrNull(
+                compareBy<AudioDevice> { it.kind.automaticRouteRank() }
+                    .thenBy { outputRouteInventoryKey(it) }
+            )
+    }
+
+    private fun clearPinnedOutputIfRouteInventoryChanged() {
+        val pinnedInventory = pinnedOutputRouteInventory ?: return
+        if (pinnedInventory != currentOutputRouteInventory()) {
+            pinnedOutputDevice = null
+            pinnedOutputRouteInventory = null
+        }
+    }
+
+    private fun routeAudioToBluetooth(device: AudioDevice) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val bluetoothDevice = findBluetoothCommunicationDevice()
+            val bluetoothDevice = findCommunicationDevice(device)
+                ?: findBluetoothCommunicationDevice()
             if (bluetoothDevice == null || !audioManager.setCommunicationDevice(bluetoothDevice)) {
                 logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to route audio to Bluetooth headset")
                 routeAudioToSpeaker()
@@ -385,11 +418,11 @@ internal class DefaultAudioCoordinator(
         setSpeakerphoneEnabled(true)
     }
 
-    private fun routeAudioToExternal(kind: AudioDeviceKind) {
+    private fun routeAudioToExternal(device: AudioDevice) {
         setLegacyBluetoothScoRouting(false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!setCommunicationDevice(kind)) {
-                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to route audio to external device kind=$kind")
+            if (!setCommunicationDevice(device)) {
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to route audio to external device kind=${device.kind}")
             }
             return
         }
@@ -403,12 +436,21 @@ internal class DefaultAudioCoordinator(
         return audioManager.setCommunicationDevice(device)
     }
 
-    private fun setCommunicationDevice(kind: AudioDeviceKind): Boolean {
+    private fun setCommunicationDevice(device: AudioDevice): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
-        val device = audioManager.availableCommunicationDevices.firstOrNull { info ->
-            deviceKindMatches(mapDeviceKind(info.type), kind)
-        } ?: return false
-        return audioManager.setCommunicationDevice(device)
+        val communicationDevice = findCommunicationDevice(device)
+            ?: audioManager.availableCommunicationDevices.firstOrNull { info ->
+                deviceKindMatches(mapDeviceKind(info.type), device.kind)
+            }
+            ?: return false
+        return audioManager.setCommunicationDevice(communicationDevice)
+    }
+
+    private fun findCommunicationDevice(device: AudioDevice): AudioDeviceInfo? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        return audioManager.availableCommunicationDevices.firstOrNull { info ->
+            info.id.toString() == device.id
+        }
     }
 
     private fun isBluetoothHeadsetConnected(): Boolean {
@@ -483,9 +525,30 @@ internal class DefaultAudioCoordinator(
         }
     }
 
-    private fun isPinnedOutputKindAvailable(kind: AudioDeviceKind): Boolean {
+    private fun isPinnedOutputDeviceAvailable(pinnedDevice: AudioDevice): Boolean {
         return _availableDevices.value.any { device ->
-            device.isOutputRoute() && deviceKindMatches(device.kind, kind)
+            device.isOutputRoute() && outputRouteInventoryKey(device) == outputRouteInventoryKey(pinnedDevice)
+        }
+    }
+
+    private fun currentOutputRouteInventory(): Set<String> {
+        return _availableDevices.value
+            .filter { it.isOutputRoute() }
+            .map { outputRouteInventoryKey(it) }
+            .toSet()
+    }
+
+    private fun outputRouteInventoryKey(device: AudioDevice): String {
+        val routeName = device.displayName.trim()
+        val fallback = device.id.ifEmpty { routeName }
+        return when (device.kind) {
+            is AudioDeviceKind.Speakerphone -> "speakerphone"
+            is AudioDeviceKind.Earpiece -> "earpiece"
+            is AudioDeviceKind.Bluetooth -> "bluetooth:$fallback"
+            is AudioDeviceKind.WiredHeadset -> "wired"
+            is AudioDeviceKind.CarAudio -> "car:$fallback"
+            is AudioDeviceKind.Usb -> "usb:$fallback"
+            is AudioDeviceKind.Other -> "other:$fallback"
         }
     }
 
@@ -577,6 +640,66 @@ internal class DefaultAudioCoordinator(
         return direction == AudioDeviceDirection.OUTPUT || direction == AudioDeviceDirection.BOTH
     }
 
+    private fun AudioDeviceKind.isExternalOutputRoute(): Boolean {
+        return when (this) {
+            is AudioDeviceKind.WiredHeadset,
+            is AudioDeviceKind.CarAudio,
+            is AudioDeviceKind.Usb,
+            is AudioDeviceKind.Other -> true
+            is AudioDeviceKind.Bluetooth,
+            is AudioDeviceKind.Speakerphone,
+            is AudioDeviceKind.Earpiece -> false
+        }
+    }
+
+    private fun AudioDeviceKind.automaticRouteRank(): Int {
+        return when (this) {
+            is AudioDeviceKind.WiredHeadset -> 0
+            is AudioDeviceKind.CarAudio,
+            is AudioDeviceKind.Usb -> 1
+            is AudioDeviceKind.Other -> 2
+            is AudioDeviceKind.Bluetooth,
+            is AudioDeviceKind.Speakerphone,
+            is AudioDeviceKind.Earpiece -> 3
+        }
+    }
+
+    private fun availableOutputDevice(kind: AudioDeviceKind): AudioDevice {
+        return _availableDevices.value.firstOrNull { device ->
+            device.isOutputRoute() && device.kind == kind
+        } ?: AudioDevice(
+            id = kind.defaultOutputId(),
+            displayName = kind.defaultOutputDisplayName(),
+            kind = kind,
+            direction = AudioDeviceDirection.OUTPUT,
+            status = AudioDeviceStatus.AVAILABLE
+        )
+    }
+
+    private fun AudioDeviceKind.defaultOutputId(): String {
+        return when (this) {
+            is AudioDeviceKind.Speakerphone -> "speaker"
+            is AudioDeviceKind.Earpiece -> "earpiece"
+            is AudioDeviceKind.Bluetooth -> "bluetooth"
+            is AudioDeviceKind.WiredHeadset -> "wired"
+            is AudioDeviceKind.CarAudio -> "car"
+            is AudioDeviceKind.Usb -> "usb"
+            is AudioDeviceKind.Other -> "other"
+        }
+    }
+
+    private fun AudioDeviceKind.defaultOutputDisplayName(): String {
+        return when (this) {
+            is AudioDeviceKind.Speakerphone -> "Speaker"
+            is AudioDeviceKind.Earpiece -> "Earpiece"
+            is AudioDeviceKind.Bluetooth -> "Bluetooth"
+            is AudioDeviceKind.WiredHeadset -> "Headset"
+            is AudioDeviceKind.CarAudio -> "Car audio"
+            is AudioDeviceKind.Usb -> "USB audio"
+            is AudioDeviceKind.Other -> "Audio"
+        }
+    }
+
     private fun deviceKindMatches(actual: AudioDeviceKind, expected: AudioDeviceKind): Boolean {
         return when {
             actual is AudioDeviceKind.Bluetooth && expected is AudioDeviceKind.Bluetooth -> true
@@ -587,6 +710,9 @@ internal class DefaultAudioCoordinator(
     private fun AudioDeviceInfo.isPublishableRoute(communicationDevices: List<AudioDeviceInfo>): Boolean {
         val direction = mapDeviceDirection(this)
         if (direction == AudioDeviceDirection.INPUT) return true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && mapDeviceKind(type) is AudioDeviceKind.Bluetooth) {
+            return communicationDevices.any { it.id == id }
+        }
         if (mapDeviceKind(type) !is AudioDeviceKind.Other) return true
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
         return communicationDevices.any { it.id == id }
@@ -601,7 +727,12 @@ internal class DefaultAudioCoordinator(
         } else {
             emptyList()
         }
-        val list = (allDevices + communicationDevices)
+        val routeDevices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            communicationDevices + allDevices
+        } else {
+            allDevices
+        }
+        val list = routeDevices
             .distinctBy { it.id }
             .filter { it.isPublishableRoute(communicationDevices) }
             .map { mapDeviceInfo(it, AudioDeviceStatus.AVAILABLE) }

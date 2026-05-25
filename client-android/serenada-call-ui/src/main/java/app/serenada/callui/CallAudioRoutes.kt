@@ -70,7 +70,7 @@ internal fun AudioDevice.callAudioRouteKey(): String {
     return when (kind) {
         is AudioDeviceKind.Speakerphone -> "speakerphone"
         is AudioDeviceKind.Earpiece -> "earpiece"
-        is AudioDeviceKind.Bluetooth -> "bluetooth"
+        is AudioDeviceKind.Bluetooth -> "bluetooth:$fallback"
         is AudioDeviceKind.WiredHeadset -> "wired"
         is AudioDeviceKind.CarAudio -> "car:$fallback"
         is AudioDeviceKind.Usb -> "usb:$fallback"
@@ -159,10 +159,10 @@ private fun AudioDevice.callAudioRouteDisplayRank(): Int {
     val hasName = displayName.trim().isNotEmpty()
     return when (val kind = kind) {
         is AudioDeviceKind.Bluetooth -> when (kind.profile) {
-            BluetoothProfile.A2DP,
+            BluetoothProfile.HFP,
             BluetoothProfile.BLE -> if (hasName) 0 else 3
             BluetoothProfile.UNKNOWN -> if (hasName) 1 else 4
-            BluetoothProfile.HFP -> if (hasName) 2 else 5
+            BluetoothProfile.A2DP -> if (hasName) 2 else 5
         }
         is AudioDeviceKind.Speakerphone,
         is AudioDeviceKind.Earpiece -> 0
