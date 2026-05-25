@@ -7,7 +7,6 @@ import UIKit
 
 private let callAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .mixWithOthers]
 private let phoneAudioSessionOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
-private let callSystemRoutePickerWillPresentNotification = Notification.Name("app.serenada.audio.systemRoutePickerWillPresent")
 
 private final class ContinuationHolder<T>: @unchecked Sendable {
     private let lock = NSLock()
@@ -85,17 +84,6 @@ private final class EventHolder<T>: @unchecked Sendable {
     }
 }
 
-private extension AudioDeviceKind {
-    var isBluetooth: Bool {
-        switch self {
-        case .bluetooth:
-            return true
-        default:
-            return false
-        }
-    }
-}
-
 @MainActor
 final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoordinator, SessionAudioController, @unchecked Sendable {
     private let availableDevicesHolder = ContinuationHolder<[AudioDevice]>(initialValue: [])
@@ -115,8 +103,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     private var proximityMonitoringActive = false
     private var isProximityNear = false
     private var pinnedOutputKind: AudioDeviceKind?
-    private var systemRouteSelectionActive = false
-    private var rememberedBluetoothOutputDevices: [String: AudioDevice] = [:]
 
     init(
         proximityMonitoringEnabled: Bool,
@@ -142,7 +128,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     func activate() {
         guard !audioSessionActive else { return }
         audioSessionActive = true
-        systemRouteSelectionActive = false
 
         do {
             try audioSession.setCategory(
@@ -172,7 +157,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
         audioSessionActive = false
         pinnedOutputKind = nil
-        systemRouteSelectionActive = false
         stopAudioRouteMonitoring()
         stopProximityMonitoring()
 
@@ -189,14 +173,8 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
     // MARK: - SerenadaAudioCoordinator Conformance
 
-    func activateCallSession(intent: AudioIntent) async throws -> AudioCoordinatorCapabilities {
+    func activateCallSession(intent: AudioIntent) async throws {
         activate()
-        return AudioCoordinatorCapabilities(
-            pttPolicy: .block,
-            canShareInput: true,
-            sessionOwnership: .sdkOwned,
-            supportedDeviceKinds: [.wiredHeadset, .bluetooth(profile: .unknown), .speakerphone, .earpiece]
-        )
     }
 
     func deactivateCallSession() async {
@@ -206,15 +184,11 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     func applyRouting(_ device: AudioDevice) async throws {
         if device.direction == .output || device.direction == .both {
             let previousPinnedOutputKind = pinnedOutputKind
-            let previousSystemRouteSelectionActive = systemRouteSelectionActive
             pinnedOutputKind = device.kind
-            systemRouteSelectionActive = false
             do {
                 try await applyUserSelectedOutputRoute(for: device.kind)
             } catch {
                 pinnedOutputKind = previousPinnedOutputKind
-                systemRouteSelectionActive = previousSystemRouteSelectionActive
-                removeRememberedOutputDevice(for: device.kind)
                 throw error
             }
         }
@@ -223,14 +197,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     func setMicMuted(_ muted: Bool) async throws {
-        // No-op for default coordinator
-    }
-
-    func suspendCapture() async throws {
-        // No-op for default coordinator
-    }
-
-    func resumeCapture() async throws {
         // No-op for default coordinator
     }
 
@@ -271,19 +237,12 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             name: AVAudioSession.mediaServicesWereResetNotification,
             object: nil
         )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleSystemRoutePickerWillPresent(_:)),
-            name: callSystemRoutePickerWillPresentNotification,
-            object: nil
-        )
     }
 
     private func stopAudioRouteMonitoring() {
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
-        NotificationCenter.default.removeObserver(self, name: callSystemRoutePickerWillPresentNotification, object: nil)
     }
 
     private func startProximityMonitoring() {
@@ -318,10 +277,8 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         Task { @MainActor [weak self] in
             guard let self = self, self.audioSessionActive else { return }
             self.updateDevicesAndRoute()
-            if self.shouldApplyManagedAudioRouting {
-                self.applyCallAudioRouting()
-                self.updateDevicesAndRoute()
-            }
+            self.applyCallAudioRouting()
+            self.updateDevicesAndRoute()
             self.onAudioEnvironmentChanged()
 
             let inputs = self.audioSession.currentRoute.inputs
@@ -329,21 +286,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             let activeInput = inputs.first.map { self.mapPortToAudioDevice($0, direction: .input, status: .active) }
             let activeOutput = outputs.first.map { self.mapPortToAudioDevice($0, direction: .output, status: .active) }
             self.emitEvent(.effectiveRouteChanged(input: activeInput, output: activeOutput))
-        }
-    }
-
-    @objc private func handleSystemRoutePickerWillPresent(_ notification: Notification) {
-        Task { @MainActor [weak self] in
-            guard let self = self, self.audioSessionActive else { return }
-            self.pinnedOutputKind = nil
-            self.systemRouteSelectionActive = true
-            do {
-                try self.audioSession.overrideOutputAudioPort(.none)
-            } catch {
-                self.logger?.log(.error, tag: "Audio", "failed to clear speaker override before system route picker: \(error)")
-            }
-            self.updateDevicesAndRoute()
-            self.onAudioEnvironmentChanged()
         }
     }
 
@@ -355,10 +297,8 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
             self.isProximityNear = near
             self.onProximityChanged(near)
-            if self.shouldApplyManagedAudioRouting {
-                self.applyCallAudioRouting()
-                self.updateDevicesAndRoute()
-            }
+            self.applyCallAudioRouting()
+            self.updateDevicesAndRoute()
             self.onAudioEnvironmentChanged()
         }
     }
@@ -374,14 +314,14 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             guard let self = self, self.audioSessionActive else { return }
             switch type {
             case .began:
-                self.emitEvent(.audioSessionInterrupted(reason: .systemAudio))
+                self.emitEvent(.externalAudioStarted)
             case .ended:
                 do {
                     // Try to restore call audio even when iOS omits shouldResume.
                     // If another owner still holds audio, activation fails and the
                     // session remains externally muted while we log the failure.
                     try self.audioSession.setActive(true)
-                    self.emitEvent(.audioSessionResumed)
+                    self.emitEvent(.externalAudioEnded)
                 } catch {
                     self.logger?.log(.error, tag: "Audio", "failed to reactivate audio session after interruption: \(error)")
                 }
@@ -407,18 +347,13 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
                 rtcAudioSession.isAudioEnabled = true
 #endif
                 self.updateDevicesAndRoute()
-                self.systemRouteSelectionActive = false
                 self.applyCallAudioRouting()
                 self.onAudioEnvironmentChanged()
-                self.emitEvent(.audioSessionResumed)
+                self.emitEvent(.externalAudioEnded)
             } catch {
                 self.logger?.log(.error, tag: "Audio", "failed to reset media services: \(error)")
             }
         }
-    }
-
-    private var shouldApplyManagedAudioRouting: Bool {
-        pinnedOutputKind != nil || !systemRouteSelectionActive
     }
 
     private func applyCallAudioRouting() {
@@ -607,15 +542,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
     }
 
-    private func removeRememberedOutputDevice(for kind: AudioDeviceKind) {
-        switch kind {
-        case .bluetooth:
-            rememberedBluetoothOutputDevices.removeAll()
-        default:
-            break
-        }
-    }
-
     private func mapPortToAudioDevice(
         _ port: AVAudioSessionPortDescription,
         direction: AudioDeviceDirection,
@@ -695,9 +621,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             }
         }
 
-        rememberBluetoothOutputDevices(from: devices)
-        appendRememberedBluetoothOutputDevices(to: &devices)
-
         let activeInput = route.inputs.first.map { mapPortToAudioDevice($0, direction: .input, status: .active) }
         let activeOutput = route.outputs.first.map { mapPortToAudioDevice($0, direction: .output, status: .active) }
 
@@ -705,62 +628,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         effectiveInputDeviceHolder.update(activeInput)
         effectiveOutputDeviceHolder.update(activeOutput)
         emitEvent(.availableDevicesChanged(devices))
-    }
-
-    private func rememberBluetoothOutputDevices(from devices: [AudioDevice]) {
-        let bluetoothDevices = devices.filter { device in
-            (device.direction == .output || device.direction == .both) && device.kind.isBluetooth
-        }
-        if bluetoothDevices.isEmpty && pinnedOutputKind != .earpiece {
-            rememberedBluetoothOutputDevices.removeAll()
-            return
-        }
-
-        for device in bluetoothDevices {
-            let remembered = audioDevice(device, withStatus: .available)
-            rememberedBluetoothOutputDevices[outputDeviceKey(remembered)] = remembered
-        }
-    }
-
-    private func appendRememberedBluetoothOutputDevices(to devices: inout [AudioDevice]) {
-        guard pinnedOutputKind == .earpiece else { return }
-
-        var existingKeys = Set(
-            devices
-                .filter { $0.direction == .output || $0.direction == .both }
-                .map(outputDeviceKey)
-        )
-        for device in rememberedBluetoothOutputDevices.values {
-            let key = outputDeviceKey(device)
-            guard !existingKeys.contains(key) else { continue }
-            devices.append(device)
-            existingKeys.insert(key)
-        }
-    }
-
-    private func outputDeviceKey(_ device: AudioDevice) -> String {
-        switch device.kind {
-        case .speakerphone:
-            return "speakerphone"
-        case .earpiece:
-            return "earpiece"
-        case .bluetooth:
-            return "bluetooth"
-        case .wiredHeadset:
-            return "wired"
-        default:
-            return "\(device.kind):\(device.id)"
-        }
-    }
-
-    private func audioDevice(_ device: AudioDevice, withStatus status: AudioDeviceStatus) -> AudioDevice {
-        AudioDevice(
-            id: device.id,
-            displayName: device.displayName,
-            kind: device.kind,
-            direction: device.direction,
-            status: status
-        )
     }
 
     private func emitEvent(_ event: AudioCoordinatorEvent) {

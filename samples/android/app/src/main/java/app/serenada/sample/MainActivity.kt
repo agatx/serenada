@@ -253,7 +253,7 @@ private fun ProviderDemoScreen(
     val state by demo.session.state.collectAsState()
     val isMicMuted by demo.session.isMicMuted.collectAsState()
     val isMicMutedByExternalAudio by demo.session.isMicMutedByExternalAudio.collectAsState()
-    var isPttPressed by remember { mutableStateOf(false) }
+    var isExternalAudioActive by remember { mutableStateOf(false) }
     val eventLog = demo.provider.eventLog.toList()
     val scrollState = rememberScrollState()
 
@@ -297,18 +297,18 @@ private fun ProviderDemoScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Audio Coordinator (PTT Simulation)", style = MaterialTheme.typography.titleMedium)
+                Text("Audio Coordinator (External Audio)", style = MaterialTheme.typography.titleMedium)
                 Text("Mic Muted: ${if (isMicMuted) "Yes" else "No"}")
                 Text("Muted by External: ${if (isMicMutedByExternalAudio) "Yes" else "No"}")
                 Spacer(modifier = Modifier.height(4.dp))
                 Button(
                     onClick = {
-                        isPttPressed = !isPttPressed
-                        demo.coordinator.simulatePttPress(isPttPressed)
+                        isExternalAudioActive = !isExternalAudioActive
+                        demo.coordinator.simulateExternalAudio(isExternalAudioActive)
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(if (isPttPressed) "Release PTT (Simulate)" else "Press PTT (Simulate)")
+                    Text(if (isExternalAudioActive) "End External Audio" else "Start External Audio")
                 }
             }
         }

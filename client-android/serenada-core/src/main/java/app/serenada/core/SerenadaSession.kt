@@ -19,13 +19,9 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import app.serenada.core.call.AudioDevice
 import app.serenada.core.call.AudioIntent
-import app.serenada.core.call.AudioCoordinatorCapabilities
 import app.serenada.core.call.AudioCoordinatorEvent
 import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.AudioDeviceKind
-import app.serenada.core.call.PttPolicy
-import app.serenada.core.call.SessionOwnership
-import app.serenada.core.call.InterruptionReason
 import app.serenada.core.call.dedupeParticipants
 import app.serenada.core.call.resolveHostPeerId
 import app.serenada.core.call.ConnectionStatusTracker
@@ -218,7 +214,6 @@ class SerenadaSession internal constructor(
     private var pendingJoinRoom: String? = null
     private val recoveryStorage = RecoveryStorage(appContext)
     private var sessionStartTs: Long? = null
-    private var audioCoordinatorCapabilities: AudioCoordinatorCapabilities? = null
     private var userMuted = false
     private var externalAudioMuted = false
     private var playbackDuckingActive = false
@@ -1065,10 +1060,9 @@ class SerenadaSession internal constructor(
         acquirePerformanceLocks()
         providerScope.launch {
             try {
-                val caps = audioCoordinatorMutex.withLock {
+                audioCoordinatorMutex.withLock {
                     audioCoordinator.activateCallSession(config.audioIntent)
                 }
-                audioCoordinatorCapabilities = caps
                 callAudioSessionController.activate()
                 webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
                 userMuted = !config.defaultAudioEnabled
@@ -1838,65 +1832,20 @@ class SerenadaSession internal constructor(
                 _currentAudioDevice.value = event.output
                 updateEffectiveMicState()
             }
-            is AudioCoordinatorEvent.AudioSessionInterrupted -> {
-                if (config.audioIntent.muteOwnMicDuringExternalAudio) {
+            is AudioCoordinatorEvent.ExternalAudioStarted -> {
+                if (config.audioIntent.muteDuringExternalAudio) {
                     externalAudioMuted = true
                     updateEffectiveMicState()
                 }
-                if (config.audioIntent.duckOwnPlaybackDuringExternalAudio) {
-                    playbackDuckingActive = true
-                    peerSlots.values.forEach { it.duckPlayback(true) }
-                }
-                val caps = audioCoordinatorCapabilities
-                if (caps != null && caps.pttPolicy == PttPolicy.PREEMPT) {
-                    if (currentRoomState != null || _diagnostics.value.isSignalingConnected) {
-                        signalingProvider.leaveRoom()
-                    }
-                    cleanupCall(EndReason.LocalLeft)
-                }
-            }
-            is AudioCoordinatorEvent.AudioSessionResumed -> {
-                externalAudioMuted = false
-                updateEffectiveMicState()
-                if (config.audioIntent.duckOwnPlaybackDuringExternalAudio) {
-                    playbackDuckingActive = false
-                    peerSlots.values.forEach { it.duckPlayback(false) }
-                }
-            }
-            is AudioCoordinatorEvent.InputUnavailable -> {
-                routeInputAvailable = false
-                if (audioCoordinatorCapabilities?.canShareInput == false) {
-                    webRtcEngine.suspendCapture()
-                    providerScope.launch {
-                        runCatching { audioCoordinator.suspendCapture() }
-                    }
-                }
-                updateEffectiveMicState()
-            }
-            is AudioCoordinatorEvent.InputAvailable -> {
-                routeInputAvailable = true
-                if (audioCoordinatorCapabilities?.canShareInput == false) {
-                    webRtcEngine.resumeCapture()
-                    providerScope.launch {
-                        runCatching { audioCoordinator.resumeCapture() }
-                    }
-                }
-                updateEffectiveMicState()
-            }
-            is AudioCoordinatorEvent.FocusLost -> {
-                if (!event.transient && config.audioIntent.muteOwnMicDuringExternalAudio) {
-                    externalAudioMuted = true
-                    updateEffectiveMicState()
-                }
-                if (event.transient && config.audioIntent.duckOwnPlaybackDuringExternalAudio) {
+                if (config.audioIntent.duckDuringExternalAudio) {
                     playbackDuckingActive = true
                     peerSlots.values.forEach { it.duckPlayback(true) }
                 }
             }
-            is AudioCoordinatorEvent.FocusRegained -> {
+            is AudioCoordinatorEvent.ExternalAudioEnded -> {
                 externalAudioMuted = false
                 updateEffectiveMicState()
-                if (playbackDuckingActive) {
+                if (config.audioIntent.duckDuringExternalAudio) {
                     playbackDuckingActive = false
                     peerSlots.values.forEach { it.duckPlayback(false) }
                 }

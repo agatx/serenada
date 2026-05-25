@@ -13,8 +13,6 @@ internal interface SessionMediaEngine {
     fun startLocalMedia(startVideoCapture: Boolean)
     fun release()
     fun toggleAudio(enabled: Boolean)
-    fun suspendCapture()
-    fun resumeCapture()
     fun toggleVideo(enabled: Boolean): Boolean
     fun flipCamera()
     fun startScreenShare(intent: Intent): Boolean

@@ -67,16 +67,14 @@ internal class DefaultAudioCoordinator(
         logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus changed: $focusChange")
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                _events.tryEmit(AudioCoordinatorEvent.FocusLost(true))
-                _events.tryEmit(AudioCoordinatorEvent.AudioSessionInterrupted(InterruptionReason.SYSTEM_AUDIO))
+                _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                _events.tryEmit(AudioCoordinatorEvent.FocusLost(true))
+                _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
                 audioFocusGranted = false
-                _events.tryEmit(AudioCoordinatorEvent.FocusLost(false))
-                _events.tryEmit(AudioCoordinatorEvent.AudioSessionInterrupted(InterruptionReason.SYSTEM_AUDIO))
+                _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
                 handler.post {
                     if (!audioSessionActive) return@post
                     requestAudioFocus()
@@ -84,8 +82,7 @@ internal class DefaultAudioCoordinator(
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 audioFocusGranted = true
-                _events.tryEmit(AudioCoordinatorEvent.FocusRegained)
-                _events.tryEmit(AudioCoordinatorEvent.AudioSessionResumed)
+                _events.tryEmit(AudioCoordinatorEvent.ExternalAudioEnded)
             }
             else -> Unit
         }
@@ -181,19 +178,8 @@ internal class DefaultAudioCoordinator(
 
     // MARK: - SerenadaAudioCoordinator Conformance
 
-    override suspend fun activateCallSession(intent: AudioIntent): AudioCoordinatorCapabilities {
+    override suspend fun activateCallSession(intent: AudioIntent) {
         activate()
-        return AudioCoordinatorCapabilities(
-            pttPolicy = PttPolicy.BLOCK,
-            canShareInput = true,
-            sessionOwnership = SessionOwnership.SDK_OWNED,
-            supportedDeviceKinds = listOf(
-                AudioDeviceKind.WiredHeadset,
-                AudioDeviceKind.Bluetooth(BluetoothProfile.UNKNOWN),
-                AudioDeviceKind.Speakerphone,
-                AudioDeviceKind.Earpiece
-            )
-        )
     }
 
     override suspend fun deactivateCallSession() {
@@ -243,14 +229,6 @@ internal class DefaultAudioCoordinator(
         if (!audioFocusGranted) {
             requestAudioFocus()
         }
-    }
-
-    override suspend fun suspendCapture() {
-        // No-op for default coordinator
-    }
-
-    override suspend fun resumeCapture() {
-        // No-op for default coordinator
     }
 
     private fun onAudioDevicesChanged() {

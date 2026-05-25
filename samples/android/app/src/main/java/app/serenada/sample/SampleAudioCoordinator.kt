@@ -5,12 +5,8 @@ import app.serenada.core.call.AudioDeviceDirection
 import app.serenada.core.call.AudioDeviceKind
 import app.serenada.core.call.AudioDeviceStatus
 import app.serenada.core.call.AudioIntent
-import app.serenada.core.call.AudioCoordinatorCapabilities
 import app.serenada.core.call.AudioCoordinatorEvent
-import app.serenada.core.call.PttPolicy
-import app.serenada.core.call.SessionOwnership
 import app.serenada.core.call.SerenadaAudioCoordinator
-import app.serenada.core.call.InterruptionReason
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -50,17 +46,8 @@ class SampleAudioCoordinator : SerenadaAudioCoordinator {
     private val _events = MutableSharedFlow<AudioCoordinatorEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<AudioCoordinatorEvent> = _events.asSharedFlow()
 
-    override suspend fun activateCallSession(intent: AudioIntent): AudioCoordinatorCapabilities {
+    override suspend fun activateCallSession(intent: AudioIntent) {
         Log.d(TAG, "activateCallSession called with intent: $intent")
-        return AudioCoordinatorCapabilities(
-            pttPolicy = PttPolicy.COEXIST,
-            canShareInput = true,
-            sessionOwnership = SessionOwnership.HOST_OWNED,
-            supportedDeviceKinds = listOf(
-                AudioDeviceKind.Speakerphone,
-                AudioDeviceKind.Earpiece
-            )
-        )
     }
 
     override suspend fun deactivateCallSession() {
@@ -77,21 +64,13 @@ class SampleAudioCoordinator : SerenadaAudioCoordinator {
         Log.d(TAG, "setMicMuted: $muted")
     }
 
-    override suspend fun suspendCapture() {
-        Log.d(TAG, "suspendCapture called")
-    }
-
-    override suspend fun resumeCapture() {
-        Log.d(TAG, "resumeCapture called")
-    }
-
-    fun simulatePttPress(active: Boolean) {
+    fun simulateExternalAudio(active: Boolean) {
         if (active) {
-            Log.d(TAG, "Simulating PTT Press: Interrupting audio session")
-            _events.tryEmit(AudioCoordinatorEvent.AudioSessionInterrupted(InterruptionReason.PTT_TRANSMISSION))
+            Log.d(TAG, "Simulating external audio start")
+            _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
         } else {
-            Log.d(TAG, "Simulating PTT Release: Resuming audio session")
-            _events.tryEmit(AudioCoordinatorEvent.AudioSessionResumed)
+            Log.d(TAG, "Simulating external audio end")
+            _events.tryEmit(AudioCoordinatorEvent.ExternalAudioEnded)
         }
     }
 }

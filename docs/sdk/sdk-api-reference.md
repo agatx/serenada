@@ -99,8 +99,8 @@ Android and iOS expose a pluggable audio coordination surface for hosts that nee
 
 - `SerenadaConfig.audioCoordinator`: optional custom `SerenadaAudioCoordinator`.
 - `SerenadaConfig.audioIntent`: `AudioIntent` passed to the coordinator during call activation.
-- `SerenadaAudioCoordinator`: protocol/interface for activation, deactivation, route selection, mic mute notification, capture suspend/resume, route streams, and coordinator events.
-- Model types: `AudioDevice`, `AudioDeviceKind`, `AudioDeviceDirection`, `AudioDeviceStatus`, `BluetoothProfile`, `AudioIntent`, `AudioCoordinatorCapabilities`, `PttPolicy`, `SessionOwnership`, `InterruptionReason`, and `AudioCoordinatorEvent`.
+- `SerenadaAudioCoordinator`: protocol/interface for activation, deactivation, route selection, mic mute notification, route streams, and external-audio events.
+- Model types: `AudioDevice`, `AudioDeviceKind`, `AudioDeviceDirection`, `AudioDeviceStatus`, `BluetoothProfile`, `AudioIntent`, and `AudioCoordinatorEvent`.
 - `SerenadaSession.availableAudioDevices`: coordinator-published route list.
 - `SerenadaSession.currentAudioDevice`: selected or active output route.
 - `SerenadaSession.isMicMuted`: effective microphone mute state.
@@ -110,7 +110,7 @@ Android and iOS expose a pluggable audio coordination surface for hosts that nee
 
 The SDK's default audio coordinator is internal implementation detail. To use default behavior, leave `audioCoordinator` unset. To customize behavior, implement `SerenadaAudioCoordinator` and inject it through `SerenadaConfig`.
 
-`isMicMuted` is composed from user mute, external-audio mute, and input-route availability. `isMicMutedByExternalAudio` lets host UIs distinguish push-to-talk or other coordinator-driven interruptions from a manual user mute.
+`isMicMuted` is composed from user mute, external-audio mute, and input-route availability. `isMicMutedByExternalAudio` lets host UIs distinguish coordinator-driven external audio from a manual user mute.
 
 ### Diagnostics
 

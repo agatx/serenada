@@ -27,13 +27,19 @@ func callAudioRouteOptions(
 ) -> [AudioDevice] {
     let candidates = (availableAudioDevices + [currentAudioDevice].compactMap { $0 })
         .filter(\.isCallAudioOutputRoute)
+    let visibleCandidates = candidates.contains(where: { device in
+        if case .bluetooth(_) = device.kind { return true }
+        return false
+    })
+        ? candidates.filter { $0.kind != .earpiece }
+        : candidates
     let activeKeys = Set(
-        candidates
+        visibleCandidates
             .filter { $0.status == .active || $0 == currentAudioDevice }
             .map(callAudioRouteKey)
     )
     var devicesByRoute: [String: AudioDevice] = [:]
-    for device in candidates {
+    for device in visibleCandidates {
         let key = callAudioRouteKey(device)
         if let existing = devicesByRoute[key] {
             devicesByRoute[key] = preferredCallAudioRouteDisplay(existing, candidate: device)
@@ -100,7 +106,7 @@ func callAudioRouteSystemImage(_ kind: AudioDeviceKind?) -> String {
     }
 }
 
-private func callAudioRouteKey(_ device: AudioDevice) -> String {
+func callAudioRouteKey(_ device: AudioDevice) -> String {
     let routeName = device.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     let fallback = device.id.isEmpty ? routeName : device.id
 

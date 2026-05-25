@@ -238,7 +238,7 @@ session.end()     // terminates room for all
 
 ## Pluggable Audio Coordinators
 
-By default, `serenada-core` manages Android audio focus, `MODE_IN_COMMUNICATION`, route changes, and proximity behavior with an internal coordinator. Apps that already own process-wide audio state, such as push-to-talk hosts, can inject a custom `SerenadaAudioCoordinator`:
+By default, `serenada-core` manages Android audio focus, `MODE_IN_COMMUNICATION`, route changes, and proximity behavior with an internal coordinator. Apps that already own process-wide audio state, such as apps with an existing audio engine, can inject a custom `SerenadaAudioCoordinator`:
 
 ```kotlin
 val serenada = SerenadaCore(
@@ -246,16 +246,17 @@ val serenada = SerenadaCore(
         serverHost = "serenada.app",
         audioCoordinator = MyAudioCoordinator(),
         audioIntent = AudioIntent(
-            supportsVideo = true,
-            muteOwnMicDuringExternalAudio = true,
-            duckOwnPlaybackDuringExternalAudio = true,
+            requiresCapture = true,
+            requiresPlayback = true,
+            muteDuringExternalAudio = true,
+            duckDuringExternalAudio = true,
         ),
     ),
     context = applicationContext,
 )
 ```
 
-Custom coordinators implement `SerenadaAudioCoordinator`. They activate and deactivate call audio, apply route selections, publish `availableDevices`, `effectiveInputDevice`, `effectiveOutputDevice`, and emit `AudioCoordinatorEvent` values for interruptions, resume, focus changes, and input availability.
+Custom coordinators implement `SerenadaAudioCoordinator`. They activate and deactivate call audio, apply route selections, publish `availableDevices`, `effectiveInputDevice`, `effectiveOutputDevice`, and emit `AudioCoordinatorEvent.ExternalAudioStarted` / `ExternalAudioEnded` when host-owned audio should temporarily mute local capture or duck playback.
 
 The concrete default coordinator is internal SDK behavior, not a supported public class to instantiate. Leave `audioCoordinator = null` to use it.
 
@@ -270,7 +271,7 @@ lifecycleScope.launch {
 
 lifecycleScope.launch {
     session.isMicMutedByExternalAudio.collect { mutedByExternalAudio ->
-        // Show a distinct push-to-talk or external-audio mute state if needed.
+        // Show a distinct external-audio mute state if needed.
     }
 }
 
@@ -278,7 +279,7 @@ session.selectAudioDevice(device)
 session.setMicMuted(true)
 ```
 
-`isMicMuted` is the effective mute state: user mute, coordinator-driven external mute, and missing input route all count as muted. `isMicMutedByExternalAudio` isolates the coordinator-driven portion so the host can distinguish user mute from push-to-talk or other external audio.
+`isMicMuted` is the effective mute state: user mute, coordinator-driven external mute, and missing input route all count as muted. `isMicMutedByExternalAudio` isolates the coordinator-driven portion so the host can distinguish user mute from other external audio.
 
 ## Permissions Handling
 

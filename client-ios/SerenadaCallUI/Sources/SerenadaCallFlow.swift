@@ -354,6 +354,7 @@ private struct SessionFirstCallFlow: View {
             availableAudioDevices: session.availableAudioDevices,
             currentAudioDevice: session.currentAudioDevice,
             onToggleAudio: { session.toggleAudio() },
+            onSelectAudioDevice: { session.selectAudioDevice($0) },
             onToggleVideo: { session.toggleVideo() },
             onFlipCamera: { session.flipCamera() },
             onToggleScreenShare: toggleScreenShare,
