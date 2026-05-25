@@ -705,7 +705,7 @@ class SerenadaSession internal constructor(
         override fun onNegotiationDirty(event: NegotiationDirtyEvent) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX negotiation_dirty with=${event.withCid}")
-                peerNegotiationEngine.scheduleIceRestart(event.withCid, "negotiation-dirty", 0)
+                peerNegotiationEngine.scheduleDirtyPairRestart(event.withCid)
             }
         }
 
@@ -1601,11 +1601,11 @@ class SerenadaSession internal constructor(
             logger?.log(
                 SerenadaLogLevel.WARNING,
                 "Session",
-                "Post-reconnect snapshot timeout after ${WebRtcResilienceConstants.EPOCH_RESYNC_TIMEOUT_MS}ms; firing ICE restart against last-known peer map",
+                "Post-reconnect snapshot timeout after ${WebRtcResilienceConstants.EPOCH_RESYNC_TIMEOUT_MS}ms; recovering peers against last-known peer map",
             )
         }
         iceRestartCallsFromGate += 1
-        peerNegotiationEngine.scheduleIceRestart("signaling-reconnect", 0)
+        peerNegotiationEngine.handleSignalingReconnect()
     }
 
     private fun cancelPostReconnectResync() {

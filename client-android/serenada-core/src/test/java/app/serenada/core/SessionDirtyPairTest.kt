@@ -3,6 +3,7 @@ package app.serenada.core
 import app.serenada.core.fakes.TestSessionFactory
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -47,6 +48,30 @@ class SessionDirtyPairTest {
         assertTrue(
             "negotiation_dirty should trigger ICE restart for the named peer",
             slot.createOfferCalls > baselineOffers || slot.pendingIceRestart || slot.iceRestartTask != null,
+        )
+    }
+
+    @Test
+    fun `negotiation_dirty schedules fallback when local is not offerer`() {
+        factory.advanceToInCallWithTurn(
+            localCid = "zeta",
+            remoteCid = "alpha",
+            localJoinedAt = 2,
+            remoteJoinedAt = 1,
+        )
+        val slot = factory.fakeMedia.fakeSlots.getValue("alpha")
+        slot.cancelNonHostFallbackTask()
+
+        factory.fakeProvider.simulateNegotiationDirty(withCid = "alpha")
+        ShadowLooper.idleMainLooper()
+
+        assertTrue(
+            "Non-offerer should arm the fallback offer path",
+            slot.nonHostFallbackTask != null,
+        )
+        assertFalse(
+            "Non-offerer must not wedge on a pending ICE restart it cannot send",
+            slot.pendingIceRestart,
         )
     }
 

@@ -155,6 +155,25 @@ internal class PeerNegotiationEngine(
         getAllSlots().values.forEach { if (shouldIOffer(it.remoteCid)) triggerIceRestart(it.remoteCid, reason) }
     }
 
+    fun handleSignalingReconnect() {
+        getAllSlots().values.forEach { slot ->
+            if (shouldIOffer(slot.remoteCid)) {
+                triggerIceRestart(slot.remoteCid, "signaling-reconnect")
+            } else {
+                maybeScheduleNonHostOfferFallback(slot.remoteCid, "signaling-reconnect")
+            }
+        }
+    }
+
+    fun scheduleDirtyPairRestart(remoteCid: String) {
+        getSlot(remoteCid) ?: return
+        if (shouldIOffer(remoteCid)) {
+            scheduleIceRestart(remoteCid, "negotiation-dirty", 0)
+        } else {
+            maybeScheduleNonHostOfferFallback(remoteCid, "negotiation-dirty")
+        }
+    }
+
     fun resetAll() {
         clearOfferTimeout()
         clearIceRestartTimer()

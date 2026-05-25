@@ -213,6 +213,25 @@ final class PeerNegotiationEngine {
         }
     }
 
+    func handleSignalingReconnect() {
+        for slot in getAllSlots().values {
+            if shouldIOffer(remoteCid: slot.remoteCid) {
+                triggerIceRestart(remoteCid: slot.remoteCid, reason: "signaling-reconnect")
+            } else {
+                maybeScheduleNonHostOfferFallback(remoteCid: slot.remoteCid, reason: "signaling-reconnect")
+            }
+        }
+    }
+
+    func scheduleDirtyPairRestart(remoteCid: String) {
+        guard getSlot(remoteCid) != nil else { return }
+        if shouldIOffer(remoteCid: remoteCid) {
+            scheduleIceRestart(remoteCid: remoteCid, reason: "negotiation-dirty", delayMs: 0)
+        } else {
+            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "negotiation-dirty")
+        }
+    }
+
     func resetAll() {
         clearOfferTimeout()
         clearIceRestartTimer()

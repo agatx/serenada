@@ -1010,7 +1010,7 @@ public final class SerenadaSession: ObservableObject {
 
     fileprivate func handleProviderNegotiationDirty(_ event: NegotiationDirtyEvent) {
         logger?.log(.debug, tag: "Session", "RX negotiation_dirty with=\(event.withCid)")
-        peerNegotiationEngine?.scheduleIceRestart(remoteCid: event.withCid, reason: "negotiation-dirty", delayMs: 0)
+        peerNegotiationEngine?.scheduleDirtyPairRestart(remoteCid: event.withCid)
     }
 
     fileprivate func handleProviderRelayFailed(_ event: RelayFailedEvent) {
@@ -1433,7 +1433,7 @@ public final class SerenadaSession: ObservableObject {
             )
         }
         iceRestartCallsFromGate += 1
-        peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
+        peerNegotiationEngine?.handleSignalingReconnect()
     }
 
     private func cancelPostReconnectResync() {

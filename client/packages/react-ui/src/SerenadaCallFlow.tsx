@@ -56,6 +56,70 @@ interface RemoteStageTile {
 }
 
 const MOBILE_BROWSER_RE = /Mobi|Android|iPhone|iPad|iPod/i;
+const PLAYBACK_RETRY_EVENTS = ['pointerdown', 'touchend', 'keydown'] as const;
+
+function isAutoplayBlocked(error: unknown): boolean {
+    return typeof error === 'object'
+        && error !== null
+        && 'name' in error
+        && (error as { name?: unknown }).name === 'NotAllowedError';
+}
+
+function useMediaElementPlayback<T extends HTMLMediaElement>(
+    mediaRef: React.RefObject<T | null>,
+    stream: MediaStream | null,
+    label: string,
+): void {
+    useEffect(() => {
+        const media = mediaRef.current;
+        if (!media || !stream) return undefined;
+
+        if (media.srcObject !== stream) {
+            media.srcObject = stream;
+        }
+
+        let disposed = false;
+        let removeRetryListeners: (() => void) | null = null;
+
+        const clearRetryListeners = () => {
+            removeRetryListeners?.();
+            removeRetryListeners = null;
+        };
+
+        const play = () => {
+            if (disposed || !media.isConnected) return;
+            clearRetryListeners();
+
+            void media.play().catch((err) => {
+                if (disposed) return;
+                if (isAutoplayBlocked(err) && typeof window !== 'undefined') {
+                    const retry = () => play();
+                    PLAYBACK_RETRY_EVENTS.forEach((eventName) => {
+                        window.addEventListener(eventName, retry, { capture: true, once: true });
+                    });
+                    removeRetryListeners = () => {
+                        PLAYBACK_RETRY_EVENTS.forEach((eventName) => {
+                            window.removeEventListener(eventName, retry, { capture: true });
+                        });
+                    };
+                    return;
+                }
+
+                console.warn(`[SerenadaCallFlow] Failed to play ${label}`, err);
+            });
+        };
+
+        play();
+
+        return () => {
+            disposed = true;
+            clearRetryListeners();
+            if (media.srcObject === stream) {
+                media.srcObject = null;
+            }
+        };
+    }, [label, mediaRef, stream]);
+}
 
 function getStreamAspectRatio(stream: MediaStream): number | null {
     const track = stream.getVideoTracks()[0];
@@ -90,6 +154,37 @@ const ParticipantBadge: React.FC<{
     );
 };
 
+const RemoteAudioSink: React.FC<{
+    cid: string;
+    stream: MediaStream;
+}> = ({ cid, stream }) => {
+    const audioRef = useRef<HTMLAudioElement>(null);
+    useMediaElementPlayback(audioRef, stream, `remote audio (${cid})`);
+
+    return <audio ref={audioRef} autoPlay data-serenada-remote-audio={cid} />;
+};
+
+const StreamVideo: React.FC<{
+    stream: MediaStream;
+    muted?: boolean;
+    className?: string;
+    style?: React.CSSProperties;
+}> = ({ stream, muted = true, className, style }) => {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    useMediaElementPlayback(videoRef, stream, 'remote video');
+
+    return (
+        <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={muted}
+            className={className}
+            style={style}
+        />
+    );
+};
+
 const VideoTile: React.FC<{
     stream: MediaStream;
     label?: string;
@@ -109,7 +204,7 @@ const VideoTile: React.FC<{
 }> = ({
     stream,
     label,
-    muted = false,
+    muted = true,
     mirrored = false,
     pinned = false,
     tileStyle,
@@ -124,12 +219,7 @@ const VideoTile: React.FC<{
     onClick,
 }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
-
-    useEffect(() => {
-        if (videoRef.current && videoRef.current.srcObject !== stream) {
-            videoRef.current.srcObject = stream;
-        }
-    }, [stream]);
+    useMediaElementPlayback(videoRef, stream, 'remote video');
 
     useEffect(() => {
         if (!onAspectRatioChange || !videoRef.current) return;
@@ -1064,11 +1154,16 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         </div>
     );
 
+    const remoteAudioSinks = remoteStreamEntries.map(([cid, stream]) => (
+        <RemoteAudioSink key={cid} cid={cid} stream={stream} />
+    ));
+
     if (effectiveState.phase === 'inCall' && isMultiParty) {
         return (
             <div data-serenada-callflow="" className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
                 {callProbe}
                 {overlayContent}
+                {remoteAudioSinks}
                 <div className="call-container">
                     <div className="video-stage">
                         <div className="video-stage-viewport" ref={stageViewportRef}>
@@ -1228,6 +1323,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         <div data-serenada-callflow="" className={rootClassName} style={rootStyle} onPointerUp={handleScreenTap}>
             {callProbe}
             {overlayContent}
+            {remoteAudioSinks}
             <div className={`call-container ${effectiveLocalLarge ? 'local-large' : ''}`}>
                 <div
                     className={`video-remote-container ${effectiveLocalLarge ? 'pip' : 'primary'}`}
@@ -1238,14 +1334,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                     } : undefined}
                 >
                     {remoteStream && (
-                        <video
-                            autoPlay
-                            playsInline
-                            ref={(node) => {
-                                if (node && node.srcObject !== remoteStream) {
-                                    node.srcObject = remoteStream;
-                                }
-                            }}
+                        <StreamVideo
+                            stream={remoteStream}
+                            muted
                             className="video-remote"
                             style={{ objectFit: remoteVideoFit }}
                         />

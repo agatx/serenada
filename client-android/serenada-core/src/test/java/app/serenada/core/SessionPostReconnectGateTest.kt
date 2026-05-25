@@ -114,6 +114,40 @@ class SessionPostReconnectGateTest {
     }
 
     @Test
+    fun `gate timeout schedules fallback when local is not offerer`() {
+        factory.advanceToInCallWithTurn(
+            localCid = "zeta",
+            remoteCid = "alpha",
+            localJoinedAt = 2,
+            remoteJoinedAt = 1,
+        )
+        val slot = factory.fakeMedia.fakeSlots.getValue("alpha")
+        val baselineFires = factory.session.postReconnectResyncFireCount()
+        slot.cancelNonHostFallbackTask()
+
+        factory.fakeProvider.simulateDisconnected()
+        ShadowLooper.idleMainLooper()
+        factory.fakeProvider.simulateConnected("ws")
+        ShadowLooper.idleMainLooper()
+
+        ShadowLooper.idleMainLooper(
+            WebRtcResilienceConstants.EPOCH_RESYNC_TIMEOUT_MS,
+            TimeUnit.MILLISECONDS,
+        )
+
+        assertFalse("Gate should clear after timeout", factory.session.isPostReconnectResyncPending())
+        assertEquals(baselineFires + 1, factory.session.postReconnectResyncFireCount())
+        assertTrue(
+            "Non-offerer should arm fallback after reconnect timeout",
+            slot.nonHostFallbackTask != null,
+        )
+        assertFalse(
+            "Non-offerer must not wedge on a pending ICE restart it cannot send",
+            slot.pendingIceRestart,
+        )
+    }
+
+    @Test
     fun `subsequent room_state updates do not double-fire`() {
         factory.advanceToInCallWithTurn(
             localCid = "alpha",
