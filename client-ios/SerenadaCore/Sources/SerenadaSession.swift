@@ -545,7 +545,17 @@ public final class SerenadaSession: ObservableObject {
         case .externalAudioEnded:
             self.externalAudioMuted = false
             self.updateEffectiveMicState()
+            if playbackDuckingActive {
+                playbackDuckingActive = false
+                peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
+            }
+        case .playbackDuckingStarted:
             if config.audioIntent.duckDuringExternalAudio {
+                playbackDuckingActive = true
+                peerSlots.values.forEach { $0.duckPlayback(ducked: true) }
+            }
+        case .playbackDuckingEnded:
+            if playbackDuckingActive {
                 playbackDuckingActive = false
                 peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
             }

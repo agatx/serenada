@@ -110,6 +110,8 @@ Android and iOS expose a pluggable audio coordination surface for hosts that nee
 
 The SDK's default audio coordinator is internal implementation detail. To use default behavior, leave `audioCoordinator` unset. To customize behavior, implement `SerenadaAudioCoordinator` and inject it through `SerenadaConfig`.
 
+`AudioCoordinatorEvent.externalAudioStarted` / `ExternalAudioStarted` applies the configured external-audio mute and ducking policy. Use `playbackDuckingStarted` / `PlaybackDuckingStarted` for duck-only interruptions that should lower playback without muting capture.
+
 `isMicMuted` is composed from user mute, external-audio mute, and input-route availability. `isMicMutedByExternalAudio` lets host UIs distinguish coordinator-driven external audio from a manual user mute.
 
 ### Diagnostics

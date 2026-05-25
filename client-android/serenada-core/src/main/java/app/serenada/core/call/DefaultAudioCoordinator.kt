@@ -70,7 +70,7 @@ internal class DefaultAudioCoordinator(
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
+                _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingStarted)
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
                 audioFocusGranted = false
@@ -83,6 +83,7 @@ internal class DefaultAudioCoordinator(
             AudioManager.AUDIOFOCUS_GAIN -> {
                 audioFocusGranted = true
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioEnded)
+                _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
             }
             else -> Unit
         }

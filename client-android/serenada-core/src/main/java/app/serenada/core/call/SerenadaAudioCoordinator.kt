@@ -99,6 +99,10 @@ sealed class AudioCoordinatorEvent {
     object ExternalAudioStarted : AudioCoordinatorEvent()
     /** Host-owned external audio ended and normal call audio may resume. */
     object ExternalAudioEnded : AudioCoordinatorEvent()
+    /** Another audio owner requested playback ducking without interrupting local capture. */
+    object PlaybackDuckingStarted : AudioCoordinatorEvent()
+    /** Playback ducking is no longer needed. */
+    object PlaybackDuckingEnded : AudioCoordinatorEvent()
 }
 
 /**

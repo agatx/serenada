@@ -1845,7 +1845,19 @@ class SerenadaSession internal constructor(
             is AudioCoordinatorEvent.ExternalAudioEnded -> {
                 externalAudioMuted = false
                 updateEffectiveMicState()
+                if (playbackDuckingActive) {
+                    playbackDuckingActive = false
+                    peerSlots.values.forEach { it.duckPlayback(false) }
+                }
+            }
+            is AudioCoordinatorEvent.PlaybackDuckingStarted -> {
                 if (config.audioIntent.duckDuringExternalAudio) {
+                    playbackDuckingActive = true
+                    peerSlots.values.forEach { it.duckPlayback(true) }
+                }
+            }
+            is AudioCoordinatorEvent.PlaybackDuckingEnded -> {
+                if (playbackDuckingActive) {
                     playbackDuckingActive = false
                     peerSlots.values.forEach { it.duckPlayback(false) }
                 }

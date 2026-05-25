@@ -297,6 +297,14 @@ struct FrontlineCallScreenView: View {
         callAudioRouteOptions(currentAudioDevice: currentAudioDevice, availableAudioDevices: availableAudioDevices)
     }
 
+    private var showsAudioRoute: Bool {
+        currentAudioRoute != nil || !audioRouteOptions.isEmpty
+    }
+
+    private var shouldShowMoreButton: Bool {
+        isCallSurfacePhase && (showsAudioRoute || config.screenSharingEnabled || config.inviteControlsEnabled)
+    }
+
     @ViewBuilder
     private func contentArea(
         pipFeed: FrontlineFeed?,
@@ -486,7 +494,7 @@ struct FrontlineCallScreenView: View {
             panelWidth: panelWidth,
             callControlsEnabled: isCallSurfacePhase,
             videoControlsEnabled: isCallSurfacePhase && config.videoEnabled && !uiState.availableCameraModes.isEmpty,
-            showMoreButton: isCallSurfacePhase,
+            showMoreButton: shouldShowMoreButton,
             snapshotSource: snapshotSource,
             snapshotHandler: onSnapshotRequested,
             reservePreviewActions: isLandscape,
@@ -583,9 +591,9 @@ struct FrontlineCallScreenView: View {
 
     private var moreSheet: some View {
         Group {
-            if isMoreSheetVisible {
+            if isMoreSheetVisible && shouldShowMoreButton {
                 FrontlineMoreSheet(
-                    showsAudioRoute: currentAudioRoute != nil || !audioRouteOptions.isEmpty,
+                    showsAudioRoute: showsAudioRoute,
                     audioRouteDevice: currentAudioRoute,
                     screenSharingEnabled: config.screenSharingEnabled,
                     inviteEnabled: config.inviteControlsEnabled,

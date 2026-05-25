@@ -362,7 +362,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         if let pinnedOutputKind {
             if isPinnedOutputKindAvailable(pinnedOutputKind) {
                 do {
-                    try applyOutputRoute(for: pinnedOutputKind)
+                    try applyManagedOutputRoute(for: pinnedOutputKind)
                 } catch {
                     logger?.log(.error, tag: "Audio", "pinned route apply failed: \(error)")
                 }
@@ -405,20 +405,21 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     private func applyBluetoothRoutePreference() throws {
+        try applyManagedOutputRoute(for: .bluetooth(profile: .hfp))
+    }
+
+    private func applyManagedOutputRoute(for kind: AudioDeviceKind) throws {
 #if canImport(WebRTC)
         let rtcAudioSession = RTCAudioSession.sharedInstance()
         rtcAudioSession.lockForConfiguration()
         defer { rtcAudioSession.unlockForConfiguration() }
         try Self.applyUserSelectedOutputRoute(
-            for: .bluetooth(profile: .hfp),
+            for: kind,
             audioSession: audioSession,
             rtcAudioSession: rtcAudioSession
         )
 #else
-        if let input = audioSession.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
-            try audioSession.setPreferredInput(input)
-        }
-        try audioSession.overrideOutputAudioPort(.none)
+        try applyOutputRoute(for: kind)
 #endif
     }
 

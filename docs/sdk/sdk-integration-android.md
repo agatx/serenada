@@ -256,7 +256,7 @@ val serenada = SerenadaCore(
 )
 ```
 
-Custom coordinators implement `SerenadaAudioCoordinator`. They activate and deactivate call audio, apply route selections, publish `availableDevices`, `effectiveInputDevice`, `effectiveOutputDevice`, and emit `AudioCoordinatorEvent.ExternalAudioStarted` / `ExternalAudioEnded` when host-owned audio should temporarily mute local capture or duck playback.
+Custom coordinators implement `SerenadaAudioCoordinator`. They activate and deactivate call audio, apply route selections, publish `availableDevices`, `effectiveInputDevice`, `effectiveOutputDevice`, and emit `AudioCoordinatorEvent.ExternalAudioStarted` / `ExternalAudioEnded` when host-owned audio should temporarily mute local capture or duck playback. For duck-only interruptions that should not mute capture, emit `PlaybackDuckingStarted` / `PlaybackDuckingEnded`.
 
 The concrete default coordinator is internal SDK behavior, not a supported public class to instantiate. Leave `audioCoordinator = null` to use it.
 

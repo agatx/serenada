@@ -131,6 +131,10 @@ public enum AudioCoordinatorEvent: Sendable {
     case externalAudioStarted
     /// Host-owned external audio ended and normal call audio may resume.
     case externalAudioEnded
+    /// Another audio owner requested playback ducking without interrupting local capture.
+    case playbackDuckingStarted
+    /// Playback ducking is no longer needed.
+    case playbackDuckingEnded
 }
 
 /// Host-provided audio coordination contract for Serenada call sessions.

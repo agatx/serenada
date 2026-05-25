@@ -179,9 +179,11 @@ AudioCoordinatorEvent (facts, coordinator → SDK):
   - effectiveRouteChanged(input: AudioDevice?, output: AudioDevice?)
   - externalAudioStarted
   - externalAudioEnded
+  - playbackDuckingStarted
+  - playbackDuckingEnded
 ```
 
-The coordinator no longer prescribes "suspend everything" or "mute mic only." It says "host-owned audio is starting" and the SDK applies the configured intent.
+The coordinator no longer prescribes "suspend everything" or "mute mic only." It says "host-owned audio is starting" and the SDK applies the configured intent. Duck-only events exist for Android-style transient focus where the system asks playback to duck but capture should continue.
 
 ### Swift Protocol
 
@@ -248,6 +250,7 @@ The session tracks two independent mute bits plus a runtime route fact. This is 
 
 - `userMuted: Bool` — set by `session.setMicMuted(muted)`. Persists across interruptions.
 - `externalAudioMuted: Bool` — set automatically when the coordinator reports `externalAudioStarted` **if** `intent.muteDuringExternalAudio` is true. Cleared on `externalAudioEnded`.
+- `playbackDuckingActive: Bool` — set automatically when the coordinator reports `externalAudioStarted` or `playbackDuckingStarted` **if** `intent.duckDuringExternalAudio` is true. Cleared on `externalAudioEnded` or `playbackDuckingEnded`.
 - `routeInputAvailable: Bool` — derived from the coordinator's `effectiveInputDevice`. False when no input route exists (mic permission lost, input device disconnected, host capture lock held on a serialized-capture Android device).
 
 Effective WebRTC sender enabled = `!userMuted && !externalAudioMuted && routeInputAvailable`.
