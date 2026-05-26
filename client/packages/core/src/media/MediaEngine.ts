@@ -9,6 +9,7 @@ import {
     ICE_CANDIDATE_BUFFER_MAX,
     CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
+    OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS,
     OUTBOUND_MEDIA_STALL_SAMPLES,
     OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS,
 } from '../constants.js';
@@ -110,6 +111,7 @@ export class MediaEngine {
     private visibilityHandler: (() => void) | null = null;
     private pageShowHandler: ((e: PageTransitionEvent) => void) | null = null;
     private heartbeatInterval: number | null = null;
+    private outboundMediaWatchdogInterval: number | null = null;
     private onlineHandler: (() => void) | null = null;
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
@@ -1341,12 +1343,15 @@ export class MediaEngine {
             const now = Date.now();
             const sleepGapMs = now - this.localVideoHeartbeatAt;
             this.localVideoHeartbeatAt = now;
-            if (!document.hidden) {
-                void this.recoverStalledOutboundMedia();
-            }
             if (document.hidden || !shouldForceLocalVideoRefresh({ sleepGapMs })) return;
             void this.refreshLocalVideoTrack('sleep-resume', true);
         }, LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS);
+
+        this.outboundMediaWatchdogInterval = window.setInterval(() => {
+            if (!document.hidden) {
+                void this.recoverStalledOutboundMedia();
+            }
+        }, OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS);
     }
 
     private removeEventListeners(): void {
@@ -1358,6 +1363,7 @@ export class MediaEngine {
         if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
         if (this.pageShowHandler) window.removeEventListener('pageshow', this.pageShowHandler);
         if (this.heartbeatInterval !== null) window.clearInterval(this.heartbeatInterval);
+        if (this.outboundMediaWatchdogInterval !== null) window.clearInterval(this.outboundMediaWatchdogInterval);
     }
 
     private async recoverStalledOutboundMedia(): Promise<void> {
