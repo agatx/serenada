@@ -434,6 +434,147 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertGreaterThan(slot.createOfferCalls, offersBefore, "Designated offerer should restart after peer reattaches")
     }
 
+    func testFourPartyReattachRestartsOnlyDeterministicOfferOwners() async throws {
+        let peerIds = ["alpha", "bravo", "charlie", "delta"]
+        let harnesses = Dictionary(uniqueKeysWithValues: peerIds.map { ($0, SessionTestHarness(handlesReconnection: true)) })
+        var cursors = Dictionary(uniqueKeysWithValues: peerIds.map { ($0, 0) })
+
+        func participants(charlieStatus: ParticipantSignalingStatus = .active) -> [SignalingProviderParticipant] {
+            peerIds.enumerated().map { index, cid in
+                SignalingProviderParticipant(
+                    peerId: cid,
+                    joinedAt: Int64(index + 1),
+                    signalingStatus: cid == "charlie" ? charlieStatus : .active
+                )
+            }
+        }
+        func sentOffers() -> [(fromCid: String, peerId: String)] {
+            var offers: [(fromCid: String, peerId: String)] = []
+            for fromCid in peerIds {
+                let localHarness = harnesses[fromCid]!
+                for message in localHarness.fakeProvider.sentPeerMessages(ofType: "offer") {
+                    offers.append((fromCid: fromCid, peerId: message.peerId))
+                }
+            }
+            return offers
+        }
+        func offerCountsBySender() -> [String: Int] {
+            Dictionary(uniqueKeysWithValues: peerIds.map { fromCid in
+                (fromCid, harnesses[fromCid]!.fakeProvider.sentPeerMessages(ofType: "offer").count)
+            })
+        }
+        func offersAfter(_ counts: [String: Int]) -> [(fromCid: String, peerId: String)] {
+            var offers: [(fromCid: String, peerId: String)] = []
+            for fromCid in peerIds {
+                let messages = harnesses[fromCid]!.fakeProvider.sentPeerMessages(ofType: "offer")
+                let startIndex = counts[fromCid] ?? 0
+                if startIndex < messages.count {
+                    for message in messages[startIndex..<messages.count] {
+                        offers.append((fromCid: fromCid, peerId: message.peerId))
+                    }
+                }
+            }
+            return offers
+        }
+        func nonStableSlots() -> [String] {
+            harnesses.flatMap { localCid, localHarness in
+                localHarness.fakeMedia.fakeSlots.compactMap { remoteCid, slot in
+                    slot.getSignalingState() == "STABLE" ? nil : "\(localCid)->\(remoteCid):\(slot.getSignalingState())"
+                }
+            }
+        }
+        func yieldAll() async {
+            for localHarness in harnesses.values {
+                await localHarness.yieldToMainActor()
+            }
+        }
+        func pumpSignals() async {
+            for _ in 0..<32 {
+                var delivered = false
+                for fromCid in peerIds {
+                    guard let localHarness = harnesses[fromCid] else { continue }
+                    let messages = localHarness.fakeProvider.sentToPeer
+                    let startIndex = cursors[fromCid] ?? 0
+                    if startIndex < messages.count {
+                        for index in startIndex..<messages.count {
+                            let message = messages[index]
+                            guard let targetHarness = harnesses[message.peerId] else { continue }
+                            var payload = message.payload ?? [:]
+                            payload["from"] = .string(fromCid)
+                            targetHarness.fakeProvider.simulateMessage(from: fromCid, type: message.type, payload: payload)
+                            delivered = true
+                        }
+                    }
+                    cursors[fromCid] = messages.count
+                }
+                await yieldAll()
+                if !delivered { return }
+            }
+            XCTFail("Timed out pumping loopback signaling")
+        }
+        func settleSignals() async {
+            for _ in 0..<8 {
+                await yieldAll()
+                await pumpSignals()
+            }
+        }
+
+        defer {
+            for localHarness in harnesses.values {
+                localHarness.tearDown()
+            }
+        }
+
+        for localHarness in harnesses.values {
+            localHarness.fakeProvider.iceServerResults = [
+                .success([IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")])
+            ]
+            await localHarness.advancePastPermissions()
+            localHarness.openSignaling()
+        }
+        for localCid in peerIds {
+            let localHarness = try XCTUnwrap(harnesses[localCid])
+            localHarness.fakeProvider.simulateJoined(
+                peerId: localCid,
+                participants: participants(),
+                hostPeerId: "alpha"
+            )
+            await localHarness.yieldToMainActor()
+        }
+        await settleSignals()
+
+        XCTAssertEqual(harnesses.values.map { $0.fakeMedia.fakeSlots.count }.sorted(), [3, 3, 3, 3])
+        XCTAssertEqual(sentOffers().count, 6)
+        XCTAssertTrue(nonStableSlots().isEmpty, "Initial negotiation should settle: \(nonStableSlots())")
+        XCTAssertTrue(sentOffers().allSatisfy { $0.fromCid < $0.peerId }, "All offers must come from the lexicographically lower peer")
+
+        let baselineOfferCounts = offerCountsBySender()
+        let baselineOfferTotal = sentOffers().count
+        for localHarness in harnesses.values {
+            localHarness.fakeProvider.simulateRoomState(
+                participants: participants(charlieStatus: .suspended),
+                hostPeerId: "alpha"
+            )
+        }
+        await settleSignals()
+        XCTAssertEqual(sentOffers().count, baselineOfferTotal, "Suspending charlie must not send new offers")
+
+        let charlieHarness = try XCTUnwrap(harnesses["charlie"])
+        charlieHarness.fakeProvider.simulateDisconnected(reason: "chaos")
+        await charlieHarness.yieldToMainActor()
+        charlieHarness.fakeProvider.simulateConnected()
+        await charlieHarness.yieldToMainActor()
+        for localHarness in harnesses.values {
+            localHarness.fakeProvider.simulateRoomState(participants: participants(), hostPeerId: "alpha")
+        }
+        await settleSignals()
+
+        let reconnectOfferRoutes = Set(offersAfter(baselineOfferCounts).map { "\($0.fromCid)->\($0.peerId)" })
+        XCTAssertEqual(reconnectOfferRoutes, Set(["alpha->charlie", "bravo->charlie", "charlie->delta"]))
+        XCTAssertEqual(sentOffers().count, baselineOfferTotal + 3, "Reconnect should send exactly one offer per affected pair")
+        XCTAssertTrue(nonStableSlots().isEmpty, "Reconnect negotiation should settle: \(nonStableSlots())")
+    }
+
     // MARK: - Group 8: Signaling Reconnect
 
     func testSignalingReconnectDuringInCallTriggersIceRestart() async throws {

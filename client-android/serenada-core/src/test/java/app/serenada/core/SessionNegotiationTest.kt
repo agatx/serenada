@@ -5,6 +5,7 @@ import app.serenada.core.SignalingProviderParticipant
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.fakes.FakePeerConnectionSlot
+import app.serenada.core.fakes.SentProviderMessage
 import app.serenada.core.fakes.TestSessionFactory
 import org.junit.After
 import org.junit.Assert.*
@@ -330,6 +331,134 @@ class SessionNegotiationTest {
         ShadowLooper.idleMainLooper()
 
         assertTrue("Designated offerer should restart after peer reattaches", slot.createOfferCalls > offersBefore)
+    }
+
+    @Test
+    fun `four-party reattach restarts only deterministic offer owners`() {
+        val peerIds = listOf("alpha", "bravo", "charlie", "delta")
+        val factories = peerIds.associateWith { TestSessionFactory(handlesReconnection = true) }
+        val cursors = peerIds.associateWith { 0 }.toMutableMap()
+        val joinedParticipants = peerIds.mapIndexed { index, cid -> cid to (index + 1).toLong() }
+
+        fun participants(charlieStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE): List<SignalingProviderParticipant> =
+            peerIds.mapIndexed { index, cid ->
+                SignalingProviderParticipant(
+                    peerId = cid,
+                    joinedAt = (index + 1).toLong(),
+                    connectionStatus = if (cid == "charlie") charlieStatus else ParticipantSignalingStatus.ACTIVE,
+                )
+            }
+        fun sentOffers(): List<Pair<String, SentProviderMessage>> =
+            peerIds.flatMap { fromCid ->
+                factories[fromCid]!!.fakeProvider.sentMessages("offer").map { fromCid to it }
+            }
+        fun offerCountsBySender(): Map<String, Int> =
+            peerIds.associateWith { fromCid -> factories[fromCid]!!.fakeProvider.sentMessages("offer").size }
+        fun offersAfter(counts: Map<String, Int>): List<Pair<String, SentProviderMessage>> =
+            peerIds.flatMap { fromCid ->
+                factories[fromCid]!!.fakeProvider.sentMessages("offer")
+                    .drop(counts[fromCid] ?: 0)
+                    .map { fromCid to it }
+            }
+        fun nonStableSlots(): List<String> =
+            factories.flatMap { (localCid, localFactory) ->
+                localFactory.fakeMedia.fakeSlots.mapNotNull { (remoteCid, slot) ->
+                    if (slot.getSignalingState() == PeerConnection.SignalingState.STABLE) {
+                        null
+                    } else {
+                        "$localCid->$remoteCid:${slot.getSignalingState()}"
+                    }
+                }
+            }
+        fun pumpSignals() {
+            repeat(32) {
+                var delivered = false
+                for ((fromCid, localFactory) in factories) {
+                    val messages = localFactory.fakeProvider.sentProviderMessages
+                    val startIndex = cursors[fromCid] ?: 0
+                    for (index in startIndex until messages.size) {
+                        val message = messages[index]
+                        val targetCid = message.peerId ?: continue
+                        val targetFactory = factories[targetCid] ?: continue
+                        val payload = message.payload?.let { JSONObject(it.toString()).apply { put("from", fromCid) } }
+                        targetFactory.fakeProvider.simulateMessage(from = fromCid, type = message.type, payload = payload)
+                        delivered = true
+                    }
+                    cursors[fromCid] = messages.size
+                }
+                ShadowLooper.idleMainLooper()
+                if (!delivered) return
+            }
+            fail("Timed out pumping loopback signaling")
+        }
+
+        try {
+            val iceServers = listOf(
+                PeerConnection.IceServer.builder("turn:turn.example.com:3478")
+                    .setUsername("user")
+                    .setPassword("pass")
+                    .createIceServer()
+            )
+            for (localFactory in factories.values) {
+                localFactory.fakeProvider.enqueueIceServers(Result.success(iceServers))
+                localFactory.grantPermissionsAndStart()
+                localFactory.openSignaling()
+            }
+            for ((localCid, localFactory) in factories) {
+                localFactory.fakeProvider.simulateJoined(
+                    peerId = localCid,
+                    participants = joinedParticipants,
+                    hostPeerId = "alpha",
+                )
+                ShadowLooper.idleMainLooper()
+            }
+            pumpSignals()
+
+            assertEquals(listOf(3, 3, 3, 3), factories.values.map { it.fakeMedia.fakeSlots.size })
+            assertEquals(6, sentOffers().size)
+            assertTrue("Initial negotiation should settle: ${nonStableSlots()}", nonStableSlots().isEmpty())
+            assertTrue("All offers must come from the lexicographically lower peer", sentOffers().all { (fromCid, message) ->
+                val targetCid = message.peerId
+                targetCid != null && fromCid < targetCid
+            })
+
+            val baselineOfferCounts = offerCountsBySender()
+            val baselineOfferTotal = sentOffers().size
+            for (localFactory in factories.values) {
+                localFactory.fakeProvider.simulateRoomStateUpdatedWith(
+                    participants = participants(ParticipantSignalingStatus.SUSPENDED),
+                    hostPeerId = "alpha",
+                )
+            }
+            ShadowLooper.idleMainLooper()
+            pumpSignals()
+            assertEquals("Suspending charlie must not send new offers", baselineOfferTotal, sentOffers().size)
+
+            factories["charlie"]!!.fakeProvider.simulateDisconnected("chaos")
+            ShadowLooper.idleMainLooper()
+            factories["charlie"]!!.fakeProvider.simulateConnected()
+            ShadowLooper.idleMainLooper()
+            for (localFactory in factories.values) {
+                localFactory.fakeProvider.simulateRoomStateUpdatedWith(
+                    participants = participants(),
+                    hostPeerId = "alpha",
+                )
+            }
+            ShadowLooper.idleMainLooper()
+            pumpSignals()
+
+            val reconnectOfferRoutes = offersAfter(baselineOfferCounts)
+                .map { (fromCid, message) -> "$fromCid->${message.peerId}" }
+                .toSet()
+            assertEquals(
+                setOf("alpha->charlie", "bravo->charlie", "charlie->delta"),
+                reconnectOfferRoutes,
+            )
+            assertEquals("Reconnect should send exactly one offer per affected pair", baselineOfferTotal + 3, sentOffers().size)
+            assertTrue("Reconnect negotiation should settle: ${nonStableSlots()}", nonStableSlots().isEmpty())
+        } finally {
+            factories.values.forEach { it.tearDown() }
+        }
     }
 
     // Group 8: Signaling Reconnect
