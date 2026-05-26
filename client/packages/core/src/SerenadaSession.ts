@@ -213,7 +213,11 @@ function toMediaSignalingMessage(message: PeerMessage): SignalingMessage {
 }
 
 function isMediaSignalingMessageType(type: string): boolean {
-    return type === 'content_state' || type === 'offer' || type === 'answer' || type === 'ice';
+    return type === 'content_state' ||
+        type === 'offer' ||
+        type === 'answer' ||
+        type === 'ice' ||
+        type === 'media_restart_request';
 }
 
 /**

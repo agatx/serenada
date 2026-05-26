@@ -676,7 +676,10 @@ class SerenadaSession internal constructor(
         override fun onMessage(message: PeerMessage) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${message.type}")
-                if (message.type == "content_state" || message.type == "participant_media_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
+                if (message.type == "content_state" || message.type == "participant_media_state" ||
+                    message.type == "offer" || message.type == "answer" || message.type == "ice" ||
+                    message.type == "media_restart_request"
+                ) {
                     signalingMessageRouter.processPeerMessage(message)
                 }
             }

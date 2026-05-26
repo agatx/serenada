@@ -434,6 +434,38 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertGreaterThan(slot.createOfferCalls, offersBefore, "Designated offerer should restart after peer reattaches")
     }
 
+    func testDesignatedOffererRecreatesPeerAfterMediaRestartRequest() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "zeta",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+        let oldSlot = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        let offerId = try XCTUnwrap(harness.fakeProvider.sentPeerMessages(ofType: "offer").last?.payload?["offerId"]?.stringValue)
+        harness.simulateAnswerFromRemote(fromCid: "zeta", offerId: offerId)
+        await harness.yieldToMainActor()
+        let offersBefore = harness.fakeProvider.sentPeerMessages(ofType: "offer").count
+
+        harness.fakeProvider.simulateMessage(
+            from: "zeta",
+            type: "media_restart_request",
+            payload: [
+                "from": .string("zeta"),
+                "reason": .string("stalled outbound media")
+            ]
+        )
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "offer").count == offersBefore + 1
+        }
+
+        let replacement = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        XCTAssertFalse(oldSlot === replacement, "Media restart should replace the stale peer slot")
+        XCTAssertTrue(oldSlot.closePeerConnectionCalled, "Old slot should be closed")
+        XCTAssertGreaterThan(replacement.createOfferCalls, 0, "Replacement should send a fresh offer")
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBefore + 1)
+    }
+
     func testFourPartyReattachRestartsOnlyDeterministicOfferOwners() async throws {
         let peerIds = ["alpha", "bravo", "charlie", "delta"]
         let harnesses = Dictionary(uniqueKeysWithValues: peerIds.map { ($0, SessionTestHarness(handlesReconnection: true)) })

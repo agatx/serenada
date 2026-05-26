@@ -183,6 +183,9 @@ final class PeerNegotiationEngine {
                 offerId: offerId(from: message.payload)
             )
 
+        case "media_restart_request":
+            handleMediaRestartRequest(slot: slot, remoteCid: fromCid)
+
         default:
             break
         }
@@ -347,6 +350,20 @@ final class PeerNegotiationEngine {
         if let pendingForOffer, !pendingForOffer.isEmpty {
             pendingRemoteIceByOfferId[remoteCid] = [offerId: pendingForOffer]
         }
+        if let oldSlot = removeSlotEntry(remoteCid) {
+            engineRemoveSlot(oldSlot)
+            oldSlot.closePeerConnection()
+        }
+        let newSlot = getOrCreateSlot(remoteCid: remoteCid)
+        return (newSlot.isReady() || newSlot.ensurePeerConnection()) ? newSlot : nil
+    }
+
+    private func replacePeerSlotForMediaRecovery(
+        remoteCid: String
+    ) -> (any PeerConnectionSlotProtocol)? {
+        clearOfferTimeout(remoteCid: remoteCid)
+        clearIceRestartTimer(remoteCid: remoteCid)
+        clearNegotiationState(remoteCid: remoteCid)
         if let oldSlot = removeSlotEntry(remoteCid) {
             engineRemoveSlot(oldSlot)
             oldSlot.closePeerConnection()
@@ -630,6 +647,12 @@ final class PeerNegotiationEngine {
         if !force {
             slot.markOfferSent()
         }
+    }
+
+    private func handleMediaRestartRequest(slot: any PeerConnectionSlotProtocol, remoteCid: String) {
+        guard canOffer(slot: slot) else { return }
+        guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
+        maybeSendOffer(slot: replacement)
     }
 
     // MARK: - Offer Timeout

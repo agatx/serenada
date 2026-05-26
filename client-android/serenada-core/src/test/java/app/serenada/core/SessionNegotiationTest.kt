@@ -334,6 +334,32 @@ class SessionNegotiationTest {
     }
 
     @Test
+    fun `designated offerer recreates peer after media restart request`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
+        val oldSlot = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(oldSlot)
+        factory.simulateAnswerFromRemote("zeta", offerId = latestOfferId())
+        val offersBefore = factory.fakeProvider.sentMessages("offer").size
+
+        factory.fakeProvider.simulateMessage(
+            from = "zeta",
+            type = "media_restart_request",
+            payload = JSONObject().apply {
+                put("from", "zeta")
+                put("reason", "stalled outbound media")
+            },
+        )
+        ShadowLooper.idleMainLooper()
+
+        val replacement = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(replacement)
+        assertNotSame("Media restart should replace the stale peer slot", oldSlot, replacement)
+        assertTrue("Old slot should be closed", oldSlot!!.closePeerConnectionCalled)
+        assertTrue("Replacement should send a fresh offer", replacement!!.createOfferCalls > 0)
+        assertEquals("Exactly one fresh offer should be sent", offersBefore + 1, factory.fakeProvider.sentMessages("offer").size)
+    }
+
+    @Test
     fun `four-party reattach restarts only deterministic offer owners`() {
         val peerIds = listOf("alpha", "bravo", "charlie", "delta")
         val factories = peerIds.associateWith { TestSessionFactory(handlesReconnection = true) }

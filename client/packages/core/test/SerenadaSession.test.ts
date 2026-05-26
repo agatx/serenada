@@ -520,6 +520,25 @@ describe('SerenadaSession', () => {
             });
         });
 
+        it('forwards provider media_restart_request messages to the media engine', () => {
+            harness = new TestSessionHarness();
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'media_restart_request',
+                payload: { reason: 'stalled outbound media' },
+            });
+
+            expect(harness.media.processSignalingMessageCalls).toEqual([{
+                v: 1,
+                type: 'media_restart_request',
+                cid: 'peer-1',
+                payload: {
+                    from: 'peer-1',
+                    reason: 'stalled outbound media',
+                },
+            }]);
+        });
+
         it('forwards signaling connected state to media engine', () => {
             harness = new TestSessionHarness();
             harness.signaling.emitConnected('ws');

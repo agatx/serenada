@@ -20,9 +20,27 @@ const ICE_STATE_PRIORITY: RTCIceConnectionState[] = ['failed', 'disconnected', '
 const CONN_STATE_PRIORITY: RTCPeerConnectionState[] = ['failed', 'disconnected', 'connecting', 'new', 'connected', 'closed'];
 const SIG_STATE_PRIORITY: RTCSignalingState[] = ['closed', 'have-local-offer', 'have-remote-offer', 'have-local-pranswer', 'have-remote-pranswer', 'stable'];
 const LEGACY_OFFER_ID = '__legacy__';
+const OUTBOUND_MEDIA_STALL_SAMPLES = 2;
+const OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS = 30_000;
 
 function getSignalingState(pc: RTCPeerConnection): RTCSignalingState {
     return pc.signalingState;
+}
+
+function getStatNumber(stat: RTCStats, key: string): number {
+    const value = (stat as unknown as Record<string, unknown>)[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function getStatString(stat: RTCStats, key: string): string | null {
+    const value = (stat as unknown as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : null;
+}
+
+interface OutboundMediaSample {
+    audioBytesSent: number;
+    videoBytesSent: number;
+    videoFramesSent: number;
 }
 
 interface PeerState {
@@ -41,6 +59,10 @@ interface PeerState {
     currentNegotiationId: string | null;
     ignoredOfferId: string | null;
     pendingRemoteIceByOfferId: Map<string, RTCIceCandidateInit[]>;
+    lastOutboundMediaSample: OutboundMediaSample | null;
+    outboundMediaStallSamples: number;
+    outboundMediaWatchInFlight: boolean;
+    lastOutboundMediaRecoveryAt: number;
 }
 
 export interface MediaEngineConfig {
@@ -206,6 +228,13 @@ export class MediaEngine {
                     const ice = parseIceCandidatePayload(payload);
                     if (ice && this.isCurrentParticipant(ice.from)) {
                         void this.handleIceFrom(ice.from, ice.candidate, ice.offerId ?? LEGACY_OFFER_ID);
+                    }
+                    break;
+                }
+                case 'media_restart_request': {
+                    const fromCid = typeof payload.from === 'string' ? payload.from.trim() : '';
+                    if (fromCid && this.isCurrentParticipant(fromCid)) {
+                        void this.handleMediaRestartRequest(fromCid);
                     }
                     break;
                 }
@@ -624,6 +653,10 @@ export class MediaEngine {
             currentNegotiationId: null,
             ignoredOfferId: null,
             pendingRemoteIceByOfferId: new Map(),
+            lastOutboundMediaSample: null,
+            outboundMediaStallSamples: 0,
+            outboundMediaWatchInFlight: false,
+            lastOutboundMediaRecoveryAt: 0,
         };
 
         if (this.localStream) {
@@ -736,6 +769,7 @@ export class MediaEngine {
         const next = new Map(this.remoteStreams);
         next.delete(remoteCid);
         this.remoteStreams = next;
+        this.lastInboundBytesByCid.delete(remoteCid);
         this.updateAggregateState();
     }
 
@@ -1307,6 +1341,9 @@ export class MediaEngine {
             const now = Date.now();
             const sleepGapMs = now - this.localVideoHeartbeatAt;
             this.localVideoHeartbeatAt = now;
+            if (!document.hidden) {
+                void this.recoverStalledOutboundMedia();
+            }
             if (document.hidden || !shouldForceLocalVideoRefresh({ sleepGapMs })) return;
             void this.refreshLocalVideoTrack('sleep-resume', true);
         }, LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS);
@@ -1321,6 +1358,136 @@ export class MediaEngine {
         if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
         if (this.pageShowHandler) window.removeEventListener('pageshow', this.pageShowHandler);
         if (this.heartbeatInterval !== null) window.clearInterval(this.heartbeatInterval);
+    }
+
+    private async recoverStalledOutboundMedia(): Promise<void> {
+        if (this.destroyed || !this.localStream) return;
+        await Promise.all(
+            Array.from(this.peers.entries()).map(([remoteCid, peer]) => (
+                this.recoverStalledOutboundMediaForPeer(remoteCid, peer)
+            ))
+        );
+    }
+
+    private async recoverStalledOutboundMediaForPeer(remoteCid: string, peer: PeerState): Promise<void> {
+        if (peer.outboundMediaWatchInFlight) return;
+        if (!this.isPeerMediaConnected(peer.pc)) {
+            this.resetOutboundMediaWatch(peer);
+            return;
+        }
+
+        const expected = this.getExpectedOutboundMedia(peer.pc);
+        if (!expected.audio && !expected.video) {
+            this.resetOutboundMediaWatch(peer);
+            return;
+        }
+
+        peer.outboundMediaWatchInFlight = true;
+        try {
+            const sample = this.readOutboundMediaSample(await peer.pc.getStats());
+            const previous = peer.lastOutboundMediaSample;
+            peer.lastOutboundMediaSample = sample;
+            if (!previous) {
+                peer.outboundMediaStallSamples = 0;
+                return;
+            }
+
+            const videoStalled = expected.video &&
+                sample.videoBytesSent <= previous.videoBytesSent &&
+                sample.videoFramesSent <= previous.videoFramesSent;
+            const audioOnlyStalled = !expected.video && expected.audio &&
+                sample.audioBytesSent <= previous.audioBytesSent;
+            if (!videoStalled && !audioOnlyStalled) {
+                peer.outboundMediaStallSamples = 0;
+                return;
+            }
+
+            peer.outboundMediaStallSamples += 1;
+            if (peer.outboundMediaStallSamples < OUTBOUND_MEDIA_STALL_SAMPLES) return;
+
+            const now = Date.now();
+            if (now - peer.lastOutboundMediaRecoveryAt < OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return;
+
+            peer.lastOutboundMediaRecoveryAt = now;
+            peer.outboundMediaStallSamples = 0;
+            peer.lastOutboundMediaSample = null;
+            if (this.shouldIOffer(remoteCid)) {
+                await this.recreatePeerForMediaRecovery(remoteCid, 'stalled outbound media');
+            } else {
+                this.requestPeerMediaRecovery(remoteCid, 'stalled outbound media');
+            }
+        } catch (err) {
+            this.logger?.log('debug', 'WebRTC', `[${remoteCid}] Outbound media watchdog failed: ${formatError(err)}`);
+        } finally {
+            peer.outboundMediaWatchInFlight = false;
+        }
+    }
+
+    private isPeerMediaConnected(pc: RTCPeerConnection): boolean {
+        return pc.signalingState === 'stable' &&
+            (pc.connectionState === 'connected') &&
+            (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed');
+    }
+
+    private getExpectedOutboundMedia(pc: RTCPeerConnection): { audio: boolean; video: boolean } {
+        let audio = false;
+        let video = false;
+        for (const sender of pc.getSenders()) {
+            const track = sender.track;
+            if (!track || track.readyState !== 'live' || !track.enabled) continue;
+            if (track.kind === 'audio') audio = true;
+            if (track.kind === 'video') video = true;
+        }
+        return { audio, video };
+    }
+
+    private readOutboundMediaSample(stats: RTCStatsReport): OutboundMediaSample {
+        const sample: OutboundMediaSample = {
+            audioBytesSent: 0,
+            videoBytesSent: 0,
+            videoFramesSent: 0,
+        };
+
+        stats.forEach((stat) => {
+            if (stat.type !== 'outbound-rtp') return;
+            const kind = getStatString(stat, 'kind') ?? getStatString(stat, 'mediaType');
+            if (kind === 'audio') {
+                sample.audioBytesSent += getStatNumber(stat, 'bytesSent');
+                return;
+            }
+            if (kind === 'video') {
+                sample.videoBytesSent += getStatNumber(stat, 'bytesSent');
+                sample.videoFramesSent += getStatNumber(stat, 'framesSent');
+            }
+        });
+
+        return sample;
+    }
+
+    private resetOutboundMediaWatch(peer: PeerState): void {
+        peer.lastOutboundMediaSample = null;
+        peer.outboundMediaStallSamples = 0;
+    }
+
+    private requestPeerMediaRecovery(remoteCid: string, reason: string): void {
+        if (!this.isSignalingConnected || !this.isParticipantActive(remoteCid)) return;
+        this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Requesting media restart after ${reason}`);
+        this.sendSignalingMessage('media_restart_request', { reason }, remoteCid);
+    }
+
+    private async handleMediaRestartRequest(fromCid: string): Promise<void> {
+        await this.recreatePeerForMediaRecovery(fromCid, 'peer media restart request');
+    }
+
+    private async recreatePeerForMediaRecovery(remoteCid: string, reason: string): Promise<void> {
+        if (!this.shouldIOffer(remoteCid) || !this.isSignalingConnected || !this.isParticipantActive(remoteCid)) return;
+        const previousStatus = this.participantConnectionStatus.get(remoteCid);
+        this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Recreating peer after ${reason}`);
+        this.cleanupPeer(remoteCid);
+        if (previousStatus) this.participantConnectionStatus.set(remoteCid, previousStatus);
+        const replacement = this.getOrCreatePeer(remoteCid);
+        replacement.lastOutboundMediaRecoveryAt = Date.now();
+        await this.createOfferTo(remoteCid);
     }
 
     private notifyChange(): void { this.onChange?.(); }

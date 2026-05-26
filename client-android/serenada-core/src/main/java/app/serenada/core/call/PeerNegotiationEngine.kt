@@ -144,6 +144,9 @@ internal class PeerNegotiationEngine(
                 )
                 handleRemoteIce(slot, fromCid, candidate, offerIdFromPayload(msg.payload))
             }
+            "media_restart_request" -> {
+                handleMediaRestartRequest(slot, fromCid)
+            }
         }
     }
 
@@ -279,6 +282,18 @@ internal class PeerNegotiationEngine(
         if (!pendingForOffer.isNullOrEmpty()) {
             pendingRemoteIceByOfferId[remoteCid] = mutableMapOf(offerId to pendingForOffer)
         }
+        removeSlotEntry(remoteCid)?.let { oldSlot ->
+            engineRemoveSlot(oldSlot)
+            oldSlot.closePeerConnection(deferDispose = true)
+        }
+        val newSlot = getOrCreateSlot(remoteCid)
+        return newSlot.takeIf { it.isReady() || it.ensurePeerConnection() }
+    }
+
+    private fun replacePeerSlotForMediaRecovery(remoteCid: String): PeerConnectionSlotProtocol? {
+        clearOfferTimeout(remoteCid)
+        clearIceRestartTimer(remoteCid)
+        clearNegotiationState(remoteCid)
         removeSlotEntry(remoteCid)?.let { oldSlot ->
             engineRemoveSlot(oldSlot)
             oldSlot.closePeerConnection(deferDispose = true)
@@ -532,6 +547,13 @@ internal class PeerNegotiationEngine(
             return
         }
         if (!force) slot.markOfferSent()
+    }
+
+    private fun handleMediaRestartRequest(slot: PeerConnectionSlotProtocol, remoteCid: String) {
+        if (!canOffer(slot)) return
+        logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after media restart request from $remoteCid")
+        val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
+        maybeSendOffer(replacement)
     }
 
     // --- Timers ---

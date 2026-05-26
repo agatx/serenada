@@ -555,7 +555,37 @@ schedule fresh negotiation against confirmed state.
 
 ---
 
-### 4.16 `media_liveness` (client → server)
+### 4.16 `media_restart_request` (client → server → client)
+
+Asks the deterministic offer owner for a peer pair to recreate that pair and
+send a fresh offer because media stopped flowing even though SDP, ICE, and
+peer-connection states still look healthy.
+
+```json
+{
+  "v": 1,
+  "type": "media_restart_request",
+  "rid": "AbC123",
+  "to": "C-c3d4...",
+  "payload": {
+    "reason": "stalled outbound media"
+  }
+}
+```
+
+**Server behavior**
+- Relay like `offer`/`answer`/`ice` and add `from` to the payload.
+
+**Client behavior**
+- If the receiver is the deterministic offer owner for `from`, close and
+  recreate that peer connection, then send a fresh offer.
+- If the receiver is not the offer owner, ignore the request.
+- Do not let this bypass perfect negotiation ownership; non-offerers request
+  recovery instead of sending their own offer.
+
+---
+
+### 4.17 `media_liveness` (client → server)
 
 Hint reported by an active client that it is currently receiving inbound
 media from one or more remote CIDs. The server uses this to defer

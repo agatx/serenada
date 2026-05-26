@@ -991,7 +991,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func handleProviderMessage(_ message: PeerMessage) {
-        guard ["content_state", "participant_media_state", "offer", "answer", "ice"].contains(message.type) else { return }
+        guard ["content_state", "participant_media_state", "offer", "answer", "ice", "media_restart_request"].contains(message.type) else { return }
         signalingMessageRouter?.processPeerMessage(message)
     }
 
