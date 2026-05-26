@@ -412,6 +412,7 @@ class SerenadaSession internal constructor(
     private var mediaLivenessTickRunnable: Runnable? = null
     private var mediaLivenessEmitInFlight = false
     private var mediaLivenessEmitCount = 0
+    private var outboundMediaWatchdogRunnable: Runnable? = null
     private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private val availableCameraModes: List<LocalCameraMode> = resolveAvailableCameraModes()
@@ -1315,7 +1316,10 @@ class SerenadaSession internal constructor(
         updateConnectionStatusFromSignals()
         // Start media-liveness emission only once we have remote peers — there's
         // nothing to report when alone in the room.
-        if (phase == CallPhase.InCall) startMediaLivenessTimer()
+        if (phase == CallPhase.InCall) {
+            startMediaLivenessTimer()
+            startOutboundMediaWatchdog()
+        }
     }
 
     private fun refreshRemoteParticipants() {
@@ -1525,6 +1529,23 @@ class SerenadaSession internal constructor(
         mediaLivenessTickRunnable = null
     }
 
+    private fun startOutboundMediaWatchdog() {
+        if (outboundMediaWatchdogRunnable != null) return
+        val runnable = object : Runnable {
+            override fun run() {
+                peerNegotiationEngine.recoverStalledOutboundMedia()
+                handler.postDelayed(this, WebRtcResilienceConstants.OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS)
+            }
+        }
+        outboundMediaWatchdogRunnable = runnable
+        handler.postDelayed(runnable, WebRtcResilienceConstants.OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS)
+    }
+
+    private fun stopOutboundMediaWatchdog() {
+        outboundMediaWatchdogRunnable?.let { handler.removeCallbacks(it) }
+        outboundMediaWatchdogRunnable = null
+    }
+
     private fun emitMediaLiveness() {
         if (_state.value.phase == CallPhase.Idle || _state.value.phase == CallPhase.Ending) return
         if (mediaLivenessEmitInFlight) return
@@ -1653,6 +1674,7 @@ class SerenadaSession internal constructor(
         cancelPostReconnectResync()
         clearAllRemoteSuspensionTracking()
         stopMediaLivenessTimer()
+        stopOutboundMediaWatchdog()
         lastInboundBytesByCid.clear()
         mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = null

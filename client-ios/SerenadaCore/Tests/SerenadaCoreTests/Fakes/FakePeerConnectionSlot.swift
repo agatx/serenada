@@ -202,6 +202,18 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
     }
+    var outboundMediaSample: OutboundMediaSample? = OutboundMediaSample(
+        expectsAudio: true,
+        expectsVideo: true,
+        audioBytesSent: 0,
+        videoBytesSent: 0,
+        videoFramesSent: 0
+    )
+    private(set) var collectOutboundMediaSampleCalls = 0
+    func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void) {
+        collectOutboundMediaSampleCalls += 1
+        onComplete(outboundMediaSample)
+    }
     func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
         onComplete(nil, nil)
     }

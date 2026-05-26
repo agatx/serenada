@@ -3,6 +3,7 @@ package app.serenada.core
 import app.serenada.core.ParticipantSignalingStatus
 import app.serenada.core.SignalingProviderParticipant
 import app.serenada.core.call.CallPhase
+import app.serenada.core.call.OutboundMediaSample
 import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.fakes.FakePeerConnectionSlot
 import app.serenada.core.fakes.SentProviderMessage
@@ -357,6 +358,67 @@ class SessionNegotiationTest {
         assertTrue("Old slot should be closed", oldSlot!!.closePeerConnectionCalled)
         assertTrue("Replacement should send a fresh offer", replacement!!.createOfferCalls > 0)
         assertEquals("Exactly one fresh offer should be sent", offersBefore + 1, factory.fakeProvider.sentMessages("offer").size)
+    }
+
+    @Test
+    fun `designated offerer recreates peer after stalled outbound media`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
+        val oldSlot = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(oldSlot)
+        factory.simulateAnswerFromRemote("zeta", offerId = latestOfferId())
+        oldSlot!!.simulateConnectionStateChange(PeerConnection.PeerConnectionState.CONNECTED)
+        oldSlot.simulateIceConnectionStateChange(PeerConnection.IceConnectionState.CONNECTED)
+        val offersBefore = factory.fakeProvider.sentMessages("offer").size
+        oldSlot.outboundMediaSample = OutboundMediaSample(
+            expectsAudio = true,
+            expectsVideo = true,
+            audioBytesSent = 1_000L,
+            videoBytesSent = 2_000L,
+            videoFramesSent = 10L,
+        )
+
+        repeat(WebRtcResilienceConstants.OUTBOUND_MEDIA_STALL_SAMPLES + 2) {
+            ShadowLooper.idleMainLooper(
+                WebRtcResilienceConstants.OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS,
+                TimeUnit.MILLISECONDS,
+            )
+            ShadowLooper.idleMainLooper()
+        }
+
+        val replacement = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(replacement)
+        assertNotSame("Stalled media recovery should replace the stale peer slot", oldSlot, replacement)
+        assertTrue("Old slot should be closed", oldSlot.closePeerConnectionCalled)
+        assertEquals("Recovery should send one fresh offer", offersBefore + 1, factory.fakeProvider.sentMessages("offer").size)
+    }
+
+    @Test
+    fun `non offerer requests peer media restart after stalled outbound media`() {
+        factory.advanceToInCallWithTurn(localCid = "zeta", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
+        factory.simulateOfferFromRemote("alpha", offerId = "remote-offer")
+        val slot = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull(slot)
+        slot!!.simulateConnectionStateChange(PeerConnection.PeerConnectionState.CONNECTED)
+        slot.simulateIceConnectionStateChange(PeerConnection.IceConnectionState.CONNECTED)
+        slot.outboundMediaSample = OutboundMediaSample(
+            expectsAudio = true,
+            expectsVideo = false,
+            audioBytesSent = 1_000L,
+            videoBytesSent = 0L,
+            videoFramesSent = 0L,
+        )
+
+        repeat(WebRtcResilienceConstants.OUTBOUND_MEDIA_STALL_SAMPLES + 2) {
+            ShadowLooper.idleMainLooper(
+                WebRtcResilienceConstants.OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS,
+                TimeUnit.MILLISECONDS,
+            )
+            ShadowLooper.idleMainLooper()
+        }
+
+        val restartRequests = factory.fakeProvider.sentMessages("media_restart_request")
+        assertEquals("Non-offerer should ask the deterministic offer owner to restart", 1, restartRequests.size)
+        assertEquals("alpha", restartRequests.single().peerId)
     }
 
     @Test

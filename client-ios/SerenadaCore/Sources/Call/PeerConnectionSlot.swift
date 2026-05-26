@@ -542,6 +542,52 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
+    public func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(nil)
+            return
+        }
+
+        let expectsAudio = peerConnection.senders.contains {
+            $0.track?.kind == kRTCMediaStreamTrackKindAudio && $0.track?.isEnabled == true
+        }
+        let expectsVideo = peerConnection.senders.contains {
+            $0.track?.kind == kRTCMediaStreamTrackKindVideo && $0.track?.isEnabled == true
+        }
+
+        peerConnection.statistics { report in
+            var audioBytesSent: Int64 = 0
+            var videoBytesSent: Int64 = 0
+            var videoFramesSent: Int64 = 0
+            for stat in report.statistics.values where stat.type == "outbound-rtp" {
+                switch mediaKind(for: stat) {
+                case "audio":
+                    audioBytesSent += memberInt64(stat, key: "bytesSent") ?? 0
+                case "video":
+                    videoBytesSent += memberInt64(stat, key: "bytesSent") ?? 0
+                    videoFramesSent += memberInt64(stat, key: "framesSent")
+                        ?? memberInt64(stat, key: "framesEncoded")
+                        ?? 0
+                default:
+                    break
+                }
+            }
+            Task { @MainActor in
+                onComplete(OutboundMediaSample(
+                    expectsAudio: expectsAudio,
+                    expectsVideo: expectsVideo,
+                    audioBytesSent: audioBytesSent,
+                    videoBytesSent: videoBytesSent,
+                    videoFramesSent: videoFramesSent
+                ))
+            }
+        }
+#else
+        onComplete(nil)
+#endif
+    }
+
     public func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
 #if canImport(WebRTC)
         guard let peerConnection else {

@@ -519,6 +519,54 @@ internal class PeerConnectionSlot(
         }
     }
 
+    override fun collectOutboundMediaSample(onComplete: (OutboundMediaSample?) -> Unit) {
+        if (isClosing) {
+            onComplete(null)
+            return
+        }
+        val pc = peerConnection
+        if (pc == null) {
+            onComplete(null)
+            return
+        }
+
+        val expectsAudio = pc.senders.any { sender ->
+            val track = sender.track()
+            track?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND && track.enabled()
+        }
+        val expectsVideo = pc.senders.any { sender ->
+            val track = sender.track()
+            track?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND && track.enabled()
+        }
+
+        pc.getStats { report ->
+            var audioBytesSent = 0L
+            var videoBytesSent = 0L
+            var videoFramesSent = 0L
+            for (stat in report.statsMap.values) {
+                if (stat.type != "outbound-rtp") continue
+                when (getMediaKind(stat)) {
+                    "audio" -> audioBytesSent += memberLong(stat, "bytesSent") ?: 0L
+                    "video" -> {
+                        videoBytesSent += memberLong(stat, "bytesSent") ?: 0L
+                        videoFramesSent += memberLong(stat, "framesSent")
+                            ?: memberLong(stat, "framesEncoded")
+                            ?: 0L
+                    }
+                }
+            }
+            onComplete(
+                OutboundMediaSample(
+                    expectsAudio = expectsAudio,
+                    expectsVideo = expectsVideo,
+                    audioBytesSent = audioBytesSent,
+                    videoBytesSent = videoBytesSent,
+                    videoFramesSent = videoFramesSent,
+                )
+            )
+        }
+    }
+
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) {
         if (isClosing) {
             onComplete(null, null)

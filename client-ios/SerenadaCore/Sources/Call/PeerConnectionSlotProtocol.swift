@@ -1,5 +1,13 @@
 import Foundation
 
+internal struct OutboundMediaSample: Equatable {
+    let expectsAudio: Bool
+    let expectsVideo: Bool
+    let audioBytesSent: Int64
+    let videoBytesSent: Int64
+    let videoFramesSent: Int64
+}
+
 @MainActor
 internal protocol PeerConnectionSlotProtocol: AnyObject {
     // Identity
@@ -71,6 +79,10 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     /// when its sample advances over the previous one. Reports `0` when
     /// the peer connection is not yet established.
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void)
+
+    /// Asynchronously samples cumulative outbound media counters and whether
+    /// local enabled tracks are expected to be flowing on this peer.
+    func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void)
 
     /// Lightweight stats fetch for voice-activity indicators. Extracts only
     /// `inbound-rtp.audioLevel` (the remote peer's audio) and

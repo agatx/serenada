@@ -24,6 +24,9 @@ public enum WebRtcResilience {
     public static let offerTimeoutMs = 8_000
     public static let iceRestartCooldownMs = 10_000
     public static let iceCandidateBufferMax = 50
+    public static let outboundMediaWatchdogIntervalMs = 5_000
+    public static let outboundMediaStallSamples = 2
+    public static let outboundMediaRecoveryCooldownMs = 30_000
 
     // MARK: - TURN
 

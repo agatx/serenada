@@ -66,6 +66,13 @@ internal class PeerNegotiationEngine(
         )
     }
 
+    private data class OutboundMediaWatch(
+        var lastSample: OutboundMediaSample? = null,
+        var stallSamples: Int = 0,
+        var inFlight: Boolean = false,
+        var lastRecoveryAtMs: Long? = null,
+    )
+
     private var offerSequence = 0L
     private val pendingLocalOfferIds = mutableMapOf<String, String>()
     private val acceptedRemoteOfferIds = mutableMapOf<String, String>()
@@ -74,6 +81,7 @@ internal class PeerNegotiationEngine(
     private val settingRemoteAnswerCids = mutableSetOf<String>()
     private val pendingRemoteIceByOfferId = mutableMapOf<String, MutableMap<String, MutableList<IceCandidate>>>()
     private val participantStatuses = mutableMapOf<String, ParticipantSignalingStatus>()
+    private val outboundMediaWatchByCid = mutableMapOf<String, OutboundMediaWatch>()
 
     // --- Public API ---
 
@@ -182,6 +190,16 @@ internal class PeerNegotiationEngine(
         clearIceRestartTimer()
         clearNegotiationState()
         participantStatuses.clear()
+        outboundMediaWatchByCid.clear()
+    }
+
+    fun recoverStalledOutboundMedia() {
+        val slots = getAllSlots()
+        outboundMediaWatchByCid.keys.filterNot(slots::containsKey).forEach(outboundMediaWatchByCid::remove)
+        if (!isSignalingConnected()) return
+        for ((remoteCid, slot) in slots) {
+            recoverStalledOutboundMedia(remoteCid, slot)
+        }
     }
 
     // --- Slot Lifecycle ---
@@ -269,6 +287,7 @@ internal class PeerNegotiationEngine(
         clearIceRestartTimer(remoteCid)
         clearNegotiationState(remoteCid)
         participantStatuses.remove(remoteCid)
+        outboundMediaWatchByCid.remove(remoteCid)
         val slot = removeSlotEntry(remoteCid) ?: return
         engineRemoveSlot(slot)
         slot.closePeerConnection(deferDispose = true)
@@ -504,6 +523,11 @@ internal class PeerNegotiationEngine(
         return participant?.signalingStatus == ParticipantSignalingStatus.ACTIVE
     }
 
+    private fun isParticipantActive(remoteCid: String): Boolean {
+        val participant = getCurrentRoomState()?.participants?.firstOrNull { it.cid == remoteCid }
+        return participant?.signalingStatus == ParticipantSignalingStatus.ACTIVE
+    }
+
     private fun maybeSendOffer(force: Boolean = false, iceRestart: Boolean = false) {
         getAllSlots().values.forEach { slot ->
             if (shouldIOffer(slot.remoteCid, getCurrentRoomState())) maybeSendOffer(slot, force, iceRestart)
@@ -552,6 +576,105 @@ internal class PeerNegotiationEngine(
     private fun handleMediaRestartRequest(slot: PeerConnectionSlotProtocol, remoteCid: String) {
         if (!canOffer(slot)) return
         logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after media restart request from $remoteCid")
+        val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
+        maybeSendOffer(replacement)
+    }
+
+    // --- Outbound Media Watchdog ---
+
+    private fun recoverStalledOutboundMedia(remoteCid: String, slot: PeerConnectionSlotProtocol) {
+        val watch = outboundMediaWatchByCid.getOrPut(remoteCid) { OutboundMediaWatch() }
+        if (watch.inFlight) return
+        if (!isPeerMediaConnected(slot)) {
+            resetOutboundMediaSample(watch)
+            return
+        }
+
+        watch.inFlight = true
+        slot.collectOutboundMediaSample { sample ->
+            handler.post {
+                if (getSlot(remoteCid) !== slot) {
+                    watch.inFlight = false
+                    return@post
+                }
+                finalizeOutboundMediaSample(remoteCid, slot, watch, sample)
+            }
+        }
+    }
+
+    private fun finalizeOutboundMediaSample(
+        remoteCid: String,
+        slot: PeerConnectionSlotProtocol,
+        watch: OutboundMediaWatch,
+        sample: OutboundMediaSample?,
+    ) {
+        try {
+            if (sample == null || (!sample.expectsAudio && !sample.expectsVideo)) {
+                resetOutboundMediaSample(watch)
+                return
+            }
+
+            val previous = watch.lastSample
+            watch.lastSample = sample
+            if (previous == null) {
+                watch.stallSamples = 0
+                return
+            }
+
+            val videoStalled = sample.expectsVideo &&
+                sample.videoBytesSent <= previous.videoBytesSent &&
+                sample.videoFramesSent <= previous.videoFramesSent
+            val audioOnlyStalled = !sample.expectsVideo &&
+                sample.expectsAudio &&
+                sample.audioBytesSent <= previous.audioBytesSent
+            if (!videoStalled && !audioOnlyStalled) {
+                watch.stallSamples = 0
+                return
+            }
+
+            watch.stallSamples += 1
+            if (watch.stallSamples < WebRtcResilienceConstants.OUTBOUND_MEDIA_STALL_SAMPLES) return
+
+            val now = clock.nowMs()
+            val lastRecoveryAt = watch.lastRecoveryAtMs
+            if (lastRecoveryAt != null && now - lastRecoveryAt < WebRtcResilienceConstants.OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return
+
+            watch.lastRecoveryAtMs = now
+            resetOutboundMediaSample(watch)
+            if (shouldIOffer(remoteCid)) {
+                recreatePeerForMediaRecovery(remoteCid, "stalled outbound media")
+            } else {
+                requestPeerMediaRecovery(remoteCid, "stalled outbound media")
+            }
+        } finally {
+            watch.inFlight = false
+        }
+    }
+
+    private fun isPeerMediaConnected(slot: PeerConnectionSlotProtocol): Boolean =
+        slot.getSignalingState() == PeerConnection.SignalingState.STABLE &&
+            slot.getConnectionState() == PeerConnection.PeerConnectionState.CONNECTED &&
+            (
+                slot.getIceConnectionState() == PeerConnection.IceConnectionState.CONNECTED ||
+                    slot.getIceConnectionState() == PeerConnection.IceConnectionState.COMPLETED
+                )
+
+    private fun resetOutboundMediaSample(watch: OutboundMediaWatch) {
+        watch.lastSample = null
+        watch.stallSamples = 0
+    }
+
+    private fun requestPeerMediaRecovery(remoteCid: String, reason: String) {
+        if (!isSignalingConnected() || !isParticipantActive(remoteCid)) return
+        logger?.log(SerenadaLogLevel.WARNING, TAG, "Requesting media restart from $remoteCid after $reason")
+        val payload = JSONObject().apply { put("reason", reason) }
+        sendMessage("media_restart_request", payload, remoteCid)
+    }
+
+    private fun recreatePeerForMediaRecovery(remoteCid: String, reason: String) {
+        val current = getSlot(remoteCid) ?: return
+        if (!canOffer(current)) return
+        logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after $reason for $remoteCid")
         val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
         maybeSendOffer(replacement)
     }

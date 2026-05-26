@@ -466,6 +466,68 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBefore + 1)
     }
 
+    func testDesignatedOffererRecreatesPeerAfterStalledOutboundMedia() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "zeta",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+        let oldSlot = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        let offerId = try XCTUnwrap(harness.fakeProvider.sentPeerMessages(ofType: "offer").last?.payload?["offerId"]?.stringValue)
+        harness.simulateAnswerFromRemote(fromCid: "zeta", offerId: offerId)
+        oldSlot.simulateConnectionStateChange(.connected)
+        oldSlot.simulateIceConnectionStateChange("CONNECTED")
+        oldSlot.outboundMediaSample = OutboundMediaSample(
+            expectsAudio: true,
+            expectsVideo: true,
+            audioBytesSent: 1_000,
+            videoBytesSent: 2_000,
+            videoFramesSent: 10
+        )
+        let offersBefore = harness.fakeProvider.sentPeerMessages(ofType: "offer").count
+
+        for _ in 0...(WebRtcResilience.outboundMediaStallSamples + 1) {
+            await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.outboundMediaWatchdogIntervalMs))
+            await harness.yieldToMainActor()
+        }
+
+        let replacement = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        XCTAssertFalse(oldSlot === replacement, "Stalled media recovery should replace the stale peer slot")
+        XCTAssertTrue(oldSlot.closePeerConnectionCalled, "Old slot should be closed")
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBefore + 1)
+    }
+
+    func testNonOffererRequestsPeerMediaRestartAfterStalledOutboundMedia() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "zeta",
+            remoteCid: "alpha",
+            localJoinedAt: 2,
+            remoteJoinedAt: 1
+        )
+        harness.simulateOfferFromRemote(fromCid: "alpha", offerId: "remote-offer")
+        await harness.yieldToMainActor()
+        let slot = try XCTUnwrap(harness.fakeMedia.fakeSlots["alpha"])
+        slot.simulateConnectionStateChange(.connected)
+        slot.simulateIceConnectionStateChange("CONNECTED")
+        slot.outboundMediaSample = OutboundMediaSample(
+            expectsAudio: true,
+            expectsVideo: false,
+            audioBytesSent: 1_000,
+            videoBytesSent: 0,
+            videoFramesSent: 0
+        )
+
+        for _ in 0...(WebRtcResilience.outboundMediaStallSamples + 1) {
+            await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.outboundMediaWatchdogIntervalMs))
+            await harness.yieldToMainActor()
+        }
+
+        let restartRequests = harness.fakeProvider.sentPeerMessages(ofType: "media_restart_request")
+        XCTAssertEqual(restartRequests.count, 1, "Non-offerer should ask the deterministic offer owner to restart")
+        XCTAssertEqual(restartRequests.first?.peerId, "alpha")
+    }
+
     func testFourPartyReattachRestartsOnlyDeterministicOfferOwners() async throws {
         let peerIds = ["alpha", "bravo", "charlie", "delta"]
         let harnesses = Dictionary(uniqueKeysWithValues: peerIds.map { ($0, SessionTestHarness(handlesReconnection: true)) })

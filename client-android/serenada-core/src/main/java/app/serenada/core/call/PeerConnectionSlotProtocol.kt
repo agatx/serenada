@@ -8,6 +8,14 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 
+internal data class OutboundMediaSample(
+    val expectsAudio: Boolean,
+    val expectsVideo: Boolean,
+    val audioBytesSent: Long,
+    val videoBytesSent: Long,
+    val videoFramesSent: Long,
+)
+
 internal interface PeerConnectionSlotProtocol {
     // Properties
     val remoteCid: String
@@ -77,6 +85,12 @@ internal interface PeerConnectionSlotProtocol {
      * connection is not yet established.
      */
     fun collectInboundBytes(onComplete: (Long) -> Unit)
+
+    /**
+     * Asynchronously samples cumulative outbound media counters and whether
+     * local enabled tracks are expected to be flowing on this peer.
+     */
+    fun collectOutboundMediaSample(onComplete: (OutboundMediaSample?) -> Unit)
 
     /**
      * Lightweight stats fetch that extracts only `audioLevel` (W3C webrtc-stats):

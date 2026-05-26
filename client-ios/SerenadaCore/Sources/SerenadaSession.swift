@@ -239,6 +239,7 @@ public final class SerenadaSession: ObservableObject {
     private var mediaLivenessTask: Task<Void, Never>?
     private var mediaLivenessEmitInFlight = false
     private var mediaLivenessEmitCount = 0
+    private var outboundMediaWatchdogCancellable: AnyCancellable?
 
     /// Test-only counter incremented on each `media_liveness` broadcast.
     internal var mediaLivenessBroadcastCount: Int { mediaLivenessEmitCount }
@@ -429,6 +430,7 @@ public final class SerenadaSession: ObservableObject {
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
         mediaLivenessTask?.cancel()
+        outboundMediaWatchdogCancellable?.cancel()
         joinLifecycleTask?.cancel()
         audioCoordinatorLifecycleTask?.cancel()
         coordinatorTasks.forEach { $0.cancel() }
@@ -1049,7 +1051,10 @@ public final class SerenadaSession: ObservableObject {
         // Start media-liveness emission only once we have remote peers — there's
         // nothing to report when alone in the room, and the timer is otherwise
         // a noisy no-op.
-        if phase == .inCall { startMediaLivenessTimer() }
+        if phase == .inCall {
+            startMediaLivenessTimer()
+            startOutboundMediaWatchdog()
+        }
     }
 
     /// True only when at least one peer exists and every slot's last observed
@@ -1297,6 +1302,7 @@ public final class SerenadaSession: ObservableObject {
         cancelPostReconnectResync()
         clearAllRemoteSuspensionTracking()
         stopMediaLivenessTimer()
+        stopOutboundMediaWatchdog()
         lastInboundBytesByCid.removeAll()
         mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = nil
@@ -1539,6 +1545,19 @@ public final class SerenadaSession: ObservableObject {
         mediaLivenessTask = nil
     }
 
+    private func startOutboundMediaWatchdog() {
+        guard outboundMediaWatchdogCancellable == nil else { return }
+        let interval = TimeInterval(WebRtcResilience.outboundMediaWatchdogIntervalMs) / 1000.0
+        outboundMediaWatchdogCancellable = clock.scheduleRepeating(intervalSeconds: interval) { [weak self] in
+            self?.peerNegotiationEngine?.recoverStalledOutboundMedia()
+        }
+    }
+
+    private func stopOutboundMediaWatchdog() {
+        outboundMediaWatchdogCancellable?.cancel()
+        outboundMediaWatchdogCancellable = nil
+    }
+
     private func emitMediaLiveness() {
         if mediaLivenessEmitInFlight { return }
         guard diagnostics.isSignalingConnected, currentRoomState != nil else { return }
@@ -1765,7 +1784,8 @@ public final class SerenadaSession: ObservableObject {
             onAggregatePeerStateChanged: { [weak self] ice, conn, sig in
                 self?.commitSnapshot { _, d in d.iceConnectionState = ice; d.peerConnectionState = conn; d.rtcSignalingState = sig }
             },
-            onConnectionStatusUpdate: { [weak self] in self?.connectionStatusTracker?.update() }
+            onConnectionStatusUpdate: { [weak self] in self?.connectionStatusTracker?.update() },
+            logger: logger
         )
     }
 

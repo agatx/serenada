@@ -39,6 +39,7 @@ final class PeerNegotiationEngine {
     private let onRemoteParticipantsChanged: () -> Void
     private let onAggregatePeerStateChanged: (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Void
     private let onConnectionStatusUpdate: () -> Void
+    private let logger: SerenadaLogger?
 
     private var offerSequence: Int64 = 0
     private var pendingLocalOfferIds: [String: String] = [:]
@@ -48,6 +49,14 @@ final class PeerNegotiationEngine {
     private var settingRemoteAnswerCids: Set<String> = []
     private var pendingRemoteIceByOfferId: [String: [String: [IceCandidatePayload]]] = [:]
     private var participantStatuses: [String: ParticipantSignalingStatus] = [:]
+    private var outboundMediaWatchByCid: [String: OutboundMediaWatch] = [:]
+
+    private struct OutboundMediaWatch {
+        var lastSample: OutboundMediaSample?
+        var stallSamples = 0
+        var inFlight = false
+        var lastRecoveryAtMs: Int64?
+    }
 
     init(
         clock: SessionClock,
@@ -75,7 +84,8 @@ final class PeerNegotiationEngine {
         sendMessage: @escaping (String, JSONValue?, String?) -> Void,
         onRemoteParticipantsChanged: @escaping () -> Void,
         onAggregatePeerStateChanged: @escaping (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Void,
-        onConnectionStatusUpdate: @escaping () -> Void
+        onConnectionStatusUpdate: @escaping () -> Void,
+        logger: SerenadaLogger? = nil
     ) {
         self.clock = clock
         self.getClientId = getClientId
@@ -95,6 +105,7 @@ final class PeerNegotiationEngine {
         self.onRemoteParticipantsChanged = onRemoteParticipantsChanged
         self.onAggregatePeerStateChanged = onAggregatePeerStateChanged
         self.onConnectionStatusUpdate = onConnectionStatusUpdate
+        self.logger = logger
     }
 
     // MARK: - Public API
@@ -227,6 +238,18 @@ final class PeerNegotiationEngine {
         clearIceRestartTimer()
         clearNegotiationState()
         participantStatuses.removeAll()
+        outboundMediaWatchByCid.removeAll()
+    }
+
+    func recoverStalledOutboundMedia() {
+        let slots = getAllSlots()
+        for remoteCid in Array(outboundMediaWatchByCid.keys) where slots[remoteCid] == nil {
+            outboundMediaWatchByCid.removeValue(forKey: remoteCid)
+        }
+        guard isSignalingConnected() else { return }
+        for (remoteCid, slot) in slots {
+            recoverStalledOutboundMedia(remoteCid: remoteCid, slot: slot)
+        }
     }
 
     // MARK: - Slot Lifecycle
@@ -335,6 +358,7 @@ final class PeerNegotiationEngine {
         clearIceRestartTimer(remoteCid: remoteCid)
         clearNegotiationState(remoteCid: remoteCid)
         participantStatuses.removeValue(forKey: remoteCid)
+        outboundMediaWatchByCid.removeValue(forKey: remoteCid)
         engineRemoveSlot(slot)
         slot.closePeerConnection()
     }
@@ -575,6 +599,10 @@ final class PeerNegotiationEngine {
         return slot.isReady() || slot.ensurePeerConnection()
     }
 
+    private func isParticipantActive(remoteCid: String) -> Bool {
+        getCurrentRoomState()?.participants.first(where: { $0.cid == remoteCid })?.signalingStatus == .active
+    }
+
     private func maybeSendOffer(force: Bool = false, iceRestart: Bool = false) {
         for slot in getAllSlots().values where shouldIOffer(remoteCid: slot.remoteCid) {
             maybeSendOffer(slot: slot, force: force, iceRestart: iceRestart)
@@ -651,6 +679,108 @@ final class PeerNegotiationEngine {
 
     private func handleMediaRestartRequest(slot: any PeerConnectionSlotProtocol, remoteCid: String) {
         guard canOffer(slot: slot) else { return }
+        logger?.log(.warning, tag: "PeerNegotiationEngine", "Recreating peer after media restart request from \(remoteCid)")
+        guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
+        maybeSendOffer(slot: replacement)
+    }
+
+    // MARK: - Outbound Media Watchdog
+
+    private func recoverStalledOutboundMedia(remoteCid: String, slot: any PeerConnectionSlotProtocol) {
+        var watch = outboundMediaWatchByCid[remoteCid] ?? OutboundMediaWatch()
+        if watch.inFlight { return }
+        if !isPeerMediaConnected(slot: slot) {
+            resetOutboundMediaSample(&watch)
+            outboundMediaWatchByCid[remoteCid] = watch
+            return
+        }
+
+        watch.inFlight = true
+        outboundMediaWatchByCid[remoteCid] = watch
+        slot.collectOutboundMediaSample { [weak self] sample in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let current = self.getSlot(remoteCid), current === slot else {
+                    self.outboundMediaWatchByCid[remoteCid]?.inFlight = false
+                    return
+                }
+                self.finalizeOutboundMediaSample(remoteCid: remoteCid, slot: slot, sample: sample)
+            }
+        }
+    }
+
+    private func finalizeOutboundMediaSample(
+        remoteCid: String,
+        slot: any PeerConnectionSlotProtocol,
+        sample: OutboundMediaSample?
+    ) {
+        var watch = outboundMediaWatchByCid[remoteCid] ?? OutboundMediaWatch()
+        defer {
+            watch.inFlight = false
+            outboundMediaWatchByCid[remoteCid] = watch
+        }
+
+        guard let sample, sample.expectsAudio || sample.expectsVideo else {
+            resetOutboundMediaSample(&watch)
+            return
+        }
+
+        let previous = watch.lastSample
+        watch.lastSample = sample
+        guard let previous else {
+            watch.stallSamples = 0
+            return
+        }
+
+        let videoStalled = sample.expectsVideo &&
+            sample.videoBytesSent <= previous.videoBytesSent &&
+            sample.videoFramesSent <= previous.videoFramesSent
+        let audioOnlyStalled = !sample.expectsVideo &&
+            sample.expectsAudio &&
+            sample.audioBytesSent <= previous.audioBytesSent
+        guard videoStalled || audioOnlyStalled else {
+            watch.stallSamples = 0
+            return
+        }
+
+        watch.stallSamples += 1
+        guard watch.stallSamples >= WebRtcResilience.outboundMediaStallSamples else { return }
+
+        let now = clock.nowMs()
+        if let lastRecoveryAtMs = watch.lastRecoveryAtMs,
+           now - lastRecoveryAtMs < Int64(WebRtcResilience.outboundMediaRecoveryCooldownMs) {
+            return
+        }
+
+        watch.lastRecoveryAtMs = now
+        resetOutboundMediaSample(&watch)
+        if shouldIOffer(remoteCid: remoteCid) {
+            recreatePeerForMediaRecovery(remoteCid: remoteCid, reason: "stalled outbound media")
+        } else {
+            requestPeerMediaRecovery(remoteCid: remoteCid, reason: "stalled outbound media")
+        }
+    }
+
+    private func isPeerMediaConnected(slot: any PeerConnectionSlotProtocol) -> Bool {
+        slot.getSignalingState() == "STABLE" &&
+            slot.getConnectionState() == .connected &&
+            (slot.getIceConnectionState() == "CONNECTED" || slot.getIceConnectionState() == "COMPLETED")
+    }
+
+    private func resetOutboundMediaSample(_ watch: inout OutboundMediaWatch) {
+        watch.lastSample = nil
+        watch.stallSamples = 0
+    }
+
+    private func requestPeerMediaRecovery(remoteCid: String, reason: String) {
+        guard isSignalingConnected(), isParticipantActive(remoteCid: remoteCid) else { return }
+        logger?.log(.warning, tag: "PeerNegotiationEngine", "Requesting media restart from \(remoteCid) after \(reason)")
+        sendMessage("media_restart_request", .object(["reason": .string(reason)]), remoteCid)
+    }
+
+    private func recreatePeerForMediaRecovery(remoteCid: String, reason: String) {
+        guard let current = getSlot(remoteCid), canOffer(slot: current) else { return }
+        logger?.log(.warning, tag: "PeerNegotiationEngine", "Recreating peer after \(reason) for \(remoteCid)")
         guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
         maybeSendOffer(slot: replacement)
     }

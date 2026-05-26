@@ -9,6 +9,8 @@ import {
     ICE_CANDIDATE_BUFFER_MAX,
     CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
+    OUTBOUND_MEDIA_STALL_SAMPLES,
+    OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS,
 } from '../constants.js';
 import { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './localVideoRecovery.js';
 
@@ -20,8 +22,6 @@ const ICE_STATE_PRIORITY: RTCIceConnectionState[] = ['failed', 'disconnected', '
 const CONN_STATE_PRIORITY: RTCPeerConnectionState[] = ['failed', 'disconnected', 'connecting', 'new', 'connected', 'closed'];
 const SIG_STATE_PRIORITY: RTCSignalingState[] = ['closed', 'have-local-offer', 'have-remote-offer', 'have-local-pranswer', 'have-remote-pranswer', 'stable'];
 const LEGACY_OFFER_ID = '__legacy__';
-const OUTBOUND_MEDIA_STALL_SAMPLES = 2;
-const OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS = 30_000;
 
 function getSignalingState(pc: RTCPeerConnection): RTCSignalingState {
     return pc.signalingState;

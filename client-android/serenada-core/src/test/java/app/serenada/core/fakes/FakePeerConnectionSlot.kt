@@ -1,5 +1,6 @@
 package app.serenada.core.fakes
 
+import app.serenada.core.call.OutboundMediaSample
 import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RealtimeCallStats
 import app.serenada.core.call.WebRtcEngine
@@ -153,6 +154,18 @@ internal class FakePeerConnectionSlot(
     override fun collectInboundBytes(onComplete: (Long) -> Unit) {
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
+    }
+    var outboundMediaSample: OutboundMediaSample? = OutboundMediaSample(
+        expectsAudio = true,
+        expectsVideo = true,
+        audioBytesSent = 0L,
+        videoBytesSent = 0L,
+        videoFramesSent = 0L,
+    )
+    var collectOutboundMediaSampleCalls = 0
+    override fun collectOutboundMediaSample(onComplete: (OutboundMediaSample?) -> Unit) {
+        collectOutboundMediaSampleCalls += 1
+        onComplete(outboundMediaSample)
     }
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) { onComplete(null, null) }
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {}
