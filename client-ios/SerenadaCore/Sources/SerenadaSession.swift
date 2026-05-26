@@ -400,15 +400,15 @@ public final class SerenadaSession: ObservableObject {
         guard coordinatorTasks.isEmpty else { return }
         let coordinator = self.audioCoordinator
         let availableDevicesTask = Task { @MainActor [weak self] in
-            guard let self else { return }
             for await devices in coordinator.availableDevices {
+                guard let self else { return }
                 self.availableAudioDevices = devices
             }
         }
 
         let effectiveInputTask = Task { @MainActor [weak self] in
-            guard let self else { return }
             for await device in coordinator.effectiveInputDevice {
+                guard let self else { return }
                 guard self.sessionActivated else { continue }
                 self.routeInputAvailable = (device != nil)
                 self.updateEffectiveMicState()
@@ -416,24 +416,19 @@ public final class SerenadaSession: ObservableObject {
         }
 
         let effectiveOutputTask = Task { @MainActor [weak self] in
-            guard let self else { return }
             for await device in coordinator.effectiveOutputDevice {
+                guard let self else { return }
                 self.currentAudioDevice = device
             }
         }
 
         let eventsTask = Task { @MainActor [weak self] in
-            guard let self else { return }
             for await event in coordinator.events {
+                guard let self else { return }
                 self.handleCoordinatorEvent(event)
             }
         }
         self.coordinatorTasks = [availableDevicesTask, effectiveInputTask, effectiveOutputTask, eventsTask]
-    }
-
-    private func stopCoordinatorTasks() {
-        coordinatorTasks.forEach { $0.cancel() }
-        coordinatorTasks.removeAll()
     }
 
     private static func resolveAvailableCameraModes(_ configuredModes: [LocalCameraMode]?) -> [LocalCameraMode] {

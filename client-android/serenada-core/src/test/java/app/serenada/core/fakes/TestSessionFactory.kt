@@ -163,7 +163,7 @@ internal class TestSessionFactory(
     }
 
     fun tearDown() {
-        session.cancelJoin()
+        session.close()
         ShadowLooper.idleMainLooper()
     }
 }

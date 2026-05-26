@@ -41,7 +41,7 @@ private val FRONTLINE_CAMERA_MODES =
  *
  * Provide either a [url] (URL-first) or a [session] (session-first) to start a call.
  * When a [url] is provided, the composable creates and owns the [SerenadaSession] internally.
- * When a [session] is provided, the caller retains ownership and is responsible for its lifecycle.
+ * When a [session] is provided, the caller retains ownership and is responsible for closing it.
  *
  * @param url Call URL to join. Mutually exclusive with [session].
  * @param session An externally created [SerenadaSession]. Mutually exclusive with [url].
@@ -103,6 +103,12 @@ fun SerenadaCallFlow(
                     ).join(callUrl)
                 }
         }
+
+    DisposableEffect(ownedSession, session) {
+        onDispose {
+            if (session == null) ownedSession?.close()
+        }
+    }
 
     val activeSession = ownedSession ?: return
     val state by activeSession.state.collectAsState()

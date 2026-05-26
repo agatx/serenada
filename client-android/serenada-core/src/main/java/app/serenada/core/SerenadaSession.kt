@@ -83,7 +83,8 @@ import java.util.concurrent.Executors
  * Represents an active call session. Created via [SerenadaCore.join] or [SerenadaCore.createRoom].
  *
  * Observe [state] for app-facing call state changes and [diagnostics] for low-level transport/media details.
- * Control the call via [leave], [end], [toggleAudio], [toggleVideo], etc.
+ * Control the call via [leave], [end], [toggleAudio], [toggleVideo], etc. Call [close] once
+ * the host is done with the session object.
  */
 class SerenadaSession internal constructor(
     /** The room ID for this call session. */
@@ -226,6 +227,8 @@ class SerenadaSession internal constructor(
     private val audioCoordinatorMutex = Mutex()
     private val audioCoordinatorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val audioCoordinatorCollectorJobs = mutableListOf<Job>()
+    private var audioCoordinatorDeactivationJob: Job? = null
+    private var closed = false
     private val connectionStatusTracker = ConnectionStatusTracker(
         handler = handler,
         getPhase = { _state.value.phase },
@@ -770,6 +773,24 @@ class SerenadaSession internal constructor(
         assertMainThread()
         signalingProvider.endRoom()
         leave()
+    }
+
+    /** Permanently release this session after the host is done with it. */
+    fun close() {
+        assertMainThread()
+        if (closed) return
+        closed = true
+
+        val deactivationJob =
+            if (_state.value.phase == CallPhase.Idle) {
+                audioCoordinatorDeactivationJob
+            } else {
+                signalingProvider.leaveRoom()
+                cleanupCall(EndReason.LocalLeft)
+            }
+
+        providerScope.cancel()
+        cancelAudioCoordinatorScopeAfter(deactivationJob)
     }
 
     /** Toggle local audio on or off. */
@@ -1685,20 +1706,21 @@ class SerenadaSession internal constructor(
 
     // --- Internal: Cleanup ---
 
-    private fun cleanupCall(reason: EndReason) {
+    private fun cleanupCall(reason: EndReason): Job {
         updateState(_state.value.copy(phase = CallPhase.Ending))
         if (_diagnostics.value.isScreenSharing) webRtcEngine.stopScreenShare()
-        resetResources(clearRecovery = true)
+        val deactivationJob = resetResources(clearRecovery = true)
         updateState(CallState(phase = CallPhase.Idle))
         delegate?.invoke()?.onSessionEnded(this, reason)
+        return deactivationJob
     }
 
-    private fun resetResources(clearRecovery: Boolean = false) {
+    private fun resetResources(clearRecovery: Boolean = false): Job {
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
         callAudioSessionController.deactivate()
-        audioCoordinatorScope.launch {
+        val deactivationJob = audioCoordinatorScope.launch {
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
@@ -1712,6 +1734,7 @@ class SerenadaSession internal constructor(
                 logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to deactivate audio session: ${e.message}")
             }
         }
+        audioCoordinatorDeactivationJob = deactivationJob
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
         signalingProvider.disconnect()
@@ -1742,6 +1765,22 @@ class SerenadaSession internal constructor(
         if (clearRecovery) recoveryStorage.clear()
         providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
+        return deactivationJob
+    }
+
+    private fun cancelAudioCoordinatorScopeAfter(deactivationJob: Job?) {
+        if (deactivationJob?.isActive == true) {
+            deactivationJob.invokeOnCompletion {
+                runOnMain { cancelAudioCoordinatorScope() }
+            }
+        } else {
+            cancelAudioCoordinatorScope()
+        }
+    }
+
+    private fun cancelAudioCoordinatorScope() {
+        stopAudioCoordinatorCollectors()
+        audioCoordinatorScope.cancel()
     }
 
     private fun shouldClearRecovery(callError: CallError): Boolean {

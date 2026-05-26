@@ -780,6 +780,38 @@ class SerenadaSessionContractTest {
 
         assertEquals(listOf(speaker), factory.session.availableAudioDevices.value)
     }
+
+    @Test
+    fun `close cancels audio device collectors`() {
+        val coordinator = MutableAudioCoordinator()
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        val speaker = AudioDevice(
+            id = "speaker",
+            displayName = "Speaker",
+            kind = AudioDeviceKind.Speakerphone,
+            direction = AudioDeviceDirection.OUTPUT,
+            status = AudioDeviceStatus.AVAILABLE,
+        )
+        val earpiece = AudioDevice(
+            id = "earpiece",
+            displayName = "Earpiece",
+            kind = AudioDeviceKind.Earpiece,
+            direction = AudioDeviceDirection.OUTPUT,
+            status = AudioDeviceStatus.AVAILABLE,
+        )
+
+        coordinator.publishAvailableDevices(listOf(speaker))
+        ShadowLooper.idleMainLooper()
+        assertEquals(listOf(speaker), factory.session.availableAudioDevices.value)
+
+        factory.session.close()
+        ShadowLooper.idleMainLooper()
+        coordinator.publishAvailableDevices(listOf(earpiece))
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(listOf(speaker), factory.session.availableAudioDevices.value)
+    }
 }
 
 private class BlockingAudioCoordinator : SerenadaAudioCoordinator {

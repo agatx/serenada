@@ -27,6 +27,34 @@ private final class BlockingAudioCoordinator: @unchecked Sendable, SerenadaAudio
     var events: AsyncStream<AudioCoordinatorEvent> { AsyncStream { _ in } }
 }
 
+private final class RetainedStreamAudioCoordinator: @unchecked Sendable, SerenadaAudioCoordinator {
+    private var availableDevicesContinuation: AsyncStream<[AudioDevice]>.Continuation?
+    private var effectiveInputContinuation: AsyncStream<AudioDevice?>.Continuation?
+    private var effectiveOutputContinuation: AsyncStream<AudioDevice?>.Continuation?
+    private var eventsContinuation: AsyncStream<AudioCoordinatorEvent>.Continuation?
+
+    lazy var availableDevices: AsyncStream<[AudioDevice]> = AsyncStream { [weak self] continuation in
+        self?.availableDevicesContinuation = continuation
+    }
+
+    lazy var effectiveInputDevice: AsyncStream<AudioDevice?> = AsyncStream { [weak self] continuation in
+        self?.effectiveInputContinuation = continuation
+    }
+
+    lazy var effectiveOutputDevice: AsyncStream<AudioDevice?> = AsyncStream { [weak self] continuation in
+        self?.effectiveOutputContinuation = continuation
+    }
+
+    lazy var events: AsyncStream<AudioCoordinatorEvent> = AsyncStream { [weak self] continuation in
+        self?.eventsContinuation = continuation
+    }
+
+    func activateCallSession(intent: AudioIntent) async throws {}
+    func deactivateCallSession() async {}
+    func applyRouting(_ device: AudioDevice) async throws {}
+    func setMicMuted(_ muted: Bool) async throws {}
+}
+
 @MainActor
 final class SerenadaSessionTests: XCTestCase {
     func testJoinUrlUsesDeepLinkHostInsteadOfDefaultConfigHost() {
@@ -166,6 +194,33 @@ final class SerenadaSessionTests: XCTestCase {
         XCTAssertEqual(session.state.phase, .idle)
         XCTAssertTrue(media.startLocalMediaCalls.isEmpty)
         XCTAssertEqual(provider.connectCalls, 0)
+    }
+
+    func testSessionDeinitializesWhileCoordinatorStreamsRemainOpen() async {
+        let provider = FakeSignalingProvider()
+        let media = FakeMediaEngine()
+        let coordinator = RetainedStreamAudioCoordinator()
+        weak var weakSession: SerenadaSession?
+        var session: SerenadaSession? = SerenadaSession(
+            roomId: "provider-room",
+            config: SerenadaConfig(
+                signalingProvider: provider,
+                defaultAudioEnabled: false,
+                defaultVideoEnabled: false,
+                audioCoordinator: coordinator
+            ),
+            initialSignalingProvider: provider,
+            mediaEngine: media
+        )
+        weakSession = session
+
+        await yieldToMainActor()
+        session?.cancelJoin()
+        session = nil
+        await yieldToMainActor()
+
+        XCTAssertNil(weakSession)
+        withExtendedLifetime(coordinator) {}
     }
 
     private func yieldToMainActor() async {
