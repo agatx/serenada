@@ -794,6 +794,7 @@ public final class SerenadaSession: ObservableObject {
         }
 
         joinFlowCoordinator?.clearJoinConnectKickstart()
+        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
 
         do {
             try await activateAudioCoordinator()
@@ -805,6 +806,8 @@ public final class SerenadaSession: ObservableObject {
             handleError(.unknown("Audio session activation failed: \(error.localizedDescription)"))
             return
         }
+
+        guard state.phase == .joining || state.phase == .awaitingPermissions || internalPhase == .joining else { return }
 
         callAudioSessionController.activate()
         webRtcEngine.startLocalMedia(preferVideo: shouldEnableVideo)
@@ -819,7 +822,6 @@ public final class SerenadaSession: ObservableObject {
         audioLevelPoller?.start()
 
         peerNegotiationEngine?.onLocalMediaReady()
-        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
         joinFlowCoordinator?.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
         ensureSignalingConnection()
     }

@@ -80,12 +80,14 @@ final class SerenadaSessionTests: XCTestCase {
     func testDefaultVideoDisabledDoesNotRequireCameraBeforeJoin() async {
         let provider = FakeSignalingProvider()
         let media = FakeMediaEngine()
+        let coordinator = FakeAudioCoordinator()
         let session = SerenadaSession(
             roomId: "provider-room",
             config: SerenadaConfig(
                 signalingProvider: provider,
                 defaultVideoEnabled: false,
-                cameraModes: [.selfie, .world]
+                cameraModes: [.selfie, .world],
+                audioCoordinator: coordinator
             ),
             initialSignalingProvider: provider,
             mediaEngine: media
@@ -102,6 +104,7 @@ final class SerenadaSessionTests: XCTestCase {
             await Task.yield()
         }
 
+        await waitUntil { !media.startLocalMediaCalls.isEmpty }
         XCTAssertEqual(media.startLocalMediaCalls.first, false)
         session.cancelJoin()
     }

@@ -280,14 +280,34 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             return
         }
 
-        if let localAudioTrack, !peerConnection.senders.contains(where: { $0.track?.kind == kRTCMediaStreamTrackKindAudio }) {
-            _ = peerConnection.add(localAudioTrack, streamIds: ["serenada"])
-        }
-        if let localVideoTrack, !peerConnection.senders.contains(where: { $0.track?.kind == kRTCMediaStreamTrackKindVideo }) {
-            _ = peerConnection.add(localVideoTrack, streamIds: ["serenada"])
-        }
+        attachTrackToTransceiver(peerConnection: peerConnection, track: localAudioTrack, mediaType: .audio)
+        attachTrackToTransceiver(peerConnection: peerConnection, track: localVideoTrack, mediaType: .video)
 #endif
     }
+
+#if canImport(WebRTC)
+    // Look up the transceiver by its stable mediaType (Unified Plan) instead of
+    // sender.track?.kind. The latter mis-reports when the sender's track is nil
+    // (e.g. the recv-only transceiver created by ensureReceiveTransceivers), which
+    // would cause peerConnection.add to append a duplicate transceiver.
+    private func attachTrackToTransceiver(
+        peerConnection: RTCPeerConnection,
+        track: RTCMediaStreamTrack?,
+        mediaType: RTCRtpMediaType
+    ) {
+        if let transceiver = peerConnection.transceivers.first(where: { $0.mediaType == mediaType }) {
+            if transceiver.sender.track !== track {
+                transceiver.sender.track = track
+            }
+            let targetDirection: RTCRtpTransceiverDirection = (track != nil) ? .sendRecv : .recvOnly
+            if transceiver.direction != targetDirection {
+                transceiver.setDirection(targetDirection, error: nil)
+            }
+        } else if let track {
+            _ = peerConnection.add(track, streamIds: ["serenada"])
+        }
+    }
+#endif
 
     public func closePeerConnection() {
         cancelOfferTimeout()

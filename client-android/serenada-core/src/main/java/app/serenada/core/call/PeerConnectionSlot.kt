@@ -236,26 +236,67 @@ internal class PeerConnectionSlot(
             peerConnection
         } ?: return
 
-        if (audioTrack != null && pc.senders.none { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }) {
-            audioSender = pc.addTrack(audioTrack, listOf("serenada"))
-            applyAudioSenderParameters(pc)
-        }
-        if (videoTrack != null && pc.senders.none { it.track()?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND }) {
-            pc.addTrack(videoTrack, listOf("serenada"))
-            applyVideoSenderParameters(currentVideoSenderPolicy())
-        }
+        attachTrackToTransceiver(
+            pc = pc,
+            track = audioTrack,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            onAttached = { sender ->
+                audioSender = sender
+                if (audioTrack != null) applyAudioSenderParameters(pc)
+            }
+        )
+        attachTrackToTransceiver(
+            pc = pc,
+            track = videoTrack,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+            onAttached = { _ ->
+                if (videoTrack != null) applyVideoSenderParameters(currentVideoSenderPolicy())
+            }
+        )
     }
 
     override fun setAudioTrack(track: AudioTrack?) {
         localAudioTrack = track
         val pc = peerConnection ?: return
-        val sender = audioSender ?: pc.senders.firstOrNull { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }
-            ?.also { audioSender = it }
-        if (sender != null) {
-            sender.setTrack(track, false)
+        attachTrackToTransceiver(
+            pc = pc,
+            track = track,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            onAttached = { sender ->
+                audioSender = sender
+                if (track != null) applyAudioSenderParameters(pc)
+            }
+        )
+    }
+
+    // Look up the transceiver by its stable mediaType (Unified Plan) instead of
+    // sender.track?.kind. The latter mis-reports when the sender's track is null
+    // (e.g. the recv-only transceiver created by ensureReceiveTransceivers), which
+    // would cause pc.addTrack to append a duplicate transceiver of the same type.
+    private fun attachTrackToTransceiver(
+        pc: PeerConnection,
+        track: MediaStreamTrack?,
+        mediaType: MediaStreamTrack.MediaType,
+        onAttached: (RtpSender?) -> Unit,
+    ) {
+        val transceiver = pc.transceivers.firstOrNull { it.mediaType == mediaType }
+        if (transceiver != null) {
+            val sender = transceiver.sender
+            if (sender.track() !== track) {
+                sender.setTrack(track, false)
+            }
+            val targetDirection = if (track != null) {
+                RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+            } else {
+                RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+            }
+            if (transceiver.direction != targetDirection) {
+                transceiver.direction = targetDirection
+            }
+            onAttached(sender)
         } else if (track != null) {
-            audioSender = pc.addTrack(track, listOf("serenada"))
-            applyAudioSenderParameters(pc)
+            val sender = pc.addTrack(track, listOf("serenada"))
+            onAttached(sender)
         }
     }
 

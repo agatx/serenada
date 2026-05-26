@@ -7,6 +7,7 @@ final class SessionTestHarness {
     let fakeProvider: FakeSignalingProvider
     let fakeAPI: FakeAPIClient
     let fakeAudio: FakeAudioController
+    let fakeAudioCoordinator: FakeAudioCoordinator
     let fakeMedia: FakeMediaEngine
     let fakeClock: FakeSessionClock
 
@@ -16,11 +17,15 @@ final class SessionTestHarness {
         config: SerenadaConfig? = nil
     ) {
         self.fakeProvider = FakeSignalingProvider(handlesReconnection: handlesReconnection)
-        let resolvedConfig = config ?? SerenadaConfig(signalingProvider: fakeProvider)
+        var resolvedConfig = config ?? SerenadaConfig(signalingProvider: fakeProvider)
         self.fakeAPI = FakeAPIClient()
         self.fakeAudio = FakeAudioController()
+        self.fakeAudioCoordinator = FakeAudioCoordinator()
         self.fakeMedia = FakeMediaEngine()
         self.fakeClock = FakeSessionClock()
+        if resolvedConfig.audioCoordinator == nil {
+            resolvedConfig.audioCoordinator = fakeAudioCoordinator
+        }
 
         self.session = SerenadaSession(
             roomId: roomId,
@@ -41,6 +46,7 @@ final class SessionTestHarness {
             session.resumeJoin()
             await yieldToMainActor()
         }
+        await waitForJoinStartup()
     }
 
     func openSignaling(transport: String = "ws") {
@@ -92,6 +98,15 @@ final class SessionTestHarness {
         await Task.yield()
         await Task.yield()
         await Task.yield()
+    }
+
+    func waitForJoinStartup(attempts: Int = 32) async {
+        for _ in 0..<attempts {
+            if !fakeMedia.startLocalMediaCalls.isEmpty || session.state.phase != .joining {
+                return
+            }
+            await yieldToMainActor()
+        }
     }
 
     // MARK: - Negotiation Test Helpers

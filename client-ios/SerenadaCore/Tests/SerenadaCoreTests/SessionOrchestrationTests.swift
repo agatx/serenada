@@ -54,6 +54,7 @@ final class SessionOrchestrationTests: XCTestCase {
             harness.session.resumeJoin()
             await harness.yieldToMainActor()
         }
+        await harness.waitForJoinStartup()
 
         // After either direct start or resumeJoin, should be in joining
         XCTAssertEqual(harness.session.state.phase, .joining)
