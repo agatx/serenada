@@ -11,6 +11,7 @@ final class SignalingPayloadsTests: XCTestCase {
             "turnToken": .string("tok123"),
             "turnTokenTTLMs": .number(60000),
             "reconnectToken": .string("rk-abc"),
+            "reconnectTokenTTLMs": .number(1_200_000),
             "participants": .array([
                 .object(["cid": .string("C-host"), "joinedAt": .number(1000)]),
                 .object(["cid": .string("C-guest")]),
@@ -21,6 +22,7 @@ final class SignalingPayloadsTests: XCTestCase {
         XCTAssertEqual(parsed.turnToken, "tok123")
         XCTAssertEqual(parsed.turnTokenTTLMs, 60000)
         XCTAssertEqual(parsed.reconnectToken, "rk-abc")
+        XCTAssertEqual(parsed.reconnectTokenTTLMs, 1_200_000)
         XCTAssertEqual(parsed.participants?.count, 2)
         XCTAssertEqual(parsed.participants?[0].cid, "C-host")
         XCTAssertEqual(parsed.participants?[0].joinedAt, 1000)
@@ -46,6 +48,23 @@ final class SignalingPayloadsTests: XCTestCase {
         ])
         let parsed = JoinedPayload(from: payload)
         XCTAssertEqual(parsed.participantCount, 1)
+    }
+
+    func testReconnectTokenRefreshedPayloadFullParse() {
+        let payload: JSONValue = .object([
+            "reconnectToken": .string("rk-new"),
+            "reconnectTokenTTLMs": .number(1_200_000),
+        ])
+        let parsed = ReconnectTokenRefreshedPayload(from: payload)
+        XCTAssertEqual(parsed?.reconnectToken, "rk-new")
+        XCTAssertEqual(parsed?.reconnectTokenTTLMs, 1_200_000)
+    }
+
+    func testReconnectTokenRefreshedPayloadMissingTokenReturnsNil() {
+        let payload: JSONValue = .object([
+            "reconnectTokenTTLMs": .number(1_200_000),
+        ])
+        XCTAssertNil(ReconnectTokenRefreshedPayload(from: payload))
     }
 
     func testJoinedPayloadEmptyParticipants() {

@@ -224,6 +224,16 @@ public struct RelayFailedEvent: Equatable, Sendable {
     }
 }
 
+public struct ReconnectTokenRefreshedEvent: Equatable, Sendable {
+    public let reconnectToken: String
+    public let reconnectTokenTTLMs: Int64?
+
+    public init(reconnectToken: String, reconnectTokenTTLMs: Int64? = nil) {
+        self.reconnectToken = reconnectToken
+        self.reconnectTokenTTLMs = reconnectTokenTTLMs
+    }
+}
+
 /// Receives provider events. Implementations may invoke these callbacks from
 /// any thread; the SDK session layer hops back to the main actor before
 /// mutating observable SDK state.
@@ -240,6 +250,7 @@ public protocol SignalingProviderDelegate: AnyObject {
     func signalingProviderDidChangeIceServers(_ iceServers: [IceServerConfig])
     func signalingProviderDidReceiveNegotiationDirty(_ event: NegotiationDirtyEvent)
     func signalingProviderDidReceiveRelayFailed(_ event: RelayFailedEvent)
+    func signalingProviderDidRefreshReconnectToken(_ event: ReconnectTokenRefreshedEvent)
 }
 
 public extension SignalingProviderDelegate {
@@ -255,6 +266,7 @@ public extension SignalingProviderDelegate {
     func signalingProviderDidChangeIceServers(_ iceServers: [IceServerConfig]) {}
     func signalingProviderDidReceiveNegotiationDirty(_ event: NegotiationDirtyEvent) {}
     func signalingProviderDidReceiveRelayFailed(_ event: RelayFailedEvent) {}
+    func signalingProviderDidRefreshReconnectToken(_ event: ReconnectTokenRefreshedEvent) {}
 }
 
 /// Transport-agnostic signaling contract for iOS SDK sessions.

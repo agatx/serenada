@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -76,6 +79,12 @@ func joinWithReconnect(rid, cid, token string) []byte {
 	return b
 }
 
+func legacyReconnectToken(secret, cid, rid string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(cid + "|" + rid))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // Reconnect outcomes ----------------------------------------------------------
 
 func TestJoinedPayloadIncludesReconnectOutcomeAndEpochOnFreshJoin(t *testing.T) {
@@ -99,6 +108,52 @@ func TestJoinedPayloadIncludesReconnectOutcomeAndEpochOnFreshJoin(t *testing.T) 
 	}
 	if got.ReconnectTokenTTLMs <= 0 {
 		t.Fatalf("expected positive reconnectTokenTTLMs, got %d", got.ReconnectTokenTTLMs)
+	}
+	if got.ReconnectTokenTTLMs != int64(20*time.Minute/time.Millisecond) {
+		t.Fatalf("expected reconnectTokenTTLMs to match 20m TTL, got %d", got.ReconnectTokenTTLMs)
+	}
+}
+
+func TestReconnectTokenRefreshReturnsNewTokenForActiveParticipant(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	first := captureJoined(t, a)
+
+	refreshMsg := Message{V: 1, Type: "reconnect-token-refresh", RID: rid}
+	refreshBytes, _ := json.Marshal(refreshMsg)
+	hub.handleMessage(a, refreshBytes)
+
+	var sawRefresh bool
+	for _, msg := range drainMessages(a) {
+		if msg.Type != "reconnect-token-refreshed" {
+			continue
+		}
+		var p struct {
+			ReconnectToken      string `json:"reconnectToken"`
+			ReconnectTokenTTLMs int64  `json:"reconnectTokenTTLMs"`
+		}
+		if err := json.Unmarshal(msg.Payload, &p); err != nil {
+			t.Fatalf("parse refresh payload: %v", err)
+		}
+		if p.ReconnectToken == "" {
+			t.Fatal("expected refreshed reconnect token")
+		}
+		if p.ReconnectTokenTTLMs != int64(20*time.Minute/time.Millisecond) {
+			t.Fatalf("expected 20m refreshed reconnectTokenTTLMs, got %d", p.ReconnectTokenTTLMs)
+		}
+		valid, expired := validateReconnectToken(p.ReconnectToken, first.CID, rid)
+		if !valid || expired {
+			t.Fatalf("expected refreshed token to validate, valid=%t expired=%t", valid, expired)
+		}
+		sawRefresh = true
+	}
+	if !sawRefresh {
+		t.Fatal("expected reconnect-token-refreshed message")
 	}
 }
 
@@ -344,6 +399,14 @@ func TestExpiredReconnectTokenIsRejected(t *testing.T) {
 	hub.handleMessage(a, joinPayload(rid, 4, 4))
 	first := captureJoined(t, a)
 
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	second := captureJoined(t, b)
+	if second.CID == "" {
+		t.Fatal("expected second participant to join")
+	}
+
 	// Issue an artificially-expired token bound to (cid, rid).
 	expired := issueReconnectTokenWithExpiry(first.CID, rid, time.Now().Add(-10*time.Minute))
 	if expired == "" {
@@ -373,6 +436,241 @@ func TestExpiredReconnectTokenIsRejected(t *testing.T) {
 	}
 	if !sawRejection {
 		t.Fatal("expected INVALID_RECONNECT_TOKEN for expired token")
+	}
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if room == nil {
+		t.Fatal("expected room to remain while second participant is active")
+	}
+	room.mu.Lock()
+	if p := room.participantByCID(first.CID); p != nil {
+		room.mu.Unlock()
+		t.Fatal("expected expired-token reconnect to evict stale suspended participant")
+	}
+	room.mu.Unlock()
+
+	hub.handleMessage(a2, joinPayload(rid, 4, 4))
+	rejoined := captureJoined(t, a2)
+	if rejoined.CID == first.CID {
+		t.Fatal("expected fresh rejoin to receive a new CID after expired token")
+	}
+	for _, participant := range rejoined.Participants {
+		if participant.CID == first.CID {
+			t.Fatal("expected fresh rejoin snapshot not to include stale suspended CID")
+		}
+	}
+}
+
+func TestLegacyReconnectTokenIsRejectedAndEvictsSuspendedParticipant(t *testing.T) {
+	const secret = "test-reconnect-secret"
+	t.Setenv("TURN_SECRET", secret)
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	first := captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	captureJoined(t, b)
+
+	legacy := legacyReconnectToken(secret, first.CID, rid)
+	valid, expired := validateReconnectToken(legacy, first.CID, rid)
+	if valid || !expired {
+		t.Fatalf("expected legacy token to be rejected as expired, valid=%t expired=%t", valid, expired)
+	}
+
+	hub.disconnectClient(a)
+
+	a2 := fakeClient(hub)
+	hub.registerClient(a2)
+	hub.handleMessage(a2, joinWithReconnect(rid, first.CID, legacy))
+
+	var sawRejection bool
+	for _, msg := range drainMessages(a2) {
+		if msg.Type != "error" {
+			continue
+		}
+		var p struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(msg.Payload, &p); err != nil {
+			continue
+		}
+		if p.Code == "INVALID_RECONNECT_TOKEN" {
+			sawRejection = true
+		}
+	}
+	if !sawRejection {
+		t.Fatal("expected INVALID_RECONNECT_TOKEN for legacy token")
+	}
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if room == nil {
+		t.Fatal("expected room to remain while second participant is active")
+	}
+	room.mu.Lock()
+	if p := room.participantByCID(first.CID); p != nil {
+		room.mu.Unlock()
+		t.Fatal("expected legacy-token reconnect to evict stale suspended participant")
+	}
+	room.mu.Unlock()
+}
+
+func TestReconnectTokenRefreshNotInRoomUsesAuthoritativeRoomID(t *testing.T) {
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	c := fakeClient(hub)
+	c.rid = rid
+	c.cid = "stale-cid"
+	hub.registerClient(c)
+
+	hub.handleMessage(c, mustMarshal(Message{V: 1, Type: "reconnect-token-refresh", RID: "client-supplied"}))
+
+	var got *Message
+	for _, msg := range drainMessages(c) {
+		if msg.Type == "error" {
+			got = &msg
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("expected NOT_IN_ROOM error")
+	}
+	if got.RID != rid {
+		t.Fatalf("expected error rid to use authoritative client room %q, got %q", rid, got.RID)
+	}
+	var payload struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatalf("parse error payload: %v", err)
+	}
+	if payload.Code != "NOT_IN_ROOM" {
+		t.Fatalf("expected NOT_IN_ROOM, got %q", payload.Code)
+	}
+}
+
+func TestNoActiveRoomCleanupDeletesGhostOnlyRoom(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	captureJoined(t, b)
+
+	hub.disconnectClient(a)
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if room == nil {
+		t.Fatal("expected room to exist after first disconnect")
+	}
+	room.mu.Lock()
+	if room.noActiveTimer != nil {
+		room.mu.Unlock()
+		t.Fatal("did not expect no-active cleanup while another participant is active")
+	}
+	room.mu.Unlock()
+
+	hub.disconnectClient(b)
+	room.mu.Lock()
+	if room.noActiveTimer == nil {
+		room.mu.Unlock()
+		t.Fatal("expected no-active cleanup timer after last active participant disconnects")
+	}
+	if got := len(room.byClient); got != 0 {
+		room.mu.Unlock()
+		t.Fatalf("expected no active participants, got %d", got)
+	}
+	if got := room.participantCount(); got != 2 {
+		room.mu.Unlock()
+		t.Fatalf("expected two suspended participants, got %d", got)
+	}
+	room.mu.Unlock()
+
+	hub.cleanupRoomIfNoActive(room)
+
+	hub.mu.RLock()
+	_, exists := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if exists {
+		t.Fatal("expected ghost-only room to be deleted by no-active cleanup")
+	}
+}
+
+func TestNoActiveRoomCleanupCancelledByReconnect(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	first := captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	captureJoined(t, b)
+
+	hub.disconnectClient(a)
+	hub.disconnectClient(b)
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if room == nil {
+		t.Fatal("expected room to exist before no-active cleanup fires")
+	}
+	room.mu.Lock()
+	if room.noActiveTimer == nil {
+		room.mu.Unlock()
+		t.Fatal("expected no-active cleanup timer")
+	}
+	room.mu.Unlock()
+
+	a2 := fakeClient(hub)
+	hub.registerClient(a2)
+	hub.handleMessage(a2, joinWithReconnect(rid, first.CID, first.ReconnectToken))
+	rejoined := captureJoined(t, a2)
+	if rejoined.Reconnect != reconnectOutcomeReattached {
+		t.Fatalf("expected reattached outcome before no-active cleanup, got %q", rejoined.Reconnect)
+	}
+
+	room.mu.Lock()
+	if room.noActiveTimer != nil {
+		room.mu.Unlock()
+		t.Fatal("expected reconnect to cancel no-active cleanup timer")
+	}
+	if got := len(room.byClient); got != 1 {
+		room.mu.Unlock()
+		t.Fatalf("expected one active participant after reconnect, got %d", got)
+	}
+	room.mu.Unlock()
+
+	hub.cleanupRoomIfNoActive(room)
+
+	hub.mu.RLock()
+	_, exists := hub.rooms[rid]
+	hub.mu.RUnlock()
+	if !exists {
+		t.Fatal("expected room to survive stale no-active cleanup after reconnect")
 	}
 }
 

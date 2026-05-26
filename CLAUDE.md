@@ -211,7 +211,7 @@ Kotlin + Jetpack Compose + Material3. Three-module Gradle project.
 - `push/` — Firebase Cloud Messaging integration
 - `service/` — foreground call service
 
-WebRTC: custom-built AAR from branch-heads/7559_173 in `app/libs/`, verified with SHA-256 checksum.
+WebRTC: custom-built AAR from branch-heads/7827 in `serenada-core/libs/`, verified with SHA-256 checksum.
 
 ### iOS Client (`client-ios/`)
 SwiftUI + Swift 5.9, project generated via XcodeGen (`project.yml`). Two SPM packages + host app.
@@ -245,7 +245,7 @@ SwiftUI + Swift 5.9, project generated via XcodeGen (`project.yml`). Two SPM pac
 - `NotificationService/` — push notification app extension (decrypts snapshot images)
 - `BroadcastUpload/` — screen sharing broadcast extension
 
-WebRTC: custom-built XCFramework from branch-heads/7559_173 in `Vendor/WebRTC/`.
+WebRTC: custom-built XCFramework from branch-heads/7827 in `Vendor/WebRTC/`.
 
 **Sample apps** (`samples/ios/`, `samples/android/`, `samples/web/`):
 - Minimal integration examples showing SDK usage for third-party developers.

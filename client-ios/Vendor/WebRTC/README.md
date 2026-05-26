@@ -7,10 +7,10 @@ Place the pinned Google WebRTC binary at:
 Recommended from repository root:
 
 ```bash
-bash tools/build_libwebrtc_ios_7559.sh
+bash tools/build_libwebrtc_ios_7827.sh
 ```
 
-This script builds `branch-heads/7559_173`, patches `rtc_base/ssl_roots.h` from
+This script builds `branch-heads/7827` (M149), patches `rtc_base/ssl_roots.h` from
 the current root bundle, strips dSYMs for repository-friendly size, copies the
 artifact here, and updates checksum.
 

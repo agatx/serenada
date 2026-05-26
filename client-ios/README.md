@@ -38,10 +38,10 @@ This project expects a pinned `WebRTC.xcframework` in:
 
 Recommended build flow (from repository root):
 ```bash
-bash tools/build_libwebrtc_ios_7559.sh
+bash tools/build_libwebrtc_ios_7827.sh
 ```
 
-The script fetches Chromium WebRTC (`branch-heads/7559_173`), patches
+The script fetches Chromium WebRTC (`branch-heads/7827`, M149), patches
 `rtc_base/ssl_roots.h` from the current root bundle, builds iOS slices, strips
 dSYMs for repository-friendly size, copies the artifact into
 `client-ios/Vendor/WebRTC/`, and updates checksum.

@@ -15,8 +15,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -73,6 +75,8 @@ class SerenadaServerProviderTest {
         val peerLeftEvents = mutableListOf<PeerEvent>()
         val peerMessages = mutableListOf<PeerMessage>()
         val roomEndedEvents = mutableListOf<RoomEndedEvent>()
+        val errors = mutableListOf<ErrorEvent>()
+        val reconnectTokenRefreshedEvents = mutableListOf<ReconnectTokenRefreshedEvent>()
 
         override fun onConnected(info: ConnectionInfo) {
             connectionInfos += info
@@ -100,6 +104,14 @@ class SerenadaServerProviderTest {
 
         override fun onRoomEnded(event: RoomEndedEvent) {
             roomEndedEvents += event
+        }
+
+        override fun onError(event: ErrorEvent) {
+            errors += event
+        }
+
+        override fun onReconnectTokenRefreshed(event: ReconnectTokenRefreshedEvent) {
+            reconnectTokenRefreshedEvents += event
         }
     }
 
@@ -184,6 +196,187 @@ class SerenadaServerProviderTest {
         assertEquals("join", rejoin.type)
         assertEquals("server-assigned", rejoin.payload?.optString("reconnectCid"))
         assertEquals("token-xyz", rejoin.payload?.optString("reconnectToken"))
+    }
+
+    @Test
+    fun `reconnect token refresh is scheduled ten minutes before expiry`() {
+        provider.joinRoom(
+            roomId = "room-1",
+            options = JoinOptions(maxParticipants = 4),
+        )
+        signaling.open(activeTransport = "ws")
+
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "server-assigned",
+                to = null,
+                payload = JSONObject().apply {
+                    put("reconnectToken", "token-1")
+                    put("reconnectTokenTTLMs", 1_200_000L)
+                    put(
+                        "participants",
+                        JSONArray().put(JSONObject().apply { put("cid", "server-assigned") }),
+                    )
+                },
+            ),
+        )
+        signaling.sentMessages.clear()
+
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(599_999L, TimeUnit.MILLISECONDS)
+        assertTrue(signaling.sentMessages.none { it.type == "reconnect-token-refresh" })
+
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(1L, TimeUnit.MILLISECONDS)
+        assertEquals(1, signaling.sentMessages.count { it.type == "reconnect-token-refresh" })
+    }
+
+    @Test
+    fun `room ended clears reconnect token refresh timer`() {
+        provider.joinRoom(
+            roomId = "room-1",
+            options = JoinOptions(maxParticipants = 4),
+        )
+        signaling.open(activeTransport = "ws")
+
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "server-assigned",
+                to = null,
+                payload = JSONObject().apply {
+                    put("reconnectToken", "token-1")
+                    put("reconnectTokenTTLMs", 1_200_000L)
+                    put(
+                        "participants",
+                        JSONArray().put(JSONObject().apply { put("cid", "server-assigned") }),
+                    )
+                },
+            ),
+        )
+        signaling.sentMessages.clear()
+
+        signaling.receive(
+            SignalingMessage(
+                type = "room_ended",
+                rid = "room-1",
+                sid = null,
+                cid = null,
+                to = null,
+                payload = JSONObject().apply { put("reason", "host_ended") },
+            ),
+        )
+        signaling.sentMessages.clear()
+
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(600_000L, TimeUnit.MILLISECONDS)
+        assertTrue(signaling.sentMessages.none { it.type == "reconnect-token-refresh" })
+        assertEquals(1, listener.roomEndedEvents.size)
+    }
+
+    @Test
+    fun `reconnect token refreshed updates token used by next auto rejoin`() {
+        provider.joinRoom(
+            roomId = "room-1",
+            options = JoinOptions(maxParticipants = 4),
+        )
+        signaling.open(activeTransport = "ws")
+
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "server-assigned",
+                to = null,
+                payload = JSONObject().apply {
+                    put("reconnectToken", "token-1")
+                    put("reconnectTokenTTLMs", 1_200_000L)
+                    put(
+                        "participants",
+                        JSONArray().put(JSONObject().apply { put("cid", "server-assigned") }),
+                    )
+                },
+            ),
+        )
+
+        signaling.receive(
+            SignalingMessage(
+                type = "reconnect-token-refreshed",
+                rid = "room-1",
+                sid = null,
+                cid = null,
+                to = null,
+                payload = JSONObject().apply {
+                    put("reconnectToken", "token-2")
+                    put("reconnectTokenTTLMs", 1_200_000L)
+                },
+            ),
+        )
+        assertEquals("token-2", listener.reconnectTokenRefreshedEvents.single().reconnectToken)
+        signaling.sentMessages.clear()
+
+        signaling.simulateClosed()
+        signaling.open(activeTransport = "ws")
+
+        val rejoin = signaling.sentMessages.single()
+        assertEquals("server-assigned", rejoin.payload?.optString("reconnectCid"))
+        assertEquals("token-2", rejoin.payload?.optString("reconnectToken"))
+    }
+
+    @Test
+    fun `invalid reconnect token retries as fresh join without surfacing error`() {
+        provider.joinRoom(
+            roomId = "room-1",
+            options = JoinOptions(maxParticipants = 4),
+        )
+        signaling.open(activeTransport = "ws")
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "server-assigned",
+                to = null,
+                payload = JSONObject().apply {
+                    put("reconnectToken", "expired-token")
+                    put("reconnectTokenTTLMs", 1_200_000L)
+                    put(
+                        "participants",
+                        JSONArray().put(JSONObject().apply { put("cid", "server-assigned") }),
+                    )
+                },
+            ),
+        )
+
+        signaling.sentMessages.clear()
+        signaling.simulateClosed()
+        signaling.open(activeTransport = "ws")
+        val reconnectJoin = signaling.sentMessages.single()
+        assertEquals("server-assigned", reconnectJoin.payload?.optString("reconnectCid"))
+        assertEquals("expired-token", reconnectJoin.payload?.optString("reconnectToken"))
+
+        signaling.receive(
+            SignalingMessage(
+                type = "error",
+                rid = "room-1",
+                sid = null,
+                cid = null,
+                to = null,
+                payload = JSONObject().apply {
+                    put("code", "INVALID_RECONNECT_TOKEN")
+                    put("message", "Reconnect token validation failed")
+                },
+            ),
+        )
+
+        val freshJoin = signaling.sentMessages.last()
+        assertEquals("join", freshJoin.type)
+        assertNull(freshJoin.payload?.optString("reconnectCid")?.ifBlank { null })
+        assertNull(freshJoin.payload?.optString("reconnectToken")?.ifBlank { null })
+        assertTrue(listener.errors.isEmpty())
     }
 
     @Test

@@ -24,7 +24,7 @@ internal class SignalingMessageRouter(
     private val getClientId: () -> String?,
     private val getHostCid: () -> String?,
     // Mutation callbacks
-    private val onJoined: (clientId: String, hostCid: String?, roomState: RoomState?, turnToken: String?, turnTTL: Long?, reconnectToken: String?) -> Unit,
+    private val onJoined: (clientId: String, hostCid: String?, roomState: RoomState?, turnToken: String?, turnTTL: Long?, reconnectToken: String?, reconnectTokenTTL: Long?) -> Unit,
     private val onRoomStateUpdated: (RoomState) -> Unit,
     private val onError: (CallError) -> Unit,
     private val onRoomEnded: () -> Unit,
@@ -97,7 +97,7 @@ internal class SignalingMessageRouter(
         val roomState = if (!hostPeerId.isNullOrBlank()) {
             RoomState(hostCid = hostPeerId, participants = participants, maxParticipants = event.maxParticipants)
         } else null
-        onJoined(cid, roomState?.hostCid, roomState, null, null, null)
+        onJoined(cid, roomState?.hostCid, roomState, null, null, event.reconnectToken, event.reconnectTokenTTLMs)
     }
 
     fun processRoomStateEvent(event: RoomStateEvent) {
@@ -172,7 +172,7 @@ internal class SignalingMessageRouter(
 
         val roomState = parseRoomState(msg.payload)
 
-        onJoined(cid, roomState?.hostCid, roomState, turnToken, turnTTL, reconnectToken)
+        onJoined(cid, roomState?.hostCid, roomState, turnToken, turnTTL, reconnectToken, payload?.reconnectTokenTTLMs)
     }
 
     private fun handleRoomState(msg: SignalingMessage) {
