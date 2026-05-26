@@ -83,6 +83,7 @@ internal class PeerNegotiationEngine(
     private val pendingRemoteIceByOfferId = mutableMapOf<String, MutableMap<String, MutableList<IceCandidate>>>()
     private val participantStatuses = mutableMapOf<String, ParticipantSignalingStatus>()
     private val outboundMediaWatchByCid = mutableMapOf<String, OutboundMediaWatch>()
+    private val lastMediaRestartHandledAtByCid = mutableMapOf<String, Long>()
 
     // --- Public API ---
 
@@ -196,11 +197,13 @@ internal class PeerNegotiationEngine(
         clearNegotiationState()
         participantStatuses.clear()
         outboundMediaWatchByCid.clear()
+        lastMediaRestartHandledAtByCid.clear()
     }
 
     fun recoverStalledOutboundMedia() {
         val slots = getAllSlots()
         outboundMediaWatchByCid.keys.filterNot(slots::containsKey).forEach(outboundMediaWatchByCid::remove)
+        lastMediaRestartHandledAtByCid.keys.filterNot(slots::containsKey).forEach(lastMediaRestartHandledAtByCid::remove)
         if (!isSignalingConnected()) return
         for ((remoteCid, slot) in slots) {
             recoverStalledOutboundMedia(remoteCid, slot)
@@ -416,7 +419,13 @@ internal class PeerNegotiationEngine(
                         onComplete = { answerSuccess ->
                             handler.post {
                                 if (!answerSuccess) {
-                                    logger?.log(SerenadaLogLevel.WARNING, TAG, "Failed to create answer for $remoteCid")
+                                    logger?.log(SerenadaLogLevel.WARNING, TAG, "Answer creation failed for $remoteCid; resetting peer")
+                                    val replacementSlot = if (allowPeerReset) replacePeerSlotForRemoteOffer(remoteCid, offerId) else null
+                                    if (replacementSlot != null) {
+                                        applyOffer(replacementSlot, allowPeerReset = false)
+                                    } else {
+                                        scheduleIceRestart(remoteCid, "answer-failed", 0)
+                                    }
                                 }
                             }
                         },
@@ -434,6 +443,12 @@ internal class PeerNegotiationEngine(
                         applyOffer(slot, allowPeerReset = true)
                     } else {
                         logger?.log(SerenadaLogLevel.WARNING, TAG, "Failed to roll back colliding offer for $remoteCid")
+                        val replacementSlot = replacePeerSlotForRemoteOffer(remoteCid, offerId)
+                        if (replacementSlot != null) {
+                            applyOffer(replacementSlot, allowPeerReset = false)
+                        } else {
+                            scheduleIceRestart(remoteCid, "rollback-failed", 0)
+                        }
                     }
                 }
             }
@@ -581,6 +596,10 @@ internal class PeerNegotiationEngine(
 
     private fun handleMediaRestartRequest(slot: PeerConnectionSlotProtocol, remoteCid: String) {
         if (!canOffer(slot)) return
+        val now = clock.nowMs()
+        val lastHandledAt = lastMediaRestartHandledAtByCid[remoteCid]
+        if (lastHandledAt != null && now - lastHandledAt < WebRtcResilienceConstants.OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return
+        lastMediaRestartHandledAtByCid[remoteCid] = now
         logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after media restart request from $remoteCid")
         val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
         maybeSendOffer(replacement)

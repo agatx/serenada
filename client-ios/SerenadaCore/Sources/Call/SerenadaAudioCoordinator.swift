@@ -83,8 +83,12 @@ public struct AudioDevice: Hashable, Sendable {
 /// Host policy for how the SDK should activate and react to shared audio.
 public struct AudioIntent: Equatable, Sendable {
     /// Whether the call needs microphone capture.
+    ///
+    /// This is a policy hint for custom coordinators; it does not disable SDK WebRTC track creation.
     public var requiresCapture: Bool = true
     /// Whether the call needs remote audio playback.
+    ///
+    /// This is a policy hint for custom coordinators; it does not disable SDK WebRTC track creation.
     public var requiresPlayback: Bool = true
     /// Initial preferred audio route, if known.
     public var preferredDevice: AudioDevice?
@@ -98,8 +102,8 @@ public struct AudioIntent: Equatable, Sendable {
     /// Creates an audio intent for call-session activation.
     ///
     /// - Parameters:
-    ///   - requiresCapture: Whether the call needs microphone capture.
-    ///   - requiresPlayback: Whether the call needs remote audio playback.
+    ///   - requiresCapture: Whether the call needs microphone capture. This is a policy hint for custom coordinators; it does not disable SDK WebRTC track creation.
+    ///   - requiresPlayback: Whether the call needs remote audio playback. This is a policy hint for custom coordinators; it does not disable SDK WebRTC track creation.
     ///   - preferredDevice: Initial preferred audio route, if known.
     ///   - enableProximityEarpiece: Whether the SDK may use proximity-based earpiece routing.
     ///   - muteDuringExternalAudio: Whether external audio should mute the local WebRTC mic.

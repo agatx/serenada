@@ -73,8 +73,10 @@ data class AudioDevice(
 /**
  * Host policy for how the SDK should activate and react to shared audio.
  *
- * @property requiresCapture Whether the call needs microphone capture.
- * @property requiresPlayback Whether the call needs remote audio playback.
+ * @property requiresCapture Whether the call needs microphone capture. This is a policy hint for
+ * custom coordinators; it does not disable SDK WebRTC track creation.
+ * @property requiresPlayback Whether the call needs remote audio playback. This is a policy hint for
+ * custom coordinators; it does not disable SDK WebRTC track creation.
  * @property preferredDevice Initial preferred audio route, if known.
  * @property enableProximityEarpiece Whether the SDK may use proximity-based earpiece routing.
  * @property muteDuringExternalAudio Whether external audio should mute the local WebRTC mic.

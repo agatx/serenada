@@ -51,6 +51,7 @@ final class PeerNegotiationEngine {
     private var pendingRemoteIceByOfferId: [String: [String: [IceCandidatePayload]]] = [:]
     private var participantStatuses: [String: ParticipantSignalingStatus] = [:]
     private var outboundMediaWatchByCid: [String: OutboundMediaWatch] = [:]
+    private var lastMediaRestartHandledAtByCid: [String: Int64] = [:]
 
     private struct OutboundMediaWatch {
         var lastSample: OutboundMediaSample?
@@ -246,12 +247,16 @@ final class PeerNegotiationEngine {
         clearNegotiationState()
         participantStatuses.removeAll()
         outboundMediaWatchByCid.removeAll()
+        lastMediaRestartHandledAtByCid.removeAll()
     }
 
     func recoverStalledOutboundMedia() {
         let slots = getAllSlots()
         for remoteCid in Array(outboundMediaWatchByCid.keys) where slots[remoteCid] == nil {
             outboundMediaWatchByCid.removeValue(forKey: remoteCid)
+        }
+        for remoteCid in Array(lastMediaRestartHandledAtByCid.keys) where slots[remoteCid] == nil {
+            lastMediaRestartHandledAtByCid.removeValue(forKey: remoteCid)
         }
         guard isSignalingConnected() else { return }
         for (remoteCid, slot) in slots {
@@ -483,11 +488,13 @@ final class PeerNegotiationEngine {
                     self.currentNegotiationIds[remoteCid] = offerId
                     self.flushPendingRemoteIce(remoteCid: remoteCid, offerId: offerId, slot: targetSlot)
                     targetSlot.createAnswer(onSdp: { [weak self] answerSdp in
-                        self?.sendMessage(
-                            "answer",
-                            .object(["sdp": .string(answerSdp), "offerId": .string(offerId)]),
-                            remoteCid
-                        )
+                        Task { @MainActor in
+                            self?.sendMessage(
+                                "answer",
+                                .object(["sdp": .string(answerSdp), "offerId": .string(offerId)]),
+                                remoteCid
+                            )
+                        }
                     }, onComplete: { [weak self, weak targetSlot] success in
                         guard !success else { return }
                         Task { @MainActor in
@@ -512,7 +519,11 @@ final class PeerNegotiationEngine {
                 Task { @MainActor in
                     guard success else {
                         self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Rollback before remote offer failed for \(remoteCid)")
-                        self.scheduleOfferTimeout(remoteCid: remoteCid)
+                        if let replacementSlot = self.replacePeerSlotForRemoteOffer(remoteCid: remoteCid, offerId: offerId) {
+                            applyOffer(to: replacementSlot, allowPeerReset: false)
+                        } else {
+                            self.scheduleIceRestart(remoteCid: remoteCid, reason: "rollback-failed", delayMs: 0)
+                        }
                         return
                     }
                     applyOffer(to: slot, allowPeerReset: true)
@@ -656,6 +667,7 @@ final class PeerNegotiationEngine {
         }
 
         let offerId = nextOfferId(remoteCid: slot.remoteCid)
+        let remoteCid = slot.remoteCid
         pendingLocalOfferIds[slot.remoteCid] = offerId
         acceptedRemoteOfferIds.removeValue(forKey: slot.remoteCid)
         ignoredOfferIds.removeValue(forKey: slot.remoteCid)
@@ -663,12 +675,15 @@ final class PeerNegotiationEngine {
         let started = slot.createOffer(
             iceRestart: iceRestart,
             onSdp: { [weak self] sdp in
-                self?.sendMessage(
-                    "offer",
-                    .object(["sdp": .string(sdp), "offerId": .string(offerId)]),
-                    slot.remoteCid
-                )
-                self?.scheduleOfferTimeout(remoteCid: slot.remoteCid)
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.sendMessage(
+                        "offer",
+                        .object(["sdp": .string(sdp), "offerId": .string(offerId)]),
+                        remoteCid
+                    )
+                    self.scheduleOfferTimeout(remoteCid: remoteCid)
+                }
             },
             onComplete: { [weak self] success in
                 Task { @MainActor in
@@ -702,6 +717,12 @@ final class PeerNegotiationEngine {
 
     private func handleMediaRestartRequest(slot: any PeerConnectionSlotProtocol, remoteCid: String) {
         guard canOffer(slot: slot) else { return }
+        let now = clock.nowMs()
+        if let lastHandledAt = lastMediaRestartHandledAtByCid[remoteCid],
+           now - lastHandledAt < Int64(WebRtcResilience.outboundMediaRecoveryCooldownMs) {
+            return
+        }
+        lastMediaRestartHandledAtByCid[remoteCid] = now
         logger?.log(.warning, tag: "PeerNegotiationEngine", "Recreating peer after media restart request from \(remoteCid)")
         guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
         maybeSendOffer(slot: replacement)

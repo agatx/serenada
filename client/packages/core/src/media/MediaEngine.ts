@@ -112,6 +112,7 @@ export class MediaEngine {
     private pageShowHandler: ((e: PageTransitionEvent) => void) | null = null;
     private heartbeatInterval: number | null = null;
     private outboundMediaWatchdogInterval: number | null = null;
+    private mediaRestartHandledAtByCid = new Map<string, number>();
     private onlineHandler: (() => void) | null = null;
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
@@ -461,6 +462,7 @@ export class MediaEngine {
         this.peers.clear();
         this.remoteStreams = new Map();
         this.lastInboundBytesByCid.clear();
+        this.mediaRestartHandledAtByCid.clear();
         if (this.retryingTimer) { window.clearTimeout(this.retryingTimer); this.retryingTimer = null; }
         this.iceConnectionState = 'closed';
         this.connectionState = 'closed';
@@ -598,6 +600,7 @@ export class MediaEngine {
                 this.cleanupAllPeers();
             }
             this.participantConnectionStatus.clear();
+            this.mediaRestartHandledAtByCid.clear();
             return;
         }
 
@@ -612,6 +615,9 @@ export class MediaEngine {
         }
         for (const cid of Array.from(this.participantConnectionStatus.keys())) {
             if (!remoteCids.has(cid)) this.participantConnectionStatus.delete(cid);
+        }
+        for (const cid of Array.from(this.mediaRestartHandledAtByCid.keys())) {
+            if (!remoteCids.has(cid)) this.mediaRestartHandledAtByCid.delete(cid);
         }
 
         for (const peer of remotePeers) {
@@ -943,6 +949,7 @@ export class MediaEngine {
                 peer.pendingLocalOfferId = null;
                 if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
                 await peer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit);
+                if (this.peers.get(fromCid) !== peer) return;
             }
 
             await this.applyRemoteOffer(peer, fromCid, sdp, offerId, true);
@@ -1390,6 +1397,7 @@ export class MediaEngine {
         peer.outboundMediaWatchInFlight = true;
         try {
             const sample = this.readOutboundMediaSample(await peer.pc.getStats());
+            if (this.peers.get(remoteCid) !== peer) return;
             const previous = peer.lastOutboundMediaSample;
             peer.lastOutboundMediaSample = sample;
             if (!previous) {
@@ -1481,6 +1489,10 @@ export class MediaEngine {
     }
 
     private async handleMediaRestartRequest(fromCid: string): Promise<void> {
+        const now = Date.now();
+        const lastHandledAt = this.mediaRestartHandledAtByCid.get(fromCid) ?? 0;
+        if (now - lastHandledAt < OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return;
+        this.mediaRestartHandledAtByCid.set(fromCid, now);
         await this.recreatePeerForMediaRecovery(fromCid, 'peer media restart request');
     }
 

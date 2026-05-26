@@ -43,6 +43,7 @@ internal class DefaultAudioCoordinator(
     private var previousMicrophoneMute = false
     private var proximityMonitoringActive = false
     private var isProximityNear = false
+    private var proximityEarpieceEnabled = true
     private var audioDeviceMonitoringActive = false
     private var communicationDeviceChangedListener: Any? = null
     private var bluetoothScoActive = false
@@ -128,7 +129,7 @@ internal class DefaultAudioCoordinator(
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.isMicrophoneMute = false
             startAudioDeviceMonitoring()
-            if (proximityMonitoringEnabled) {
+            if (proximityMonitoringEnabled && proximityEarpieceEnabled) {
                 startProximityMonitoring()
             }
             updateDevicesAndRoute()
@@ -152,6 +153,7 @@ internal class DefaultAudioCoordinator(
             return
         }
         audioSessionActive = false
+        proximityEarpieceEnabled = true
         pinnedOutputDevice = null
         pinnedOutputRouteInventory = null
         stopProximityMonitoring()
@@ -182,7 +184,9 @@ internal class DefaultAudioCoordinator(
     // MARK: - SerenadaAudioCoordinator Conformance
 
     override suspend fun activateCallSession(intent: AudioIntent) {
+        proximityEarpieceEnabled = intent.enableProximityEarpiece
         activate()
+        intent.preferredDevice?.let { applyRouting(it) }
     }
 
     override suspend fun deactivateCallSession() {
@@ -263,7 +267,7 @@ internal class DefaultAudioCoordinator(
         }
         if (registered) {
             proximityMonitoringActive = true
-            isProximityNear = true
+            isProximityNear = false
         }
     }
 

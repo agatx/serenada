@@ -156,8 +156,8 @@ The profile matters: an A2DP-only BT device cannot carry the call's mic, so the 
 
 ```
 AudioIntent {
-  requiresCapture: Bool                            // default true
-  requiresPlayback: Bool                           // default true
+  requiresCapture: Bool                            // default true; policy hint, not a WebRTC track gate
+  requiresPlayback: Bool                           // default true; policy hint, not a WebRTC track gate
   preferredDevice: AudioDevice?
   enableProximityEarpiece: Bool                    // default true
   muteDuringExternalAudio: Bool                    // default true. SDK mutes its mic

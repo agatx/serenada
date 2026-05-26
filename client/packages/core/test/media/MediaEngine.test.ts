@@ -823,6 +823,57 @@ describe('MediaEngine', () => {
         expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(2);
     });
 
+    it('rate limits repeated media restart requests from the same peer', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await vi.waitFor(() => {
+            expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(1);
+        });
+
+        const firstOfferId = sentMessages.find((message) => message.type === 'offer')?.payload?.offerId;
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'answer',
+            payload: { from: 'zeta', sdp: 'remote-answer', offerId: firstOfferId },
+        });
+        await flushPromises();
+
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'media_restart_request',
+            payload: { from: 'zeta', reason: 'stalled outbound media' },
+        });
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'media_restart_request',
+            payload: { from: 'zeta', reason: 'stalled outbound media' },
+        });
+        await flushPromises();
+
+        expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(2);
+    });
+
     it('renegotiates a four-party reattach from deterministic offer owners only', async () => {
         const getUserMedia = vi.fn().mockResolvedValue(createMediaStream());
         Object.defineProperty(globalThis, 'navigator', {

@@ -106,6 +106,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     private var audioSessionActive = false
     private var proximityMonitoringActive = false
     private var isProximityNear = false
+    private var proximityEarpieceEnabled = true
     private var pinnedOutputDevice: AudioDevice?
     private var pinnedOutputRouteInventory: Set<String>?
     private var builtInReceiverRouteObserved = false
@@ -148,7 +149,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
 
         startAudioRouteMonitoring()
-        if proximityMonitoringEnabled {
+        if proximityMonitoringEnabled && proximityEarpieceEnabled {
             startProximityMonitoring()
         }
         updateDevicesAndRoute()
@@ -163,6 +164,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
 
         audioSessionActive = false
+        proximityEarpieceEnabled = true
         pinnedOutputDevice = nil
         pinnedOutputRouteInventory = nil
         stopAudioRouteMonitoring()
@@ -182,7 +184,11 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     // MARK: - SerenadaAudioCoordinator Conformance
 
     func activateCallSession(intent: AudioIntent) async throws {
+        proximityEarpieceEnabled = intent.enableProximityEarpiece
         activate()
+        if let preferredDevice = intent.preferredDevice {
+            try await applyRouting(preferredDevice)
+        }
     }
 
     func deactivateCallSession() async {
@@ -354,8 +360,12 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
                 try self.audioSession.setActive(true)
 #if canImport(WebRTC)
                 let rtcAudioSession = RTCAudioSession.sharedInstance()
-                rtcAudioSession.isAudioEnabled = false
-                rtcAudioSession.isAudioEnabled = true
+                do {
+                    rtcAudioSession.lockForConfiguration()
+                    defer { rtcAudioSession.unlockForConfiguration() }
+                    rtcAudioSession.isAudioEnabled = false
+                    rtcAudioSession.isAudioEnabled = true
+                }
 #endif
                 self.updateDevicesAndRoute()
                 self.applyCallAudioRouting()

@@ -57,6 +57,7 @@ import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
@@ -222,6 +223,7 @@ class SerenadaSession internal constructor(
     private var sessionActivated = false
     private val audioCoordinatorMutex = Mutex()
     private val audioCoordinatorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val audioCoordinatorCollectorJobs = mutableListOf<Job>()
     private val connectionStatusTracker = ConnectionStatusTracker(
         handler = handler,
         getPhase = { _state.value.phase },
@@ -559,28 +561,35 @@ class SerenadaSession internal constructor(
     }
 
     private fun startAudioCoordinatorCollectors() {
-        audioCoordinatorScope.launch {
+        if (audioCoordinatorCollectorJobs.isNotEmpty()) return
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
             audioCoordinator.availableDevices.collect { devices ->
                 _availableAudioDevices.value = devices
             }
         }
-        audioCoordinatorScope.launch {
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
             audioCoordinator.effectiveInputDevice.collect { device ->
                 if (!sessionActivated) return@collect
                 routeInputAvailable = (device != null)
                 updateEffectiveMicState()
             }
         }
-        audioCoordinatorScope.launch {
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
             audioCoordinator.effectiveOutputDevice.collect { device ->
                 _currentAudioDevice.value = device
+                if (sessionActivated) applyLocalVideoPreference()
             }
         }
-        audioCoordinatorScope.launch {
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
             audioCoordinator.events.collect { event ->
                 handleCoordinatorEvent(event)
             }
         }
+    }
+
+    private fun stopAudioCoordinatorCollectors() {
+        audioCoordinatorCollectorJobs.forEach { it.cancel() }
+        audioCoordinatorCollectorJobs.clear()
     }
 
     private val forceSse = config.transports == listOf(SerenadaTransport.SSE)
@@ -1051,6 +1060,7 @@ class SerenadaSession internal constructor(
         hasInitialIceServers = false
         reconnectRecoveryPending = false
         iceFetchGeneration += 1
+        startAudioCoordinatorCollectors()
         localMediaReadyForNegotiation = false
         if (webRtcStatsExecutor == null) {
             webRtcStatsExecutor = newWebRtcStatsExecutor()
@@ -1078,12 +1088,20 @@ class SerenadaSession internal constructor(
         updateDiagnostics(CallDiagnostics())
 
         acquirePerformanceLocks()
+        joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
         providerScope.launch {
             try {
                 audioCoordinatorMutex.withLock {
                     audioCoordinator.activateCallSession(config.audioIntent)
                 }
-                if (!isActive) return@launch
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to activate audio session: ${e.message}")
+                handleError(CallError.Unknown(e.message ?: "Audio session activation failed"))
+                return@launch
+            }
+            if (!isActive) return@launch
+            try {
                 callAudioSessionController.activate()
                 webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
                 localMediaReadyForNegotiation = true
@@ -1093,13 +1111,12 @@ class SerenadaSession internal constructor(
                 applyLocalVideoPreference()
                 startRemoteVideoStatePolling()
                 peerNegotiationEngine.onLocalMediaReady()
-                joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
                 joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
                 joinFlowCoordinator.ensureSignalingConnection()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to activate audio session: ${e.message}")
-                handleError(CallError.Unknown(e.message ?: "Audio session activation failed"))
+                logger?.log(SerenadaLogLevel.ERROR, "Media", "Failed to start local media: ${e.message}")
+                handleError(CallError.Unknown(e.message ?: "Local media startup failed"))
             }
         }
     }
@@ -1673,6 +1690,7 @@ class SerenadaSession internal constructor(
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
         callAudioSessionController.deactivate()
+        stopAudioCoordinatorCollectors()
         audioCoordinatorScope.launch {
             audioCoordinatorMutex.withLock {
                 audioCoordinator.deactivateCallSession()
@@ -1885,6 +1903,7 @@ class SerenadaSession internal constructor(
                 routeInputAvailable = (event.input != null)
                 _currentAudioDevice.value = event.output
                 updateEffectiveMicState()
+                applyLocalVideoPreference()
             }
             is AudioCoordinatorEvent.ExternalAudioStarted -> {
                 if (config.audioIntent.muteDuringExternalAudio) {
