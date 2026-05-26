@@ -398,6 +398,31 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertTrue(harness.fakeProvider.sentPeerMessages(ofType: "offer").isEmpty)
     }
 
+    func testStaleOfferTimeoutEscalatesToIceRestart() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "zeta",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+        let slot = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        XCTAssertEqual(slot.getSignalingState(), "HAVE_LOCAL_OFFER")
+        XCTAssertNotNil(slot.offerTimeoutTask)
+        let offersBeforeTimeout = harness.fakeProvider.sentPeerMessages(ofType: "offer").count
+
+        slot.setRemoteDescription(type: .answer, sdp: "manual-answer")
+        XCTAssertEqual(slot.getSignalingState(), "STABLE")
+
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.offerTimeoutMs) + 1)
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "offer").count > offersBeforeTimeout
+        }
+
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBeforeTimeout + 1)
+        XCTAssertGreaterThan(slot.createOfferCalls, offersBeforeTimeout)
+        XCTAssertEqual(slot.getSignalingState(), "HAVE_LOCAL_OFFER")
+    }
+
     func testDesignatedOffererRestartsWhenPeerReattaches() async throws {
         await harness.advanceToInCallWithTurn(
             localCid: "alpha",

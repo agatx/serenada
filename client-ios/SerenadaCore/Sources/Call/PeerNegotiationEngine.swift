@@ -845,7 +845,12 @@ final class PeerNegotiationEngine {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, let slot = self.getSlot(remoteCid) else { return }
-                guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else { return }
+                guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else {
+                    if triggerIceRestart, self.shouldIOffer(remoteCid: remoteCid) {
+                        self.scheduleIceRestart(remoteCid: remoteCid, reason: "offer-timeout-stale", delayMs: 0)
+                    }
+                    return
+                }
                 if triggerIceRestart {
                     slot.markPendingIceRestart()
                 }
