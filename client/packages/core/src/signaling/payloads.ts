@@ -60,17 +60,20 @@ export interface TurnRefreshedPayload {
 export interface OfferPayload {
     from: string;
     sdp: string;
+    offerId?: string;
     timestamp?: number;
 }
 
 export interface AnswerPayload {
     from: string;
     sdp: string;
+    offerId?: string;
 }
 
 export interface IceCandidatePayload {
     from: string;
     candidate: RTCIceCandidateInit;
+    offerId?: string;
 }
 
 function parseContentState(raw: unknown): ParticipantContentState | undefined {
@@ -187,6 +190,11 @@ export function parseOfferPayload(raw: Record<string, unknown> | undefined): Off
     return {
         from: raw.from,
         sdp: raw.sdp,
+        offerId: typeof raw.offerId === 'string' && raw.offerId !== ''
+            ? raw.offerId
+            : typeof raw.negotiationId === 'string' && raw.negotiationId !== ''
+              ? raw.negotiationId
+              : undefined,
         timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : undefined,
     };
 }
@@ -198,6 +206,11 @@ export function parseAnswerPayload(raw: Record<string, unknown> | undefined): An
     return {
         from: raw.from,
         sdp: raw.sdp,
+        offerId: typeof raw.offerId === 'string' && raw.offerId !== ''
+            ? raw.offerId
+            : typeof raw.negotiationId === 'string' && raw.negotiationId !== ''
+              ? raw.negotiationId
+              : undefined,
     };
 }
 
@@ -211,5 +224,10 @@ export function parseIceCandidatePayload(raw: Record<string, unknown> | undefine
     return {
         from: raw.from,
         candidate: candidate as RTCIceCandidateInit,
+        offerId: typeof raw.offerId === 'string' && raw.offerId !== ''
+            ? raw.offerId
+            : typeof raw.negotiationId === 'string' && raw.negotiationId !== ''
+              ? raw.negotiationId
+              : undefined,
     };
 }

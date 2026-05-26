@@ -52,7 +52,7 @@ class SessionDirtyPairTest {
     }
 
     @Test
-    fun `negotiation_dirty schedules fallback when local is not offerer`() {
+    fun `negotiation_dirty is no-op when local is not offerer`() {
         factory.advanceToInCallWithTurn(
             localCid = "zeta",
             remoteCid = "alpha",
@@ -60,15 +60,12 @@ class SessionDirtyPairTest {
             remoteJoinedAt = 1,
         )
         val slot = factory.fakeMedia.fakeSlots.getValue("alpha")
-        slot.cancelNonHostFallbackTask()
+        val baselineOffers = slot.createOfferCalls
 
         factory.fakeProvider.simulateNegotiationDirty(withCid = "alpha")
         ShadowLooper.idleMainLooper()
 
-        assertTrue(
-            "Non-offerer should arm the fallback offer path",
-            slot.nonHostFallbackTask != null,
-        )
+        assertEquals("Non-offerer must not create recovery offers", baselineOffers, slot.createOfferCalls)
         assertFalse(
             "Non-offerer must not wedge on a pending ICE restart it cannot send",
             slot.pendingIceRestart,

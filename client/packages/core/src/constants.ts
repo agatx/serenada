@@ -20,8 +20,6 @@ export const JOIN_HARD_TIMEOUT_MS = 15000;
 // Peer Connection
 export const OFFER_TIMEOUT_MS = 8000;
 export const ICE_RESTART_COOLDOWN_MS = 10000;
-export const NON_HOST_FALLBACK_DELAY_MS = 4000;
-export const NON_HOST_FALLBACK_MAX_ATTEMPTS = 2;
 export const ICE_CANDIDATE_BUFFER_MAX = 50;
 
 // TURN

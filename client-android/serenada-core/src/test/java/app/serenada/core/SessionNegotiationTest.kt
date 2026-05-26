@@ -1,5 +1,7 @@
 package app.serenada.core
 
+import app.serenada.core.ParticipantSignalingStatus
+import app.serenada.core.SignalingProviderParticipant
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.WebRtcResilienceConstants
 import app.serenada.core.fakes.FakePeerConnectionSlot
@@ -12,7 +14,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
+import org.json.JSONObject
 import org.webrtc.PeerConnection
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -21,8 +25,40 @@ class SessionNegotiationTest {
 
     private lateinit var factory: TestSessionFactory
 
+    private data class NegotiationScenario(
+        val id: String,
+        val localCid: String,
+        val remoteCid: String,
+    )
+
     @Before fun setUp() { factory = TestSessionFactory() }
     @After fun tearDown() { factory.tearDown() }
+
+    private fun sharedNegotiationScenarios(): List<NegotiationScenario> {
+        val file = listOf(
+            File("test-fixtures/peer-negotiation-scenarios.json"),
+            File("../test-fixtures/peer-negotiation-scenarios.json"),
+            File("../../test-fixtures/peer-negotiation-scenarios.json"),
+        ).firstOrNull { it.isFile } ?: error("Missing shared peer negotiation scenarios")
+        val scenarios = JSONObject(file.readText()).getJSONArray("scenarios")
+        return (0 until scenarios.length()).map { index ->
+            val scenario = scenarios.getJSONObject(index)
+            NegotiationScenario(
+                id = scenario.getString("id"),
+                localCid = scenario.getString("localCid"),
+                remoteCid = scenario.getString("remoteCid"),
+            )
+        }
+    }
+
+    private fun resetFactory() {
+        factory.tearDown()
+        factory = TestSessionFactory()
+    }
+
+    private fun latestOfferId(): String {
+        return factory.fakeProvider.sentMessages("offer").last().payload!!.getString("offerId")
+    }
 
     // Group 1: Offer/Answer Exchange
 
@@ -254,19 +290,46 @@ class SessionNegotiationTest {
     }
 
     @Test
-    fun `non-host fallback fires after delay`() {
+    fun `non-offerer does not send fallback offer after delay`() {
         factory.advanceToInCallWithTurn(localCid = "zulu", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
 
         val fakeSlot = factory.fakeMedia.fakeSlots["alpha"]
         assertNotNull(fakeSlot)
 
-        // Advance past non-host fallback delay
-        ShadowLooper.idleMainLooper(WebRtcResilienceConstants.NON_HOST_FALLBACK_DELAY_MS, TimeUnit.MILLISECONDS)
+        ShadowLooper.idleMainLooper(WebRtcResilienceConstants.OFFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         ShadowLooper.idleMainLooper()
 
-        // After fallback, non-host should send an offer
         val offers = factory.fakeProvider.sentMessages("offer")
-        assertTrue("Non-host fallback should send offer", offers.isNotEmpty())
+        assertTrue("Non-offerer must not create fallback offers", offers.isEmpty())
+    }
+
+    @Test
+    fun `designated offerer restarts when peer reattaches`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
+        val slot = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(slot)
+        factory.simulateAnswerFromRemote("zeta", offerId = latestOfferId())
+        val offersBefore = slot!!.createOfferCalls
+
+        factory.fakeProvider.simulateRoomStateUpdatedWith(
+            participants = listOf(
+                SignalingProviderParticipant(peerId = "alpha", joinedAt = 1),
+                SignalingProviderParticipant(peerId = "zeta", joinedAt = 2, connectionStatus = ParticipantSignalingStatus.SUSPENDED),
+            ),
+            hostPeerId = "alpha",
+        )
+        ShadowLooper.idleMainLooper()
+
+        factory.fakeProvider.simulateRoomStateUpdatedWith(
+            participants = listOf(
+                SignalingProviderParticipant(peerId = "alpha", joinedAt = 1),
+                SignalingProviderParticipant(peerId = "zeta", joinedAt = 2, connectionStatus = ParticipantSignalingStatus.ACTIVE),
+            ),
+            hostPeerId = "alpha",
+        )
+        ShadowLooper.idleMainLooper()
+
+        assertTrue("Designated offerer should restart after peer reattaches", slot.createOfferCalls > offersBefore)
     }
 
     // Group 8: Signaling Reconnect
@@ -293,6 +356,184 @@ class SessionNegotiationTest {
 
         val hasRestarted = fakeSlot.createOfferCalls > offersBefore || fakeSlot.iceRestartTask != null || fakeSlot.pendingIceRestart
         assertTrue("Reconnect with DISCONNECTED peer should trigger ICE restart", hasRestarted)
+    }
+
+    @Test
+    fun `ICE restart rolls back stale local offer before retrying`() {
+        factory = TestSessionFactory(handlesReconnection = true)
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(fakeSlot)
+        assertEquals(PeerConnection.SignalingState.HAVE_LOCAL_OFFER, fakeSlot!!.getSignalingState())
+        val offersBefore = fakeSlot.createOfferCalls
+
+        // Simulate a watchdog that was lost while the app/signaling transport
+        // was suspended. A dirty-pair restart must still recover the slot.
+        fakeSlot.cancelOfferTimeout()
+        factory.fakeProvider.simulateNegotiationDirty(withCid = "zeta")
+        ShadowLooper.idleMainLooper()
+
+        assertEquals("Stale local offers should be rolled back before retrying ICE restart", 1, fakeSlot.rollbackCalls)
+        assertTrue("ICE restart should retry from STABLE", fakeSlot.createOfferCalls > offersBefore)
+        assertEquals("Retry should leave a fresh local offer waiting for answer", PeerConnection.SignalingState.HAVE_LOCAL_OFFER, fakeSlot.getSignalingState())
+    }
+
+    @Test
+    fun `shared perfect negotiation scenarios`() {
+        val handled = mutableSetOf<String>()
+        for (scenario in sharedNegotiationScenarios()) {
+            resetFactory()
+            handled += scenario.id
+            when (scenario.id) {
+                "impolite-offer-collision-ignores-offer-and-ice" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 1,
+                        remoteJoinedAt = 2,
+                    )
+                    val slot = factory.fakeMedia.fakeSlots[scenario.remoteCid]!!
+                    assertEquals(PeerConnection.SignalingState.HAVE_LOCAL_OFFER, slot.getSignalingState())
+
+                    factory.simulateOfferFromRemote(scenario.remoteCid, sdp = "colliding-offer", offerId = "remote-offer-1")
+                    factory.simulateIceCandidateFromRemote(scenario.remoteCid, candidate = "candidate:ignored", offerId = "remote-offer-1")
+
+                    assertTrue("Impolite peer must not apply a colliding offer", slot.setRemoteDescriptionCalls.none { it.first == org.webrtc.SessionDescription.Type.OFFER })
+                    assertTrue("ICE for the ignored offer must be dropped", slot.addedIceCandidates.isEmpty())
+                    assertTrue("Ignored offer must not be answered", factory.fakeProvider.sentMessages("answer").isEmpty())
+                }
+                "polite-offer-collision-rolls-back-and-answers" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 2,
+                        remoteJoinedAt = 1,
+                    )
+                    val slot = factory.fakeMedia.fakeSlots[scenario.remoteCid]!!
+                    slot.createOffer(iceRestart = false, onSdp = {}, onComplete = null)
+                    assertEquals(PeerConnection.SignalingState.HAVE_LOCAL_OFFER, slot.getSignalingState())
+
+                    factory.simulateOfferFromRemote(scenario.remoteCid, sdp = "remote-offer", offerId = "remote-offer-1")
+
+                    assertEquals("Polite peer must roll back its local offer", 1, slot.rollbackCalls)
+                    assertEquals(org.webrtc.SessionDescription.Type.OFFER, slot.setRemoteDescriptionCalls.last().first)
+                    assertTrue("Polite peer must answer the accepted remote offer", factory.fakeProvider.sentMessages("answer").any {
+                        it.payload?.optString("offerId") == "remote-offer-1"
+                    })
+                }
+                "stale-answer-in-stable-is-dropped" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 1,
+                        remoteJoinedAt = 2,
+                    )
+                    val slot = factory.fakeMedia.fakeSlots[scenario.remoteCid]!!
+                    val offerId = latestOfferId()
+                    factory.simulateAnswerFromRemote(scenario.remoteCid, offerId = offerId)
+                    val answerApplies = slot.setRemoteDescriptionCalls.count { it.first == org.webrtc.SessionDescription.Type.ANSWER }
+
+                    factory.simulateAnswerFromRemote(scenario.remoteCid, sdp = "late-answer", offerId = offerId)
+
+                    assertEquals("Stale answer in STABLE must be dropped", answerApplies, slot.setRemoteDescriptionCalls.count { it.first == org.webrtc.SessionDescription.Type.ANSWER })
+                }
+                "stale-answer-wrong-offer-id-is-dropped" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 1,
+                        remoteJoinedAt = 2,
+                    )
+                    val slot = factory.fakeMedia.fakeSlots[scenario.remoteCid]!!
+
+                    factory.simulateAnswerFromRemote(scenario.remoteCid, sdp = "wrong-answer", offerId = "wrong-offer-id")
+
+                    assertTrue("Wrong-offer answer must not reach the peer connection", slot.setRemoteDescriptionCalls.none { it.first == org.webrtc.SessionDescription.Type.ANSWER })
+                    assertEquals(PeerConnection.SignalingState.HAVE_LOCAL_OFFER, slot.getSignalingState())
+                }
+                "early-ice-for-eventual-offer-is-buffered-and-flushed" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 2,
+                        remoteJoinedAt = 1,
+                    )
+                    val slot = factory.fakeMedia.fakeSlots[scenario.remoteCid]!!
+
+                    factory.simulateIceCandidateFromRemote(scenario.remoteCid, candidate = "candidate:future", offerId = "remote-offer-1")
+                    assertTrue("Future-offer ICE must be buffered", slot.addedIceCandidates.isEmpty())
+
+                    factory.simulateOfferFromRemote(scenario.remoteCid, sdp = "remote-offer", offerId = "remote-offer-1")
+
+                    assertEquals(1, slot.addedIceCandidates.size)
+                    assertEquals("candidate:future", slot.addedIceCandidates.first().sdp)
+                }
+                "departed-peer-signaling-is-ignored" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 1,
+                        remoteJoinedAt = 2,
+                    )
+                    val createdSlotsBefore = factory.fakeMedia.createdSlotCids.size
+                    val answersBefore = factory.fakeProvider.sentMessages("answer").size
+
+                    factory.simulateRoomState(participants = listOf(scenario.localCid to 1L), hostCid = scenario.localCid)
+                    factory.simulateOfferFromRemote(scenario.remoteCid, sdp = "late-offer", offerId = "late-offer-id")
+                    factory.simulateAnswerFromRemote(scenario.remoteCid, sdp = "late-answer", offerId = "late-offer-id")
+                    factory.simulateIceCandidateFromRemote(scenario.remoteCid, candidate = "candidate:late", offerId = "late-offer-id")
+
+                    assertFalse(factory.fakeMedia.fakeSlots.containsKey(scenario.remoteCid))
+                    assertEquals(createdSlotsBefore, factory.fakeMedia.createdSlotCids.size)
+                    assertEquals(answersBefore, factory.fakeProvider.sentMessages("answer").size)
+                }
+                "self-signaling-is-ignored" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 1,
+                        remoteJoinedAt = 2,
+                    )
+                    val createdSlotsBefore = factory.fakeMedia.createdSlotCids.size
+                    val answersBefore = factory.fakeProvider.sentMessages("answer").size
+
+                    factory.simulateOfferFromRemote(scenario.localCid, sdp = "self-offer", offerId = "self-offer-id")
+                    factory.simulateAnswerFromRemote(scenario.localCid, sdp = "self-answer", offerId = "self-offer-id")
+                    factory.simulateIceCandidateFromRemote(scenario.localCid, candidate = "candidate:self", offerId = "self-offer-id")
+
+                    assertFalse(factory.fakeMedia.fakeSlots.containsKey(scenario.localCid))
+                    assertEquals(createdSlotsBefore, factory.fakeMedia.createdSlotCids.size)
+                    assertEquals(answersBefore, factory.fakeProvider.sentMessages("answer").size)
+                }
+                "remote-offer-apply-failure-recreates-peer-and-answers" -> {
+                    factory.advanceToInCallWithTurn(
+                        localCid = scenario.localCid,
+                        remoteCid = scenario.remoteCid,
+                        localJoinedAt = 2,
+                        remoteJoinedAt = 1,
+                    )
+                    val oldSlot = factory.fakeMedia.fakeSlots[scenario.remoteCid]!!
+                    oldSlot.failNextRemoteOffer = true
+
+                    factory.simulateIceCandidateFromRemote(scenario.remoteCid, candidate = "candidate:recovered", offerId = "remote-offer-1")
+                    factory.simulateOfferFromRemote(scenario.remoteCid, sdp = "remote-offer", offerId = "remote-offer-1")
+
+                    val newSlot = factory.fakeMedia.fakeSlots[scenario.remoteCid]!!
+                    assertNotSame("Failed remote offer should recreate the peer slot", oldSlot, newSlot)
+                    assertTrue("Old peer slot should be removed", factory.fakeMedia.removedSlots.contains(oldSlot))
+                    assertTrue("Old peer slot should be closed", oldSlot.closePeerConnectionCalled)
+                    assertEquals(org.webrtc.SessionDescription.Type.OFFER, newSlot.setRemoteDescriptionCalls.last().first)
+                    assertEquals("candidate:recovered", newSlot.addedIceCandidates.single().sdp)
+                    assertTrue("Replacement peer must answer the remote offer", factory.fakeProvider.sentMessages("answer").any {
+                        it.payload?.optString("offerId") == "remote-offer-1"
+                    })
+                }
+                else -> fail("Unhandled shared negotiation scenario: ${scenario.id}")
+            }
+        }
+
+        assertEquals(sharedNegotiationScenarios().map { it.id }.toSet(), handled)
     }
 
     // Additional

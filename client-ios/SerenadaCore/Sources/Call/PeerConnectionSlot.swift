@@ -13,8 +13,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public private(set) var lastIceRestartAt: TimeInterval = 0
     public private(set) var offerTimeoutTask: Task<Void, Never>?
     public private(set) var iceRestartTask: Task<Void, Never>?
-    public private(set) var nonHostFallbackTask: Task<Void, Never>?
-    public private(set) var nonHostFallbackAttempts = 0
     private var playbackDucked = false
 
     // MARK: - Offer Lifecycle
@@ -53,24 +51,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func cancelIceRestartTask() {
         iceRestartTask?.cancel()
         iceRestartTask = nil
-    }
-
-    public func setNonHostFallbackTask(_ task: Task<Void, Never>) {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = task
-    }
-
-    public func cancelNonHostFallbackTask() {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = nil
-    }
-
-    public func clearNonHostFallbackTask() {
-        nonHostFallbackTask = nil
-    }
-
-    public func incrementNonHostFallbackAttempts() {
-        nonHostFallbackAttempts += 1
     }
 
 #if canImport(WebRTC)
@@ -312,7 +292,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func closePeerConnection() {
         cancelOfferTimeout()
         cancelIceRestartTask()
-        cancelNonHostFallbackTask()
 
 #if canImport(WebRTC)
         detachRemoteTrackFromRegisteredRenderers()

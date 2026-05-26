@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "impolite-offer-collision-ignores-offer-and-ice",
+      "localCid": "alpha",
+      "remoteCid": "zeta",
+      "description": "Local owns offer creation and ignores a colliding remote offer plus ICE for that ignored offer."
+    },
+    {
+      "id": "polite-offer-collision-rolls-back-and-answers",
+      "localCid": "zeta",
+      "remoteCid": "alpha",
+      "description": "Local is polite during glare, rolls back its pending local offer, applies the remote offer, and answers it."
+    },
+    {
+      "id": "stale-answer-in-stable-is-dropped",
+      "localCid": "alpha",
+      "remoteCid": "zeta",
+      "description": "An answer received after the local peer is already stable does not touch the peer connection."
+    },
+    {
+      "id": "stale-answer-wrong-offer-id-is-dropped",
+      "localCid": "alpha",
+      "remoteCid": "zeta",
+      "description": "An answer for a non-current offer id is dropped while the current local offer is pending."
+    },
+    {
+      "id": "early-ice-for-eventual-offer-is-buffered-and-flushed",
+      "localCid": "zeta",
+      "remoteCid": "alpha",
+      "description": "ICE carrying a future offer id is buffered until that offer is accepted, then flushed exactly once."
+    },
+    {
+      "id": "departed-peer-signaling-is-ignored",
+      "localCid": "alpha",
+      "remoteCid": "zeta",
+      "description": "Late offer, answer, and ICE from a peer that is no longer in room state must not recreate or mutate a slot."
+    },
+    {
+      "id": "self-signaling-is-ignored",
+      "localCid": "alpha",
+      "remoteCid": "zeta",
+      "description": "Looped-back offer, answer, and ICE from the local cid must not create a self peer connection or produce an answer."
+    },
+    {
+      "id": "remote-offer-apply-failure-recreates-peer-and-answers",
+      "localCid": "zeta",
+      "remoteCid": "alpha",
+      "description": "An incoming offer that WebRTC rejects on the existing peer connection is retried on a fresh peer connection and answered."
+    }
+  ]
+}

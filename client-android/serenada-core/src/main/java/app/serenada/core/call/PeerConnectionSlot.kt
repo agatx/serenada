@@ -101,10 +101,6 @@ internal class PeerConnectionSlot(
         private set
     override var iceRestartTask: Runnable? = null
         private set
-    override var nonHostFallbackTask: Runnable? = null
-        private set
-    override var nonHostFallbackAttempts: Int = 0
-        private set
 
     // Offer lifecycle
     override fun beginOffer() { isMakingOffer = true }
@@ -124,10 +120,6 @@ internal class PeerConnectionSlot(
     override fun cancelOfferTimeout() { offerTimeoutTask = null }
     override fun setIceRestartTask(task: Runnable) { iceRestartTask = task }
     override fun cancelIceRestartTask() { iceRestartTask = null }
-    override fun setNonHostFallbackTask(task: Runnable) { nonHostFallbackTask = task }
-    override fun cancelNonHostFallbackTask() { nonHostFallbackTask = null }
-    override fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
-    override fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
     @Volatile private var isClosing = false
     private var peerConnection: PeerConnection? = null
@@ -272,7 +264,6 @@ internal class PeerConnectionSlot(
         isClosing = true
         offerTimeoutTask = null
         iceRestartTask = null
-        nonHostFallbackTask = null
         isMakingOffer = false
         pendingIceRestart = false
         val pc = peerConnection
@@ -395,25 +386,35 @@ internal class PeerConnectionSlot(
     override fun setRemoteDescription(
         type: SessionDescription.Type,
         sdp: String,
-        onComplete: (() -> Unit)?,
+        onComplete: ((Boolean) -> Unit)?,
     ) {
-        if (isClosing) return
+        if (isClosing) {
+            onComplete?.invoke(false)
+            return
+        }
         val pc = peerConnection ?: run {
-            if (!ensurePeerConnection()) return
+            if (!ensurePeerConnection()) {
+                onComplete?.invoke(false)
+                return
+            }
             peerConnection
-        } ?: return
+        } ?: run {
+            onComplete?.invoke(false)
+            return
+        }
         val desc = SessionDescription(type, sdp)
         pc.setRemoteDescription(object : SdpObserverAdapter() {
             override fun onSetSuccess() {
                 if (!isCurrentPeerConnection(pc)) return
                 remoteDescriptionSet = true
                 flushPendingIceCandidates()
-                onComplete?.invoke()
+                onComplete?.invoke(true)
             }
 
             override fun onSetFailure(error: String?) {
                 if (!isCurrentPeerConnection(pc)) return
                 logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set remote description ($type): $error")
+                onComplete?.invoke(false)
             }
         }, desc)
     }

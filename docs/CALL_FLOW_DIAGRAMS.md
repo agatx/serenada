@@ -37,8 +37,6 @@ Cross-platform parity is enforced by `node scripts/check-resilience-constants.mj
 | `JOIN_HARD_TIMEOUT_MS` | 15,000 ms | Join | Fail entire join attempt |
 | `OFFER_TIMEOUT_MS` | 8,000 ms | Peer Connection | Wait for answer before rollback + ICE restart |
 | `ICE_RESTART_COOLDOWN_MS` | 10,000 ms | Peer Connection | Minimum interval between ICE restarts |
-| `NON_HOST_FALLBACK_DELAY_MS` | 4,000 ms | Peer Connection | Wait before non-host sends offer |
-| `NON_HOST_FALLBACK_MAX_ATTEMPTS` | 2 | Peer Connection | Max non-host fallback offers |
 | `ICE_CANDIDATE_BUFFER_MAX` | 50 | Peer Connection | Max queued ICE candidates before remote SDP |
 | `TURN_FETCH_TIMEOUT_MS` | 2,000 ms | TURN | Credential fetch timeout |
 | `TURN_REFRESH_TRIGGER_RATIO` | 0.8 | TURN | Refresh at 80% of TTL |
@@ -152,7 +150,6 @@ sequenceDiagram
         T->>S: offer → relay to peer
     else Non-host
         Note over WC: Wait for offer from host
-        WC->>WC: Schedule non-host fallback (4s)
     end
 
     Note over S: Relay offer to peer
@@ -259,15 +256,10 @@ sequenceDiagram
         WC->>WC: scheduleIceRestart("offer-timeout-unexpected", 0ms)
     end
 
-    Note over SC,PC: === Scenario 6: Non-Host Fallback (4s) ===
+    Note over SC,PC: === Scenario 6: Non-Offerer Recovery ===
 
-    Note over WC: Non-host: no offer received after 4s
-    WC->>WC: nonHostFallbackTimer fires (attempt 1 of 2)
-    alt No remote description & signaling stable
-        WC->>PC: createOffer()
-        WC->>SC: sendMessage("offer", {sdp})
-    end
-    Note over WC: If still no answer: retry once more (attempt 2)
+    Note over WC: Non-offerer never creates fallback offers.
+    Note over WC: Designated offerer recovers via offer timeout, dirty-pair, or peer reattach.
 
     Note over SC,PC: === Scenario 7: Ping/Pong Timeout ===
 
@@ -366,8 +358,7 @@ sequenceDiagram
     else Non-host (2 participants)
         CM->>CM: phase = .inCall
         CM->>WE: ensurePeerConnection()
-        CM->>CM: scheduleNonHostFallback(4s)
-        Note over CM: Wait for host offer
+        Note over CM: Wait for designated offerer
     else 1 participant
         CM->>CM: phase = .waiting
     end
@@ -472,17 +463,10 @@ sequenceDiagram
         CM->>CM: scheduleIceRestart("offer-timeout", 0ms)
     end
 
-    Note over CM,PC: === Scenario 6: Non-Host Fallback (4s) ===
+    Note over CM,PC: === Scenario 6: Non-Offerer Recovery ===
 
-    Note over CM: Non-host: no offer received after 4s
-    CM->>CM: nonHostOfferFallbackTask fires (attempt 1 of 2)
-    alt No remote description & stable & not making offer
-        CM->>WE: createOffer()
-        WE-->>CM: onSdp
-        CM->>SC: send("offer", {sdp})
-        CM->>CM: scheduleOfferTimeout(8s, triggerIceRestart: false)
-    end
-    Note over CM: Retry once more if no answer (attempt 2)
+    Note over CM: Non-offerer never creates fallback offers.
+    Note over CM: Designated offerer recovers via offer timeout, dirty-pair, or peer reattach.
 
     Note over CM,PC: === Scenario 7: Ping/Pong Timeout ===
 
@@ -593,8 +577,7 @@ sequenceDiagram
     else Non-host (2 participants)
         CM->>CM: phase = InCall
         CM->>WE: ensurePeerConnection()
-        CM->>CM: scheduleNonHostFallback(4s)
-        Note over CM: Wait for host offer
+        Note over CM: Wait for designated offerer
     else 1 participant
         CM->>CM: phase = Waiting
     end
@@ -703,16 +686,10 @@ sequenceDiagram
         CM->>CM: scheduleIceRestart("offer-timeout-stale", 0ms)
     end
 
-    Note over CM,PC: === Scenario 6: Non-Host Fallback (4s) ===
+    Note over CM,PC: === Scenario 6: Non-Offerer Recovery ===
 
-    Note over CM: Non-host: no offer received after 4s
-    CM->>CM: nonHostOfferFallback fires (attempt 1 of 2)
-    alt No remote description & stable & not making offer
-        CM->>WE: createOffer()
-        WE-->>CM: onSdp
-        CM->>SC: send("offer", {sdp})
-        CM->>CM: scheduleOfferTimeout(8s)
-    end
+    Note over CM: Non-offerer never creates fallback offers.
+    Note over CM: Designated offerer recovers via offer timeout, dirty-pair, or peer reattach.
     Note over CM: Retry once more if no answer (attempt 2)
 
     Note over CM,PC: === Scenario 7: Ping/Pong Timeout ===

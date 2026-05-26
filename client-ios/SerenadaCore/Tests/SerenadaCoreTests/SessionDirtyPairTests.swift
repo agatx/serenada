@@ -41,7 +41,7 @@ final class SessionDirtyPairTests: XCTestCase {
         XCTAssertTrue(didFire, "negotiation_dirty should trigger ICE restart for the named peer")
     }
 
-    func testNegotiationDirtySchedulesFallbackWhenLocalIsNotOfferer() async {
+    func testNegotiationDirtyIsNoOpWhenLocalIsNotOfferer() async {
         await harness.advanceToInCallWithTurn(
             localCid: "zeta",
             remoteCid: "alpha",
@@ -50,13 +50,12 @@ final class SessionDirtyPairTests: XCTestCase {
         )
         let slot = harness.fakeMedia.fakeSlots["alpha"]
         XCTAssertNotNil(slot)
-        slot?.cancelNonHostFallbackTask()
-        XCTAssertNil(slot?.nonHostFallbackTask)
+        let baselineOffers = slot?.createOfferCalls ?? 0
 
         harness.fakeProvider.simulateNegotiationDirty(withCid: "alpha")
         await harness.yieldToMainActor()
 
-        XCTAssertNotNil(slot?.nonHostFallbackTask, "Non-offerer should arm the fallback offer path")
+        XCTAssertEqual(slot?.createOfferCalls ?? 0, baselineOffers, "Non-offerer must not create recovery offers")
         XCTAssertEqual(slot?.pendingIceRestart, false, "Non-offerer must not wedge on a pending ICE restart it cannot send")
     }
 

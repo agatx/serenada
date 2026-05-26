@@ -14,8 +14,6 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     // Timer tasks
     var offerTimeoutTask: Task<Void, Never>? { get }
     var iceRestartTask: Task<Void, Never>? { get }
-    var nonHostFallbackTask: Task<Void, Never>? { get }
-    var nonHostFallbackAttempts: Int { get }
 
     // Offer lifecycle
     func beginOffer()
@@ -32,10 +30,6 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func cancelOfferTimeout()
     func setIceRestartTask(_ task: Task<Void, Never>)
     func cancelIceRestartTask()
-    func setNonHostFallbackTask(_ task: Task<Void, Never>)
-    func cancelNonHostFallbackTask()
-    func clearNonHostFallbackTask()
-    func incrementNonHostFallbackAttempts()
 
     // WebRTC operations
     func setIceServers(_ servers: [IceServerConfig])

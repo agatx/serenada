@@ -114,7 +114,7 @@ class SessionPostReconnectGateTest {
     }
 
     @Test
-    fun `gate timeout schedules fallback when local is not offerer`() {
+    fun `gate timeout does not make non-offerer send recovery offer`() {
         factory.advanceToInCallWithTurn(
             localCid = "zeta",
             remoteCid = "alpha",
@@ -123,7 +123,7 @@ class SessionPostReconnectGateTest {
         )
         val slot = factory.fakeMedia.fakeSlots.getValue("alpha")
         val baselineFires = factory.session.postReconnectResyncFireCount()
-        slot.cancelNonHostFallbackTask()
+        val baselineOffers = slot.createOfferCalls
 
         factory.fakeProvider.simulateDisconnected()
         ShadowLooper.idleMainLooper()
@@ -137,10 +137,7 @@ class SessionPostReconnectGateTest {
 
         assertFalse("Gate should clear after timeout", factory.session.isPostReconnectResyncPending())
         assertEquals(baselineFires + 1, factory.session.postReconnectResyncFireCount())
-        assertTrue(
-            "Non-offerer should arm fallback after reconnect timeout",
-            slot.nonHostFallbackTask != null,
-        )
+        assertEquals("Non-offerer must not create recovery offers", baselineOffers, slot.createOfferCalls)
         assertFalse(
             "Non-offerer must not wedge on a pending ICE restart it cannot send",
             slot.pendingIceRestart,
