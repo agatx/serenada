@@ -22,6 +22,7 @@ internal class PeerNegotiationEngine(
     private val getCurrentRoomState: () -> RoomState?,
     private val isSignalingConnected: () -> Boolean,
     private val hasIceServers: () -> Boolean,
+    private val isLocalMediaReady: () -> Boolean = { true },
     // Slot access (session owns peerSlots)
     private val getSlot: (String) -> PeerConnectionSlotProtocol?,
     private val getAllSlots: () -> Map<String, PeerConnectionSlotProtocol>,
@@ -115,6 +116,10 @@ internal class PeerNegotiationEngine(
         }
 
         updateAggregatePeerState()
+    }
+
+    fun onLocalMediaReady() {
+        maybeSendOffer()
     }
 
     fun processSignalingPayload(msg: SignalingMessage) {
@@ -517,6 +522,7 @@ internal class PeerNegotiationEngine(
 
     private fun canOffer(slot: PeerConnectionSlotProtocol): Boolean {
         if (!isSignalingConnected()) return false
+        if (!isLocalMediaReady()) return false
         if (!slot.isReady()) return false
         if (!shouldIOffer(slot.remoteCid, getCurrentRoomState())) return false
         val participant = getCurrentRoomState()?.participants?.firstOrNull { it.cid == slot.remoteCid }

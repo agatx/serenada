@@ -61,6 +61,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -430,6 +431,7 @@ class SerenadaSession internal constructor(
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
     private var hasInitialIceServers = false
+    private var localMediaReadyForNegotiation = false
 
     private fun resolveAvailableCameraModes(): List<LocalCameraMode> {
         val configuredModes = resolveCameraModes(config.cameraModes)
@@ -448,6 +450,7 @@ class SerenadaSession internal constructor(
             getCurrentRoomState = { currentRoomState },
             isSignalingConnected = { _diagnostics.value.isSignalingConnected },
             hasIceServers = { webRtcEngine.hasIceServers() },
+            isLocalMediaReady = { localMediaReadyForNegotiation },
             getSlot = { cid: String -> peerSlots[cid] },
             getAllSlots = { peerSlots.toMap() },
             setSlot = { cid: String, slot: PeerConnectionSlotProtocol ->
@@ -552,24 +555,28 @@ class SerenadaSession internal constructor(
     private val callAudioSessionController: SessionAudioController = audioController ?: (config.audioCoordinator?.let { CustomAudioCoordinatorAdapter(it, config.proximityMonitoringEnabled, sensorManager, proximitySensor, handler, { applyLocalVideoPreference() }) } ?: defaultAudioCoordinator)
 
     init {
-        providerScope.launch {
+        startAudioCoordinatorCollectors()
+    }
+
+    private fun startAudioCoordinatorCollectors() {
+        audioCoordinatorScope.launch {
             audioCoordinator.availableDevices.collect { devices ->
                 _availableAudioDevices.value = devices
             }
         }
-        providerScope.launch {
+        audioCoordinatorScope.launch {
             audioCoordinator.effectiveInputDevice.collect { device ->
                 if (!sessionActivated) return@collect
                 routeInputAvailable = (device != null)
                 updateEffectiveMicState()
             }
         }
-        providerScope.launch {
+        audioCoordinatorScope.launch {
             audioCoordinator.effectiveOutputDevice.collect { device ->
                 _currentAudioDevice.value = device
             }
         }
-        providerScope.launch {
+        audioCoordinatorScope.launch {
             audioCoordinator.events.collect { event ->
                 handleCoordinatorEvent(event)
             }
@@ -1044,6 +1051,7 @@ class SerenadaSession internal constructor(
         hasInitialIceServers = false
         reconnectRecoveryPending = false
         iceFetchGeneration += 1
+        localMediaReadyForNegotiation = false
         if (webRtcStatsExecutor == null) {
             webRtcStatsExecutor = newWebRtcStatsExecutor()
         }
@@ -1068,8 +1076,6 @@ class SerenadaSession internal constructor(
             )
         )
         updateDiagnostics(CallDiagnostics())
-        joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
-        joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
 
         acquirePerformanceLocks()
         providerScope.launch {
@@ -1077,13 +1083,18 @@ class SerenadaSession internal constructor(
                 audioCoordinatorMutex.withLock {
                     audioCoordinator.activateCallSession(config.audioIntent)
                 }
+                if (!isActive) return@launch
                 callAudioSessionController.activate()
                 webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
+                localMediaReadyForNegotiation = true
                 userMuted = !config.defaultAudioEnabled
                 sessionActivated = true
                 updateEffectiveMicState()
                 applyLocalVideoPreference()
                 startRemoteVideoStatePolling()
+                peerNegotiationEngine.onLocalMediaReady()
+                joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
+                joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
                 joinFlowCoordinator.ensureSignalingConnection()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -1690,6 +1701,7 @@ class SerenadaSession internal constructor(
         localSuspendedSinceMs = null
         sessionStartTs = null
         sessionActivated = false
+        localMediaReadyForNegotiation = false
         playbackDuckingActive = false
         externalAudioMuted = false
         routeInputAvailable = true
@@ -1819,7 +1831,10 @@ class SerenadaSession internal constructor(
         assertMainThread()
         providerScope.launch {
             try {
-                audioCoordinator.applyRouting(device)
+                audioCoordinatorMutex.withLock {
+                    if (!sessionActivated) return@withLock
+                    audioCoordinator.applyRouting(device)
+                }
             } catch (e: Exception) {
                 logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to apply routing to device ${device.displayName}: ${e.message}")
             }
@@ -1837,7 +1852,10 @@ class SerenadaSession internal constructor(
         updateEffectiveMicState()
         providerScope.launch {
             runCatching {
-                audioCoordinator.setMicMuted(muted)
+                audioCoordinatorMutex.withLock {
+                    if (!sessionActivated) return@withLock
+                    audioCoordinator.setMicMuted(muted)
+                }
             }.onFailure { e ->
                 logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to set mic muted state on coordinator to $muted: ${e.message}")
             }
@@ -1858,6 +1876,7 @@ class SerenadaSession internal constructor(
     }
 
     private fun handleCoordinatorEvent(event: AudioCoordinatorEvent) {
+        if (!sessionActivated && event !is AudioCoordinatorEvent.AvailableDevicesChanged) return
         when (event) {
             is AudioCoordinatorEvent.AvailableDevicesChanged -> {
                 _availableAudioDevices.value = event.devices

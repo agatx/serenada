@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SerenadaCore
 
@@ -22,10 +23,14 @@ public final class SampleAudioCoordinator: SerenadaAudioCoordinator, @unchecked 
 
     public func activateCallSession(intent: AudioIntent) async throws {
         print("[SampleAudioCoordinator] activateCallSession called with intent: \(intent)")
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers])
+        try session.setActive(true)
     }
 
     public func deactivateCallSession() async {
         print("[SampleAudioCoordinator] deactivateCallSession called")
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     public func applyRouting(_ device: AudioDevice) async throws {

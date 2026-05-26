@@ -144,9 +144,15 @@ public enum AudioCoordinatorEvent: Sendable {
 /// ``SerenadaConfig/audioCoordinator`` nil to use the SDK's internal default.
 public protocol SerenadaAudioCoordinator: AnyObject, Sendable {
     /// Activate audio for a Serenada call.
+    ///
+    /// Custom iOS coordinators own `AVAudioSession` activation while this call is active. Configure
+    /// the category/mode/route policy and call `setActive(true)` before returning so WebRTC audio
+    /// can flow while the SDK has manual WebRTC audio enabled.
     func activateCallSession(intent: AudioIntent) async throws
 
     /// Deactivate call audio and release coordinator-owned route or focus state.
+    ///
+    /// Custom iOS coordinators should restore or deactivate their `AVAudioSession` state here.
     func deactivateCallSession() async
 
     /// Apply a user-selected audio route.

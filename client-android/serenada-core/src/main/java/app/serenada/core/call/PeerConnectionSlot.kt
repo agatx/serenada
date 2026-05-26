@@ -125,7 +125,7 @@ internal class PeerConnectionSlot(
     private var peerConnection: PeerConnection? = null
     private var audioSender: RtpSender? = null
     private var remoteVideoTrack: VideoTrack? = null
-    private var playbackDucked = false
+    @Volatile private var playbackDucked = false
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()

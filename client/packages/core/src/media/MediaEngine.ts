@@ -803,7 +803,7 @@ export class MediaEngine {
     private isParticipantActive(remoteCid: string): boolean {
         if (!this.roomState) return true;
         const participant = this.roomState.participants?.find(p => p.cid === remoteCid);
-        return participant?.connectionStatus !== 'suspended';
+        return !!participant && participant.connectionStatus !== 'suspended';
     }
 
     private nextOfferId(remoteCid: string): string {
@@ -857,14 +857,13 @@ export class MediaEngine {
 
             if (peer.offerTimeout) window.clearTimeout(peer.offerTimeout);
             peer.offerTimeout = window.setTimeout(() => {
+                if (this.peers.get(remoteCid) !== peer) return;
                 peer.offerTimeout = null;
-                const currentPeer = this.peers.get(remoteCid);
-                if (!currentPeer) return;
                 this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Offer timeout`);
-                currentPeer.pendingIceRestart = true;
-                currentPeer.pendingLocalOfferId = null;
-                if (currentPeer.pc.signalingState === 'have-local-offer') {
-                    currentPeer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
+                peer.pendingIceRestart = true;
+                peer.pendingLocalOfferId = null;
+                if (peer.pc.signalingState === 'have-local-offer') {
+                    peer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
                         .catch(err => this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Rollback failed: ${formatError(err)}`))
                         .finally(() => this.scheduleIceRestart(remoteCid, 'offer-timeout', 0));
                 } else {

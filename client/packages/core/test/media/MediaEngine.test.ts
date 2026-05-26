@@ -735,6 +735,41 @@ describe('MediaEngine', () => {
         ]);
     });
 
+    it('does not request media restart from a departed peer', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+
+        const internals = engine as unknown as { requestPeerMediaRecovery: (remoteCid: string, reason: string) => void };
+        engine.updateRoomState({
+            hostCid: 'zeta',
+            participants: [{ cid: 'zeta' }],
+        }, 'zeta');
+        internals.requestPeerMediaRecovery('alpha', 'departed peer');
+
+        expect(sentMessages.filter((message) => message.type === 'media_restart_request')).toHaveLength(0);
+    });
+
     it('recreates the offerer peer when a media restart request is received', async () => {
         const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
         Object.defineProperty(globalThis, 'navigator', {

@@ -5,8 +5,8 @@ import UIKit
 @preconcurrency import WebRTC
 #endif
 
-private let callAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .mixWithOthers]
-private let phoneAudioSessionOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
+private let callAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers]
+private let phoneAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers]
 
 private struct OutputRouteRequest: Equatable {
     let id: String
@@ -38,9 +38,8 @@ private final class ContinuationHolder<T>: @unchecked Sendable {
             lock.lock()
             continuations[id] = continuation
             let initial = currentValue
-            lock.unlock()
-
             continuation.yield(initial)
+            lock.unlock()
 
             continuation.onTermination = { [weak self] _ in
                 guard let self = self else { return }
@@ -549,9 +548,15 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         case .earpiece:
             try rtcAudioSessionSetPreferredInput(.builtInMic, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
             try rtcAudioSessionOverrideOutput(.none, rtcAudioSession: rtcAudioSession)
-        case .bluetooth(_):
-            let input = audioSession.availableInputs?.first { $0.uid == device.id && $0.portType == .bluetoothHFP }
-            try rtcAudioSessionSetPreferredInput(input, fallbackPortType: .bluetoothHFP, audioSession: audioSession, rtcAudioSession: rtcAudioSession)
+        case .bluetooth(let profile):
+            let portTypes = bluetoothPortTypes(for: profile)
+            let input = audioSession.availableInputs?.first { $0.uid == device.id && portTypes.contains($0.portType) }
+                ?? audioSession.availableInputs?.first { portTypes.contains($0.portType) }
+            if let input {
+                try rtcAudioSession.setPreferredInput(input)
+            } else if profile != .a2dp {
+                throw audioRouteError("missing preferred bluetooth input")
+            }
             try rtcAudioSessionOverrideOutput(.none, rtcAudioSession: rtcAudioSession)
         case .wiredHeadset:
             let input = audioSession.availableInputs?.first { $0.uid == device.id && $0.portType == .headsetMic }
@@ -602,6 +607,19 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
     private nonisolated static func audioRouteError(_ message: String) -> NSError {
         NSError(domain: "app.serenada.audioRoute", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private nonisolated static func bluetoothPortTypes(for profile: BluetoothProfile) -> Set<AVAudioSession.Port> {
+        switch profile {
+        case .hfp:
+            return [.bluetoothHFP]
+        case .a2dp:
+            return [.bluetoothA2DP]
+        case .ble:
+            return [.bluetoothLE]
+        case .unknown:
+            return [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE]
+        }
     }
 #endif
 
@@ -682,7 +700,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             let inputDevice = mapPortToAudioDevice(port, direction: .input, status: isActiveInput ? .active : .available)
             devices.append(inputDevice)
 
-            if port.portType == .bluetoothHFP || port.portType == .headsetMic || port.portType == .usbAudio {
+            if port.portType == .bluetoothHFP || port.portType == .bluetoothA2DP || port.portType == .bluetoothLE || port.portType == .headsetMic || port.portType == .usbAudio {
                 let isActiveOutput = route.outputs.contains { $0.uid == port.uid }
                 let outputDevice = mapPortToAudioDevice(port, direction: .output, status: isActiveOutput ? .active : .available)
                 devices.append(outputDevice)

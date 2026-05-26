@@ -78,7 +78,7 @@ internal class DefaultAudioCoordinator(
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
                 handler.post {
                     if (!audioSessionActive) return@post
-                    requestAudioFocus()
+                    requestAudioFocus(emitRecoveryEventOnGain = true)
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
@@ -263,7 +263,7 @@ internal class DefaultAudioCoordinator(
         }
         if (registered) {
             proximityMonitoringActive = true
-            isProximityNear = false
+            isProximityNear = true
         }
     }
 
@@ -552,7 +552,8 @@ internal class DefaultAudioCoordinator(
         }
     }
 
-    private fun requestAudioFocus() {
+    private fun requestAudioFocus(emitRecoveryEventOnGain: Boolean = false) {
+        val wasGranted = audioFocusGranted
         val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val request =
                 audioFocusRequest
@@ -577,6 +578,10 @@ internal class DefaultAudioCoordinator(
             ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
         audioFocusGranted = granted
+        if (emitRecoveryEventOnGain && granted && !wasGranted) {
+            _events.tryEmit(AudioCoordinatorEvent.ExternalAudioEnded)
+            _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
+        }
         logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus request granted=$granted")
     }
 

@@ -153,7 +153,7 @@ public final class SerenadaSession: ObservableObject {
     private let webRtcEngine: SessionMediaEngine
     private let callAudioSessionController: SessionAudioController
     private let audioCoordinator: SerenadaAudioCoordinator
-    private var audioCoordinatorLifecycleTask: Task<Void, Never>?
+    private var audioCoordinatorLifecycleTask: Task<Void, Error>?
     private var joinLifecycleTask: Task<Void, Never>?
     private var coordinatorTasks: [Task<Void, Never>] = []
     private var userMuted = false
@@ -161,6 +161,7 @@ public final class SerenadaSession: ObservableObject {
     private var playbackDuckingActive = false
     private var routeInputAvailable = true
     private var sessionActivated = false
+    private var localMediaReadyForNegotiation = false
     private let apiClient: SessionAPIClient
     private let clock: SessionClock
     private let config: SerenadaConfig
@@ -357,7 +358,40 @@ public final class SerenadaSession: ObservableObject {
         configureRuntimeBridges()
         buildSubEngines()
 
-        // Start observing coordinator streams
+        startCoordinatorTasks()
+
+        // Skip periodic TURN refresh while every peer is on a direct ICE path —
+        // the credentials go unused and the call survives arbitrary-length
+        // signaling outages. A failover to relay triggers the next refresh.
+        // Gate returns `true` to allow the refresh, so direct paths must
+        // return `false` to skip; unknown (session deallocated) defaults to
+        // refreshing to avoid silently dropping credentials.
+        if let serverProvider = signalingProvider as? SerenadaServerProvider {
+            serverProvider.setTurnRefreshGate { [weak self] in
+                guard let self else { return true }
+                return !self.arePeerPathsAllDirect()
+            }
+        }
+
+        internalPhase = .joining
+        let videoCaptureSupported = !self.availableCameraModes.isEmpty
+        let initialCameraMode = self.availableCameraModes.first ?? .selfie
+        commitSnapshot { s, _ in
+            s.localParticipant.displayName = self.displayName
+            s.localParticipant.audioEnabled = config.defaultAudioEnabled
+            s.localParticipant.videoEnabled = videoCaptureSupported && config.defaultVideoEnabled
+            s.localParticipant.cameraMode = initialCameraMode
+            s.localParticipant.availableCameraModes = self.availableCameraModes
+        }
+        startNetworkMonitoring()
+
+        joinLifecycleTask = Task { @MainActor [weak self] in
+            await self?.beginJoinIfNeeded()
+        }
+    }
+
+    private func startCoordinatorTasks() {
+        guard coordinatorTasks.isEmpty else { return }
         let coordinator = self.audioCoordinator
         let availableDevicesTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -389,35 +423,11 @@ public final class SerenadaSession: ObservableObject {
             }
         }
         self.coordinatorTasks = [availableDevicesTask, effectiveInputTask, effectiveOutputTask, eventsTask]
+    }
 
-        // Skip periodic TURN refresh while every peer is on a direct ICE path —
-        // the credentials go unused and the call survives arbitrary-length
-        // signaling outages. A failover to relay triggers the next refresh.
-        // Gate returns `true` to allow the refresh, so direct paths must
-        // return `false` to skip; unknown (session deallocated) defaults to
-        // refreshing to avoid silently dropping credentials.
-        if let serverProvider = signalingProvider as? SerenadaServerProvider {
-            serverProvider.setTurnRefreshGate { [weak self] in
-                guard let self else { return true }
-                return !self.arePeerPathsAllDirect()
-            }
-        }
-
-        internalPhase = .joining
-        let videoCaptureSupported = !self.availableCameraModes.isEmpty
-        let initialCameraMode = self.availableCameraModes.first ?? .selfie
-        commitSnapshot { s, _ in
-            s.localParticipant.displayName = self.displayName
-            s.localParticipant.audioEnabled = config.defaultAudioEnabled
-            s.localParticipant.videoEnabled = videoCaptureSupported && config.defaultVideoEnabled
-            s.localParticipant.cameraMode = initialCameraMode
-            s.localParticipant.availableCameraModes = self.availableCameraModes
-        }
-        startNetworkMonitoring()
-
-        joinLifecycleTask = Task { @MainActor [weak self] in
-            await self?.beginJoinIfNeeded()
-        }
+    private func stopCoordinatorTasks() {
+        coordinatorTasks.forEach { $0.cancel() }
+        coordinatorTasks.removeAll()
     }
 
     private static func resolveAvailableCameraModes(_ configuredModes: [LocalCameraMode]?) -> [LocalCameraMode] {
@@ -496,8 +506,13 @@ public final class SerenadaSession: ObservableObject {
     ///
     /// The call is asynchronous; failures are logged and the current route is left unchanged.
     public func selectAudioDevice(_ device: AudioDevice) {
-        Task {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
+                if let lifecycleTask = audioCoordinatorLifecycleTask {
+                    try await lifecycleTask.value
+                }
+                guard sessionActivated else { return }
                 try await audioCoordinator.applyRouting(device)
             } catch {
                 logger?.log(.error, tag: "Audio", "Failed to apply routing to device \(device.displayName): \(error)")
@@ -511,8 +526,13 @@ public final class SerenadaSession: ObservableObject {
     public func setMicMuted(_ muted: Bool) {
         self.userMuted = muted
         self.updateEffectiveMicState()
-        Task {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
+                if let lifecycleTask = audioCoordinatorLifecycleTask {
+                    try await lifecycleTask.value
+                }
+                guard sessionActivated else { return }
                 try await audioCoordinator.setMicMuted(muted)
             } catch (let error) {
                 logger?.log(.error, tag: "Audio", "Failed to set mic muted state on coordinator to \(muted): \(error)")
@@ -534,6 +554,9 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func handleCoordinatorEvent(_ event: AudioCoordinatorEvent) {
+        if !sessionActivated {
+            guard case .availableDevicesChanged = event else { return }
+        }
         switch event {
         case .availableDevicesChanged(let devices):
             self.availableAudioDevices = devices
@@ -760,6 +783,8 @@ public final class SerenadaSession: ObservableObject {
     private func prepareMediaAndConnect() async {
         guard state.phase == .joining || state.phase == .awaitingPermissions || internalPhase == .joining else { return }
 
+        startCoordinatorTasks()
+        localMediaReadyForNegotiation = false
         let videoCaptureSupported = !availableCameraModes.isEmpty
         let shouldEnableAudio = config.defaultAudioEnabled
         let shouldEnableVideo = videoCaptureSupported && config.defaultVideoEnabled
@@ -769,7 +794,6 @@ public final class SerenadaSession: ObservableObject {
         }
 
         joinFlowCoordinator?.clearJoinConnectKickstart()
-        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
 
         do {
             try await activateAudioCoordinator()
@@ -784,6 +808,7 @@ public final class SerenadaSession: ObservableObject {
 
         callAudioSessionController.activate()
         webRtcEngine.startLocalMedia(preferVideo: shouldEnableVideo)
+        localMediaReadyForNegotiation = true
         self.userMuted = !shouldEnableAudio
         self.sessionActivated = true
         self.updateEffectiveMicState()
@@ -793,23 +818,33 @@ public final class SerenadaSession: ObservableObject {
         statsPoller?.start()
         audioLevelPoller?.start()
 
+        peerNegotiationEngine?.onLocalMediaReady()
+        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
         joinFlowCoordinator?.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
         ensureSignalingConnection()
     }
 
     private func activateAudioCoordinator() async throws {
-        if let previous = audioCoordinatorLifecycleTask {
-            await previous.value
+        let previous = audioCoordinatorLifecycleTask
+        let coordinator = audioCoordinator
+        let intent = config.audioIntent
+        let task = Task<Void, Error> {
+            if let previous {
+                try? await previous.value
+            }
+            try Task.checkCancellation()
+            try await coordinator.activateCallSession(intent: intent)
         }
-        try await audioCoordinator.activateCallSession(intent: config.audioIntent)
+        audioCoordinatorLifecycleTask = task
+        try await task.value
     }
 
     private func deactivateAudioCoordinator() {
         let previous = audioCoordinatorLifecycleTask
         let coordinator = audioCoordinator
-        let task = Task {
+        let task = Task<Void, Error> {
             if let previous {
-                await previous.value
+                try? await previous.value
             }
             await coordinator.deactivateCallSession()
         }
@@ -1304,6 +1339,7 @@ public final class SerenadaSession: ObservableObject {
         webRtcEngine.release()
         callAudioSessionController.deactivate()
         deactivateAudioCoordinator()
+        stopCoordinatorTasks()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
@@ -1322,6 +1358,7 @@ public final class SerenadaSession: ObservableObject {
         sessionStartTs = nil
         callStartedAtMs = nil
         sessionActivated = false
+        localMediaReadyForNegotiation = false
         playbackDuckingActive = false
         externalAudioMuted = false
         routeInputAvailable = true
@@ -1771,6 +1808,7 @@ public final class SerenadaSession: ObservableObject {
             getCurrentRoomState: { [weak self] in self?.currentRoomState },
             isSignalingConnected: { [weak self] in self?.diagnostics.isSignalingConnected ?? false },
             hasIceServers: { [weak self] in self?.webRtcEngine.hasIceServers() ?? false },
+            isLocalMediaReady: { [weak self] in self?.localMediaReadyForNegotiation ?? false },
             getSlot: { [weak self] cid in self?.peerSlots[cid] },
             getAllSlots: { [weak self] in self?.peerSlots ?? [:] },
             setSlot: { [weak self] cid, slot in
@@ -1963,11 +2001,7 @@ private final class CustomAudioCoordinatorAdapter: SessionAudioController {
     }
 
     func shouldPauseVideoForProximity(isScreenSharing: Bool) -> Bool {
-        var isBluetooth = false
-        if case .bluetooth = currentOutputDevice?.kind {
-            isBluetooth = true
-        }
-        return proximityMonitoringActive && isProximityNear && !isScreenSharing && !isBluetooth
+        proximityMonitoringActive && isProximityNear && !isScreenSharing && !isBluetoothHeadsetConnected()
     }
 
     func setOnAudioEnvironmentChanged(_ handler: @escaping () -> Void) {
@@ -1985,6 +2019,20 @@ private final class CustomAudioCoordinatorAdapter: SessionAudioController {
         )
         proximityMonitoringActive = true
         isProximityNear = UIDevice.current.proximityState
+    }
+
+    private func isBluetoothHeadsetConnected() -> Bool {
+        if case .bluetooth = currentOutputDevice?.kind {
+            return true
+        }
+        return AVAudioSession.sharedInstance().currentRoute.outputs.contains { output in
+            switch output.portType {
+            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private func stopProximityMonitoring() {

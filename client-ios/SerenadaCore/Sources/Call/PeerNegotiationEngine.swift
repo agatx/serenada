@@ -15,6 +15,7 @@ final class PeerNegotiationEngine {
     private let getCurrentRoomState: () -> RoomState?
     private let isSignalingConnected: () -> Bool
     private let hasIceServers: () -> Bool
+    private let isLocalMediaReady: () -> Bool
 
     // Slot access (session owns peerSlots)
     private let getSlot: (String) -> (any PeerConnectionSlotProtocol)?
@@ -67,6 +68,7 @@ final class PeerNegotiationEngine {
         getCurrentRoomState: @escaping () -> RoomState?,
         isSignalingConnected: @escaping () -> Bool,
         hasIceServers: @escaping () -> Bool,
+        isLocalMediaReady: @escaping () -> Bool = { true },
         getSlot: @escaping (String) -> (any PeerConnectionSlotProtocol)?,
         getAllSlots: @escaping () -> [String: any PeerConnectionSlotProtocol],
         setSlot: @escaping (String, any PeerConnectionSlotProtocol) -> Void,
@@ -95,6 +97,7 @@ final class PeerNegotiationEngine {
         self.getCurrentRoomState = getCurrentRoomState
         self.isSignalingConnected = isSignalingConnected
         self.hasIceServers = hasIceServers
+        self.isLocalMediaReady = isLocalMediaReady
         self.getSlot = getSlot
         self.getAllSlots = getAllSlots
         self.setSlot = setSlot
@@ -146,6 +149,10 @@ final class PeerNegotiationEngine {
         }
 
         updateAggregatePeerState()
+    }
+
+    func onLocalMediaReady() {
+        maybeSendOffer()
     }
 
     func processSignalingPayload(_ message: SignalingMessage) {
@@ -481,7 +488,19 @@ final class PeerNegotiationEngine {
                             .object(["sdp": .string(answerSdp), "offerId": .string(offerId)]),
                             remoteCid
                         )
-                    }, onComplete: { _ in })
+                    }, onComplete: { [weak self, weak targetSlot] success in
+                        guard !success else { return }
+                        Task { @MainActor in
+                            guard let self, targetSlot != nil else { return }
+                            self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Answer creation failed for \(remoteCid); resetting peer")
+                            if allowPeerReset,
+                               let replacementSlot = self.replacePeerSlotForRemoteOffer(remoteCid: remoteCid, offerId: offerId) {
+                                applyOffer(to: replacementSlot, allowPeerReset: false)
+                            } else {
+                                self.scheduleIceRestart(remoteCid: remoteCid, reason: "answer-failed", delayMs: 0)
+                            }
+                        }
+                    })
                 }
             }
         }
@@ -491,9 +510,12 @@ final class PeerNegotiationEngine {
             clearOfferTimeout(remoteCid: remoteCid)
             slot.rollbackLocalDescription { success in
                 Task { @MainActor in
-                    if success {
-                        applyOffer(to: slot, allowPeerReset: true)
+                    guard success else {
+                        self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Rollback before remote offer failed for \(remoteCid)")
+                        self.scheduleOfferTimeout(remoteCid: remoteCid)
+                        return
                     }
+                    applyOffer(to: slot, allowPeerReset: true)
                 }
             }
             return
@@ -594,6 +616,7 @@ final class PeerNegotiationEngine {
         guard let roomState = getCurrentRoomState() else { return false }
         guard getParticipantCount() > 1 else { return false }
         guard isSignalingConnected() else { return false }
+        guard isLocalMediaReady() else { return false }
         guard shouldIOffer(remoteCid: slot.remoteCid, roomState: roomState) else { return false }
         guard roomState.participants.first(where: { $0.cid == slot.remoteCid })?.signalingStatus == .active else { return false }
         return slot.isReady() || slot.ensurePeerConnection()
