@@ -1552,9 +1552,9 @@ Out of scope for this document, listed for visibility:
   both messages (parsers were already present from Phase 1, dropped
   silently before) and emits the new events. `SerenadaSession` consumes
   `negotiationDirty` to call `MediaEngine.scheduleDirtyPairRestart(cid)`,
-  which routes through the existing per-CID `scheduleIceRestart` (or
-  `scheduleNonHostFallback` when the local peer should not offer) so all
-  existing glare/cooldown guards apply.
+  which routes through the existing per-CID `scheduleIceRestart` only when
+  the local peer is the designated offerer, so all existing glare/cooldown
+  guards apply without letting non-offerers create fallback offers.
 
 - **Android SDK** (`SignalingProvider.kt`, `SerenadaServerProvider.kt`,
   `SerenadaSession.kt`): `Listener` gains `onNegotiationDirty` and

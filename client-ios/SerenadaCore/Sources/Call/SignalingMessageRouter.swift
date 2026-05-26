@@ -67,7 +67,7 @@ final class SignalingMessageRouter {
             onPong()
         case "turn-refreshed":
             onTurnRefreshed(message.payload)
-        case "offer", "answer", "ice":
+        case "offer", "answer", "ice", "media_restart_request":
             onSignalingPayload(message)
         case "content_state":
             let payload = ContentStatePayload(from: message.payload)
@@ -168,7 +168,7 @@ final class SignalingMessageRouter {
         case "participant_media_state":
             let payload = MediaStatePayload(from: message.payload.map { .object($0) })
             onParticipantMediaState(payload)
-        case "offer", "answer", "ice":
+        case "offer", "answer", "ice", "media_restart_request":
             var payload = message.payload ?? [:]
             if payload["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 payload["from"] = .string(message.from)

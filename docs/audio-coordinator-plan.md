@@ -70,18 +70,18 @@ The collisions are these, not "two sessions exist":
 
 4. **Route forcing.** PTT typically forces speakerphone for radio ergonomics. If Serenada was on Bluetooth, the route flips. Coordinator must save pre-PTT route and restore on resume.
 
-On Android, both pipelines can run with full media on most devices. Capture is occasionally serialized on older / budget devices, where `AudioRecord.startRecording()` errors if another process holds the input. This is the only case where SDK genuinely loses its mic for the PTT duration, and it needs a real capture suspend/resume primitive.
+On Android, both pipelines can run with full media on most devices. Capture is occasionally serialized on older / budget devices, where `AudioRecord.startRecording()` errors if another process holds the input. The current SDK surface treats that as a product-level fallback decision instead of exposing capture suspend/resume as public coordinator API.
 
 ### Leading-Edge Audio Leak (accepted)
 
 Mute-during-PTT is best-effort, not synchronous. There is typically a ~50-100ms window at each edge of the PTT moment where audio leaks:
 
-- **Start edge**: PTT audio flows through the framework's pipeline before `audioSessionInterrupted` reaches the SDK and the mute applies. The remote Serenada caller hears a brief slice of PTT audio bleed-through.
-- **End edge**: The mute persists until `audioSessionResumed`, but the iOS deactivation gap may swallow tail audio anyway. Bounded.
+- **Start edge**: PTT audio flows through the framework's pipeline before `externalAudioStarted` reaches the SDK and the mute applies. The remote Serenada caller hears a brief slice of PTT audio bleed-through.
+- **End edge**: The mute persists until `externalAudioEnded`, but the iOS deactivation gap may swallow tail audio anyway. Bounded.
 
 This applies to both outgoing PTT (host could in theory pre-notify before `requestBeginTransmitting`, but we accept the simpler post-hoc flow) and incoming PTT (OS-initiated; pre-notification is not possible by construction). The complexity of a synchronous handshake to close this window is not justified by the tiny duration involved.
 
-Hosts that require zero leak should publish `pttPolicy: .block` (no PTT while a call is active) instead of attempting tighter coexistence semantics. The SDK does not promise stricter-than-best-effort behavior on the coexist path.
+Hosts that require zero leak should enforce that policy before starting the external audio path. The SDK does not promise stricter-than-best-effort behavior on the coexist path.
 
 ## Goals and Non-Goals
 
@@ -156,71 +156,43 @@ The profile matters: an A2DP-only BT device cannot carry the call's mic, so the 
 
 ```
 AudioIntent {
-  supportsVideo: Bool                              // affects earpiece pool
   requiresCapture: Bool                            // default true
   requiresPlayback: Bool                           // default true
   preferredDevice: AudioDevice?
   enableProximityEarpiece: Bool                    // default true
-  muteOwnMicDuringExternalAudio: Bool              // default true. SDK mutes its mic
-                                                   // when the coordinator reports an
-                                                   // interruption (e.g., PTT active).
-  duckOwnPlaybackDuringExternalAudio: Bool         // default true. SDK lowers its
-                                                   // remote audio track volume during
-                                                   // an interruption.
-  exclusiveSession: Bool                           // default false. When true, SDK
-                                                   // asks the coordinator to deny
-                                                   // concurrent audio (rarely used).
+  muteDuringExternalAudio: Bool                    // default true. SDK mutes its mic
+                                                   // when the coordinator reports
+                                                   // host-owned external audio.
+  duckDuringExternalAudio: Bool                    // default true. SDK lowers remote
+                                                   // playback during host-owned
+                                                   // external audio.
 }
 ```
 
-The two `*DuringExternalAudio` knobs are the primary policy levers for PTT coexistence. The defaults match the recommended UX (mute mic to prevent leak; duck playback so the user can hear PTT). Hosts that want different behavior (e.g., don't duck because their PTT volume is already low, or don't mute because the PTT audio is acoustically separated via headset) flip the flags.
+The two `*DuringExternalAudio` knobs are the only public coexistence policy. The defaults match the recommended UX (mute mic to prevent leak; duck playback so the user can hear the host-owned audio path). Hosts that want different behavior (e.g., don't duck because their external-audio volume is already low, or don't mute because the two audio paths are acoustically separated via headset) flip the flags.
 
-Events split into facts (what happened) and capabilities (what the host promises about the environment). This is the structural fix Codex pushed for.
+Events expose facts, not host policy. The SDK owns the mute and ducking decisions based on `AudioIntent`.
 
 ```
 AudioCoordinatorEvent (facts, coordinator → SDK):
   - availableDevicesChanged([AudioDevice])
   - effectiveRouteChanged(input: AudioDevice?, output: AudioDevice?)
-  - audioSessionInterrupted(reason: InterruptionReason)
-  - audioSessionResumed
-  - inputUnavailable                          // mic gone (permission, hardware, exclusive lock)
-  - inputAvailable
-  - focusLost(transient: Bool)                // Android-flavored; iOS folds into interruption
-  - focusRegained
+  - externalAudioStarted
+  - externalAudioEnded
+  - playbackDuckingStarted
+  - playbackDuckingEnded
 ```
 
-```
-AudioCoordinatorCapabilities (published once on activate):
-  pttPolicy: PttPolicy
-  canShareInput: Bool                         // false on Android devices with serialized AudioRecord
-  sessionOwnership: SessionOwnership
-  supportedDeviceKinds: [AudioDeviceKind]
-
-PttPolicy:
-  - coexist          // PTT and call run concurrently; SDK mutes/ducks per intent
-  - preempt          // PTT terminates the call
-  - block            // host promises PTT will not fire while a call is active
-
-SessionOwnership:
-  - sdkOwned         // SDK internal default coordinator drives activation
-  - hostOwned        // coordinator owns activation (e.g., Zello AudioSessionManager)
-  - systemOwned      // OS framework owns activation (e.g., iOS PushToTalk while channel active)
-
-InterruptionReason: phoneCall | otherAudio | pttTransmission | systemAudio | unknown
-```
-
-The SDK consumes facts and capabilities and decides actions internally. The coordinator no longer prescribes "suspend everything" or "mute mic only." The coordinator says "PTT is starting." The SDK consults `pttPolicy` and `muteOwnMicDuringExternalAudio` and acts.
+The coordinator no longer prescribes "suspend everything" or "mute mic only." It says "host-owned audio is starting" and the SDK applies the configured intent. Duck-only events exist for Android-style transient focus where the system asks playback to duck but capture should continue.
 
 ### Swift Protocol
 
 ```swift
 public protocol SerenadaAudioCoordinator: AnyObject, Sendable {
-    func activateCallSession(intent: AudioIntent) async throws -> AudioCoordinatorCapabilities
+    func activateCallSession(intent: AudioIntent) async throws
     func deactivateCallSession() async
     func applyRouting(_ device: AudioDevice) async throws
     func setMicMuted(_ muted: Bool) async throws
-    func suspendCapture() async throws
-    func resumeCapture() async throws
 
     var availableDevices: AsyncStream<[AudioDevice]> { get }
     var effectiveInputDevice: AsyncStream<AudioDevice?> { get }
@@ -239,12 +211,10 @@ public struct SerenadaConfig {
 
 ```kotlin
 interface SerenadaAudioCoordinator {
-    suspend fun activateCallSession(intent: AudioIntent): AudioCoordinatorCapabilities
+    suspend fun activateCallSession(intent: AudioIntent)
     suspend fun deactivateCallSession()
     suspend fun applyRouting(device: AudioDevice)
     suspend fun setMicMuted(muted: Boolean)
-    suspend fun suspendCapture()
-    suspend fun resumeCapture()
 
     val availableDevices: StateFlow<List<AudioDevice>>
     val effectiveInputDevice: StateFlow<AudioDevice?>
@@ -267,19 +237,20 @@ The session exposes UI-facing properties sourced from the coordinator, plus sele
 session.availableAudioDevices: StateFlow<[AudioDevice]>
 session.currentAudioDevice: StateFlow<AudioDevice>
 session.isMicMuted: StateFlow<Bool>
-session.isMicMutedByExternalAudio: StateFlow<Bool>   // true while PTT mute is held
+session.isMicMutedByExternalAudio: StateFlow<Bool>   // true while external-audio mute is held
 session.selectAudioDevice(device): records user override, calls coordinator.applyRouting
 session.setMicMuted(muted): user-initiated mute (separate from interruption-driven mute)
 ```
 
-`isMicMuted` reflects the effective mic state. `isMicMutedByExternalAudio` separates user-initiated mute from auto-mute-during-PTT so the UI can show distinct affordances ("Muted" vs "Muted (PTT active)").
+`isMicMuted` reflects the effective mic state. `isMicMutedByExternalAudio` separates user-initiated mute from coordinator-driven external-audio mute so the UI can show distinct affordances.
 
 ### Mute State Composition
 
-The session tracks two independent mute bits plus a runtime route fact. This is part of the contract, not an open question, because PTT-end must not accidentally unmute a user-muted call.
+The session tracks two independent mute bits plus a runtime route fact. This is part of the contract, not an open question, because external-audio end must not accidentally unmute a user-muted call.
 
 - `userMuted: Bool` — set by `session.setMicMuted(muted)`. Persists across interruptions.
-- `externalAudioMuted: Bool` — set automatically when the coordinator reports an interruption (e.g. `audioSessionInterrupted(.pttTransmission)`) **if** `intent.muteOwnMicDuringExternalAudio` is true. Cleared on `audioSessionResumed`.
+- `externalAudioMuted: Bool` — set automatically when the coordinator reports `externalAudioStarted` **if** `intent.muteDuringExternalAudio` is true. Cleared on `externalAudioEnded`.
+- `playbackDuckingActive: Bool` — set automatically when the coordinator reports `externalAudioStarted` or `playbackDuckingStarted` **if** `intent.duckDuringExternalAudio` is true. Cleared on `externalAudioEnded` or `playbackDuckingEnded`.
 - `routeInputAvailable: Bool` — derived from the coordinator's `effectiveInputDevice`. False when no input route exists (mic permission lost, input device disconnected, host capture lock held on a serialized-capture Android device).
 
 Effective WebRTC sender enabled = `!userMuted && !externalAudioMuted && routeInputAvailable`.
@@ -295,8 +266,8 @@ The resume path is "clear `externalAudioMuted` and recompute effective sender en
 
 Ordering is explicit and the same on both platforms:
 
-1. `coordinator.activateCallSession(intent)` completes (await), returning capabilities
-2. SDK applies initial routing based on capabilities and policy
+1. `coordinator.activateCallSession(intent)` completes (await)
+2. SDK applies initial routing based on available devices, effective route, and intent
 3. SDK enables WebRTC audio I/O: iOS sets `RTCAudioSession.isAudioEnabled = true`; Android starts `JavaAudioDeviceModule` capture
 4. Call runs
 5. On teardown: SDK disables WebRTC audio I/O first
@@ -313,16 +284,14 @@ On iOS, the SDK also configures `RTCAudioSession.useManualAudio = true` at SDK i
 ```
 App: SerenadaCore.join(url, config)                  // audioCoordinator: nil
 SDK: Instantiates internal default coordinator
-SDK: caps = await coordinator.activateCallSession(intent: video=true, prox=true)
+SDK: await coordinator.activateCallSession(intent: prox=true)
   Default iOS:     setCategory(.playAndRecord, .voiceChat, [.allowBluetooth, ...])
                    setActive(true)
                    subscribe to routeChangeNotification
                    emit availableDevicesChanged([wired, speaker, earpiece, ...])
-                   return capabilities(pttPolicy: .block, sessionOwnership: .sdkOwned, ...)
   Default Android: requestAudioFocus(...)
                    setMode(MODE_IN_COMMUNICATION)
                    subscribe to AudioDeviceCallback
-                   return capabilities(pttPolicy: .block, sessionOwnership: .sdkOwned, ...)
 SDK: Applies ranking, await coordinator.applyRouting(.bluetoothHeadset)
   Default iOS:     setPreferredInput / overrideOutputAudioPort
   Default Android: setCommunicationDevice(BT_SCO) or startBluetoothSco
@@ -350,23 +319,17 @@ Externally observable behavior: identical to today.
 
 ```
 Zello: SerenadaCore.join(url, config(audioCoordinator: ZelloAudioCoordinator()))
-SDK: caps = await coordinator.activateCallSession(intent: video=true)
+SDK: await coordinator.activateCallSession(intent: capture=true, playback=true)
   Zello iOS:     dispatch onto AudioConcurrency queue
                  transition AudioSessionManager state -> .recording
                    (sets .playAndRecord + Zello's options + setActive(true))
                  if PTT framework owns the session, skip setActive
                  subscribe to route changes via existing AudioSessionRouteParser
                  enumerate devices
-                 return capabilities(pttPolicy: .coexist,
-                                     canShareInput: true,
-                                     sessionOwnership: .hostOwned or .systemOwned)
   Zello Android: AudioManagerImpl.acquireAudioDevice()
                  (increments _devCounter, starts SCO if BT on-demand)
                  NO setMode call (Zello policy: never set mode)
                  enumerate devices via BluetoothAudioImpl
-                 return capabilities(pttPolicy: .coexist,
-                                     canShareInput: depends-on-device,
-                                     sessionOwnership: .hostOwned)
 SDK: Applies ranking, await coordinator.applyRouting(.bluetoothHeadset)
   Zello Android: routes through BluetoothAudioImpl
   Zello iOS:     setPreferredInput through AudioSessionManager
@@ -386,10 +349,9 @@ SDK: await coordinator.deactivateCallSession()
 [Serenada call active, mic capturing, BT routing via Zello stack]
 
 Zello: User keys PTT (or incoming PTT arrives via PTChannelManager)
-Zello: ZelloAudioCoordinator.events emits audioSessionInterrupted(.pttTransmission)
-SDK:   Observes event. Consults capabilities (pttPolicy: .coexist) and
-       intent (muteOwnMicDuringExternalAudio: true,
-               duckOwnPlaybackDuringExternalAudio: true).
+Zello: ZelloAudioCoordinator.events emits externalAudioStarted
+SDK:   Observes event and intent (muteDuringExternalAudio: true,
+               duckDuringExternalAudio: true).
 SDK:   Set externalAudioMuted = true (effective WebRTC sender goes false via
          composition rule in Mute State Composition).
        Lower remote audio track receiver volume to ducked level.
@@ -403,7 +365,7 @@ SDK:   Set externalAudioMuted = true (effective WebRTC sender goes false via
 
 Zello: PTT ends. Framework calls didDeactivate (iOS), or Zello signals end (Android).
 Zello: On iOS, host re-activates AVAudioSession with Serenada's category immediately.
-Zello: events emits audioSessionResumed.
+Zello: events emits externalAudioEnded.
 SDK:   Clear externalAudioMuted bit and recompute effective sender enabled.
          If user had muted manually mid-PTT, sender stays disabled and
          session.isMicMuted continues to reflect that.
@@ -412,7 +374,7 @@ SDK:   Clear externalAudioMuted bit and recompute effective sender enabled.
        On iOS: ~100-200ms audio gap is bounded by host re-activation speed.
 ```
 
-If `muteOwnMicDuringExternalAudio = false` in the intent, SDK skips the mic mute step but still emits `isMicMutedByExternalAudio` events that observers can use (e.g., a host that handles the mute via their own UI layer).
+If `muteDuringExternalAudio = false` in the intent, SDK skips the mic mute step but still exposes `isMicMutedByExternalAudio` so observers can distinguish coordinator-driven audio state from user mute.
 
 ### Sequence 3-Fallback: Android Serialized-Capture Device
 
@@ -420,30 +382,25 @@ If `muteOwnMicDuringExternalAudio = false` in the intent, SDK skips the mic mute
 [Serenada call active. Device cannot share mic between AudioRecord instances.]
 
 Zello: User keys PTT. Zello's PTT pipeline needs the mic.
-Zello: events emits inputUnavailable
-SDK:   Observes. Consults capabilities (canShareInput: false).
-       await coordinator.suspendCapture() — stops ADM input entirely.
-       Sets session.isMicMutedByExternalAudio = true.
+Zello: events emits externalAudioStarted
+SDK:   Observes and applies the configured external-audio mute/duck behavior.
        Remote audio continues playing.
        Call stays connected.
 Zello: PTT ends.
-Zello: events emits inputAvailable
-SDK:   await coordinator.resumeCapture() — restarts ADM input.
-       Sets session.isMicMutedByExternalAudio = false.
+Zello: events emits externalAudioEnded
+SDK:   Clears session.isMicMutedByExternalAudio.
 ```
 
-The capture suspend/resume primitive is a new method on the internal `SessionMediaEngine` interface, not just sender-track toggling. The Android default coordinator implements no-op suspend/resume (its capture is never externally preempted). Zello's coordinator implements the real version: it tells the SDK when its own `AudioRecord` is competing for the input.
+The minimum public surface intentionally does not expose capture suspend/resume or serialized-capture capability negotiation. If a host discovers hardware that cannot run both paths reliably, it should decide at the product layer whether to mute, defer its own audio path, or end one of the sessions.
 
 ### Sequence 3-Preempt: Host Opts Into Call Termination
 
 ```
-[Coordinator publishes pttPolicy: .preempt]
-Zello: events emits audioSessionInterrupted(.pttTransmission)
-SDK:   Consults policy (.preempt). Terminates call with endedReason: .pttPreempted.
-       App layer can offer reconnect after PTT ends.
+[Host policy decides that its own audio path must preempt the video call]
+App:   Ends or prevents the Serenada call before starting the external audio path.
 ```
 
-This path is reserved for hosts that have explicitly opted in (e.g., a truck-driver deployment where the radio always wins). Not the default.
+This path is intentionally app-owned rather than an SDK coordinator policy.
 
 ## Open Questions
 
@@ -451,7 +408,7 @@ This path is reserved for hosts that have explicitly opted in (e.g., a truck-dri
 
 2. **Coordinator activation failure.** If `activateCallSession` throws, the call cannot start. SDK surfaces a clear error code so the host can show "audio busy" or similar. Decide which error codes are coordinator-supplied vs SDK-defined.
 
-3. **Cellular call mid-Serenada-call.** Both default coordinator and host coordinator must handle. iOS: phone call interrupts via standard interruption flow, emits `audioSessionInterrupted(.phoneCall)`. Android: `PhoneCallStateMonitor` style detection. Already works in standalone; needs verification in coordinator model.
+3. **Cellular call mid-Serenada-call.** Both default coordinator and host coordinator must handle. iOS: phone call interrupts via standard interruption flow and the coordinator emits `externalAudioStarted` / `externalAudioEnded`. Android: `PhoneCallStateMonitor` style detection. Already works in standalone; needs verification in coordinator model.
 
 4. **iOS deactivation gap behavior.** The ~100-200ms gap when PTT framework deactivates and host re-activates is bounded but real. Decide whether to expose it as a `briefAudioGap` event (so UI can show a tiny "reconnecting audio" affordance) or treat as transparent. Default: transparent, no UI surface.
 
@@ -459,7 +416,7 @@ This path is reserved for hosts that have explicitly opted in (e.g., a truck-dri
 
 6. **AirPods auto-switching.** iOS may auto-route to AirPods when proximity is detected. Default coordinator must respect; Zello coordinator must respect. Verify both paths.
 
-7. **Long PTT and ICE freshness.** WebRTC's ICE consent freshness check fires every 30s by default. A PTT moment is rarely that long, but for hosts that opt into very long suspensions (e.g., `pttPolicy: .preempt` with reconnect-after path), the SDK may need to issue a soft ICE refresh on resume. Probably overengineering for v1.
+7. **Long external-audio moments and ICE freshness.** WebRTC's ICE consent freshness check fires every 30s by default. A host-owned audio moment is rarely that long, but if the host pauses or replaces the call for a long time, the SDK may need to issue a soft ICE refresh on resume. Probably overengineering for v1.
 
 8. **Backwards compatibility.** Public API additions only. Minor version bump.
 
@@ -473,19 +430,17 @@ Sequenced so each step is shippable and verifiable in isolation.
 - Move `CallAudioSessionController` to an internal default coordinator that conforms to `SerenadaAudioCoordinator`
 - Introduce `RTCAudioSession.useManualAudio = true` at SDK init; gate `isAudioEnabled` on coordinator state
 - Migrate route-change subscription from `CallAudioSessionController` into the coordinator's responsibility surface
-- Add capture suspend/resume scaffolding to the internal media engine interface (no-op default impl)
 - No public API change yet. Verify standalone behavior unchanged via existing test plan.
 
 ### Step 2: Internal Refactor, Android
 
 - Same extraction in `client-android/serenada-core/`. `CallAudioSessionController` becomes the internal default coordinator.
-- Add `suspendCapture` / `resumeCapture` to `SessionMediaEngine` and `WebRtcEngine`. Default impl stops/starts the `JavaAudioDeviceModule` audio input on Android. Test that round-trip resume returns audio within an acceptable window.
 - Verify standalone behavior unchanged.
 
 ### Step 3: Public API, Both Platforms
 
 - Expose `SerenadaAudioCoordinator` protocol publicly
-- Expose `AudioDevice`, `AudioIntent`, `AudioCoordinatorEvent`, `AudioCoordinatorCapabilities`, `PttPolicy`, `SessionOwnership` as public types
+- Expose `AudioDevice`, `AudioIntent`, and `AudioCoordinatorEvent` as public types
 - Add `audioCoordinator: SerenadaAudioCoordinator?` and `audioIntent: AudioIntent` to `SerenadaConfig`
 - Expose `availableAudioDevices`, `currentAudioDevice`, `isMicMuted`, `isMicMutedByExternalAudio`, `selectAudioDevice`, `setMicMuted` on `SerenadaSession`
 - Implement the three mute-state composition (user / external / route) on the session
@@ -495,12 +450,12 @@ Sequenced so each step is shippable and verifiable in isolation.
 ### Step 4: Sample Coordinator
 
 - Add a sample non-default coordinator implementation in `samples/ios/` and `samples/android/`
-- The sample shows: how to enumerate devices through host audio infra, how to emit `audioSessionInterrupted(.pttTransmission)` on a fake PTT event, how to handle re-activation
+- The sample shows: how to enumerate devices through host audio infra, how to emit `externalAudioStarted` / `externalAudioEnded` on a fake host-audio event, how to handle re-activation
 - Useful as both documentation and a test bed
 
 ### Step 5: Zello Integration (separate effort, owned by Zello)
 
 - Zello implements `ZelloAudioCoordinator` on top of its existing audio infrastructure
-- Validation: Serenada call + Zello PTT, both Android and iOS, with `pttPolicy: .coexist` and default mute-mic / duck-playback flags
-- Validation: Serenada call + Zello PTT on an Android device with serialized capture, verifying the suspend/resume path
-- Validation: opt-in `pttPolicy: .preempt` deployment scenario
+- Validation: Serenada call + Zello PTT, both Android and iOS, with default mute-mic / duck-playback flags
+- Validation: Serenada call + Zello PTT on an Android device with serialized capture, verifying the product-level fallback behavior
+- Validation: opt-in product-level preemption deployment scenario

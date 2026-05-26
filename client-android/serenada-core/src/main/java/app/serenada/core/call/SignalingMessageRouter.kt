@@ -51,7 +51,7 @@ internal class SignalingMessageRouter(
             "room_ended" -> onRoomEnded()
             "pong" -> onPong()
             "turn-refreshed" -> onTurnRefreshed(msg)
-            "offer", "answer", "ice" -> onSignalingPayload(msg)
+            "offer", "answer", "ice", "media_restart_request" -> onSignalingPayload(msg)
             "content_state" -> handleContentState(msg)
             "error" -> handleError(msg)
         }
@@ -137,7 +137,7 @@ internal class SignalingMessageRouter(
                 val parsed = message.payload.toMediaStatePayload() ?: return
                 onMediaStateReceived(parsed.fromCid, parsed.audioEnabled, parsed.videoEnabled)
             }
-            "offer", "answer", "ice" -> {
+            "offer", "answer", "ice", "media_restart_request" -> {
                 val base = message.payload ?: JSONObject()
                 if (base.optString("from").isBlank()) base.put("from", message.from)
                 onSignalingPayload(SignalingMessage(

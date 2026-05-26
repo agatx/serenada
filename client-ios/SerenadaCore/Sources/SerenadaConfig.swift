@@ -53,7 +53,7 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         transports: [SerenadaTransport] = [.ws, .sse],
         proximityMonitoringEnabled: Bool = false,
         audioCoordinator: SerenadaAudioCoordinator? = nil,
-        audioIntent: AudioIntent = AudioIntent(supportsVideo: false)
+        audioIntent: AudioIntent = AudioIntent()
     ) {
         self.serverHost = serverHost
         self.signalingProvider = signalingProvider

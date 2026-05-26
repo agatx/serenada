@@ -114,6 +114,37 @@ class SessionPostReconnectGateTest {
     }
 
     @Test
+    fun `gate timeout does not make non-offerer send recovery offer`() {
+        factory.advanceToInCallWithTurn(
+            localCid = "zeta",
+            remoteCid = "alpha",
+            localJoinedAt = 2,
+            remoteJoinedAt = 1,
+        )
+        val slot = factory.fakeMedia.fakeSlots.getValue("alpha")
+        val baselineFires = factory.session.postReconnectResyncFireCount()
+        val baselineOffers = slot.createOfferCalls
+
+        factory.fakeProvider.simulateDisconnected()
+        ShadowLooper.idleMainLooper()
+        factory.fakeProvider.simulateConnected("ws")
+        ShadowLooper.idleMainLooper()
+
+        ShadowLooper.idleMainLooper(
+            WebRtcResilienceConstants.EPOCH_RESYNC_TIMEOUT_MS,
+            TimeUnit.MILLISECONDS,
+        )
+
+        assertFalse("Gate should clear after timeout", factory.session.isPostReconnectResyncPending())
+        assertEquals(baselineFires + 1, factory.session.postReconnectResyncFireCount())
+        assertEquals("Non-offerer must not create recovery offers", baselineOffers, slot.createOfferCalls)
+        assertFalse(
+            "Non-offerer must not wedge on a pending ICE restart it cannot send",
+            slot.pendingIceRestart,
+        )
+    }
+
+    @Test
     fun `subsequent room_state updates do not double-fire`() {
         factory.advanceToInCallWithTurn(
             localCid = "alpha",

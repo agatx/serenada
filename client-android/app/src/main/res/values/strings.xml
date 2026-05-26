@@ -149,6 +149,14 @@
     <string name="frontline_stop_screen_share">Stop screen share</string>
     <string name="frontline_share_screen">Share screen</string>
     <string name="frontline_close">Close</string>
+    <string name="call_audio_route">Audio</string>
+    <string name="call_audio_speaker">Speaker</string>
+    <string name="call_audio_phone">Phone</string>
+    <string name="call_audio_headset">Headset</string>
+    <string name="call_audio_bluetooth">Bluetooth</string>
+    <string name="call_audio_car">Car audio</string>
+    <string name="call_audio_usb">USB audio</string>
+    <string name="call_audio_unknown">Audio</string>
 
     <string name="notification_call_title">Serenada call</string>
     <string name="notification_call_status_channel">Call status</string>

@@ -105,6 +105,7 @@ import app.serenada.core.layout.SceneParticipant
 import app.serenada.core.layout.UserLayoutPrefs
 import app.serenada.core.layout.clampStageTileAspectRatio
 import app.serenada.core.layout.computeLayout
+import app.serenada.core.call.AudioDevice
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.LocalCameraMode
@@ -121,11 +122,11 @@ private val FrontlineBlack = Color.Black
 private val FrontlinePanel = Color.Black
 private val FrontlineSurface = Color(0xFF1A1A1A)
 private val FrontlineBorder = Color(0xFF2A2A2A)
-private val FrontlineAccent = Color(0xFF15BF54)
+internal val FrontlineAccent = Color(0xFF15BF54)
 private val FrontlineDanger = Color(0xFFF5564B)
 private val FrontlineDim = Color(0xFFA1A1AA)
-private val FrontlineSheet = Color(0xFF15161A)
-private val FrontlineSheetRow = Color.White.copy(alpha = 0.09f)
+internal val FrontlineSheet = Color(0xFF15161A)
+internal val FrontlineSheetRow = Color.White.copy(alpha = 0.09f)
 private val FrontlineStageLocalAccentWidth = 2.5.dp
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
@@ -144,12 +145,15 @@ internal fun FrontlineCallScreen(
     config: SerenadaCallFlowConfig,
     theme: SerenadaCallFlowTheme,
     strings: Map<SerenadaString, String>?,
+    availableAudioDevices: List<AudioDevice>,
+    currentAudioDevice: AudioDevice?,
     onToggleAudio: () -> Unit,
     onToggleVideo: () -> Unit,
     onFlipCamera: () -> Unit,
     onToggleFlashlight: () -> Unit,
     onLocalPinchZoom: (Float) -> Unit,
     onEndCall: () -> Unit,
+    onSelectAudioDevice: (AudioDevice) -> Unit,
     onShareLink: (() -> Unit)?,
     onInviteToRoom: () -> Unit,
     onStartScreenShare: (Intent) -> Unit,
@@ -188,6 +192,7 @@ internal fun FrontlineCallScreen(
 
     var pipSwapped by rememberSaveable { mutableStateOf(false) }
     var isMoreSheetVisible by rememberSaveable { mutableStateOf(false) }
+    var isAudioRouteSheetVisible by rememberSaveable { mutableStateOf(false) }
     var showSnapshotFlash by remember { mutableStateOf(false) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
@@ -265,9 +270,16 @@ internal fun FrontlineCallScreen(
         }
         else -> null
     }
+    val currentAudioRoute = remember(currentAudioDevice, availableAudioDevices) {
+        currentCallAudioRoute(currentAudioDevice, availableAudioDevices)
+    }
+    val audioRouteOptions = remember(currentAudioDevice, availableAudioDevices) {
+        callAudioRouteOptions(currentAudioDevice, availableAudioDevices)
+    }
+    val showAudioRouteControl = currentAudioRoute != null || audioRouteOptions.isNotEmpty()
     val showMoreButton =
         isCallSurfacePhase &&
-            (config.screenSharingEnabled || config.inviteControlsEnabled)
+            (showAudioRouteControl || config.screenSharingEnabled || config.inviteControlsEnabled)
     val snapshotSource =
         if (
             config.snapshotEnabled &&
@@ -619,12 +631,18 @@ internal fun FrontlineCallScreen(
 
                 FrontlineMoreSheet(
                     visible = isMoreSheetVisible,
+                    audioRouteDevice = currentAudioRoute,
+                    audioRouteOptions = audioRouteOptions,
                     screenSharingEnabled = config.screenSharingEnabled,
                     inviteEnabled = config.inviteControlsEnabled,
                     shareEnabled = config.inviteControlsEnabled && shareLinkAction != null,
                     isScreenSharing = uiState.isScreenSharing,
                     strings = strings,
                     onDismiss = { isMoreSheetVisible = false },
+                    onAudioRoute = {
+                        isMoreSheetVisible = false
+                        isAudioRouteSheetVisible = true
+                    },
                     onToggleScreenShare = {
                         isMoreSheetVisible = false
                         if (uiState.isScreenSharing) {
@@ -642,6 +660,18 @@ internal fun FrontlineCallScreen(
                         shareLinkAction?.invoke()
                     },
                     modifier = Modifier.zIndex(8f),
+                )
+                CallAudioRouteSheet(
+                    visible = isAudioRouteSheetVisible,
+                    devices = audioRouteOptions,
+                    currentDevice = currentAudioRoute,
+                    strings = strings,
+                    onDismiss = { isAudioRouteSheetVisible = false },
+                    onSelect = { device ->
+                        isAudioRouteSheetVisible = false
+                        onSelectAudioDevice(device)
+                    },
+                    modifier = Modifier.zIndex(9f),
                 )
             }
         }
@@ -1895,12 +1925,15 @@ private fun FrontlineEndButton(
 @Composable
 private fun FrontlineMoreSheet(
     visible: Boolean,
+    audioRouteDevice: AudioDevice?,
+    audioRouteOptions: List<AudioDevice>,
     screenSharingEnabled: Boolean,
     inviteEnabled: Boolean,
     shareEnabled: Boolean,
     isScreenSharing: Boolean,
     strings: Map<SerenadaString, String>?,
     onDismiss: () -> Unit,
+    onAudioRoute: () -> Unit,
     onToggleScreenShare: () -> Unit,
     onInvite: () -> Unit,
     onShare: () -> Unit,
@@ -1941,6 +1974,14 @@ private fun FrontlineMoreSheet(
                             .background(Color.White.copy(alpha = 0.24f))
                     )
                     Spacer(Modifier.height(18.dp))
+                    if (audioRouteDevice != null || audioRouteOptions.isNotEmpty()) {
+                        FrontlineSheetItem(
+                            icon = callAudioRouteIcon(audioRouteDevice?.kind),
+                            title = audioRouteDevice?.callAudioRouteLabel(strings)
+                                ?: resolveString(SerenadaString.CallAudioRoute, strings),
+                            onClick = onAudioRoute,
+                        )
+                    }
                     if (screenSharingEnabled) {
                         FrontlineSheetItem(
                             icon = if (isScreenSharing) Icons.AutoMirrored.Filled.StopScreenShare else Icons.AutoMirrored.Filled.ScreenShare,

@@ -3,9 +3,9 @@ import XCTest
 
 private final class BlockingAudioCoordinator: @unchecked Sendable, SerenadaAudioCoordinator {
     private(set) var activateCalls = 0
-    private var activationContinuation: CheckedContinuation<AudioCoordinatorCapabilities, Error>?
+    private var activationContinuation: CheckedContinuation<Void, Error>?
 
-    func activateCallSession(intent: AudioIntent) async throws -> AudioCoordinatorCapabilities {
+    func activateCallSession(intent: AudioIntent) async throws {
         activateCalls += 1
         return try await withCheckedThrowingContinuation { continuation in
             activationContinuation = continuation
@@ -13,20 +13,13 @@ private final class BlockingAudioCoordinator: @unchecked Sendable, SerenadaAudio
     }
 
     func finishActivation() {
-        activationContinuation?.resume(returning: AudioCoordinatorCapabilities(
-            pttPolicy: .block,
-            canShareInput: true,
-            sessionOwnership: .sdkOwned,
-            supportedDeviceKinds: []
-        ))
+        activationContinuation?.resume()
         activationContinuation = nil
     }
 
     func deactivateCallSession() async {}
     func applyRouting(_ device: AudioDevice) async throws {}
     func setMicMuted(_ muted: Bool) async throws {}
-    func suspendCapture() async throws {}
-    func resumeCapture() async throws {}
 
     var availableDevices: AsyncStream<[AudioDevice]> { AsyncStream { _ in } }
     var effectiveInputDevice: AsyncStream<AudioDevice?> { AsyncStream { _ in } }

@@ -20,14 +20,8 @@ public final class SampleAudioCoordinator: SerenadaAudioCoordinator, @unchecked 
         self.activeOutput = speaker
     }
 
-    public func activateCallSession(intent: AudioIntent) async throws -> AudioCoordinatorCapabilities {
+    public func activateCallSession(intent: AudioIntent) async throws {
         print("[SampleAudioCoordinator] activateCallSession called with intent: \(intent)")
-        return AudioCoordinatorCapabilities(
-            pttPolicy: .coexist,
-            canShareInput: true,
-            sessionOwnership: .hostOwned,
-            supportedDeviceKinds: [.speakerphone, .earpiece, .bluetooth(profile: .unknown)]
-        )
     }
 
     public func deactivateCallSession() async {
@@ -53,21 +47,13 @@ public final class SampleAudioCoordinator: SerenadaAudioCoordinator, @unchecked 
         print("[SampleAudioCoordinator] setMicMuted: \(muted)")
     }
 
-    public func suspendCapture() async throws {
-        print("[SampleAudioCoordinator] suspendCapture called")
-    }
-
-    public func resumeCapture() async throws {
-        print("[SampleAudioCoordinator] resumeCapture called")
-    }
-
-    public func simulatePttPress(_ active: Bool) {
+    public func simulateExternalAudio(_ active: Bool) {
         if active {
-            print("[SampleAudioCoordinator] Simulating PTT Press: Interrupting audio session")
-            emit(.audioSessionInterrupted(reason: .pttTransmission))
+            print("[SampleAudioCoordinator] Simulating external audio start")
+            emit(.externalAudioStarted)
         } else {
-            print("[SampleAudioCoordinator] Simulating PTT Release: Resuming audio session")
-            emit(.audioSessionResumed)
+            print("[SampleAudioCoordinator] Simulating external audio end")
+            emit(.externalAudioEnded)
         }
     }
 

@@ -85,7 +85,7 @@ session.onPeerMessage { message ->
 }
 ```
 
-The sample also includes `SampleAudioCoordinator`, which implements `SerenadaAudioCoordinator` and is passed through `SerenadaConfig.audioCoordinator`. Real host apps can use the same protocol to own audio focus, route selection, and push-to-talk coexistence policy. Omit `audioCoordinator` to use the SDK's internal default coordinator.
+The sample also includes `SampleAudioCoordinator`, which implements `SerenadaAudioCoordinator` and is passed through `SerenadaConfig.audioCoordinator`. Real host apps can use the same protocol to own audio focus, route selection, and external-audio coexistence policy. Omit `audioCoordinator` to use the SDK's internal default coordinator.
 
 ## Sample limitations
 

@@ -1,5 +1,6 @@
 package app.serenada.core.fakes
 
+import app.serenada.core.call.OutboundMediaSample
 import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RealtimeCallStats
 import app.serenada.core.call.WebRtcEngine
@@ -25,8 +26,6 @@ internal class FakePeerConnectionSlot(
     override var lastIceRestartAt = 0L; private set
     override var offerTimeoutTask: Runnable? = null; private set
     override var iceRestartTask: Runnable? = null; private set
-    override var nonHostFallbackTask: Runnable? = null; private set
-    override var nonHostFallbackAttempts = 0; private set
 
     // State machine
     private var signalingState = PeerConnection.SignalingState.STABLE
@@ -44,6 +43,7 @@ internal class FakePeerConnectionSlot(
     var closePeerConnectionCalled = false; private set
     var closePeerConnectionDeferredDispose = false; private set
     var ensurePeerConnectionCalls = 0; private set
+    var failNextRemoteOffer = false
 
     // Offer lifecycle
     override fun beginOffer() { isMakingOffer = true }
@@ -63,10 +63,6 @@ internal class FakePeerConnectionSlot(
     override fun cancelOfferTimeout() { offerTimeoutTask = null }
     override fun setIceRestartTask(task: Runnable) { iceRestartTask = task }
     override fun cancelIceRestartTask() { iceRestartTask = null }
-    override fun setNonHostFallbackTask(task: Runnable) { nonHostFallbackTask = task }
-    override fun cancelNonHostFallbackTask() { nonHostFallbackTask = null }
-    override fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
-    override fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
     // WebRTC operations
     override fun setIceServers(servers: List<PeerConnection.IceServer>) {
@@ -102,8 +98,13 @@ internal class FakePeerConnectionSlot(
         onComplete?.invoke(true)
     }
 
-    override fun setRemoteDescription(type: SessionDescription.Type, sdp: String, onComplete: (() -> Unit)?) {
+    override fun setRemoteDescription(type: SessionDescription.Type, sdp: String, onComplete: ((Boolean) -> Unit)?) {
         setRemoteDescriptionCalls.add(type to sdp)
+        if (type == SessionDescription.Type.OFFER && failNextRemoteOffer) {
+            failNextRemoteOffer = false
+            onComplete?.invoke(false)
+            return
+        }
         remoteDescriptionSet = true
         when (type) {
             SessionDescription.Type.OFFER -> signalingState = PeerConnection.SignalingState.HAVE_REMOTE_OFFER
@@ -111,7 +112,7 @@ internal class FakePeerConnectionSlot(
             else -> signalingState = PeerConnection.SignalingState.STABLE
         }
         onSignalingStateChange?.invoke(remoteCid, signalingState)
-        onComplete?.invoke()
+        onComplete?.invoke(true)
     }
 
     override fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)?) {
@@ -153,6 +154,18 @@ internal class FakePeerConnectionSlot(
     override fun collectInboundBytes(onComplete: (Long) -> Unit) {
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
+    }
+    var outboundMediaSample: OutboundMediaSample? = OutboundMediaSample(
+        expectsAudio = true,
+        expectsVideo = true,
+        audioBytesSent = 0L,
+        videoBytesSent = 0L,
+        videoFramesSent = 0L,
+    )
+    var collectOutboundMediaSampleCalls = 0
+    override fun collectOutboundMediaSample(onComplete: (OutboundMediaSample?) -> Unit) {
+        collectOutboundMediaSampleCalls += 1
+        onComplete(outboundMediaSample)
     }
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) { onComplete(null, null) }
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {}

@@ -77,7 +77,10 @@ struct FrontlineCallScreenView: View {
     let roomName: String?
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
+    let availableAudioDevices: [AudioDevice]
+    let currentAudioDevice: AudioDevice?
     let onToggleAudio: () -> Void
+    let onSelectAudioDevice: (AudioDevice) -> Void
     let onToggleVideo: () -> Void
     let onFlipCamera: () -> Void
     let onToggleScreenShare: () -> Void
@@ -93,6 +96,7 @@ struct FrontlineCallScreenView: View {
 
     @State private var pipSwapped = false
     @State private var isMoreSheetVisible = false
+    @State private var isAudioRouteSheetVisible = false
     @State private var showShareSheet = false
     @State private var showSnapshotFlash = false
     @State private var showDebugPanel = false
@@ -197,10 +201,15 @@ struct FrontlineCallScreenView: View {
                 debugOverlay
                 snapshotFlashOverlay
                 moreSheet
+                audioRouteSheet
             }
         }
         .background(frontlineBlack)
-        .accessibilityIdentifier("call.frontline.screen")
+        .overlay(alignment: .topLeading) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("call.frontline.screen")
+        }
         .onChange(of: uiState.localVideoEnabled) { _ in pipSwapped = false }
         .onChange(of: uiState.localCameraMode) { _ in pipSwapped = false }
         .onChange(of: uiState.remoteParticipants.map { $0.cid }) { activeCids in
@@ -278,6 +287,22 @@ struct FrontlineCallScreenView: View {
 
     private var canSwapPip: Bool {
         pipFeed != nil && uiState.localVideoEnabled && remote != nil
+    }
+
+    private var currentAudioRoute: AudioDevice? {
+        currentCallAudioRoute(currentAudioDevice: currentAudioDevice, availableAudioDevices: availableAudioDevices)
+    }
+
+    private var audioRouteOptions: [AudioDevice] {
+        callAudioRouteOptions(currentAudioDevice: currentAudioDevice, availableAudioDevices: availableAudioDevices)
+    }
+
+    private var showsAudioRoute: Bool {
+        currentAudioRoute != nil || !audioRouteOptions.isEmpty
+    }
+
+    private var shouldShowMoreButton: Bool {
+        isCallSurfacePhase && (showsAudioRoute || config.screenSharingEnabled || config.inviteControlsEnabled)
     }
 
     @ViewBuilder
@@ -469,7 +494,7 @@ struct FrontlineCallScreenView: View {
             panelWidth: panelWidth,
             callControlsEnabled: isCallSurfacePhase,
             videoControlsEnabled: isCallSurfacePhase && config.videoEnabled && !uiState.availableCameraModes.isEmpty,
-            showMoreButton: isCallSurfacePhase && (config.screenSharingEnabled || config.inviteControlsEnabled),
+            showMoreButton: shouldShowMoreButton,
             snapshotSource: snapshotSource,
             snapshotHandler: onSnapshotRequested,
             reservePreviewActions: isLandscape,
@@ -566,8 +591,10 @@ struct FrontlineCallScreenView: View {
 
     private var moreSheet: some View {
         Group {
-            if isMoreSheetVisible {
+            if isMoreSheetVisible && shouldShowMoreButton {
                 FrontlineMoreSheet(
+                    showsAudioRoute: showsAudioRoute,
+                    audioRouteDevice: currentAudioRoute,
                     screenSharingEnabled: config.screenSharingEnabled,
                     inviteEnabled: config.inviteControlsEnabled,
                     shareEnabled: config.inviteControlsEnabled && roomShareURL != nil,
@@ -576,6 +603,10 @@ struct FrontlineCallScreenView: View {
                     broadcastTriggerCount: $broadcastTriggerCount,
                     strings: strings,
                     onDismiss: { isMoreSheetVisible = false },
+                    onAudioRoute: {
+                        isMoreSheetVisible = false
+                        isAudioRouteSheetVisible = true
+                    },
                     onToggleScreenShare: {
                         isMoreSheetVisible = false
                         onToggleScreenShare()
@@ -594,6 +625,23 @@ struct FrontlineCallScreenView: View {
                     onShare: {
                         isMoreSheetVisible = false
                         showShareSheet = true
+                    }
+                )
+            }
+        }
+    }
+
+    private var audioRouteSheet: some View {
+        Group {
+            if isAudioRouteSheetVisible {
+                FrontlineAudioRouteSheet(
+                    devices: audioRouteOptions,
+                    currentDevice: currentAudioRoute,
+                    strings: strings,
+                    onDismiss: { isAudioRouteSheetVisible = false },
+                    onSelect: { device in
+                        isAudioRouteSheetVisible = false
+                        onSelectAudioDevice(device)
                     }
                 )
             }
@@ -979,6 +1027,7 @@ private struct FrontlineControlsPanel<Pip: View>: View {
                     onClick: onMore
                 )
                 .frame(width: moreWidth, height: buttonHeight)
+                .accessibilityIdentifier("call.frontline.more")
             }
         }
         .frame(maxWidth: .infinity)
@@ -1094,6 +1143,8 @@ private struct FrontlineEndButton: View {
 }
 
 private struct FrontlineMoreSheet: View {
+    let showsAudioRoute: Bool
+    let audioRouteDevice: AudioDevice?
     let screenSharingEnabled: Bool
     let inviteEnabled: Bool
     let shareEnabled: Bool
@@ -1102,6 +1153,7 @@ private struct FrontlineMoreSheet: View {
     @Binding var broadcastTriggerCount: Int
     let strings: [SerenadaString: String]?
     let onDismiss: () -> Void
+    let onAudioRoute: () -> Void
     let onToggleScreenShare: () -> Void
     let onStartBroadcastPicker: () -> Void
     let onInvite: () -> Void
@@ -1119,6 +1171,16 @@ private struct FrontlineMoreSheet: View {
                     .frame(width: 36, height: 4)
                     .padding(.top, 18)
                     .padding(.bottom, 18)
+
+                if showsAudioRoute {
+                    FrontlineSheetItem(
+                        systemImage: callAudioRouteSystemImage(audioRouteDevice?.kind),
+                        title: audioRouteDevice.map { callAudioRouteLabel($0, strings: strings) }
+                            ?? resolveString(.callAudioRoute, overrides: strings),
+                        onClick: onAudioRoute
+                    )
+                    .accessibilityIdentifier("call.frontline.more.audio")
+                }
 
                 if screenSharingEnabled {
                     FrontlineSheetItem(
@@ -1187,6 +1249,110 @@ private struct FrontlineMoreSheet: View {
         } else {
             onToggleScreenShare()
         }
+    }
+}
+
+private struct FrontlineAudioRouteSheet: View {
+    let devices: [AudioDevice]
+    let currentDevice: AudioDevice?
+    let strings: [SerenadaString: String]?
+    let onDismiss: () -> Void
+    let onSelect: (AudioDevice) -> Void
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            VStack(spacing: 0) {
+                Capsule()
+                    .fill(Color.white.opacity(0.24))
+                    .frame(width: 36, height: 4)
+                    .padding(.top, 18)
+                    .padding(.bottom, 18)
+
+                Text(resolveString(.callAudioRoute, overrides: strings))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.bottom, 10)
+
+                ForEach(devices, id: \.self) { device in
+                    FrontlineAudioRouteItem(
+                        device: device,
+                        selected: isSelected(device),
+                        strings: strings,
+                        onClick: { onSelect(device) }
+                    )
+                }
+
+                Button(action: onDismiss) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "xmark")
+                        Text(resolveString(.frontlineClose, overrides: strings))
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 12)
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
+            .background(frontlineSheet)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .transition(.opacity)
+    }
+
+    private func isSelected(_ device: AudioDevice) -> Bool {
+        if let currentDevice {
+            return callAudioRouteKey(device) == callAudioRouteKey(currentDevice)
+        }
+        return device.status == .active
+    }
+}
+
+private struct FrontlineAudioRouteItem: View {
+    let device: AudioDevice
+    let selected: Bool
+    let strings: [SerenadaString: String]?
+    let onClick: () -> Void
+
+    var body: some View {
+        Button(action: onClick) {
+            HStack(spacing: 12) {
+                Image(systemName: callAudioRouteSystemImage(device.kind))
+                    .font(.system(size: 22, weight: .semibold))
+                    .frame(width: 38, height: 38)
+
+                Text(callAudioRouteLabel(device, strings: strings))
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "checkmark")
+                    .font(.system(size: 20, weight: .bold))
+                    .opacity(selected ? 1 : 0)
+                    .frame(width: 24, height: 24)
+            }
+            .foregroundStyle(selected ? Color.black : Color.white)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(selected ? frontlineAccent : frontlineSheetRow)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 5)
+        .accessibilityLabel(callAudioRouteLabel(device, strings: strings))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

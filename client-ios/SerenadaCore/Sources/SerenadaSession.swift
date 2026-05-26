@@ -147,7 +147,6 @@ public final class SerenadaSession: ObservableObject {
     private let webRtcEngine: SessionMediaEngine
     private let callAudioSessionController: SessionAudioController
     private let audioCoordinator: SerenadaAudioCoordinator
-    private var audioCoordinatorCapabilities: AudioCoordinatorCapabilities?
     private var audioCoordinatorLifecycleTask: Task<Void, Never>?
     private var joinLifecycleTask: Task<Void, Never>?
     private var coordinatorTasks: [Task<Void, Never>] = []
@@ -240,6 +239,7 @@ public final class SerenadaSession: ObservableObject {
     private var mediaLivenessTask: Task<Void, Never>?
     private var mediaLivenessEmitInFlight = false
     private var mediaLivenessEmitCount = 0
+    private var outboundMediaWatchdogCancellable: AnyCancellable?
 
     /// Test-only counter incremented on each `media_liveness` broadcast.
     internal var mediaLivenessBroadcastCount: Int { mediaLivenessEmitCount }
@@ -430,6 +430,7 @@ public final class SerenadaSession: ObservableObject {
         for task in suspendedPresentationTasks.values { task.cancel() }
         suspendedPresentationTasks.removeAll()
         mediaLivenessTask?.cancel()
+        outboundMediaWatchdogCancellable?.cancel()
         joinLifecycleTask?.cancel()
         audioCoordinatorLifecycleTask?.cancel()
         coordinatorTasks.forEach { $0.cancel() }
@@ -534,66 +535,28 @@ public final class SerenadaSession: ObservableObject {
             self.routeInputAvailable = (input != nil)
             self.currentAudioDevice = output
             self.updateEffectiveMicState()
-        case .audioSessionInterrupted:
-            if config.audioIntent.muteOwnMicDuringExternalAudio {
+        case .externalAudioStarted:
+            if config.audioIntent.muteDuringExternalAudio {
                 self.externalAudioMuted = true
                 self.updateEffectiveMicState()
             }
-            if config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+            if config.audioIntent.duckDuringExternalAudio {
                 playbackDuckingActive = true
                 peerSlots.values.forEach { $0.duckPlayback(ducked: true) }
             }
-            if let capabilities = self.audioCoordinatorCapabilities, capabilities.pttPolicy == .preempt {
-                if currentRoomState != nil || diagnostics.isSignalingConnected {
-                    signalingProvider.leaveRoom()
-                }
-                self.cleanupCall(reason: .localLeft, transitionToEnding: false)
-            }
-        case .audioSessionResumed:
+        case .externalAudioEnded:
             self.externalAudioMuted = false
             self.updateEffectiveMicState()
-            if config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+            if playbackDuckingActive {
                 playbackDuckingActive = false
                 peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
             }
-        case .inputUnavailable:
-            self.routeInputAvailable = false
-            if self.audioCoordinatorCapabilities?.canShareInput == false {
-                Task {
-                    do {
-                        try await self.webRtcEngine.suspendCapture()
-                        try await self.audioCoordinator.suspendCapture()
-                    } catch {
-                        self.logger?.log(.error, tag: "Audio", "Failed to suspend capture: \(error)")
-                    }
-                }
-            }
-            self.updateEffectiveMicState()
-        case .inputAvailable:
-            self.routeInputAvailable = true
-            if self.audioCoordinatorCapabilities?.canShareInput == false {
-                Task {
-                    do {
-                        try await self.webRtcEngine.resumeCapture()
-                        try await self.audioCoordinator.resumeCapture()
-                    } catch {
-                        self.logger?.log(.error, tag: "Audio", "Failed to resume capture: \(error)")
-                    }
-                }
-            }
-            self.updateEffectiveMicState()
-        case .focusLost(let transient):
-            if !transient && config.audioIntent.muteOwnMicDuringExternalAudio {
-                self.externalAudioMuted = true
-                self.updateEffectiveMicState()
-            }
-            if transient && config.audioIntent.duckOwnPlaybackDuringExternalAudio {
+        case .playbackDuckingStarted:
+            if config.audioIntent.duckDuringExternalAudio {
                 playbackDuckingActive = true
                 peerSlots.values.forEach { $0.duckPlayback(ducked: true) }
             }
-        case .focusRegained:
-            self.externalAudioMuted = false
-            self.updateEffectiveMicState()
+        case .playbackDuckingEnded:
             if playbackDuckingActive {
                 playbackDuckingActive = false
                 peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
@@ -803,9 +766,8 @@ public final class SerenadaSession: ObservableObject {
         joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
 
         do {
-            let caps = try await activateAudioCoordinator()
+            try await activateAudioCoordinator()
             try Task.checkCancellation()
-            self.audioCoordinatorCapabilities = caps
         } catch is CancellationError {
             return
         } catch {
@@ -829,11 +791,11 @@ public final class SerenadaSession: ObservableObject {
         ensureSignalingConnection()
     }
 
-    private func activateAudioCoordinator() async throws -> AudioCoordinatorCapabilities {
+    private func activateAudioCoordinator() async throws {
         if let previous = audioCoordinatorLifecycleTask {
             await previous.value
         }
-        return try await audioCoordinator.activateCallSession(intent: config.audioIntent)
+        try await audioCoordinator.activateCallSession(intent: config.audioIntent)
     }
 
     private func deactivateAudioCoordinator() {
@@ -1031,7 +993,7 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func handleProviderMessage(_ message: PeerMessage) {
-        guard ["content_state", "participant_media_state", "offer", "answer", "ice"].contains(message.type) else { return }
+        guard ["content_state", "participant_media_state", "offer", "answer", "ice", "media_restart_request"].contains(message.type) else { return }
         signalingMessageRouter?.processPeerMessage(message)
     }
 
@@ -1050,7 +1012,7 @@ public final class SerenadaSession: ObservableObject {
 
     fileprivate func handleProviderNegotiationDirty(_ event: NegotiationDirtyEvent) {
         logger?.log(.debug, tag: "Session", "RX negotiation_dirty with=\(event.withCid)")
-        peerNegotiationEngine?.scheduleIceRestart(remoteCid: event.withCid, reason: "negotiation-dirty", delayMs: 0)
+        peerNegotiationEngine?.scheduleDirtyPairRestart(remoteCid: event.withCid)
     }
 
     fileprivate func handleProviderRelayFailed(_ event: RelayFailedEvent) {
@@ -1089,7 +1051,10 @@ public final class SerenadaSession: ObservableObject {
         // Start media-liveness emission only once we have remote peers — there's
         // nothing to report when alone in the room, and the timer is otherwise
         // a noisy no-op.
-        if phase == .inCall { startMediaLivenessTimer() }
+        if phase == .inCall {
+            startMediaLivenessTimer()
+            startOutboundMediaWatchdog()
+        }
     }
 
     /// True only when at least one peer exists and every slot's last observed
@@ -1337,6 +1302,7 @@ public final class SerenadaSession: ObservableObject {
         cancelPostReconnectResync()
         clearAllRemoteSuspensionTracking()
         stopMediaLivenessTimer()
+        stopOutboundMediaWatchdog()
         lastInboundBytesByCid.removeAll()
         mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = nil
@@ -1349,7 +1315,6 @@ public final class SerenadaSession: ObservableObject {
         playbackDuckingActive = false
         externalAudioMuted = false
         routeInputAvailable = true
-        audioCoordinatorCapabilities = nil
         if clearRecovery { recoveryStorage.clear() }
 
         let videoCaptureSupported = !availableCameraModes.isEmpty
@@ -1474,7 +1439,7 @@ public final class SerenadaSession: ObservableObject {
             )
         }
         iceRestartCallsFromGate += 1
-        peerNegotiationEngine?.triggerIceRestart(reason: "signaling-reconnect")
+        peerNegotiationEngine?.handleSignalingReconnect()
     }
 
     private func cancelPostReconnectResync() {
@@ -1578,6 +1543,19 @@ public final class SerenadaSession: ObservableObject {
     private func stopMediaLivenessTimer() {
         mediaLivenessTask?.cancel()
         mediaLivenessTask = nil
+    }
+
+    private func startOutboundMediaWatchdog() {
+        guard outboundMediaWatchdogCancellable == nil else { return }
+        let interval = TimeInterval(WebRtcResilience.outboundMediaWatchdogIntervalMs) / 1000.0
+        outboundMediaWatchdogCancellable = clock.scheduleRepeating(intervalSeconds: interval) { [weak self] in
+            self?.peerNegotiationEngine?.recoverStalledOutboundMedia()
+        }
+    }
+
+    private func stopOutboundMediaWatchdog() {
+        outboundMediaWatchdogCancellable?.cancel()
+        outboundMediaWatchdogCancellable = nil
     }
 
     private func emitMediaLiveness() {
@@ -1806,7 +1784,8 @@ public final class SerenadaSession: ObservableObject {
             onAggregatePeerStateChanged: { [weak self] ice, conn, sig in
                 self?.commitSnapshot { _, d in d.iceConnectionState = ice; d.peerConnectionState = conn; d.rtcSignalingState = sig }
             },
-            onConnectionStatusUpdate: { [weak self] in self?.connectionStatusTracker?.update() }
+            onConnectionStatusUpdate: { [weak self] in self?.connectionStatusTracker?.update() },
+            logger: logger
         )
     }
 

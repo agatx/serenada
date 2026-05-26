@@ -8,6 +8,14 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 
+internal data class OutboundMediaSample(
+    val expectsAudio: Boolean,
+    val expectsVideo: Boolean,
+    val audioBytesSent: Long,
+    val videoBytesSent: Long,
+    val videoFramesSent: Long,
+)
+
 internal interface PeerConnectionSlotProtocol {
     // Properties
     val remoteCid: String
@@ -17,8 +25,6 @@ internal interface PeerConnectionSlotProtocol {
     val lastIceRestartAt: Long
     val offerTimeoutTask: Runnable?
     val iceRestartTask: Runnable?
-    val nonHostFallbackTask: Runnable?
-    val nonHostFallbackAttempts: Int
 
     // Offer lifecycle
     fun beginOffer()
@@ -35,10 +41,6 @@ internal interface PeerConnectionSlotProtocol {
     fun cancelOfferTimeout()
     fun setIceRestartTask(task: Runnable)
     fun cancelIceRestartTask()
-    fun setNonHostFallbackTask(task: Runnable)
-    fun cancelNonHostFallbackTask()
-    fun clearNonHostFallbackTask()
-    fun incrementNonHostFallbackAttempts()
 
     // WebRTC operations
     fun setIceServers(servers: List<PeerConnection.IceServer>)
@@ -55,7 +57,7 @@ internal interface PeerConnectionSlotProtocol {
     fun setRemoteDescription(
         type: SessionDescription.Type,
         sdp: String,
-        onComplete: (() -> Unit)? = null,
+        onComplete: ((Boolean) -> Unit)? = null,
     )
     fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)? = null)
     fun addIceCandidate(candidate: IceCandidate)
@@ -83,6 +85,12 @@ internal interface PeerConnectionSlotProtocol {
      * connection is not yet established.
      */
     fun collectInboundBytes(onComplete: (Long) -> Unit)
+
+    /**
+     * Asynchronously samples cumulative outbound media counters and whether
+     * local enabled tracks are expected to be flowing on this peer.
+     */
+    fun collectOutboundMediaSample(onComplete: (OutboundMediaSample?) -> Unit)
 
     /**
      * Lightweight stats fetch that extracts only `audioLevel` (W3C webrtc-stats):

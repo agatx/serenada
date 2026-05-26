@@ -22,9 +22,10 @@ object WebRtcResilienceConstants {
     // ── Peer Connection ──────────────────────────────────────────────
     const val OFFER_TIMEOUT_MS = 8_000L
     const val ICE_RESTART_COOLDOWN_MS = 10_000L
-    const val NON_HOST_FALLBACK_DELAY_MS = 4_000L
-    const val NON_HOST_FALLBACK_MAX_ATTEMPTS = 2
     const val ICE_CANDIDATE_BUFFER_MAX = 50
+    const val OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS = 5_000L
+    const val OUTBOUND_MEDIA_STALL_SAMPLES = 2
+    const val OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS = 30_000L
 
     // ── TURN ─────────────────────────────────────────────────────────
     const val TURN_FETCH_TIMEOUT_MS = 2_000L

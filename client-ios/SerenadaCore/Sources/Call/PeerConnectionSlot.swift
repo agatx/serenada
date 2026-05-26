@@ -13,8 +13,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public private(set) var lastIceRestartAt: TimeInterval = 0
     public private(set) var offerTimeoutTask: Task<Void, Never>?
     public private(set) var iceRestartTask: Task<Void, Never>?
-    public private(set) var nonHostFallbackTask: Task<Void, Never>?
-    public private(set) var nonHostFallbackAttempts = 0
     private var playbackDucked = false
 
     // MARK: - Offer Lifecycle
@@ -53,24 +51,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func cancelIceRestartTask() {
         iceRestartTask?.cancel()
         iceRestartTask = nil
-    }
-
-    public func setNonHostFallbackTask(_ task: Task<Void, Never>) {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = task
-    }
-
-    public func cancelNonHostFallbackTask() {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = nil
-    }
-
-    public func clearNonHostFallbackTask() {
-        nonHostFallbackTask = nil
-    }
-
-    public func incrementNonHostFallbackAttempts() {
-        nonHostFallbackAttempts += 1
     }
 
 #if canImport(WebRTC)
@@ -312,7 +292,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func closePeerConnection() {
         cancelOfferTimeout()
         cancelIceRestartTask()
-        cancelNonHostFallbackTask()
 
 #if canImport(WebRTC)
         detachRemoteTrackFromRegisteredRenderers()
@@ -560,6 +539,52 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         }
 #else
         onComplete(0)
+#endif
+    }
+
+    public func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(nil)
+            return
+        }
+
+        let expectsAudio = peerConnection.senders.contains {
+            $0.track?.kind == kRTCMediaStreamTrackKindAudio && $0.track?.isEnabled == true
+        }
+        let expectsVideo = peerConnection.senders.contains {
+            $0.track?.kind == kRTCMediaStreamTrackKindVideo && $0.track?.isEnabled == true
+        }
+
+        peerConnection.statistics { report in
+            var audioBytesSent: Int64 = 0
+            var videoBytesSent: Int64 = 0
+            var videoFramesSent: Int64 = 0
+            for stat in report.statistics.values where stat.type == "outbound-rtp" {
+                switch mediaKind(for: stat) {
+                case "audio":
+                    audioBytesSent += memberInt64(stat, key: "bytesSent") ?? 0
+                case "video":
+                    videoBytesSent += memberInt64(stat, key: "bytesSent") ?? 0
+                    videoFramesSent += memberInt64(stat, key: "framesSent")
+                        ?? memberInt64(stat, key: "framesEncoded")
+                        ?? 0
+                default:
+                    break
+                }
+            }
+            Task { @MainActor in
+                onComplete(OutboundMediaSample(
+                    expectsAudio: expectsAudio,
+                    expectsVideo: expectsVideo,
+                    audioBytesSent: audioBytesSent,
+                    videoBytesSent: videoBytesSent,
+                    videoFramesSent: videoFramesSent
+                ))
+            }
+        }
+#else
+        onComplete(nil)
 #endif
     }
 

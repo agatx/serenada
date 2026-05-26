@@ -185,6 +185,14 @@
 "frontline_stop_screen_share" = "Detener pantalla compartida";
 "frontline_share_screen" = "Compartir pantalla";
 "frontline_close" = "Cerrar";
+"call_audio_route" = "Audio";
+"call_audio_speaker" = "Altavoz";
+"call_audio_phone" = "Teléfono";
+"call_audio_headset" = "Auriculares";
+"call_audio_bluetooth" = "Bluetooth";
+"call_audio_car" = "Audio del coche";
+"call_audio_usb" = "Audio USB";
+"call_audio_unknown" = "Audio";
 
 "feedback_title" = "Comentarios";
 "feedback_send_action" = "Enviar comentarios";

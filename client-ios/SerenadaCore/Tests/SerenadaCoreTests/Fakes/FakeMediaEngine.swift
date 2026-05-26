@@ -34,9 +34,6 @@ final class FakeMediaEngine: SessionMediaEngine {
         toggleAudioCalls.append(enabled)
     }
 
-    func suspendCapture() async throws {}
-    func resumeCapture() async throws {}
-
     @discardableResult
     func toggleVideo(_ enabled: Bool) -> Bool {
         toggleVideoCalls.append(enabled)

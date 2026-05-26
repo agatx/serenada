@@ -97,19 +97,21 @@ internal class TestSessionFactory(
         ShadowLooper.idleMainLooper()
     }
 
-    fun simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp") {
+    fun simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp", offerId: String? = null) {
         val payload = JSONObject().apply {
             put("from", fromCid)
             put("sdp", sdp)
+            offerId?.let { put("offerId", it) }
         }
         fakeProvider.simulateMessage(from = fromCid, type = "offer", payload = payload)
         ShadowLooper.idleMainLooper()
     }
 
-    fun simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp") {
+    fun simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp", offerId: String? = null) {
         val payload = JSONObject().apply {
             put("from", fromCid)
             put("sdp", sdp)
+            offerId?.let { put("offerId", it) }
         }
         fakeProvider.simulateMessage(from = fromCid, type = "answer", payload = payload)
         ShadowLooper.idleMainLooper()
@@ -120,9 +122,11 @@ internal class TestSessionFactory(
         candidate: String = "candidate:test",
         sdpMid: String? = "0",
         sdpMLineIndex: Int = 0,
+        offerId: String? = null,
     ) {
         val payload = JSONObject().apply {
             put("from", fromCid)
+            offerId?.let { put("offerId", it) }
             put("candidate", JSONObject().apply {
                 put("candidate", candidate)
                 sdpMid?.let { put("sdpMid", it) }

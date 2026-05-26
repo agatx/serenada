@@ -209,7 +209,7 @@ private struct ProviderDemoView: View {
     let coordinator: SampleAudioCoordinator
     let onDismiss: () -> Void
 
-    @State private var isPttPressed = false
+    @State private var isExternalAudioActive = false
 
     var body: some View {
         NavigationStack {
@@ -231,19 +231,19 @@ private struct ProviderDemoView: View {
                         Text("Is host: \(session.state.localParticipant.isHost ? "true" : "false")")
                     }
 
-                    infoCard(title: "Audio Coordinator (PTT Simulation)") {
+                    infoCard(title: "Audio Coordinator (External Audio)") {
                         Text("Mic Muted: \(session.isMicMuted ? "Yes" : "No")")
                         Text("Muted by External: \(session.isMicMutedByExternalAudio ? "Yes" : "No")")
                         
                         Button(action: {
-                            isPttPressed.toggle()
-                            coordinator.simulatePttPress(isPttPressed)
+                            isExternalAudioActive.toggle()
+                            coordinator.simulateExternalAudio(isExternalAudioActive)
                         }) {
-                            Text(isPttPressed ? "Release PTT (Simulate)" : "Press PTT (Simulate)")
+                            Text(isExternalAudioActive ? "End External Audio" : "Start External Audio")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(isPttPressed ? .red : .blue)
+                        .tint(isExternalAudioActive ? .red : .blue)
                     }
 
                     infoCard(title: "Provider Event Log") {

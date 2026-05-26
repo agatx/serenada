@@ -354,14 +354,6 @@ internal final class WebRtcEngine: SessionMediaEngine {
 #endif
     }
 
-    public func suspendCapture() async throws {
-        // No-op scaffolding on iOS
-    }
-
-    public func resumeCapture() async throws {
-        // No-op scaffolding on iOS
-    }
-
     @discardableResult
     public func toggleVideo(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)

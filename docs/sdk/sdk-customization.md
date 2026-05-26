@@ -183,7 +183,7 @@ SerenadaCallFlow(
 )
 ```
 
-Frontline v1 hides controls that are not backed by the SDK call UI contract today, including speaker/earpiece switching, audio route picker, report-quality, and placeholder add-person flows. Screen sharing, invite/share actions, mute, video, camera mode, flashlight, snapshot, PiP swap, end call, debug overlay, reconnect badge, and local pinch zoom use existing SDK callbacks. The standard waiting-screen QR code is not shown in the Frontline variant.
+Frontline v1 shows the current audio route as the first More sheet item. Android and iOS open a simple checkmarked route picker backed by `availableAudioDevices`, `currentAudioDevice`, and `selectAudioDevice(...)`. On iOS, the built-in Phone route is hidden while Bluetooth audio is present because iOS cannot reliably expose Phone as an app-selectable communication route in that state. Built-in earpiece routes are labeled as "Phone"; named external routes such as Bluetooth devices use the device name when the coordinator provides one. Controls that are not backed by the SDK call UI contract today, including report-quality and placeholder add-person flows, remain hidden. Screen sharing, invite/share actions, mute, video, camera mode, flashlight, snapshot, PiP swap, end call, debug overlay, reconnect badge, and local pinch zoom use existing SDK callbacks. The standard waiting-screen QR code is not shown in the Frontline variant.
 
 ## Camera Modes
 
@@ -355,6 +355,7 @@ Available string keys:
 - `CallQrCode`, `CallToggleFlashlight`, `CallToggleVideoFit`, `CallTakeSnapshot`
 - Native Frontline: `FrontlineYou` / `frontlineYou`, `FrontlineWaiting` / `frontlineWaiting`, `FrontlineVideo` / `frontlineVideo`, `FrontlineVideoOn` / `frontlineVideoOn`, `FrontlineMute` / `frontlineMute`, `FrontlineMore` / `frontlineMore`, `FrontlineEnd` / `frontlineEnd`, `FrontlineFlipCamera` / `frontlineFlipCamera`
 - Native Frontline: `FrontlineStopScreenShare` / `frontlineStopScreenShare`, `FrontlineShareScreen` / `frontlineShareScreen`, `FrontlineClose` / `frontlineClose`
+- Native Call audio routes: `CallAudioRoute` / `callAudioRoute`, `CallAudioSpeaker` / `callAudioSpeaker`, `CallAudioPhone` / `callAudioPhone`, `CallAudioHeadset` / `callAudioHeadset`, `CallAudioBluetooth` / `callAudioBluetooth`, `CallAudioCar` / `callAudioCar`, `CallAudioUsb` / `callAudioUsb`, `CallAudioUnknown` / `callAudioUnknown`
 
 ### Web
 
