@@ -361,6 +361,42 @@ class SessionNegotiationTest {
     }
 
     @Test
+    fun `media restart request is rate limited per peer`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
+        val oldSlot = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(oldSlot)
+        factory.simulateAnswerFromRemote("zeta", offerId = latestOfferId())
+
+        factory.fakeProvider.simulateMessage(
+            from = "zeta",
+            type = "media_restart_request",
+            payload = JSONObject().apply {
+                put("from", "zeta")
+                put("reason", "stalled outbound media")
+            },
+        )
+        ShadowLooper.idleMainLooper()
+        val replacement = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(replacement)
+        assertNotSame(oldSlot, replacement)
+        val offersAfterFirstRequest = factory.fakeProvider.sentMessages("offer").size
+
+        factory.simulateAnswerFromRemote("zeta", offerId = latestOfferId())
+        factory.fakeProvider.simulateMessage(
+            from = "zeta",
+            type = "media_restart_request",
+            payload = JSONObject().apply {
+                put("from", "zeta")
+                put("reason", "stalled outbound media")
+            },
+        )
+        ShadowLooper.idleMainLooper()
+
+        assertSame("Immediate duplicate restart request must keep the current slot", replacement, factory.fakeMedia.fakeSlots["zeta"])
+        assertEquals("Immediate duplicate restart request must not send another offer", offersAfterFirstRequest, factory.fakeProvider.sentMessages("offer").size)
+    }
+
+    @Test
     fun `designated offerer recreates peer after stalled outbound media`() {
         factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
         val oldSlot = factory.fakeMedia.fakeSlots["zeta"]
@@ -419,6 +455,27 @@ class SessionNegotiationTest {
         val restartRequests = factory.fakeProvider.sentMessages("media_restart_request")
         assertEquals("Non-offerer should ask the deterministic offer owner to restart", 1, restartRequests.size)
         assertEquals("alpha", restartRequests.single().peerId)
+    }
+
+    @Test
+    fun `answer creation failure resets peer and retries remote offer`() {
+        factory.advanceToInCallWithTurn(localCid = "zeta", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
+        val oldSlot = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull(oldSlot)
+        oldSlot!!.failNextAnswer = true
+
+        factory.simulateOfferFromRemote("alpha", offerId = "remote-offer")
+        repeat(4) { ShadowLooper.idleMainLooper() }
+
+        val replacement = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull(replacement)
+        assertNotSame("Failed answer creation should replace the peer slot", oldSlot, replacement)
+        assertTrue("Old slot should be closed after answer failure", oldSlot.closePeerConnectionCalled)
+        assertEquals(org.webrtc.SessionDescription.Type.OFFER, replacement!!.setRemoteDescriptionCalls.last().first)
+        assertTrue("Replacement should create the answer", replacement.createAnswerCalls > 0)
+        assertTrue("Replacement answer should be sent for the original offer", factory.fakeProvider.sentMessages("answer").any {
+            it.payload?.optString("offerId") == "remote-offer"
+        })
     }
 
     @Test

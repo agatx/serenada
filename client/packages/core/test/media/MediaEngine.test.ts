@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MediaEngine } from '../../src/media/MediaEngine.js';
-import { OFFER_TIMEOUT_MS } from '../../src/constants.js';
+import { OFFER_TIMEOUT_MS, OUTBOUND_MEDIA_STALL_SAMPLES } from '../../src/constants.js';
 
 interface SharedNegotiationScenario {
     id: string;
@@ -766,6 +766,150 @@ describe('MediaEngine', () => {
             participants: [{ cid: 'zeta' }],
         }, 'zeta');
         internals.requestPeerMediaRecovery('alpha', 'departed peer');
+
+        expect(sentMessages.filter((message) => message.type === 'media_restart_request')).toHaveLength(0);
+    });
+
+    it('drops a rolled-back offer when the peer is replaced during rollback', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+        await flushPromises();
+
+        const peer = engine.getPeerConnectionsMap().get('alpha') as FakeRtcPeerConnection | undefined;
+        expect(peer).toBeDefined();
+        await peer!.setLocalDescription(await peer!.createOffer());
+        expect(peer!.signalingState).toBe('have-local-offer');
+
+        const originalSetLocalDescription = peer!.setLocalDescription.bind(peer);
+        let resolveRollback: (() => void) | null = null;
+        peer!.setLocalDescription = vi.fn(async (description: RTCSessionDescriptionInit) => {
+            if (description.type === 'rollback') {
+                await new Promise<void>(resolve => { resolveRollback = resolve; });
+            }
+            await originalSetLocalDescription(description);
+        });
+
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'offer',
+            payload: { from: 'alpha', sdp: 'remote-offer', offerId: 'remote-offer' },
+        });
+        await flushPromises();
+        expect(resolveRollback).toBeDefined();
+
+        engine.updateRoomState({
+            hostCid: 'zeta',
+            participants: [{ cid: 'zeta' }],
+        }, 'zeta');
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+        const replacement = engine.getPeerConnectionsMap().get('alpha') as FakeRtcPeerConnection | undefined;
+        expect(replacement).toBeDefined();
+        expect(replacement).not.toBe(peer);
+
+        resolveRollback?.();
+        await flushPromises();
+
+        expect(sentMessages.filter(message =>
+            message.type === 'answer' &&
+            message.to === 'alpha' &&
+            message.payload?.offerId === 'remote-offer'
+        )).toHaveLength(0);
+    });
+
+    it('drops outbound stats results when the peer is replaced while stats are in flight', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'offer',
+            payload: { from: 'alpha', sdp: 'remote-offer', offerId: 'remote-offer' },
+        });
+        await flushPromises();
+
+        const peer = engine.getPeerConnectionsMap().get('alpha') as FakeRtcPeerConnection | undefined;
+        expect(peer).toBeDefined();
+        peer!.connectionState = 'connected';
+        peer!.iceConnectionState = 'connected';
+        const internals = engine as unknown as {
+            recoverStalledOutboundMedia: () => Promise<void>;
+            peers: Map<string, {
+                lastOutboundMediaSample: { audioBytesSent: number; videoBytesSent: number; videoFramesSent: number } | null;
+                outboundMediaStallSamples: number;
+            }>;
+        };
+        const peerState = internals.peers.get('alpha');
+        expect(peerState).toBeDefined();
+        peerState!.lastOutboundMediaSample = { audioBytesSent: 0, videoBytesSent: 0, videoFramesSent: 0 };
+        peerState!.outboundMediaStallSamples = OUTBOUND_MEDIA_STALL_SAMPLES - 1;
+
+        let resolveStats: (() => void) | null = null;
+        peer!.getStats = vi.fn(async () => {
+            await new Promise<void>(resolve => { resolveStats = resolve; });
+            return createOutboundStats(0, 0, 0);
+        });
+
+        const pendingRecovery = internals.recoverStalledOutboundMedia();
+        await flushPromises();
+        expect(resolveStats).toBeDefined();
+
+        engine.updateRoomState({
+            hostCid: 'zeta',
+            participants: [{ cid: 'zeta' }],
+        }, 'zeta');
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+        expect(engine.getPeerConnectionsMap().get('alpha')).not.toBe(peer);
+
+        resolveStats?.();
+        await pendingRecovery;
+        await flushPromises();
 
         expect(sentMessages.filter((message) => message.type === 'media_restart_request')).toHaveLength(0);
     });

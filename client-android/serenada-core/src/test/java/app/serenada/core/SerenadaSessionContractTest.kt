@@ -2,9 +2,18 @@ package app.serenada.core
 
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
+import app.serenada.core.call.AudioCoordinatorEvent
+import app.serenada.core.call.AudioDevice
+import app.serenada.core.call.AudioIntent
+import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.WebRtcResilienceConstants
 import android.os.Looper
 import app.serenada.core.fakes.TestSessionFactory
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -506,6 +515,30 @@ class SerenadaSessionContractTest {
         assertEquals(CallPhase.Error, factory.session.state.value.phase)
     }
 
+    @Test
+    fun `join hard timeout fires while audio coordinator activation is suspended`() {
+        val coordinator = BlockingAudioCoordinator()
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(1, coordinator.activateCalls)
+        assertEquals(CallPhase.Joining, factory.session.state.value.phase)
+
+        ShadowLooper.idleMainLooper(
+            WebRtcResilienceConstants.JOIN_HARD_TIMEOUT_MS,
+            TimeUnit.MILLISECONDS
+        )
+
+        assertEquals(CallPhase.Error, factory.session.state.value.phase)
+        assertEquals("Signaling must not start while activation is still suspended", 0, factory.fakeProvider.connectCalls.size)
+        assertEquals("Local media must not start while activation is still suspended", 0, factory.fakeMedia.startLocalMediaCalls)
+    }
+
     // ── Reconnect backoff ───────────────────────────────────────────
 
     @Test
@@ -717,4 +750,24 @@ class SerenadaSessionContractTest {
             factory.session.state.value.remoteParticipants.isEmpty()
         )
     }
+}
+
+private class BlockingAudioCoordinator : SerenadaAudioCoordinator {
+    private val activation = CompletableDeferred<Unit>()
+    var activateCalls = 0
+        private set
+
+    override suspend fun activateCallSession(intent: AudioIntent) {
+        activateCalls += 1
+        activation.await()
+    }
+
+    override suspend fun deactivateCallSession() {}
+    override suspend fun applyRouting(device: AudioDevice) {}
+    override suspend fun setMicMuted(muted: Boolean) {}
+
+    override val availableDevices: StateFlow<List<AudioDevice>> = MutableStateFlow(emptyList())
+    override val effectiveInputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val effectiveOutputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
 }

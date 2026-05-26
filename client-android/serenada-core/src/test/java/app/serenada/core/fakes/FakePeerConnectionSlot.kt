@@ -44,6 +44,7 @@ internal class FakePeerConnectionSlot(
     var closePeerConnectionDeferredDispose = false; private set
     var ensurePeerConnectionCalls = 0; private set
     var failNextRemoteOffer = false
+    var failNextAnswer = false
 
     // Offer lifecycle
     override fun beginOffer() { isMakingOffer = true }
@@ -92,6 +93,11 @@ internal class FakePeerConnectionSlot(
 
     override fun createAnswer(onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)?) {
         createAnswerCalls++
+        if (failNextAnswer) {
+            failNextAnswer = false
+            onComplete?.invoke(false)
+            return
+        }
         onSdp("fake-answer-sdp")
         signalingState = PeerConnection.SignalingState.STABLE
         onSignalingStateChange?.invoke(remoteCid, signalingState)

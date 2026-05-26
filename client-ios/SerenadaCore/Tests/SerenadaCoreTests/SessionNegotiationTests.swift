@@ -466,6 +466,51 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBefore + 1)
     }
 
+    func testMediaRestartRequestIsRateLimitedPerPeer() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "zeta",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+        let oldSlot = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        let initialOfferId = try XCTUnwrap(harness.fakeProvider.sentPeerMessages(ofType: "offer").last?.payload?["offerId"]?.stringValue)
+        harness.simulateAnswerFromRemote(fromCid: "zeta", offerId: initialOfferId)
+        await harness.yieldToMainActor()
+
+        harness.fakeProvider.simulateMessage(
+            from: "zeta",
+            type: "media_restart_request",
+            payload: [
+                "from": .string("zeta"),
+                "reason": .string("stalled outbound media")
+            ]
+        )
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "offer").count == 2
+        }
+        let replacement = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        XCTAssertFalse(oldSlot === replacement)
+        let offersAfterFirstRequest = harness.fakeProvider.sentPeerMessages(ofType: "offer").count
+
+        let restartOfferId = try XCTUnwrap(harness.fakeProvider.sentPeerMessages(ofType: "offer").last?.payload?["offerId"]?.stringValue)
+        harness.simulateAnswerFromRemote(fromCid: "zeta", offerId: restartOfferId)
+        await harness.yieldToMainActor()
+        harness.fakeProvider.simulateMessage(
+            from: "zeta",
+            type: "media_restart_request",
+            payload: [
+                "from": .string("zeta"),
+                "reason": .string("stalled outbound media")
+            ]
+        )
+        await harness.yieldToMainActor()
+
+        let current = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        XCTAssertTrue(current === replacement, "Immediate duplicate restart request must keep the current slot")
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersAfterFirstRequest, "Immediate duplicate restart request must not send another offer")
+    }
+
     func testDesignatedOffererRecreatesPeerAfterStalledOutboundMedia() async throws {
         await harness.advanceToInCallWithTurn(
             localCid: "alpha",
@@ -526,6 +571,32 @@ final class SessionNegotiationTests: XCTestCase {
         let restartRequests = harness.fakeProvider.sentPeerMessages(ofType: "media_restart_request")
         XCTAssertEqual(restartRequests.count, 1, "Non-offerer should ask the deterministic offer owner to restart")
         XCTAssertEqual(restartRequests.first?.peerId, "alpha")
+    }
+
+    func testRollbackFailureResetsPeerAndRetriesRemoteOffer() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "zeta",
+            remoteCid: "alpha",
+            localJoinedAt: 2,
+            remoteJoinedAt: 1
+        )
+        let oldSlot = try XCTUnwrap(harness.fakeMedia.fakeSlots["alpha"])
+        _ = oldSlot.createOffer(iceRestart: false, onSdp: { _ in }, onComplete: nil)
+        oldSlot.failNextRollback = true
+        XCTAssertEqual(oldSlot.getSignalingState(), "HAVE_LOCAL_OFFER")
+
+        harness.simulateOfferFromRemote(fromCid: "alpha", sdp: "remote-offer", offerId: "remote-offer")
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "answer").contains {
+                $0.payload?["offerId"]?.stringValue == "remote-offer"
+            }
+        }
+
+        let replacement = try XCTUnwrap(harness.fakeMedia.fakeSlots["alpha"])
+        XCTAssertFalse(oldSlot === replacement, "Failed rollback should replace the peer slot")
+        XCTAssertTrue(oldSlot.closePeerConnectionCalled, "Old slot should be closed after rollback failure")
+        XCTAssertEqual(replacement.setRemoteDescriptionCalls.last?.type, .offer)
+        XCTAssertGreaterThan(replacement.createAnswerCalls, 0, "Replacement should answer the original offer")
     }
 
     func testFourPartyReattachRestartsOnlyDeterministicOfferOwners() async throws {
@@ -775,7 +846,12 @@ final class SessionNegotiationTests: XCTestCase {
                 XCTAssertEqual(slot.getSignalingState(), "HAVE_LOCAL_OFFER")
 
                 harness.simulateOfferFromRemote(fromCid: scenario.remoteCid, sdp: "remote-offer", offerId: "remote-offer-1")
-                await waitUntil { slot.rollbackCalls == 1 && slot.createAnswerCalls > 0 }
+                await waitUntil {
+                    slot.rollbackCalls == 1 &&
+                    harness.fakeProvider.sentPeerMessages(ofType: "answer").contains {
+                        $0.payload?["offerId"]?.stringValue == "remote-offer-1"
+                    }
+                }
 
                 XCTAssertEqual(slot.rollbackCalls, 1, "Polite peer must roll back its local offer")
                 XCTAssertEqual(slot.setRemoteDescriptionCalls.last?.type, .offer)

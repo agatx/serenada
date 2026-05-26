@@ -2,6 +2,7 @@ package app.serenada.core.fakes
 
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaSession
+import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.SessionClock
 import okhttp3.OkHttpClient
 import org.json.JSONObject
@@ -19,6 +20,7 @@ internal class TestSessionFactory(
     val roomId: String = "test-room-id",
     val handlesReconnection: Boolean = false,
     defaultVideoEnabled: Boolean = true,
+    audioCoordinator: SerenadaAudioCoordinator? = null,
     config: SerenadaConfig? = null,
 ) {
     val fakeProvider = FakeSignalingProvider(handlesReconnection = handlesReconnection)
@@ -32,6 +34,7 @@ internal class TestSessionFactory(
         config = config ?: SerenadaConfig(
             signalingProvider = fakeProvider,
             defaultVideoEnabled = defaultVideoEnabled,
+            audioCoordinator = audioCoordinator,
         ),
         context = RuntimeEnvironment.getApplication(),
         delegate = null,

@@ -29,6 +29,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     private(set) var closePeerConnectionCalled = false
     private(set) var ensurePeerConnectionCalls = 0
     var failNextRemoteOffer = false
+    var failNextRollback = false
 
     // Callbacks for driving state changes
     private let onConnectionStateChange: ((String, String) -> Void)?
@@ -150,6 +151,11 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     func rollbackLocalDescription(onComplete: ((Bool) -> Void)? = nil) {
         rollbackCalls += 1
+        if failNextRollback {
+            failNextRollback = false
+            onComplete?(false)
+            return
+        }
         signalingState = "STABLE"
         onComplete?(true)
     }
