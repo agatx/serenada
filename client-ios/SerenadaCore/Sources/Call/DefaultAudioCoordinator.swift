@@ -5,8 +5,14 @@ import UIKit
 @preconcurrency import WebRTC
 #endif
 
-private let callAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers]
-private let phoneAudioSessionOptions: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers]
+#if compiler(>=6.2)
+private let bluetoothHandsFreeAudioSessionOption: AVAudioSession.CategoryOptions = .allowBluetoothHFP
+#else
+private let bluetoothHandsFreeAudioSessionOption: AVAudioSession.CategoryOptions = .allowBluetooth
+#endif
+
+private let callAudioSessionOptions: AVAudioSession.CategoryOptions = [bluetoothHandsFreeAudioSessionOption, .allowBluetoothA2DP, .mixWithOthers]
+private let phoneAudioSessionOptions: AVAudioSession.CategoryOptions = [bluetoothHandsFreeAudioSessionOption, .allowBluetoothA2DP, .mixWithOthers]
 
 private struct OutputRouteRequest: Equatable {
     let id: String
