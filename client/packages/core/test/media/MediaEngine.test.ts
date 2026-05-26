@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MediaEngine } from '../../src/media/MediaEngine.js';
-import { OFFER_TIMEOUT_MS, OUTBOUND_MEDIA_STALL_SAMPLES } from '../../src/constants.js';
+import { OFFER_TIMEOUT_MS, OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS, OUTBOUND_MEDIA_STALL_SAMPLES } from '../../src/constants.js';
 
 interface SharedNegotiationScenario {
     id: string;
@@ -968,6 +968,9 @@ describe('MediaEngine', () => {
     });
 
     it('rate limits repeated media restart requests from the same peer', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+
         const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
         Object.defineProperty(globalThis, 'navigator', {
             value: {
@@ -1016,6 +1019,24 @@ describe('MediaEngine', () => {
         await flushPromises();
 
         expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(2);
+
+        const restartOfferId = sentMessages.filter((message) => message.type === 'offer').at(-1)?.payload?.offerId;
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'answer',
+            payload: { from: 'zeta', sdp: 'remote-answer', offerId: restartOfferId },
+        });
+        await flushPromises();
+        vi.setSystemTime(Date.now() + OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS + 1);
+
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'media_restart_request',
+            payload: { from: 'zeta', reason: 'stalled outbound media' },
+        });
+        await flushPromises();
+
+        expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(3);
     });
 
     it('renegotiates a four-party reattach from deterministic offer owners only', async () => {

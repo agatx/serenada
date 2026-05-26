@@ -296,6 +296,7 @@ internal class PeerNegotiationEngine(
         clearNegotiationState(remoteCid)
         participantStatuses.remove(remoteCid)
         outboundMediaWatchByCid.remove(remoteCid)
+        lastMediaRestartHandledAtByCid.remove(remoteCid)
         val slot = removeSlotEntry(remoteCid) ?: return
         engineRemoveSlot(slot)
         slot.closePeerConnection(deferDispose = true)
@@ -403,6 +404,7 @@ internal class PeerNegotiationEngine(
                             }
                         }
                         logger?.log(SerenadaLogLevel.WARNING, TAG, "Failed to apply remote offer from $remoteCid")
+                        scheduleIceRestart(remoteCid, "remote-offer-apply-failed", 0)
                         return@post
                     }
                     acceptedRemoteOfferIds[remoteCid] = offerId

@@ -15,6 +15,7 @@ final class FakeMediaEngine: SessionMediaEngine {
     private(set) var createdSlotCids: [String] = []
     private(set) var removedSlots: [any PeerConnectionSlotProtocol] = []
     private(set) var fakeSlots: [String: FakePeerConnectionSlot] = [:]
+    var failNextCreatedSlotRemoteOffer = false
 
     private var _iceServers: [IceServerConfig]?
     private var onCameraFacingChanged: ((Bool) -> Void)?
@@ -77,6 +78,10 @@ final class FakeMediaEngine: SessionMediaEngine {
             onIceConnectionStateChange: onIceConnectionStateChange,
             onSignalingStateChange: onSignalingStateChange
         )
+        if failNextCreatedSlotRemoteOffer {
+            slot.failNextRemoteOffer = true
+            failNextCreatedSlotRemoteOffer = false
+        }
         fakeSlots[remoteCid] = slot
         if let iceServers = _iceServers {
             slot.setIceServers(iceServers)

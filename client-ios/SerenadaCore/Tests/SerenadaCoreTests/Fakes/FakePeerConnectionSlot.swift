@@ -21,6 +21,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     // Call tracking
     private(set) var createOfferCalls = 0
+    private(set) var createOfferIceRestartFlags: [Bool] = []
     private(set) var createAnswerCalls = 0
     private(set) var setRemoteDescriptionCalls: [(type: SessionDescriptionType, sdp: String)] = []
     private(set) var addedIceCandidates: [IceCandidatePayload] = []
@@ -113,6 +114,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         onComplete: ((Bool) -> Void)? = nil
     ) -> Bool {
         createOfferCalls += 1
+        createOfferIceRestartFlags.append(iceRestart)
         guard signalingState == "STABLE" else {
             onComplete?(false)
             return false

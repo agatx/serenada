@@ -15,6 +15,7 @@ public enum WebRtcResilience {
 
     // MARK: - Join
 
+    public static let audioCoordinatorTimeoutMs = 10_000
     public static let joinConnectKickstartMs = 1_200
     public static let joinRecoveryMs = 4_000
     public static let joinHardTimeoutMs = 15_000
@@ -91,6 +92,7 @@ extension WebRtcResilience {
     public static var reconnectBackoffCapNs: UInt64 { UInt64(reconnectBackoffCapMs) * 1_000_000 }
     public static var connectTimeoutNs: UInt64 { UInt64(connectTimeoutMs) * 1_000_000 }
     public static var pingIntervalNs: UInt64 { UInt64(pingIntervalMs) * 1_000_000 }
+    public static var audioCoordinatorTimeoutNs: UInt64 { UInt64(audioCoordinatorTimeoutMs) * 1_000_000 }
     public static var joinConnectKickstartNs: UInt64 { UInt64(joinConnectKickstartMs) * 1_000_000 }
     public static var joinRecoveryNs: UInt64 { UInt64(joinRecoveryMs) * 1_000_000 }
     public static var joinHardTimeoutNs: UInt64 { UInt64(joinHardTimeoutMs) * 1_000_000 }

@@ -123,6 +123,9 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertEqual(fakeSlot?.setRemoteDescriptionCalls.first?.type, .offer)
         XCTAssertGreaterThan(fakeSlot?.createAnswerCalls ?? 0, 0, "Should create answer")
 
+        await waitUntil {
+            !harness.fakeProvider.sentPeerMessages(ofType: "answer").isEmpty
+        }
         let answerMessages = harness.fakeProvider.sentPeerMessages(ofType: "answer")
         XCTAssertFalse(answerMessages.isEmpty, "Should send answer message")
     }
@@ -420,6 +423,7 @@ final class SessionNegotiationTests: XCTestCase {
 
         XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBeforeTimeout + 1)
         XCTAssertGreaterThan(slot.createOfferCalls, offersBeforeTimeout)
+        XCTAssertEqual(slot.createOfferIceRestartFlags.last, true)
         XCTAssertEqual(slot.getSignalingState(), "HAVE_LOCAL_OFFER")
     }
 
@@ -534,6 +538,21 @@ final class SessionNegotiationTests: XCTestCase {
         let current = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
         XCTAssertTrue(current === replacement, "Immediate duplicate restart request must keep the current slot")
         XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersAfterFirstRequest, "Immediate duplicate restart request must not send another offer")
+
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.outboundMediaRecoveryCooldownMs) + 1)
+        harness.fakeProvider.simulateMessage(
+            from: "zeta",
+            type: "media_restart_request",
+            payload: [
+                "from": .string("zeta"),
+                "reason": .string("stalled outbound media")
+            ]
+        )
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "offer").count == offersAfterFirstRequest + 1
+        }
+
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersAfterFirstRequest + 1, "Restart request after cooldown should be honored")
     }
 
     func testDesignatedOffererRecreatesPeerAfterStalledOutboundMedia() async throws {
@@ -622,6 +641,33 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertTrue(oldSlot.closePeerConnectionCalled, "Old slot should be closed after rollback failure")
         XCTAssertEqual(replacement.setRemoteDescriptionCalls.last?.type, .offer)
         XCTAssertGreaterThan(replacement.createAnswerCalls, 0, "Replacement should answer the original offer")
+    }
+
+    func testRemoteOfferApplyFailureEscalatesAfterReplacementFails() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "zeta",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+        let oldSlot = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        let initialOfferId = try XCTUnwrap(harness.fakeProvider.sentPeerMessages(ofType: "offer").last?.payload?["offerId"]?.stringValue)
+        harness.simulateAnswerFromRemote(fromCid: "zeta", offerId: initialOfferId)
+        await harness.yieldToMainActor()
+        oldSlot.failNextRemoteOffer = true
+        harness.fakeMedia.failNextCreatedSlotRemoteOffer = true
+        let offersBefore = harness.fakeProvider.sentPeerMessages(ofType: "offer").count
+
+        harness.simulateOfferFromRemote(fromCid: "zeta", sdp: "bad-offer", offerId: "bad-offer")
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "offer").count > offersBefore
+        }
+
+        let replacement = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        XCTAssertFalse(oldSlot === replacement, "Failed remote offer apply should replace the peer slot first")
+        XCTAssertTrue(oldSlot.closePeerConnectionCalled)
+        XCTAssertEqual(replacement.setRemoteDescriptionCalls.last?.type, .offer)
+        XCTAssertEqual(replacement.createOfferIceRestartFlags.last, true, "Replacement apply failure should escalate to an ICE restart")
     }
 
     func testFourPartyReattachRestartsOnlyDeterministicOfferOwners() async throws {

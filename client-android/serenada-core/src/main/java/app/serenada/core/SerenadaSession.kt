@@ -59,11 +59,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -1088,12 +1090,17 @@ class SerenadaSession internal constructor(
         updateDiagnostics(CallDiagnostics())
 
         acquirePerformanceLocks()
-        joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
         providerScope.launch {
             try {
-                audioCoordinatorMutex.withLock {
-                    audioCoordinator.activateCallSession(config.audioIntent)
+                withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                    audioCoordinatorMutex.withLock {
+                        audioCoordinator.activateCallSession(config.audioIntent)
+                    }
                 }
+            } catch (e: TimeoutCancellationException) {
+                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Audio session activation timed out")
+                handleError(CallError.Unknown("Audio session activation timed out"))
+                return@launch
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to activate audio session: ${e.message}")
@@ -1101,6 +1108,7 @@ class SerenadaSession internal constructor(
                 return@launch
             }
             if (!isActive) return@launch
+            joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
             try {
                 callAudioSessionController.activate()
                 webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
@@ -1690,10 +1698,18 @@ class SerenadaSession internal constructor(
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
         callAudioSessionController.deactivate()
-        stopAudioCoordinatorCollectors()
         audioCoordinatorScope.launch {
-            audioCoordinatorMutex.withLock {
-                audioCoordinator.deactivateCallSession()
+            try {
+                withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                    audioCoordinatorMutex.withLock {
+                        audioCoordinator.deactivateCallSession()
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Audio session deactivation timed out")
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to deactivate audio session: ${e.message}")
             }
         }
         releasePerformanceLocks()

@@ -28,7 +28,9 @@ func callAudioRouteOptions(
     let candidates = (availableAudioDevices + [currentAudioDevice].compactMap { $0 })
         .filter(\.isCallAudioOutputRoute)
     let visibleCandidates = candidates.contains(where: { device in
-        if case .bluetooth(_) = device.kind { return true }
+        if case .bluetooth(_) = device.kind {
+            return device.status == .active || device.status == .connecting || device == currentAudioDevice
+        }
         return false
     })
         ? candidates.filter { $0.kind != .earpiece }

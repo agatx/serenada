@@ -4,6 +4,9 @@ import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.AudioCoordinatorEvent
 import app.serenada.core.call.AudioDevice
+import app.serenada.core.call.AudioDeviceDirection
+import app.serenada.core.call.AudioDeviceKind
+import app.serenada.core.call.AudioDeviceStatus
 import app.serenada.core.call.AudioIntent
 import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.WebRtcResilienceConstants
@@ -516,7 +519,7 @@ class SerenadaSessionContractTest {
     }
 
     @Test
-    fun `join hard timeout fires while audio coordinator activation is suspended`() {
+    fun `audio coordinator activation timeout fires before signaling starts`() {
         val coordinator = BlockingAudioCoordinator()
         factory.tearDown()
         factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
@@ -530,7 +533,7 @@ class SerenadaSessionContractTest {
         assertEquals(CallPhase.Joining, factory.session.state.value.phase)
 
         ShadowLooper.idleMainLooper(
-            WebRtcResilienceConstants.JOIN_HARD_TIMEOUT_MS,
+            WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS,
             TimeUnit.MILLISECONDS
         )
 
@@ -750,6 +753,33 @@ class SerenadaSessionContractTest {
             factory.session.state.value.remoteParticipants.isEmpty()
         )
     }
+
+    @Test
+    fun `audio device collectors stay active after call cleanup`() {
+        val coordinator = MutableAudioCoordinator()
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+        factory.openSignaling()
+        factory.simulateJoinedResponse(cid = "my-cid")
+
+        factory.session.leave()
+        ShadowLooper.idleMainLooper()
+        val speaker = AudioDevice(
+            id = "speaker",
+            displayName = "Speaker",
+            kind = AudioDeviceKind.Speakerphone,
+            direction = AudioDeviceDirection.OUTPUT,
+            status = AudioDeviceStatus.AVAILABLE,
+        )
+        coordinator.publishAvailableDevices(listOf(speaker))
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(listOf(speaker), factory.session.availableAudioDevices.value)
+    }
 }
 
 private class BlockingAudioCoordinator : SerenadaAudioCoordinator {
@@ -770,4 +800,21 @@ private class BlockingAudioCoordinator : SerenadaAudioCoordinator {
     override val effectiveInputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
     override val effectiveOutputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
     override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
+}
+
+private class MutableAudioCoordinator : SerenadaAudioCoordinator {
+    private val _availableDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
+    override val availableDevices: StateFlow<List<AudioDevice>> = _availableDevices
+    override val effectiveInputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val effectiveOutputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
+
+    fun publishAvailableDevices(devices: List<AudioDevice>) {
+        _availableDevices.value = devices
+    }
+
+    override suspend fun activateCallSession(intent: AudioIntent) {}
+    override suspend fun deactivateCallSession() {}
+    override suspend fun applyRouting(device: AudioDevice) {}
+    override suspend fun setMicMuted(muted: Boolean) {}
 }

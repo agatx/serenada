@@ -35,6 +35,7 @@ internal class FakePeerConnectionSlot(
 
     // Call tracking
     var createOfferCalls = 0; private set
+    val createOfferIceRestartFlags = mutableListOf<Boolean>()
     var createAnswerCalls = 0; private set
     val setRemoteDescriptionCalls = mutableListOf<Pair<SessionDescription.Type, String>>()
     val addedIceCandidates = mutableListOf<IceCandidate>()
@@ -45,6 +46,7 @@ internal class FakePeerConnectionSlot(
     var ensurePeerConnectionCalls = 0; private set
     var failNextRemoteOffer = false
     var failNextAnswer = false
+    var failNextRollback = false
 
     // Offer lifecycle
     override fun beginOffer() { isMakingOffer = true }
@@ -80,6 +82,7 @@ internal class FakePeerConnectionSlot(
 
     override fun createOffer(iceRestart: Boolean, onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)?): Boolean {
         createOfferCalls++
+        createOfferIceRestartFlags += iceRestart
         if (signalingState != PeerConnection.SignalingState.STABLE) {
             onComplete?.invoke(false)
             return false
@@ -123,6 +126,11 @@ internal class FakePeerConnectionSlot(
 
     override fun rollbackLocalDescription(onComplete: ((Boolean) -> Unit)?) {
         rollbackCalls++
+        if (failNextRollback) {
+            failNextRollback = false
+            onComplete?.invoke(false)
+            return
+        }
         signalingState = PeerConnection.SignalingState.STABLE
         onSignalingStateChange?.invoke(remoteCid, signalingState)
         onComplete?.invoke(true)

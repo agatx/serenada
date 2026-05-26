@@ -394,6 +394,19 @@ class SessionNegotiationTest {
 
         assertSame("Immediate duplicate restart request must keep the current slot", replacement, factory.fakeMedia.fakeSlots["zeta"])
         assertEquals("Immediate duplicate restart request must not send another offer", offersAfterFirstRequest, factory.fakeProvider.sentMessages("offer").size)
+
+        factory.fakeClock.advance(WebRtcResilienceConstants.OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS + 1)
+        factory.fakeProvider.simulateMessage(
+            from = "zeta",
+            type = "media_restart_request",
+            payload = JSONObject().apply {
+                put("from", "zeta")
+                put("reason", "stalled outbound media")
+            },
+        )
+        ShadowLooper.idleMainLooper()
+
+        assertEquals("Restart request after cooldown should be honored", offersAfterFirstRequest + 1, factory.fakeProvider.sentMessages("offer").size)
     }
 
     @Test
@@ -476,6 +489,51 @@ class SessionNegotiationTest {
         assertTrue("Replacement answer should be sent for the original offer", factory.fakeProvider.sentMessages("answer").any {
             it.payload?.optString("offerId") == "remote-offer"
         })
+    }
+
+    @Test
+    fun `rollback failure resets peer and retries remote offer`() {
+        factory.advanceToInCallWithTurn(localCid = "zeta", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
+        val oldSlot = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull(oldSlot)
+        oldSlot!!.createOffer(iceRestart = false, onSdp = {}, onComplete = null)
+        oldSlot.failNextRollback = true
+        assertEquals(PeerConnection.SignalingState.HAVE_LOCAL_OFFER, oldSlot.getSignalingState())
+
+        factory.simulateOfferFromRemote("alpha", sdp = "remote-offer", offerId = "remote-offer")
+        repeat(4) { ShadowLooper.idleMainLooper() }
+
+        val replacement = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull(replacement)
+        assertNotSame("Failed rollback should replace the peer slot", oldSlot, replacement)
+        assertTrue("Old slot should be closed after rollback failure", oldSlot.closePeerConnectionCalled)
+        assertEquals(org.webrtc.SessionDescription.Type.OFFER, replacement!!.setRemoteDescriptionCalls.last().first)
+        assertTrue("Replacement should answer the original offer", replacement.createAnswerCalls > 0)
+        assertTrue("Replacement answer should be sent for the original offer", factory.fakeProvider.sentMessages("answer").any {
+            it.payload?.optString("offerId") == "remote-offer"
+        })
+    }
+
+    @Test
+    fun `remote offer apply failure escalates after replacement fails`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
+        val oldSlot = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(oldSlot)
+        factory.simulateAnswerFromRemote("zeta", offerId = latestOfferId())
+        oldSlot!!.failNextRemoteOffer = true
+        factory.fakeMedia.failNextCreatedSlotRemoteOffer = true
+        val offersBefore = factory.fakeProvider.sentMessages("offer").size
+
+        factory.simulateOfferFromRemote("zeta", sdp = "bad-offer", offerId = "bad-offer")
+        repeat(4) { ShadowLooper.idleMainLooper() }
+
+        val replacement = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(replacement)
+        assertNotSame("Failed remote offer apply should replace the peer slot first", oldSlot, replacement)
+        assertTrue("Old slot should be closed after remote offer apply failure", oldSlot.closePeerConnectionCalled)
+        assertEquals(org.webrtc.SessionDescription.Type.OFFER, replacement!!.setRemoteDescriptionCalls.last().first)
+        assertEquals("Replacement apply failure should escalate to one new offer", offersBefore + 1, factory.fakeProvider.sentMessages("offer").size)
+        assertEquals(true, replacement.createOfferIceRestartFlags.last())
     }
 
     @Test

@@ -766,9 +766,10 @@ export class MediaEngine {
         return peerState;
     }
 
-    private cleanupPeer(remoteCid: string): void {
+    private cleanupPeer(remoteCid: string, options: { clearMediaRestartCooldown?: boolean } = {}): void {
         const peer = this.peers.get(remoteCid);
         if (!peer) return;
+        const clearMediaRestartCooldown = options.clearMediaRestartCooldown ?? true;
         this.clearPeerTimers(peer);
         this.clearPeerNegotiation(peer);
         peer.pc.close();
@@ -778,11 +779,14 @@ export class MediaEngine {
         next.delete(remoteCid);
         this.remoteStreams = next;
         this.lastInboundBytesByCid.delete(remoteCid);
+        if (clearMediaRestartCooldown) {
+            this.mediaRestartHandledAtByCid.delete(remoteCid);
+        }
         this.updateAggregateState();
     }
 
     private replacePeerForRemoteOffer(remoteCid: string, offerId: string, pendingIce: RTCIceCandidateInit[]): PeerState {
-        this.cleanupPeer(remoteCid);
+        this.cleanupPeer(remoteCid, { clearMediaRestartCooldown: false });
         const peer = this.getOrCreatePeer(remoteCid);
         if (pendingIce.length > 0) {
             peer.pendingRemoteIceByOfferId.set(offerId, [...pendingIce]);
@@ -1032,8 +1036,7 @@ export class MediaEngine {
             if (peer.pc.remoteDescription) {
                 await peer.pc.addIceCandidate(candidate);
             } else {
-                if (peer.iceBuffer.length >= ICE_CANDIDATE_BUFFER_MAX) peer.iceBuffer.shift();
-                peer.iceBuffer.push(candidate);
+                if (peer.iceBuffer.length < ICE_CANDIDATE_BUFFER_MAX) peer.iceBuffer.push(candidate);
             }
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `[${fromCid}] Error handling ICE candidate: ${formatError(err)}`);
@@ -1500,7 +1503,7 @@ export class MediaEngine {
         if (!this.shouldIOffer(remoteCid) || !this.isSignalingConnected || !this.isParticipantActive(remoteCid)) return;
         const previousStatus = this.participantConnectionStatus.get(remoteCid);
         this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Recreating peer after ${reason}`);
-        this.cleanupPeer(remoteCid);
+        this.cleanupPeer(remoteCid, { clearMediaRestartCooldown: false });
         if (previousStatus) this.participantConnectionStatus.set(remoteCid, previousStatus);
         const replacement = this.getOrCreatePeer(remoteCid);
         replacement.lastOutboundMediaRecoveryAt = Date.now();

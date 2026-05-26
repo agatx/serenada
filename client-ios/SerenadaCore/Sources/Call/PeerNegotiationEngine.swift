@@ -371,6 +371,7 @@ final class PeerNegotiationEngine {
         clearNegotiationState(remoteCid: remoteCid)
         participantStatuses.removeValue(forKey: remoteCid)
         outboundMediaWatchByCid.removeValue(forKey: remoteCid)
+        lastMediaRestartHandledAtByCid.removeValue(forKey: remoteCid)
         engineRemoveSlot(slot)
         slot.closePeerConnection()
     }
@@ -482,6 +483,8 @@ final class PeerNegotiationEngine {
                             applyOffer(to: replacementSlot, allowPeerReset: false)
                             return
                         }
+                        self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Failed to apply remote offer from \(remoteCid)")
+                        self.scheduleIceRestart(remoteCid: remoteCid, reason: "remote-offer-apply-failed", delayMs: 0)
                         return
                     }
                     self.acceptedRemoteOfferIds[remoteCid] = offerId
@@ -489,7 +492,8 @@ final class PeerNegotiationEngine {
                     self.flushPendingRemoteIce(remoteCid: remoteCid, offerId: offerId, slot: targetSlot)
                     targetSlot.createAnswer(onSdp: { [weak self] answerSdp in
                         Task { @MainActor in
-                            self?.sendMessage(
+                            guard let self, self.acceptedRemoteOfferIds[remoteCid] == offerId else { return }
+                            self.sendMessage(
                                 "answer",
                                 .object(["sdp": .string(answerSdp), "offerId": .string(offerId)]),
                                 remoteCid
@@ -515,8 +519,9 @@ final class PeerNegotiationEngine {
         if offerCollision && signalingState == "HAVE_LOCAL_OFFER" {
             pendingLocalOfferIds.removeValue(forKey: remoteCid)
             clearOfferTimeout(remoteCid: remoteCid)
-            slot.rollbackLocalDescription { success in
+            slot.rollbackLocalDescription { [weak self] success in
                 Task { @MainActor in
+                    guard let self else { return }
                     guard success else {
                         self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Rollback before remote offer failed for \(remoteCid)")
                         if let replacementSlot = self.replacePeerSlotForRemoteOffer(remoteCid: remoteCid, offerId: offerId) {
@@ -677,6 +682,7 @@ final class PeerNegotiationEngine {
             onSdp: { [weak self] sdp in
                 Task { @MainActor in
                     guard let self else { return }
+                    guard self.pendingLocalOfferIds[remoteCid] == offerId else { return }
                     self.sendMessage(
                         "offer",
                         .object(["sdp": .string(sdp), "offerId": .string(offerId)]),

@@ -64,17 +64,25 @@ internal class DefaultAudioCoordinator(
 
     private val _events = MutableSharedFlow<AudioCoordinatorEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<AudioCoordinatorEvent> = _events.asSharedFlow()
+    private val playbackDuckingFallbackRunnable = Runnable {
+        _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
+    }
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio focus changed: $focusChange")
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                clearPlaybackDuckingFallback()
+                _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingStarted)
+                schedulePlaybackDuckingFallback()
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
+                clearPlaybackDuckingFallback()
+                _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
                 audioFocusGranted = false
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
                 handler.post {
@@ -83,6 +91,7 @@ internal class DefaultAudioCoordinator(
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
+                clearPlaybackDuckingFallback()
                 audioFocusGranted = true
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioEnded)
                 _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
@@ -156,6 +165,7 @@ internal class DefaultAudioCoordinator(
         proximityEarpieceEnabled = true
         pinnedOutputDevice = null
         pinnedOutputRouteInventory = null
+        clearPlaybackDuckingFallback()
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
         runCatching {
@@ -185,7 +195,14 @@ internal class DefaultAudioCoordinator(
 
     override suspend fun activateCallSession(intent: AudioIntent) {
         proximityEarpieceEnabled = intent.enableProximityEarpiece
-        activate()
+        if (audioSessionActive) {
+            updateProximityMonitoringForIntent()
+            applyCallAudioRouting()
+            updateDevicesAndRoute()
+            onAudioEnvironmentChanged()
+        } else {
+            activate()
+        }
         intent.preferredDevice?.let { applyRouting(it) }
     }
 
@@ -391,6 +408,8 @@ internal class DefaultAudioCoordinator(
                 ?: findBluetoothCommunicationDevice()
             if (bluetoothDevice == null || !audioManager.setCommunicationDevice(bluetoothDevice)) {
                 logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to route audio to Bluetooth headset")
+                pinnedOutputDevice = null
+                pinnedOutputRouteInventory = null
                 routeAudioToSpeaker()
             }
             return
@@ -409,6 +428,23 @@ internal class DefaultAudioCoordinator(
         }
         setLegacyBluetoothScoRouting(false)
         setSpeakerphoneEnabled(false)
+    }
+
+    private fun updateProximityMonitoringForIntent() {
+        if (proximityMonitoringEnabled && proximityEarpieceEnabled) {
+            startProximityMonitoring()
+        } else {
+            stopProximityMonitoring()
+        }
+    }
+
+    private fun schedulePlaybackDuckingFallback() {
+        clearPlaybackDuckingFallback()
+        handler.postDelayed(playbackDuckingFallbackRunnable, PLAYBACK_DUCKING_FALLBACK_MS)
+    }
+
+    private fun clearPlaybackDuckingFallback() {
+        handler.removeCallbacks(playbackDuckingFallbackRunnable)
     }
 
     private fun routeAudioToSpeaker() {
@@ -786,5 +822,6 @@ internal class DefaultAudioCoordinator(
 
     private companion object {
         private const val COMMUNICATION_ROUTE_REFRESH_DELAY_MS = 300L
+        private const val PLAYBACK_DUCKING_FALLBACK_MS = 3_000L
     }
 }

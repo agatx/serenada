@@ -10,6 +10,12 @@ struct JoinRecoveryState: Equatable {
     let participantCount: Int
 }
 
+private struct AudioCoordinatorTimeoutError: LocalizedError {
+    var errorDescription: String? {
+        "Audio coordinator operation timed out"
+    }
+}
+
 func resolveJoinRecoveryState(
     currentPhase: CallPhase,
     participantHint: Int?,
@@ -794,7 +800,6 @@ public final class SerenadaSession: ObservableObject {
         }
 
         joinFlowCoordinator?.clearJoinConnectKickstart()
-        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
 
         do {
             try await activateAudioCoordinator()
@@ -809,6 +814,7 @@ public final class SerenadaSession: ObservableObject {
 
         guard state.phase == .joining || state.phase == .awaitingPermissions || internalPhase == .joining else { return }
 
+        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
         callAudioSessionController.activate()
         webRtcEngine.startLocalMedia(preferVideo: shouldEnableVideo)
         localMediaReadyForNegotiation = true
@@ -830,27 +836,68 @@ public final class SerenadaSession: ObservableObject {
         let previous = audioCoordinatorLifecycleTask
         let coordinator = audioCoordinator
         let intent = config.audioIntent
-        let task = Task<Void, Error> {
+        let task = Task<Void, Error> { [weak self] in
             if let previous {
-                try? await previous.value
+                do {
+                    try await self?.awaitAudioCoordinatorLifecycleTask(previous)
+                } catch {
+                    await MainActor.run {
+                        self?.logger?.log(.warning, tag: "Audio", "Previous audio coordinator operation did not finish before activation: \(error.localizedDescription)")
+                    }
+                }
             }
             try Task.checkCancellation()
             try await coordinator.activateCallSession(intent: intent)
         }
         audioCoordinatorLifecycleTask = task
-        try await task.value
+        try await awaitAudioCoordinatorLifecycleTask(task)
     }
 
     private func deactivateAudioCoordinator() {
         let previous = audioCoordinatorLifecycleTask
         let coordinator = audioCoordinator
-        let task = Task<Void, Error> {
+        let task = Task<Void, Error> { [weak self] in
             if let previous {
-                try? await previous.value
+                do {
+                    try await self?.awaitAudioCoordinatorLifecycleTask(previous)
+                } catch {
+                    await MainActor.run {
+                        self?.logger?.log(.warning, tag: "Audio", "Previous audio coordinator operation did not finish before deactivation: \(error.localizedDescription)")
+                    }
+                }
             }
             await coordinator.deactivateCallSession()
         }
         audioCoordinatorLifecycleTask = task
+        Task { @MainActor [weak self] in
+            do {
+                try await self?.awaitAudioCoordinatorLifecycleTask(task)
+            } catch is CancellationError {
+            } catch {
+                self?.logger?.log(.warning, tag: "Audio", "Audio coordinator deactivation did not finish: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func awaitAudioCoordinatorLifecycleTask(_ task: Task<Void, Error>) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await task.value
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: WebRtcResilience.audioCoordinatorTimeoutNs)
+                task.cancel()
+                throw AudioCoordinatorTimeoutError()
+            }
+
+            do {
+                _ = try await group.next()
+                group.cancelAll()
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
     }
 
     private func ensureSignalingConnection() {
@@ -1341,7 +1388,6 @@ public final class SerenadaSession: ObservableObject {
         webRtcEngine.release()
         callAudioSessionController.deactivate()
         deactivateAudioCoordinator()
-        stopCoordinatorTasks()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()

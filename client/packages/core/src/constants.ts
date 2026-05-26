@@ -13,6 +13,7 @@ export const PONG_MISS_THRESHOLD = 2;
 export const WS_FALLBACK_CONSECUTIVE_FAILURES = 3;
 
 // Join
+export const AUDIO_COORDINATOR_TIMEOUT_MS = 10000;
 export const JOIN_CONNECT_KICKSTART_MS = 1200;
 export const JOIN_RECOVERY_MS = 4000;
 export const JOIN_HARD_TIMEOUT_MS = 15000;

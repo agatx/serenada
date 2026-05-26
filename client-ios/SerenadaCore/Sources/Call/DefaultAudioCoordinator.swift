@@ -167,6 +167,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         proximityEarpieceEnabled = true
         pinnedOutputDevice = nil
         pinnedOutputRouteInventory = nil
+        pendingManagedOutputRequest = nil
         stopAudioRouteMonitoring()
         stopProximityMonitoring()
 
@@ -185,7 +186,14 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
     func activateCallSession(intent: AudioIntent) async throws {
         proximityEarpieceEnabled = intent.enableProximityEarpiece
-        activate()
+        if audioSessionActive {
+            updateProximityMonitoringForIntent()
+            updateDevicesAndRoute()
+            applyCallAudioRouting()
+            onAudioEnvironmentChanged()
+        } else {
+            activate()
+        }
         if let preferredDevice = intent.preferredDevice {
             try await applyRouting(preferredDevice)
         }
@@ -254,12 +262,19 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             name: AVAudioSession.mediaServicesWereResetNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSilenceSecondaryAudioHint(_:)),
+            name: AVAudioSession.silenceSecondaryAudioHintNotification,
+            object: nil
+        )
     }
 
     private func stopAudioRouteMonitoring() {
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.silenceSecondaryAudioHintNotification, object: nil)
     }
 
     private func startProximityMonitoring() {
@@ -288,6 +303,14 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         UIDevice.current.isProximityMonitoringEnabled = false
         proximityMonitoringActive = false
         isProximityNear = false
+    }
+
+    private func updateProximityMonitoringForIntent() {
+        if proximityMonitoringEnabled && proximityEarpieceEnabled {
+            startProximityMonitoring()
+        } else {
+            stopProximityMonitoring()
+        }
     }
 
     @objc private func handleAudioRouteChange(_ notification: Notification) {
@@ -373,6 +396,26 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
                 self.emitEvent(.externalAudioEnded)
             } catch {
                 self.logger?.log(.error, tag: "Audio", "failed to reset media services: \(error)")
+            }
+        }
+    }
+
+    @objc private func handleSilenceSecondaryAudioHint(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+              let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: typeValue) else {
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self = self, self.audioSessionActive else { return }
+            switch type {
+            case .begin:
+                self.emitEvent(.playbackDuckingStarted)
+            case .end:
+                self.emitEvent(.playbackDuckingEnded)
+            @unknown default:
+                break
             }
         }
     }
@@ -740,7 +783,7 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
 
         for port in route.outputs {
-            if port.portType != .builtInSpeaker && port.portType != .builtInReceiver && port.portType != .bluetoothHFP && port.portType != .usbAudio {
+            if port.portType != .builtInSpeaker && port.portType != .builtInReceiver && port.portType != .bluetoothHFP && port.portType != .bluetoothA2DP && port.portType != .bluetoothLE && port.portType != .usbAudio {
                 devices.append(mapPortToAudioDevice(port, direction: .output, status: .active))
             }
         }
