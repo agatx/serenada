@@ -13,8 +13,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public private(set) var lastIceRestartAt: TimeInterval = 0
     public private(set) var offerTimeoutTask: Task<Void, Never>?
     public private(set) var iceRestartTask: Task<Void, Never>?
-    public private(set) var nonHostFallbackTask: Task<Void, Never>?
-    public private(set) var nonHostFallbackAttempts = 0
+    private var playbackDucked = false
 
     // MARK: - Offer Lifecycle
 
@@ -52,24 +51,6 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func cancelIceRestartTask() {
         iceRestartTask?.cancel()
         iceRestartTask = nil
-    }
-
-    public func setNonHostFallbackTask(_ task: Task<Void, Never>) {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = task
-    }
-
-    public func cancelNonHostFallbackTask() {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = nil
-    }
-
-    public func clearNonHostFallbackTask() {
-        nonHostFallbackTask = nil
-    }
-
-    public func incrementNonHostFallbackAttempts() {
-        nonHostFallbackAttempts += 1
     }
 
 #if canImport(WebRTC)
@@ -259,6 +240,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                     self.attachRemoteTrackToRegisteredRenderers()
                     self.onRemoteVideoTrack(self.remoteCid, track)
                 }
+            },
+            onRemoteAudioTrack: { [weak self] track in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.applyPlaybackDuck(to: track)
+                }
             }
         )
         observerProxy = observer
@@ -293,19 +280,38 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             return
         }
 
-        if let localAudioTrack, !peerConnection.senders.contains(where: { $0.track?.kind == kRTCMediaStreamTrackKindAudio }) {
-            _ = peerConnection.add(localAudioTrack, streamIds: ["serenada"])
-        }
-        if let localVideoTrack, !peerConnection.senders.contains(where: { $0.track?.kind == kRTCMediaStreamTrackKindVideo }) {
-            _ = peerConnection.add(localVideoTrack, streamIds: ["serenada"])
-        }
+        attachTrackToTransceiver(peerConnection: peerConnection, track: localAudioTrack, mediaType: .audio)
+        attachTrackToTransceiver(peerConnection: peerConnection, track: localVideoTrack, mediaType: .video)
 #endif
     }
+
+#if canImport(WebRTC)
+    // Look up the transceiver by its stable mediaType (Unified Plan) instead of
+    // sender.track?.kind. The latter mis-reports when the sender's track is nil
+    // (e.g. the recv-only transceiver created by ensureReceiveTransceivers), which
+    // would cause peerConnection.add to append a duplicate transceiver.
+    private func attachTrackToTransceiver(
+        peerConnection: RTCPeerConnection,
+        track: RTCMediaStreamTrack?,
+        mediaType: RTCRtpMediaType
+    ) {
+        if let transceiver = peerConnection.transceivers.first(where: { $0.mediaType == mediaType }) {
+            if transceiver.sender.track !== track {
+                transceiver.sender.track = track
+            }
+            let targetDirection: RTCRtpTransceiverDirection = (track != nil) ? .sendRecv : .recvOnly
+            if transceiver.direction != targetDirection {
+                transceiver.setDirection(targetDirection, error: nil)
+            }
+        } else if let track {
+            _ = peerConnection.add(track, streamIds: ["serenada"])
+        }
+    }
+#endif
 
     public func closePeerConnection() {
         cancelOfferTimeout()
         cancelIceRestartTask()
-        cancelNonHostFallbackTask()
 
 #if canImport(WebRTC)
         detachRemoteTrackFromRegisteredRenderers()
@@ -556,6 +562,52 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
+    public func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(nil)
+            return
+        }
+
+        let expectsAudio = peerConnection.senders.contains {
+            $0.track?.kind == kRTCMediaStreamTrackKindAudio && $0.track?.isEnabled == true
+        }
+        let expectsVideo = peerConnection.senders.contains {
+            $0.track?.kind == kRTCMediaStreamTrackKindVideo && $0.track?.isEnabled == true
+        }
+
+        peerConnection.statistics { report in
+            var audioBytesSent: Int64 = 0
+            var videoBytesSent: Int64 = 0
+            var videoFramesSent: Int64 = 0
+            for stat in report.statistics.values where stat.type == "outbound-rtp" {
+                switch mediaKind(for: stat) {
+                case "audio":
+                    audioBytesSent += memberInt64(stat, key: "bytesSent") ?? 0
+                case "video":
+                    videoBytesSent += memberInt64(stat, key: "bytesSent") ?? 0
+                    videoFramesSent += memberInt64(stat, key: "framesSent")
+                        ?? memberInt64(stat, key: "framesEncoded")
+                        ?? 0
+                default:
+                    break
+                }
+            }
+            Task { @MainActor in
+                onComplete(OutboundMediaSample(
+                    expectsAudio: expectsAudio,
+                    expectsVideo: expectsVideo,
+                    audioBytesSent: audioBytesSent,
+                    videoBytesSent: videoBytesSent,
+                    videoFramesSent: videoFramesSent
+                ))
+            }
+        }
+#else
+        onComplete(nil)
+#endif
+    }
+
     public func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
 #if canImport(WebRTC)
         guard let peerConnection else {
@@ -638,10 +690,26 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         false
 #endif
     }
+
+    public func duckPlayback(ducked: Bool) {
+        playbackDucked = ducked
+#if canImport(WebRTC)
+        guard let peerConnection = peerConnection else { return }
+        for receiver in peerConnection.receivers {
+            if let audioTrack = receiver.track as? RTCAudioTrack {
+                applyPlaybackDuck(to: audioTrack)
+            }
+        }
+#endif
+    }
 }
 
 #if canImport(WebRTC)
 private extension PeerConnectionSlot {
+    private func applyPlaybackDuck(to track: RTCAudioTrack) {
+        track.source.volume = playbackDucked ? 0.15 : 1.0
+    }
+
     private func ensureReceiveTransceivers(on peerConnection: RTCPeerConnection) {
         if peerConnection.transceivers.contains(where: { $0.mediaType == .audio }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
@@ -961,6 +1029,7 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     private let onSignalingState: (RTCSignalingState) -> Void
     private let onRenegotiationNeeded: () -> Void
     private let onRemoteVideoTrack: (RTCVideoTrack?) -> Void
+    private let onRemoteAudioTrack: (RTCAudioTrack) -> Void
 
     init(
         onIceCandidate: @escaping (RTCIceCandidate) -> Void,
@@ -968,7 +1037,8 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         onIceConnectionState: @escaping (RTCIceConnectionState) -> Void,
         onSignalingState: @escaping (RTCSignalingState) -> Void,
         onRenegotiationNeeded: @escaping () -> Void,
-        onRemoteVideoTrack: @escaping (RTCVideoTrack?) -> Void
+        onRemoteVideoTrack: @escaping (RTCVideoTrack?) -> Void,
+        onRemoteAudioTrack: @escaping (RTCAudioTrack) -> Void
     ) {
         self.onIceCandidate = onIceCandidate
         self.onConnectionState = onConnectionState
@@ -976,6 +1046,7 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         self.onSignalingState = onSignalingState
         self.onRenegotiationNeeded = onRenegotiationNeeded
         self.onRemoteVideoTrack = onRemoteVideoTrack
+        self.onRemoteAudioTrack = onRemoteAudioTrack
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
@@ -983,6 +1054,9 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+        if let track = stream.audioTracks.first {
+            onRemoteAudioTrack(track)
+        }
         onRemoteVideoTrack(stream.videoTracks.first)
     }
 
@@ -1007,7 +1081,9 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {
-        if let track = rtpReceiver.track as? RTCVideoTrack {
+        if let track = rtpReceiver.track as? RTCAudioTrack {
+            onRemoteAudioTrack(track)
+        } else if let track = rtpReceiver.track as? RTCVideoTrack {
             onRemoteVideoTrack(track)
         }
     }

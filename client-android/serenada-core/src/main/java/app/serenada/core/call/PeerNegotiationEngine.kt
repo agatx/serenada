@@ -2,6 +2,7 @@ package app.serenada.core.call
 
 import android.os.Handler
 import app.serenada.core.IceConnectionState
+import app.serenada.core.ParticipantSignalingStatus
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
 import app.serenada.core.PeerConnectionState
@@ -21,6 +22,7 @@ internal class PeerNegotiationEngine(
     private val getCurrentRoomState: () -> RoomState?,
     private val isSignalingConnected: () -> Boolean,
     private val hasIceServers: () -> Boolean,
+    private val isLocalMediaReady: () -> Boolean = { true },
     // Slot access (session owns peerSlots)
     private val getSlot: (String) -> PeerConnectionSlotProtocol?,
     private val getAllSlots: () -> Map<String, PeerConnectionSlotProtocol>,
@@ -46,6 +48,7 @@ internal class PeerNegotiationEngine(
 ) {
     companion object {
         private const val TAG = "PeerNegotiationEngine"
+        private const val LEGACY_OFFER_ID = "__legacy__"
         val ICE_PRIORITY = mapOf(
             PeerConnection.IceConnectionState.FAILED to 0, PeerConnection.IceConnectionState.DISCONNECTED to 1,
             PeerConnection.IceConnectionState.CHECKING to 2, PeerConnection.IceConnectionState.NEW to 3,
@@ -64,6 +67,24 @@ internal class PeerNegotiationEngine(
         )
     }
 
+    private data class OutboundMediaWatch(
+        var lastSample: OutboundMediaSample? = null,
+        var stallSamples: Int = 0,
+        var inFlight: Boolean = false,
+        var lastRecoveryAtMs: Long? = null,
+    )
+
+    private var offerSequence = 0L
+    private val pendingLocalOfferIds = mutableMapOf<String, String>()
+    private val acceptedRemoteOfferIds = mutableMapOf<String, String>()
+    private val currentNegotiationIds = mutableMapOf<String, String>()
+    private val ignoredOfferIds = mutableMapOf<String, String>()
+    private val settingRemoteAnswerCids = mutableSetOf<String>()
+    private val pendingRemoteIceByOfferId = mutableMapOf<String, MutableMap<String, MutableList<IceCandidate>>>()
+    private val participantStatuses = mutableMapOf<String, ParticipantSignalingStatus>()
+    private val outboundMediaWatchByCid = mutableMapOf<String, OutboundMediaWatch>()
+    private val lastMediaRestartHandledAtByCid = mutableMapOf<String, Long>()
+
     // --- Public API ---
 
     fun syncPeers(roomState: RoomState) {
@@ -72,24 +93,34 @@ internal class PeerNegotiationEngine(
         val remoteCids = remotePeers.map { it.cid }.toSet()
 
         getAllSlots().keys.filter { it !in remoteCids }.forEach { removePeerSlot(it) }
+        participantStatuses.keys.filter { it !in remoteCids }.forEach { participantStatuses.remove(it) }
         if (remotePeers.isEmpty()) {
             clearOfferTimeout()
             clearIceRestartTimer()
-            clearNonHostOfferFallback()
+            participantStatuses.clear()
         }
 
         remotePeers.forEach { participant ->
+            val previousStatus = participantStatuses[participant.cid]
+            participantStatuses[participant.cid] = participant.signalingStatus
+            val becameActive = previousStatus == ParticipantSignalingStatus.SUSPENDED &&
+                participant.signalingStatus == ParticipantSignalingStatus.ACTIVE
             val slot = getOrCreateSlot(participant.cid)
             slot.ensurePeerConnection()
             if (shouldIOffer(participant.cid, roomState)) {
-                clearNonHostOfferFallback(participant.cid)
-                maybeSendOffer(slot)
-            } else {
-                maybeScheduleNonHostOfferFallback(participant.cid, "participants")
+                if (becameActive) {
+                    scheduleIceRestart(participant.cid, "peer-reattached", 0)
+                } else {
+                    maybeSendOffer(slot)
+                }
             }
         }
 
         updateAggregatePeerState()
+    }
+
+    fun onLocalMediaReady() {
+        maybeSendOffer()
     }
 
     fun processSignalingPayload(msg: SignalingMessage) {
@@ -107,24 +138,12 @@ internal class PeerNegotiationEngine(
         }
         when (msg.type) {
             "offer" -> {
-                clearNonHostOfferFallback(fromCid)
                 val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
-                slot.setRemoteDescription(SessionDescription.Type.OFFER, sdp) {
-                    slot.createAnswer(onSdp = { answerSdp ->
-                        val payload = JSONObject().apply { put("sdp", answerSdp) }
-                        sendMessage("answer", payload, fromCid)
-                    })
-                }
+                handleRemoteOffer(slot, fromCid, sdp, offerIdFromPayload(msg.payload))
             }
             "answer" -> {
-                clearNonHostOfferFallback(fromCid)
                 val sdp = msg.payload?.optString("sdp").orEmpty().ifBlank { return }
-                slot.setRemoteDescription(SessionDescription.Type.ANSWER, sdp) {
-                    clearOfferTimeout(fromCid)
-                    slot.clearPendingIceRestart()
-                    updateAggregatePeerState()
-                    onConnectionStatusUpdate()
-                }
+                handleRemoteAnswer(slot, fromCid, sdp, offerIdFromPayload(msg.payload))
             }
             "ice" -> {
                 val candidateJson = msg.payload?.optJSONObject("candidate") ?: return
@@ -137,14 +156,16 @@ internal class PeerNegotiationEngine(
                     sdpMLineIndex,
                     candidateSdp
                 )
-                slot.addIceCandidate(candidate)
+                handleRemoteIce(slot, fromCid, candidate, offerIdFromPayload(msg.payload))
+            }
+            "media_restart_request" -> {
+                handleMediaRestartRequest(slot, fromCid)
             }
         }
     }
 
     fun onIceServersReady() {
         maybeSendOffer()
-        getAllSlots().values.forEach { if (!shouldIOffer(it.remoteCid)) maybeScheduleNonHostOfferFallback(it.remoteCid, "ice-ready") }
     }
 
     fun scheduleIceRestart(reason: String, delayMs: Long) {
@@ -155,10 +176,38 @@ internal class PeerNegotiationEngine(
         getAllSlots().values.forEach { if (shouldIOffer(it.remoteCid)) triggerIceRestart(it.remoteCid, reason) }
     }
 
+    fun handleSignalingReconnect() {
+        getAllSlots().values.forEach { slot ->
+            if (shouldIOffer(slot.remoteCid)) {
+                triggerIceRestart(slot.remoteCid, "signaling-reconnect")
+            }
+        }
+    }
+
+    fun scheduleDirtyPairRestart(remoteCid: String) {
+        getSlot(remoteCid) ?: return
+        if (shouldIOffer(remoteCid)) {
+            scheduleIceRestart(remoteCid, "negotiation-dirty", 0)
+        }
+    }
+
     fun resetAll() {
         clearOfferTimeout()
         clearIceRestartTimer()
-        clearNonHostOfferFallback()
+        clearNegotiationState()
+        participantStatuses.clear()
+        outboundMediaWatchByCid.clear()
+        lastMediaRestartHandledAtByCid.clear()
+    }
+
+    fun recoverStalledOutboundMedia() {
+        val slots = getAllSlots()
+        outboundMediaWatchByCid.keys.filterNot(slots::containsKey).forEach(outboundMediaWatchByCid::remove)
+        lastMediaRestartHandledAtByCid.keys.filterNot(slots::containsKey).forEach(lastMediaRestartHandledAtByCid::remove)
+        if (!isSignalingConnected()) return
+        for ((remoteCid, slot) in slots) {
+            recoverStalledOutboundMedia(remoteCid, slot)
+        }
     }
 
     // --- Slot Lifecycle ---
@@ -174,6 +223,7 @@ internal class PeerNegotiationEngine(
                     candidateJson.put("sdpMid", candidate.sdpMid)
                     candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
                     put("candidate", candidateJson)
+                    currentLocalOfferId(cid)?.let { put("offerId", it) }
                 }
                 sendMessage("ice", payload, cid)
             },
@@ -243,10 +293,240 @@ internal class PeerNegotiationEngine(
     private fun removePeerSlot(remoteCid: String) {
         clearOfferTimeout(remoteCid)
         clearIceRestartTimer(remoteCid)
-        clearNonHostOfferFallback(remoteCid)
+        clearNegotiationState(remoteCid)
+        participantStatuses.remove(remoteCid)
+        outboundMediaWatchByCid.remove(remoteCid)
+        lastMediaRestartHandledAtByCid.remove(remoteCid)
         val slot = removeSlotEntry(remoteCid) ?: return
         engineRemoveSlot(slot)
         slot.closePeerConnection(deferDispose = true)
+    }
+
+    private fun replacePeerSlotForRemoteOffer(remoteCid: String, offerId: String): PeerConnectionSlotProtocol? {
+        val pendingForOffer = pendingRemoteIceByOfferId[remoteCid]?.get(offerId)?.toMutableList()
+        clearOfferTimeout(remoteCid)
+        clearIceRestartTimer(remoteCid)
+        clearNegotiationState(remoteCid)
+        if (!pendingForOffer.isNullOrEmpty()) {
+            pendingRemoteIceByOfferId[remoteCid] = mutableMapOf(offerId to pendingForOffer)
+        }
+        removeSlotEntry(remoteCid)?.let { oldSlot ->
+            engineRemoveSlot(oldSlot)
+            oldSlot.closePeerConnection(deferDispose = true)
+        }
+        val newSlot = getOrCreateSlot(remoteCid)
+        return newSlot.takeIf { it.isReady() || it.ensurePeerConnection() }
+    }
+
+    private fun replacePeerSlotForMediaRecovery(remoteCid: String): PeerConnectionSlotProtocol? {
+        clearOfferTimeout(remoteCid)
+        clearIceRestartTimer(remoteCid)
+        clearNegotiationState(remoteCid)
+        removeSlotEntry(remoteCid)?.let { oldSlot ->
+            engineRemoveSlot(oldSlot)
+            oldSlot.closePeerConnection(deferDispose = true)
+        }
+        val newSlot = getOrCreateSlot(remoteCid)
+        return newSlot.takeIf { it.isReady() || it.ensurePeerConnection() }
+    }
+
+    // --- Negotiation Identity / Perfect Negotiation ---
+
+    private fun nextOfferId(remoteCid: String): String {
+        offerSequence += 1
+        return "${getClientId().orEmpty()}:$remoteCid:${clock.nowMs()}:$offerSequence"
+    }
+
+    private fun offerIdFromPayload(payload: JSONObject?): String {
+        return payload
+            ?.optString("offerId")
+            ?.takeIf { it.isNotBlank() }
+            ?: payload
+                ?.optString("negotiationId")
+                ?.takeIf { it.isNotBlank() }
+            ?: LEGACY_OFFER_ID
+    }
+
+    private fun currentLocalOfferId(remoteCid: String): String? {
+        return pendingLocalOfferIds[remoteCid]
+            ?: acceptedRemoteOfferIds[remoteCid]
+            ?: currentNegotiationIds[remoteCid]
+    }
+
+    private fun clearNegotiationState(remoteCid: String? = null) {
+        if (remoteCid != null) {
+            pendingLocalOfferIds.remove(remoteCid)
+            acceptedRemoteOfferIds.remove(remoteCid)
+            currentNegotiationIds.remove(remoteCid)
+            ignoredOfferIds.remove(remoteCid)
+            settingRemoteAnswerCids.remove(remoteCid)
+            pendingRemoteIceByOfferId.remove(remoteCid)
+            return
+        }
+        pendingLocalOfferIds.clear()
+        acceptedRemoteOfferIds.clear()
+        currentNegotiationIds.clear()
+        ignoredOfferIds.clear()
+        settingRemoteAnswerCids.clear()
+        pendingRemoteIceByOfferId.clear()
+    }
+
+    private fun handleRemoteOffer(
+        slot: PeerConnectionSlotProtocol,
+        remoteCid: String,
+        sdp: String,
+        offerId: String,
+    ) {
+        val signalingState = slot.getSignalingState()
+        val readyForOffer = !slot.isMakingOffer &&
+            (signalingState == PeerConnection.SignalingState.STABLE || remoteCid in settingRemoteAnswerCids)
+        val offerCollision = !readyForOffer
+        val polite = !shouldIOffer(remoteCid)
+
+        if (offerCollision && !polite) {
+            ignoredOfferIds[remoteCid] = offerId
+            logger?.log(SerenadaLogLevel.WARNING, TAG, "Ignoring colliding offer from impolite peer $remoteCid")
+            return
+        }
+
+        fun applyOffer(targetSlot: PeerConnectionSlotProtocol, allowPeerReset: Boolean) {
+            ignoredOfferIds.remove(remoteCid)
+            pendingLocalOfferIds.remove(remoteCid)
+            clearOfferTimeout(remoteCid)
+            targetSlot.setRemoteDescription(SessionDescription.Type.OFFER, sdp) { success ->
+                handler.post {
+                    if (!success) {
+                        if (allowPeerReset) {
+                            val replacementSlot = replacePeerSlotForRemoteOffer(remoteCid, offerId)
+                            if (replacementSlot != null) {
+                                applyOffer(replacementSlot, allowPeerReset = false)
+                                return@post
+                            }
+                        }
+                        logger?.log(SerenadaLogLevel.WARNING, TAG, "Failed to apply remote offer from $remoteCid")
+                        scheduleIceRestart(remoteCid, "remote-offer-apply-failed", 0)
+                        return@post
+                    }
+                    acceptedRemoteOfferIds[remoteCid] = offerId
+                    currentNegotiationIds[remoteCid] = offerId
+                    flushPendingRemoteIce(remoteCid, offerId, targetSlot)
+                    targetSlot.createAnswer(
+                        onSdp = { answerSdp ->
+                            val payload = JSONObject().apply {
+                                put("sdp", answerSdp)
+                                put("offerId", offerId)
+                            }
+                            sendMessage("answer", payload, remoteCid)
+                        },
+                        onComplete = { answerSuccess ->
+                            handler.post {
+                                if (!answerSuccess) {
+                                    logger?.log(SerenadaLogLevel.WARNING, TAG, "Answer creation failed for $remoteCid; resetting peer")
+                                    val replacementSlot = if (allowPeerReset) replacePeerSlotForRemoteOffer(remoteCid, offerId) else null
+                                    if (replacementSlot != null) {
+                                        applyOffer(replacementSlot, allowPeerReset = false)
+                                    } else {
+                                        scheduleIceRestart(remoteCid, "answer-failed", 0)
+                                    }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
+        if (offerCollision && signalingState == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+            pendingLocalOfferIds.remove(remoteCid)
+            clearOfferTimeout(remoteCid)
+            slot.rollbackLocalDescription { success ->
+                handler.post {
+                    if (success) {
+                        applyOffer(slot, allowPeerReset = true)
+                    } else {
+                        logger?.log(SerenadaLogLevel.WARNING, TAG, "Failed to roll back colliding offer for $remoteCid")
+                        val replacementSlot = replacePeerSlotForRemoteOffer(remoteCid, offerId)
+                        if (replacementSlot != null) {
+                            applyOffer(replacementSlot, allowPeerReset = false)
+                        } else {
+                            scheduleIceRestart(remoteCid, "rollback-failed", 0)
+                        }
+                    }
+                }
+            }
+            return
+        }
+
+        applyOffer(slot, allowPeerReset = true)
+    }
+
+    private fun handleRemoteAnswer(
+        slot: PeerConnectionSlotProtocol,
+        remoteCid: String,
+        sdp: String,
+        offerId: String,
+    ) {
+        val pendingOfferId = pendingLocalOfferIds[remoteCid]
+        if (slot.getSignalingState() != PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+            logger?.log(SerenadaLogLevel.DEBUG, TAG, "Dropping stale answer from $remoteCid in ${slot.getSignalingState()}")
+            return
+        }
+        if (offerId != LEGACY_OFFER_ID && pendingOfferId != offerId) {
+            logger?.log(SerenadaLogLevel.DEBUG, TAG, "Dropping answer from $remoteCid for stale offerId=$offerId")
+            return
+        }
+
+        settingRemoteAnswerCids.add(remoteCid)
+        slot.setRemoteDescription(SessionDescription.Type.ANSWER, sdp) { success ->
+            handler.post {
+                settingRemoteAnswerCids.remove(remoteCid)
+                if (success) {
+                    val completedOfferId = pendingLocalOfferIds.remove(remoteCid) ?: offerId
+                    currentNegotiationIds[remoteCid] = completedOfferId
+                    ignoredOfferIds.remove(remoteCid)
+                    clearOfferTimeout(remoteCid)
+                    slot.clearPendingIceRestart()
+                    flushPendingRemoteIce(remoteCid, completedOfferId, slot)
+                    updateAggregatePeerState()
+                    onConnectionStatusUpdate()
+                } else if (shouldIOffer(remoteCid)) {
+                    scheduleIceRestart(remoteCid, "answer-apply-failed", 0)
+                } else {
+                    logger?.log(SerenadaLogLevel.WARNING, TAG, "Failed to apply answer from $remoteCid")
+                }
+            }
+        }
+    }
+
+    private fun handleRemoteIce(
+        slot: PeerConnectionSlotProtocol,
+        remoteCid: String,
+        candidate: IceCandidate,
+        offerId: String,
+    ) {
+        if (ignoredOfferIds[remoteCid] == offerId) return
+        if (offerId != LEGACY_OFFER_ID && !isKnownNegotiationId(remoteCid, offerId)) {
+            val pendingByOffer = pendingRemoteIceByOfferId.getOrPut(remoteCid) { mutableMapOf() }
+            val pending = pendingByOffer.getOrPut(offerId) { mutableListOf() }
+            if (pending.size < WebRtcResilienceConstants.ICE_CANDIDATE_BUFFER_MAX) {
+                pending.add(candidate)
+            }
+            return
+        }
+        slot.addIceCandidate(candidate)
+    }
+
+    private fun isKnownNegotiationId(remoteCid: String, offerId: String): Boolean {
+        return pendingLocalOfferIds[remoteCid] == offerId ||
+            acceptedRemoteOfferIds[remoteCid] == offerId ||
+            currentNegotiationIds[remoteCid] == offerId
+    }
+
+    private fun flushPendingRemoteIce(remoteCid: String, offerId: String, slot: PeerConnectionSlotProtocol) {
+        val pendingByOffer = pendingRemoteIceByOfferId[remoteCid] ?: return
+        val candidates = pendingByOffer.remove(offerId) ?: return
+        candidates.forEach(slot::addIceCandidate)
+        if (pendingByOffer.isEmpty()) pendingRemoteIceByOfferId.remove(remoteCid)
     }
 
     // --- Offer Logic ---
@@ -259,10 +539,16 @@ internal class PeerNegotiationEngine(
 
     private fun canOffer(slot: PeerConnectionSlotProtocol): Boolean {
         if (!isSignalingConnected()) return false
+        if (!isLocalMediaReady()) return false
         if (!slot.isReady()) return false
         if (!shouldIOffer(slot.remoteCid, getCurrentRoomState())) return false
-        val participantCids = getCurrentRoomState()?.participants?.map { it.cid }?.toSet() ?: emptySet()
-        return slot.remoteCid in participantCids
+        val participant = getCurrentRoomState()?.participants?.firstOrNull { it.cid == slot.remoteCid }
+        return participant?.signalingStatus == ParticipantSignalingStatus.ACTIVE
+    }
+
+    private fun isParticipantActive(remoteCid: String): Boolean {
+        val participant = getCurrentRoomState()?.participants?.firstOrNull { it.cid == remoteCid }
+        return participant?.signalingStatus == ParticipantSignalingStatus.ACTIVE
     }
 
     private fun maybeSendOffer(force: Boolean = false, iceRestart: Boolean = false) {
@@ -276,23 +562,148 @@ internal class PeerNegotiationEngine(
         if (!force && slot.sentOffer) return
         if (!canOffer(slot)) return
         if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) { if (iceRestart) slot.markPendingIceRestart(); return }
+        val offerId = nextOfferId(slot.remoteCid)
+        pendingLocalOfferIds[slot.remoteCid] = offerId
+        acceptedRemoteOfferIds.remove(slot.remoteCid)
+        ignoredOfferIds.remove(slot.remoteCid)
         slot.beginOffer()
         val started = slot.createOffer(
             iceRestart = iceRestart,
             onSdp = { sdp ->
-                val payload = JSONObject().apply { put("sdp", sdp) }
+                val payload = JSONObject().apply {
+                    put("sdp", sdp)
+                    put("offerId", offerId)
+                }
                 sendMessage("offer", payload, slot.remoteCid)
                 scheduleOfferTimeout(slot.remoteCid)
             },
             onComplete = { success ->
                 handler.post {
                     slot.completeOffer()
-                    if (!success && iceRestart) scheduleIceRestart(slot.remoteCid, "offer-failed", 500)
+                    if (!success) {
+                        pendingLocalOfferIds.remove(slot.remoteCid)
+                        if (iceRestart) scheduleIceRestart(slot.remoteCid, "offer-failed", 500)
+                    }
                 }
             }
         )
-        if (!started) { slot.completeOffer(); if (iceRestart) slot.markPendingIceRestart(); return }
+        if (!started) {
+            pendingLocalOfferIds.remove(slot.remoteCid)
+            slot.completeOffer()
+            if (iceRestart) slot.markPendingIceRestart()
+            return
+        }
         if (!force) slot.markOfferSent()
+    }
+
+    private fun handleMediaRestartRequest(slot: PeerConnectionSlotProtocol, remoteCid: String) {
+        if (!canOffer(slot)) return
+        val now = clock.nowMs()
+        val lastHandledAt = lastMediaRestartHandledAtByCid[remoteCid]
+        if (lastHandledAt != null && now - lastHandledAt < WebRtcResilienceConstants.OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return
+        lastMediaRestartHandledAtByCid[remoteCid] = now
+        logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after media restart request from $remoteCid")
+        val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
+        maybeSendOffer(replacement)
+    }
+
+    // --- Outbound Media Watchdog ---
+
+    private fun recoverStalledOutboundMedia(remoteCid: String, slot: PeerConnectionSlotProtocol) {
+        val watch = outboundMediaWatchByCid.getOrPut(remoteCid) { OutboundMediaWatch() }
+        if (watch.inFlight) return
+        if (!isPeerMediaConnected(slot)) {
+            resetOutboundMediaSample(watch)
+            return
+        }
+
+        watch.inFlight = true
+        slot.collectOutboundMediaSample { sample ->
+            handler.post {
+                if (getSlot(remoteCid) !== slot) {
+                    watch.inFlight = false
+                    return@post
+                }
+                finalizeOutboundMediaSample(remoteCid, slot, watch, sample)
+            }
+        }
+    }
+
+    private fun finalizeOutboundMediaSample(
+        remoteCid: String,
+        slot: PeerConnectionSlotProtocol,
+        watch: OutboundMediaWatch,
+        sample: OutboundMediaSample?,
+    ) {
+        try {
+            if (sample == null || (!sample.expectsAudio && !sample.expectsVideo)) {
+                resetOutboundMediaSample(watch)
+                return
+            }
+
+            val previous = watch.lastSample
+            watch.lastSample = sample
+            if (previous == null) {
+                watch.stallSamples = 0
+                return
+            }
+
+            val videoStalled = sample.expectsVideo &&
+                sample.videoBytesSent <= previous.videoBytesSent &&
+                sample.videoFramesSent <= previous.videoFramesSent
+            val audioOnlyStalled = !sample.expectsVideo &&
+                sample.expectsAudio &&
+                sample.audioBytesSent <= previous.audioBytesSent
+            if (!videoStalled && !audioOnlyStalled) {
+                watch.stallSamples = 0
+                return
+            }
+
+            watch.stallSamples += 1
+            if (watch.stallSamples < WebRtcResilienceConstants.OUTBOUND_MEDIA_STALL_SAMPLES) return
+
+            val now = clock.nowMs()
+            val lastRecoveryAt = watch.lastRecoveryAtMs
+            if (lastRecoveryAt != null && now - lastRecoveryAt < WebRtcResilienceConstants.OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return
+
+            watch.lastRecoveryAtMs = now
+            resetOutboundMediaSample(watch)
+            if (shouldIOffer(remoteCid)) {
+                recreatePeerForMediaRecovery(remoteCid, "stalled outbound media")
+            } else {
+                requestPeerMediaRecovery(remoteCid, "stalled outbound media")
+            }
+        } finally {
+            watch.inFlight = false
+        }
+    }
+
+    private fun isPeerMediaConnected(slot: PeerConnectionSlotProtocol): Boolean =
+        slot.getSignalingState() == PeerConnection.SignalingState.STABLE &&
+            slot.getConnectionState() == PeerConnection.PeerConnectionState.CONNECTED &&
+            (
+                slot.getIceConnectionState() == PeerConnection.IceConnectionState.CONNECTED ||
+                    slot.getIceConnectionState() == PeerConnection.IceConnectionState.COMPLETED
+                )
+
+    private fun resetOutboundMediaSample(watch: OutboundMediaWatch) {
+        watch.lastSample = null
+        watch.stallSamples = 0
+    }
+
+    private fun requestPeerMediaRecovery(remoteCid: String, reason: String) {
+        if (!isSignalingConnected() || !isParticipantActive(remoteCid)) return
+        logger?.log(SerenadaLogLevel.WARNING, TAG, "Requesting media restart from $remoteCid after $reason")
+        val payload = JSONObject().apply { put("reason", reason) }
+        sendMessage("media_restart_request", payload, remoteCid)
+    }
+
+    private fun recreatePeerForMediaRecovery(remoteCid: String, reason: String) {
+        val current = getSlot(remoteCid) ?: return
+        if (!canOffer(current)) return
+        logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after $reason for $remoteCid")
+        val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
+        maybeSendOffer(replacement)
     }
 
     // --- Timers ---
@@ -304,15 +715,14 @@ internal class PeerNegotiationEngine(
             slot.cancelOfferTimeout()
             if (slot.getSignalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
                 slot.markPendingIceRestart()
+                pendingLocalOfferIds.remove(remoteCid)
                 slot.rollbackLocalDescription {
                     handler.post {
                         if (shouldIOffer(remoteCid)) scheduleIceRestart(remoteCid, "offer-timeout", 0)
-                        else maybeScheduleNonHostOfferFallback(remoteCid, "offer-timeout")
                     }
                 }
             } else {
                 if (shouldIOffer(remoteCid)) scheduleIceRestart(remoteCid, "offer-timeout-stale", 0)
-                else maybeScheduleNonHostOfferFallback(remoteCid, "offer-timeout-stale")
             }
         }
         slot.setOfferTimeoutTask(runnable)
@@ -349,54 +759,37 @@ internal class PeerNegotiationEngine(
         val slot = getSlot(remoteCid) ?: return
         if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
         if (slot.isMakingOffer) { slot.markPendingIceRestart(); return }
+        val signalingState = slot.getSignalingState()
+        if (signalingState != PeerConnection.SignalingState.STABLE) {
+            slot.markPendingIceRestart()
+            if (signalingState == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                pendingLocalOfferIds.remove(remoteCid)
+                rollbackStaleLocalOfferAndRetryIceRestart(slot, remoteCid, reason)
+            }
+            return
+        }
         logger?.log(SerenadaLogLevel.WARNING, "Negotiation", "ICE restart triggered for $remoteCid ($reason)")
         slot.recordIceRestart(clock.nowMs())
         maybeSendOffer(slot, force = true, iceRestart = true)
     }
 
-    private fun maybeScheduleNonHostOfferFallback(remoteCid: String, reason: String) {
-        val slot = getSlot(remoteCid) ?: return
-        if (shouldIOffer(remoteCid)) { clearNonHostOfferFallback(remoteCid); return }
-        if (!isSignalingConnected()) return
-        if (slot.nonHostFallbackTask != null) return
-        if (slot.nonHostFallbackAttempts >= WebRtcResilienceConstants.NON_HOST_FALLBACK_MAX_ATTEMPTS) return
-        val runnable = Runnable {
-            slot.clearNonHostFallbackTask()
-            slot.incrementNonHostFallbackAttempts()
-            logger?.log(SerenadaLogLevel.WARNING, "Negotiation", "Non-host offer fallback for $remoteCid ($reason)")
-            maybeSendNonHostFallbackOffer(remoteCid)
-        }
-        slot.setNonHostFallbackTask(runnable)
-        handler.postDelayed(runnable, WebRtcResilienceConstants.NON_HOST_FALLBACK_DELAY_MS)
-    }
-
-    private fun clearNonHostOfferFallback(remoteCid: String? = null) {
-        if (remoteCid != null) {
-            getSlot(remoteCid)?.let { slot -> slot.nonHostFallbackTask?.let { handler.removeCallbacks(it) }; slot.cancelNonHostFallbackTask() }
-        } else {
-            getAllSlots().values.forEach { slot -> slot.nonHostFallbackTask?.let { r -> handler.removeCallbacks(r) }; slot.cancelNonHostFallbackTask() }
-        }
-    }
-
-    private fun maybeSendNonHostFallbackOffer(remoteCid: String) {
-        val slot = getSlot(remoteCid) ?: return
-        if (shouldIOffer(remoteCid)) return
-        if (!isSignalingConnected()) return
-        if (!slot.isReady() && !slot.ensurePeerConnection()) return
-        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) return
-        if (slot.hasRemoteDescription()) return
-        if (slot.isMakingOffer) return
-        slot.beginOffer()
-        val started = slot.createOffer(
-            onSdp = { sdp ->
-                sendMessage("offer", JSONObject().apply { put("sdp", sdp) }, remoteCid)
-                scheduleOfferTimeout(remoteCid)
-            },
-            onComplete = { success ->
-                handler.post { slot.completeOffer(); if (!success) maybeScheduleNonHostOfferFallback(remoteCid, "offer-failed") }
+    private fun rollbackStaleLocalOfferAndRetryIceRestart(
+        slot: PeerConnectionSlotProtocol,
+        remoteCid: String,
+        reason: String,
+    ) {
+        slot.rollbackLocalDescription { success ->
+            handler.post {
+                if (success) {
+                    val currentSlot = getSlot(remoteCid) ?: return@post
+                    if (currentSlot.getSignalingState() == PeerConnection.SignalingState.STABLE && currentSlot.pendingIceRestart) {
+                        triggerIceRestart(remoteCid, "$reason-rollback")
+                    }
+                } else {
+                    scheduleOfferTimeout(remoteCid)
+                }
             }
-        )
-        if (!started) { slot.completeOffer(); maybeScheduleNonHostOfferFallback(remoteCid, "offer-not-started") }
+        }
     }
 
     // --- Aggregate Peer State ---

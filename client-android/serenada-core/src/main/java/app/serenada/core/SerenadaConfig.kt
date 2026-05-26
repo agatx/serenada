@@ -1,6 +1,8 @@
 package app.serenada.core
 
 import app.serenada.core.call.LocalCameraMode
+import app.serenada.core.call.SerenadaAudioCoordinator
+import app.serenada.core.call.AudioIntent
 
 /** Default preference order for [SerenadaConfig.cameraModes] when left null. */
 val DEFAULT_CAMERA_MODES: List<LocalCameraMode> = listOf(
@@ -37,6 +39,10 @@ data class SerenadaConfig(
     val transports: List<SerenadaTransport> = listOf(SerenadaTransport.WS, SerenadaTransport.SSE),
     /** Whether the proximity sensor is used to switch audio to the earpiece and pause video (default false). */
     val proximityMonitoringEnabled: Boolean = false,
+    /** Custom audio coordinator. If null, the SDK uses its internal default coordinator. */
+    val audioCoordinator: SerenadaAudioCoordinator? = null,
+    /** Audio policy passed to the coordinator when a call session activates. */
+    val audioIntent: AudioIntent = AudioIntent(),
 )
 
 /** Available signaling transport types. */

@@ -26,6 +26,22 @@ enum class SerenadaString {
     FrontlineStopScreenShare,
     FrontlineShareScreen,
     FrontlineClose,
+    /** Header for Call audio route selection. */
+    CallAudioRoute,
+    /** Call audio route label for speakerphone output. */
+    CallAudioSpeaker,
+    /** Call audio route label for built-in phone/earpiece output. */
+    CallAudioPhone,
+    /** Call audio route label for wired headset output. */
+    CallAudioHeadset,
+    /** Call audio route label for Bluetooth output. */
+    CallAudioBluetooth,
+    /** Call audio route label for car audio output. */
+    CallAudioCar,
+    /** Call audio route label for USB audio output. */
+    CallAudioUsb,
+    /** Call audio route fallback label for unknown output routes. */
+    CallAudioUnknown,
 }
 
 val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
@@ -54,6 +70,14 @@ val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
     SerenadaString.FrontlineStopScreenShare to "Stop screen share",
     SerenadaString.FrontlineShareScreen to "Share screen",
     SerenadaString.FrontlineClose to "Close",
+    SerenadaString.CallAudioRoute to "Audio",
+    SerenadaString.CallAudioSpeaker to "Speaker",
+    SerenadaString.CallAudioPhone to "Phone",
+    SerenadaString.CallAudioHeadset to "Headset",
+    SerenadaString.CallAudioBluetooth to "Bluetooth",
+    SerenadaString.CallAudioCar to "Car audio",
+    SerenadaString.CallAudioUsb to "USB audio",
+    SerenadaString.CallAudioUnknown to "Audio",
 )
 
 fun resolveString(key: SerenadaString, overrides: Map<SerenadaString, String>?): String {

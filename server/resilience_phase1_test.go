@@ -812,6 +812,116 @@ func TestRelayToSuspendedTargetMarksDirtyAndEmitsRelayFailed(t *testing.T) {
 	}
 }
 
+func TestMediaRestartRequestRelaysToActivePeer(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	bJoined := captureJoined(t, b)
+
+	drainMessages(a)
+	drainMessages(b)
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"reason": "stalled outbound media",
+	})
+	hub.handleMessage(a, mustMarshal(Message{
+		V:       1,
+		Type:    "media_restart_request",
+		RID:     rid,
+		To:      bJoined.CID,
+		Payload: payload,
+	}))
+
+	for _, m := range drainMessages(b) {
+		if m.Type != "media_restart_request" {
+			continue
+		}
+		var p struct {
+			From   string `json:"from"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			t.Fatalf("parse media_restart_request payload: %v", err)
+		}
+		if p.From != a.cid || p.Reason != "stalled outbound media" {
+			t.Fatalf("unexpected media_restart_request payload: %+v", p)
+		}
+		return
+	}
+	t.Fatal("expected media_restart_request relay")
+}
+
+func TestMediaRestartRequestToSuspendedTargetMarksDirtyAndEmitsRelayFailed(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+	rid := mustTestRoomID(t)
+	hub := newHub(4)
+
+	a := fakeClient(hub)
+	hub.registerClient(a)
+	hub.handleMessage(a, joinPayload(rid, 4, 4))
+	captureJoined(t, a)
+
+	b := fakeClient(hub)
+	hub.registerClient(b)
+	hub.handleMessage(b, joinPayload(rid, 4, 4))
+	bJoined := captureJoined(t, b)
+
+	drainMessages(a)
+	hub.disconnectClient(b)
+	drainMessages(a)
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"reason": "stalled outbound media",
+	})
+	hub.handleMessage(a, mustMarshal(Message{
+		V:       1,
+		Type:    "media_restart_request",
+		RID:     rid,
+		To:      bJoined.CID,
+		Payload: payload,
+	}))
+
+	var saw bool
+	for _, m := range drainMessages(a) {
+		if m.Type != "relay_failed" {
+			continue
+		}
+		var p struct {
+			Reason  string   `json:"reason"`
+			Targets []string `json:"targets"`
+			Of      string   `json:"of"`
+		}
+		if err := json.Unmarshal(m.Payload, &p); err != nil {
+			continue
+		}
+		if p.Reason == "target_suspended" && len(p.Targets) == 1 && p.Targets[0] == bJoined.CID && p.Of == "media_restart_request" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatal("expected relay_failed for suspended media_restart_request target")
+	}
+
+	hub.mu.RLock()
+	room := hub.rooms[rid]
+	hub.mu.RUnlock()
+	room.mu.Lock()
+	dirty := room.negotiationDirty
+	room.mu.Unlock()
+	if dirty == nil || !dirty[a.cid][bJoined.CID] {
+		t.Fatalf("expected dirty negotiation pair %s→%s, got %+v", a.cid, bJoined.CID, dirty)
+	}
+}
+
 func TestNegotiationDirtyDeliveredOnReattach(t *testing.T) {
 	t.Setenv("TURN_SECRET", "test-reconnect-secret")
 	rid := mustTestRoomID(t)

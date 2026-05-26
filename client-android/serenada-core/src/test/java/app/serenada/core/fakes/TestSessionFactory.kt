@@ -2,6 +2,7 @@ package app.serenada.core.fakes
 
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.SerenadaSession
+import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.SessionClock
 import okhttp3.OkHttpClient
 import org.json.JSONObject
@@ -19,6 +20,7 @@ internal class TestSessionFactory(
     val roomId: String = "test-room-id",
     val handlesReconnection: Boolean = false,
     defaultVideoEnabled: Boolean = true,
+    audioCoordinator: SerenadaAudioCoordinator? = null,
     config: SerenadaConfig? = null,
 ) {
     val fakeProvider = FakeSignalingProvider(handlesReconnection = handlesReconnection)
@@ -32,6 +34,7 @@ internal class TestSessionFactory(
         config = config ?: SerenadaConfig(
             signalingProvider = fakeProvider,
             defaultVideoEnabled = defaultVideoEnabled,
+            audioCoordinator = audioCoordinator,
         ),
         context = RuntimeEnvironment.getApplication(),
         delegate = null,
@@ -97,19 +100,21 @@ internal class TestSessionFactory(
         ShadowLooper.idleMainLooper()
     }
 
-    fun simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp") {
+    fun simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp", offerId: String? = null) {
         val payload = JSONObject().apply {
             put("from", fromCid)
             put("sdp", sdp)
+            offerId?.let { put("offerId", it) }
         }
         fakeProvider.simulateMessage(from = fromCid, type = "offer", payload = payload)
         ShadowLooper.idleMainLooper()
     }
 
-    fun simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp") {
+    fun simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp", offerId: String? = null) {
         val payload = JSONObject().apply {
             put("from", fromCid)
             put("sdp", sdp)
+            offerId?.let { put("offerId", it) }
         }
         fakeProvider.simulateMessage(from = fromCid, type = "answer", payload = payload)
         ShadowLooper.idleMainLooper()
@@ -120,9 +125,11 @@ internal class TestSessionFactory(
         candidate: String = "candidate:test",
         sdpMid: String? = "0",
         sdpMLineIndex: Int = 0,
+        offerId: String? = null,
     ) {
         val payload = JSONObject().apply {
             put("from", fromCid)
+            offerId?.let { put("offerId", it) }
             put("candidate", JSONObject().apply {
                 put("candidate", candidate)
                 sdpMid?.let { put("sdpMid", it) }
@@ -156,7 +163,7 @@ internal class TestSessionFactory(
     }
 
     fun tearDown() {
-        session.cancelJoin()
+        session.close()
         ShadowLooper.idleMainLooper()
     }
 }

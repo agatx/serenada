@@ -7,6 +7,7 @@ final class SessionTestHarness {
     let fakeProvider: FakeSignalingProvider
     let fakeAPI: FakeAPIClient
     let fakeAudio: FakeAudioController
+    let fakeAudioCoordinator: FakeAudioCoordinator
     let fakeMedia: FakeMediaEngine
     let fakeClock: FakeSessionClock
 
@@ -16,11 +17,15 @@ final class SessionTestHarness {
         config: SerenadaConfig? = nil
     ) {
         self.fakeProvider = FakeSignalingProvider(handlesReconnection: handlesReconnection)
-        let resolvedConfig = config ?? SerenadaConfig(signalingProvider: fakeProvider)
+        var resolvedConfig = config ?? SerenadaConfig(signalingProvider: fakeProvider)
         self.fakeAPI = FakeAPIClient()
         self.fakeAudio = FakeAudioController()
+        self.fakeAudioCoordinator = FakeAudioCoordinator()
         self.fakeMedia = FakeMediaEngine()
         self.fakeClock = FakeSessionClock()
+        if resolvedConfig.audioCoordinator == nil {
+            resolvedConfig.audioCoordinator = fakeAudioCoordinator
+        }
 
         self.session = SerenadaSession(
             roomId: roomId,
@@ -41,6 +46,7 @@ final class SessionTestHarness {
             session.resumeJoin()
             await yieldToMainActor()
         }
+        await waitForJoinStartup()
     }
 
     func openSignaling(transport: String = "ws") {
@@ -94,6 +100,15 @@ final class SessionTestHarness {
         await Task.yield()
     }
 
+    func waitForJoinStartup(attempts: Int = 32) async {
+        for _ in 0..<attempts {
+            if !fakeMedia.startLocalMediaCalls.isEmpty || session.state.phase != .joining {
+                return
+            }
+            await yieldToMainActor()
+        }
+    }
+
     // MARK: - Negotiation Test Helpers
 
     /// Advance to inCall state with TURN credentials ready and ICE servers set.
@@ -120,25 +135,33 @@ final class SessionTestHarness {
         await yieldToMainActor()
     }
 
-    func simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp") {
+    func simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp", offerId: String? = nil) {
+        var payload: [String: JSONValue] = [
+            "from": .string(fromCid),
+            "sdp": .string(sdp)
+        ]
+        if let offerId {
+            payload["offerId"] = .string(offerId)
+        }
         fakeProvider.simulateMessage(
             from: fromCid,
             type: "offer",
-            payload: [
-                "from": .string(fromCid),
-                "sdp": .string(sdp)
-            ]
+            payload: payload
         )
     }
 
-    func simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp") {
+    func simulateAnswerFromRemote(fromCid: String, sdp: String = "remote-answer-sdp", offerId: String? = nil) {
+        var payload: [String: JSONValue] = [
+            "from": .string(fromCid),
+            "sdp": .string(sdp)
+        ]
+        if let offerId {
+            payload["offerId"] = .string(offerId)
+        }
         fakeProvider.simulateMessage(
             from: fromCid,
             type: "answer",
-            payload: [
-                "from": .string(fromCid),
-                "sdp": .string(sdp)
-            ]
+            payload: payload
         )
     }
 
@@ -146,7 +169,8 @@ final class SessionTestHarness {
         fromCid: String,
         candidate: String = "candidate:1 1 udp 2130706431 192.168.1.1 12345 typ host",
         sdpMid: String? = "0",
-        sdpMLineIndex: Int = 0
+        sdpMLineIndex: Int = 0,
+        offerId: String? = nil
     ) {
         var candidateObject: [String: JSONValue] = [
             "candidate": .string(candidate),
@@ -155,13 +179,17 @@ final class SessionTestHarness {
         if let sdpMid {
             candidateObject["sdpMid"] = .string(sdpMid)
         }
+        var payload: [String: JSONValue] = [
+            "from": .string(fromCid),
+            "candidate": .object(candidateObject)
+        ]
+        if let offerId {
+            payload["offerId"] = .string(offerId)
+        }
         fakeProvider.simulateMessage(
             from: fromCid,
             type: "ice",
-            payload: [
-                "from": .string(fromCid),
-                "candidate": .object(candidateObject)
-            ]
+            payload: payload
         )
     }
 

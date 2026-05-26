@@ -185,6 +185,14 @@
 "frontline_stop_screen_share" = "Остановить демонстрацию экрана";
 "frontline_share_screen" = "Показать экран";
 "frontline_close" = "Закрыть";
+"call_audio_route" = "Аудио";
+"call_audio_speaker" = "Динамик";
+"call_audio_phone" = "Телефон";
+"call_audio_headset" = "Гарнитура";
+"call_audio_bluetooth" = "Bluetooth";
+"call_audio_car" = "Автоаудио";
+"call_audio_usb" = "USB-аудио";
+"call_audio_unknown" = "Аудио";
 
 "feedback_title" = "Отзыв";
 "feedback_send_action" = "Отправить отзыв";

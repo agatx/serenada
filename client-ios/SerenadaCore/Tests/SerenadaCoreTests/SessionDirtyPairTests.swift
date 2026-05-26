@@ -41,6 +41,24 @@ final class SessionDirtyPairTests: XCTestCase {
         XCTAssertTrue(didFire, "negotiation_dirty should trigger ICE restart for the named peer")
     }
 
+    func testNegotiationDirtyIsNoOpWhenLocalIsNotOfferer() async {
+        await harness.advanceToInCallWithTurn(
+            localCid: "zeta",
+            remoteCid: "alpha",
+            localJoinedAt: 2,
+            remoteJoinedAt: 1
+        )
+        let slot = harness.fakeMedia.fakeSlots["alpha"]
+        XCTAssertNotNil(slot)
+        let baselineOffers = slot?.createOfferCalls ?? 0
+
+        harness.fakeProvider.simulateNegotiationDirty(withCid: "alpha")
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(slot?.createOfferCalls ?? 0, baselineOffers, "Non-offerer must not create recovery offers")
+        XCTAssertEqual(slot?.pendingIceRestart, false, "Non-offerer must not wedge on a pending ICE restart it cannot send")
+    }
+
     func testNegotiationDirtyForUnknownPeerIsNoOp() async {
         await harness.advanceToInCallWithTurn(
             localCid: "alpha",

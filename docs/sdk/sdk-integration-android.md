@@ -90,7 +90,7 @@ fun FrontlineCallScreen(url: String) {
 }
 ```
 
-URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE)` on the `SerenadaConfig` used to create the session. When `Frontline` is selected, Android keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
+URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE)` on the `SerenadaConfig` used to create the session. When `Frontline` is selected, Android keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. The More sheet shows the current audio route first and opens a checkmarked route list for routes published by the session audio coordinator. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
 
 ## Session-First (Pre-Observation)
 
@@ -235,6 +235,51 @@ session.end()     // terminates room for all
 `SerenadaSession` exposes two flows:
 - `state` for lifecycle, participants, permissions, and errors
 - `diagnostics` for transport state, low-level WebRTC state, stats, and feature degradation details
+
+## Pluggable Audio Coordinators
+
+By default, `serenada-core` manages Android audio focus, `MODE_IN_COMMUNICATION`, route changes, and proximity behavior with an internal coordinator. Apps that already own process-wide audio state, such as apps with an existing audio engine, can inject a custom `SerenadaAudioCoordinator`:
+
+```kotlin
+val serenada = SerenadaCore(
+    config = SerenadaConfig(
+        serverHost = "serenada.app",
+        audioCoordinator = MyAudioCoordinator(),
+        audioIntent = AudioIntent(
+            requiresCapture = true,
+            requiresPlayback = true,
+            muteDuringExternalAudio = true,
+            duckDuringExternalAudio = true,
+        ),
+    ),
+    context = applicationContext,
+)
+```
+
+Custom coordinators implement `SerenadaAudioCoordinator`. They activate and deactivate call audio, apply route selections, publish `availableDevices`, `effectiveInputDevice`, `effectiveOutputDevice`, and emit `AudioCoordinatorEvent.ExternalAudioStarted` / `ExternalAudioEnded` when host-owned audio should temporarily mute local capture or duck playback. For duck-only interruptions that should not mute capture, emit `PlaybackDuckingStarted` / `PlaybackDuckingEnded`.
+
+The concrete default coordinator is internal SDK behavior, not a supported public class to instantiate. Leave `audioCoordinator = null` to use it.
+
+Custom UIs can observe and control the active coordinator through the session:
+
+```kotlin
+lifecycleScope.launch {
+    session.availableAudioDevices.collect { devices ->
+        // Render route picker.
+    }
+}
+
+lifecycleScope.launch {
+    session.isMicMutedByExternalAudio.collect { mutedByExternalAudio ->
+        // Show a distinct external-audio mute state if needed.
+    }
+}
+
+session.selectAudioDevice(device)
+session.setMicMuted(true)
+```
+
+`isMicMuted` is the effective mute state: user mute, coordinator-driven external mute, and missing input route all count as muted. `isMicMutedByExternalAudio` isolates the coordinator-driven portion so the host can distinguish user mute from other external audio.
 
 ## Permissions Handling
 
@@ -409,7 +454,9 @@ val config = SerenadaConfig(
     defaultAudioEnabled = true,       // mic on at join (default)
     defaultVideoEnabled = true,       // camera on at join (default)
     cameraModes = DEFAULT_CAMERA_MODES, // available modes & cycle order; empty = audio-only (default: all supported modes)
-    transports = listOf(SerenadaTransport.WS, SerenadaTransport.SSE) // transport priority (default)
+    transports = listOf(SerenadaTransport.WS, SerenadaTransport.SSE), // transport priority (default)
+    audioCoordinator = null,          // custom SerenadaAudioCoordinator, or internal default
+    audioIntent = AudioIntent(),      // audio policy passed to the coordinator
 )
 ```
 

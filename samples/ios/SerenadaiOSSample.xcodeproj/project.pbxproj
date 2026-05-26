@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2BE5A3862FB89D3FBF7F6323 /* SampleAudioCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFBB2B6613452F9D67A76644 /* SampleAudioCoordinator.swift */; };
 		6CF3476877DA3857617F7F09 /* SampleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFE5658C05C260B3C738673F /* SampleApp.swift */; };
 		88754D97CAA579CA6F653BE9 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 2BE6A6A228FF7E4499A7B690 /* SerenadaCallUI */; };
 		EE9FBC1A7FDDB675541C4C24 /* SerenadaCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2F9E0DD7A17C19C01D95052B /* SerenadaCore */; };
@@ -17,6 +18,7 @@
 		6C3B2CD2AC43B90853AD6422 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = "../../client-ios/SerenadaCallUI"; sourceTree = SOURCE_ROOT; };
 		95A490328968D50CBBB2BCFF /* SerenadaCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCore; path = "../../client-ios/SerenadaCore"; sourceTree = SOURCE_ROOT; };
 		EFE5658C05C260B3C738673F /* SampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleApp.swift; sourceTree = "<group>"; };
+		FFBB2B6613452F9D67A76644 /* SampleAudioCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleAudioCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -36,6 +38,7 @@
 			isa = PBXGroup;
 			children = (
 				EFE5658C05C260B3C738673F /* SampleApp.swift */,
+				FFBB2B6613452F9D67A76644 /* SampleAudioCoordinator.swift */,
 			);
 			path = SampleApp;
 			sourceTree = "<group>";
@@ -141,6 +144,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6CF3476877DA3857617F7F09 /* SampleApp.swift in Sources */,
+				2BE5A3862FB89D3FBF7F6323 /* SampleAudioCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -225,7 +229,7 @@
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.1;
+				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -301,7 +305,7 @@
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 5.1;
+				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;

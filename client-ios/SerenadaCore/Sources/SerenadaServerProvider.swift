@@ -242,7 +242,7 @@ extension SerenadaServerProvider: SignalingClientListener {
                     )
                 )
             }
-        case "offer", "answer", "ice", "content_state", "participant_media_state":
+        case "offer", "answer", "ice", "media_restart_request", "content_state", "participant_media_state":
             emitPeerMessage(message)
         case "negotiation_dirty":
             if let payload = NegotiationDirtyPayload(from: message.payload) {

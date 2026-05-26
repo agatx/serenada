@@ -30,4 +30,12 @@ fun buildSerenadaCallStrings(context: Context): Map<SerenadaString, String> = ma
     SerenadaString.FrontlineStopScreenShare to context.getString(R.string.frontline_stop_screen_share),
     SerenadaString.FrontlineShareScreen to context.getString(R.string.frontline_share_screen),
     SerenadaString.FrontlineClose to context.getString(R.string.frontline_close),
+    SerenadaString.CallAudioRoute to context.getString(R.string.call_audio_route),
+    SerenadaString.CallAudioSpeaker to context.getString(R.string.call_audio_speaker),
+    SerenadaString.CallAudioPhone to context.getString(R.string.call_audio_phone),
+    SerenadaString.CallAudioHeadset to context.getString(R.string.call_audio_headset),
+    SerenadaString.CallAudioBluetooth to context.getString(R.string.call_audio_bluetooth),
+    SerenadaString.CallAudioCar to context.getString(R.string.call_audio_car),
+    SerenadaString.CallAudioUsb to context.getString(R.string.call_audio_usb),
+    SerenadaString.CallAudioUnknown to context.getString(R.string.call_audio_unknown),
 )

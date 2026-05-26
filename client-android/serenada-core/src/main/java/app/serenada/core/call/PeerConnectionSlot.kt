@@ -1,9 +1,11 @@
 package app.serenada.core.call
 
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
+import java.util.concurrent.atomic.AtomicInteger
 import org.webrtc.AudioTrack
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
@@ -13,6 +15,7 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RTCStats
 import org.webrtc.RTCStatsReport
 import org.webrtc.RtpParameters
+import org.webrtc.RtpSender
 import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceViewRenderer
@@ -35,6 +38,7 @@ internal class PeerConnectionSlot(
     private val applyAudioSenderParameters: (PeerConnection) -> Unit,
     private val currentVideoSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy,
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
+    private val peerConnectionDisposeQueue: PeerConnectionDisposeQueue,
     private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
     private companion object {
@@ -97,10 +101,6 @@ internal class PeerConnectionSlot(
         private set
     override var iceRestartTask: Runnable? = null
         private set
-    override var nonHostFallbackTask: Runnable? = null
-        private set
-    override var nonHostFallbackAttempts: Int = 0
-        private set
 
     // Offer lifecycle
     override fun beginOffer() { isMakingOffer = true }
@@ -120,15 +120,12 @@ internal class PeerConnectionSlot(
     override fun cancelOfferTimeout() { offerTimeoutTask = null }
     override fun setIceRestartTask(task: Runnable) { iceRestartTask = task }
     override fun cancelIceRestartTask() { iceRestartTask = null }
-    override fun setNonHostFallbackTask(task: Runnable) { nonHostFallbackTask = task }
-    override fun cancelNonHostFallbackTask() { nonHostFallbackTask = null }
-    override fun clearNonHostFallbackTask() { nonHostFallbackTask = null }
-    override fun incrementNonHostFallbackAttempts() { nonHostFallbackAttempts++ }
 
-    private val disposeHandler = Handler(Looper.getMainLooper())
     @Volatile private var isClosing = false
     private var peerConnection: PeerConnection? = null
+    private var audioSender: RtpSender? = null
     private var remoteVideoTrack: VideoTrack? = null
+    @Volatile private var playbackDucked = false
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()
@@ -182,6 +179,9 @@ internal class PeerConnectionSlot(
             override fun onTrack(transceiver: RtpTransceiver?) {
                 if (!isCurrentPeerConnection(observerPeerConnection)) return
                 val track = transceiver?.receiver?.track()
+                if (track is AudioTrack) {
+                    track.setVolume(if (playbackDucked) 0.15 else 1.0)
+                }
                 if (track is VideoTrack) {
                     remoteVideoTrack?.removeSink(remoteVideoStateSink)
                     remoteSinks.forEach { sink -> remoteVideoTrack?.removeSink(sink) }
@@ -236,13 +236,67 @@ internal class PeerConnectionSlot(
             peerConnection
         } ?: return
 
-        if (audioTrack != null && pc.senders.none { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }) {
-            pc.addTrack(audioTrack, listOf("serenada"))
-            applyAudioSenderParameters(pc)
-        }
-        if (videoTrack != null && pc.senders.none { it.track()?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND }) {
-            pc.addTrack(videoTrack, listOf("serenada"))
-            applyVideoSenderParameters(currentVideoSenderPolicy())
+        attachTrackToTransceiver(
+            pc = pc,
+            track = audioTrack,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            onAttached = { sender ->
+                audioSender = sender
+                if (audioTrack != null) applyAudioSenderParameters(pc)
+            }
+        )
+        attachTrackToTransceiver(
+            pc = pc,
+            track = videoTrack,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+            onAttached = { _ ->
+                if (videoTrack != null) applyVideoSenderParameters(currentVideoSenderPolicy())
+            }
+        )
+    }
+
+    override fun setAudioTrack(track: AudioTrack?) {
+        localAudioTrack = track
+        val pc = peerConnection ?: return
+        attachTrackToTransceiver(
+            pc = pc,
+            track = track,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            onAttached = { sender ->
+                audioSender = sender
+                if (track != null) applyAudioSenderParameters(pc)
+            }
+        )
+    }
+
+    // Look up the transceiver by its stable mediaType (Unified Plan) instead of
+    // sender.track?.kind. The latter mis-reports when the sender's track is null
+    // (e.g. the recv-only transceiver created by ensureReceiveTransceivers), which
+    // would cause pc.addTrack to append a duplicate transceiver of the same type.
+    private fun attachTrackToTransceiver(
+        pc: PeerConnection,
+        track: MediaStreamTrack?,
+        mediaType: MediaStreamTrack.MediaType,
+        onAttached: (RtpSender?) -> Unit,
+    ) {
+        val transceiver = pc.transceivers.firstOrNull { it.mediaType == mediaType }
+        if (transceiver != null) {
+            val sender = transceiver.sender
+            if (sender.track() !== track) {
+                sender.setTrack(track, false)
+            }
+            val targetDirection = if (track != null) {
+                RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+            } else {
+                RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+            }
+            if (transceiver.direction != targetDirection) {
+                transceiver.direction = targetDirection
+            }
+            onAttached(sender)
+        } else if (track != null) {
+            val sender = pc.addTrack(track, listOf("serenada"))
+            onAttached(sender)
         }
     }
 
@@ -251,7 +305,6 @@ internal class PeerConnectionSlot(
         isClosing = true
         offerTimeoutTask = null
         iceRestartTask = null
-        nonHostFallbackTask = null
         isMakingOffer = false
         pendingIceRestart = false
         val pc = peerConnection
@@ -261,6 +314,7 @@ internal class PeerConnectionSlot(
         remoteSinks.forEach { sink -> track?.removeSink(sink) }
         remoteSinks.clear()
         remoteVideoTrack = null
+        audioSender = null
         remoteBlackFrameAnalyzer.onTrackDetached()
         remoteDescriptionSet = false
         pendingIceCandidates.clear()
@@ -373,25 +427,35 @@ internal class PeerConnectionSlot(
     override fun setRemoteDescription(
         type: SessionDescription.Type,
         sdp: String,
-        onComplete: (() -> Unit)?,
+        onComplete: ((Boolean) -> Unit)?,
     ) {
-        if (isClosing) return
+        if (isClosing) {
+            onComplete?.invoke(false)
+            return
+        }
         val pc = peerConnection ?: run {
-            if (!ensurePeerConnection()) return
+            if (!ensurePeerConnection()) {
+                onComplete?.invoke(false)
+                return
+            }
             peerConnection
-        } ?: return
+        } ?: run {
+            onComplete?.invoke(false)
+            return
+        }
         val desc = SessionDescription(type, sdp)
         pc.setRemoteDescription(object : SdpObserverAdapter() {
             override fun onSetSuccess() {
                 if (!isCurrentPeerConnection(pc)) return
                 remoteDescriptionSet = true
                 flushPendingIceCandidates()
-                onComplete?.invoke()
+                onComplete?.invoke(true)
             }
 
             override fun onSetFailure(error: String?) {
                 if (!isCurrentPeerConnection(pc)) return
                 logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to set remote description ($type): $error")
+                onComplete?.invoke(false)
             }
         }, desc)
     }
@@ -496,6 +560,54 @@ internal class PeerConnectionSlot(
         }
     }
 
+    override fun collectOutboundMediaSample(onComplete: (OutboundMediaSample?) -> Unit) {
+        if (isClosing) {
+            onComplete(null)
+            return
+        }
+        val pc = peerConnection
+        if (pc == null) {
+            onComplete(null)
+            return
+        }
+
+        val expectsAudio = pc.senders.any { sender ->
+            val track = sender.track()
+            track?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND && track.enabled()
+        }
+        val expectsVideo = pc.senders.any { sender ->
+            val track = sender.track()
+            track?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND && track.enabled()
+        }
+
+        pc.getStats { report ->
+            var audioBytesSent = 0L
+            var videoBytesSent = 0L
+            var videoFramesSent = 0L
+            for (stat in report.statsMap.values) {
+                if (stat.type != "outbound-rtp") continue
+                when (getMediaKind(stat)) {
+                    "audio" -> audioBytesSent += memberLong(stat, "bytesSent") ?: 0L
+                    "video" -> {
+                        videoBytesSent += memberLong(stat, "bytesSent") ?: 0L
+                        videoFramesSent += memberLong(stat, "framesSent")
+                            ?: memberLong(stat, "framesEncoded")
+                            ?: 0L
+                    }
+                }
+            }
+            onComplete(
+                OutboundMediaSample(
+                    expectsAudio = expectsAudio,
+                    expectsVideo = expectsVideo,
+                    audioBytesSent = audioBytesSent,
+                    videoBytesSent = videoBytesSent,
+                    videoFramesSent = videoFramesSent,
+                )
+            )
+        }
+    }
+
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) {
         if (isClosing) {
             onComplete(null, null)
@@ -544,6 +656,17 @@ internal class PeerConnectionSlot(
         return !remoteBlackFrameAnalyzer.isVideoConsideredOff()
     }
 
+    override fun duckPlayback(ducked: Boolean) {
+        playbackDucked = ducked
+        val pc = peerConnection ?: return
+        for (receiver in pc.receivers) {
+            val track = receiver.track()
+            if (track is AudioTrack) {
+                track.setVolume(if (ducked) 0.15 else 1.0)
+            }
+        }
+    }
+
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
         if (isClosing) return
         val pc = peerConnection ?: return
@@ -588,7 +711,7 @@ internal class PeerConnectionSlot(
                 }
         }
         if (deferDispose) {
-            disposeHandler.postDelayed(dispose, DEFERRED_DISPOSE_DELAY_MS)
+            peerConnectionDisposeQueue.postDelayed(dispose, DEFERRED_DISPOSE_DELAY_MS)
         } else {
             dispose.run()
         }
@@ -999,4 +1122,58 @@ internal class PeerConnectionSlot(
         return mimeType.removePrefix("video/")
     }
 
+}
+
+internal class PeerConnectionDisposeQueue(
+    private val handler: Handler = Handler(Looper.getMainLooper()),
+) {
+    private val pending = LinkedHashSet<Runnable>()
+    private val flushThread = HandlerThread("serenada-pc-dispose").apply { start() }
+    private val flushHandler = Handler(flushThread.looper)
+    @Volatile private var isShutdown = false
+
+    @Synchronized
+    fun postDelayed(dispose: Runnable, delayMs: Long) {
+        if (isShutdown) {
+            dispose.run()
+            return
+        }
+        lateinit var wrapper: Runnable
+        wrapper = Runnable {
+            synchronized(this) {
+                pending.remove(wrapper)
+            }
+            dispose.run()
+        }
+        pending.add(wrapper)
+        handler.postDelayed(wrapper, delayMs)
+    }
+
+    fun flush(shutdownAfterDrain: Boolean = false, onDrained: (() -> Unit)? = null) {
+        val runnables = synchronized(this) {
+            pending.toList().also { pending.clear() }
+        }
+        if (runnables.isEmpty()) {
+            onDrained?.invoke()
+            if (shutdownAfterDrain) shutdown()
+            return
+        }
+        val remaining = AtomicInteger(runnables.size)
+        for (runnable in runnables) {
+            handler.removeCallbacks(runnable)
+            flushHandler.post {
+                runnable.run()
+                if (remaining.decrementAndGet() == 0) {
+                    onDrained?.invoke()
+                    if (shutdownAfterDrain) shutdown()
+                }
+            }
+        }
+    }
+
+    private fun shutdown() {
+        if (isShutdown) return
+        isShutdown = true
+        flushThread.quitSafely()
+    }
 }

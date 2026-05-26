@@ -288,6 +288,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             saveCurrentCallToHistoryIfNeeded()
         }
         clearActiveSessionObservers()
+        session.close()
         activeSession = null
         CallService.stop(appContext)
         currentRoomId = null

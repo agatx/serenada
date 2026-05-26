@@ -87,6 +87,7 @@
 		E023D6932A1411B953694012 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
 		EE8328B7F79EEA681164E7ED /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 018403014C9AEDF89B039618 /* SettingsScreen.swift */; };
 		F237C6E7ED0C17810C58C49F /* SavedRoomStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */; };
+		F550B054F40D9A81D9A612F8 /* FakeAudioCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59CA13885164CF265442E406 /* FakeAudioCoordinator.swift */; };
 		F6138648F1A35A494AF6330E /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9036C71CC2E91FAD8FB5170 /* APIClient.swift */; };
 		F9CC8286BAD9F8D26CDEEF33 /* RecentCallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43E2F0452DE65337073894BF /* RecentCallStore.swift */; };
 		FB02BC3FE7EB98719C7BE654 /* SavedRoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B27D4928922728BD684878 /* SavedRoom.swift */; };
@@ -184,6 +185,7 @@
 		4D4E0E538F82CE87BE4FDB24 /* SerenadaCallUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SerenadaCallUI; path = SerenadaCallUI; sourceTree = SOURCE_ROOT; };
 		4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStoreTests.swift; sourceTree = "<group>"; };
 		53E3B13DA44022026D9F605D /* SavedRoomStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoomStore.swift; sourceTree = "<group>"; };
+		59CA13885164CF265442E406 /* FakeAudioCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioCoordinator.swift; sourceTree = "<group>"; };
 		6625E5E013BB38E369F98188 /* JoinWithCodeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinWithCodeScreen.swift; sourceTree = "<group>"; };
 		68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SerenadaBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -535,6 +537,7 @@
 			children = (
 				2F42A2D07ED2383049D7227F /* FakeAPIClient.swift */,
 				CC2247BFD0D693E4041DAF16 /* FakeAudioController.swift */,
+				59CA13885164CF265442E406 /* FakeAudioCoordinator.swift */,
 				461DCF4D9C695C2B6051BF91 /* FakeMediaEngine.swift */,
 				D6A49EB1B8C461E0A475E453 /* FakePeerConnectionSlot.swift */,
 				99B88E3237E25D45BB2BD9B4 /* FakeSessionClock.swift */,
@@ -833,6 +836,7 @@
 				8149EFE501BB29983C52316D /* EndpointHostParserTests.swift in Sources */,
 				0587ECB1D9436E518EF012E9 /* FakeAPIClient.swift in Sources */,
 				0361CD790E1AFC86D02CF4F6 /* FakeAudioController.swift in Sources */,
+				F550B054F40D9A81D9A612F8 /* FakeAudioCoordinator.swift in Sources */,
 				2689E7B3ED25607A90E268B7 /* FakeMediaEngine.swift in Sources */,
 				82817D4A112B6323E80F9F91 /* FakePeerConnectionSlot.swift in Sources */,
 				144C4C15F4B31D2E8AE8057A /* FakeSessionClock.swift in Sources */,

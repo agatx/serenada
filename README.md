@@ -225,6 +225,69 @@ In custom-provider mode:
 
 On web, provider-delivered peer messages are exposed through `session.onPeerMessage(...)`. Raw Serenada transport envelopes are no longer part of the public SDK surface.
 
+### Pluggable Audio Coordinators
+
+On iOS and Android, the SDKs support a pluggable audio session model via `SerenadaAudioCoordinator`. This lets the host app control the process-global audio session, routing policies, and Bluetooth state machines (useful when embedding Serenada alongside another audio engine like a push-to-talk system), while retaining the SDK's internal call routing and proximity monitor behaviors.
+
+If `audioCoordinator` is omitted, the SDK uses its internal default coordinator. The concrete default coordinator is not public API; custom integrations should implement `SerenadaAudioCoordinator` and inject that implementation through `SerenadaConfig`.
+
+#### Configuration
+
+To use a custom coordinator, provide it and an `AudioIntent` in `SerenadaConfig`:
+
+##### iOS (Swift)
+```swift
+let config = SerenadaConfig(
+    serverHost: "serenada.app",
+    audioCoordinator: MyCustomAudioCoordinator(),
+    audioIntent: AudioIntent(
+        supportsVideo: true,
+        muteOwnMicDuringExternalAudio: true, // Mute when interrupted (e.g. by PTT)
+        duckOwnPlaybackDuringExternalAudio: true // Duck remote playback during interruption
+    )
+)
+```
+
+##### Android (Kotlin)
+```kotlin
+val config = SerenadaConfig(
+    serverHost = "serenada.app",
+    audioCoordinator = MyCustomAudioCoordinator(),
+    audioIntent = AudioIntent(
+        supportsVideo = true,
+        muteOwnMicDuringExternalAudio = true,
+        duckOwnPlaybackDuringExternalAudio = true
+    )
+)
+```
+
+#### Coordinator Contract
+
+The coordinator implementation is responsible for:
+- Activating/deactivating the hardware audio session.
+- Managing audio focus, modes, and Bluetooth routing.
+- Publishing available devices, current input/output routes, and session events (interruptions, resume, focus changes) to the SDK.
+
+The session exposes coordinator state for custom UI:
+
+- `availableAudioDevices`: routes published by the active coordinator.
+- `currentAudioDevice`: selected or active output route.
+- `isMicMuted`: effective microphone mute state.
+- `isMicMutedByExternalAudio`: whether external audio is currently forcing a mute.
+- `selectAudioDevice(...)`: requests routing to a coordinator-published route.
+- `setMicMuted(...)`: sets the user-requested microphone mute state.
+
+#### Mute & Ducking Composition
+
+The session maintains a composed microphone mute state calculated as:
+`isMicMuted` = `userMuted || externalAudioMuted || !routeInputAvailable`
+
+When the coordinator publishes an `audioSessionInterrupted` event (e.g., due to incoming/outgoing PTT or a phone call), the SDK:
+1. Mutes the local WebRTC track (if `muteOwnMicDuringExternalAudio` is enabled) to prevent audio leaks.
+2. Lowers the volume of all remote participant audio tracks to 15% (if `duckOwnPlaybackDuringExternalAudio` is enabled).
+3. Restores full volume and unmutes the mic cleanly upon receiving `audioSessionResumed`.
+
+
 ## Documentation
 
 - [SDK API Reference](https://agatx.github.io/serenada/) – Generated API docs for all platforms (Web, Android, iOS)

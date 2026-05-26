@@ -6,11 +6,12 @@ import { normalizeIceServers } from '../iceServers.js';
 import {
     OFFER_TIMEOUT_MS,
     ICE_RESTART_COOLDOWN_MS,
-    NON_HOST_FALLBACK_DELAY_MS,
-    NON_HOST_FALLBACK_MAX_ATTEMPTS,
     ICE_CANDIDATE_BUFFER_MAX,
     CONNECTION_RETRYING_DELAY_MS,
     LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS,
+    OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS,
+    OUTBOUND_MEDIA_STALL_SAMPLES,
+    OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS,
 } from '../constants.js';
 import { shouldForceLocalVideoRefresh, shouldRecoverLocalVideo } from './localVideoRecovery.js';
 
@@ -21,6 +22,27 @@ const DEFAULT_RTC_CONFIG: RTCConfiguration = {
 const ICE_STATE_PRIORITY: RTCIceConnectionState[] = ['failed', 'disconnected', 'checking', 'new', 'connected', 'completed', 'closed'];
 const CONN_STATE_PRIORITY: RTCPeerConnectionState[] = ['failed', 'disconnected', 'connecting', 'new', 'connected', 'closed'];
 const SIG_STATE_PRIORITY: RTCSignalingState[] = ['closed', 'have-local-offer', 'have-remote-offer', 'have-local-pranswer', 'have-remote-pranswer', 'stable'];
+const LEGACY_OFFER_ID = '__legacy__';
+
+function getSignalingState(pc: RTCPeerConnection): RTCSignalingState {
+    return pc.signalingState;
+}
+
+function getStatNumber(stat: RTCStats, key: string): number {
+    const value = (stat as unknown as Record<string, unknown>)[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function getStatString(stat: RTCStats, key: string): string | null {
+    const value = (stat as unknown as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : null;
+}
+
+interface OutboundMediaSample {
+    audioBytesSent: number;
+    videoBytesSent: number;
+    videoFramesSent: number;
+}
 
 interface PeerState {
     pc: RTCPeerConnection;
@@ -32,8 +54,16 @@ interface PeerState {
     lastIceRestartAt: number;
     pendingIceRestart: boolean;
     pendingLocalTrackNegotiation: boolean;
-    nonHostFallbackTimer: number | null;
-    nonHostFallbackAttempts: number;
+    isSettingRemoteAnswerPending: boolean;
+    pendingLocalOfferId: string | null;
+    acceptedRemoteOfferId: string | null;
+    currentNegotiationId: string | null;
+    ignoredOfferId: string | null;
+    pendingRemoteIceByOfferId: Map<string, RTCIceCandidateInit[]>;
+    lastOutboundMediaSample: OutboundMediaSample | null;
+    outboundMediaStallSamples: number;
+    outboundMediaWatchInFlight: boolean;
+    lastOutboundMediaRecoveryAt: number;
 }
 
 export interface MediaEngineConfig {
@@ -77,14 +107,18 @@ export class MediaEngine {
     private retryingTimer: number | null = null;
     private localVideoHeartbeatAt = Date.now();
     private localVideoHiddenAt: number | null = typeof document !== 'undefined' && document.hidden ? Date.now() : null;
+    private participantConnectionStatus = new Map<string, 'active' | 'suspended'>();
     private visibilityHandler: (() => void) | null = null;
     private pageShowHandler: ((e: PageTransitionEvent) => void) | null = null;
     private heartbeatInterval: number | null = null;
+    private outboundMediaWatchdogInterval: number | null = null;
+    private mediaRestartHandledAtByCid = new Map<string, number>();
     private onlineHandler: (() => void) | null = null;
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
     private turnsOnly: boolean;
     private logger?: SerenadaLogger;
+    private offerSequence = 0;
 
     // Injected dependencies
     private sendSignalingMessage: (type: string, payload?: Record<string, unknown>, to?: string) => void;
@@ -157,8 +191,6 @@ export class MediaEngine {
         for (const [remoteCid] of this.peers) {
             if (this.shouldIOffer(remoteCid)) {
                 this.scheduleIceRestart(remoteCid, 'signaling-reconnect', 0);
-            } else {
-                this.scheduleNonHostFallback(remoteCid);
             }
         }
     }
@@ -173,8 +205,6 @@ export class MediaEngine {
         }
         if (this.shouldIOffer(remoteCid)) {
             this.scheduleIceRestart(remoteCid, 'negotiation-dirty', 0);
-        } else {
-            this.scheduleNonHostFallback(remoteCid);
         }
     }
 
@@ -185,17 +215,30 @@ export class MediaEngine {
             switch (type) {
                 case 'offer': {
                     const offer = parseOfferPayload(payload);
-                    if (offer) void this.handleOfferFrom(offer.from, offer.sdp);
+                    if (offer && this.isCurrentParticipant(offer.from)) {
+                        void this.handleOfferFrom(offer.from, offer.sdp, offer.offerId ?? LEGACY_OFFER_ID);
+                    }
                     break;
                 }
                 case 'answer': {
                     const answer = parseAnswerPayload(payload);
-                    if (answer) void this.handleAnswerFrom(answer.from, answer.sdp);
+                    if (answer && this.isCurrentParticipant(answer.from)) {
+                        void this.handleAnswerFrom(answer.from, answer.sdp, answer.offerId ?? LEGACY_OFFER_ID);
+                    }
                     break;
                 }
                 case 'ice': {
                     const ice = parseIceCandidatePayload(payload);
-                    if (ice) void this.handleIceFrom(ice.from, ice.candidate);
+                    if (ice && this.isCurrentParticipant(ice.from)) {
+                        void this.handleIceFrom(ice.from, ice.candidate, ice.offerId ?? LEGACY_OFFER_ID);
+                    }
+                    break;
+                }
+                case 'media_restart_request': {
+                    const fromCid = typeof payload.from === 'string' ? payload.from.trim() : '';
+                    if (fromCid && this.isCurrentParticipant(fromCid)) {
+                        void this.handleMediaRestartRequest(fromCid);
+                    }
                     break;
                 }
             }
@@ -413,11 +456,13 @@ export class MediaEngine {
     cleanupAllPeers(): void {
         for (const [, peer] of this.peers) {
             this.clearPeerTimers(peer);
+            this.clearPeerNegotiation(peer);
             peer.pc.close();
         }
         this.peers.clear();
         this.remoteStreams = new Map();
         this.lastInboundBytesByCid.clear();
+        this.mediaRestartHandledAtByCid.clear();
         if (this.retryingTimer) { window.clearTimeout(this.retryingTimer); this.retryingTimer = null; }
         this.iceConnectionState = 'closed';
         this.connectionState = 'closed';
@@ -554,6 +599,8 @@ export class MediaEngine {
                 this.logger?.log('debug', 'WebRTC', 'Room state cleared, cleaning up all peers');
                 this.cleanupAllPeers();
             }
+            this.participantConnectionStatus.clear();
+            this.mediaRestartHandledAtByCid.clear();
             return;
         }
 
@@ -566,22 +613,32 @@ export class MediaEngine {
                 this.cleanupPeer(cid);
             }
         }
+        for (const cid of Array.from(this.participantConnectionStatus.keys())) {
+            if (!remoteCids.has(cid)) this.participantConnectionStatus.delete(cid);
+        }
+        for (const cid of Array.from(this.mediaRestartHandledAtByCid.keys())) {
+            if (!remoteCids.has(cid)) this.mediaRestartHandledAtByCid.delete(cid);
+        }
 
         for (const peer of remotePeers) {
+            const previousStatus = this.participantConnectionStatus.get(peer.cid);
+            const nextStatus = peer.connectionStatus === 'suspended' ? 'suspended' : 'active';
+            this.participantConnectionStatus.set(peer.cid, nextStatus);
+            const becameActive = previousStatus === 'suspended' && nextStatus === 'active';
             if (!this.peers.has(peer.cid)) {
                 this.getOrCreatePeer(peer.cid);
-                if (this.shouldIOffer(peer.cid)) {
-                    const peerState = this.peers.get(peer.cid);
-                    if (
-                        peerState &&
-                        this.localStream &&
-                        peerState.pc.signalingState === 'stable' &&
-                        !peerState.pc.remoteDescription
-                    ) {
-                        void this.createOfferTo(peer.cid);
-                    }
-                } else {
-                    this.scheduleNonHostFallback(peer.cid);
+            }
+            if (this.shouldIOffer(peer.cid)) {
+                const peerState = this.peers.get(peer.cid);
+                if (becameActive) {
+                    this.scheduleIceRestart(peer.cid, 'peer-reattached', 0);
+                } else if (
+                    peerState &&
+                    this.localStream &&
+                    peerState.pc.signalingState === 'stable' &&
+                    !peerState.pc.remoteDescription
+                ) {
+                    void this.createOfferTo(peer.cid);
                 }
             }
         }
@@ -598,7 +655,16 @@ export class MediaEngine {
             isMakingOffer: false, offerTimeout: null, iceRestartTimer: null,
             lastIceRestartAt: 0, pendingIceRestart: false,
             pendingLocalTrackNegotiation: false,
-            nonHostFallbackTimer: null, nonHostFallbackAttempts: 0,
+            isSettingRemoteAnswerPending: false,
+            pendingLocalOfferId: null,
+            acceptedRemoteOfferId: null,
+            currentNegotiationId: null,
+            ignoredOfferId: null,
+            pendingRemoteIceByOfferId: new Map(),
+            lastOutboundMediaSample: null,
+            outboundMediaStallSamples: 0,
+            outboundMediaWatchInFlight: false,
+            lastOutboundMediaRecoveryAt: 0,
         };
 
         if (this.localStream) {
@@ -676,7 +742,12 @@ export class MediaEngine {
                 if (!candidate.sdpMid) {
                     candidate.sdpMid = String(candidate.sdpMLineIndex ?? 0);
                 }
-                this.sendSignalingMessage('ice', { candidate }, remoteCid);
+                const payload: Record<string, unknown> = { candidate };
+                const offerId = this.currentLocalOfferId(peerState);
+                if (offerId) {
+                    payload.offerId = offerId;
+                }
+                this.sendSignalingMessage('ice', payload, remoteCid);
             }
         };
 
@@ -695,49 +766,114 @@ export class MediaEngine {
         return peerState;
     }
 
-    private cleanupPeer(remoteCid: string): void {
+    private cleanupPeer(remoteCid: string, options: { clearMediaRestartCooldown?: boolean } = {}): void {
         const peer = this.peers.get(remoteCid);
         if (!peer) return;
+        const clearMediaRestartCooldown = options.clearMediaRestartCooldown ?? true;
         this.clearPeerTimers(peer);
+        this.clearPeerNegotiation(peer);
         peer.pc.close();
         this.peers.delete(remoteCid);
+        this.participantConnectionStatus.delete(remoteCid);
         const next = new Map(this.remoteStreams);
         next.delete(remoteCid);
         this.remoteStreams = next;
+        this.lastInboundBytesByCid.delete(remoteCid);
+        if (clearMediaRestartCooldown) {
+            this.mediaRestartHandledAtByCid.delete(remoteCid);
+        }
         this.updateAggregateState();
+    }
+
+    private replacePeerForRemoteOffer(remoteCid: string, offerId: string, pendingIce: RTCIceCandidateInit[]): PeerState {
+        this.cleanupPeer(remoteCid, { clearMediaRestartCooldown: false });
+        const peer = this.getOrCreatePeer(remoteCid);
+        if (pendingIce.length > 0) {
+            peer.pendingRemoteIceByOfferId.set(offerId, [...pendingIce]);
+        }
+        return peer;
     }
 
     private clearPeerTimers(peer: PeerState): void {
         if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
         if (peer.iceRestartTimer) { window.clearTimeout(peer.iceRestartTimer); peer.iceRestartTimer = null; }
-        if (peer.nonHostFallbackTimer) { window.clearTimeout(peer.nonHostFallbackTimer); peer.nonHostFallbackTimer = null; }
+    }
+
+    private isCurrentParticipant(remoteCid: string): boolean {
+        if (remoteCid === this.clientId) return false;
+        if (!this.roomState) return true;
+        return this.roomState.participants?.some(p => p.cid === remoteCid) ?? false;
     }
 
     private shouldIOffer(remoteCid: string): boolean {
         const myId = this.clientId;
-        return typeof myId === 'string' && myId.length > 0 && myId < remoteCid;
+        return typeof myId === 'string' && myId.length > 0 && myId < remoteCid && this.isCurrentParticipant(remoteCid);
+    }
+
+    private isParticipantActive(remoteCid: string): boolean {
+        if (!this.roomState) return true;
+        const participant = this.roomState.participants?.find(p => p.cid === remoteCid);
+        return !!participant && participant.connectionStatus !== 'suspended';
+    }
+
+    private nextOfferId(remoteCid: string): string {
+        this.offerSequence += 1;
+        return `${this.clientId ?? ''}:${remoteCid}:${Date.now()}:${this.offerSequence}`;
+    }
+
+    private currentLocalOfferId(peer: PeerState): string | null {
+        return peer.pendingLocalOfferId ?? peer.acceptedRemoteOfferId ?? peer.currentNegotiationId;
+    }
+
+    private clearPeerNegotiation(peer: PeerState): void {
+        peer.isSettingRemoteAnswerPending = false;
+        peer.pendingLocalOfferId = null;
+        peer.acceptedRemoteOfferId = null;
+        peer.currentNegotiationId = null;
+        peer.ignoredOfferId = null;
+        peer.pendingRemoteIceByOfferId.clear();
+    }
+
+    private isKnownNegotiationId(peer: PeerState, offerId: string): boolean {
+        return peer.pendingLocalOfferId === offerId ||
+            peer.acceptedRemoteOfferId === offerId ||
+            peer.currentNegotiationId === offerId;
+    }
+
+    private async flushPendingRemoteIce(peer: PeerState, offerId: string): Promise<void> {
+        const pending = peer.pendingRemoteIceByOfferId.get(offerId);
+        if (!pending) return;
+        peer.pendingRemoteIceByOfferId.delete(offerId);
+        for (const candidate of pending) {
+            await peer.pc.addIceCandidate(candidate);
+        }
     }
 
     private async createOfferTo(remoteCid: string, options?: { iceRestart?: boolean }): Promise<void> {
         const peer = this.peers.get(remoteCid);
         if (!peer) return;
         if (peer.isMakingOffer) { if (options?.iceRestart) peer.pendingIceRestart = true; return; }
+        if (!this.shouldIOffer(remoteCid) || !this.isParticipantActive(remoteCid)) return;
         try {
             if (peer.pc.signalingState !== 'stable') { if (options?.iceRestart) peer.pendingIceRestart = true; return; }
+            const offerId = this.nextOfferId(remoteCid);
+            peer.pendingLocalOfferId = offerId;
+            peer.acceptedRemoteOfferId = null;
+            peer.ignoredOfferId = null;
             peer.isMakingOffer = true;
             const offer = await peer.pc.createOffer(options);
             await peer.pc.setLocalDescription(offer as RTCSessionDescriptionInit);
-            this.sendSignalingMessage('offer', { sdp: offer.sdp }, remoteCid);
+            this.sendSignalingMessage('offer', { sdp: offer.sdp, offerId }, remoteCid);
 
             if (peer.offerTimeout) window.clearTimeout(peer.offerTimeout);
             peer.offerTimeout = window.setTimeout(() => {
+                if (this.peers.get(remoteCid) !== peer) return;
                 peer.offerTimeout = null;
-                const currentPeer = this.peers.get(remoteCid);
-                if (!currentPeer) return;
                 this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Offer timeout`);
-                currentPeer.pendingIceRestart = true;
-                if (currentPeer.pc.signalingState === 'have-local-offer') {
-                    currentPeer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
+                peer.pendingIceRestart = true;
+                peer.pendingLocalOfferId = null;
+                if (peer.pc.signalingState === 'have-local-offer') {
+                    peer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit)
                         .catch(err => this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Rollback failed: ${formatError(err)}`))
                         .finally(() => this.scheduleIceRestart(remoteCid, 'offer-timeout', 0));
                 } else {
@@ -745,6 +881,7 @@ export class MediaEngine {
                 }
             }, OFFER_TIMEOUT_MS);
         } catch (err) {
+            peer.pendingLocalOfferId = null;
             this.logger?.log('error', 'WebRTC', `[${remoteCid}] Error creating offer: ${formatError(err)}`);
         } finally {
             peer.isMakingOffer = false;
@@ -758,7 +895,7 @@ export class MediaEngine {
     private scheduleIceRestart(remoteCid: string, reason: string, delayMs: number): void {
         const peer = this.peers.get(remoteCid);
         if (!peer) return;
-        if (!this.isSignalingConnected) { peer.pendingIceRestart = true; return; }
+        if (!this.isSignalingConnected || !this.isParticipantActive(remoteCid)) { peer.pendingIceRestart = true; return; }
         if (peer.iceRestartTimer) return;
         if (Date.now() - peer.lastIceRestartAt < ICE_RESTART_COOLDOWN_MS) return;
         peer.iceRestartTimer = window.setTimeout(() => {
@@ -770,93 +907,136 @@ export class MediaEngine {
     private async triggerIceRestart(remoteCid: string, reason: string): Promise<void> {
         const peer = this.peers.get(remoteCid);
         if (!peer) return;
-        if (!this.isSignalingConnected) { peer.pendingIceRestart = true; return; }
+        if (!this.isSignalingConnected || !this.isParticipantActive(remoteCid)) { peer.pendingIceRestart = true; return; }
         if (!this.shouldIOffer(remoteCid)) return;
         if (peer.isMakingOffer) { peer.pendingIceRestart = true; return; }
+        if (peer.pc.signalingState !== 'stable') {
+            peer.pendingIceRestart = true;
+            if (peer.pc.signalingState === 'have-local-offer') {
+                peer.pendingLocalOfferId = null;
+                try {
+                    await peer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `[${remoteCid}] ICE restart rollback failed: ${formatError(err)}`);
+                    return;
+                }
+                const signalingStateAfterRollback = getSignalingState(peer.pc);
+                if (signalingStateAfterRollback !== 'stable') {
+                    return;
+                }
+                peer.pendingIceRestart = false;
+            } else {
+                return;
+            }
+        }
         peer.lastIceRestartAt = Date.now();
         peer.pendingIceRestart = false;
         this.logger?.log('warning', 'WebRTC', `ICE restart triggered for ${remoteCid} (${reason})`);
         await this.createOfferTo(remoteCid, { iceRestart: true });
     }
 
-    private scheduleNonHostFallback(remoteCid: string): void {
-        if (this.shouldIOffer(remoteCid)) return;
-        const peer = this.peers.get(remoteCid);
-        if (!peer || peer.nonHostFallbackTimer) return;
-        if (peer.nonHostFallbackAttempts >= NON_HOST_FALLBACK_MAX_ATTEMPTS) return;
-
-        peer.nonHostFallbackTimer = window.setTimeout(async () => {
-            peer.nonHostFallbackTimer = null;
-            const currentPeer = this.peers.get(remoteCid);
-            if (!currentPeer) return;
-            if (this.shouldIOffer(remoteCid)) return;
-            if (currentPeer.pc.remoteDescription) return;
-            if (currentPeer.pc.signalingState !== 'stable') return;
-            if (!this.isSignalingConnected) return;
-
-            currentPeer.nonHostFallbackAttempts++;
-            this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Non-host fallback offer (attempt ${currentPeer.nonHostFallbackAttempts})`);
-            try {
-                const offer = await currentPeer.pc.createOffer();
-                await currentPeer.pc.setLocalDescription(offer as RTCSessionDescriptionInit);
-                this.sendSignalingMessage('offer', { sdp: offer.sdp }, remoteCid);
-
-                if (currentPeer.offerTimeout) window.clearTimeout(currentPeer.offerTimeout);
-                currentPeer.offerTimeout = window.setTimeout(async () => {
-                    currentPeer.offerTimeout = null;
-                    const p = this.peers.get(remoteCid);
-                    if (!p) return;
-                    if (p.pc.signalingState === 'have-local-offer') {
-                        try { await p.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit); }
-                        catch (err) { this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Non-host rollback failed: ${formatError(err)}`); }
-                    }
-                    this.scheduleNonHostFallback(remoteCid);
-                }, OFFER_TIMEOUT_MS);
-            } catch (err) {
-                this.logger?.log('error', 'WebRTC', `[${remoteCid}] Non-host fallback offer failed: ${formatError(err)}`);
-                this.scheduleNonHostFallback(remoteCid);
-            }
-        }, NON_HOST_FALLBACK_DELAY_MS);
-    }
-
-    private async handleOfferFrom(fromCid: string, sdp: string): Promise<void> {
+    private async handleOfferFrom(fromCid: string, sdp: string, offerId: string): Promise<void> {
         try {
             const peer = this.getOrCreatePeer(fromCid);
-            if (peer.nonHostFallbackTimer) { window.clearTimeout(peer.nonHostFallbackTimer); peer.nonHostFallbackTimer = null; }
-            await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-            if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
-            while (peer.iceBuffer.length > 0) {
-                const c = peer.iceBuffer.shift();
-                if (c) await peer.pc.addIceCandidate(c);
+            const readyForOffer = !peer.isMakingOffer &&
+                (peer.pc.signalingState === 'stable' || peer.isSettingRemoteAnswerPending);
+            const offerCollision = !readyForOffer;
+            const polite = !this.shouldIOffer(fromCid);
+
+            if (offerCollision && !polite) {
+                peer.ignoredOfferId = offerId;
+                this.logger?.log('warning', 'WebRTC', `[${fromCid}] Ignoring colliding offer`);
+                return;
             }
-            const answer = await peer.pc.createAnswer();
-            await peer.pc.setLocalDescription(answer);
-            this.sendSignalingMessage('answer', { sdp: answer.sdp }, fromCid);
+
+            if (offerCollision && peer.pc.signalingState === 'have-local-offer') {
+                peer.pendingLocalOfferId = null;
+                if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
+                await peer.pc.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit);
+                if (this.peers.get(fromCid) !== peer) return;
+            }
+
+            await this.applyRemoteOffer(peer, fromCid, sdp, offerId, true);
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `[${fromCid}] Error handling offer: ${formatError(err)}`);
         }
     }
 
-    private async handleAnswerFrom(fromCid: string, sdp: string): Promise<void> {
+    private async applyRemoteOffer(peer: PeerState, fromCid: string, sdp: string, offerId: string, allowPeerReset: boolean): Promise<void> {
+        peer.ignoredOfferId = null;
+        peer.pendingLocalOfferId = null;
+        try {
+            await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+        } catch (err) {
+            if (allowPeerReset && this.peers.get(fromCid) === peer) {
+                this.logger?.log('warning', 'WebRTC', `[${fromCid}] Recreating peer after remote offer failed: ${formatError(err)}`);
+                const pendingIce = peer.pendingRemoteIceByOfferId.get(offerId) ?? [];
+                const replacementPeer = this.replacePeerForRemoteOffer(fromCid, offerId, pendingIce);
+                await this.applyRemoteOffer(replacementPeer, fromCid, sdp, offerId, false);
+                return;
+            }
+            throw err;
+        }
+        peer.acceptedRemoteOfferId = offerId;
+        peer.currentNegotiationId = offerId;
+        if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
+        await this.flushPendingRemoteIce(peer, offerId);
+        while (peer.iceBuffer.length > 0) {
+            const c = peer.iceBuffer.shift();
+            if (c) await peer.pc.addIceCandidate(c);
+        }
+        const answer = await peer.pc.createAnswer();
+        await peer.pc.setLocalDescription(answer);
+        this.sendSignalingMessage('answer', { sdp: answer.sdp, offerId }, fromCid);
+    }
+
+    private async handleAnswerFrom(fromCid: string, sdp: string, offerId: string): Promise<void> {
         try {
             const peer = this.peers.get(fromCid);
             if (!peer) return;
-            if (peer.nonHostFallbackTimer) { window.clearTimeout(peer.nonHostFallbackTimer); peer.nonHostFallbackTimer = null; }
+            if (peer.pc.signalingState !== 'have-local-offer') {
+                this.logger?.log('debug', 'WebRTC', `[${fromCid}] Dropping stale answer in ${peer.pc.signalingState}`);
+                return;
+            }
+            if (offerId !== LEGACY_OFFER_ID && peer.pendingLocalOfferId !== offerId) {
+                this.logger?.log('debug', 'WebRTC', `[${fromCid}] Dropping answer for stale offerId=${offerId}`);
+                return;
+            }
+            peer.isSettingRemoteAnswerPending = true;
             await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+            peer.isSettingRemoteAnswerPending = false;
+            const completedOfferId = peer.pendingLocalOfferId ?? offerId;
+            peer.pendingLocalOfferId = null;
+            peer.currentNegotiationId = completedOfferId;
+            peer.ignoredOfferId = null;
             if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
+            peer.pendingIceRestart = false;
+            await this.flushPendingRemoteIce(peer, completedOfferId);
         } catch (err) {
+            const peer = this.peers.get(fromCid);
+            if (peer) peer.isSettingRemoteAnswerPending = false;
             this.logger?.log('error', 'WebRTC', `[${fromCid}] Error handling answer: ${formatError(err)}`);
         }
     }
 
-    private async handleIceFrom(fromCid: string, candidate: RTCIceCandidateInit): Promise<void> {
+    private async handleIceFrom(fromCid: string, candidate: RTCIceCandidateInit, offerId: string): Promise<void> {
         try {
             const peer = this.getOrCreatePeer(fromCid);
+            if (peer.ignoredOfferId === offerId) {
+                return;
+            }
+            if (offerId !== LEGACY_OFFER_ID && !this.isKnownNegotiationId(peer, offerId)) {
+                const pending = peer.pendingRemoteIceByOfferId.get(offerId) ?? [];
+                if (pending.length < ICE_CANDIDATE_BUFFER_MAX) {
+                    pending.push(candidate);
+                }
+                peer.pendingRemoteIceByOfferId.set(offerId, pending);
+                return;
+            }
             if (peer.pc.remoteDescription) {
                 await peer.pc.addIceCandidate(candidate);
             } else {
-                if (peer.iceBuffer.length >= ICE_CANDIDATE_BUFFER_MAX) peer.iceBuffer.shift();
-                peer.iceBuffer.push(candidate);
+                if (peer.iceBuffer.length < ICE_CANDIDATE_BUFFER_MAX) peer.iceBuffer.push(candidate);
             }
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `[${fromCid}] Error handling ICE candidate: ${formatError(err)}`);
@@ -1175,6 +1355,12 @@ export class MediaEngine {
             if (document.hidden || !shouldForceLocalVideoRefresh({ sleepGapMs })) return;
             void this.refreshLocalVideoTrack('sleep-resume', true);
         }, LOCAL_VIDEO_HEARTBEAT_INTERVAL_MS);
+
+        this.outboundMediaWatchdogInterval = window.setInterval(() => {
+            if (!document.hidden) {
+                void this.recoverStalledOutboundMedia();
+            }
+        }, OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS);
     }
 
     private removeEventListeners(): void {
@@ -1186,6 +1372,142 @@ export class MediaEngine {
         if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
         if (this.pageShowHandler) window.removeEventListener('pageshow', this.pageShowHandler);
         if (this.heartbeatInterval !== null) window.clearInterval(this.heartbeatInterval);
+        if (this.outboundMediaWatchdogInterval !== null) window.clearInterval(this.outboundMediaWatchdogInterval);
+    }
+
+    private async recoverStalledOutboundMedia(): Promise<void> {
+        if (this.destroyed || !this.localStream) return;
+        await Promise.all(
+            Array.from(this.peers.entries()).map(([remoteCid, peer]) => (
+                this.recoverStalledOutboundMediaForPeer(remoteCid, peer)
+            ))
+        );
+    }
+
+    private async recoverStalledOutboundMediaForPeer(remoteCid: string, peer: PeerState): Promise<void> {
+        if (peer.outboundMediaWatchInFlight) return;
+        if (!this.isPeerMediaConnected(peer.pc)) {
+            this.resetOutboundMediaWatch(peer);
+            return;
+        }
+
+        const expected = this.getExpectedOutboundMedia(peer.pc);
+        if (!expected.audio && !expected.video) {
+            this.resetOutboundMediaWatch(peer);
+            return;
+        }
+
+        peer.outboundMediaWatchInFlight = true;
+        try {
+            const sample = this.readOutboundMediaSample(await peer.pc.getStats());
+            if (this.peers.get(remoteCid) !== peer) return;
+            const previous = peer.lastOutboundMediaSample;
+            peer.lastOutboundMediaSample = sample;
+            if (!previous) {
+                peer.outboundMediaStallSamples = 0;
+                return;
+            }
+
+            const videoStalled = expected.video &&
+                sample.videoBytesSent <= previous.videoBytesSent &&
+                sample.videoFramesSent <= previous.videoFramesSent;
+            const audioOnlyStalled = !expected.video && expected.audio &&
+                sample.audioBytesSent <= previous.audioBytesSent;
+            if (!videoStalled && !audioOnlyStalled) {
+                peer.outboundMediaStallSamples = 0;
+                return;
+            }
+
+            peer.outboundMediaStallSamples += 1;
+            if (peer.outboundMediaStallSamples < OUTBOUND_MEDIA_STALL_SAMPLES) return;
+
+            const now = Date.now();
+            if (now - peer.lastOutboundMediaRecoveryAt < OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return;
+
+            peer.lastOutboundMediaRecoveryAt = now;
+            peer.outboundMediaStallSamples = 0;
+            peer.lastOutboundMediaSample = null;
+            if (this.shouldIOffer(remoteCid)) {
+                await this.recreatePeerForMediaRecovery(remoteCid, 'stalled outbound media');
+            } else {
+                this.requestPeerMediaRecovery(remoteCid, 'stalled outbound media');
+            }
+        } catch (err) {
+            this.logger?.log('debug', 'WebRTC', `[${remoteCid}] Outbound media watchdog failed: ${formatError(err)}`);
+        } finally {
+            peer.outboundMediaWatchInFlight = false;
+        }
+    }
+
+    private isPeerMediaConnected(pc: RTCPeerConnection): boolean {
+        return pc.signalingState === 'stable' &&
+            (pc.connectionState === 'connected') &&
+            (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed');
+    }
+
+    private getExpectedOutboundMedia(pc: RTCPeerConnection): { audio: boolean; video: boolean } {
+        let audio = false;
+        let video = false;
+        for (const sender of pc.getSenders()) {
+            const track = sender.track;
+            if (!track || track.readyState !== 'live' || !track.enabled) continue;
+            if (track.kind === 'audio') audio = true;
+            if (track.kind === 'video') video = true;
+        }
+        return { audio, video };
+    }
+
+    private readOutboundMediaSample(stats: RTCStatsReport): OutboundMediaSample {
+        const sample: OutboundMediaSample = {
+            audioBytesSent: 0,
+            videoBytesSent: 0,
+            videoFramesSent: 0,
+        };
+
+        stats.forEach((stat) => {
+            if (stat.type !== 'outbound-rtp') return;
+            const kind = getStatString(stat, 'kind') ?? getStatString(stat, 'mediaType');
+            if (kind === 'audio') {
+                sample.audioBytesSent += getStatNumber(stat, 'bytesSent');
+                return;
+            }
+            if (kind === 'video') {
+                sample.videoBytesSent += getStatNumber(stat, 'bytesSent');
+                sample.videoFramesSent += getStatNumber(stat, 'framesSent');
+            }
+        });
+
+        return sample;
+    }
+
+    private resetOutboundMediaWatch(peer: PeerState): void {
+        peer.lastOutboundMediaSample = null;
+        peer.outboundMediaStallSamples = 0;
+    }
+
+    private requestPeerMediaRecovery(remoteCid: string, reason: string): void {
+        if (!this.isSignalingConnected || !this.isParticipantActive(remoteCid)) return;
+        this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Requesting media restart after ${reason}`);
+        this.sendSignalingMessage('media_restart_request', { reason }, remoteCid);
+    }
+
+    private async handleMediaRestartRequest(fromCid: string): Promise<void> {
+        const now = Date.now();
+        const lastHandledAt = this.mediaRestartHandledAtByCid.get(fromCid) ?? 0;
+        if (now - lastHandledAt < OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return;
+        this.mediaRestartHandledAtByCid.set(fromCid, now);
+        await this.recreatePeerForMediaRecovery(fromCid, 'peer media restart request');
+    }
+
+    private async recreatePeerForMediaRecovery(remoteCid: string, reason: string): Promise<void> {
+        if (!this.shouldIOffer(remoteCid) || !this.isSignalingConnected || !this.isParticipantActive(remoteCid)) return;
+        const previousStatus = this.participantConnectionStatus.get(remoteCid);
+        this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Recreating peer after ${reason}`);
+        this.cleanupPeer(remoteCid, { clearMediaRestartCooldown: false });
+        if (previousStatus) this.participantConnectionStatus.set(remoteCid, previousStatus);
+        const replacement = this.getOrCreatePeer(remoteCid);
+        replacement.lastOutboundMediaRecoveryAt = Date.now();
+        await this.createOfferTo(remoteCid);
     }
 
     private notifyChange(): void { this.onChange?.(); }

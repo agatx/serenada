@@ -2,6 +2,8 @@ import Foundation
 
 @MainActor
 final class PeerNegotiationEngine {
+    private static let legacyOfferId = "__legacy__"
+
     // Clock
     private let clock: SessionClock
 
@@ -13,6 +15,7 @@ final class PeerNegotiationEngine {
     private let getCurrentRoomState: () -> RoomState?
     private let isSignalingConnected: () -> Bool
     private let hasIceServers: () -> Bool
+    private let isLocalMediaReady: () -> Bool
 
     // Slot access (session owns peerSlots)
     private let getSlot: (String) -> (any PeerConnectionSlotProtocol)?
@@ -37,6 +40,25 @@ final class PeerNegotiationEngine {
     private let onRemoteParticipantsChanged: () -> Void
     private let onAggregatePeerStateChanged: (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Void
     private let onConnectionStatusUpdate: () -> Void
+    private let logger: SerenadaLogger?
+
+    private var offerSequence: Int64 = 0
+    private var pendingLocalOfferIds: [String: String] = [:]
+    private var acceptedRemoteOfferIds: [String: String] = [:]
+    private var currentNegotiationIds: [String: String] = [:]
+    private var ignoredOfferIds: [String: String] = [:]
+    private var settingRemoteAnswerCids: Set<String> = []
+    private var pendingRemoteIceByOfferId: [String: [String: [IceCandidatePayload]]] = [:]
+    private var participantStatuses: [String: ParticipantSignalingStatus] = [:]
+    private var outboundMediaWatchByCid: [String: OutboundMediaWatch] = [:]
+    private var lastMediaRestartHandledAtByCid: [String: Int64] = [:]
+
+    private struct OutboundMediaWatch {
+        var lastSample: OutboundMediaSample?
+        var stallSamples = 0
+        var inFlight = false
+        var lastRecoveryAtMs: Int64?
+    }
 
     init(
         clock: SessionClock,
@@ -47,6 +69,7 @@ final class PeerNegotiationEngine {
         getCurrentRoomState: @escaping () -> RoomState?,
         isSignalingConnected: @escaping () -> Bool,
         hasIceServers: @escaping () -> Bool,
+        isLocalMediaReady: @escaping () -> Bool = { true },
         getSlot: @escaping (String) -> (any PeerConnectionSlotProtocol)?,
         getAllSlots: @escaping () -> [String: any PeerConnectionSlotProtocol],
         setSlot: @escaping (String, any PeerConnectionSlotProtocol) -> Void,
@@ -64,7 +87,8 @@ final class PeerNegotiationEngine {
         sendMessage: @escaping (String, JSONValue?, String?) -> Void,
         onRemoteParticipantsChanged: @escaping () -> Void,
         onAggregatePeerStateChanged: @escaping (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Void,
-        onConnectionStatusUpdate: @escaping () -> Void
+        onConnectionStatusUpdate: @escaping () -> Void,
+        logger: SerenadaLogger? = nil
     ) {
         self.clock = clock
         self.getClientId = getClientId
@@ -74,6 +98,7 @@ final class PeerNegotiationEngine {
         self.getCurrentRoomState = getCurrentRoomState
         self.isSignalingConnected = isSignalingConnected
         self.hasIceServers = hasIceServers
+        self.isLocalMediaReady = isLocalMediaReady
         self.getSlot = getSlot
         self.getAllSlots = getAllSlots
         self.setSlot = setSlot
@@ -84,6 +109,7 @@ final class PeerNegotiationEngine {
         self.onRemoteParticipantsChanged = onRemoteParticipantsChanged
         self.onAggregatePeerStateChanged = onAggregatePeerStateChanged
         self.onConnectionStatusUpdate = onConnectionStatusUpdate
+        self.logger = logger
     }
 
     // MARK: - Public API
@@ -96,22 +122,29 @@ final class PeerNegotiationEngine {
         for remoteCid in departing {
             removePeerSlot(remoteCid: remoteCid)
         }
+        for remoteCid in Set(participantStatuses.keys).subtracting(remoteCids) {
+            participantStatuses.removeValue(forKey: remoteCid)
+        }
 
         if remoteParticipants.isEmpty {
             clearOfferTimeout()
             clearIceRestartTimer()
-            clearNonHostOfferFallback()
+            participantStatuses.removeAll()
         }
 
         if remoteParticipants.count >= 1 {
             for participant in remoteParticipants {
+                let previousStatus = participantStatuses[participant.cid]
+                participantStatuses[participant.cid] = participant.signalingStatus
+                let becameActive = previousStatus == .suspended && participant.signalingStatus == .active
                 let slot = getOrCreateSlot(remoteCid: participant.cid)
                 _ = slot.ensurePeerConnection()
                 if shouldIOffer(remoteCid: participant.cid, roomState: roomState) {
-                    clearNonHostOfferFallback(remoteCid: participant.cid)
-                    maybeSendOffer(slot: slot)
-                } else {
-                    maybeScheduleNonHostOfferFallback(remoteCid: participant.cid, reason: "participants")
+                    if becameActive {
+                        scheduleIceRestart(remoteCid: participant.cid, reason: "peer-reattached", delayMs: 0)
+                    } else {
+                        maybeSendOffer(slot: slot)
+                    }
                 }
             }
         }
@@ -119,9 +152,19 @@ final class PeerNegotiationEngine {
         updateAggregatePeerState()
     }
 
+    func onLocalMediaReady() {
+        maybeSendOffer()
+    }
+
     func processSignalingPayload(_ message: SignalingMessage) {
         guard let fromCid = message.payload?.objectValue?["from"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               !fromCid.isEmpty else {
+            return
+        }
+        if fromCid == getClientId() {
+            return
+        }
+        if let roomState = getCurrentRoomState(), !roomState.participants.contains(where: { $0.cid == fromCid }) {
             return
         }
 
@@ -132,47 +175,12 @@ final class PeerNegotiationEngine {
 
         switch message.type {
         case "offer":
-            clearNonHostOfferFallback(remoteCid: fromCid)
             guard let sdp = message.payload?.objectValue?["sdp"]?.stringValue, !sdp.isEmpty else { return }
-            slot.setRemoteDescription(type: .offer, sdp: sdp) { [weak self] success in
-                guard let self else { return }
-                guard success else {
-                    self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "offer-apply-failed")
-                    return
-                }
-                self.clearNonHostOfferFallback(remoteCid: fromCid)
-                slot.createAnswer(onSdp: { [weak self] answerSdp in
-                    self?.sendMessage(
-                        "answer",
-                        .object(["sdp": .string(answerSdp)]),
-                        fromCid
-                    )
-                }, onComplete: { [weak self] answerSuccess in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        if !answerSuccess {
-                            self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "answer-create-failed")
-                        }
-                    }
-                })
-            }
+            handleRemoteOffer(slot: slot, remoteCid: fromCid, sdp: sdp, offerId: offerId(from: message.payload))
 
         case "answer":
-            clearNonHostOfferFallback(remoteCid: fromCid)
             guard let sdp = message.payload?.objectValue?["sdp"]?.stringValue, !sdp.isEmpty else { return }
-            slot.setRemoteDescription(type: .answer, sdp: sdp) { [weak self] success in
-                guard let self else { return }
-                if success {
-                    self.clearOfferTimeout(remoteCid: fromCid)
-                    self.getSlot(fromCid)?.clearPendingIceRestart()
-                    self.updateAggregatePeerState()
-                    self.onConnectionStatusUpdate()
-                } else if self.shouldIOffer(remoteCid: fromCid) {
-                    self.scheduleIceRestart(remoteCid: fromCid, reason: "answer-apply-failed", delayMs: 0)
-                } else {
-                    self.maybeScheduleNonHostOfferFallback(remoteCid: fromCid, reason: "answer-apply-failed")
-                }
-            }
+            handleRemoteAnswer(slot: slot, remoteCid: fromCid, sdp: sdp, offerId: offerId(from: message.payload))
 
         case "ice":
             guard let candidateObject = message.payload?.objectValue?["candidate"]?.objectValue,
@@ -183,13 +191,19 @@ final class PeerNegotiationEngine {
             let sdpMLineIndex = Int32(candidateObject["sdpMLineIndex"]?.intValue ?? 0)
             let trimmedMid = candidateObject["sdpMid"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             let sdpMid = trimmedMid.flatMap { $0.isEmpty ? nil : $0 }
-            slot.addIceCandidate(
-                IceCandidatePayload(
+            handleRemoteIce(
+                slot: slot,
+                remoteCid: fromCid,
+                candidate: IceCandidatePayload(
                     sdpMid: sdpMid,
                     sdpMLineIndex: sdpMLineIndex,
                     candidate: candidate
-                )
+                ),
+                offerId: offerId(from: message.payload)
             )
+
+        case "media_restart_request":
+            handleMediaRestartRequest(slot: slot, remoteCid: fromCid)
 
         default:
             break
@@ -198,7 +212,6 @@ final class PeerNegotiationEngine {
 
     func onIceServersReady() {
         maybeSendOffer()
-        maybeScheduleNonHostOfferFallback(reason: "ice-ready")
     }
 
     func scheduleIceRestart(reason: String, delayMs: Int) {
@@ -213,10 +226,42 @@ final class PeerNegotiationEngine {
         }
     }
 
+    func handleSignalingReconnect() {
+        for slot in getAllSlots().values {
+            if shouldIOffer(remoteCid: slot.remoteCid) {
+                triggerIceRestart(remoteCid: slot.remoteCid, reason: "signaling-reconnect")
+            }
+        }
+    }
+
+    func scheduleDirtyPairRestart(remoteCid: String) {
+        guard getSlot(remoteCid) != nil else { return }
+        if shouldIOffer(remoteCid: remoteCid) {
+            scheduleIceRestart(remoteCid: remoteCid, reason: "negotiation-dirty", delayMs: 0)
+        }
+    }
+
     func resetAll() {
         clearOfferTimeout()
         clearIceRestartTimer()
-        clearNonHostOfferFallback()
+        clearNegotiationState()
+        participantStatuses.removeAll()
+        outboundMediaWatchByCid.removeAll()
+        lastMediaRestartHandledAtByCid.removeAll()
+    }
+
+    func recoverStalledOutboundMedia() {
+        let slots = getAllSlots()
+        for remoteCid in Array(outboundMediaWatchByCid.keys) where slots[remoteCid] == nil {
+            outboundMediaWatchByCid.removeValue(forKey: remoteCid)
+        }
+        for remoteCid in Array(lastMediaRestartHandledAtByCid.keys) where slots[remoteCid] == nil {
+            lastMediaRestartHandledAtByCid.removeValue(forKey: remoteCid)
+        }
+        guard isSignalingConnected() else { return }
+        for (remoteCid, slot) in slots {
+            recoverStalledOutboundMedia(remoteCid: remoteCid, slot: slot)
+        }
     }
 
     // MARK: - Slot Lifecycle
@@ -231,15 +276,19 @@ final class PeerNegotiationEngine {
             { [weak self] cid, candidate in
                 Task { @MainActor in
                     guard let self else { return }
+                    var payload: [String: JSONValue] = [
+                        "candidate": .object([
+                            "candidate": .string(candidate.candidate),
+                            "sdpMid": candidate.sdpMid.map(JSONValue.string) ?? .null,
+                            "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
+                        ])
+                    ]
+                    if let offerId = self.currentLocalOfferId(remoteCid: cid) {
+                        payload["offerId"] = .string(offerId)
+                    }
                     self.sendMessage(
                         "ice",
-                        .object([
-                            "candidate": .object([
-                                "candidate": .string(candidate.candidate),
-                                "sdpMid": candidate.sdpMid.map(JSONValue.string) ?? .null,
-                                "sdpMLineIndex": .number(Double(candidate.sdpMLineIndex))
-                            ])
-                        ]),
+                        .object(payload),
                         cid
                     )
                 }
@@ -319,24 +368,278 @@ final class PeerNegotiationEngine {
         guard let slot = removeSlotEntry(remoteCid) else { return }
         clearOfferTimeout(remoteCid: remoteCid)
         clearIceRestartTimer(remoteCid: remoteCid)
-        clearNonHostOfferFallback(remoteCid: remoteCid)
+        clearNegotiationState(remoteCid: remoteCid)
+        participantStatuses.removeValue(forKey: remoteCid)
+        outboundMediaWatchByCid.removeValue(forKey: remoteCid)
+        lastMediaRestartHandledAtByCid.removeValue(forKey: remoteCid)
         engineRemoveSlot(slot)
         slot.closePeerConnection()
+    }
+
+    private func replacePeerSlotForRemoteOffer(
+        remoteCid: String,
+        offerId: String
+    ) -> (any PeerConnectionSlotProtocol)? {
+        let pendingForOffer = pendingRemoteIceByOfferId[remoteCid]?[offerId]
+        clearOfferTimeout(remoteCid: remoteCid)
+        clearIceRestartTimer(remoteCid: remoteCid)
+        clearNegotiationState(remoteCid: remoteCid)
+        if let pendingForOffer, !pendingForOffer.isEmpty {
+            pendingRemoteIceByOfferId[remoteCid] = [offerId: pendingForOffer]
+        }
+        if let oldSlot = removeSlotEntry(remoteCid) {
+            engineRemoveSlot(oldSlot)
+            oldSlot.closePeerConnection()
+        }
+        let newSlot = getOrCreateSlot(remoteCid: remoteCid)
+        return (newSlot.isReady() || newSlot.ensurePeerConnection()) ? newSlot : nil
+    }
+
+    private func replacePeerSlotForMediaRecovery(
+        remoteCid: String
+    ) -> (any PeerConnectionSlotProtocol)? {
+        clearOfferTimeout(remoteCid: remoteCid)
+        clearIceRestartTimer(remoteCid: remoteCid)
+        clearNegotiationState(remoteCid: remoteCid)
+        if let oldSlot = removeSlotEntry(remoteCid) {
+            engineRemoveSlot(oldSlot)
+            oldSlot.closePeerConnection()
+        }
+        let newSlot = getOrCreateSlot(remoteCid: remoteCid)
+        return (newSlot.isReady() || newSlot.ensurePeerConnection()) ? newSlot : nil
+    }
+
+    // MARK: - Negotiation Identity / Perfect Negotiation
+
+    private func nextOfferId(remoteCid: String) -> String {
+        offerSequence += 1
+        return "\(getClientId() ?? ""):\(remoteCid):\(clock.nowMs()):\(offerSequence)"
+    }
+
+    private func offerId(from payload: JSONValue?) -> String {
+        guard let object = payload?.objectValue else { return Self.legacyOfferId }
+        if let offerId = object["offerId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !offerId.isEmpty {
+            return offerId
+        }
+        if let negotiationId = object["negotiationId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !negotiationId.isEmpty {
+            return negotiationId
+        }
+        return Self.legacyOfferId
+    }
+
+    private func currentLocalOfferId(remoteCid: String) -> String? {
+        pendingLocalOfferIds[remoteCid]
+            ?? acceptedRemoteOfferIds[remoteCid]
+            ?? currentNegotiationIds[remoteCid]
+    }
+
+    private func clearNegotiationState(remoteCid: String? = nil) {
+        if let remoteCid {
+            pendingLocalOfferIds.removeValue(forKey: remoteCid)
+            acceptedRemoteOfferIds.removeValue(forKey: remoteCid)
+            currentNegotiationIds.removeValue(forKey: remoteCid)
+            ignoredOfferIds.removeValue(forKey: remoteCid)
+            settingRemoteAnswerCids.remove(remoteCid)
+            pendingRemoteIceByOfferId.removeValue(forKey: remoteCid)
+            return
+        }
+        pendingLocalOfferIds.removeAll()
+        acceptedRemoteOfferIds.removeAll()
+        currentNegotiationIds.removeAll()
+        ignoredOfferIds.removeAll()
+        settingRemoteAnswerCids.removeAll()
+        pendingRemoteIceByOfferId.removeAll()
+    }
+
+    private func handleRemoteOffer(
+        slot: any PeerConnectionSlotProtocol,
+        remoteCid: String,
+        sdp: String,
+        offerId: String
+    ) {
+        let signalingState = slot.getSignalingState()
+        let readyForOffer = !slot.isMakingOffer &&
+            (signalingState == "STABLE" || settingRemoteAnswerCids.contains(remoteCid))
+        let offerCollision = !readyForOffer
+        let polite = !shouldIOffer(remoteCid: remoteCid)
+
+        if offerCollision && !polite {
+            ignoredOfferIds[remoteCid] = offerId
+            return
+        }
+
+        func applyOffer(to targetSlot: any PeerConnectionSlotProtocol, allowPeerReset: Bool) {
+            ignoredOfferIds.removeValue(forKey: remoteCid)
+            pendingLocalOfferIds.removeValue(forKey: remoteCid)
+            clearOfferTimeout(remoteCid: remoteCid)
+            targetSlot.setRemoteDescription(type: .offer, sdp: sdp) { [weak self, weak targetSlot] success in
+                Task { @MainActor in
+                    guard let self, let targetSlot else { return }
+                    guard success else {
+                        if allowPeerReset,
+                           let replacementSlot = self.replacePeerSlotForRemoteOffer(remoteCid: remoteCid, offerId: offerId) {
+                            applyOffer(to: replacementSlot, allowPeerReset: false)
+                            return
+                        }
+                        self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Failed to apply remote offer from \(remoteCid)")
+                        self.scheduleIceRestart(remoteCid: remoteCid, reason: "remote-offer-apply-failed", delayMs: 0)
+                        return
+                    }
+                    self.acceptedRemoteOfferIds[remoteCid] = offerId
+                    self.currentNegotiationIds[remoteCid] = offerId
+                    self.flushPendingRemoteIce(remoteCid: remoteCid, offerId: offerId, slot: targetSlot)
+                    targetSlot.createAnswer(onSdp: { [weak self] answerSdp in
+                        Task { @MainActor in
+                            guard let self, self.acceptedRemoteOfferIds[remoteCid] == offerId else { return }
+                            self.sendMessage(
+                                "answer",
+                                .object(["sdp": .string(answerSdp), "offerId": .string(offerId)]),
+                                remoteCid
+                            )
+                        }
+                    }, onComplete: { [weak self, weak targetSlot] success in
+                        guard !success else { return }
+                        Task { @MainActor in
+                            guard let self, targetSlot != nil else { return }
+                            self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Answer creation failed for \(remoteCid); resetting peer")
+                            if allowPeerReset,
+                               let replacementSlot = self.replacePeerSlotForRemoteOffer(remoteCid: remoteCid, offerId: offerId) {
+                                applyOffer(to: replacementSlot, allowPeerReset: false)
+                            } else {
+                                self.scheduleIceRestart(remoteCid: remoteCid, reason: "answer-failed", delayMs: 0)
+                            }
+                        }
+                    })
+                }
+            }
+        }
+
+        if offerCollision && signalingState == "HAVE_LOCAL_OFFER" {
+            pendingLocalOfferIds.removeValue(forKey: remoteCid)
+            clearOfferTimeout(remoteCid: remoteCid)
+            slot.rollbackLocalDescription { [weak self] success in
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard success else {
+                        self.logger?.log(.warning, tag: "PeerNegotiationEngine", "Rollback before remote offer failed for \(remoteCid)")
+                        if let replacementSlot = self.replacePeerSlotForRemoteOffer(remoteCid: remoteCid, offerId: offerId) {
+                            applyOffer(to: replacementSlot, allowPeerReset: false)
+                        } else {
+                            self.scheduleIceRestart(remoteCid: remoteCid, reason: "rollback-failed", delayMs: 0)
+                        }
+                        return
+                    }
+                    applyOffer(to: slot, allowPeerReset: true)
+                }
+            }
+            return
+        }
+
+        applyOffer(to: slot, allowPeerReset: true)
+    }
+
+    private func handleRemoteAnswer(
+        slot: any PeerConnectionSlotProtocol,
+        remoteCid: String,
+        sdp: String,
+        offerId: String
+    ) {
+        let pendingOfferId = pendingLocalOfferIds[remoteCid]
+        guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else { return }
+        if offerId != Self.legacyOfferId && pendingOfferId != offerId {
+            return
+        }
+
+        settingRemoteAnswerCids.insert(remoteCid)
+        slot.setRemoteDescription(type: .answer, sdp: sdp) { [weak self, weak slot] success in
+            Task { @MainActor in
+                guard let self else { return }
+                self.settingRemoteAnswerCids.remove(remoteCid)
+                guard let slot else { return }
+                if success {
+                    let completedOfferId = self.pendingLocalOfferIds.removeValue(forKey: remoteCid) ?? offerId
+                    self.currentNegotiationIds[remoteCid] = completedOfferId
+                    self.ignoredOfferIds.removeValue(forKey: remoteCid)
+                    self.clearOfferTimeout(remoteCid: remoteCid)
+                    slot.clearPendingIceRestart()
+                    self.flushPendingRemoteIce(remoteCid: remoteCid, offerId: completedOfferId, slot: slot)
+                    self.updateAggregatePeerState()
+                    self.onConnectionStatusUpdate()
+                } else if self.shouldIOffer(remoteCid: remoteCid) {
+                    self.scheduleIceRestart(remoteCid: remoteCid, reason: "answer-apply-failed", delayMs: 0)
+                }
+            }
+        }
+    }
+
+    private func handleRemoteIce(
+        slot: any PeerConnectionSlotProtocol,
+        remoteCid: String,
+        candidate: IceCandidatePayload,
+        offerId: String
+    ) {
+        if ignoredOfferIds[remoteCid] == offerId { return }
+        if offerId != Self.legacyOfferId, !isKnownNegotiationId(remoteCid: remoteCid, offerId: offerId) {
+            var pendingByOffer = pendingRemoteIceByOfferId[remoteCid] ?? [:]
+            var pending = pendingByOffer[offerId] ?? []
+            if pending.count < WebRtcResilience.iceCandidateBufferMax {
+                pending.append(candidate)
+            }
+            pendingByOffer[offerId] = pending
+            pendingRemoteIceByOfferId[remoteCid] = pendingByOffer
+            return
+        }
+        slot.addIceCandidate(candidate)
+    }
+
+    private func isKnownNegotiationId(remoteCid: String, offerId: String) -> Bool {
+        pendingLocalOfferIds[remoteCid] == offerId ||
+            acceptedRemoteOfferIds[remoteCid] == offerId ||
+            currentNegotiationIds[remoteCid] == offerId
+    }
+
+    private func flushPendingRemoteIce(
+        remoteCid: String,
+        offerId: String,
+        slot: any PeerConnectionSlotProtocol
+    ) {
+        guard var pendingByOffer = pendingRemoteIceByOfferId[remoteCid],
+              let candidates = pendingByOffer.removeValue(forKey: offerId) else {
+            return
+        }
+        candidates.forEach(slot.addIceCandidate)
+        if pendingByOffer.isEmpty {
+            pendingRemoteIceByOfferId.removeValue(forKey: remoteCid)
+        } else {
+            pendingRemoteIceByOfferId[remoteCid] = pendingByOffer
+        }
     }
 
     // MARK: - Offer Logic
 
     private func shouldIOffer(remoteCid: String, roomState: RoomState? = nil) -> Bool {
-        _ = roomState
         guard let myCid = getClientId() else { return false }
+        if let roomState,
+           !roomState.participants.contains(where: { $0.cid == remoteCid }) {
+            return false
+        }
         return myCid < remoteCid
     }
 
     private func canOffer(slot: any PeerConnectionSlotProtocol) -> Bool {
+        guard let roomState = getCurrentRoomState() else { return false }
         guard getParticipantCount() > 1 else { return false }
         guard isSignalingConnected() else { return false }
-        guard shouldIOffer(remoteCid: slot.remoteCid) else { return false }
+        guard isLocalMediaReady() else { return false }
+        guard shouldIOffer(remoteCid: slot.remoteCid, roomState: roomState) else { return false }
+        guard roomState.participants.first(where: { $0.cid == slot.remoteCid })?.signalingStatus == .active else { return false }
         return slot.isReady() || slot.ensurePeerConnection()
+    }
+
+    private func isParticipantActive(remoteCid: String) -> Bool {
+        getCurrentRoomState()?.participants.first(where: { $0.cid == remoteCid })?.signalingStatus == .active
     }
 
     private func maybeSendOffer(force: Bool = false, iceRestart: Bool = false) {
@@ -368,22 +671,32 @@ final class PeerNegotiationEngine {
             return
         }
 
+        let offerId = nextOfferId(remoteCid: slot.remoteCid)
+        let remoteCid = slot.remoteCid
+        pendingLocalOfferIds[slot.remoteCid] = offerId
+        acceptedRemoteOfferIds.removeValue(forKey: slot.remoteCid)
+        ignoredOfferIds.removeValue(forKey: slot.remoteCid)
         slot.beginOffer()
         let started = slot.createOffer(
             iceRestart: iceRestart,
             onSdp: { [weak self] sdp in
-                self?.sendMessage(
-                    "offer",
-                    .object(["sdp": .string(sdp)]),
-                    slot.remoteCid
-                )
-                self?.scheduleOfferTimeout(remoteCid: slot.remoteCid)
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard self.pendingLocalOfferIds[remoteCid] == offerId else { return }
+                    self.sendMessage(
+                        "offer",
+                        .object(["sdp": .string(sdp), "offerId": .string(offerId)]),
+                        remoteCid
+                    )
+                    self.scheduleOfferTimeout(remoteCid: remoteCid)
+                }
             },
             onComplete: { [weak self] success in
                 Task { @MainActor in
                     guard let self else { return }
                     slot.completeOffer()
                     if !success {
+                        self.pendingLocalOfferIds.removeValue(forKey: slot.remoteCid)
                         if iceRestart {
                             self.scheduleIceRestart(remoteCid: slot.remoteCid, reason: "offer-failed", delayMs: 500)
                         } else if self.shouldIOffer(remoteCid: slot.remoteCid) {
@@ -395,6 +708,7 @@ final class PeerNegotiationEngine {
         )
 
         if !started {
+            pendingLocalOfferIds.removeValue(forKey: slot.remoteCid)
             slot.completeOffer()
             if iceRestart {
                 slot.markPendingIceRestart()
@@ -405,6 +719,120 @@ final class PeerNegotiationEngine {
         if !force {
             slot.markOfferSent()
         }
+    }
+
+    private func handleMediaRestartRequest(slot: any PeerConnectionSlotProtocol, remoteCid: String) {
+        guard canOffer(slot: slot) else { return }
+        let now = clock.nowMs()
+        if let lastHandledAt = lastMediaRestartHandledAtByCid[remoteCid],
+           now - lastHandledAt < Int64(WebRtcResilience.outboundMediaRecoveryCooldownMs) {
+            return
+        }
+        lastMediaRestartHandledAtByCid[remoteCid] = now
+        logger?.log(.warning, tag: "PeerNegotiationEngine", "Recreating peer after media restart request from \(remoteCid)")
+        guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
+        maybeSendOffer(slot: replacement)
+    }
+
+    // MARK: - Outbound Media Watchdog
+
+    private func recoverStalledOutboundMedia(remoteCid: String, slot: any PeerConnectionSlotProtocol) {
+        var watch = outboundMediaWatchByCid[remoteCid] ?? OutboundMediaWatch()
+        if watch.inFlight { return }
+        if !isPeerMediaConnected(slot: slot) {
+            resetOutboundMediaSample(&watch)
+            outboundMediaWatchByCid[remoteCid] = watch
+            return
+        }
+
+        watch.inFlight = true
+        outboundMediaWatchByCid[remoteCid] = watch
+        slot.collectOutboundMediaSample { [weak self] sample in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let current = self.getSlot(remoteCid), current === slot else {
+                    self.outboundMediaWatchByCid[remoteCid]?.inFlight = false
+                    return
+                }
+                self.finalizeOutboundMediaSample(remoteCid: remoteCid, slot: slot, sample: sample)
+            }
+        }
+    }
+
+    private func finalizeOutboundMediaSample(
+        remoteCid: String,
+        slot: any PeerConnectionSlotProtocol,
+        sample: OutboundMediaSample?
+    ) {
+        var watch = outboundMediaWatchByCid[remoteCid] ?? OutboundMediaWatch()
+        defer {
+            watch.inFlight = false
+            outboundMediaWatchByCid[remoteCid] = watch
+        }
+
+        guard let sample, sample.expectsAudio || sample.expectsVideo else {
+            resetOutboundMediaSample(&watch)
+            return
+        }
+
+        let previous = watch.lastSample
+        watch.lastSample = sample
+        guard let previous else {
+            watch.stallSamples = 0
+            return
+        }
+
+        let videoStalled = sample.expectsVideo &&
+            sample.videoBytesSent <= previous.videoBytesSent &&
+            sample.videoFramesSent <= previous.videoFramesSent
+        let audioOnlyStalled = !sample.expectsVideo &&
+            sample.expectsAudio &&
+            sample.audioBytesSent <= previous.audioBytesSent
+        guard videoStalled || audioOnlyStalled else {
+            watch.stallSamples = 0
+            return
+        }
+
+        watch.stallSamples += 1
+        guard watch.stallSamples >= WebRtcResilience.outboundMediaStallSamples else { return }
+
+        let now = clock.nowMs()
+        if let lastRecoveryAtMs = watch.lastRecoveryAtMs,
+           now - lastRecoveryAtMs < Int64(WebRtcResilience.outboundMediaRecoveryCooldownMs) {
+            return
+        }
+
+        watch.lastRecoveryAtMs = now
+        resetOutboundMediaSample(&watch)
+        if shouldIOffer(remoteCid: remoteCid) {
+            recreatePeerForMediaRecovery(remoteCid: remoteCid, reason: "stalled outbound media")
+        } else {
+            requestPeerMediaRecovery(remoteCid: remoteCid, reason: "stalled outbound media")
+        }
+    }
+
+    private func isPeerMediaConnected(slot: any PeerConnectionSlotProtocol) -> Bool {
+        slot.getSignalingState() == "STABLE" &&
+            slot.getConnectionState() == .connected &&
+            (slot.getIceConnectionState() == "CONNECTED" || slot.getIceConnectionState() == "COMPLETED")
+    }
+
+    private func resetOutboundMediaSample(_ watch: inout OutboundMediaWatch) {
+        watch.lastSample = nil
+        watch.stallSamples = 0
+    }
+
+    private func requestPeerMediaRecovery(remoteCid: String, reason: String) {
+        guard isSignalingConnected(), isParticipantActive(remoteCid: remoteCid) else { return }
+        logger?.log(.warning, tag: "PeerNegotiationEngine", "Requesting media restart from \(remoteCid) after \(reason)")
+        sendMessage("media_restart_request", .object(["reason": .string(reason)]), remoteCid)
+    }
+
+    private func recreatePeerForMediaRecovery(remoteCid: String, reason: String) {
+        guard let current = getSlot(remoteCid), canOffer(slot: current) else { return }
+        logger?.log(.warning, tag: "PeerNegotiationEngine", "Recreating peer after \(reason) for \(remoteCid)")
+        guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
+        maybeSendOffer(slot: replacement)
     }
 
     // MARK: - Offer Timeout
@@ -423,17 +851,21 @@ final class PeerNegotiationEngine {
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, let slot = self.getSlot(remoteCid) else { return }
-                guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else { return }
+                guard slot.getSignalingState() == "HAVE_LOCAL_OFFER" else {
+                    if triggerIceRestart, self.shouldIOffer(remoteCid: remoteCid) {
+                        self.scheduleIceRestart(remoteCid: remoteCid, reason: "offer-timeout-stale", delayMs: 0)
+                    }
+                    return
+                }
                 if triggerIceRestart {
                     slot.markPendingIceRestart()
                 }
+                self.pendingLocalOfferIds.removeValue(forKey: remoteCid)
                 slot.rollbackLocalDescription { _ in
                     Task { @MainActor in
                         if triggerIceRestart {
                             if self.shouldIOffer(remoteCid: remoteCid) {
                                 self.scheduleIceRestart(remoteCid: remoteCid, reason: "offer-timeout", delayMs: 0)
-                            } else {
-                                self.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-timeout")
                             }
                         } else {
                             onTimedOut?()
@@ -506,103 +938,39 @@ final class PeerNegotiationEngine {
             return
         }
 
+        let signalingState = slot.getSignalingState()
+        guard signalingState == "STABLE" else {
+            slot.markPendingIceRestart()
+            if signalingState == "HAVE_LOCAL_OFFER" {
+                pendingLocalOfferIds.removeValue(forKey: remoteCid)
+                rollbackStaleLocalOfferAndRetryIceRestart(slot: slot, remoteCid: remoteCid, reason: reason)
+            }
+            return
+        }
+
         slot.recordIceRestart(nowMs: clock.nowMs())
         maybeSendOffer(slot: slot, force: true, iceRestart: true)
     }
 
-    // MARK: - Non-Host Offer Fallback
-
-    private func maybeScheduleNonHostOfferFallback(reason: String) {
-        for slot in getAllSlots().values where !shouldIOffer(remoteCid: slot.remoteCid) {
-            maybeScheduleNonHostOfferFallback(remoteCid: slot.remoteCid, reason: reason)
-        }
-    }
-
-    private func maybeScheduleNonHostOfferFallback(remoteCid: String, reason: String) {
-        guard let slot = getSlot(remoteCid) else { return }
-        guard getParticipantCount() > 1 else {
-            clearNonHostOfferFallback(remoteCid: remoteCid)
-            return
-        }
-        guard !shouldIOffer(remoteCid: remoteCid) else {
-            clearNonHostOfferFallback(remoteCid: remoteCid)
-            return
-        }
-        guard isSignalingConnected() else { return }
-        guard slot.nonHostFallbackTask == nil else { return }
-        guard slot.nonHostFallbackAttempts < WebRtcResilience.nonHostFallbackMaxAttempts else { return }
-
-        slot.setNonHostFallbackTask(Task { [weak self] in
-            guard let clock = self?.clock else { return }
-            try? await clock.sleep(nanoseconds: WebRtcResilience.nonHostFallbackDelayNs)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, let slot = self.getSlot(remoteCid) else { return }
-                slot.clearNonHostFallbackTask()
-                slot.incrementNonHostFallbackAttempts()
-                self.maybeSendNonHostFallbackOffer(remoteCid: remoteCid)
-            }
-        })
-    }
-
-    private func clearNonHostOfferFallback(remoteCid: String? = nil) {
-        if let remoteCid {
-            getSlot(remoteCid)?.cancelNonHostFallbackTask()
-            return
-        }
-
-        for slot in getAllSlots().values {
-            slot.cancelNonHostFallbackTask()
-        }
-    }
-
-    private func maybeSendNonHostFallbackOffer(remoteCid: String) {
-        guard let slot = getSlot(remoteCid) else { return }
-        guard getParticipantCount() > 1 else { return }
-        guard !shouldIOffer(remoteCid: remoteCid) else { return }
-        guard isSignalingConnected() else { return }
-        guard slot.isReady() || slot.ensurePeerConnection() else { return }
-        guard slot.getSignalingState() == "STABLE" else {
-            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "signaling-not-stable")
-            return
-        }
-        guard !slot.hasRemoteDescription() else { return }
-        guard !slot.isMakingOffer else {
-            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "already-making-offer")
-            return
-        }
-
-        slot.beginOffer()
-        let started = slot.createOffer(
-            iceRestart: false,
-            onSdp: { [weak self] sdp in
-                self?.sendMessage(
-                    "offer",
-                    .object(["sdp": .string(sdp)]),
-                    remoteCid
-                )
-                self?.scheduleOfferTimeout(
-                    remoteCid: remoteCid,
-                    triggerIceRestart: false,
-                    onTimedOut: { [weak self] in
-                        self?.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-timeout")
+    private func rollbackStaleLocalOfferAndRetryIceRestart(
+        slot: any PeerConnectionSlotProtocol,
+        remoteCid: String,
+        reason: String
+    ) {
+        slot.rollbackLocalDescription { [weak self] success in
+            Task { @MainActor in
+                guard let self else { return }
+                if success {
+                    guard let currentSlot = self.getSlot(remoteCid),
+                          currentSlot.getSignalingState() == "STABLE",
+                          currentSlot.pendingIceRestart else {
+                        return
                     }
-                )
-            },
-            onComplete: { [weak self] success in
-                Task { @MainActor in
-                    guard let self else { return }
-                    slot.completeOffer()
-                    if !success {
-                        self.maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-failed")
-                    }
+                    self.triggerIceRestart(remoteCid: remoteCid, reason: "\(reason)-rollback")
+                } else {
+                    self.scheduleOfferTimeout(remoteCid: remoteCid)
                 }
             }
-        )
-
-        if !started {
-            slot.completeOffer()
-            maybeScheduleNonHostOfferFallback(remoteCid: remoteCid, reason: "offer-not-started")
         }
     }
 

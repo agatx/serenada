@@ -861,7 +861,7 @@ func (h *Hub) handleMessage(c *Client, msgBytes []byte) {
 		h.handleTurnRefresh(c, msg)
 	case "reconnect-token-refresh":
 		h.handleReconnectTokenRefresh(c, msg)
-	case "offer", "answer", "ice", "content_state":
+	case "offer", "answer", "ice", "media_restart_request", "content_state":
 		// log.Printf("[%s] Relay from %s to room %s", msg.Type, c.cid, c.rid) // verbose
 		h.handleRelay(c, msg)
 	case "participant_media_state":
@@ -1534,10 +1534,10 @@ func (h *Hub) handleRelay(c *Client, msg Message) {
 	}
 
 	// Walk the full participant list (including suspended). Active peers get
-	// the message; for offer/answer/ice we additionally mark the sender's
+	// the message; for offer/answer/ice/media_restart_request we additionally mark the sender's
 	// dirty pair with each suspended target and respond `relay_failed` so the
 	// sender doesn't sit waiting forever for an answer that will never come.
-	negotiationType := msg.Type == "offer" || msg.Type == "answer" || msg.Type == "ice"
+	negotiationType := msg.Type == "offer" || msg.Type == "answer" || msg.Type == "ice" || msg.Type == "media_restart_request"
 	relayedCount := 0
 	var suspendedTargets []string
 	for cid, p := range room.byCID {

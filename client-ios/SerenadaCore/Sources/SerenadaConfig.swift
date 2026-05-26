@@ -39,6 +39,10 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
     /// Whether the proximity sensor is used to switch audio to the earpiece and pause video.
     /// Defaults to `false`.
     public var proximityMonitoringEnabled: Bool
+    /// Custom audio coordinator. If `nil`, the SDK uses its internal default coordinator.
+    public var audioCoordinator: SerenadaAudioCoordinator?
+    /// Audio policy passed to the coordinator when a call session activates.
+    public var audioIntent: AudioIntent
 
     public init(
         serverHost: String? = nil,
@@ -47,7 +51,9 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         defaultVideoEnabled: Bool = true,
         cameraModes: [LocalCameraMode]? = nil,
         transports: [SerenadaTransport] = [.ws, .sse],
-        proximityMonitoringEnabled: Bool = false
+        proximityMonitoringEnabled: Bool = false,
+        audioCoordinator: SerenadaAudioCoordinator? = nil,
+        audioIntent: AudioIntent = AudioIntent()
     ) {
         self.serverHost = serverHost
         self.signalingProvider = signalingProvider
@@ -56,6 +62,8 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
         self.cameraModes = cameraModes
         self.transports = transports
         self.proximityMonitoringEnabled = proximityMonitoringEnabled
+        self.audioCoordinator = audioCoordinator
+        self.audioIntent = audioIntent
     }
 
     public static func == (lhs: SerenadaConfig, rhs: SerenadaConfig) -> Bool {
@@ -66,6 +74,8 @@ public struct SerenadaConfig: Equatable, @unchecked Sendable {
             && lhs.transports == rhs.transports
             && lhs.proximityMonitoringEnabled == rhs.proximityMonitoringEnabled
             && haveSameProvider(lhs.signalingProvider, rhs.signalingProvider)
+            && lhs.audioCoordinator === rhs.audioCoordinator
+            && lhs.audioIntent == rhs.audioIntent
     }
 }
 

@@ -145,7 +145,7 @@ final class LoopbackSignalingProviderTests: XCTestCase {
         let media = FakeMediaEngine()
         let session = SerenadaSession(
             roomId: roomId,
-            config: SerenadaConfig(signalingProvider: provider),
+            config: SerenadaConfig(signalingProvider: provider, audioCoordinator: FakeAudioCoordinator()),
             initialSignalingProvider: provider,
             audioController: FakeAudioController(),
             mediaEngine: media,

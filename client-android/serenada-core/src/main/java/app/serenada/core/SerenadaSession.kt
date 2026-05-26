@@ -13,6 +13,15 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import app.serenada.core.call.AudioDevice
+import app.serenada.core.call.AudioIntent
+import app.serenada.core.call.AudioCoordinatorEvent
+import app.serenada.core.call.SerenadaAudioCoordinator
+import app.serenada.core.call.AudioDeviceKind
 import app.serenada.core.call.dedupeParticipants
 import app.serenada.core.call.resolveHostPeerId
 import app.serenada.core.call.ConnectionStatusTracker
@@ -26,7 +35,7 @@ import app.serenada.core.call.resolveCameraModes
 import app.serenada.core.call.SignalingMessageRouter
 import app.serenada.core.call.AudioLevelPoller
 import app.serenada.core.call.StatsPoller
-import app.serenada.core.call.CallAudioSessionController
+import app.serenada.core.call.DefaultAudioCoordinator
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.ContentTypeWire
@@ -48,14 +57,20 @@ import app.serenada.core.network.CoreApiClient
 import app.serenada.core.network.SessionAPIClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
@@ -68,7 +83,8 @@ import java.util.concurrent.Executors
  * Represents an active call session. Created via [SerenadaCore.join] or [SerenadaCore.createRoom].
  *
  * Observe [state] for app-facing call state changes and [diagnostics] for low-level transport/media details.
- * Control the call via [leave], [end], [toggleAudio], [toggleVideo], etc.
+ * Control the call via [leave], [end], [toggleAudio], [toggleVideo], etc. Call [close] once
+ * the host is done with the session object.
  */
 class SerenadaSession internal constructor(
     /** The room ID for this call session. */
@@ -99,6 +115,8 @@ class SerenadaSession internal constructor(
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+    private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
 
     private val _state = MutableStateFlow(CallState())
     /** Primary observable call state. Collect this flow for UI updates. */
@@ -107,6 +125,22 @@ class SerenadaSession internal constructor(
     private val _diagnostics = MutableStateFlow(CallDiagnostics())
     /** Real-time connection diagnostics (stats, transport state, ICE state). */
     val diagnostics: StateFlow<CallDiagnostics> = _diagnostics.asStateFlow()
+
+    private val _availableAudioDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
+    /** Audio routes currently published by the active coordinator. */
+    val availableAudioDevices: StateFlow<List<AudioDevice>> = _availableAudioDevices.asStateFlow()
+
+    private val _currentAudioDevice = MutableStateFlow<AudioDevice?>(null)
+    /** Current selected or active output route, or null when no route is available yet. */
+    val currentAudioDevice: StateFlow<AudioDevice?> = _currentAudioDevice.asStateFlow()
+
+    private val _isMicMuted = MutableStateFlow(false)
+    /** Whether the microphone is effectively muted by user action, external audio, or missing input. */
+    val isMicMuted: StateFlow<Boolean> = _isMicMuted.asStateFlow()
+
+    private val _isMicMutedByExternalAudio = MutableStateFlow(false)
+    /** Whether the microphone is muted specifically because external audio, such as push-to-talk, is active. */
+    val isMicMutedByExternalAudio: StateFlow<Boolean> = _isMicMutedByExternalAudio.asStateFlow()
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -185,6 +219,16 @@ class SerenadaSession internal constructor(
     private var pendingJoinRoom: String? = null
     private val recoveryStorage = RecoveryStorage(appContext)
     private var sessionStartTs: Long? = null
+    private var userMuted = false
+    private var externalAudioMuted = false
+    private var playbackDuckingActive = false
+    private var routeInputAvailable = true
+    private var sessionActivated = false
+    private val audioCoordinatorMutex = Mutex()
+    private val audioCoordinatorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val audioCoordinatorCollectorJobs = mutableListOf<Job>()
+    private var audioCoordinatorDeactivationJob: Job? = null
+    private var closed = false
     private val connectionStatusTracker = ConnectionStatusTracker(
         handler = handler,
         getPhase = { _state.value.phase },
@@ -378,6 +422,7 @@ class SerenadaSession internal constructor(
     private var mediaLivenessTickRunnable: Runnable? = null
     private var mediaLivenessEmitInFlight = false
     private var mediaLivenessEmitCount = 0
+    private var outboundMediaWatchdogRunnable: Runnable? = null
     private var iceFetchGeneration = 0
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private val availableCameraModes: List<LocalCameraMode> = resolveAvailableCameraModes()
@@ -393,6 +438,7 @@ class SerenadaSession internal constructor(
     private var webRtcEngine: SessionMediaEngine = mediaEngine ?: buildWebRtcEngine()
     private var awaitingPermissions = false
     private var hasInitialIceServers = false
+    private var localMediaReadyForNegotiation = false
 
     private fun resolveAvailableCameraModes(): List<LocalCameraMode> {
         val configuredModes = resolveCameraModes(config.cameraModes)
@@ -411,9 +457,15 @@ class SerenadaSession internal constructor(
             getCurrentRoomState = { currentRoomState },
             isSignalingConnected = { _diagnostics.value.isSignalingConnected },
             hasIceServers = { webRtcEngine.hasIceServers() },
+            isLocalMediaReady = { localMediaReadyForNegotiation },
             getSlot = { cid: String -> peerSlots[cid] },
             getAllSlots = { peerSlots.toMap() },
-            setSlot = { cid: String, slot: PeerConnectionSlotProtocol -> peerSlots[cid] = slot },
+            setSlot = { cid: String, slot: PeerConnectionSlotProtocol ->
+                peerSlots[cid] = slot
+                if (playbackDuckingActive) {
+                    slot.duckPlayback(true)
+                }
+            },
             removeSlotEntry = { cid: String -> peerSlots.remove(cid) },
             createSlotViaEngine = {
                 remoteCid: String,
@@ -496,7 +548,7 @@ class SerenadaSession internal constructor(
         }
     }
 
-    private val callAudioSessionController: SessionAudioController = audioController ?: CallAudioSessionController(
+    private val defaultAudioCoordinator = DefaultAudioCoordinator(
         context = appContext,
         handler = handler,
         proximityMonitoringEnabled = config.proximityMonitoringEnabled,
@@ -506,6 +558,44 @@ class SerenadaSession internal constructor(
         onAudioEnvironmentChanged = { applyLocalVideoPreference() },
         logger = logger,
     )
+    private val audioCoordinator: SerenadaAudioCoordinator = config.audioCoordinator ?: defaultAudioCoordinator
+    private val callAudioSessionController: SessionAudioController = audioController ?: (config.audioCoordinator?.let { CustomAudioCoordinatorAdapter(it, config.proximityMonitoringEnabled, sensorManager, proximitySensor, handler, { applyLocalVideoPreference() }) } ?: defaultAudioCoordinator)
+
+    init {
+        startAudioCoordinatorCollectors()
+    }
+
+    private fun startAudioCoordinatorCollectors() {
+        if (audioCoordinatorCollectorJobs.isNotEmpty()) return
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
+            audioCoordinator.availableDevices.collect { devices ->
+                _availableAudioDevices.value = devices
+            }
+        }
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
+            audioCoordinator.effectiveInputDevice.collect { device ->
+                if (!sessionActivated) return@collect
+                routeInputAvailable = (device != null)
+                updateEffectiveMicState()
+            }
+        }
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
+            audioCoordinator.effectiveOutputDevice.collect { device ->
+                _currentAudioDevice.value = device
+                if (sessionActivated) applyLocalVideoPreference()
+            }
+        }
+        audioCoordinatorCollectorJobs += audioCoordinatorScope.launch {
+            audioCoordinator.events.collect { event ->
+                handleCoordinatorEvent(event)
+            }
+        }
+    }
+
+    private fun stopAudioCoordinatorCollectors() {
+        audioCoordinatorCollectorJobs.forEach { it.cancel() }
+        audioCoordinatorCollectorJobs.clear()
+    }
 
     private val forceSse = config.transports == listOf(SerenadaTransport.SSE)
 
@@ -610,7 +700,10 @@ class SerenadaSession internal constructor(
         override fun onMessage(message: PeerMessage) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX ${message.type}")
-                if (message.type == "content_state" || message.type == "participant_media_state" || message.type == "offer" || message.type == "answer" || message.type == "ice") {
+                if (message.type == "content_state" || message.type == "participant_media_state" ||
+                    message.type == "offer" || message.type == "answer" || message.type == "ice" ||
+                    message.type == "media_restart_request"
+                ) {
                     signalingMessageRouter.processPeerMessage(message)
                 }
             }
@@ -639,7 +732,7 @@ class SerenadaSession internal constructor(
         override fun onNegotiationDirty(event: NegotiationDirtyEvent) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX negotiation_dirty with=${event.withCid}")
-                peerNegotiationEngine.scheduleIceRestart(event.withCid, "negotiation-dirty", 0)
+                peerNegotiationEngine.scheduleDirtyPairRestart(event.withCid)
             }
         }
 
@@ -682,13 +775,28 @@ class SerenadaSession internal constructor(
         leave()
     }
 
+    /** Permanently release this session after the host is done with it. */
+    fun close() {
+        assertMainThread()
+        if (closed) return
+        closed = true
+
+        val deactivationJob =
+            if (_state.value.phase == CallPhase.Idle) {
+                audioCoordinatorDeactivationJob
+            } else {
+                signalingProvider.leaveRoom()
+                cleanupCall(EndReason.LocalLeft)
+            }
+
+        providerScope.cancel()
+        cancelAudioCoordinatorScopeAfter(deactivationJob)
+    }
+
     /** Toggle local audio on or off. */
     fun toggleAudio() {
         assertMainThread()
-        val enabled = !_state.value.localAudioEnabled
-        webRtcEngine.toggleAudio(enabled)
-        updateState(_state.value.copy(localAudioEnabled = enabled))
-        broadcastLocalMediaState()
+        setMicMuted(!userMuted)
     }
 
     /** Toggle local video on or off. */
@@ -975,6 +1083,8 @@ class SerenadaSession internal constructor(
         hasInitialIceServers = false
         reconnectRecoveryPending = false
         iceFetchGeneration += 1
+        startAudioCoordinatorCollectors()
+        localMediaReadyForNegotiation = false
         if (webRtcStatsExecutor == null) {
             webRtcStatsExecutor = newWebRtcStatsExecutor()
         }
@@ -999,18 +1109,45 @@ class SerenadaSession internal constructor(
             )
         )
         updateDiagnostics(CallDiagnostics())
-        joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
-        joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
 
         acquirePerformanceLocks()
-        callAudioSessionController.activate()
-        webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
-
-        if (!config.defaultAudioEnabled) webRtcEngine.toggleAudio(false)
-        applyLocalVideoPreference()
-
-        startRemoteVideoStatePolling()
-        joinFlowCoordinator.ensureSignalingConnection()
+        providerScope.launch {
+            try {
+                withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                    audioCoordinatorMutex.withLock {
+                        audioCoordinator.activateCallSession(config.audioIntent)
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Audio session activation timed out")
+                handleError(CallError.Unknown("Audio session activation timed out"))
+                return@launch
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to activate audio session: ${e.message}")
+                handleError(CallError.Unknown(e.message ?: "Audio session activation failed"))
+                return@launch
+            }
+            if (!isActive) return@launch
+            joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
+            try {
+                callAudioSessionController.activate()
+                webRtcEngine.startLocalMedia(startVideoCapture = userPreferredVideoEnabled)
+                localMediaReadyForNegotiation = true
+                userMuted = !config.defaultAudioEnabled
+                sessionActivated = true
+                updateEffectiveMicState()
+                applyLocalVideoPreference()
+                startRemoteVideoStatePolling()
+                peerNegotiationEngine.onLocalMediaReady()
+                joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
+                joinFlowCoordinator.ensureSignalingConnection()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                logger?.log(SerenadaLogLevel.ERROR, "Media", "Failed to start local media: ${e.message}")
+                handleError(CallError.Unknown(e.message ?: "Local media startup failed"))
+            }
+        }
     }
 
     internal fun startWithPermissionCheck() {
@@ -1246,7 +1383,10 @@ class SerenadaSession internal constructor(
         updateConnectionStatusFromSignals()
         // Start media-liveness emission only once we have remote peers — there's
         // nothing to report when alone in the room.
-        if (phase == CallPhase.InCall) startMediaLivenessTimer()
+        if (phase == CallPhase.InCall) {
+            startMediaLivenessTimer()
+            startOutboundMediaWatchdog()
+        }
     }
 
     private fun refreshRemoteParticipants() {
@@ -1456,6 +1596,23 @@ class SerenadaSession internal constructor(
         mediaLivenessTickRunnable = null
     }
 
+    private fun startOutboundMediaWatchdog() {
+        if (outboundMediaWatchdogRunnable != null) return
+        val runnable = object : Runnable {
+            override fun run() {
+                peerNegotiationEngine.recoverStalledOutboundMedia()
+                handler.postDelayed(this, WebRtcResilienceConstants.OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS)
+            }
+        }
+        outboundMediaWatchdogRunnable = runnable
+        handler.postDelayed(runnable, WebRtcResilienceConstants.OUTBOUND_MEDIA_WATCHDOG_INTERVAL_MS)
+    }
+
+    private fun stopOutboundMediaWatchdog() {
+        outboundMediaWatchdogRunnable?.let { handler.removeCallbacks(it) }
+        outboundMediaWatchdogRunnable = null
+    }
+
     private fun emitMediaLiveness() {
         if (_state.value.phase == CallPhase.Idle || _state.value.phase == CallPhase.Ending) return
         if (mediaLivenessEmitInFlight) return
@@ -1535,11 +1692,11 @@ class SerenadaSession internal constructor(
             logger?.log(
                 SerenadaLogLevel.WARNING,
                 "Session",
-                "Post-reconnect snapshot timeout after ${WebRtcResilienceConstants.EPOCH_RESYNC_TIMEOUT_MS}ms; firing ICE restart against last-known peer map",
+                "Post-reconnect snapshot timeout after ${WebRtcResilienceConstants.EPOCH_RESYNC_TIMEOUT_MS}ms; recovering peers against last-known peer map",
             )
         }
         iceRestartCallsFromGate += 1
-        peerNegotiationEngine.scheduleIceRestart("signaling-reconnect", 0)
+        peerNegotiationEngine.handleSignalingReconnect()
     }
 
     private fun cancelPostReconnectResync() {
@@ -1549,19 +1706,35 @@ class SerenadaSession internal constructor(
 
     // --- Internal: Cleanup ---
 
-    private fun cleanupCall(reason: EndReason) {
+    private fun cleanupCall(reason: EndReason): Job {
         updateState(_state.value.copy(phase = CallPhase.Ending))
         if (_diagnostics.value.isScreenSharing) webRtcEngine.stopScreenShare()
-        resetResources(clearRecovery = true)
+        val deactivationJob = resetResources(clearRecovery = true)
         updateState(CallState(phase = CallPhase.Idle))
         delegate?.invoke()?.onSessionEnded(this, reason)
+        return deactivationJob
     }
 
-    private fun resetResources(clearRecovery: Boolean = false) {
+    private fun resetResources(clearRecovery: Boolean = false): Job {
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
         callAudioSessionController.deactivate()
+        val deactivationJob = audioCoordinatorScope.launch {
+            try {
+                withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                    audioCoordinatorMutex.withLock {
+                        audioCoordinator.deactivateCallSession()
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Audio session deactivation timed out")
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to deactivate audio session: ${e.message}")
+            }
+        }
+        audioCoordinatorDeactivationJob = deactivationJob
         releasePerformanceLocks()
         stopRemoteVideoStatePolling()
         signalingProvider.disconnect()
@@ -1579,13 +1752,35 @@ class SerenadaSession internal constructor(
         cancelPostReconnectResync()
         clearAllRemoteSuspensionTracking()
         stopMediaLivenessTimer()
+        stopOutboundMediaWatchdog()
         lastInboundBytesByCid.clear()
         mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = null
         sessionStartTs = null
+        sessionActivated = false
+        localMediaReadyForNegotiation = false
+        playbackDuckingActive = false
+        externalAudioMuted = false
+        routeInputAvailable = true
         if (clearRecovery) recoveryStorage.clear()
         providerScope.coroutineContext.cancelChildren()
         updateDiagnostics(CallDiagnostics())
+        return deactivationJob
+    }
+
+    private fun cancelAudioCoordinatorScopeAfter(deactivationJob: Job?) {
+        if (deactivationJob?.isActive == true) {
+            deactivationJob.invokeOnCompletion {
+                runOnMain { cancelAudioCoordinatorScope() }
+            }
+        } else {
+            cancelAudioCoordinatorScope()
+        }
+    }
+
+    private fun cancelAudioCoordinatorScope() {
+        stopAudioCoordinatorCollectors()
+        audioCoordinatorScope.cancel()
     }
 
     private fun shouldClearRecovery(callError: CallError): Boolean {
@@ -1700,6 +1895,116 @@ class SerenadaSession internal constructor(
         }
     }
 
+    /**
+     * Request routing to a coordinator-published audio device.
+     *
+     * The call is asynchronous; failures are logged and the current route is left unchanged.
+     */
+    fun selectAudioDevice(device: AudioDevice) {
+        assertMainThread()
+        providerScope.launch {
+            try {
+                audioCoordinatorMutex.withLock {
+                    if (!sessionActivated) return@withLock
+                    audioCoordinator.applyRouting(device)
+                }
+            } catch (e: Exception) {
+                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to apply routing to device ${device.displayName}: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Set the user-requested microphone mute state.
+     *
+     * The effective mute state may still be true when external audio is active or no input route is available.
+     */
+    fun setMicMuted(muted: Boolean) {
+        assertMainThread()
+        userMuted = muted
+        updateEffectiveMicState()
+        providerScope.launch {
+            runCatching {
+                audioCoordinatorMutex.withLock {
+                    if (!sessionActivated) return@withLock
+                    audioCoordinator.setMicMuted(muted)
+                }
+            }.onFailure { e ->
+                logger?.log(SerenadaLogLevel.ERROR, "Audio", "Failed to set mic muted state on coordinator to $muted: ${e.message}")
+            }
+        }
+    }
+
+    private fun updateEffectiveMicState() {
+        val effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
+        if (sessionActivated) {
+            webRtcEngine.toggleAudio(effectiveEnabled)
+        }
+        updateState(_state.value.copy(localAudioEnabled = effectiveEnabled))
+        _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
+        _isMicMutedByExternalAudio.value = externalAudioMuted
+        if (sessionActivated) {
+            broadcastLocalMediaState()
+        }
+    }
+
+    private fun handleCoordinatorEvent(event: AudioCoordinatorEvent) {
+        if (!sessionActivated && event !is AudioCoordinatorEvent.AvailableDevicesChanged) return
+        when (event) {
+            is AudioCoordinatorEvent.AvailableDevicesChanged -> {
+                _availableAudioDevices.value = event.devices
+            }
+            is AudioCoordinatorEvent.EffectiveRouteChanged -> {
+                routeInputAvailable = (event.input != null)
+                _currentAudioDevice.value = event.output
+                updateEffectiveMicState()
+                applyLocalVideoPreference()
+            }
+            is AudioCoordinatorEvent.ExternalAudioStarted -> {
+                if (config.audioIntent.muteDuringExternalAudio) {
+                    externalAudioMuted = true
+                    updateEffectiveMicState()
+                }
+                if (config.audioIntent.duckDuringExternalAudio) {
+                    playbackDuckingActive = true
+                    peerSlots.values.forEach { it.duckPlayback(true) }
+                }
+            }
+            is AudioCoordinatorEvent.ExternalAudioEnded -> {
+                externalAudioMuted = false
+                updateEffectiveMicState()
+                if (playbackDuckingActive) {
+                    playbackDuckingActive = false
+                    peerSlots.values.forEach { it.duckPlayback(false) }
+                }
+            }
+            is AudioCoordinatorEvent.PlaybackDuckingStarted -> {
+                if (config.audioIntent.duckDuringExternalAudio) {
+                    playbackDuckingActive = true
+                    peerSlots.values.forEach { it.duckPlayback(true) }
+                }
+            }
+            is AudioCoordinatorEvent.PlaybackDuckingEnded -> {
+                if (playbackDuckingActive) {
+                    playbackDuckingActive = false
+                    peerSlots.values.forEach { it.duckPlayback(false) }
+                }
+            }
+        }
+    }
+
+    private fun handleError(error: CallError) {
+        resetResources()
+        updateState(
+            CallState(
+                phase = CallPhase.Error,
+                error = error,
+                signalingState = SignalingState.Failed(error),
+            )
+        )
+        delegate?.invoke()?.onSessionEnded(this, EndReason.Error(error))
+    }
+
     private fun isPlausibleJoinedAtMs(joinedAtMs: Long, nowMs: Long): Boolean {
         return joinedAtMs >= PLAUSIBLE_EPOCH_MS &&
             joinedAtMs <= nowMs + JOINED_AT_FUTURE_SKEW_MS
@@ -1715,5 +2020,79 @@ class SerenadaSession internal constructor(
         // their own; longer is the OS window where Doze / process freeze may
         // have killed the WS.
         const val FOREGROUND_RESUME_MIN_BACKGROUND_MS = 5_000L
+    }
+}
+
+private class CustomAudioCoordinatorAdapter(
+    private val coordinator: SerenadaAudioCoordinator,
+    private val proximityMonitoringEnabled: Boolean,
+    private val sensorManager: SensorManager?,
+    private val proximitySensor: Sensor?,
+    private val handler: Handler,
+    private val onAudioEnvironmentChanged: () -> Unit
+) : SessionAudioController {
+    private var proximityMonitoringActive = false
+    private var isProximityNear = false
+
+    private val proximitySensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            val maxRange = proximitySensor?.maximumRange ?: return
+            val distance = event.values.firstOrNull() ?: return
+            val near = distance < maxRange
+            if (near == isProximityNear) return
+            isProximityNear = near
+            onAudioEnvironmentChanged()
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    override fun activate() {
+        if (proximityMonitoringEnabled) {
+            startProximityMonitoring()
+        }
+    }
+
+    override fun deactivate() {
+        stopProximityMonitoring()
+    }
+
+    override fun shouldPauseVideoForProximity(isScreenSharing: Boolean): Boolean {
+        return proximityMonitoringActive && isProximityNear && !isScreenSharing && !isBluetoothHeadsetConnected()
+    }
+
+    private fun isBluetoothHeadsetConnected(): Boolean {
+        val currentDevice = coordinator.effectiveOutputDevice.value
+        return currentDevice?.kind is AudioDeviceKind.Bluetooth
+    }
+
+    private fun startProximityMonitoring() {
+        if (proximityMonitoringActive) return
+        val manager = sensorManager ?: return
+        val sensor = proximitySensor ?: return
+        val registered = runCatching {
+            manager.registerListener(
+                proximitySensorListener,
+                sensor,
+                SensorManager.SENSOR_DELAY_NORMAL,
+                handler
+            )
+        }.getOrElse { false }
+        if (registered) {
+            proximityMonitoringActive = true
+            isProximityNear = false
+        }
+    }
+
+    private fun stopProximityMonitoring() {
+        if (!proximityMonitoringActive) {
+            isProximityNear = false
+            return
+        }
+        runCatching {
+            sensorManager?.unregisterListener(proximitySensorListener)
+        }
+        proximityMonitoringActive = false
+        isProximityNear = false
     }
 }

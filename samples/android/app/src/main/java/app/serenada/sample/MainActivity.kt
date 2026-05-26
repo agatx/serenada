@@ -56,6 +56,7 @@ private val sampleCallFlowConfig = SerenadaCallFlowConfig(
 private data class ProviderDemoSession(
     val session: SerenadaSession,
     val provider: SampleMockSignalingProvider,
+    val coordinator: SampleAudioCoordinator,
 )
 
 class MainActivity : ComponentActivity() {
@@ -100,13 +101,15 @@ private fun SampleApp(serenada: SerenadaCore) {
             onJoinUrl = { callUrl = it },
             onStartProviderDemo = {
                 val provider = SampleMockSignalingProvider()
+                val coordinator = SampleAudioCoordinator()
                 val providerCore = SerenadaCore(
-                    config = SerenadaConfig(signalingProvider = provider),
+                    config = SerenadaConfig(signalingProvider = provider, audioCoordinator = coordinator),
                     context = context,
                 )
                 providerDemo = ProviderDemoSession(
                     session = providerCore.join(roomId = "sample-provider-room"),
                     provider = provider,
+                    coordinator = coordinator,
                 )
             },
             serenada = serenada,
@@ -248,6 +251,9 @@ private fun ProviderDemoScreen(
     onDismiss: () -> Unit,
 ) {
     val state by demo.session.state.collectAsState()
+    val isMicMuted by demo.session.isMicMuted.collectAsState()
+    val isMicMutedByExternalAudio by demo.session.isMicMutedByExternalAudio.collectAsState()
+    var isExternalAudioActive by remember { mutableStateOf(false) }
     val eventLog = demo.provider.eventLog.toList()
     val scrollState = rememberScrollState()
 
@@ -282,6 +288,28 @@ private fun ProviderDemoScreen(
                     }"
                 )
                 Text("Is host: ${state.isHost}")
+            }
+        }
+
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Audio Coordinator (External Audio)", style = MaterialTheme.typography.titleMedium)
+                Text("Mic Muted: ${if (isMicMuted) "Yes" else "No"}")
+                Text("Muted by External: ${if (isMicMutedByExternalAudio) "Yes" else "No"}")
+                Spacer(modifier = Modifier.height(4.dp))
+                Button(
+                    onClick = {
+                        isExternalAudioActive = !isExternalAudioActive
+                        demo.coordinator.simulateExternalAudio(isExternalAudioActive)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (isExternalAudioActive) "End External Audio" else "Start External Audio")
+                }
             }
         }
 

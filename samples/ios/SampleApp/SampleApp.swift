@@ -16,6 +16,7 @@ private enum ActiveCall {
 private struct ProviderDemoSession {
     let session: SerenadaSession
     let provider: SampleMockSignalingProvider
+    let coordinator: SampleAudioCoordinator
 }
 
 @main
@@ -35,6 +36,7 @@ struct SerenadaiOSSampleApp: App {
                     ProviderDemoView(
                         session: activeProviderDemo.session,
                         provider: activeProviderDemo.provider,
+                        coordinator: activeProviderDemo.coordinator,
                         onDismiss: {
                             activeProviderDemo.session.leave()
                             self.activeProviderDemo = nil
@@ -47,10 +49,12 @@ struct SerenadaiOSSampleApp: App {
                         onStartCall: { activeCall = $0 },
                         onStartProviderDemo: {
                             let provider = SampleMockSignalingProvider()
-                            let providerCore = SerenadaCore(config: .init(signalingProvider: provider))
+                            let coordinator = SampleAudioCoordinator()
+                            let providerCore = SerenadaCore(config: .init(signalingProvider: provider, audioCoordinator: coordinator))
                             self.activeProviderDemo = ProviderDemoSession(
                                 session: providerCore.join(roomId: "sample-provider-room"),
-                                provider: provider
+                                provider: provider,
+                                coordinator: coordinator
                             )
                         }
                     )
@@ -202,7 +206,10 @@ private struct HomeView: View {
 private struct ProviderDemoView: View {
     @ObservedObject var session: SerenadaSession
     @ObservedObject var provider: SampleMockSignalingProvider
+    let coordinator: SampleAudioCoordinator
     let onDismiss: () -> Void
+
+    @State private var isExternalAudioActive = false
 
     var body: some View {
         NavigationStack {
@@ -222,6 +229,21 @@ private struct ProviderDemoView: View {
                         Text("Local CID: \(session.state.localParticipant.cid ?? "pending")")
                         Text("Remote peers: \(session.state.remoteParticipants.map(\.cid).joined(separator: ", ").ifEmpty("none"))")
                         Text("Is host: \(session.state.localParticipant.isHost ? "true" : "false")")
+                    }
+
+                    infoCard(title: "Audio Coordinator (External Audio)") {
+                        Text("Mic Muted: \(session.isMicMuted ? "Yes" : "No")")
+                        Text("Muted by External: \(session.isMicMutedByExternalAudio ? "Yes" : "No")")
+                        
+                        Button(action: {
+                            isExternalAudioActive.toggle()
+                            coordinator.simulateExternalAudio(isExternalAudioActive)
+                        }) {
+                            Text(isExternalAudioActive ? "End External Audio" : "Start External Audio")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(isExternalAudioActive ? .red : .blue)
                     }
 
                     infoCard(title: "Provider Event Log") {

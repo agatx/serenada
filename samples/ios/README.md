@@ -8,6 +8,7 @@ Minimal iOS host app demonstrating Serenada SDK integration with SwiftUI.
 - Creates a new room via `SerenadaCore.createRoom()` and joins explicitly with `join()`
 - Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
 - Shows incremental `peerJoined` events and peer-message delivery without Serenada transport
+- Demonstrates injecting a custom `SerenadaAudioCoordinator` for host-owned audio policy
 - Runs as a standalone XcodeGen app inside this repository
 - Resolves `SerenadaCore` and `SerenadaCallUI` directly from local source in `client-ios/`
 
@@ -83,3 +84,5 @@ let unsubscribe = session.onPeerMessage { message in
     print("provider message: \(message.type)")
 }
 ```
+
+The sample also includes `SampleAudioCoordinator`, which implements `SerenadaAudioCoordinator` and is passed through `SerenadaConfig.audioCoordinator`. Real host apps can use the same protocol to own `AVAudioSession`, route selection, and external-audio coexistence policy. Omit `audioCoordinator` to use the SDK's internal default coordinator.

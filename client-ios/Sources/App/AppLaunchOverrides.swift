@@ -5,6 +5,8 @@ enum AppLaunchOverrides {
         static let uiTestingFlag = "-ui-testing"
         static let clearStateFlag = "-ui-testing-clear-state"
         static let deepLinkEnv = "SERENADA_UI_TEST_DEEPLINK"
+        static let callUiVariantEnv = "SERENADA_UI_TEST_CALL_UI_VARIANT"
+        static let callUiVariantDefaultsKey = "call_ui_variant"
     }
 
     static func applyIfNeeded() {
@@ -14,6 +16,8 @@ enum AppLaunchOverrides {
         if arguments.contains(Key.clearStateFlag) {
             clearPersistedState()
         }
+
+        applyCallUiVariantOverride()
     }
 
     static func pendingDeepLinkURL() -> URL? {
@@ -34,6 +38,19 @@ enum AppLaunchOverrides {
 
         if let sharedDefaults = UserDefaults(suiteName: AppConstants.appGroupIdentifier) {
             sharedDefaults.removePersistentDomain(forName: AppConstants.appGroupIdentifier)
+            sharedDefaults.synchronize()
+        }
+    }
+
+    private static func applyCallUiVariantOverride() {
+        guard let rawValue = ProcessInfo.processInfo.environment[Key.callUiVariantEnv]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawValue.isEmpty else {
+            return
+        }
+        let normalized = rawValue.lowercased()
+        UserDefaults.standard.set(normalized, forKey: Key.callUiVariantDefaultsKey)
+        if let sharedDefaults = UserDefaults(suiteName: AppConstants.appGroupIdentifier) {
+            sharedDefaults.set(normalized, forKey: Key.callUiVariantDefaultsKey)
             sharedDefaults.synchronize()
         }
     }

@@ -65,6 +65,7 @@ internal class WebRtcEngine(
 
     private val localSinks = LinkedHashSet<VideoSink>()
     private val peerSlots = LinkedHashSet<PeerConnectionSlot>()
+    private val peerConnectionDisposeQueue = PeerConnectionDisposeQueue()
 
     private var iceServers: List<PeerConnection.IceServer>? = null
     private val initializedRenderers =
@@ -262,14 +263,16 @@ internal class WebRtcEngine(
     override fun release() {
         if (released) return
         released = true
-        stopLocalMedia()
         peerSlots.toList().forEach { slot ->
             slot.closePeerConnection()
         }
         peerSlots.clear()
+        stopLocalMedia()
         localSinks.clear()
-        runCatching { peerConnectionFactory.dispose() }
-        runCatching { audioDeviceModule.release() }
+        peerConnectionDisposeQueue.flush(shutdownAfterDrain = true) {
+            runCatching { peerConnectionFactory.dispose() }
+            runCatching { audioDeviceModule.release() }
+        }
         // eglBase is owned by SerenadaSession and outlives the engine — do not release it here.
     }
 
@@ -394,6 +397,7 @@ internal class WebRtcEngine(
             applyAudioSenderParameters = ::applyAudioSenderParameters,
             currentVideoSenderPolicy = ::activeVideoSenderPolicy,
             isRemoteBlackFrameAnalysisEnabled = { isRemoteBlackFrameAnalysisEnabled },
+            peerConnectionDisposeQueue = peerConnectionDisposeQueue,
             logger = logger,
         )
         peerSlots.add(slot)

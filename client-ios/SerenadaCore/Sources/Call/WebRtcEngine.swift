@@ -121,6 +121,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
     private var localAudioTrack: RTCAudioTrack?
     private var localVideoSource: RTCVideoSource?
     private var localVideoTrack: RTCVideoTrack?
+    private var previousUseManualAudio: Bool?
 
     private var localRenderers: [WeakAnyBox] = []
 #endif
@@ -234,6 +235,17 @@ internal final class WebRtcEngine: SessionMediaEngine {
         guard let factory = peerConnectionFactory else { return }
         guard localAudioTrack == nil && localVideoTrack == nil else { return }
 
+        let audioSession = RTCAudioSession.sharedInstance()
+        do {
+            audioSession.lockForConfiguration()
+            defer { audioSession.unlockForConfiguration() }
+            if previousUseManualAudio == nil {
+                previousUseManualAudio = audioSession.useManualAudio
+            }
+            audioSession.useManualAudio = true
+            audioSession.isAudioEnabled = true
+        }
+
         localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
         localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
 
@@ -279,6 +291,16 @@ internal final class WebRtcEngine: SessionMediaEngine {
         cameraController.updateLocalVideoSource(nil)
         localAudioTrack = nil
         localAudioSource = nil
+        let audioSession = RTCAudioSession.sharedInstance()
+        do {
+            audioSession.lockForConfiguration()
+            defer { audioSession.unlockForConfiguration() }
+            audioSession.isAudioEnabled = false
+            if let previousUseManualAudio {
+                audioSession.useManualAudio = previousUseManualAudio
+                self.previousUseManualAudio = nil
+            }
+        }
 #endif
     }
 

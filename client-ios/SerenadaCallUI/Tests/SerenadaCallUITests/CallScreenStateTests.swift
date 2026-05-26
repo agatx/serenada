@@ -3,6 +3,55 @@ import SerenadaCore
 import XCTest
 
 final class CallScreenStateTests: XCTestCase {
+    func testRouteOptionsKeepActiveEarpieceWhenBluetoothIsOnlyAvailable() {
+        let earpiece = AudioDevice(
+            id: "earpiece",
+            displayName: "Phone",
+            kind: .earpiece,
+            direction: .output,
+            status: .active
+        )
+        let bluetooth = AudioDevice(
+            id: "airpods",
+            displayName: "AirPods",
+            kind: .bluetooth(profile: .a2dp),
+            direction: .output,
+            status: .available
+        )
+
+        let options = callAudioRouteOptions(
+            currentAudioDevice: earpiece,
+            availableAudioDevices: [earpiece, bluetooth, speakerDevice()]
+        )
+
+        XCTAssertTrue(options.contains { $0.kind == .earpiece && $0.status == .active })
+    }
+
+    func testRouteOptionsHideEarpieceWhenBluetoothIsActive() {
+        let earpiece = AudioDevice(
+            id: "earpiece",
+            displayName: "Phone",
+            kind: .earpiece,
+            direction: .output,
+            status: .available
+        )
+        let bluetooth = AudioDevice(
+            id: "airpods",
+            displayName: "AirPods",
+            kind: .bluetooth(profile: .a2dp),
+            direction: .output,
+            status: .active
+        )
+
+        let options = callAudioRouteOptions(
+            currentAudioDevice: bluetooth,
+            availableAudioDevices: [earpiece, bluetooth, speakerDevice()]
+        )
+
+        XCTAssertFalse(options.contains { $0.kind == .earpiece })
+        XCTAssertTrue(options.contains { $0.kind == .bluetooth(profile: .a2dp) && $0.status == .active })
+    }
+
     func testPrimaryLocalVideoContentModeUsesFitForWorldAndComposite() {
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .world), .scaleAspectFit)
         XCTAssertEqual(primaryLocalVideoContentMode(localCameraMode: .composite), .scaleAspectFit)
@@ -235,4 +284,14 @@ final class CallScreenStateTests: XCTestCase {
         XCTAssertEqual(frontlineSnapshotSource(snapshotEnabled: true, localVideoEnabled: false, remoteParticipants: remotes), .remote(cid: "r2"))
         XCTAssertNil(frontlineSnapshotSource(snapshotEnabled: true, localVideoEnabled: false, remoteParticipants: []))
     }
+}
+
+private func speakerDevice() -> AudioDevice {
+    AudioDevice(
+        id: "speaker",
+        displayName: "Speaker",
+        kind: .speakerphone,
+        direction: .output,
+        status: .available
+    )
 }

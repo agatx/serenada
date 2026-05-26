@@ -237,6 +237,26 @@ describe('SerenadaServerProvider', () => {
                 sdp: 'offer-sdp',
             },
         });
+
+        messages.mockClear();
+        engine.emitMessage({
+            v: 1,
+            type: 'media_restart_request',
+            rid: 'room-1',
+            payload: {
+                from: 'peer-1',
+                reason: 'stalled outbound media',
+            },
+        });
+
+        expect(messages).toHaveBeenCalledWith({
+            from: 'peer-1',
+            type: 'media_restart_request',
+            payload: {
+                from: 'peer-1',
+                reason: 'stalled outbound media',
+            },
+        });
     });
 
     it('omits roomEnded.by when neither payload nor room state provide an owner', () => {

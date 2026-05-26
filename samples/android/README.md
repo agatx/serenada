@@ -8,6 +8,7 @@ Minimal Android host app demonstrating Serenada SDK integration using `serenada-
 - Creates a new room via `SerenadaCore.createRoom()` and joins explicitly with `join()` (session-first path)
 - Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
 - Shows incremental `peerJoined` events and peer-message delivery without Serenada server transport
+- Demonstrates injecting a custom `SerenadaAudioCoordinator` for host-owned audio policy
 - Disables screen sharing and invite controls (these require app-specific service and push wiring)
 - Total integration: ~80 lines of Kotlin
 
@@ -83,6 +84,8 @@ session.onPeerMessage { message ->
     println("provider message: ${message.type}")
 }
 ```
+
+The sample also includes `SampleAudioCoordinator`, which implements `SerenadaAudioCoordinator` and is passed through `SerenadaConfig.audioCoordinator`. Real host apps can use the same protocol to own audio focus, route selection, and external-audio coexistence policy. Omit `audioCoordinator` to use the SDK's internal default coordinator.
 
 ## Sample limitations
 

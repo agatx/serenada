@@ -1,5 +1,13 @@
 import Foundation
 
+internal struct OutboundMediaSample: Equatable {
+    let expectsAudio: Bool
+    let expectsVideo: Bool
+    let audioBytesSent: Int64
+    let videoBytesSent: Int64
+    let videoFramesSent: Int64
+}
+
 @MainActor
 internal protocol PeerConnectionSlotProtocol: AnyObject {
     // Identity
@@ -14,8 +22,6 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     // Timer tasks
     var offerTimeoutTask: Task<Void, Never>? { get }
     var iceRestartTask: Task<Void, Never>? { get }
-    var nonHostFallbackTask: Task<Void, Never>? { get }
-    var nonHostFallbackAttempts: Int { get }
 
     // Offer lifecycle
     func beginOffer()
@@ -32,10 +38,6 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func cancelOfferTimeout()
     func setIceRestartTask(_ task: Task<Void, Never>)
     func cancelIceRestartTask()
-    func setNonHostFallbackTask(_ task: Task<Void, Never>)
-    func cancelNonHostFallbackTask()
-    func clearNonHostFallbackTask()
-    func incrementNonHostFallbackAttempts()
 
     // WebRTC operations
     func setIceServers(_ servers: [IceServerConfig])
@@ -55,6 +57,7 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func getSignalingState() -> String
     func hasRemoteDescription() -> Bool
     func isRemoteVideoTrackEnabled() -> Bool
+    func duckPlayback(ducked: Bool)
 
     /// Last observed path type for the selected ICE candidate pair: `true`
     /// for direct (host/srflx/prflx), `false` for relayed through TURN,
@@ -76,6 +79,10 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     /// when its sample advances over the previous one. Reports `0` when
     /// the peer connection is not yet established.
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void)
+
+    /// Asynchronously samples cumulative outbound media counters and whether
+    /// local enabled tracks are expected to be flowing on this peer.
+    func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void)
 
     /// Lightweight stats fetch for voice-activity indicators. Extracts only
     /// `inbound-rtp.audioLevel` (the remote peer's audio) and

@@ -11,8 +11,6 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     private(set) var lastIceRestartAt: TimeInterval = 0
     private(set) var offerTimeoutTask: Task<Void, Never>?
     private(set) var iceRestartTask: Task<Void, Never>?
-    private(set) var nonHostFallbackTask: Task<Void, Never>?
-    private(set) var nonHostFallbackAttempts = 0
 
     // State machine
     private(set) var signalingState = "STABLE"
@@ -23,6 +21,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     // Call tracking
     private(set) var createOfferCalls = 0
+    private(set) var createOfferIceRestartFlags: [Bool] = []
     private(set) var createAnswerCalls = 0
     private(set) var setRemoteDescriptionCalls: [(type: SessionDescriptionType, sdp: String)] = []
     private(set) var addedIceCandidates: [IceCandidatePayload] = []
@@ -30,6 +29,8 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     private(set) var rollbackCalls = 0
     private(set) var closePeerConnectionCalled = false
     private(set) var ensurePeerConnectionCalls = 0
+    var failNextRemoteOffer = false
+    var failNextRollback = false
 
     // Callbacks for driving state changes
     private let onConnectionStateChange: ((String, String) -> Void)?
@@ -85,19 +86,6 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         iceRestartTask = nil
     }
 
-    func setNonHostFallbackTask(_ task: Task<Void, Never>) {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = task
-    }
-
-    func cancelNonHostFallbackTask() {
-        nonHostFallbackTask?.cancel()
-        nonHostFallbackTask = nil
-    }
-
-    func clearNonHostFallbackTask() { nonHostFallbackTask = nil }
-    func incrementNonHostFallbackAttempts() { nonHostFallbackAttempts += 1 }
-
     // MARK: - WebRTC Operations
 
     func setIceServers(_ servers: [IceServerConfig]) {
@@ -117,7 +105,6 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         closePeerConnectionCalled = true
         cancelOfferTimeout()
         cancelIceRestartTask()
-        cancelNonHostFallbackTask()
     }
 
     @discardableResult
@@ -127,6 +114,7 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         onComplete: ((Bool) -> Void)? = nil
     ) -> Bool {
         createOfferCalls += 1
+        createOfferIceRestartFlags.append(iceRestart)
         guard signalingState == "STABLE" else {
             onComplete?(false)
             return false
@@ -146,6 +134,11 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     func setRemoteDescription(type: SessionDescriptionType, sdp: String, onComplete: ((Bool) -> Void)? = nil) {
         setRemoteDescriptionCalls.append((type: type, sdp: sdp))
+        if type == .offer, failNextRemoteOffer {
+            failNextRemoteOffer = false
+            onComplete?(false)
+            return
+        }
         remoteDescriptionSet = true
         switch type {
         case .offer:
@@ -160,6 +153,11 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     func rollbackLocalDescription(onComplete: ((Bool) -> Void)? = nil) {
         rollbackCalls += 1
+        if failNextRollback {
+            failNextRollback = false
+            onComplete?(false)
+            return
+        }
         signalingState = "STABLE"
         onComplete?(true)
     }
@@ -179,6 +177,10 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     func hasRemoteDescription() -> Bool { remoteDescriptionSet }
     var remoteVideoTrackEnabledOverride = false
     func isRemoteVideoTrackEnabled() -> Bool { remoteVideoTrackEnabledOverride }
+    private(set) var duckedPlayback = false
+    func duckPlayback(ducked: Bool) {
+        duckedPlayback = ducked
+    }
 
     // MARK: - Renderer Management
 
@@ -207,6 +209,18 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
+    }
+    var outboundMediaSample: OutboundMediaSample? = OutboundMediaSample(
+        expectsAudio: true,
+        expectsVideo: true,
+        audioBytesSent: 0,
+        videoBytesSent: 0,
+        videoFramesSent: 0
+    )
+    private(set) var collectOutboundMediaSampleCalls = 0
+    func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void) {
+        collectOutboundMediaSampleCalls += 1
+        onComplete(outboundMediaSample)
     }
     func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void) {
         onComplete(nil, nil)

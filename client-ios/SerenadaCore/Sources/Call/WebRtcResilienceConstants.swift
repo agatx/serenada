@@ -15,6 +15,7 @@ public enum WebRtcResilience {
 
     // MARK: - Join
 
+    public static let audioCoordinatorTimeoutMs = 10_000
     public static let joinConnectKickstartMs = 1_200
     public static let joinRecoveryMs = 4_000
     public static let joinHardTimeoutMs = 15_000
@@ -23,9 +24,10 @@ public enum WebRtcResilience {
 
     public static let offerTimeoutMs = 8_000
     public static let iceRestartCooldownMs = 10_000
-    public static let nonHostFallbackDelayMs = 4_000
-    public static let nonHostFallbackMaxAttempts = 2
     public static let iceCandidateBufferMax = 50
+    public static let outboundMediaWatchdogIntervalMs = 5_000
+    public static let outboundMediaStallSamples = 2
+    public static let outboundMediaRecoveryCooldownMs = 30_000
 
     // MARK: - TURN
 
@@ -90,12 +92,12 @@ extension WebRtcResilience {
     public static var reconnectBackoffCapNs: UInt64 { UInt64(reconnectBackoffCapMs) * 1_000_000 }
     public static var connectTimeoutNs: UInt64 { UInt64(connectTimeoutMs) * 1_000_000 }
     public static var pingIntervalNs: UInt64 { UInt64(pingIntervalMs) * 1_000_000 }
+    public static var audioCoordinatorTimeoutNs: UInt64 { UInt64(audioCoordinatorTimeoutMs) * 1_000_000 }
     public static var joinConnectKickstartNs: UInt64 { UInt64(joinConnectKickstartMs) * 1_000_000 }
     public static var joinRecoveryNs: UInt64 { UInt64(joinRecoveryMs) * 1_000_000 }
     public static var joinHardTimeoutNs: UInt64 { UInt64(joinHardTimeoutMs) * 1_000_000 }
     public static var offerTimeoutNs: UInt64 { UInt64(offerTimeoutMs) * 1_000_000 }
     public static var iceRestartCooldownNs: UInt64 { UInt64(iceRestartCooldownMs) * 1_000_000 }
-    public static var nonHostFallbackDelayNs: UInt64 { UInt64(nonHostFallbackDelayMs) * 1_000_000 }
     public static var turnFetchTimeoutNs: UInt64 { UInt64(turnFetchTimeoutMs) * 1_000_000 }
     public static var snapshotPrepareTimeoutNs: UInt64 { UInt64(snapshotPrepareTimeoutMs) * 1_000_000 }
 }

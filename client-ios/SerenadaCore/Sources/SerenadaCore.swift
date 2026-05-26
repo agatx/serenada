@@ -34,7 +34,8 @@ public struct CreateRoomResult {
     }
 }
 
-/// Main entry point for the Serenada SDK. Create an instance with ``SerenadaConfig``, then use ``join(url:)`` or ``createRoom()`` to start a call.
+/// Main entry point for the Serenada SDK. Create an instance with ``SerenadaConfig``,
+/// then use ``join(url:displayName:peerId:)`` or ``createRoom()`` to start a call.
 @MainActor
 public final class SerenadaCore {
     /// SDK version string.
@@ -82,9 +83,12 @@ public final class SerenadaCore {
 
     /// Join an existing call by URL. Returns a session that begins connecting immediately.
     ///
-    /// - Parameter peerId: Optional host-supplied stable identity for this user
-    ///   (distinct from the per-call client ID). Surfaced on remote participants so
-    ///   the call UI can resolve avatars via `SerenadaCallFlowConfig.avatarProvider`.
+    /// - Parameters:
+    ///   - url: Full Serenada call URL.
+    ///   - displayName: Optional display name for the local participant.
+    ///   - peerId: Optional host-supplied stable identity for this user
+    ///     (distinct from the per-call client ID). Surfaced on remote participants so
+    ///     the call UI can resolve avatars via `SerenadaCallFlowConfig.avatarProvider`.
     public func join(url: URL, displayName: String? = nil, peerId: String? = nil) -> SerenadaSession {
         let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
         let target = DeepLinkParser.parseTarget(from: url)
@@ -100,7 +104,9 @@ public final class SerenadaCore {
                 defaultVideoEnabled: config.defaultVideoEnabled,
                 cameraModes: config.cameraModes,
                 transports: config.transports,
-                proximityMonitoringEnabled: config.proximityMonitoringEnabled
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled,
+                audioCoordinator: config.audioCoordinator,
+                audioIntent: config.audioIntent
             )
         } else {
             sessionConfig = config
@@ -121,7 +127,10 @@ public final class SerenadaCore {
 
     /// Join an existing call by room ID. Returns a session that begins connecting immediately.
     ///
-    /// - Parameter peerId: Optional host-supplied stable identity — see the URL ``join(url:displayName:peerId:)`` overload.
+    /// - Parameters:
+    ///   - roomId: Bare room identifier.
+    ///   - displayName: Optional display name for the local participant.
+    ///   - peerId: Optional host-supplied stable identity; see the URL ``join(url:displayName:peerId:)`` overload.
     public func join(roomId: String, displayName: String? = nil, peerId: String? = nil) -> SerenadaSession {
         let url = resolvedConfig.serverHost.flatMap { buildRoomURL(host: $0, roomId: roomId) }
 
@@ -139,7 +148,7 @@ public final class SerenadaCore {
         return session
     }
 
-    /// Create a new room. Returns the room URL and ID. Call ``join(url:displayName:)`` or ``join(roomId:displayName:)`` to start the call.
+    /// Create a new room. Returns the room URL and ID. Call ``join(url:displayName:peerId:)`` or ``join(roomId:displayName:peerId:)`` to start the call.
     public func createRoom() async throws -> CreateRoomResult {
         let apiClient = CoreAPIClient()
         let serverHost = try requireServerHost(config)

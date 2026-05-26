@@ -245,7 +245,7 @@ internal class SerenadaServerProvider(
                         }
                 }
             }
-            "offer", "answer", "ice", "content_state", "participant_media_state" -> emitPeerMessage(message)
+            "offer", "answer", "ice", "media_restart_request", "content_state", "participant_media_state" -> emitPeerMessage(message)
             "negotiation_dirty" -> {
                 val payload = message.payload.toNegotiationDirtyPayload() ?: return
                 listener?.onNegotiationDirty(NegotiationDirtyEvent(withCid = payload.withCid))

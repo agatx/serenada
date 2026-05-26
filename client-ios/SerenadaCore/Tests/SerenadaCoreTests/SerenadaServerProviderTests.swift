@@ -57,6 +57,23 @@ final class SerenadaServerProviderTests: XCTestCase {
     private var delegate: RecordingDelegate!
     private var provider: SerenadaServerProvider!
 
+    @discardableResult
+    private func waitUntil(attempts: Int = 32, condition: () -> Bool) async -> Bool {
+        for _ in 0..<attempts {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForPendingSleeps(_ expectedCount: Int, attempts: Int = 32) async {
+        await waitUntil(attempts: attempts) { [unowned self] in
+            self.fakeClock.pendingSleepCount == expectedCount
+        }
+    }
+
     override func setUp() {
         super.setUp()
         signaling = FakeSessionSignaling()
@@ -151,12 +168,15 @@ final class SerenadaServerProviderTests: XCTestCase {
             )
         )
         signaling.clearSentMessages()
-        await Task.yield()
+        await waitForPendingSleeps(1)
 
         await fakeClock.advance(byMs: 599_999)
         XCTAssertFalse(signaling.sentMessages.contains { $0.type == "reconnect-token-refresh" })
 
         await fakeClock.advance(byMs: 1)
+        await waitUntil { [unowned self] in
+            self.signaling.sentMessages.contains { $0.type == "reconnect-token-refresh" }
+        }
         XCTAssertEqual(signaling.sentMessages.filter { $0.type == "reconnect-token-refresh" }.count, 1)
     }
 

@@ -2,9 +2,21 @@ package app.serenada.core
 
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
+import app.serenada.core.call.AudioCoordinatorEvent
+import app.serenada.core.call.AudioDevice
+import app.serenada.core.call.AudioDeviceDirection
+import app.serenada.core.call.AudioDeviceKind
+import app.serenada.core.call.AudioDeviceStatus
+import app.serenada.core.call.AudioIntent
+import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.call.WebRtcResilienceConstants
 import android.os.Looper
 import app.serenada.core.fakes.TestSessionFactory
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -506,6 +518,30 @@ class SerenadaSessionContractTest {
         assertEquals(CallPhase.Error, factory.session.state.value.phase)
     }
 
+    @Test
+    fun `audio coordinator activation timeout fires before signaling starts`() {
+        val coordinator = BlockingAudioCoordinator()
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(1, coordinator.activateCalls)
+        assertEquals(CallPhase.Joining, factory.session.state.value.phase)
+
+        ShadowLooper.idleMainLooper(
+            WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS,
+            TimeUnit.MILLISECONDS
+        )
+
+        assertEquals(CallPhase.Error, factory.session.state.value.phase)
+        assertEquals("Signaling must not start while activation is still suspended", 0, factory.fakeProvider.connectCalls.size)
+        assertEquals("Local media must not start while activation is still suspended", 0, factory.fakeMedia.startLocalMediaCalls)
+    }
+
     // ── Reconnect backoff ───────────────────────────────────────────
 
     @Test
@@ -717,4 +753,100 @@ class SerenadaSessionContractTest {
             factory.session.state.value.remoteParticipants.isEmpty()
         )
     }
+
+    @Test
+    fun `audio device collectors stay active after call cleanup`() {
+        val coordinator = MutableAudioCoordinator()
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+            .grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        factory.startSession()
+        ShadowLooper.idleMainLooper()
+        factory.openSignaling()
+        factory.simulateJoinedResponse(cid = "my-cid")
+
+        factory.session.leave()
+        ShadowLooper.idleMainLooper()
+        val speaker = AudioDevice(
+            id = "speaker",
+            displayName = "Speaker",
+            kind = AudioDeviceKind.Speakerphone,
+            direction = AudioDeviceDirection.OUTPUT,
+            status = AudioDeviceStatus.AVAILABLE,
+        )
+        coordinator.publishAvailableDevices(listOf(speaker))
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(listOf(speaker), factory.session.availableAudioDevices.value)
+    }
+
+    @Test
+    fun `close cancels audio device collectors`() {
+        val coordinator = MutableAudioCoordinator()
+        factory.tearDown()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        val speaker = AudioDevice(
+            id = "speaker",
+            displayName = "Speaker",
+            kind = AudioDeviceKind.Speakerphone,
+            direction = AudioDeviceDirection.OUTPUT,
+            status = AudioDeviceStatus.AVAILABLE,
+        )
+        val earpiece = AudioDevice(
+            id = "earpiece",
+            displayName = "Earpiece",
+            kind = AudioDeviceKind.Earpiece,
+            direction = AudioDeviceDirection.OUTPUT,
+            status = AudioDeviceStatus.AVAILABLE,
+        )
+
+        coordinator.publishAvailableDevices(listOf(speaker))
+        ShadowLooper.idleMainLooper()
+        assertEquals(listOf(speaker), factory.session.availableAudioDevices.value)
+
+        factory.session.close()
+        ShadowLooper.idleMainLooper()
+        coordinator.publishAvailableDevices(listOf(earpiece))
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(listOf(speaker), factory.session.availableAudioDevices.value)
+    }
+}
+
+private class BlockingAudioCoordinator : SerenadaAudioCoordinator {
+    private val activation = CompletableDeferred<Unit>()
+    var activateCalls = 0
+        private set
+
+    override suspend fun activateCallSession(intent: AudioIntent) {
+        activateCalls += 1
+        activation.await()
+    }
+
+    override suspend fun deactivateCallSession() {}
+    override suspend fun applyRouting(device: AudioDevice) {}
+    override suspend fun setMicMuted(muted: Boolean) {}
+
+    override val availableDevices: StateFlow<List<AudioDevice>> = MutableStateFlow(emptyList())
+    override val effectiveInputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val effectiveOutputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
+}
+
+private class MutableAudioCoordinator : SerenadaAudioCoordinator {
+    private val _availableDevices = MutableStateFlow<List<AudioDevice>>(emptyList())
+    override val availableDevices: StateFlow<List<AudioDevice>> = _availableDevices
+    override val effectiveInputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val effectiveOutputDevice: StateFlow<AudioDevice?> = MutableStateFlow(null)
+    override val events: SharedFlow<AudioCoordinatorEvent> = MutableSharedFlow()
+
+    fun publishAvailableDevices(devices: List<AudioDevice>) {
+        _availableDevices.value = devices
+    }
+
+    override suspend fun activateCallSession(intent: AudioIntent) {}
+    override suspend fun deactivateCallSession() {}
+    override suspend fun applyRouting(device: AudioDevice) {}
+    override suspend fun setMicMuted(muted: Boolean) {}
 }
