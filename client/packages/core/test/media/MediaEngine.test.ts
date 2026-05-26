@@ -584,6 +584,100 @@ describe('MediaEngine', () => {
         expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(2);
     });
 
+    it('renegotiates a four-party reattach from deterministic offer owners only', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream());
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+
+        const peerIds = ['alpha', 'bravo', 'charlie', 'delta'];
+        const engines = new Map<string, MediaEngine>();
+        const sentMessages: Array<{ from: string; type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const roomState = (suspendedCid?: string) => ({
+            hostCid: 'alpha',
+            participants: peerIds.map(cid => ({
+                cid,
+                ...(cid === suspendedCid ? { connectionStatus: 'suspended' as const } : {}),
+            })),
+        });
+        const offerMessages = () => sentMessages.filter(message => message.type === 'offer');
+        const nonStablePeerStates = () => Array.from(engines.entries()).flatMap(([localCid, engine]) =>
+            Array.from(engine.getPeerConnectionsMap().entries())
+                .map(([remoteCid, pc]) => ({ localCid, remoteCid, state: (pc as FakeRtcPeerConnection).signalingState }))
+                .filter(peer => peer.state !== 'stable')
+        );
+        const peerCounts = () => Array.from(engines.values()).map(engine => engine.getPeerConnectionsMap().size);
+
+        for (const localCid of peerIds) {
+            const engine = new MediaEngine({ initialVideoEnabled: false }, (type, payload, to) => {
+                sentMessages.push({ from: localCid, type, payload, to });
+                if (!to) return;
+                engines.get(to)?.processSignalingMessage({
+                    v: 1,
+                    type,
+                    payload: { ...payload, from: localCid },
+                });
+            });
+            engines.set(localCid, engine);
+        }
+
+        for (const [localCid, engine] of engines) {
+            engine.updateSignalingConnected(true);
+            await engine.startLocalMedia();
+            engine.updateRoomState(roomState(), localCid);
+        }
+
+        await vi.waitFor(() => {
+            expect(offerMessages()).toHaveLength(6);
+            expect(peerCounts()).toEqual([3, 3, 3, 3]);
+            expect(nonStablePeerStates()).toEqual([]);
+        });
+
+        const baselineOfferCount = offerMessages().length;
+
+        for (const [localCid, engine] of engines) {
+            engine.updateRoomState(roomState('charlie'), localCid);
+        }
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await flushPromises();
+        expect(offerMessages()).toHaveLength(baselineOfferCount);
+
+        for (const [localCid, engine] of engines) {
+            engine.updateRoomState(roomState(), localCid);
+        }
+        engines.get('charlie')?.handleSignalingReconnect();
+
+        await vi.waitFor(() => {
+            expect(offerMessages()).toHaveLength(baselineOfferCount + 3);
+            expect(nonStablePeerStates()).toEqual([]);
+        });
+
+        const reconnectOfferRoutes = offerMessages()
+            .slice(baselineOfferCount)
+            .map(message => `${message.from}->${message.to}`);
+        expect(new Set(reconnectOfferRoutes)).toEqual(new Set([
+            'alpha->charlie',
+            'bravo->charlie',
+            'charlie->delta',
+        ]));
+        for (const message of offerMessages()) {
+            expect(message.to).toBeDefined();
+            expect(message.from < message.to!).toBe(true);
+        }
+
+        for (const engine of engines.values()) {
+            engine.destroy();
+        }
+    });
+
     it('scheduleDirtyPairRestart is a no-op for an unknown CID', () => {
         const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
         const engine = new MediaEngine({}, (type, payload, to) => {
