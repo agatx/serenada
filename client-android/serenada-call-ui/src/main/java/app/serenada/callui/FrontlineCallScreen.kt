@@ -10,6 +10,8 @@ import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -75,6 +77,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -84,6 +87,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -165,8 +169,6 @@ internal fun FrontlineCallScreen(
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
     attachLocalSink: (VideoSink) -> Unit,
     detachLocalSink: (VideoSink) -> Unit,
-    attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
-    detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
     attachRemoteSinkForCid: (String, VideoSink) -> Unit,
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
@@ -242,9 +244,6 @@ internal fun FrontlineCallScreen(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val localRendererEvents = remember {
         aspectRatioRendererEvents(mainHandler) { ratio -> localAspectRatio = ratio }
-    }
-    val remoteRendererEvents = remember {
-        aspectRatioRendererEvents(mainHandler) {}
     }
     val localZoomTransformState = rememberTransformableState { zoomChange, _, _ ->
         if (zoomChange > 0f && abs(zoomChange - 1f) > FRONTLINE_ZOOM_CHANGE_THRESHOLD) {
@@ -444,7 +443,6 @@ internal fun FrontlineCallScreen(
                             isCallSurfacePhase = isCallSurfacePhase,
                             eglContext = eglContext,
                             localRendererEvents = localRendererEvents,
-                            remoteRendererEvents = remoteRendererEvents,
                             localAspectRatio = localAspectRatio ?: 0f,
                             remoteAspectRatios = remoteTileAspectRatios,
                             activeContentSpotlightId = activeContentSpotlightId,
@@ -460,8 +458,8 @@ internal fun FrontlineCallScreen(
                             detachLocalRenderer = detachLocalRenderer,
                             attachLocalSink = attachLocalSink,
                             detachLocalSink = detachLocalSink,
-                            attachRemoteRenderer = attachRemoteRenderer,
-                            detachRemoteRenderer = detachRemoteRenderer,
+                            attachRemoteSink = attachRemoteSink,
+                            detachRemoteSink = detachRemoteSink,
                             attachRemoteSinkForCid = attachRemoteSinkForCid,
                             detachRemoteSinkForCid = detachRemoteSinkForCid,
                             pip = pip,
@@ -509,7 +507,6 @@ internal fun FrontlineCallScreen(
                             isCallSurfacePhase = isCallSurfacePhase,
                             eglContext = eglContext,
                             localRendererEvents = localRendererEvents,
-                            remoteRendererEvents = remoteRendererEvents,
                             localAspectRatio = localAspectRatio ?: 0f,
                             remoteAspectRatios = remoteTileAspectRatios,
                             activeContentSpotlightId = activeContentSpotlightId,
@@ -525,8 +522,8 @@ internal fun FrontlineCallScreen(
                             detachLocalRenderer = detachLocalRenderer,
                             attachLocalSink = attachLocalSink,
                             detachLocalSink = detachLocalSink,
-                            attachRemoteRenderer = attachRemoteRenderer,
-                            detachRemoteRenderer = detachRemoteRenderer,
+                            attachRemoteSink = attachRemoteSink,
+                            detachRemoteSink = detachRemoteSink,
                             attachRemoteSinkForCid = attachRemoteSinkForCid,
                             detachRemoteSinkForCid = detachRemoteSinkForCid,
                             pip = pip,
@@ -709,7 +706,6 @@ private fun FrontlineContentArea(
     isCallSurfacePhase: Boolean,
     eglContext: EglBase.Context,
     localRendererEvents: RendererCommon.RendererEvents,
-    remoteRendererEvents: RendererCommon.RendererEvents,
     localAspectRatio: Float,
     remoteAspectRatios: MutableMap<String, Float>,
     activeContentSpotlightId: String?,
@@ -725,8 +721,8 @@ private fun FrontlineContentArea(
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
     attachLocalSink: (VideoSink) -> Unit,
     detachLocalSink: (VideoSink) -> Unit,
-    attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
-    detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
+    attachRemoteSink: (VideoSink) -> Unit,
+    detachRemoteSink: (VideoSink) -> Unit,
     attachRemoteSinkForCid: (String, VideoSink) -> Unit,
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     pip: @Composable (Modifier) -> Unit,
@@ -792,13 +788,12 @@ private fun FrontlineContentArea(
                     localContentMode = localContentMode,
                     eglContext = eglContext,
                     localRendererEvents = localRendererEvents,
-                    remoteRendererEvents = remoteRendererEvents,
                     remoteVideoFitCover = remoteVideoFitCover,
                     localZoomTransformState = localZoomTransformState,
                     attachLocalRenderer = attachLocalRenderer,
                     detachLocalRenderer = detachLocalRenderer,
-                    attachRemoteRenderer = attachRemoteRenderer,
-                    detachRemoteRenderer = detachRemoteRenderer,
+                    attachRemoteSink = attachRemoteSink,
+                    detachRemoteSink = detachRemoteSink,
                     strings = strings,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -935,7 +930,6 @@ private fun FrontlineMultiPartyStage(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val localId = uiState.localCid ?: "local"
     val hasLocalContent = localContentMode
     val activeContentOwnerId = activeContentSpotlightId?.removePrefix(FRONTLINE_CONTENT_SPOTLIGHT_PREFIX)
@@ -1098,11 +1092,9 @@ private fun FrontlineMultiPartyStage(
                         localContentMode = localContentMode,
                         localZoomTransformState = localZoomTransformState,
                         localRendererEvents = localRendererEvents,
-                        remoteRendererEvents = remote?.let { participant ->
-                            remember(participant.cid, mainHandler) {
-                                aspectRatioRendererEvents(mainHandler) { ratio ->
-                                    remoteAspectRatios[participant.cid] = clampStageTileAspectRatio(ratio)
-                                }
+                        onRemoteAspectRatioChanged = remote?.let { participant ->
+                            { ratio: Float ->
+                                remoteAspectRatios[participant.cid] = ratio
                             }
                         },
                         attachLocalSink = attachLocalSink,
@@ -1148,7 +1140,7 @@ private fun FrontlineMultiPartyStage(
                         localContentMode = localContentMode,
                         localZoomTransformState = localZoomTransformState,
                         localRendererEvents = localRendererEvents,
-                        remoteRendererEvents = null,
+                        onRemoteAspectRatioChanged = null,
                         attachLocalSink = attachLocalSink,
                         detachLocalSink = detachLocalSink,
                         attachRemoteSinkForCid = attachRemoteSinkForCid,
@@ -1190,7 +1182,7 @@ private fun FrontlineLayoutTile(
     localContentMode: Boolean,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
     localRendererEvents: RendererCommon.RendererEvents,
-    remoteRendererEvents: RendererCommon.RendererEvents?,
+    onRemoteAspectRatioChanged: ((Float) -> Unit)?,
     attachLocalSink: (VideoSink) -> Unit,
     detachLocalSink: (VideoSink) -> Unit,
     attachRemoteSinkForCid: (String, VideoSink) -> Unit,
@@ -1257,15 +1249,20 @@ private fun FrontlineLayoutTile(
                 }
             }
             remote != null && remote.videoEnabled -> {
-                TextureVideoSurface(
-                    modifier = Modifier.fillMaxSize(),
-                    rendererName = "frontline-remote-stage-${remote.cid}",
-                    eglContext = eglContext,
-                    onAttach = { sink -> attachRemoteSinkForCid(remote.cid, sink) },
-                    onDetach = { sink -> detachRemoteSinkForCid(remote.cid, sink) },
-                    contentScale = contentScale,
-                    rendererEvents = remoteRendererEvents,
-                )
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    FrontlineRemoteVideoSurface(
+                        remote = remote,
+                        width = maxWidth,
+                        height = maxHeight,
+                        rendererName = "frontline-remote-stage-${remote.cid}",
+                        eglContext = eglContext,
+                        contentScale = contentScale,
+                        onAspectRatioChanged = onRemoteAspectRatioChanged ?: {},
+                        onAttach = { sink -> attachRemoteSinkForCid(remote.cid, sink) },
+                        onDetach = { sink -> detachRemoteSinkForCid(remote.cid, sink) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             else -> {
                 FrontlineCameraOffTile(
@@ -1356,6 +1353,70 @@ private fun FrontlineCameraOffTile(
 }
 
 @Composable
+private fun FrontlineRemoteVideoSurface(
+    remote: RemoteParticipant,
+    width: Dp,
+    height: Dp,
+    rendererName: String,
+    eglContext: EglBase.Context,
+    contentScale: ContentScale,
+    onAttach: (VideoSink) -> Unit,
+    onDetach: (VideoSink) -> Unit,
+    modifier: Modifier = Modifier,
+    onAspectRatioChanged: (Float) -> Unit = {},
+) {
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val currentOnAspectRatioChanged = rememberUpdatedState(onAspectRatioChanged)
+    var videoAspectRatio by remember(remote.cid) { mutableStateOf(0f) }
+
+    val rendererEvents = remember(remote.cid, mainHandler) {
+        object : RendererCommon.RendererEvents {
+            override fun onFirstFrameRendered() = Unit
+
+            override fun onFrameResolutionChanged(widthPx: Int, heightPx: Int, rotation: Int) {
+                val rotatedWidth = if (rotation % 180 == 0) widthPx else heightPx
+                val rotatedHeight = if (rotation % 180 == 0) heightPx else widthPx
+                if (rotatedWidth == 0 || rotatedHeight == 0) return
+                val rawRatio = rotatedWidth.toFloat() / rotatedHeight.toFloat()
+                val layoutRatio = clampStageTileAspectRatio(rawRatio)
+                mainHandler.post {
+                    videoAspectRatio = rawRatio
+                    currentOnAspectRatioChanged.value(layoutRatio)
+                }
+            }
+        }
+    }
+    val geometry = computeFitCoverGeometry(width, height, videoAspectRatio)
+    val animatedScale by animateFloatAsState(
+        targetValue = if (contentScale == ContentScale.Crop) geometry.coverScale else 1f,
+        animationSpec = tween(durationMillis = 260),
+        label = "frontline_remote_video_scale",
+    )
+
+    Box(
+        modifier = modifier
+            .background(FrontlineSurface)
+            .clipToBounds(),
+        contentAlignment = Alignment.Center,
+    ) {
+        TextureVideoSurface(
+            modifier = Modifier
+                .size(geometry.fitWidth, geometry.fitHeight)
+                .graphicsLayer {
+                    scaleX = animatedScale
+                    scaleY = animatedScale
+                },
+            rendererName = rendererName,
+            eglContext = eglContext,
+            onAttach = onAttach,
+            onDetach = onDetach,
+            contentScale = ContentScale.Crop,
+            rendererEvents = rendererEvents,
+        )
+    }
+}
+
+@Composable
 private fun FrontlineLargeSurface(
     feed: FrontlineFeed,
     uiState: CallUiState,
@@ -1363,13 +1424,12 @@ private fun FrontlineLargeSurface(
     localContentMode: Boolean,
     eglContext: EglBase.Context,
     localRendererEvents: RendererCommon.RendererEvents,
-    remoteRendererEvents: RendererCommon.RendererEvents,
     remoteVideoFitCover: Boolean,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
     attachLocalRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
-    attachRemoteRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
-    detachRemoteRenderer: (SurfaceViewRenderer) -> Unit,
+    attachRemoteSink: (VideoSink) -> Unit,
+    detachRemoteSink: (VideoSink) -> Unit,
     strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
@@ -1395,15 +1455,19 @@ private fun FrontlineLargeSurface(
             }
         }
         feed == FrontlineFeed.Remote && remote?.videoEnabled == true -> {
-            VideoSurface(
-                modifier = modifier.clipToBounds(),
-                viewKey = "frontline-remote-main",
-                onAttach = { renderer -> attachRemoteRenderer(renderer, remoteRendererEvents) },
-                onDetach = detachRemoteRenderer,
-                mirror = false,
-                contentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
-                isMediaOverlay = false,
-            )
+            BoxWithConstraints(modifier = modifier.clipToBounds()) {
+                FrontlineRemoteVideoSurface(
+                    remote = remote,
+                    width = maxWidth,
+                    height = maxHeight,
+                    rendererName = "frontline-remote-main",
+                    eglContext = eglContext,
+                    contentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
+                    onAttach = attachRemoteSink,
+                    onDetach = detachRemoteSink,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
         else -> {
             val waitingForRemote = uiState.isFrontlineWaitingForRemote()

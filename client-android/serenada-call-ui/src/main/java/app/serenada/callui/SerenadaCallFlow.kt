@@ -376,8 +376,6 @@ fun SerenadaCallFlow(
             detachLocalRenderer = detachLocalRenderer,
             attachLocalSink = attachLocalSink,
             detachLocalSink = detachLocalSink,
-            attachRemoteRenderer = attachRemoteRenderer,
-            detachRemoteRenderer = detachRemoteRenderer,
             attachRemoteSinkForCid = attachRemoteSinkForCid,
             detachRemoteSinkForCid = detachRemoteSinkForCid,
             attachRemoteSink = attachRemoteSink,

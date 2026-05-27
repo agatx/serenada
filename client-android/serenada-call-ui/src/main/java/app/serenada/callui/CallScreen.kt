@@ -1878,14 +1878,14 @@ private fun MultiPartyStage(
     }
 }
 
-private data class FitCoverGeometry(
+internal data class FitCoverGeometry(
     val fitWidth: androidx.compose.ui.unit.Dp,
     val fitHeight: androidx.compose.ui.unit.Dp,
     val coverScale: Float,
 )
 
 @Composable
-private fun computeFitCoverGeometry(
+internal fun computeFitCoverGeometry(
     tileWidth: androidx.compose.ui.unit.Dp,
     tileHeight: androidx.compose.ui.unit.Dp,
     videoAspectRatio: Float,
