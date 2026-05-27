@@ -4,6 +4,46 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] — 2026-05-18
+
+Milestone release: a dedicated Frontline call UI, pluggable audio
+coordinators, and the WebRTC engine upgraded to M149. Minor bump per
+the pre-1.0 policy because the WebRTC upgrade and the new audio
+extension point change behavior existing consumers may depend on.
+
+### Added
+- Android, iOS: **Frontline call UI variant** — an opt-in, glanceable
+  call experience tuned for frontline workers (larger touch targets,
+  simplified more-menu, multiparty local-tile layout fixes). Off by
+  default; existing call UIs are unchanged.
+- Android, iOS: **pluggable audio coordinators**. Host apps can supply
+  their own audio-session coordinator to integrate Serenada calls with
+  app-specific audio routing, ducking, and interruption handling. A
+  default coordinator preserves today's behavior when none is
+  supplied.
+- React UI: `SerenadaCallFlowConfig.videoEnabled` lets host apps start
+  a call with video off without reaching into the session directly.
+
+### Changed
+- Web, Android, iOS: **bundled WebRTC upgraded to M149**
+  (`libwebrtc-7827`). Picks up upstream stability and codec fixes.
+  Android consumers pulling the WebRTC AAR should update the
+  coordinate to `app.serenada:libwebrtc-7827-universal:0.7.0`.
+
+### Fixed
+- SDK: reconnect-token refresh no longer drops the token across a
+  reconnect cycle, so SSE session takeover stays authorized.
+- Server: SSE session takeover is now gated on reconnect-token
+  verification, and snapshot cleanup was optimized.
+- Protocol: `room_ended` broadcast payload now sends the `reason`
+  field matching the v1 spec (was mismatched).
+- Android: peer teardown is guarded against native WebRTC crashes
+  during slot cleanup.
+- React UI: the snapshot button is hidden when the source video is
+  off, so there's no shutter on a black frame.
+- iOS: DocC builds again on Xcode 16; Android Dokka docs generation
+  fixed.
+
 ## [0.6.13] — 2026-05-16
 
 Android build toolchain refresh.
