@@ -994,23 +994,34 @@ export class MediaEngine {
         try {
             const peer = this.peers.get(fromCid);
             if (!peer) return;
+            // Snapshot the pending offer id before the await; it identifies the offer this
+            // answer completes (and covers the legacy/no-offerId path, where `offerId` is the
+            // sentinel rather than our real local id).
+            const pendingOfferId = peer.pendingLocalOfferId;
             if (peer.pc.signalingState !== 'have-local-offer') {
                 this.logger?.log('debug', 'WebRTC', `[${fromCid}] Dropping stale answer in ${peer.pc.signalingState}`);
                 return;
             }
-            if (offerId !== LEGACY_OFFER_ID && peer.pendingLocalOfferId !== offerId) {
+            if (offerId !== LEGACY_OFFER_ID && pendingOfferId !== offerId) {
                 this.logger?.log('debug', 'WebRTC', `[${fromCid}] Dropping answer for stale offerId=${offerId}`);
                 return;
             }
             peer.isSettingRemoteAnswerPending = true;
             await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
             peer.isSettingRemoteAnswerPending = false;
-            const completedOfferId = peer.pendingLocalOfferId ?? offerId;
-            peer.pendingLocalOfferId = null;
-            peer.currentNegotiationId = completedOfferId;
-            peer.ignoredOfferId = null;
-            if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
-            peer.pendingIceRestart = false;
+            const completedOfferId = pendingOfferId ?? offerId;
+            // Finalize negotiation state only while the pending offer is still the one we
+            // completed. The await above yields to the event loop, so a renegotiation offer
+            // (e.g. an ICE restart) can reassign pendingLocalOfferId; finalizing then would
+            // clobber the newer offer's id and cancel its offer-timeout / pending-retry,
+            // leaving it stuck in have-local-offer if its answer is lost.
+            if (peer.pendingLocalOfferId === completedOfferId) {
+                peer.pendingLocalOfferId = null;
+                peer.currentNegotiationId = completedOfferId;
+                peer.ignoredOfferId = null;
+                if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
+                peer.pendingIceRestart = false;
+            }
             await this.flushPendingRemoteIce(peer, completedOfferId);
         } catch (err) {
             const peer = this.peers.get(fromCid);

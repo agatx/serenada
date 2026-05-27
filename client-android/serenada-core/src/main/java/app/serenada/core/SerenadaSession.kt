@@ -142,12 +142,22 @@ class SerenadaSession internal constructor(
     /** Whether the microphone is muted specifically because external audio, such as push-to-talk, is active. */
     val isMicMutedByExternalAudio: StateFlow<Boolean> = _isMicMutedByExternalAudio.asStateFlow()
 
+    // Latched true once the call's media has connected at least once. A "network-online"
+    // ICE restart is a recovery mechanism for an established call; firing it during initial
+    // setup is never useful and is actively harmful: registerNetworkCallback replays
+    // onAvailable for every already-connected network right after registration, and that
+    // replay would otherwise schedule an ICE restart mid-first-offer, forcing a redundant
+    // renegotiation the moment the first answer lands (observed as a "pending-retry").
+    private var hasEverConnectedPeer = false
+
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             handler.post {
                 if (_state.value.phase == CallPhase.InCall) {
                     if (isConnectionDegraded()) markConnectionDegraded()
-                    peerNegotiationEngine.scheduleIceRestart("network-online", 0)
+                    if (hasEverConnectedPeer) {
+                        peerNegotiationEngine.scheduleIceRestart("network-online", 0)
+                    }
                 }
             }
         }
@@ -489,6 +499,7 @@ class SerenadaSession internal constructor(
             sendMessage = { type: String, payload: org.json.JSONObject?, to: String? -> sendMessage(type, payload, to) },
             onRemoteParticipantsChanged = { refreshRemoteParticipants() },
             onAggregatePeerStateChanged = { ice: IceConnectionState, conn: PeerConnectionState, sig: RtcSignalingState ->
+                if (conn == PeerConnectionState.CONNECTED) hasEverConnectedPeer = true
                 val current = _diagnostics.value
                 val next = current.copy(
                     iceConnectionState = ice,
@@ -1085,6 +1096,7 @@ class SerenadaSession internal constructor(
         iceFetchGeneration += 1
         startAudioCoordinatorCollectors()
         localMediaReadyForNegotiation = false
+        hasEverConnectedPeer = false
         if (webRtcStatsExecutor == null) {
             webRtcStatsExecutor = newWebRtcStatsExecutor()
         }

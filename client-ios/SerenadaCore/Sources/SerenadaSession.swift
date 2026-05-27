@@ -168,6 +168,11 @@ public final class SerenadaSession: ObservableObject {
     private var routeInputAvailable = true
     private var sessionActivated = false
     private var localMediaReadyForNegotiation = false
+    // Latched true once the call's media has connected at least once. The network monitor
+    // below only restarts ICE for an established call: NWPathMonitor delivers the current
+    // path once at start(), and treating that initial callback as a network change would
+    // otherwise force a redundant renegotiation during the first offer (a "pending-retry").
+    private var hasEverConnectedPeer = false
     private let apiClient: SessionAPIClient
     private let clock: SessionClock
     private let config: SerenadaConfig
@@ -786,6 +791,7 @@ public final class SerenadaSession: ObservableObject {
 
         startCoordinatorTasks()
         localMediaReadyForNegotiation = false
+        hasEverConnectedPeer = false
         let videoCaptureSupported = !availableCameraModes.isEmpty
         let shouldEnableAudio = config.defaultAudioEnabled
         let shouldEnableVideo = videoCaptureSupported && config.defaultVideoEnabled
@@ -1873,6 +1879,7 @@ public final class SerenadaSession: ObservableObject {
             sendMessage: { [weak self] type, payload, to in self?.sendMessage(type: type, payload: payload, to: to) },
             onRemoteParticipantsChanged: { [weak self] in self?.refreshRemoteParticipants() },
             onAggregatePeerStateChanged: { [weak self] ice, conn, sig in
+                if conn == .connected { self?.hasEverConnectedPeer = true }
                 self?.commitSnapshot { _, d in d.iceConnectionState = ice; d.peerConnectionState = conn; d.rtcSignalingState = sig }
             },
             onConnectionStatusUpdate: { [weak self] in self?.connectionStatusTracker?.update() },
@@ -1929,7 +1936,11 @@ public final class SerenadaSession: ObservableObject {
             Task { @MainActor in
                 guard self.internalPhase == .inCall else { return }
                 if self.connectionStatusTracker?.isConnectionDegraded() == true { self.connectionStatusTracker?.update() }
-                if path.status == .satisfied { self.peerNegotiationEngine?.scheduleIceRestart(reason: "network-online", delayMs: 0) }
+                // Skip until the call has connected once; the initial NWPathMonitor callback
+                // at start() is the baseline network, not a handover (see hasEverConnectedPeer).
+                if path.status == .satisfied && self.hasEverConnectedPeer {
+                    self.peerNegotiationEngine?.scheduleIceRestart(reason: "network-online", delayMs: 0)
+                }
             }
         }
         pathMonitor.start(queue: pathMonitorQueue)

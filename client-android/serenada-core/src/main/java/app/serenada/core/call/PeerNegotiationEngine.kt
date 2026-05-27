@@ -481,11 +481,23 @@ internal class PeerNegotiationEngine(
             handler.post {
                 settingRemoteAnswerCids.remove(remoteCid)
                 if (success) {
-                    val completedOfferId = pendingLocalOfferIds.remove(remoteCid) ?: offerId
-                    currentNegotiationIds[remoteCid] = completedOfferId
-                    ignoredOfferIds.remove(remoteCid)
-                    clearOfferTimeout(remoteCid)
-                    slot.clearPendingIceRestart()
+                    // The offer this answer completes is whatever was pending when we validated
+                    // it above; `pendingOfferId` also covers the legacy/no-offerId path, where
+                    // `offerId` is the sentinel rather than our real local id.
+                    val completedOfferId = pendingOfferId ?: offerId
+                    // Finalize negotiation state only while the slot's pending offer is still the
+                    // one we completed. A renegotiation offer (e.g. a "pending-retry" ICE restart
+                    // fired from the STABLE signaling callback) can replace it during this async
+                    // setRemoteDescription; finalizing then would clobber the newer offer's id and
+                    // cancel its per-peer offer-timeout / pending-retry, stranding it in
+                    // HAVE_LOCAL_OFFER if its answer is lost.
+                    if (pendingLocalOfferIds[remoteCid] == completedOfferId) {
+                        pendingLocalOfferIds.remove(remoteCid)
+                        currentNegotiationIds[remoteCid] = completedOfferId
+                        ignoredOfferIds.remove(remoteCid)
+                        clearOfferTimeout(remoteCid)
+                        slot.clearPendingIceRestart()
+                    }
                     flushPendingRemoteIce(remoteCid, completedOfferId, slot)
                     updateAggregatePeerState()
                     onConnectionStatusUpdate()
