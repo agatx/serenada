@@ -376,12 +376,12 @@ fun SerenadaCallFlow(
             detachLocalRenderer = detachLocalRenderer,
             attachLocalSink = attachLocalSink,
             detachLocalSink = detachLocalSink,
-            attachRemoteRenderer = attachRemoteRenderer,
-            detachRemoteRenderer = detachRemoteRenderer,
             attachRemoteSinkForCid = attachRemoteSinkForCid,
             detachRemoteSinkForCid = detachRemoteSinkForCid,
             attachRemoteSink = attachRemoteSink,
             detachRemoteSink = detachRemoteSink,
+            initialRemoteVideoFitCover = initialRemoteVideoFitCover,
+            onRemoteVideoFitChanged = onRemoteVideoFitChanged,
             onSnapshotRequested = onSnapshotRequested,
         )
     } else {

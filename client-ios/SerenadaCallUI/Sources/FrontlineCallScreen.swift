@@ -13,6 +13,7 @@ private let frontlineDim = Color(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xAA 
 private let frontlineSheet = Color(red: 0x15 / 255, green: 0x16 / 255, blue: 0x1A / 255)
 private let frontlineSheetRow = Color.white.opacity(0.09)
 private let frontlineContentSpotlightPrefix = "content:"
+private let frontlineSheetAnimation = Animation.interactiveSpring(response: 0.32, dampingFraction: 0.9, blendDuration: 0.05)
 private let frontlineMoreButtonHeightToWidthRatio: CGFloat = 1.62
 private let frontlineLargeVideoAccentLineWidth: CGFloat = 3
 private let frontlinePipVideoAccentLineWidth: CGFloat = 2.5
@@ -68,6 +69,28 @@ func frontlineIncludesNormalLocalStageTile(
     activeContentOwnerId != localSpotlightId || contentTileIsSpotlight
 }
 
+func frontlineMoreMenuOpensAudioRouteDirectly(
+    showsAudioRoute: Bool,
+    screenSharingEnabled: Bool,
+    inviteEnabled: Bool
+) -> Bool {
+    showsAudioRoute && !screenSharingEnabled && !inviteEnabled
+}
+
+func frontlineShowsRemoteFitButton(
+    isCallSurfacePhase: Bool,
+    waitingForRemote: Bool,
+    remoteParticipantCount: Int,
+    largeFeedIsRemote: Bool,
+    remoteVideoEnabled: Bool
+) -> Bool {
+    isCallSurfacePhase &&
+        !waitingForRemote &&
+        remoteParticipantCount <= 1 &&
+        largeFeedIsRemote &&
+        remoteVideoEnabled
+}
+
 struct FrontlineCallScreenView: View {
     let roomId: String
     let uiState: CallUiState
@@ -93,10 +116,12 @@ struct FrontlineCallScreenView: View {
     let onDismiss: (() -> Void)?
     let onSnapshotRequested: ((SnapshotSource) -> Void)?
     let rendererProvider: CallRendererProvider
+    let onRemoteVideoFitChanged: ((Bool) -> Void)?
 
     @State private var pipSwapped = false
     @State private var isMoreSheetVisible = false
     @State private var isAudioRouteSheetVisible = false
+    @State private var remoteVideoFitCover: Bool
     @State private var showShareSheet = false
     @State private var showSnapshotFlash = false
     @State private var showDebugPanel = false
@@ -108,6 +133,62 @@ struct FrontlineCallScreenView: View {
     @State private var lastVideoStartedParticipantId: String?
     @State private var previousRemoteVideoEnabled: [String: Bool] = [:]
     @State private var broadcastTriggerCount = 0
+
+    init(
+        roomId: String,
+        uiState: CallUiState,
+        sessionPhase: SerenadaCallPhase,
+        roomShareURL: URL?,
+        screenShareExtensionBundleId: String?,
+        roomName: String?,
+        config: SerenadaCallFlowConfig,
+        strings: [SerenadaString: String]?,
+        availableAudioDevices: [AudioDevice],
+        currentAudioDevice: AudioDevice?,
+        onToggleAudio: @escaping () -> Void,
+        onSelectAudioDevice: @escaping (AudioDevice) -> Void,
+        onToggleVideo: @escaping () -> Void,
+        onFlipCamera: @escaping () -> Void,
+        onToggleScreenShare: @escaping () -> Void,
+        onAdjustCameraZoom: @escaping (CGFloat) -> Void,
+        onResetCameraZoom: @escaping () -> Void,
+        onToggleFlashlight: @escaping () -> Void,
+        onEndCall: @escaping () -> Void,
+        onInviteToRoom: @escaping () async -> Result<Void, Error>,
+        onRequestPermissions: @escaping () -> Void,
+        onDismiss: (() -> Void)?,
+        onSnapshotRequested: ((SnapshotSource) -> Void)?,
+        rendererProvider: CallRendererProvider,
+        initialRemoteVideoFitCover: Bool = true,
+        onRemoteVideoFitChanged: ((Bool) -> Void)? = nil
+    ) {
+        self.roomId = roomId
+        self.uiState = uiState
+        self.sessionPhase = sessionPhase
+        self.roomShareURL = roomShareURL
+        self.screenShareExtensionBundleId = screenShareExtensionBundleId
+        self.roomName = roomName
+        self.config = config
+        self.strings = strings
+        self.availableAudioDevices = availableAudioDevices
+        self.currentAudioDevice = currentAudioDevice
+        self.onToggleAudio = onToggleAudio
+        self.onSelectAudioDevice = onSelectAudioDevice
+        self.onToggleVideo = onToggleVideo
+        self.onFlipCamera = onFlipCamera
+        self.onToggleScreenShare = onToggleScreenShare
+        self.onAdjustCameraZoom = onAdjustCameraZoom
+        self.onResetCameraZoom = onResetCameraZoom
+        self.onToggleFlashlight = onToggleFlashlight
+        self.onEndCall = onEndCall
+        self.onInviteToRoom = onInviteToRoom
+        self.onRequestPermissions = onRequestPermissions
+        self.onDismiss = onDismiss
+        self.onSnapshotRequested = onSnapshotRequested
+        self.rendererProvider = rendererProvider
+        self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
+        _remoteVideoFitCover = State(initialValue: initialRemoteVideoFitCover)
+    }
 
     private func str(_ key: SerenadaString) -> String {
         resolveString(key, overrides: strings)
@@ -150,7 +231,7 @@ struct FrontlineCallScreenView: View {
             let panelWidth = isLandscape ? (geometry.size.width >= 720 ? 320.0 : 260.0) : geometry.size.width
             let pipFeed = pipFeed
             let pipInPanel = isTabletLandscape && pipFeed != nil
-            let pipSize = frontlinePipSize(containerWidth: geometry.size.width, inPanel: pipInPanel)
+            let pipSize = frontlinePipSize(containerSize: geometry.size, inPanel: pipInPanel)
 
             ZStack {
                 frontlineBlack.ignoresSafeArea()
@@ -305,12 +386,27 @@ struct FrontlineCallScreenView: View {
         isCallSurfacePhase && (showsAudioRoute || config.screenSharingEnabled || config.inviteControlsEnabled)
     }
 
+    private var moreOpensAudioRouteDirectly: Bool {
+        frontlineMoreMenuOpensAudioRouteDirectly(
+            showsAudioRoute: showsAudioRoute,
+            screenSharingEnabled: config.screenSharingEnabled,
+            inviteEnabled: config.inviteControlsEnabled
+        )
+    }
+
     @ViewBuilder
     private func contentArea(
         pipFeed: FrontlineFeed?,
         pipInPanel: Bool,
         pipSize: CGSize
     ) -> some View {
+        let showRemoteFitButton = frontlineShowsRemoteFitButton(
+            isCallSurfacePhase: isCallSurfacePhase,
+            waitingForRemote: frontlineIsWaitingForRemote(uiState),
+            remoteParticipantCount: uiState.remoteParticipants.count,
+            largeFeedIsRemote: largeFeed == .remote,
+            remoteVideoEnabled: remote?.videoEnabled == true
+        )
         ZStack {
             if !isCallSurfacePhase {
                 FrontlinePhaseSurface(
@@ -347,6 +443,17 @@ struct FrontlineCallScreenView: View {
                 .padding(.leading, 16)
                 .padding(.bottom, 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
+
+            if showRemoteFitButton {
+                FrontlineRemoteFitButton(
+                    remoteVideoFitCover: remoteVideoFitCover,
+                    strings: strings,
+                    onClick: toggleRemoteVideoFit
+                )
+                .padding(.trailing, 16)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
 
             if isCallSurfacePhase,
@@ -420,7 +527,7 @@ struct FrontlineCallScreenView: View {
             WebRTCVideoView(
                 kind: remote.map { .remoteForCid($0.cid) } ?? .remote,
                 rendererProvider: rendererProvider,
-                videoContentMode: .scaleAspectFill
+                videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit
             )
             .ignoresSafeArea()
         default:
@@ -442,9 +549,11 @@ struct FrontlineCallScreenView: View {
             pinnedSpotlightId: $pinnedSpotlightId,
             selectedSpotlightId: $selectedSpotlightId,
             lastVideoStartedParticipantId: lastVideoStartedParticipantId,
+            remoteVideoFitCover: $remoteVideoFitCover,
             rendererProvider: rendererProvider,
             strings: strings,
-            onAdjustCameraZoom: onAdjustCameraZoom
+            onAdjustCameraZoom: onAdjustCameraZoom,
+            onRemoteVideoFitChanged: onRemoteVideoFitChanged
         )
     }
 
@@ -529,7 +638,7 @@ struct FrontlineCallScreenView: View {
             onFlipCamera: onFlipCamera,
             onToggleFlashlight: onToggleFlashlight,
             onSnapshotFlash: { showSnapshotFlash = true },
-            onMore: { isMoreSheetVisible = true },
+            onMore: openMoreOrAudioRoute,
             onEndCall: onEndCall
         )
     }
@@ -590,62 +699,58 @@ struct FrontlineCallScreenView: View {
     }
 
     private var moreSheet: some View {
-        Group {
-            if isMoreSheetVisible && shouldShowMoreButton {
-                FrontlineMoreSheet(
-                    showsAudioRoute: showsAudioRoute,
-                    audioRouteDevice: currentAudioRoute,
-                    screenSharingEnabled: config.screenSharingEnabled,
-                    inviteEnabled: config.inviteControlsEnabled,
-                    shareEnabled: config.inviteControlsEnabled && roomShareURL != nil,
-                    isScreenSharing: uiState.isScreenSharing,
-                    screenShareExtensionBundleId: screenShareExtensionBundleId,
-                    broadcastTriggerCount: $broadcastTriggerCount,
-                    strings: strings,
-                    onDismiss: { isMoreSheetVisible = false },
-                    onAudioRoute: {
-                        isMoreSheetVisible = false
-                        isAudioRouteSheetVisible = true
-                    },
-                    onToggleScreenShare: {
-                        isMoreSheetVisible = false
-                        onToggleScreenShare()
-                    },
-                    onStartBroadcastPicker: {
-                        onToggleScreenShare()
-                        broadcastTriggerCount += 1
-                        DispatchQueue.main.async {
-                            isMoreSheetVisible = false
-                        }
-                    },
-                    onInvite: {
-                        isMoreSheetVisible = false
-                        Task { _ = await onInviteToRoom() }
-                    },
-                    onShare: {
-                        isMoreSheetVisible = false
-                        showShareSheet = true
-                    }
-                )
+        FrontlineMoreSheet(
+            visible: isMoreSheetVisible && shouldShowMoreButton && !moreOpensAudioRouteDirectly,
+            showsAudioRoute: showsAudioRoute,
+            audioRouteDevice: currentAudioRoute,
+            screenSharingEnabled: config.screenSharingEnabled,
+            inviteEnabled: config.inviteControlsEnabled,
+            shareEnabled: config.inviteControlsEnabled && roomShareURL != nil,
+            isScreenSharing: uiState.isScreenSharing,
+            screenShareExtensionBundleId: screenShareExtensionBundleId,
+            broadcastTriggerCount: $broadcastTriggerCount,
+            strings: strings,
+            onDismiss: { setMoreSheetVisible(false) },
+            onAudioRoute: {
+                withAnimation(frontlineSheetAnimation) {
+                    isMoreSheetVisible = false
+                    isAudioRouteSheetVisible = true
+                }
+            },
+            onToggleScreenShare: {
+                setMoreSheetVisible(false)
+                onToggleScreenShare()
+            },
+            onStartBroadcastPicker: {
+                onToggleScreenShare()
+                broadcastTriggerCount += 1
+                DispatchQueue.main.async {
+                    setMoreSheetVisible(false)
+                }
+            },
+            onInvite: {
+                setMoreSheetVisible(false)
+                Task { _ = await onInviteToRoom() }
+            },
+            onShare: {
+                setMoreSheetVisible(false)
+                showShareSheet = true
             }
-        }
+        )
     }
 
     private var audioRouteSheet: some View {
-        Group {
-            if isAudioRouteSheetVisible {
-                FrontlineAudioRouteSheet(
-                    devices: audioRouteOptions,
-                    currentDevice: currentAudioRoute,
-                    strings: strings,
-                    onDismiss: { isAudioRouteSheetVisible = false },
-                    onSelect: { device in
-                        isAudioRouteSheetVisible = false
-                        onSelectAudioDevice(device)
-                    }
-                )
+        FrontlineAudioRouteSheet(
+            visible: isAudioRouteSheetVisible,
+            devices: audioRouteOptions,
+            currentDevice: currentAudioRoute,
+            strings: strings,
+            onDismiss: { setAudioRouteSheetVisible(false) },
+            onSelect: { device in
+                setAudioRouteSheetVisible(false)
+                onSelectAudioDevice(device)
             }
-        }
+        )
     }
 
     private var localDisplayName: String {
@@ -664,6 +769,35 @@ struct FrontlineCallScreenView: View {
         }
     }
 
+    private func openMoreOrAudioRoute() {
+        withAnimation(frontlineSheetAnimation) {
+            if moreOpensAudioRouteDirectly {
+                isAudioRouteSheetVisible = true
+            } else {
+                isMoreSheetVisible = true
+            }
+        }
+    }
+
+    private func setMoreSheetVisible(_ visible: Bool) {
+        withAnimation(frontlineSheetAnimation) {
+            isMoreSheetVisible = visible
+        }
+    }
+
+    private func setAudioRouteSheetVisible(_ visible: Bool) {
+        withAnimation(frontlineSheetAnimation) {
+            isAudioRouteSheetVisible = visible
+        }
+    }
+
+    private func toggleRemoteVideoFit() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            remoteVideoFitCover.toggle()
+        }
+        onRemoteVideoFitChanged?(remoteVideoFitCover)
+    }
+
     private func updateLastVideoStartedParticipant() {
         let next = Dictionary(uniqueKeysWithValues: uiState.remoteParticipants.map { ($0.cid, $0.videoEnabled) })
         if !previousRemoteVideoEnabled.isEmpty {
@@ -675,11 +809,12 @@ struct FrontlineCallScreenView: View {
     }
 }
 
-private func frontlinePipSize(containerWidth: CGFloat, inPanel: Bool) -> CGSize {
+func frontlinePipSize(containerSize: CGSize, inPanel: Bool) -> CGSize {
     if inPanel { return CGSize(width: 220, height: 280) }
-    if containerWidth >= 1100 { return CGSize(width: 172, height: 220) }
-    if containerWidth >= 720 { return CGSize(width: 152, height: 196) }
-    if containerWidth >= 480 { return CGSize(width: 120, height: 154) }
+    let referenceWidth = containerSize.width > containerSize.height ? containerSize.height : containerSize.width
+    if referenceWidth >= 1100 { return CGSize(width: 172, height: 220) }
+    if referenceWidth >= 720 { return CGSize(width: 152, height: 196) }
+    if referenceWidth >= 480 { return CGSize(width: 120, height: 154) }
     return CGSize(width: 100, height: 128)
 }
 
@@ -1142,7 +1277,60 @@ private struct FrontlineEndButton: View {
     }
 }
 
+private struct FrontlineRemoteFitButton: View {
+    let remoteVideoFitCover: Bool
+    let strings: [SerenadaString: String]?
+    let onClick: () -> Void
+
+    var body: some View {
+        Button(action: onClick) {
+            Image(systemName: remoteVideoFitCover
+                ? "arrow.down.right.and.arrow.up.left"
+                : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(Color.black.opacity(0.4))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(resolveString(
+            remoteVideoFitCover ? .callA11yVideoFit : .callA11yVideoFill,
+            overrides: strings
+        ))
+    }
+}
+
+private struct FrontlineBottomSheetContainer<Content: View>: View {
+    let visible: Bool
+    let onDismiss: () -> Void
+    private let content: Content
+
+    init(visible: Bool, onDismiss: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.visible = visible
+        self.onDismiss = onDismiss
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            if visible {
+                Color.black.opacity(0.5)
+                    .ignoresSafeArea()
+                    .onTapGesture(perform: onDismiss)
+                    .transition(.opacity)
+
+                content
+                    .transition(.move(edge: .bottom))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .allowsHitTesting(visible)
+    }
+}
+
 private struct FrontlineMoreSheet: View {
+    let visible: Bool
     let showsAudioRoute: Bool
     let audioRouteDevice: AudioDevice?
     let screenSharingEnabled: Bool
@@ -1160,11 +1348,7 @@ private struct FrontlineMoreSheet: View {
     let onShare: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Color.black.opacity(0.5)
-                .ignoresSafeArea()
-                .onTapGesture(perform: onDismiss)
-
+        FrontlineBottomSheetContainer(visible: visible, onDismiss: onDismiss) {
             VStack(spacing: 0) {
                 Capsule()
                     .fill(Color.white.opacity(0.24))
@@ -1188,6 +1372,7 @@ private struct FrontlineMoreSheet: View {
                         title: isScreenSharing
                             ? resolveString(.frontlineStopScreenShare, overrides: strings)
                             : resolveString(.frontlineShareScreen, overrides: strings),
+                        danger: isScreenSharing,
                         onClick: screenShareAction
                     )
                     .overlay {
@@ -1240,7 +1425,6 @@ private struct FrontlineMoreSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .ignoresSafeArea(edges: .bottom)
         }
-        .transition(.opacity)
     }
 
     private func screenShareAction() {
@@ -1253,6 +1437,7 @@ private struct FrontlineMoreSheet: View {
 }
 
 private struct FrontlineAudioRouteSheet: View {
+    let visible: Bool
     let devices: [AudioDevice]
     let currentDevice: AudioDevice?
     let strings: [SerenadaString: String]?
@@ -1260,11 +1445,7 @@ private struct FrontlineAudioRouteSheet: View {
     let onSelect: (AudioDevice) -> Void
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Color.black.opacity(0.5)
-                .ignoresSafeArea()
-                .onTapGesture(perform: onDismiss)
-
+        FrontlineBottomSheetContainer(visible: visible, onDismiss: onDismiss) {
             VStack(spacing: 0) {
                 Capsule()
                     .fill(Color.white.opacity(0.24))
@@ -1307,7 +1488,6 @@ private struct FrontlineAudioRouteSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .ignoresSafeArea(edges: .bottom)
         }
-        .transition(.opacity)
     }
 
     private func isSelected(_ device: AudioDevice) -> Bool {
@@ -1359,6 +1539,7 @@ private struct FrontlineAudioRouteItem: View {
 private struct FrontlineSheetItem: View {
     let systemImage: String
     let title: String
+    var danger = false
     let onClick: () -> Void
 
     var body: some View {
@@ -1378,7 +1559,7 @@ private struct FrontlineSheetItem: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .background(frontlineSheetRow)
+            .background(danger ? frontlineDanger : frontlineSheetRow)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
@@ -1525,9 +1706,11 @@ private struct FrontlineMultiPartyStage: View {
     @Binding var pinnedSpotlightId: String?
     @Binding var selectedSpotlightId: String?
     let lastVideoStartedParticipantId: String?
+    @Binding var remoteVideoFitCover: Bool
     let rendererProvider: CallRendererProvider
     let strings: [SerenadaString: String]?
     let onAdjustCameraZoom: (CGFloat) -> Void
+    let onRemoteVideoFitChanged: ((Bool) -> Void)?
 
     @State private var lastMagnificationValue: CGFloat = 1
     @State private var localAspectRatio: CGFloat?
@@ -1562,7 +1745,10 @@ private struct FrontlineMultiPartyStage: View {
                         onLocalVideoSizeChanged: { localAspectRatio = quantizedFrontlineAspectRatio($0) },
                         onRemoteVideoSizeChanged: { _, _ in },
                         localZoomEnabled: false,
-                        localZoomGesture: localZoomGesture(enabled: false)
+                        localZoomGesture: localZoomGesture(enabled: false),
+                        showRemoteFitButton: false,
+                        remoteVideoFitCover: remoteVideoFitCover,
+                        onToggleRemoteVideoFit: toggleRemoteVideoFit
                     )
                     .frame(width: pip.frame.width, height: pip.frame.height)
                     .clipShape(RoundedRectangle(cornerRadius: pip.cornerRadius))
@@ -1588,6 +1774,9 @@ private struct FrontlineMultiPartyStage: View {
             ?? selectedSpotlightId.flatMap { availableIds.contains($0) ? $0 : nil }
             ?? defaultPrimary
         let spotlightIsContent = contentSource != nil && activeContentSpotlightId != nil && effectiveSpotlight == activeContentSpotlightId
+        let spotlightIsRemote =
+            uiState.remoteParticipants.contains { $0.cid == effectiveSpotlight } ||
+            (spotlightIsContent && contentSource?.ownerParticipantId != localSpotlightId)
 
         var participants = uiState.remoteParticipants.map {
             SceneParticipant(
@@ -1631,7 +1820,7 @@ private struct FrontlineMultiPartyStage: View {
             activeSpeakerId: nil,
             pinnedParticipantId: spotlightIsContent ? nil : effectiveSpotlight,
             contentSource: spotlightIsContent ? contentSource : nil,
-            userPrefs: UserLayoutPrefs(dominantFit: .cover)
+            userPrefs: UserLayoutPrefs(dominantFit: spotlightIsRemote && !remoteVideoFitCover ? .contain : .cover)
         ))
     }
 
@@ -1659,6 +1848,11 @@ private struct FrontlineMultiPartyStage: View {
             }
             return nil
         }()
+        let showRemoteFitButton =
+            tile.zOrder == 0 &&
+            remote != nil &&
+            !isLocal &&
+            (!isContentTile || contentOwnerCid != localSpotlightId)
 
         FrontlineLayoutTile(
             tileId: tile.id,
@@ -1678,8 +1872,18 @@ private struct FrontlineMultiPartyStage: View {
             onLocalVideoSizeChanged: { localAspectRatio = quantizedFrontlineAspectRatio($0) },
             onRemoteVideoSizeChanged: { cid, size in remoteTileAspectRatios[cid] = quantizedFrontlineAspectRatio(size) },
             localZoomEnabled: localZoomEnabled,
-            localZoomGesture: localZoomGesture(enabled: localZoomEnabled)
+            localZoomGesture: localZoomGesture(enabled: localZoomEnabled),
+            showRemoteFitButton: showRemoteFitButton,
+            remoteVideoFitCover: remoteVideoFitCover,
+            onToggleRemoteVideoFit: toggleRemoteVideoFit
         )
+    }
+
+    private func toggleRemoteVideoFit() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            remoteVideoFitCover.toggle()
+        }
+        onRemoteVideoFitChanged?(remoteVideoFitCover)
     }
 
     private var activeContentSource: ContentSource? {
@@ -1736,6 +1940,9 @@ private struct FrontlineLayoutTile<ZoomGesture: Gesture>: View {
     let onRemoteVideoSizeChanged: (String, CGSize) -> Void
     let localZoomEnabled: Bool
     let localZoomGesture: ZoomGesture
+    let showRemoteFitButton: Bool
+    let remoteVideoFitCover: Bool
+    let onToggleRemoteVideoFit: () -> Void
 
     var body: some View {
         let displayName = isLocal
@@ -1799,6 +2006,16 @@ private struct FrontlineLayoutTile<ZoomGesture: Gesture>: View {
             if !isContentTile {
                 FrontlineNameChip(label: displayName, muted: muted, audioLevel: audioLevel, compact: true)
                     .padding(6)
+            }
+
+            if showRemoteFitButton {
+                FrontlineRemoteFitButton(
+                    remoteVideoFitCover: remoteVideoFitCover,
+                    strings: strings,
+                    onClick: onToggleRemoteVideoFit
+                )
+                .padding(8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }
         .clipShape(tileShape)

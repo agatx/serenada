@@ -366,7 +366,9 @@ private struct SessionFirstCallFlow: View {
             onRequestPermissions: { requestPermissions(state: state) },
             onDismiss: onDismiss,
             onSnapshotRequested: makeSnapshotHandler(),
-            rendererProvider: session
+            rendererProvider: session,
+            initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
+            onRemoteVideoFitChanged: params.onRemoteVideoFitChanged
         )
     }
 
