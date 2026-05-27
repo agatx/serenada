@@ -4,6 +4,24 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.1] — 2026-05-26
+
+### Fixed
+- Web, Android, iOS: 1:1 video calls no longer get stuck in
+  "Reconnecting" after a renegotiation. Two independent races were
+  fixed: (1) the answer-success path cleared the pending local
+  `offerId` unconditionally, so a renegotiation offer's id got
+  clobbered and its answer dropped as a stale offer — the SDK now
+  finalizes against the offer id captured before `setRemoteDescription`
+  and only while it is still pending; (2) on Android/iOS the network
+  callback replays the current network at registration, which the
+  session mistook for a handover and used to restart ICE mid-first-
+  offer — that path is now gated behind a `hasEverConnectedPeer` latch.
+
+### Changed
+- Android, iOS: Frontline call UX polish, including a remote video
+  fit (fill / fit) toggle in the Frontline call screen.
+
 ## [0.7.0] — 2026-05-18
 
 Milestone release: a dedicated Frontline call UI, pluggable audio

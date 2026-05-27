@@ -58,7 +58,7 @@ afterEvaluate {
 
                 groupId = "app.serenada"
                 artifactId = "call-ui"
-                version = "0.7.0"
+                version = "0.7.1"
 
                 pom {
                     name.set("Serenada Call UI")
