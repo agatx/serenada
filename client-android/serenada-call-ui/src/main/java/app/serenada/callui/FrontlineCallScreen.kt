@@ -51,6 +51,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashlightOff
 import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.FlipCameraIos
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.MoreVert
@@ -61,6 +63,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -168,6 +171,8 @@ internal fun FrontlineCallScreen(
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit,
+    initialRemoteVideoFitCover: Boolean = true,
+    onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
     onSnapshotRequested: ((SnapshotSource) -> Unit)?,
 ) {
     val activity = LocalContext.current as? Activity
@@ -196,6 +201,7 @@ internal fun FrontlineCallScreen(
     var showSnapshotFlash by remember { mutableStateOf(false) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
+    var remoteVideoFitCover by rememberSaveable { mutableStateOf(initialRemoteVideoFitCover) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
     var pinnedSpotlightId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -223,6 +229,12 @@ internal fun FrontlineCallScreen(
         uiState.phase == CallPhase.InCall || uiState.phase == CallPhase.Waiting
     val remote = uiState.remoteParticipants.firstOrNull()
     val remoteVideoEnabled = remote?.videoEnabled == true
+    val toggleRemoteVideoFit = {
+        val next = !remoteVideoFitCover
+        remoteVideoFitCover = next
+        onRemoteVideoFitChanged?.invoke(next)
+        Unit
+    }
     LaunchedEffect(uiState.localVideoEnabled, remote?.cid, localContentMode) {
         pipSwapped = false
     }
@@ -439,6 +451,8 @@ internal fun FrontlineCallScreen(
                             pinnedSpotlightId = pinnedSpotlightId,
                             selectedSpotlightId = selectedSpotlightId,
                             lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                            remoteVideoFitCover = remoteVideoFitCover,
+                            onToggleRemoteVideoFit = toggleRemoteVideoFit,
                             onPinnedSpotlightIdChanged = { pinnedSpotlightId = it },
                             onSelectedSpotlightIdChanged = { selectedSpotlightId = it },
                             localZoomTransformState = localZoomTransformState,
@@ -502,6 +516,8 @@ internal fun FrontlineCallScreen(
                             pinnedSpotlightId = pinnedSpotlightId,
                             selectedSpotlightId = selectedSpotlightId,
                             lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                            remoteVideoFitCover = remoteVideoFitCover,
+                            onToggleRemoteVideoFit = toggleRemoteVideoFit,
                             onPinnedSpotlightIdChanged = { pinnedSpotlightId = it },
                             onSelectedSpotlightIdChanged = { selectedSpotlightId = it },
                             localZoomTransformState = localZoomTransformState,
@@ -700,6 +716,8 @@ private fun FrontlineContentArea(
     pinnedSpotlightId: String?,
     selectedSpotlightId: String?,
     lastVideoStartedParticipantId: String?,
+    remoteVideoFitCover: Boolean,
+    onToggleRemoteVideoFit: () -> Unit,
     onPinnedSpotlightIdChanged: (String?) -> Unit,
     onSelectedSpotlightIdChanged: (String?) -> Unit,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
@@ -752,6 +770,8 @@ private fun FrontlineContentArea(
                     pinnedSpotlightId = pinnedSpotlightId,
                     selectedSpotlightId = selectedSpotlightId,
                     lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                    remoteVideoFitCover = remoteVideoFitCover,
+                    onToggleRemoteVideoFit = onToggleRemoteVideoFit,
                     onPinnedSpotlightIdChanged = onPinnedSpotlightIdChanged,
                     onSelectedSpotlightIdChanged = onSelectedSpotlightIdChanged,
                     localZoomTransformState = localZoomTransformState,
@@ -773,6 +793,7 @@ private fun FrontlineContentArea(
                     eglContext = eglContext,
                     localRendererEvents = localRendererEvents,
                     remoteRendererEvents = remoteRendererEvents,
+                    remoteVideoFitCover = remoteVideoFitCover,
                     localZoomTransformState = localZoomTransformState,
                     attachLocalRenderer = attachLocalRenderer,
                     detachLocalRenderer = detachLocalRenderer,
@@ -816,6 +837,25 @@ private fun FrontlineContentArea(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = 16.dp, bottom = 16.dp),
+            )
+        }
+
+        if (
+            frontlineShowsRemoteFitButton(
+                isCallSurfacePhase = isCallSurfacePhase,
+                waitingForRemote = waitingForRemote,
+                remoteParticipantCount = uiState.remoteParticipants.size,
+                largeFeedIsRemote = largeFeed == FrontlineFeed.Remote,
+                remoteVideoEnabled = remote?.videoEnabled == true,
+            )
+        ) {
+            FrontlineRemoteFitButton(
+                remoteVideoFitCover = remoteVideoFitCover,
+                strings = strings,
+                onClick = onToggleRemoteVideoFit,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 16.dp),
             )
         }
 
@@ -881,6 +921,8 @@ private fun FrontlineMultiPartyStage(
     pinnedSpotlightId: String?,
     selectedSpotlightId: String?,
     lastVideoStartedParticipantId: String?,
+    remoteVideoFitCover: Boolean,
+    onToggleRemoteVideoFit: () -> Unit,
     onPinnedSpotlightIdChanged: (String?) -> Unit,
     onSelectedSpotlightIdChanged: (String?) -> Unit,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
@@ -933,6 +975,9 @@ private fun FrontlineMultiPartyStage(
         contentSource != null &&
             activeContentSpotlightId != null &&
             effectiveSpotlightId == activeContentSpotlightId
+    val spotlightIsRemote =
+        uiState.remoteParticipants.any { it.cid == effectiveSpotlightId } ||
+            (spotlightIsContent && contentSource.ownerParticipantId != localId)
 
     BoxWithConstraints(modifier = modifier) {
         val viewportWidthPx = with(density) { maxWidth.toPx() }
@@ -948,7 +993,9 @@ private fun FrontlineMultiPartyStage(
             activeContentSpotlightId,
             effectiveSpotlightId,
             spotlightIsContent,
+            spotlightIsRemote,
             contentSource,
+            remoteVideoFitCover,
         ) {
             val baseParticipants =
                 uiState.remoteParticipants.map { participant ->
@@ -998,7 +1045,13 @@ private fun FrontlineMultiPartyStage(
                     activeSpeakerId = null,
                     pinnedParticipantId = if (spotlightIsContent) null else effectiveSpotlightId,
                     contentSource = if (spotlightIsContent) contentSource else null,
-                    userPrefs = UserLayoutPrefs(dominantFit = FitMode.COVER),
+                    userPrefs = UserLayoutPrefs(
+                        dominantFit = if (spotlightIsRemote && !remoteVideoFitCover) {
+                            FitMode.CONTAIN
+                        } else {
+                            FitMode.COVER
+                        },
+                    ),
                 )
             )
         }
@@ -1024,6 +1077,11 @@ private fun FrontlineMultiPartyStage(
                     } else {
                         null
                     }
+                    val showRemoteFitButton =
+                        tile.zOrder == 0 &&
+                            remote != null &&
+                            !isLocal &&
+                            (!isContentTile || contentOwnerCid != localId)
                     val tileWidth = with(density) { tile.frame.width.toDp() }
                     val tileHeight = with(density) { tile.frame.height.toDp() }
                     val tileX = with(density) { tile.frame.x.toDp() }
@@ -1054,6 +1112,9 @@ private fun FrontlineMultiPartyStage(
                         contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
                         cornerRadius = tileCornerRadius,
                         pinned = tileSpotlightId == pinnedSpotlightId,
+                        showRemoteFitButton = showRemoteFitButton,
+                        remoteVideoFitCover = remoteVideoFitCover,
+                        onToggleRemoteVideoFit = onToggleRemoteVideoFit,
                         onSelect = { onSelectedSpotlightIdChanged(tileSpotlightId) },
                         onTogglePinned = {
                             onPinnedSpotlightIdChanged(
@@ -1095,6 +1156,9 @@ private fun FrontlineMultiPartyStage(
                         contentScale = if (pip.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
                         cornerRadius = pipCornerRadius,
                         pinned = false,
+                        showRemoteFitButton = false,
+                        remoteVideoFitCover = remoteVideoFitCover,
+                        onToggleRemoteVideoFit = onToggleRemoteVideoFit,
                         onSelect = { onSelectedSpotlightIdChanged(pip.participantId) },
                         onTogglePinned = {
                             onPinnedSpotlightIdChanged(
@@ -1134,6 +1198,9 @@ private fun FrontlineLayoutTile(
     contentScale: ContentScale,
     cornerRadius: Dp,
     pinned: Boolean,
+    showRemoteFitButton: Boolean,
+    remoteVideoFitCover: Boolean,
+    onToggleRemoteVideoFit: () -> Unit,
     onSelect: () -> Unit,
     onTogglePinned: () -> Unit,
     strings: Map<SerenadaString, String>?,
@@ -1241,6 +1308,17 @@ private fun FrontlineLayoutTile(
             )
         }
 
+        if (showRemoteFitButton) {
+            FrontlineRemoteFitButton(
+                remoteVideoFitCover = remoteVideoFitCover,
+                strings = strings,
+                onClick = onToggleRemoteVideoFit,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp),
+            )
+        }
+
         if (showLocalVideoAccent) {
             Box(
                 modifier = Modifier
@@ -1286,6 +1364,7 @@ private fun FrontlineLargeSurface(
     eglContext: EglBase.Context,
     localRendererEvents: RendererCommon.RendererEvents,
     remoteRendererEvents: RendererCommon.RendererEvents,
+    remoteVideoFitCover: Boolean,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
     attachLocalRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
@@ -1322,7 +1401,7 @@ private fun FrontlineLargeSurface(
                 onAttach = { renderer -> attachRemoteRenderer(renderer, remoteRendererEvents) },
                 onDetach = detachRemoteRenderer,
                 mirror = false,
-                contentScale = ContentScale.Crop,
+                contentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
                 isMediaOverlay = false,
             )
         }
@@ -2087,6 +2166,27 @@ private fun FrontlineSheetItem(
 }
 
 @Composable
+private fun FrontlineRemoteFitButton(
+    remoteVideoFitCover: Boolean,
+    strings: Map<SerenadaString, String>?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .size(44.dp)
+            .background(Color.Black.copy(alpha = 0.4f), CircleShape),
+    ) {
+        Icon(
+            imageVector = if (remoteVideoFitCover) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+            contentDescription = resolveString(SerenadaString.CallToggleVideoFit, strings),
+            tint = Color.White,
+        )
+    }
+}
+
+@Composable
 private fun FrontlineNameChip(
     label: String,
     muted: Boolean,
@@ -2235,6 +2335,19 @@ private fun frontlineMoreMenuOpensAudioRouteDirectly(
     screenSharingEnabled: Boolean,
     inviteEnabled: Boolean,
 ): Boolean = showAudioRouteControl && !screenSharingEnabled && !inviteEnabled
+
+private fun frontlineShowsRemoteFitButton(
+    isCallSurfacePhase: Boolean,
+    waitingForRemote: Boolean,
+    remoteParticipantCount: Int,
+    largeFeedIsRemote: Boolean,
+    remoteVideoEnabled: Boolean,
+): Boolean =
+    isCallSurfacePhase &&
+        !waitingForRemote &&
+        remoteParticipantCount <= 1 &&
+        largeFeedIsRemote &&
+        remoteVideoEnabled
 
 private data class FrontlinePipSize(val width: Dp, val height: Dp)
 

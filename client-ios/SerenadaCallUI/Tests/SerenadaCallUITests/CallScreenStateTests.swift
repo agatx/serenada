@@ -258,6 +258,45 @@ final class CallScreenStateTests: XCTestCase {
         )
     }
 
+    func testFrontlineRemoteFitButtonShowsOnlyForSingleRemoteLargePreview() {
+        XCTAssertTrue(
+            frontlineShowsRemoteFitButton(
+                isCallSurfacePhase: true,
+                waitingForRemote: false,
+                remoteParticipantCount: 1,
+                largeFeedIsRemote: true,
+                remoteVideoEnabled: true
+            )
+        )
+        XCTAssertFalse(
+            frontlineShowsRemoteFitButton(
+                isCallSurfacePhase: true,
+                waitingForRemote: false,
+                remoteParticipantCount: 1,
+                largeFeedIsRemote: false,
+                remoteVideoEnabled: true
+            )
+        )
+        XCTAssertFalse(
+            frontlineShowsRemoteFitButton(
+                isCallSurfacePhase: true,
+                waitingForRemote: false,
+                remoteParticipantCount: 2,
+                largeFeedIsRemote: true,
+                remoteVideoEnabled: true
+            )
+        )
+        XCTAssertFalse(
+            frontlineShowsRemoteFitButton(
+                isCallSurfacePhase: true,
+                waitingForRemote: false,
+                remoteParticipantCount: 1,
+                largeFeedIsRemote: true,
+                remoteVideoEnabled: false
+            )
+        )
+    }
+
     func testFrontlineWaitingOnlyWhenCallSurfaceHasNoRemoteParticipants() {
         var state = CallUiState()
         state.phase = .waiting

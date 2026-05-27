@@ -382,6 +382,8 @@ fun SerenadaCallFlow(
             detachRemoteSinkForCid = detachRemoteSinkForCid,
             attachRemoteSink = attachRemoteSink,
             detachRemoteSink = detachRemoteSink,
+            initialRemoteVideoFitCover = initialRemoteVideoFitCover,
+            onRemoteVideoFitChanged = onRemoteVideoFitChanged,
             onSnapshotRequested = onSnapshotRequested,
         )
     } else {
