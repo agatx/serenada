@@ -1005,13 +1005,16 @@ export class MediaEngine {
             peer.isSettingRemoteAnswerPending = true;
             await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
             peer.isSettingRemoteAnswerPending = false;
-            const completedOfferId = peer.pendingLocalOfferId ?? offerId;
-            peer.pendingLocalOfferId = null;
-            peer.currentNegotiationId = completedOfferId;
+            // Only clear the pending offer we actually completed. The await above yields to
+            // the event loop, so a renegotiation offer (e.g. an ICE restart) can reassign
+            // pendingLocalOfferId before this runs; clobbering it would later drop that
+            // offer's answer as a "stale offerId" and stall renegotiation.
+            if (peer.pendingLocalOfferId === offerId) peer.pendingLocalOfferId = null;
+            peer.currentNegotiationId = offerId;
             peer.ignoredOfferId = null;
             if (peer.offerTimeout) { window.clearTimeout(peer.offerTimeout); peer.offerTimeout = null; }
             peer.pendingIceRestart = false;
-            await this.flushPendingRemoteIce(peer, completedOfferId);
+            await this.flushPendingRemoteIce(peer, offerId);
         } catch (err) {
             const peer = this.peers.get(fromCid);
             if (peer) peer.isSettingRemoteAnswerPending = false;

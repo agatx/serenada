@@ -481,12 +481,20 @@ internal class PeerNegotiationEngine(
             handler.post {
                 settingRemoteAnswerCids.remove(remoteCid)
                 if (success) {
-                    val completedOfferId = pendingLocalOfferIds.remove(remoteCid) ?: offerId
-                    currentNegotiationIds[remoteCid] = completedOfferId
+                    // We just completed the offer identified by `offerId` (validated above).
+                    // Only clear the pending entry if it still refers to that same offer: a
+                    // renegotiation offer (e.g. a "pending-retry" ICE restart fired synchronously
+                    // from the STABLE signaling callback) can replace it with a newer offerId
+                    // before this async callback runs. Clobbering that newer id would make us
+                    // drop the new offer's answer as a "stale offerId" and stall in Reconnecting.
+                    if (pendingLocalOfferIds[remoteCid] == offerId) {
+                        pendingLocalOfferIds.remove(remoteCid)
+                    }
+                    currentNegotiationIds[remoteCid] = offerId
                     ignoredOfferIds.remove(remoteCid)
                     clearOfferTimeout(remoteCid)
                     slot.clearPendingIceRestart()
-                    flushPendingRemoteIce(remoteCid, completedOfferId, slot)
+                    flushPendingRemoteIce(remoteCid, offerId, slot)
                     updateAggregatePeerState()
                     onConnectionStatusUpdate()
                 } else if (shouldIOffer(remoteCid)) {
