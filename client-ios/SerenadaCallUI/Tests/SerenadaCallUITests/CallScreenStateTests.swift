@@ -209,6 +209,55 @@ final class CallScreenStateTests: XCTestCase {
         )
     }
 
+    func testFrontlineMoreOpensAudioRouteDirectlyOnlyWhenAudioIsOnlyItem() {
+        XCTAssertTrue(
+            frontlineMoreMenuOpensAudioRouteDirectly(
+                showsAudioRoute: true,
+                screenSharingEnabled: false,
+                inviteEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            frontlineMoreMenuOpensAudioRouteDirectly(
+                showsAudioRoute: false,
+                screenSharingEnabled: false,
+                inviteEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            frontlineMoreMenuOpensAudioRouteDirectly(
+                showsAudioRoute: true,
+                screenSharingEnabled: true,
+                inviteEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            frontlineMoreMenuOpensAudioRouteDirectly(
+                showsAudioRoute: true,
+                screenSharingEnabled: false,
+                inviteEnabled: true
+            )
+        )
+    }
+
+    func testFrontlinePipSizeUsesShorterDimensionInLandscape() {
+        XCTAssertEqual(
+            frontlinePipSize(containerSize: CGSize(width: 390, height: 844), inPanel: false),
+            CGSize(width: 100, height: 128)
+        )
+        XCTAssertEqual(
+            frontlinePipSize(containerSize: CGSize(width: 844, height: 390), inPanel: false),
+            CGSize(width: 100, height: 128)
+        )
+    }
+
+    func testFrontlinePipSizeKeepsPanelSize() {
+        XCTAssertEqual(
+            frontlinePipSize(containerSize: CGSize(width: 1366, height: 1024), inPanel: true),
+            CGSize(width: 220, height: 280)
+        )
+    }
+
     func testFrontlineWaitingOnlyWhenCallSurfaceHasNoRemoteParticipants() {
         var state = CallUiState()
         state.phase = .waiting

@@ -280,6 +280,19 @@ internal fun FrontlineCallScreen(
     val showMoreButton =
         isCallSurfacePhase &&
             (showAudioRouteControl || config.screenSharingEnabled || config.inviteControlsEnabled)
+    val moreOpensAudioRouteDirectly =
+        frontlineMoreMenuOpensAudioRouteDirectly(
+            showAudioRouteControl = showAudioRouteControl,
+            screenSharingEnabled = config.screenSharingEnabled,
+            inviteEnabled = config.inviteControlsEnabled,
+        )
+    val openMoreOrAudioRoute = {
+        if (moreOpensAudioRouteDirectly) {
+            isAudioRouteSheetVisible = true
+        } else {
+            isMoreSheetVisible = true
+        }
+    }
     val snapshotSource =
         if (
             config.snapshotEnabled &&
@@ -377,20 +390,11 @@ internal fun FrontlineCallScreen(
                     else -> 260.dp
                 }
                 val pipInPanel = isTabletLandscape && pipFeed != null
-                val pipWidth = when {
-                    pipInPanel -> 220.dp
-                    maxWidth >= 1100.dp -> 172.dp
-                    maxWidth >= 720.dp -> 152.dp
-                    maxWidth >= 480.dp -> 120.dp
-                    else -> 100.dp
-                }
-                val pipHeight = when {
-                    pipInPanel -> 280.dp
-                    maxWidth >= 1100.dp -> 220.dp
-                    maxWidth >= 720.dp -> 196.dp
-                    maxWidth >= 480.dp -> 154.dp
-                    else -> 128.dp
-                }
+                val pipSize = frontlinePipSize(
+                    containerWidth = maxWidth,
+                    containerHeight = maxHeight,
+                    inPanel = pipInPanel,
+                )
                 val pip: @Composable (Modifier) -> Unit = { modifier ->
                     if (pipFeed != null) {
                         FrontlinePip(
@@ -398,8 +402,8 @@ internal fun FrontlineCallScreen(
                             uiState = uiState,
                             remote = remote,
                             eglContext = eglContext,
-                            width = pipWidth,
-                            height = pipHeight,
+                            width = pipSize.width,
+                            height = pipSize.height,
                             showSwapHint = canSwapPip,
                             onClick = {
                                 if (canSwapPip) {
@@ -473,7 +477,7 @@ internal fun FrontlineCallScreen(
                             onFlipCamera = onFlipCamera,
                             onToggleFlashlight = onToggleFlashlight,
                             onSnapshotFlash = { showSnapshotFlash = true },
-                            onMore = { isMoreSheetVisible = true },
+                            onMore = openMoreOrAudioRoute,
                             onEndCall = onEndCall,
                             strings = strings,
                             modifier = Modifier.width(panelWidth).fillMaxHeight(),
@@ -536,7 +540,7 @@ internal fun FrontlineCallScreen(
                             onFlipCamera = onFlipCamera,
                             onToggleFlashlight = onToggleFlashlight,
                             onSnapshotFlash = { showSnapshotFlash = true },
-                            onMore = { isMoreSheetVisible = true },
+                            onMore = openMoreOrAudioRoute,
                             onEndCall = onEndCall,
                             strings = strings,
                             modifier = Modifier.fillMaxWidth(),
@@ -630,7 +634,7 @@ internal fun FrontlineCallScreen(
                 }
 
                 FrontlineMoreSheet(
-                    visible = isMoreSheetVisible,
+                    visible = isMoreSheetVisible && !moreOpensAudioRouteDirectly,
                     audioRouteDevice = currentAudioRoute,
                     audioRouteOptions = audioRouteOptions,
                     screenSharingEnabled = config.screenSharingEnabled,
@@ -1990,6 +1994,7 @@ private fun FrontlineMoreSheet(
                             } else {
                                 resolveString(SerenadaString.FrontlineShareScreen, strings)
                             },
+                            danger = isScreenSharing,
                             onClick = onToggleScreenShare,
                         )
                     }
@@ -2041,8 +2046,10 @@ private fun FrontlineSheetItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     onClick: () -> Unit,
+    danger: Boolean = false,
 ) {
     val shape = RoundedCornerShape(16.dp)
+    val background = if (danger) FrontlineDanger else FrontlineSheetRow
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -2052,7 +2059,7 @@ private fun FrontlineSheetItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(shape)
-                .background(FrontlineSheetRow)
+                .background(background)
                 .clickable(onClick = onClick)
                 .padding(horizontal = 18.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -2222,6 +2229,31 @@ private fun frontlineIncludesNormalLocalStageTile(
     activeContentOwnerId: String?,
     contentTileIsSpotlight: Boolean,
 ): Boolean = activeContentOwnerId != localSpotlightId || contentTileIsSpotlight
+
+private fun frontlineMoreMenuOpensAudioRouteDirectly(
+    showAudioRouteControl: Boolean,
+    screenSharingEnabled: Boolean,
+    inviteEnabled: Boolean,
+): Boolean = showAudioRouteControl && !screenSharingEnabled && !inviteEnabled
+
+private data class FrontlinePipSize(val width: Dp, val height: Dp)
+
+private fun frontlinePipSize(
+    containerWidth: Dp,
+    containerHeight: Dp,
+    inPanel: Boolean,
+): FrontlinePipSize {
+    if (inPanel) {
+        return FrontlinePipSize(width = 220.dp, height = 280.dp)
+    }
+    val referenceWidth = if (containerWidth > containerHeight) containerHeight else containerWidth
+    return when {
+        referenceWidth >= 1100.dp -> FrontlinePipSize(width = 172.dp, height = 220.dp)
+        referenceWidth >= 720.dp -> FrontlinePipSize(width = 152.dp, height = 196.dp)
+        referenceWidth >= 480.dp -> FrontlinePipSize(width = 120.dp, height = 154.dp)
+        else -> FrontlinePipSize(width = 100.dp, height = 128.dp)
+    }
+}
 
 private fun String.frontlineContentSpotlightId(): String = "$FRONTLINE_CONTENT_SPOTLIGHT_PREFIX$this"
 

@@ -13,6 +13,7 @@ private let frontlineDim = Color(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xAA 
 private let frontlineSheet = Color(red: 0x15 / 255, green: 0x16 / 255, blue: 0x1A / 255)
 private let frontlineSheetRow = Color.white.opacity(0.09)
 private let frontlineContentSpotlightPrefix = "content:"
+private let frontlineSheetAnimation = Animation.interactiveSpring(response: 0.32, dampingFraction: 0.9, blendDuration: 0.05)
 private let frontlineMoreButtonHeightToWidthRatio: CGFloat = 1.62
 private let frontlineLargeVideoAccentLineWidth: CGFloat = 3
 private let frontlinePipVideoAccentLineWidth: CGFloat = 2.5
@@ -66,6 +67,14 @@ func frontlineIncludesNormalLocalStageTile(
     contentTileIsSpotlight: Bool
 ) -> Bool {
     activeContentOwnerId != localSpotlightId || contentTileIsSpotlight
+}
+
+func frontlineMoreMenuOpensAudioRouteDirectly(
+    showsAudioRoute: Bool,
+    screenSharingEnabled: Bool,
+    inviteEnabled: Bool
+) -> Bool {
+    showsAudioRoute && !screenSharingEnabled && !inviteEnabled
 }
 
 struct FrontlineCallScreenView: View {
@@ -150,7 +159,7 @@ struct FrontlineCallScreenView: View {
             let panelWidth = isLandscape ? (geometry.size.width >= 720 ? 320.0 : 260.0) : geometry.size.width
             let pipFeed = pipFeed
             let pipInPanel = isTabletLandscape && pipFeed != nil
-            let pipSize = frontlinePipSize(containerWidth: geometry.size.width, inPanel: pipInPanel)
+            let pipSize = frontlinePipSize(containerSize: geometry.size, inPanel: pipInPanel)
 
             ZStack {
                 frontlineBlack.ignoresSafeArea()
@@ -303,6 +312,14 @@ struct FrontlineCallScreenView: View {
 
     private var shouldShowMoreButton: Bool {
         isCallSurfacePhase && (showsAudioRoute || config.screenSharingEnabled || config.inviteControlsEnabled)
+    }
+
+    private var moreOpensAudioRouteDirectly: Bool {
+        frontlineMoreMenuOpensAudioRouteDirectly(
+            showsAudioRoute: showsAudioRoute,
+            screenSharingEnabled: config.screenSharingEnabled,
+            inviteEnabled: config.inviteControlsEnabled
+        )
     }
 
     @ViewBuilder
@@ -529,7 +546,7 @@ struct FrontlineCallScreenView: View {
             onFlipCamera: onFlipCamera,
             onToggleFlashlight: onToggleFlashlight,
             onSnapshotFlash: { showSnapshotFlash = true },
-            onMore: { isMoreSheetVisible = true },
+            onMore: openMoreOrAudioRoute,
             onEndCall: onEndCall
         )
     }
@@ -590,62 +607,58 @@ struct FrontlineCallScreenView: View {
     }
 
     private var moreSheet: some View {
-        Group {
-            if isMoreSheetVisible && shouldShowMoreButton {
-                FrontlineMoreSheet(
-                    showsAudioRoute: showsAudioRoute,
-                    audioRouteDevice: currentAudioRoute,
-                    screenSharingEnabled: config.screenSharingEnabled,
-                    inviteEnabled: config.inviteControlsEnabled,
-                    shareEnabled: config.inviteControlsEnabled && roomShareURL != nil,
-                    isScreenSharing: uiState.isScreenSharing,
-                    screenShareExtensionBundleId: screenShareExtensionBundleId,
-                    broadcastTriggerCount: $broadcastTriggerCount,
-                    strings: strings,
-                    onDismiss: { isMoreSheetVisible = false },
-                    onAudioRoute: {
-                        isMoreSheetVisible = false
-                        isAudioRouteSheetVisible = true
-                    },
-                    onToggleScreenShare: {
-                        isMoreSheetVisible = false
-                        onToggleScreenShare()
-                    },
-                    onStartBroadcastPicker: {
-                        onToggleScreenShare()
-                        broadcastTriggerCount += 1
-                        DispatchQueue.main.async {
-                            isMoreSheetVisible = false
-                        }
-                    },
-                    onInvite: {
-                        isMoreSheetVisible = false
-                        Task { _ = await onInviteToRoom() }
-                    },
-                    onShare: {
-                        isMoreSheetVisible = false
-                        showShareSheet = true
-                    }
-                )
+        FrontlineMoreSheet(
+            visible: isMoreSheetVisible && shouldShowMoreButton && !moreOpensAudioRouteDirectly,
+            showsAudioRoute: showsAudioRoute,
+            audioRouteDevice: currentAudioRoute,
+            screenSharingEnabled: config.screenSharingEnabled,
+            inviteEnabled: config.inviteControlsEnabled,
+            shareEnabled: config.inviteControlsEnabled && roomShareURL != nil,
+            isScreenSharing: uiState.isScreenSharing,
+            screenShareExtensionBundleId: screenShareExtensionBundleId,
+            broadcastTriggerCount: $broadcastTriggerCount,
+            strings: strings,
+            onDismiss: { setMoreSheetVisible(false) },
+            onAudioRoute: {
+                withAnimation(frontlineSheetAnimation) {
+                    isMoreSheetVisible = false
+                    isAudioRouteSheetVisible = true
+                }
+            },
+            onToggleScreenShare: {
+                setMoreSheetVisible(false)
+                onToggleScreenShare()
+            },
+            onStartBroadcastPicker: {
+                onToggleScreenShare()
+                broadcastTriggerCount += 1
+                DispatchQueue.main.async {
+                    setMoreSheetVisible(false)
+                }
+            },
+            onInvite: {
+                setMoreSheetVisible(false)
+                Task { _ = await onInviteToRoom() }
+            },
+            onShare: {
+                setMoreSheetVisible(false)
+                showShareSheet = true
             }
-        }
+        )
     }
 
     private var audioRouteSheet: some View {
-        Group {
-            if isAudioRouteSheetVisible {
-                FrontlineAudioRouteSheet(
-                    devices: audioRouteOptions,
-                    currentDevice: currentAudioRoute,
-                    strings: strings,
-                    onDismiss: { isAudioRouteSheetVisible = false },
-                    onSelect: { device in
-                        isAudioRouteSheetVisible = false
-                        onSelectAudioDevice(device)
-                    }
-                )
+        FrontlineAudioRouteSheet(
+            visible: isAudioRouteSheetVisible,
+            devices: audioRouteOptions,
+            currentDevice: currentAudioRoute,
+            strings: strings,
+            onDismiss: { setAudioRouteSheetVisible(false) },
+            onSelect: { device in
+                setAudioRouteSheetVisible(false)
+                onSelectAudioDevice(device)
             }
-        }
+        )
     }
 
     private var localDisplayName: String {
@@ -664,6 +677,28 @@ struct FrontlineCallScreenView: View {
         }
     }
 
+    private func openMoreOrAudioRoute() {
+        withAnimation(frontlineSheetAnimation) {
+            if moreOpensAudioRouteDirectly {
+                isAudioRouteSheetVisible = true
+            } else {
+                isMoreSheetVisible = true
+            }
+        }
+    }
+
+    private func setMoreSheetVisible(_ visible: Bool) {
+        withAnimation(frontlineSheetAnimation) {
+            isMoreSheetVisible = visible
+        }
+    }
+
+    private func setAudioRouteSheetVisible(_ visible: Bool) {
+        withAnimation(frontlineSheetAnimation) {
+            isAudioRouteSheetVisible = visible
+        }
+    }
+
     private func updateLastVideoStartedParticipant() {
         let next = Dictionary(uniqueKeysWithValues: uiState.remoteParticipants.map { ($0.cid, $0.videoEnabled) })
         if !previousRemoteVideoEnabled.isEmpty {
@@ -675,11 +710,12 @@ struct FrontlineCallScreenView: View {
     }
 }
 
-private func frontlinePipSize(containerWidth: CGFloat, inPanel: Bool) -> CGSize {
+func frontlinePipSize(containerSize: CGSize, inPanel: Bool) -> CGSize {
     if inPanel { return CGSize(width: 220, height: 280) }
-    if containerWidth >= 1100 { return CGSize(width: 172, height: 220) }
-    if containerWidth >= 720 { return CGSize(width: 152, height: 196) }
-    if containerWidth >= 480 { return CGSize(width: 120, height: 154) }
+    let referenceWidth = containerSize.width > containerSize.height ? containerSize.height : containerSize.width
+    if referenceWidth >= 1100 { return CGSize(width: 172, height: 220) }
+    if referenceWidth >= 720 { return CGSize(width: 152, height: 196) }
+    if referenceWidth >= 480 { return CGSize(width: 120, height: 154) }
     return CGSize(width: 100, height: 128)
 }
 
@@ -1142,7 +1178,36 @@ private struct FrontlineEndButton: View {
     }
 }
 
+private struct FrontlineBottomSheetContainer<Content: View>: View {
+    let visible: Bool
+    let onDismiss: () -> Void
+    private let content: Content
+
+    init(visible: Bool, onDismiss: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.visible = visible
+        self.onDismiss = onDismiss
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            if visible {
+                Color.black.opacity(0.5)
+                    .ignoresSafeArea()
+                    .onTapGesture(perform: onDismiss)
+                    .transition(.opacity)
+
+                content
+                    .transition(.move(edge: .bottom))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .allowsHitTesting(visible)
+    }
+}
+
 private struct FrontlineMoreSheet: View {
+    let visible: Bool
     let showsAudioRoute: Bool
     let audioRouteDevice: AudioDevice?
     let screenSharingEnabled: Bool
@@ -1160,11 +1225,7 @@ private struct FrontlineMoreSheet: View {
     let onShare: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Color.black.opacity(0.5)
-                .ignoresSafeArea()
-                .onTapGesture(perform: onDismiss)
-
+        FrontlineBottomSheetContainer(visible: visible, onDismiss: onDismiss) {
             VStack(spacing: 0) {
                 Capsule()
                     .fill(Color.white.opacity(0.24))
@@ -1188,6 +1249,7 @@ private struct FrontlineMoreSheet: View {
                         title: isScreenSharing
                             ? resolveString(.frontlineStopScreenShare, overrides: strings)
                             : resolveString(.frontlineShareScreen, overrides: strings),
+                        danger: isScreenSharing,
                         onClick: screenShareAction
                     )
                     .overlay {
@@ -1240,7 +1302,6 @@ private struct FrontlineMoreSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .ignoresSafeArea(edges: .bottom)
         }
-        .transition(.opacity)
     }
 
     private func screenShareAction() {
@@ -1253,6 +1314,7 @@ private struct FrontlineMoreSheet: View {
 }
 
 private struct FrontlineAudioRouteSheet: View {
+    let visible: Bool
     let devices: [AudioDevice]
     let currentDevice: AudioDevice?
     let strings: [SerenadaString: String]?
@@ -1260,11 +1322,7 @@ private struct FrontlineAudioRouteSheet: View {
     let onSelect: (AudioDevice) -> Void
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Color.black.opacity(0.5)
-                .ignoresSafeArea()
-                .onTapGesture(perform: onDismiss)
-
+        FrontlineBottomSheetContainer(visible: visible, onDismiss: onDismiss) {
             VStack(spacing: 0) {
                 Capsule()
                     .fill(Color.white.opacity(0.24))
@@ -1307,7 +1365,6 @@ private struct FrontlineAudioRouteSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .ignoresSafeArea(edges: .bottom)
         }
-        .transition(.opacity)
     }
 
     private func isSelected(_ device: AudioDevice) -> Bool {
@@ -1359,6 +1416,7 @@ private struct FrontlineAudioRouteItem: View {
 private struct FrontlineSheetItem: View {
     let systemImage: String
     let title: String
+    var danger = false
     let onClick: () -> Void
 
     var body: some View {
@@ -1378,7 +1436,7 @@ private struct FrontlineSheetItem: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-            .background(frontlineSheetRow)
+            .background(danger ? frontlineDanger : frontlineSheetRow)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
