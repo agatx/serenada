@@ -559,20 +559,23 @@ final class PeerNegotiationEngine {
                 self.settingRemoteAnswerCids.remove(remoteCid)
                 guard let slot else { return }
                 if success {
-                    // We just completed the offer identified by `offerId` (validated above).
-                    // Only clear the pending entry if it still refers to that same offer: a
-                    // renegotiation offer (e.g. a "pending-retry" ICE restart fired synchronously
-                    // from the STABLE signaling callback) can replace it with a newer offerId
-                    // before this async callback runs. Clobbering that newer id would make us
-                    // drop the new offer's answer as a "stale offerId" and stall in Reconnecting.
-                    if self.pendingLocalOfferIds[remoteCid] == offerId {
+                    // The offer this answer completes is whatever was pending when we validated
+                    // it above; `pendingOfferId` also covers the legacy/no-offerId path, where
+                    // `offerId` is the sentinel rather than our real local id.
+                    let completedOfferId = pendingOfferId ?? offerId
+                    // Finalize negotiation state only while the slot's pending offer is still the
+                    // one we completed. A renegotiation offer (e.g. a "pending-retry" ICE restart
+                    // from the STABLE signaling callback) can replace it during this async
+                    // setRemoteDescription; finalizing then would clobber the newer offer's id and
+                    // cancel its per-peer offer-timeout / pending-retry.
+                    if self.pendingLocalOfferIds[remoteCid] == completedOfferId {
                         self.pendingLocalOfferIds.removeValue(forKey: remoteCid)
+                        self.currentNegotiationIds[remoteCid] = completedOfferId
+                        self.ignoredOfferIds.removeValue(forKey: remoteCid)
+                        self.clearOfferTimeout(remoteCid: remoteCid)
+                        slot.clearPendingIceRestart()
                     }
-                    self.currentNegotiationIds[remoteCid] = offerId
-                    self.ignoredOfferIds.removeValue(forKey: remoteCid)
-                    self.clearOfferTimeout(remoteCid: remoteCid)
-                    slot.clearPendingIceRestart()
-                    self.flushPendingRemoteIce(remoteCid: remoteCid, offerId: offerId, slot: slot)
+                    self.flushPendingRemoteIce(remoteCid: remoteCid, offerId: completedOfferId, slot: slot)
                     self.updateAggregatePeerState()
                     self.onConnectionStatusUpdate()
                 } else if self.shouldIOffer(remoteCid: remoteCid) {
