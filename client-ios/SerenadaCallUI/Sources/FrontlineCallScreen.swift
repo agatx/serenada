@@ -957,6 +957,12 @@ private struct FrontlineAudioLarge: View {
     }
 }
 
+func formatCallElapsed(startedAtMs: Int64?, fallbackStartedAtMs: Int64, nowMs: Int64) -> String {
+    let startedAt = startedAtMs ?? fallbackStartedAtMs
+    let elapsedSeconds = max(0, (nowMs - startedAt) / 1000)
+    return String(format: "%02lld:%02lld", elapsedSeconds / 60, elapsedSeconds % 60)
+}
+
 private struct FrontlineTimerLabel: View {
     let startedAtMs: Int64?
     @State private var nowMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -977,9 +983,11 @@ private struct FrontlineTimerLabel: View {
     }
 
     private var elapsedLabel: String {
-        let startedAt = startedAtMs ?? fallbackStartedAtMs
-        let elapsedSeconds = max(0, (nowMs - startedAt) / 1000)
-        return String(format: "%02lld:%02lld", elapsedSeconds / 60, elapsedSeconds % 60)
+        formatCallElapsed(
+            startedAtMs: startedAtMs,
+            fallbackStartedAtMs: fallbackStartedAtMs,
+            nowMs: nowMs
+        )
     }
 }
 

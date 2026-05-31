@@ -264,10 +264,12 @@ private final class SystemPictureInPictureSourceView: UIView {
             timerLabel.text = nil
             return
         }
-        let startedAtMs = participant.callStartedAtMs ?? fallbackStartedAtMs
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let elapsedSeconds = max(0, (nowMs - startedAtMs) / 1000)
-        timerLabel.text = String(format: "%02lld:%02lld", elapsedSeconds / 60, elapsedSeconds % 60)
+        timerLabel.text = formatCallElapsed(
+            startedAtMs: participant.callStartedAtMs,
+            fallbackStartedAtMs: fallbackStartedAtMs,
+            nowMs: nowMs
+        )
     }
 }
 
@@ -366,11 +368,12 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         )
     }
 
-    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-        coordinator.detachRenderer()
+    static func dismantleUIView(_ uiView: SystemPictureInPictureSourceView, coordinator: Coordinator) {
+        coordinator.cleanup()
     }
 
-    final class Coordinator: NSObject, AVPictureInPictureControllerDelegate {
+    @MainActor
+    final class Coordinator: NSObject, @preconcurrency AVPictureInPictureControllerDelegate {
         weak var rendererProvider: CallRendererProvider?
 
         private weak var sourceView: SystemPictureInPictureSourceView?
@@ -411,7 +414,11 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
 
             ensureController()
             contentController?.update(participant: participant, avatarImage: avatarImage)
-            attachRenderer(participant: participant)
+            if controller?.isPictureInPictureActive == true {
+                attachRenderer(participant: participant)
+            } else {
+                detachRenderer()
+            }
         }
 
         func detachRenderer() {
@@ -422,22 +429,33 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             }
             guard let source = attachedSource else { return }
             let provider = rendererProvider
-            Task { @MainActor in
-                switch source {
-                case .local:
-                    provider?.detachLocalRenderer(videoView)
-                case .remote(let cid):
-                    if let cid {
-                        provider?.detachRemoteRenderer(videoView, forCid: cid)
-                    } else {
-                        provider?.detachRemoteRenderer(videoView)
-                    }
+            switch source {
+            case .local:
+                provider?.detachLocalRenderer(videoView)
+            case .remote(let cid):
+                if let cid {
+                    provider?.detachRemoteRenderer(videoView, forCid: cid)
+                } else {
+                    provider?.detachRemoteRenderer(videoView)
                 }
             }
             attachedSource = nil
 #else
             attachedSource = nil
 #endif
+        }
+
+        func cleanup() {
+            if controller?.isPictureInPictureActive == true {
+                controller?.stopPictureInPicture()
+            }
+            sourceView?.setPlaceholderVisible(false, animated: false)
+            detachRenderer()
+            controller?.delegate = nil
+            controller = nil
+            contentController = nil
+            currentParticipant = nil
+            currentAvatarImage = nil
         }
 
         private func ensureController() {
@@ -470,16 +488,14 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             detachRenderer()
             let provider = rendererProvider
             let source = participant.source
-            Task { @MainActor in
-                switch source {
-                case .local:
-                    provider?.attachLocalRenderer(videoView)
-                case .remote(let cid):
-                    if let cid {
-                        provider?.attachRemoteRenderer(videoView, forCid: cid)
-                    } else {
-                        provider?.attachRemoteRenderer(videoView)
-                    }
+            switch source {
+            case .local:
+                provider?.attachLocalRenderer(videoView)
+            case .remote(let cid):
+                if let cid {
+                    provider?.attachRemoteRenderer(videoView, forCid: cid)
+                } else {
+                    provider?.attachRemoteRenderer(videoView)
                 }
             }
             attachedSource = source
@@ -495,10 +511,12 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
 
         func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
             updateSourcePlaceholder(visible: true, animated: false)
+            attachCurrentRenderer()
         }
 
         func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
             updateSourcePlaceholder(visible: true, animated: false)
+            attachCurrentRenderer()
         }
 
         func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
@@ -507,6 +525,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
 
         func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
             updateSourcePlaceholder(visible: false, animated: true)
+            detachRenderer()
         }
 
         private func updateSourcePlaceholder(visible: Bool, animated: Bool) {
@@ -523,6 +542,11 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
                 avatarImage: currentAvatarImage,
                 placeholderVisible: true
             )
+        }
+
+        private func attachCurrentRenderer() {
+            guard let currentParticipant else { return }
+            attachRenderer(participant: currentParticipant)
         }
     }
 }

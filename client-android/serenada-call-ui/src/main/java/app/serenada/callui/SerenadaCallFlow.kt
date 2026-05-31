@@ -361,6 +361,7 @@ fun SerenadaCallFlow(
             enabled = config.systemPictureInPictureEnabled,
             uiState = uiState,
             sourceRect = systemPipSourceRect,
+            onPictureInPictureDismissRequested = onDismiss,
         )
     val systemPipModifier =
         androidx.compose.ui.Modifier

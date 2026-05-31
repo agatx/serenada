@@ -260,13 +260,8 @@ internal fun CallScreen(
             )
         }
 
-    val isCallChromeVisible = !isSystemPictureInPicture
-    val areControlsActuallyVisible = areControlsVisible && isCallChromeVisible
-
     val toggleControlsVisibility: () -> Unit = {
-        if (isSystemPictureInPicture) {
-            Unit
-        } else if (areControlsVisible) {
+        if (areControlsVisible) {
             areControlsVisible = false
             wereControlsLastHiddenByAutoHide = false
         } else {
@@ -280,7 +275,7 @@ internal fun CallScreen(
 
     // Auto-hide controls
     LaunchedEffect(areControlsVisible, uiState.phase, isControlsAutoHideEnabled) {
-        if (areControlsActuallyVisible && uiState.phase == CallPhase.InCall && isControlsAutoHideEnabled) {
+        if (areControlsVisible && uiState.phase == CallPhase.InCall && isControlsAutoHideEnabled) {
             delay(8000)
             wereControlsLastHiddenByAutoHide = true
             areControlsVisible = false
@@ -308,11 +303,15 @@ internal fun CallScreen(
     SerenadaTheme(theme) {
       androidx.compose.runtime.CompositionLocalProvider(LocalAvatarCache provides avatarCache) {
         if (isSystemPictureInPicture) {
+            val systemPipRemoteCid =
+                pinnedParticipantId?.takeIf { pinned ->
+                    uiState.remoteParticipants.any { participant -> participant.cid == pinned }
+                } ?: uiState.remoteParticipants.firstOrNull()?.cid
             val feed =
                 selectSystemPictureInPictureFeed(
                     localIsLarge = effectiveLocalLarge,
                     localVideoEnabled = uiState.localVideoEnabled,
-                    hasRemote = uiState.remoteParticipants.isNotEmpty(),
+                    remoteCid = systemPipRemoteCid,
                 )
             SystemPictureInPictureContent(
                 uiState = uiState,
@@ -322,8 +321,8 @@ internal fun CallScreen(
                 remoteContentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
                 attachLocalSink = attachLocalSink,
                 detachLocalSink = detachLocalSink,
-                attachRemoteSink = attachRemoteSink,
-                detachRemoteSink = detachRemoteSink,
+                attachRemoteSinkForCid = attachRemoteSinkForCid,
+                detachRemoteSinkForCid = detachRemoteSinkForCid,
             )
         } else {
         BoxWithConstraints(
@@ -353,7 +352,7 @@ internal fun CallScreen(
                         uiState.connectionState == "CONNECTED")
         val animatedPipBottomPadding by
         animateDpAsState(
-            targetValue = if (areControlsActuallyVisible) 130.dp else 48.dp,
+            targetValue = if (areControlsVisible) 130.dp else 48.dp,
             animationSpec = tween(durationMillis = controlsAnimationDuration),
             label = "pip_bottom_padding"
         )
@@ -366,7 +365,7 @@ internal fun CallScreen(
         val pipInnerCornerRadius =
             if (pipCornerRadius > pipContentPadding) pipCornerRadius - pipContentPadding else 0.dp
         val mainVideoBottomPadding by animateDpAsState(
-            targetValue = if (areControlsActuallyVisible) 134.dp else 0.dp,
+            targetValue = if (areControlsVisible) 134.dp else 0.dp,
             animationSpec = tween(durationMillis = controlsAnimationDuration),
             label = "main_video_bottom_padding"
         )
@@ -637,7 +636,7 @@ internal fun CallScreen(
         }
 
         // Debug tap target — only when debug overlay is enabled via config
-        if (config.debugOverlayEnabled && isCallChromeVisible) {
+        if (config.debugOverlayEnabled) {
             Box(
                 modifier =
                     Modifier.align(Alignment.TopStart)
@@ -674,7 +673,7 @@ internal fun CallScreen(
         }
 
         // Waiting State Overlay
-        if (uiState.phase == CallPhase.Waiting && !effectiveLocalLarge && isCallChromeVisible) {
+        if (uiState.phase == CallPhase.Waiting && !effectiveLocalLarge) {
             WaitingOverlay(
                 roomShareUrl = roomShareUrl,
                 onInviteToRoom = onInviteToRoom,
@@ -686,7 +685,7 @@ internal fun CallScreen(
 
         // Reconnecting Indicator
         AnimatedVisibility(
-            visible = showReconnectingBadge && isCallChromeVisible,
+            visible = showReconnectingBadge,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp)
@@ -745,9 +744,9 @@ internal fun CallScreen(
         }
         val snapshotHandler = onSnapshotRequested
         val showSnapshotButton =
-            snapshotSource != null && snapshotHandler != null && areControlsActuallyVisible
+            snapshotSource != null && snapshotHandler != null && areControlsVisible
 
-        if (isCallChromeVisible && (showFlashButton || showRemoteFitButton || showSnapshotButton)) {
+        if (showFlashButton || showRemoteFitButton || showSnapshotButton) {
             val configuration = androidx.compose.ui.platform.LocalConfiguration.current
             val isLandscape = configuration.orientation ==
                 android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -797,18 +796,22 @@ internal fun CallScreen(
             }
 
             val snapshotIcon: @Composable () -> Unit = {
-                if (showSnapshotButton && snapshotHandler != null && snapshotSource != null) {
-                    IconButton(
-                        onClick = { snapshotHandler(snapshotSource) },
-                        modifier = Modifier.size(44.dp)
-                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                            .testTag("call.takeSnapshot")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PhotoCamera,
-                            contentDescription = resolveString(SerenadaString.CallTakeSnapshot, strings),
-                            tint = Color.White
-                        )
+                if (areControlsVisible) {
+                    snapshotHandler?.let { handler ->
+                        snapshotSource?.let { source ->
+                            IconButton(
+                                onClick = { handler(source) },
+                                modifier = Modifier.size(44.dp)
+                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                    .testTag("call.takeSnapshot")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = resolveString(SerenadaString.CallTakeSnapshot, strings),
+                                    tint = Color.White
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -838,7 +841,7 @@ internal fun CallScreen(
 
         // Controls Bar
         AnimatedVisibility(
-            visible = areControlsActuallyVisible,
+            visible = areControlsVisible,
             enter =
                 fadeIn(animationSpec = tween(durationMillis = controlsAnimationDuration)) +
                         slideInVertically(
@@ -1540,7 +1543,7 @@ private fun MultiPartyStage(
                 val topChromePx = with(density) { 20.dp.toPx() }
                 val bottomChromePx = with(density) { (bottomPadding + 4.dp).toPx() }
 
-                if (useComputedLayout && localCid != null) {
+                if (useComputedLayout) {
                 // Focus/content mode: use computeLayout for primary + filmstrip rendering
                 val contentSource = if (hasLocalContent) {
                     val type = when {

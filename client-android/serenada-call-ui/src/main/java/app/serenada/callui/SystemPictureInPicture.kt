@@ -44,9 +44,10 @@ import kotlin.math.roundToInt
 import org.webrtc.EglBase
 import org.webrtc.VideoSink
 
-internal enum class SystemPictureInPictureFeed {
-    Local,
-    Remote,
+internal sealed interface SystemPictureInPictureFeed {
+    object Local : SystemPictureInPictureFeed
+
+    data class Remote(val cid: String?) : SystemPictureInPictureFeed
 }
 
 /**
@@ -58,13 +59,13 @@ internal enum class SystemPictureInPictureFeed {
 internal fun selectSystemPictureInPictureFeed(
     localIsLarge: Boolean,
     localVideoEnabled: Boolean,
-    hasRemote: Boolean,
+    remoteCid: String?,
 ): SystemPictureInPictureFeed =
     when {
         localIsLarge && localVideoEnabled -> SystemPictureInPictureFeed.Local
-        hasRemote -> SystemPictureInPictureFeed.Remote
+        remoteCid != null -> SystemPictureInPictureFeed.Remote(remoteCid)
         localVideoEnabled -> SystemPictureInPictureFeed.Local
-        else -> SystemPictureInPictureFeed.Remote
+        else -> SystemPictureInPictureFeed.Remote(null)
     }
 
 @Composable
@@ -72,6 +73,7 @@ internal fun rememberSystemPictureInPictureMode(
     enabled: Boolean,
     uiState: CallUiState,
     sourceRect: Rect?,
+    onPictureInPictureDismissRequested: () -> Unit,
 ): Boolean {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -82,12 +84,11 @@ internal fun rememberSystemPictureInPictureMode(
             activity?.packageManager?.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE) == true
     val shouldEnter = supported && uiState.phase.isSystemPipPhase()
     val latestShouldEnter by rememberUpdatedState(shouldEnter)
+    val latestOnPictureInPictureDismissRequested by rememberUpdatedState(onPictureInPictureDismissRequested)
     val latestParams = remember { mutableStateOf<PictureInPictureParams?>(null) }
     var isInPictureInPicture by remember(activity) {
         mutableStateOf(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity?.isInPictureInPictureMode == true)
     }
-    val latestIsInPictureInPicture by rememberUpdatedState(isInPictureInPicture)
-
     DisposableEffect(componentActivity) {
         if (componentActivity == null) return@DisposableEffect onDispose {}
         val listener = Consumer<PictureInPictureModeChangedInfo> { info ->
@@ -115,7 +116,13 @@ internal fun rememberSystemPictureInPictureMode(
     }
 
     DisposableEffect(componentActivity, supported) {
-        if (!supported || componentActivity == null) return@DisposableEffect onDispose {}
+        if (
+            !supported ||
+            componentActivity == null ||
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ) {
+            return@DisposableEffect onDispose {}
+        }
         val listener = Runnable {
             val params = latestParams.value ?: return@Runnable
             if (latestShouldEnter) {
@@ -130,15 +137,7 @@ internal fun rememberSystemPictureInPictureMode(
 
     LaunchedEffect(activity, supported, isInPictureInPicture, shouldEnter) {
         if (supported && isInPictureInPicture && !shouldEnter) {
-            runCatching { activity.finish() }
-        }
-    }
-
-    DisposableEffect(activity, supported) {
-        onDispose {
-            if (supported && latestIsInPictureInPicture) {
-                runCatching { activity.finish() }
-            }
+            latestOnPictureInPictureDismissRequested()
         }
     }
 
@@ -171,12 +170,19 @@ internal fun SystemPictureInPictureContent(
     remoteContentScale: ContentScale,
     attachLocalSink: (VideoSink) -> Unit,
     detachLocalSink: (VideoSink) -> Unit,
-    attachRemoteSink: (VideoSink) -> Unit,
-    detachRemoteSink: (VideoSink) -> Unit,
+    attachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteSinkForCid: (String, VideoSink) -> Unit,
 ) {
-    val remote = uiState.remoteParticipants.firstOrNull()
+    val remote =
+        when (feed) {
+            SystemPictureInPictureFeed.Local -> null
+            is SystemPictureInPictureFeed.Remote -> {
+                feed.cid?.let { cid -> uiState.remoteParticipants.firstOrNull { it.cid == cid } }
+                    ?: uiState.remoteParticipants.firstOrNull()
+            }
+        }
     val showLocalVideo = feed == SystemPictureInPictureFeed.Local && uiState.localVideoEnabled
-    val showRemoteVideo = feed == SystemPictureInPictureFeed.Remote && remote?.videoEnabled == true
+    val showRemoteVideo = feed is SystemPictureInPictureFeed.Remote && remote?.videoEnabled == true
 
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black),
@@ -199,8 +205,12 @@ internal fun SystemPictureInPictureContent(
                     modifier = Modifier.fillMaxSize(),
                     rendererName = "system-pip-remote-${remote.cid}",
                     eglContext = eglContext,
-                    onAttach = attachRemoteSink,
-                    onDetach = detachRemoteSink,
+                    onAttach = { sink ->
+                        remote.cid.let { cid -> attachRemoteSinkForCid(cid, sink) }
+                    },
+                    onDetach = { sink ->
+                        remote.cid.let { cid -> detachRemoteSinkForCid(cid, sink) }
+                    },
                     mirror = false,
                     contentScale = remoteContentScale,
                 )

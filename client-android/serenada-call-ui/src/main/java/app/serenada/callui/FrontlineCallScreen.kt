@@ -442,20 +442,35 @@ internal fun FrontlineCallScreen(
                 }
 
                 if (isSystemPictureInPicture) {
+                    val remoteCids = uiState.remoteParticipants.map { it.cid }.toSet()
+                    val systemPipRemoteCid =
+                        listOf(pinnedSpotlightId, selectedSpotlightId, lastVideoStartedParticipantId)
+                            .firstNotNullOfOrNull { spotlightId ->
+                                when {
+                                    spotlightId == null -> null
+                                    spotlightId in remoteCids -> spotlightId
+                                    spotlightId.isFrontlineContentSpotlightId() -> {
+                                        spotlightId
+                                            .removePrefix(FRONTLINE_CONTENT_SPOTLIGHT_PREFIX)
+                                            .takeIf { it in remoteCids }
+                                    }
+                                    else -> null
+                                }
+                            } ?: remote?.cid
                     SystemPictureInPictureContent(
                         uiState = uiState,
                         feed = selectSystemPictureInPictureFeed(
                             localIsLarge = largeFeed == FrontlineFeed.Local,
                             localVideoEnabled = uiState.localVideoEnabled,
-                            hasRemote = remote != null,
+                            remoteCid = systemPipRemoteCid,
                         ),
                         eglContext = eglContext,
                         localContentScale = if (uiState.isScreenSharing) ContentScale.Fit else ContentScale.Crop,
                         remoteContentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
                         attachLocalSink = attachLocalSink,
                         detachLocalSink = detachLocalSink,
-                        attachRemoteSink = attachRemoteSink,
-                        detachRemoteSink = detachRemoteSink,
+                        attachRemoteSinkForCid = attachRemoteSinkForCid,
+                        detachRemoteSinkForCid = detachRemoteSinkForCid,
                     )
                 } else if (isLandscape) {
                     Row(Modifier.fillMaxSize()) {
