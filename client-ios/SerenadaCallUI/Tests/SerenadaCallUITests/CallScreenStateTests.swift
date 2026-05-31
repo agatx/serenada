@@ -132,6 +132,112 @@ final class CallScreenStateTests: XCTestCase {
         XCTAssertFalse(shouldPreferLargeLocalPreview(localCameraMode: .screenShare))
     }
 
+    func testSystemPictureInPictureSourceSelectorUsesSharedPriority() {
+        let remotes = [remoteParticipant("remote-a"), remoteParticipant("remote-b")]
+
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: true,
+                localVideoEnabled: true,
+                remoteParticipants: remotes
+            ),
+            .local
+        )
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: true,
+                localVideoEnabled: false,
+                remoteParticipants: remotes
+            ),
+            .remote(cid: "remote-a")
+        )
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: false,
+                localVideoEnabled: true,
+                remoteParticipants: []
+            ),
+            .local
+        )
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: false,
+                localVideoEnabled: false,
+                remoteParticipants: []
+            ),
+            .remote(cid: nil)
+        )
+    }
+
+    func testSystemPictureInPictureSourceSelectorUsesPreferredSourceIds() {
+        let remotes = [remoteParticipant("remote-a"), remoteParticipant("remote-b")]
+
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: false,
+                localVideoEnabled: true,
+                remoteParticipants: remotes,
+                preferredSourceIds: ["remote-b"]
+            ),
+            .remote(cid: "remote-b")
+        )
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: false,
+                localVideoEnabled: true,
+                remoteParticipants: remotes,
+                preferredSourceIds: ["local", "remote-b"]
+            ),
+            .local
+        )
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: false,
+                localVideoEnabled: false,
+                remoteParticipants: remotes,
+                preferredSourceIds: ["local", "remote-b"]
+            ),
+            .remote(cid: "remote-b")
+        )
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: false,
+                localVideoEnabled: true,
+                remoteParticipants: remotes,
+                preferredSourceIds: ["content:remote-b"],
+                sourceIdForPreferredSourceId: { sourceId in
+                    sourceId.hasPrefix("content:")
+                        ? String(sourceId.dropFirst("content:".count))
+                        : sourceId
+                }
+            ),
+            .remote(cid: "remote-b")
+        )
+        XCTAssertEqual(
+            selectSystemPictureInPictureSource(
+                localSourceId: "local",
+                localIsPrimary: false,
+                localVideoEnabled: true,
+                remoteParticipants: remotes,
+                preferredSourceIds: ["content:local"],
+                sourceIdForPreferredSourceId: { sourceId in
+                    sourceId.hasPrefix("content:")
+                        ? String(sourceId.dropFirst("content:".count))
+                        : sourceId
+                }
+            ),
+            .local
+        )
+    }
+
     func testPinchZoomAllowedForLargeWorldAndCompositePreview() {
         XCTAssertTrue(
             shouldEnablePinchZoom(
@@ -381,5 +487,14 @@ private func speakerDevice() -> AudioDevice {
         kind: .speakerphone,
         direction: .output,
         status: .available
+    )
+}
+
+private func remoteParticipant(_ cid: String) -> RemoteParticipant {
+    RemoteParticipant(
+        cid: cid,
+        displayName: cid,
+        videoEnabled: true,
+        connectionState: .connected
     )
 }

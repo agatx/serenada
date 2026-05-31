@@ -231,28 +231,20 @@ struct FrontlineCallScreenView: View {
     }
 
     private var currentSystemPictureInPictureSource: SystemPictureInPictureSource {
-        if uiState.remoteParticipants.count > 1 {
-            let spotlightId = pinnedSpotlightId ?? selectedSpotlightId ?? lastVideoStartedParticipantId
-            if spotlightId == localSpotlightId {
-                return .local
+        selectSystemPictureInPictureSource(
+            localSourceId: localSpotlightId,
+            localIsPrimary: uiState.remoteParticipants.count <= 1 && largeFeed == .local,
+            localVideoEnabled: uiState.localVideoEnabled,
+            remoteParticipants: uiState.remoteParticipants,
+            preferredSourceIds: uiState.remoteParticipants.count > 1
+                ? [pinnedSpotlightId, selectedSpotlightId, lastVideoStartedParticipantId]
+                : [],
+            sourceIdForPreferredSourceId: { sourceId in
+                sourceId.isFrontlineContentSpotlightId
+                    ? sourceId.removingFrontlineContentSpotlightPrefix
+                    : sourceId
             }
-            if let remote = uiState.remoteParticipants.first(where: { remote in
-                spotlightId == remote.cid || spotlightId == remote.cid.frontlineContentSpotlightId
-            }) {
-                return .remote(cid: remote.cid)
-            }
-            return .remote(cid: uiState.remoteParticipants.first?.cid)
-        }
-        if largeFeed == .local && uiState.localVideoEnabled {
-            return .local
-        }
-        if let remote {
-            return .remote(cid: remote.cid)
-        }
-        if uiState.localVideoEnabled {
-            return .local
-        }
-        return .remote(cid: nil)
+        )
     }
 
     var body: some View {

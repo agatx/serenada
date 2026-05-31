@@ -13,6 +13,43 @@ enum SystemPictureInPictureSource: Equatable {
     case remote(cid: String?)
 }
 
+func selectSystemPictureInPictureSource(
+    localSourceId: String?,
+    localIsPrimary: Bool,
+    localVideoEnabled: Bool,
+    remoteParticipants: [RemoteParticipant],
+    preferredSourceIds: [String?] = [],
+    sourceIdForPreferredSourceId: (String) -> String? = { $0 }
+) -> SystemPictureInPictureSource {
+    let remoteCids = Set(remoteParticipants.map(\.cid))
+
+    for preferredSourceId in preferredSourceIds {
+        guard let preferredSourceId else { continue }
+        guard let sourceId = sourceIdForPreferredSourceId(preferredSourceId) else { continue }
+        if let localSourceId, sourceId == localSourceId {
+            if localVideoEnabled {
+                return .local
+            }
+            continue
+        }
+        guard remoteCids.contains(sourceId) else {
+            continue
+        }
+        return .remote(cid: sourceId)
+    }
+
+    if localIsPrimary && localVideoEnabled {
+        return .local
+    }
+    if let remote = remoteParticipants.first {
+        return .remote(cid: remote.cid)
+    }
+    if localVideoEnabled {
+        return .local
+    }
+    return .remote(cid: nil)
+}
+
 enum SystemPictureInPictureCoordinateSpace {
     static let name = "app.serenada.callui.system-pip"
 }

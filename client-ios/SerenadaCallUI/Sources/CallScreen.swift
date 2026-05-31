@@ -361,8 +361,12 @@ struct CallScreenView: View {
             localCameraMode: uiState.localCameraMode
         )
         let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
-        let systemPictureInPictureSource = currentSystemPictureInPictureSource(
-            showLocalAsPrimarySurface: showLocalAsPrimarySurface
+        let systemPictureInPictureSource = selectSystemPictureInPictureSource(
+            localSourceId: uiState.localCid,
+            localIsPrimary: !isMultiParty && showLocalAsPrimarySurface,
+            localVideoEnabled: uiState.localVideoEnabled,
+            remoteParticipants: uiState.remoteParticipants,
+            preferredSourceIds: isMultiParty ? [pinnedParticipantId] : []
         )
 
         ZStack {
@@ -714,32 +718,6 @@ struct CallScreenView: View {
             return .remote(cid: remote.cid)
         }
         return nil
-    }
-
-    private func currentSystemPictureInPictureSource(
-        showLocalAsPrimarySurface: Bool
-    ) -> SystemPictureInPictureSource {
-        if isMultiParty {
-            if let pinned = pinnedParticipantId {
-                if pinned == uiState.localCid {
-                    return .local
-                }
-                if let remote = uiState.remoteParticipants.first(where: { $0.cid == pinned }) {
-                    return .remote(cid: remote.cid)
-                }
-            }
-            return .remote(cid: uiState.remoteParticipants.first?.cid)
-        }
-        if showLocalAsPrimarySurface {
-            return .local
-        }
-        if let remote = uiState.remoteParticipants.first {
-            return .remote(cid: remote.cid)
-        }
-        if uiState.localVideoEnabled {
-            return .local
-        }
-        return .remote(cid: nil)
     }
 
     private var hasOtherTopRightCornerButtons: Bool {
