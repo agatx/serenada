@@ -49,6 +49,24 @@ internal enum class SystemPictureInPictureFeed {
     Remote,
 }
 
+/**
+ * Chooses which feed system PiP should surface. Shared by [CallScreen] and
+ * [FrontlineCallScreen] so the priority order stays in one place: prefer the
+ * local camera when it is the large feed, otherwise a present remote, then any
+ * enabled local camera, falling back to remote.
+ */
+internal fun selectSystemPictureInPictureFeed(
+    localIsLarge: Boolean,
+    localVideoEnabled: Boolean,
+    hasRemote: Boolean,
+): SystemPictureInPictureFeed =
+    when {
+        localIsLarge && localVideoEnabled -> SystemPictureInPictureFeed.Local
+        hasRemote -> SystemPictureInPictureFeed.Remote
+        localVideoEnabled -> SystemPictureInPictureFeed.Local
+        else -> SystemPictureInPictureFeed.Remote
+    }
+
 @Composable
 internal fun rememberSystemPictureInPictureMode(
     enabled: Boolean,
@@ -246,16 +264,6 @@ private fun SystemPictureInPictureAvatar(
         }
     }
 }
-
-private fun androidx.compose.ui.unit.Dp.coerceIn(
-    minimumValue: androidx.compose.ui.unit.Dp,
-    maximumValue: androidx.compose.ui.unit.Dp,
-): androidx.compose.ui.unit.Dp =
-    when {
-        this < minimumValue -> minimumValue
-        this > maximumValue -> maximumValue
-        else -> this
-    }
 
 private fun Rect?.toPipAspectRatio(): Rational {
     if (this != null && width() > 0 && height() > 0) {

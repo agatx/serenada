@@ -309,12 +309,11 @@ internal fun CallScreen(
       androidx.compose.runtime.CompositionLocalProvider(LocalAvatarCache provides avatarCache) {
         if (isSystemPictureInPicture) {
             val feed =
-                when {
-                    effectiveLocalLarge && uiState.localVideoEnabled -> SystemPictureInPictureFeed.Local
-                    uiState.remoteParticipants.firstOrNull() != null -> SystemPictureInPictureFeed.Remote
-                    uiState.localVideoEnabled -> SystemPictureInPictureFeed.Local
-                    else -> SystemPictureInPictureFeed.Remote
-                }
+                selectSystemPictureInPictureFeed(
+                    localIsLarge = effectiveLocalLarge,
+                    localVideoEnabled = uiState.localVideoEnabled,
+                    hasRemote = uiState.remoteParticipants.isNotEmpty(),
+                )
             SystemPictureInPictureContent(
                 uiState = uiState,
                 feed = feed,

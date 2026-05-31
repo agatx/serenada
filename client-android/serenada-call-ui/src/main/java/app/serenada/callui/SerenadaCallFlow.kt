@@ -375,8 +375,8 @@ fun SerenadaCallFlow(
                     )
             }
 
-    if (config.uiVariant == SerenadaCallUiVariant.Frontline) {
-        androidx.compose.foundation.layout.Box(modifier = systemPipModifier) {
+    androidx.compose.foundation.layout.Box(modifier = systemPipModifier) {
+        if (config.uiVariant == SerenadaCallUiVariant.Frontline) {
             FrontlineCallScreen(
                 uiState = uiState,
                 roomShareUrl = roomShareUrl,
@@ -410,9 +410,7 @@ fun SerenadaCallFlow(
                 onRemoteVideoFitChanged = onRemoteVideoFitChanged,
                 onSnapshotRequested = onSnapshotRequested,
             )
-        }
-    } else {
-        androidx.compose.foundation.layout.Box(modifier = systemPipModifier) {
+        } else {
             CallScreen(
                 uiState = uiState,
                 roomShareUrl = roomShareUrl,

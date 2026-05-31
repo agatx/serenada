@@ -444,12 +444,11 @@ internal fun FrontlineCallScreen(
                 if (isSystemPictureInPicture) {
                     SystemPictureInPictureContent(
                         uiState = uiState,
-                        feed = when {
-                            largeFeed == FrontlineFeed.Local && uiState.localVideoEnabled -> SystemPictureInPictureFeed.Local
-                            remote != null -> SystemPictureInPictureFeed.Remote
-                            uiState.localVideoEnabled -> SystemPictureInPictureFeed.Local
-                            else -> SystemPictureInPictureFeed.Remote
-                        },
+                        feed = selectSystemPictureInPictureFeed(
+                            localIsLarge = largeFeed == FrontlineFeed.Local,
+                            localVideoEnabled = uiState.localVideoEnabled,
+                            hasRemote = remote != null,
+                        ),
                         eglContext = eglContext,
                         localContentScale = if (uiState.isScreenSharing) ContentScale.Fit else ContentScale.Crop,
                         remoteContentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,

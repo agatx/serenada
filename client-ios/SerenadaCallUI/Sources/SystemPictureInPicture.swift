@@ -684,6 +684,12 @@ private final class SystemPictureInPictureVideoView: UIView, RTCVideoRenderer {
         layer as! AVSampleBufferDisplayLayer
     }
 
+    private static let pixelBufferAttributes: CFDictionary = [
+        kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+        kCVPixelBufferCGImageCompatibilityKey as String: true,
+        kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
+    ] as CFDictionary
+
     private let renderQueue = DispatchQueue(label: "app.serenada.callui.system-pip-video")
     private let renderLock = NSLock()
     private let ciContext = CIContext()
@@ -803,17 +809,12 @@ private final class SystemPictureInPictureVideoView: UIView, RTCVideoRenderer {
 
     private func render(image: CIImage, width: Int, height: Int) -> CVPixelBuffer? {
         var output: CVPixelBuffer?
-        let attrs: [String: Any] = [
-            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
-            kCVPixelBufferCGImageCompatibilityKey as String: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
-        ]
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault,
             width,
             height,
             kCVPixelFormatType_32BGRA,
-            attrs as CFDictionary,
+            Self.pixelBufferAttributes,
             &output
         )
         guard status == kCVReturnSuccess, let output else { return nil }
