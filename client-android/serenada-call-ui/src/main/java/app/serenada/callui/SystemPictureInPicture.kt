@@ -105,7 +105,7 @@ internal fun rememberSystemPictureInPictureMode(
             latestParams.value = null
             return@LaunchedEffect
         }
-        val hostActivity = activity
+        val hostActivity = activity ?: return@LaunchedEffect
         val params =
             buildSystemPictureInPictureParams(
                 sourceRect = sourceRect,
