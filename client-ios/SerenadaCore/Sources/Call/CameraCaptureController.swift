@@ -359,6 +359,7 @@ final class CameraCaptureController {
 
         let fps = selectCaptureFPS(for: format)
 
+        enableMultitaskingCameraAccessIfSupported(on: capturer.captureSession)
         capturer.startCapture(with: camera, format: format, fps: fps)
         localVideoCapturer = capturer
         localCameraSource = source
@@ -375,6 +376,11 @@ final class CameraCaptureController {
         enableContinuousAutoFocus(for: camera)
 
         return true
+    }
+
+    private func enableMultitaskingCameraAccessIfSupported(on session: AVCaptureSession) {
+        guard session.isMultitaskingCameraAccessSupported else { return }
+        session.isMultitaskingCameraAccessEnabled = true
     }
 
     private func enableContinuousAutoFocus(for device: AVCaptureDevice) {

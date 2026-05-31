@@ -119,6 +119,7 @@ internal fun CallScreen(
     config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
     theme: SerenadaCallFlowTheme = SerenadaCallFlowTheme(),
     strings: Map<SerenadaString, String>? = null,
+    isSystemPictureInPicture: Boolean = false,
     onToggleAudio: () -> Unit,
     onToggleVideo: () -> Unit,
     onFlipCamera: () -> Unit,
@@ -259,8 +260,13 @@ internal fun CallScreen(
             )
         }
 
+    val isCallChromeVisible = !isSystemPictureInPicture
+    val areControlsActuallyVisible = areControlsVisible && isCallChromeVisible
+
     val toggleControlsVisibility: () -> Unit = {
-        if (areControlsVisible) {
+        if (isSystemPictureInPicture) {
+            Unit
+        } else if (areControlsVisible) {
             areControlsVisible = false
             wereControlsLastHiddenByAutoHide = false
         } else {
@@ -274,7 +280,7 @@ internal fun CallScreen(
 
     // Auto-hide controls
     LaunchedEffect(areControlsVisible, uiState.phase, isControlsAutoHideEnabled) {
-        if (areControlsVisible && uiState.phase == CallPhase.InCall && isControlsAutoHideEnabled) {
+        if (areControlsActuallyVisible && uiState.phase == CallPhase.InCall && isControlsAutoHideEnabled) {
             delay(8000)
             wereControlsLastHiddenByAutoHide = true
             areControlsVisible = false
@@ -294,12 +300,33 @@ internal fun CallScreen(
     // remote-as-large so the user doesn't see a giant "Camera off" placeholder.
     // The user's swap preference (`isLocalLarge`) is preserved and reapplied
     // automatically when video comes back on.
-    val effectiveLocalLarge = isLocalLarge && uiState.localVideoEnabled
+    val effectiveLocalLarge =
+        isLocalLarge && uiState.localVideoEnabled
 
     val avatarCache = rememberAvatarCache(config.avatarProvider)
 
     SerenadaTheme(theme) {
       androidx.compose.runtime.CompositionLocalProvider(LocalAvatarCache provides avatarCache) {
+        if (isSystemPictureInPicture) {
+            val feed =
+                when {
+                    effectiveLocalLarge && uiState.localVideoEnabled -> SystemPictureInPictureFeed.Local
+                    uiState.remoteParticipants.firstOrNull() != null -> SystemPictureInPictureFeed.Remote
+                    uiState.localVideoEnabled -> SystemPictureInPictureFeed.Local
+                    else -> SystemPictureInPictureFeed.Remote
+                }
+            SystemPictureInPictureContent(
+                uiState = uiState,
+                feed = feed,
+                eglContext = eglContext,
+                localContentScale = if (uiState.isScreenSharing) ContentScale.Fit else ContentScale.Crop,
+                remoteContentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
+                attachLocalSink = attachLocalSink,
+                detachLocalSink = detachLocalSink,
+                attachRemoteSink = attachRemoteSink,
+                detachRemoteSink = detachRemoteSink,
+            )
+        } else {
         BoxWithConstraints(
             modifier =
                 Modifier.fillMaxSize().background(theme.backgroundColor)
@@ -327,7 +354,7 @@ internal fun CallScreen(
                         uiState.connectionState == "CONNECTED")
         val animatedPipBottomPadding by
         animateDpAsState(
-            targetValue = if (areControlsVisible) 130.dp else 48.dp,
+            targetValue = if (areControlsActuallyVisible) 130.dp else 48.dp,
             animationSpec = tween(durationMillis = controlsAnimationDuration),
             label = "pip_bottom_padding"
         )
@@ -340,7 +367,7 @@ internal fun CallScreen(
         val pipInnerCornerRadius =
             if (pipCornerRadius > pipContentPadding) pipCornerRadius - pipContentPadding else 0.dp
         val mainVideoBottomPadding by animateDpAsState(
-            targetValue = if (areControlsVisible) 134.dp else 0.dp,
+            targetValue = if (areControlsActuallyVisible) 134.dp else 0.dp,
             animationSpec = tween(durationMillis = controlsAnimationDuration),
             label = "main_video_bottom_padding"
         )
@@ -611,7 +638,7 @@ internal fun CallScreen(
         }
 
         // Debug tap target — only when debug overlay is enabled via config
-        if (config.debugOverlayEnabled) {
+        if (config.debugOverlayEnabled && isCallChromeVisible) {
             Box(
                 modifier =
                     Modifier.align(Alignment.TopStart)
@@ -648,7 +675,7 @@ internal fun CallScreen(
         }
 
         // Waiting State Overlay
-        if (uiState.phase == CallPhase.Waiting && !effectiveLocalLarge) {
+        if (uiState.phase == CallPhase.Waiting && !effectiveLocalLarge && isCallChromeVisible) {
             WaitingOverlay(
                 roomShareUrl = roomShareUrl,
                 onInviteToRoom = onInviteToRoom,
@@ -660,7 +687,7 @@ internal fun CallScreen(
 
         // Reconnecting Indicator
         AnimatedVisibility(
-            visible = showReconnectingBadge,
+            visible = showReconnectingBadge && isCallChromeVisible,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp)
@@ -719,9 +746,9 @@ internal fun CallScreen(
         }
         val snapshotHandler = onSnapshotRequested
         val showSnapshotButton =
-            snapshotSource != null && snapshotHandler != null && areControlsVisible
+            snapshotSource != null && snapshotHandler != null && areControlsActuallyVisible
 
-        if (showFlashButton || showRemoteFitButton || showSnapshotButton) {
+        if (isCallChromeVisible && (showFlashButton || showRemoteFitButton || showSnapshotButton)) {
             val configuration = androidx.compose.ui.platform.LocalConfiguration.current
             val isLandscape = configuration.orientation ==
                 android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -812,7 +839,7 @@ internal fun CallScreen(
 
         // Controls Bar
         AnimatedVisibility(
-            visible = areControlsVisible,
+            visible = areControlsActuallyVisible,
             enter =
                 fadeIn(animationSpec = tween(durationMillis = controlsAnimationDuration)) +
                         slideInVertically(
@@ -921,6 +948,7 @@ internal fun CallScreen(
             }
         }
 
+        }
         }
       }
     }

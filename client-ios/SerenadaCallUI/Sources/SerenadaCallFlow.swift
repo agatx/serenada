@@ -215,6 +215,8 @@ private struct SessionFirstCallFlow: View {
     let onSnapshotError: ((SnapshotError) -> Void)?
 
     @ObservedObject private var session: SerenadaSession
+    @State private var systemPictureInPictureSource: SystemPictureInPictureSource = .remote(cid: nil)
+    @State private var systemPictureInPictureSourceFrame: CGRect?
 
     init(
         params: SerenadaCallFlow.SessionParams,
@@ -238,12 +240,13 @@ private struct SessionFirstCallFlow: View {
     var body: some View {
         let state = session.state
         let phase = state.phase
+        let callUiState = mapSessionToUiState(session)
 
         Group {
             switch phase {
             case .idle, .joining:
                 if config.uiVariant == .frontline {
-                    frontlineCallScreen(state: state)
+                    frontlineCallScreen(state: state, callUiState: callUiState)
                 } else {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -256,7 +259,7 @@ private struct SessionFirstCallFlow: View {
 
             case .awaitingPermissions:
                 if config.uiVariant == .frontline {
-                    frontlineCallScreen(state: state)
+                    frontlineCallScreen(state: state, callUiState: callUiState)
                 } else {
                     VStack(spacing: 16) {
                         Text(resolveString(.callPermissionsRequired, overrides: strings))
@@ -273,12 +276,12 @@ private struct SessionFirstCallFlow: View {
 
             case .waiting, .inCall:
                 if config.uiVariant == .frontline {
-                    frontlineCallScreen(state: state)
+                    frontlineCallScreen(state: state, callUiState: callUiState)
                 } else {
                     // Session-first mode renders through bridge using session as renderer provider
                     CallScreenView(
                         roomId: session.roomId,
-                        uiState: mapSessionToUiState(session),
+                        uiState: callUiState,
                         roomShareURL: session.roomUrl,
                         screenShareExtensionBundleId: session.screenShareExtensionBundleId,
                         roomName: params.roomName,
@@ -296,13 +299,15 @@ private struct SessionFirstCallFlow: View {
                         onSnapshotRequested: makeSnapshotHandler(),
                         rendererProvider: session,
                         initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
-                        onRemoteVideoFitChanged: params.onRemoteVideoFitChanged
+                        onRemoteVideoFitChanged: params.onRemoteVideoFitChanged,
+                        onSystemPictureInPictureSourceChanged: { systemPictureInPictureSource = $0 },
+                        onSystemPictureInPictureSourceFrameChanged: { systemPictureInPictureSourceFrame = $0 }
                     )
                 }
 
             case .ending:
                 if config.uiVariant == .frontline {
-                    frontlineCallScreen(state: state)
+                    frontlineCallScreen(state: state, callUiState: callUiState)
                         .onAppear {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                                 onDismiss?()
@@ -324,7 +329,7 @@ private struct SessionFirstCallFlow: View {
 
             case .error:
                 if config.uiVariant == .frontline {
-                    frontlineCallScreen(state: state)
+                    frontlineCallScreen(state: state, callUiState: callUiState)
                 } else {
                     VStack(spacing: 16) {
                         Text(resolveString(.callErrorGeneric, overrides: strings))
@@ -339,12 +344,24 @@ private struct SessionFirstCallFlow: View {
                 }
             }
         }
+        .coordinateSpace(name: SystemPictureInPictureCoordinateSpace.name)
+        .overlay {
+            if config.systemPictureInPictureEnabled {
+                SystemPictureInPictureLayer(
+                    enabled: true,
+                    uiState: callUiState,
+                    source: systemPictureInPictureSource,
+                    sourceFrame: systemPictureInPictureSourceFrame,
+                    rendererProvider: session
+                )
+            }
+        }
     }
 
-    private func frontlineCallScreen(state: CallState) -> some View {
+    private func frontlineCallScreen(state: CallState, callUiState: CallUiState) -> some View {
         FrontlineCallScreenView(
             roomId: session.roomId,
-            uiState: mapSessionToUiState(session),
+            uiState: callUiState,
             sessionPhase: state.phase,
             roomShareURL: session.roomUrl,
             screenShareExtensionBundleId: session.screenShareExtensionBundleId,
@@ -368,7 +385,9 @@ private struct SessionFirstCallFlow: View {
             onSnapshotRequested: makeSnapshotHandler(),
             rendererProvider: session,
             initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
-            onRemoteVideoFitChanged: params.onRemoteVideoFitChanged
+            onRemoteVideoFitChanged: params.onRemoteVideoFitChanged,
+            onSystemPictureInPictureSourceChanged: { systemPictureInPictureSource = $0 },
+            onSystemPictureInPictureSourceFrameChanged: { systemPictureInPictureSourceFrame = $0 }
         )
     }
 

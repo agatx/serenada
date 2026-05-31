@@ -48,6 +48,12 @@ public struct SerenadaCallFlowConfig {
     /// standard call UI.
     public var uiVariant: SerenadaCallUiVariant
 
+    /// Enables system Picture in Picture for active calls when the host app
+    /// has the required iOS background modes/capabilities. iOS video-call PiP
+    /// provides system return controls but does not allow custom in-window
+    /// buttons such as End Call.
+    public var systemPictureInPictureEnabled: Bool
+
     public init(
         screenSharingEnabled: Bool = true,
         inviteControlsEnabled: Bool = true,
@@ -56,7 +62,8 @@ public struct SerenadaCallFlowConfig {
         snapshotEnabled: Bool = false,
         avatarProvider: AvatarProvider? = nil,
         videoEnabled: Bool = true,
-        uiVariant: SerenadaCallUiVariant = .standard
+        uiVariant: SerenadaCallUiVariant = .standard,
+        systemPictureInPictureEnabled: Bool = false
     ) {
         self.screenSharingEnabled = screenSharingEnabled
         self.inviteControlsEnabled = inviteControlsEnabled
@@ -66,5 +73,6 @@ public struct SerenadaCallFlowConfig {
         self.avatarProvider = avatarProvider
         self.videoEnabled = videoEnabled
         self.uiVariant = uiVariant
+        self.systemPictureInPictureEnabled = systemPictureInPictureEnabled
     }
 }

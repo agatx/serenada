@@ -40,4 +40,14 @@ data class SerenadaCallFlowConfig(
      * to the `SerenadaConfig` used to build the session.
      */
     val videoEnabled: Boolean = true,
+    /**
+     * Enables Android system Picture-in-Picture while a call is active.
+     *
+     * Host apps must also mark their call activity with
+     * `android:supportsPictureInPicture="true"` and appropriate
+     * `android:configChanges` entries. When enabled, the call UI configures
+     * the host activity's PiP params, auto-enters PiP on Home/gesture leave
+     * where supported, and shows only the active video/avatar surface.
+     */
+    val systemPictureInPictureEnabled: Boolean = false,
 )

@@ -108,7 +108,8 @@ struct RootView: View {
                             inviteControlsEnabled: true,
                             debugOverlayEnabled: true,
                             snapshotEnabled: true,
-                            uiVariant: callManager.callUiVariant
+                            uiVariant: callManager.callUiVariant,
+                            systemPictureInPictureEnabled: true
                         ),
                         strings: L10n.serenadaCallStrings,
                         onInviteToRoom: { await callManager.inviteToCurrentRoom() },

@@ -2,6 +2,7 @@ package app.serenada.callui
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Rect
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,9 +13,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallState
 import app.serenada.core.SerenadaConfig
@@ -32,6 +35,7 @@ import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoSink
+import kotlin.math.roundToInt
 
 private val FRONTLINE_CAMERA_MODES =
     listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE)
@@ -351,71 +355,97 @@ fun SerenadaCallFlow(
     onSnapshotRequested: ((SnapshotSource) -> Unit)? = null,
     onDismiss: () -> Unit = {},
 ) {
+    var systemPipSourceRect by remember { mutableStateOf<Rect?>(null) }
+    val isSystemPictureInPicture =
+        rememberSystemPictureInPictureMode(
+            enabled = config.systemPictureInPictureEnabled,
+            uiState = uiState,
+            sourceRect = systemPipSourceRect,
+        )
+    val systemPipModifier =
+        androidx.compose.ui.Modifier
+            .onGloballyPositioned { coordinates ->
+                val bounds = coordinates.boundsInWindow()
+                systemPipSourceRect =
+                    Rect(
+                        bounds.left.roundToInt(),
+                        bounds.top.roundToInt(),
+                        bounds.right.roundToInt(),
+                        bounds.bottom.roundToInt(),
+                    )
+            }
+
     if (config.uiVariant == SerenadaCallUiVariant.Frontline) {
-        FrontlineCallScreen(
-            uiState = uiState,
-            roomShareUrl = roomShareUrl,
-            eglContext = eglContext,
-            config = config,
-            theme = theme,
-            strings = strings,
-            availableAudioDevices = availableAudioDevices,
-            currentAudioDevice = currentAudioDevice,
-            onToggleAudio = onToggleAudio,
-            onToggleVideo = onToggleVideo,
-            onFlipCamera = onFlipCamera,
-            onToggleFlashlight = onToggleFlashlight,
-            onLocalPinchZoom = onLocalPinchZoom,
-            onEndCall = onEndCall,
-            onSelectAudioDevice = onSelectAudioDevice,
-            onShareLink = onShareLink,
-            onInviteToRoom = onInviteToRoom,
-            onStartScreenShare = onStartScreenShare,
-            onStopScreenShare = onStopScreenShare,
-            attachLocalRenderer = attachLocalRenderer,
-            detachLocalRenderer = detachLocalRenderer,
-            attachLocalSink = attachLocalSink,
-            detachLocalSink = detachLocalSink,
-            attachRemoteSinkForCid = attachRemoteSinkForCid,
-            detachRemoteSinkForCid = detachRemoteSinkForCid,
-            attachRemoteSink = attachRemoteSink,
-            detachRemoteSink = detachRemoteSink,
-            initialRemoteVideoFitCover = initialRemoteVideoFitCover,
-            onRemoteVideoFitChanged = onRemoteVideoFitChanged,
-            onSnapshotRequested = onSnapshotRequested,
-        )
+        androidx.compose.foundation.layout.Box(modifier = systemPipModifier) {
+            FrontlineCallScreen(
+                uiState = uiState,
+                roomShareUrl = roomShareUrl,
+                eglContext = eglContext,
+                config = config,
+                theme = theme,
+                strings = strings,
+                availableAudioDevices = availableAudioDevices,
+                currentAudioDevice = currentAudioDevice,
+                isSystemPictureInPicture = isSystemPictureInPicture,
+                onToggleAudio = onToggleAudio,
+                onToggleVideo = onToggleVideo,
+                onFlipCamera = onFlipCamera,
+                onToggleFlashlight = onToggleFlashlight,
+                onLocalPinchZoom = onLocalPinchZoom,
+                onEndCall = onEndCall,
+                onSelectAudioDevice = onSelectAudioDevice,
+                onShareLink = onShareLink,
+                onInviteToRoom = onInviteToRoom,
+                onStartScreenShare = onStartScreenShare,
+                onStopScreenShare = onStopScreenShare,
+                attachLocalRenderer = attachLocalRenderer,
+                detachLocalRenderer = detachLocalRenderer,
+                attachLocalSink = attachLocalSink,
+                detachLocalSink = detachLocalSink,
+                attachRemoteSinkForCid = attachRemoteSinkForCid,
+                detachRemoteSinkForCid = detachRemoteSinkForCid,
+                attachRemoteSink = attachRemoteSink,
+                detachRemoteSink = detachRemoteSink,
+                initialRemoteVideoFitCover = initialRemoteVideoFitCover,
+                onRemoteVideoFitChanged = onRemoteVideoFitChanged,
+                onSnapshotRequested = onSnapshotRequested,
+            )
+        }
     } else {
-        CallScreen(
-            uiState = uiState,
-            roomShareUrl = roomShareUrl,
-            eglContext = eglContext,
-            initialRemoteVideoFitCover = initialRemoteVideoFitCover,
-            config = config,
-            theme = theme,
-            strings = strings,
-            onToggleAudio = onToggleAudio,
-            onToggleVideo = onToggleVideo,
-            onFlipCamera = onFlipCamera,
-            onToggleFlashlight = onToggleFlashlight,
-            onLocalPinchZoom = onLocalPinchZoom,
-            onEndCall = onEndCall,
-            onShareLink = onShareLink,
-            onInviteToRoom = onInviteToRoom,
-            onRemoteVideoFitChanged = onRemoteVideoFitChanged,
-            onStartScreenShare = onStartScreenShare,
-            onStopScreenShare = onStopScreenShare,
-            attachLocalRenderer = attachLocalRenderer,
-            detachLocalRenderer = detachLocalRenderer,
-            attachLocalSink = attachLocalSink,
-            detachLocalSink = detachLocalSink,
-            attachRemoteRenderer = attachRemoteRenderer,
-            detachRemoteRenderer = detachRemoteRenderer,
-            attachRemoteSinkForCid = attachRemoteSinkForCid,
-            detachRemoteSinkForCid = detachRemoteSinkForCid,
-            attachRemoteSink = attachRemoteSink,
-            detachRemoteSink = detachRemoteSink,
-            onSnapshotRequested = onSnapshotRequested,
-        )
+        androidx.compose.foundation.layout.Box(modifier = systemPipModifier) {
+            CallScreen(
+                uiState = uiState,
+                roomShareUrl = roomShareUrl,
+                eglContext = eglContext,
+                initialRemoteVideoFitCover = initialRemoteVideoFitCover,
+                config = config,
+                theme = theme,
+                strings = strings,
+                isSystemPictureInPicture = isSystemPictureInPicture,
+                onToggleAudio = onToggleAudio,
+                onToggleVideo = onToggleVideo,
+                onFlipCamera = onFlipCamera,
+                onToggleFlashlight = onToggleFlashlight,
+                onLocalPinchZoom = onLocalPinchZoom,
+                onEndCall = onEndCall,
+                onShareLink = onShareLink,
+                onInviteToRoom = onInviteToRoom,
+                onRemoteVideoFitChanged = onRemoteVideoFitChanged,
+                onStartScreenShare = onStartScreenShare,
+                onStopScreenShare = onStopScreenShare,
+                attachLocalRenderer = attachLocalRenderer,
+                detachLocalRenderer = detachLocalRenderer,
+                attachLocalSink = attachLocalSink,
+                detachLocalSink = detachLocalSink,
+                attachRemoteRenderer = attachRemoteRenderer,
+                detachRemoteRenderer = detachRemoteRenderer,
+                attachRemoteSinkForCid = attachRemoteSinkForCid,
+                detachRemoteSinkForCid = detachRemoteSinkForCid,
+                attachRemoteSink = attachRemoteSink,
+                detachRemoteSink = detachRemoteSink,
+                onSnapshotRequested = onSnapshotRequested,
+            )
+        }
     }
 }
 

@@ -92,6 +92,31 @@ fun FrontlineCallScreen(url: String) {
 
 URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = listOf(LocalCameraMode.WORLD, LocalCameraMode.SELFIE, LocalCameraMode.COMPOSITE)` on the `SerenadaConfig` used to create the session. When `Frontline` is selected, Android keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. The More sheet shows the current audio route first and opens a checkmarked route list for routes published by the session audio coordinator. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
 
+### Optional System Picture-in-Picture
+
+The prebuilt call UI can configure Android system Picture-in-Picture for waiting and active calls. Host apps must also opt their call activity into PiP in the manifest:
+
+```xml
+<activity
+    android:name=".MainActivity"
+    android:supportsPictureInPicture="true"
+    android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation">
+    ...
+</activity>
+```
+
+Then enable the call UI flag:
+
+```kotlin
+SerenadaCallFlow(
+    url = url,
+    config = SerenadaCallFlowConfig(systemPictureInPictureEnabled = true),
+    onDismiss = { navController.popBackStack() }
+)
+```
+
+When enabled on a supported device, the SDK keeps the active video or avatar visible in system PiP and auto-enters PiP on Home/gesture leave where Android supports it. Android custom PiP actions are intentionally not used, so call controls remain available after returning to the app. If the call ends while the activity is still in PiP, the SDK finishes that activity so the system closes the PiP window instead of showing non-call UI inside it.
+
 ## Session-First (Pre-Observation)
 
 Create a session before presenting UI to observe state early:

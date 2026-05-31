@@ -68,6 +68,30 @@ SerenadaCallFlow(
 
 URL-first frontline calls start audio-first and use the camera order `world -> selfie -> composite`. For session-first usage, set `defaultVideoEnabled = false` and `cameraModes = [.world, .selfie, .composite]` on the `SerenadaConfig` used to create the session. When `frontline` is selected, iOS keeps Frontline styling for lifecycle states, 1:1 calls, and multi-party calls. The More sheet shows the current audio route first and opens the SDK route picker backed by `availableAudioDevices`, `currentAudioDevice`, and `selectAudioDevice(...)`; Phone is hidden while Bluetooth audio is present. Invite/share actions remain in the Frontline More sheet; the standard waiting-screen QR code is not shown.
 
+### Optional System Picture in Picture
+
+The prebuilt call UI can configure iOS video-call Picture in Picture for waiting and active calls. Host apps must include background audio/VoIP modes in their app `Info.plist`:
+
+```xml
+<key>UIBackgroundModes</key>
+<array>
+    <string>audio</string>
+    <string>voip</string>
+</array>
+```
+
+Then enable the call UI flag:
+
+```swift
+SerenadaCallFlow(
+    url: url,
+    config: SerenadaCallFlowConfig(systemPictureInPictureEnabled: true),
+    onDismiss: { dismiss() }
+)
+```
+
+When enabled on a supported iOS device, the SDK keeps the active large video feed or avatar visible in system PiP and lets the system return control bring the user back to the app. The SDK enables multitasking camera access on its capture sessions when iOS reports support, so local camera video can continue in PiP on supported devices. iOS does not support custom in-window PiP actions for video calls, so End Call remains available only after returning to the app.
+
 ## Session-First (Pre-Observation)
 
 Create a session before presenting UI to observe state early:

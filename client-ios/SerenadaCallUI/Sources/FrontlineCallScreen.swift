@@ -117,6 +117,8 @@ struct FrontlineCallScreenView: View {
     let onSnapshotRequested: ((SnapshotSource) -> Void)?
     let rendererProvider: CallRendererProvider
     let onRemoteVideoFitChanged: ((Bool) -> Void)?
+    let onSystemPictureInPictureSourceChanged: ((SystemPictureInPictureSource) -> Void)?
+    let onSystemPictureInPictureSourceFrameChanged: ((CGRect?) -> Void)?
 
     @State private var pipSwapped = false
     @State private var isMoreSheetVisible = false
@@ -160,7 +162,9 @@ struct FrontlineCallScreenView: View {
         onSnapshotRequested: ((SnapshotSource) -> Void)?,
         rendererProvider: CallRendererProvider,
         initialRemoteVideoFitCover: Bool = true,
-        onRemoteVideoFitChanged: ((Bool) -> Void)? = nil
+        onRemoteVideoFitChanged: ((Bool) -> Void)? = nil,
+        onSystemPictureInPictureSourceChanged: ((SystemPictureInPictureSource) -> Void)? = nil,
+        onSystemPictureInPictureSourceFrameChanged: ((CGRect?) -> Void)? = nil
     ) {
         self.roomId = roomId
         self.uiState = uiState
@@ -187,6 +191,8 @@ struct FrontlineCallScreenView: View {
         self.onSnapshotRequested = onSnapshotRequested
         self.rendererProvider = rendererProvider
         self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
+        self.onSystemPictureInPictureSourceChanged = onSystemPictureInPictureSourceChanged
+        self.onSystemPictureInPictureSourceFrameChanged = onSystemPictureInPictureSourceFrameChanged
         _remoteVideoFitCover = State(initialValue: initialRemoteVideoFitCover)
     }
 
@@ -222,6 +228,31 @@ struct FrontlineCallScreenView: View {
             localVideoEnabled: uiState.localVideoEnabled,
             remoteParticipants: uiState.remoteParticipants
         )
+    }
+
+    private var currentSystemPictureInPictureSource: SystemPictureInPictureSource {
+        if uiState.remoteParticipants.count > 1 {
+            let spotlightId = pinnedSpotlightId ?? selectedSpotlightId ?? lastVideoStartedParticipantId
+            if spotlightId == localSpotlightId {
+                return .local
+            }
+            if let remote = uiState.remoteParticipants.first(where: { remote in
+                spotlightId == remote.cid || spotlightId == remote.cid.frontlineContentSpotlightId
+            }) {
+                return .remote(cid: remote.cid)
+            }
+            return .remote(cid: uiState.remoteParticipants.first?.cid)
+        }
+        if largeFeed == .local && uiState.localVideoEnabled {
+            return .local
+        }
+        if let remote {
+            return .remote(cid: remote.cid)
+        }
+        if uiState.localVideoEnabled {
+            return .local
+        }
+        return .remote(cid: nil)
     }
 
     var body: some View {
@@ -293,6 +324,9 @@ struct FrontlineCallScreenView: View {
         }
         .onChange(of: uiState.localVideoEnabled) { _ in pipSwapped = false }
         .onChange(of: uiState.localCameraMode) { _ in pipSwapped = false }
+        .task(id: currentSystemPictureInPictureSource) {
+            onSystemPictureInPictureSourceChanged?(currentSystemPictureInPictureSource)
+        }
         .onChange(of: uiState.remoteParticipants.map { $0.cid }) { activeCids in
             let active = Set(activeCids)
             remoteTileAspectRatios = remoteTileAspectRatios.filter { active.contains($0.key) }
@@ -418,8 +452,10 @@ struct FrontlineCallScreenView: View {
                 )
             } else if frontlineIsWaitingForRemote(uiState) {
                 waitingSurface
+                    .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
             } else if uiState.remoteParticipants.count > 1 {
                 multiPartyStage
+                    .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
             } else {
                 largeSurface(feed: largeFeed)
             }
@@ -523,6 +559,7 @@ struct FrontlineCallScreenView: View {
                 localVideoView(contentMode: uiState.isScreenSharing ? .scaleAspectFit : .scaleAspectFill)
                 localZoomInteractionLayer(enabled: isLocalCameraZoomEnabled)
             }
+            .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
         case .remote where remote?.videoEnabled == true:
             WebRTCVideoView(
                 kind: remote.map { .remoteForCid($0.cid) } ?? .remote,
@@ -530,11 +567,13 @@ struct FrontlineCallScreenView: View {
                 videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit
             )
             .ignoresSafeArea()
+            .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
         default:
             FrontlineAudioLarge(
                 remote: remote,
                 startedAtMs: uiState.callStartedAtMs,
-                strings: strings
+                strings: strings,
+                onSystemPictureInPictureSourceFrameChanged: onSystemPictureInPictureSourceFrameChanged
             )
         }
     }
@@ -887,6 +926,7 @@ private struct FrontlineAudioLarge: View {
     let remote: RemoteParticipant?
     let startedAtMs: Int64?
     let strings: [SerenadaString: String]?
+    let onSystemPictureInPictureSourceFrameChanged: ((CGRect?) -> Void)?
 
     var body: some View {
         let name = remoteDisplayName(remote)
@@ -910,6 +950,7 @@ private struct FrontlineAudioLarge: View {
             Spacer().frame(height: 10)
             FrontlineTimerLabel(startedAtMs: startedAtMs)
         }
+        .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(frontlineBlack)

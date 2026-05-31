@@ -74,6 +74,7 @@ final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOu
                 started = false
                 return
             }
+            enableMultitaskingCameraAccessIfSupported()
             if !session.isRunning {
                 session.startRunning()
             }
@@ -86,6 +87,11 @@ final class CompositeCameraVideoCapturer: RTCVideoCapturer, AVCaptureVideoDataOu
             started = isRunning
         }
         return started
+    }
+
+    private func enableMultitaskingCameraAccessIfSupported() {
+        guard session.isMultitaskingCameraAccessSupported else { return }
+        session.isMultitaskingCameraAccessEnabled = true
     }
 
     func stopCapture() {

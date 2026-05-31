@@ -355,6 +355,7 @@ fun SerenadaAppRoot(
                                 inviteControlsEnabled = true,
                                 debugOverlayEnabled = true,
                                 snapshotEnabled = true,
+                                systemPictureInPictureEnabled = true,
                             ),
                             strings = buildSerenadaCallStrings(context),
                             onSnapshotCaptured = { result ->
