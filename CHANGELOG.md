@@ -4,6 +4,17 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.2] — 2026-06-02
+
+### Added
+- Web, Android, iOS: `SerenadaCallFlow` now accepts an optional
+  `onEndCall` callback so host apps can route the end-call button
+  through app-owned cleanup, analytics, service teardown, or navigation.
+
+### Changed
+- Web, Android, iOS: reconnect/status badges are gated by an 800 ms
+  delay before appearing, including the Frontline call UI.
+
 ## [0.8.1] — 2026-06-01
 
 ### Changed
