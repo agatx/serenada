@@ -19,7 +19,7 @@ public struct SerenadaCallFlow: View {
     private let config: SerenadaCallFlowConfig
     private let strings: [SerenadaString: String]?
     private let onDismiss: (() -> Void)?
-    private var onEndCall: (() -> Void)?
+    private let onEndCall: (() -> Void)?
     private var onCallEnded: ((EndReason) -> Void)?
     private var onSnapshotCaptured: ((SnapshotResult) -> Void)?
     private var onSnapshotError: ((SnapshotError) -> Void)?
