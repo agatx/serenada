@@ -107,11 +107,22 @@ func handleDeepLink(_ url: URL) {
     // Observe session.state before showing UI if needed
 
     presentFullScreen {
-        SerenadaCallFlow(session: session, onDismiss: { dismiss() })
+        SerenadaCallFlow(
+            session: session,
+            onEndCall: {
+                session.leave()
+                dismiss()
+            },
+            onDismiss: { dismiss() }
+        )
             .serenadaTheme(.init(accentColor: .blue))
     }
 }
 ```
+
+If `onEndCall` is omitted, the prebuilt UI calls `session.leave()` before
+dismissing. When you provide `onEndCall`, your host owns the end button behavior,
+including leaving the session and updating navigation state.
 
 ## Create a Room
 

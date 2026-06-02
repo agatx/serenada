@@ -4,7 +4,7 @@ Minimal Android host app demonstrating Serenada SDK integration using `serenada-
 
 ## What it does
 
-- Accepts a call URL and presents `SerenadaCallFlow` (URL-first path)
+- Accepts a call URL, creates a session, and presents `SerenadaCallFlow` (session-first path)
 - Creates a new room via `SerenadaCore.createRoom()` and joins explicitly with `join()` (session-first path)
 - Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
 - Shows incremental `peerJoined` events and peer-message delivery without Serenada server transport
@@ -51,11 +51,20 @@ val serenada = SerenadaCore(
     context = this,
 )
 
-// 2. Join via URL (URL-first — SDK creates the session internally)
+// 2. Join via URL and present the host-owned session.
+val session = serenada.join(url = callUrl)
 SerenadaCallFlow(
-    url = callUrl,
+    session = session,
     config = SerenadaCallFlowConfig(screenSharingEnabled = false, inviteControlsEnabled = false),
-    onDismiss = { /* navigate back */ },
+    onEndCall = {
+        session.leave()
+        session.close()
+        // navigate back
+    },
+    onDismiss = {
+        session.close()
+        // navigate back
+    },
 )
 
 // 3. Or create a room, then join explicitly
@@ -66,7 +75,10 @@ scope.launch {
     SerenadaCallFlow(
         session = session,
         config = SerenadaCallFlowConfig(screenSharingEnabled = false, inviteControlsEnabled = false),
-        onDismiss = { /* navigate back */ },
+        onDismiss = {
+            session.close()
+            // navigate back
+        },
     )
 }
 ```

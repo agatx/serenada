@@ -391,6 +391,16 @@ Only the exported `SerenadaString` keys are overridable. Other small utility lab
 
 ---
 
+## End-call handling
+
+`SerenadaCallFlow` leaves the active session directly when the user taps End Call
+unless you provide `onEndCall`. Use `onEndCall` when the host app needs to route
+the button through app-owned cleanup, foreground-service teardown, analytics, or
+navigation. When provided, the callback owns calling `session.leave()` and
+releasing any host-owned session resources.
+
+---
+
 ## Theming
 
 Each platform provides a theme object to customize the call UI's visual appearance.

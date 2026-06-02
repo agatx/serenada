@@ -57,6 +57,7 @@ private val FRONTLINE_CAMERA_MODES =
  * @param onShareLink Called when the user taps the share-link control. Pass `null` to hide it.
  * @param onInviteToRoom Called when the user taps the invite control. Pass `null` to hide it.
  * @param onRemoteVideoFitChanged Called when the user toggles remote video fit/fill mode.
+ * @param onEndCall Called when the user taps the end-call button. When `null`, the session leaves directly.
  * @param onStartScreenShare Called with the [MediaProjection][android.media.projection.MediaProjection]
  *   consent intent when the user starts screen sharing. Use this to start a foreground service with
  *   [FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION][android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION]
@@ -77,6 +78,7 @@ fun SerenadaCallFlow(
     onShareLink: (() -> Unit)? = null,
     onInviteToRoom: (() -> Unit)? = null,
     onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
+    onEndCall: (() -> Unit)? = null,
     onStartScreenShare: ((Intent) -> Unit)? = null,
     onStopScreenShare: (() -> Unit)? = null,
     onSnapshotCaptured: ((SnapshotResult) -> Unit)? = null,
@@ -219,7 +221,7 @@ fun SerenadaCallFlow(
         onFlipCamera = { activeSession.flipCamera() },
         onToggleFlashlight = { activeSession.toggleFlashlight() },
         onLocalPinchZoom = { scaleFactor -> activeSession.adjustLocalCameraZoom(scaleFactor) },
-        onEndCall = { activeSession.leave() },
+        onEndCall = onEndCall ?: { activeSession.leave() },
         onSelectAudioDevice = { device -> activeSession.selectAudioDevice(device) },
         onShareLink = onShareLink,
         onInviteToRoom = { onInviteToRoom?.invoke() },

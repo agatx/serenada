@@ -13,8 +13,7 @@ const builtInSerenada = createSerenadaCore({ serverHost: 'serenada.app' })
 
 interface ActiveCall {
     kind: 'built-in'
-    url: string
-    session?: SerenadaSessionHandle
+    session: SerenadaSessionHandle
 }
 
 interface ProviderDemoState {
@@ -128,6 +127,13 @@ class SampleMockProvider extends SignalingProviderEmitter {
 export default function App() {
     const [activeScreen, setActiveScreen] = useState<ActiveScreen>(null)
 
+    const startBuiltInCall = useCallback((url: string) => {
+        setActiveScreen({
+            kind: 'built-in',
+            session: builtInSerenada.join(url),
+        })
+    }, [])
+
     const dismissProviderDemo = useCallback(() => {
         setActiveScreen((current) => {
             if (!current || current.kind !== 'provider-demo') {
@@ -190,9 +196,15 @@ export default function App() {
     if (activeScreen?.kind === 'built-in') {
         return (
             <SerenadaCallFlow
-                url={activeScreen.url}
                 session={activeScreen.session}
-                onDismiss={() => setActiveScreen(null)}
+                onEndCall={() => {
+                    activeScreen.session.leave()
+                    setActiveScreen(null)
+                }}
+                onDismiss={() => {
+                    activeScreen.session.destroy()
+                    setActiveScreen(null)
+                }}
             />
         )
     }
@@ -208,7 +220,7 @@ export default function App() {
 
     return (
         <HomeScreen
-            onJoin={(call) => setActiveScreen(call)}
+            onJoin={startBuiltInCall}
             onStartProviderDemo={startProviderDemo}
         />
     )
@@ -218,7 +230,7 @@ function HomeScreen({
     onJoin,
     onStartProviderDemo,
 }: {
-    onJoin: (call: ActiveCall) => void
+    onJoin: (url: string) => void
     onStartProviderDemo: () => void
 }) {
     const [urlText, setUrlText] = useState('')
@@ -226,7 +238,7 @@ function HomeScreen({
     const handleCreateRoom = useCallback(async () => {
         const room = await builtInSerenada.createRoom()
         console.log('Share this URL:', room.url)
-        onJoin({ kind: 'built-in', url: room.url })
+        onJoin(room.url)
     }, [onJoin])
 
     return (
@@ -249,7 +261,7 @@ function HomeScreen({
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <button
-                        onClick={() => onJoin({ kind: 'built-in', url: urlText })}
+                        onClick={() => onJoin(urlText)}
                         disabled={!urlText}
                     >
                         Join Call

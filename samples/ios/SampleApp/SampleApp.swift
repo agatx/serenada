@@ -10,7 +10,7 @@ private let sampleCallFlowConfig = SerenadaCallFlowConfig(
 )
 
 private enum ActiveCall {
-    case url(URL)
+    case session(SerenadaSession)
 }
 
 private struct ProviderDemoSession {
@@ -66,10 +66,14 @@ struct SerenadaiOSSampleApp: App {
     @ViewBuilder
     private func callFlow(for activeCall: ActiveCall) -> some View {
         switch activeCall {
-        case .url(let url):
+        case .session(let session):
             SerenadaCallFlow(
-                url: url,
+                session: session,
                 config: sampleCallFlowConfig,
+                onEndCall: {
+                    session.leave()
+                    self.activeCall = nil
+                },
                 onDismiss: { self.activeCall = nil }
             )
         }
@@ -182,7 +186,7 @@ private struct HomeView: View {
         }
 
         errorMessage = nil
-        onStartCall(.url(url))
+        onStartCall(.session(serenada.join(url: url)))
     }
 
     private func createRoom() {
@@ -194,7 +198,7 @@ private struct HomeView: View {
                 let room = try await serenada.createRoom()
                 isCreatingRoom = false
                 lastCreatedRoomURL = room.url
-                onStartCall(.url(room.url))
+                onStartCall(.session(serenada.join(url: room.url)))
             } catch {
                 isCreatingRoom = false
                 errorMessage = error.localizedDescription

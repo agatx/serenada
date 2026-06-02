@@ -138,6 +138,7 @@ private val FrontlineStageLocalAccentWidth = 2.5.dp
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
 private const val FRONTLINE_MORE_BUTTON_HEIGHT_TO_WIDTH_RATIO = 1.62f
+private const val FRONTLINE_RECONNECTING_BADGE_DELAY_MS = 800L
 
 private enum class FrontlineFeed {
     Local,
@@ -203,6 +204,7 @@ internal fun FrontlineCallScreen(
     var isAudioRouteSheetVisible by rememberSaveable { mutableStateOf(false) }
     var showSnapshotFlash by remember { mutableStateOf(false) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
+    var showConnectionStatusBadge by remember { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(initialRemoteVideoFitCover) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
@@ -322,9 +324,19 @@ internal fun FrontlineCallScreen(
         } else {
             null
         }
+    LaunchedEffect(uiState.phase, uiState.connectionStatus) {
+        if (uiState.phase != CallPhase.InCall || uiState.connectionStatus == ConnectionStatus.Connected) {
+            showConnectionStatusBadge = false
+            return@LaunchedEffect
+        }
+        delay(FRONTLINE_RECONNECTING_BADGE_DELAY_MS)
+        if (uiState.phase == CallPhase.InCall && uiState.connectionStatus != ConnectionStatus.Connected) {
+            showConnectionStatusBadge = true
+        }
+    }
     val showReconnectingBadge =
         uiState.phase == CallPhase.InCall &&
-            uiState.connectionStatus != ConnectionStatus.Connected
+            showConnectionStatusBadge
     LaunchedEffect(isSystemPictureInPicture) {
         if (isSystemPictureInPicture) {
             isMoreSheetVisible = false

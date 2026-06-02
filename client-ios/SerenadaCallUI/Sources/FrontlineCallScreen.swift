@@ -18,6 +18,7 @@ private let frontlineMoreButtonHeightToWidthRatio: CGFloat = 1.62
 private let frontlineLargeVideoAccentLineWidth: CGFloat = 3
 private let frontlinePipVideoAccentLineWidth: CGFloat = 2.5
 private let frontlinePipBorderLineWidth: CGFloat = 1.5
+private let frontlineReconnectingBadgeDelayNanoseconds: UInt64 = 800_000_000
 
 private enum FrontlineFeed {
     case local
@@ -135,6 +136,7 @@ struct FrontlineCallScreenView: View {
     @State private var lastVideoStartedParticipantId: String?
     @State private var previousRemoteVideoEnabled: [String: Bool] = [:]
     @State private var broadcastTriggerCount = 0
+    @State private var showConnectionStatusBadge = false
 
     init(
         roomId: String,
@@ -318,6 +320,17 @@ struct FrontlineCallScreenView: View {
         .onChange(of: uiState.localCameraMode) { _ in pipSwapped = false }
         .task(id: currentSystemPictureInPictureSource) {
             onSystemPictureInPictureSourceChanged?(currentSystemPictureInPictureSource)
+        }
+        .task(id: "\(uiState.phase.rawValue):\(uiState.connectionStatus.rawValue)") {
+            guard uiState.phase == .inCall, uiState.connectionStatus != .connected else {
+                showConnectionStatusBadge = false
+                return
+            }
+            showConnectionStatusBadge = false
+            try? await Task.sleep(nanoseconds: frontlineReconnectingBadgeDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            guard uiState.phase == .inCall, uiState.connectionStatus != .connected else { return }
+            showConnectionStatusBadge = true
         }
         .onChange(of: uiState.remoteParticipants.map { $0.cid }) { activeCids in
             let active = Set(activeCids)
@@ -676,7 +689,7 @@ struct FrontlineCallScreenView: View {
 
     private var reconnectingBadge: some View {
         Group {
-            if uiState.phase == .inCall && uiState.connectionStatus != .connected {
+            if uiState.phase == .inCall && showConnectionStatusBadge {
                 VStack(spacing: 4) {
                     Text(str(.callReconnecting))
                         .font(.system(size: 14, weight: .medium))

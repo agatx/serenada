@@ -78,15 +78,24 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun SampleApp(serenada: SerenadaCore) {
-    var callUrl by remember { mutableStateOf<String?>(null) }
+    var callSession by remember { mutableStateOf<SerenadaSession?>(null) }
     var providerDemo by remember { mutableStateOf<ProviderDemoSession?>(null) }
     val context = LocalContext.current
+    fun dismissCall(leave: Boolean) {
+        val session = callSession
+        if (leave) {
+            session?.leave()
+        }
+        session?.close()
+        callSession = null
+    }
 
     when {
-        callUrl != null -> SerenadaCallFlow(
-            url = callUrl!!,
+        callSession != null -> SerenadaCallFlow(
+            session = callSession!!,
             config = sampleCallFlowConfig,
-            onDismiss = { callUrl = null },
+            onEndCall = { dismissCall(leave = true) },
+            onDismiss = { dismissCall(leave = false) },
         )
 
         providerDemo != null -> ProviderDemoScreen(
@@ -98,7 +107,7 @@ private fun SampleApp(serenada: SerenadaCore) {
         )
 
         else -> HomeScreen(
-            onJoinUrl = { callUrl = it },
+            onJoinUrl = { callSession = serenada.join(it) },
             onStartProviderDemo = {
                 val provider = SampleMockSignalingProvider()
                 val coordinator = SampleAudioCoordinator()

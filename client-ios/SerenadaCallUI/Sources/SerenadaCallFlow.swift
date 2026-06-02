@@ -19,6 +19,7 @@ public struct SerenadaCallFlow: View {
     private let config: SerenadaCallFlowConfig
     private let strings: [SerenadaString: String]?
     private let onDismiss: (() -> Void)?
+    private var onEndCall: (() -> Void)?
     private var onCallEnded: ((EndReason) -> Void)?
     private var onSnapshotCaptured: ((SnapshotResult) -> Void)?
     private var onSnapshotError: ((SnapshotError) -> Void)?
@@ -45,12 +46,14 @@ public struct SerenadaCallFlow: View {
         serenadaConfig: SerenadaConfig = SerenadaConfig(serverHost: "serenada.app"),
         config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
         strings: [SerenadaString: String]? = nil,
+        onEndCall: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.mode = .urlFirst(url: url, serenadaConfig: serenadaConfig)
         self.config = config
         self.strings = strings
         self.onDismiss = onDismiss
+        self.onEndCall = onEndCall
         self.onCallEnded = nil
         self._avatarCache = StateObject(wrappedValue: AvatarCache(provider: config.avatarProvider))
     }
@@ -65,6 +68,7 @@ public struct SerenadaCallFlow: View {
         strings: [SerenadaString: String]? = nil,
         onInviteToRoom: (() async -> Result<Void, Error>)? = nil,
         onRemoteVideoFitChanged: ((Bool) -> Void)? = nil,
+        onEndCall: (() -> Void)? = nil,
         onDismiss: (() -> Void)? = nil
     ) {
         self.mode = .sessionFirst(SessionParams(
@@ -77,6 +81,7 @@ public struct SerenadaCallFlow: View {
         self.config = config
         self.strings = strings
         self.onDismiss = onDismiss
+        self.onEndCall = onEndCall
         self.onCallEnded = nil
         self._avatarCache = StateObject(wrappedValue: AvatarCache(provider: config.avatarProvider))
     }
@@ -93,6 +98,7 @@ public struct SerenadaCallFlow: View {
                     config: config,
                     strings: strings,
                     onDismiss: onDismiss,
+                    onEndCall: onEndCall,
                     onCallEnded: onCallEnded,
                     onSnapshotCaptured: onSnapshotCaptured,
                     onSnapshotError: onSnapshotError
@@ -104,6 +110,7 @@ public struct SerenadaCallFlow: View {
                     config: config,
                     strings: strings,
                     onDismiss: onDismiss,
+                    onEndCall: onEndCall,
                     onCallEnded: onCallEnded,
                     onSnapshotCaptured: onSnapshotCaptured,
                     onSnapshotError: onSnapshotError
@@ -145,6 +152,7 @@ private struct URLFirstCallFlow: View {
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
     let onDismiss: (() -> Void)?
+    let onEndCall: (() -> Void)?
     let onCallEnded: ((EndReason) -> Void)?
     let onSnapshotCaptured: ((SnapshotResult) -> Void)?
     let onSnapshotError: ((SnapshotError) -> Void)?
@@ -166,6 +174,7 @@ private struct URLFirstCallFlow: View {
                     config: config,
                     strings: strings,
                     onDismiss: onDismiss,
+                    onEndCall: onEndCall,
                     onCallEnded: onCallEnded,
                     onSnapshotCaptured: onSnapshotCaptured,
                     onSnapshotError: onSnapshotError
@@ -210,6 +219,7 @@ private struct SessionFirstCallFlow: View {
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
     let onDismiss: (() -> Void)?
+    let onEndCall: (() -> Void)?
     let onCallEnded: ((EndReason) -> Void)?
     let onSnapshotCaptured: ((SnapshotResult) -> Void)?
     let onSnapshotError: ((SnapshotError) -> Void)?
@@ -223,6 +233,7 @@ private struct SessionFirstCallFlow: View {
         config: SerenadaCallFlowConfig,
         strings: [SerenadaString: String]?,
         onDismiss: (() -> Void)?,
+        onEndCall: (() -> Void)?,
         onCallEnded: ((EndReason) -> Void)?,
         onSnapshotCaptured: ((SnapshotResult) -> Void)? = nil,
         onSnapshotError: ((SnapshotError) -> Void)? = nil
@@ -231,6 +242,7 @@ private struct SessionFirstCallFlow: View {
         self.config = config
         self.strings = strings
         self.onDismiss = onDismiss
+        self.onEndCall = onEndCall
         self.onCallEnded = onCallEnded
         self.onSnapshotCaptured = onSnapshotCaptured
         self.onSnapshotError = onSnapshotError
@@ -400,6 +412,10 @@ private struct SessionFirstCallFlow: View {
     }
 
     private func endCall() {
+        if let onEndCall {
+            onEndCall()
+            return
+        }
         session.leave()
         onCallEnded?(.localLeft)
         onDismiss?()

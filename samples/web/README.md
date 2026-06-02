@@ -4,7 +4,7 @@ Minimal web host app demonstrating Serenada SDK integration with React.
 
 ## What it does
 
-- Accepts a call URL and renders `<SerenadaCallFlow>` using built-in Serenada signaling
+- Accepts a call URL, creates a session, and renders `<SerenadaCallFlow>` using built-in Serenada signaling
 - Creates a new room via `createSerenadaCore({ serverHost }).createRoom()` and joins explicitly with `join()`
 - Starts a custom-provider demo backed by an in-memory `SignalingProvider`
 - Shows provider-mode incremental `peerJoined` events plus `onPeerMessage()` delivery without Serenada transport
@@ -48,12 +48,29 @@ const serenada = createSerenadaCore({ serverHost: 'serenada.app' })
 // Prefer SerenadaSessionHandle in app-facing code and component props.
 
 // 2a. Join an existing invite link by URL
-<SerenadaCallFlow url={callUrl} onDismiss={() => navigate('/')} />
+const callSession = serenada.join(callUrl)
+<SerenadaCallFlow
+  session={callSession}
+  onEndCall={() => {
+    callSession.leave()
+    navigate('/')
+  }}
+  onDismiss={() => {
+    callSession.destroy()
+    navigate('/')
+  }}
+/>
 
 // 2b. Create a room, then join explicitly.
 const room = await serenada.createRoom()
 const session = serenada.join(room.url)
-<SerenadaCallFlow session={session} onDismiss={() => navigate('/')} />
+<SerenadaCallFlow
+  session={session}
+  onDismiss={() => {
+    session.destroy()
+    navigate('/')
+  }}
+/>
 ```
 
 Provider mode uses the same SDK package with an injected provider instead of `serverHost`:

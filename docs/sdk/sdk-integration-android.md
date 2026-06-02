@@ -138,10 +138,22 @@ fun handleDeepLink(uri: Uri) {
     // In your Composable:
     SerenadaCallFlow(
         session = session,
-        onDismiss = { navController.popBackStack() }
+        onEndCall = {
+            session.leave()
+            session.close()
+            navController.popBackStack()
+        },
+        onDismiss = {
+            session.close()
+            navController.popBackStack()
+        }
     )
 }
 ```
+
+If `onEndCall` is omitted, the prebuilt UI calls `session.leave()` before
+dismissing. When you provide `onEndCall`, your host owns the end button behavior,
+including leaving or closing the session and updating navigation state.
 
 ## Create a Room
 

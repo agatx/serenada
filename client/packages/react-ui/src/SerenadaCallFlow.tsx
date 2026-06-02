@@ -307,6 +307,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     strings,
     waitingActions,
     onDismiss,
+    onEndCall,
     onStatsUpdate,
     onSnapshotCaptured,
     onSnapshotError,
@@ -398,7 +399,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     // automatically when video comes back on.
     const effectiveLocalLarge = isLocalLarge && !isCameraOff;
     const [areControlsVisible, setAreControlsVisible] = useState(true);
-    const [showRecoveringBadge, setShowRecoveringBadge] = useState(false);
+    const [showConnectionStatusBadge, setShowConnectionStatusBadge] = useState(false);
     const [showWaiting, setShowWaiting] = useState(true);
     const [showDebug, setShowDebug] = useState(false);
     const [debugStats, setDebugStats] = useState<CallStats | null>(null);
@@ -487,30 +488,25 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [localParticipant?.cameraMode]);
 
     const showReconnecting = useMemo(() => (
-        effectiveState.phase !== 'idle' &&
-        effectiveState.phase !== 'ending' &&
-        effectiveState.connectionStatus === 'retrying'
-    ) || (
-        effectiveState.phase !== 'idle' &&
-        effectiveState.phase !== 'ending' &&
-        effectiveState.connectionStatus === 'recovering' &&
-        showRecoveringBadge
-    ), [effectiveState.connectionStatus, effectiveState.phase, showRecoveringBadge]);
+        (effectiveState.phase === 'waiting' || effectiveState.phase === 'inCall') &&
+        effectiveState.connectionStatus !== 'connected' &&
+        showConnectionStatusBadge
+    ), [effectiveState.connectionStatus, effectiveState.phase, showConnectionStatusBadge]);
 
     useEffect(() => {
         if (effectiveState.phase !== 'waiting' && effectiveState.phase !== 'inCall') {
             // eslint-disable-next-line react-hooks/set-state-in-effect -- reconnect badge resets immediately when the call is no longer active
-            setShowRecoveringBadge(false);
+            setShowConnectionStatusBadge(false);
             return;
         }
 
-        if (effectiveState.connectionStatus !== 'recovering') {
-            setShowRecoveringBadge(false);
+        if (effectiveState.connectionStatus === 'connected') {
+            setShowConnectionStatusBadge(false);
             return;
         }
 
         const timer = window.setTimeout(() => {
-            setShowRecoveringBadge(true);
+            setShowConnectionStatusBadge(true);
         }, 800);
         return () => window.clearTimeout(timer);
     }, [effectiveState.connectionStatus, effectiveState.phase]);
@@ -712,11 +708,13 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     }, [onDismiss, session]);
 
     const handleLeave = useCallback(() => {
-        if (session) {
-            session.leave();
+        if (onEndCall) {
+            onEndCall();
+            return;
         }
+        session?.leave();
         onDismiss?.();
-    }, [onDismiss, session]);
+    }, [onDismiss, onEndCall, session]);
 
     const handleToggleAudio = useCallback(() => {
         session?.toggleAudio();
@@ -999,7 +997,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
     const overlayContent = (
         <>
-            <StatusOverlay connectionStatus={effectiveState.connectionStatus} strings={strings} />
+            <StatusOverlay
+                connectionStatus={showReconnecting ? effectiveState.connectionStatus : 'connected'}
+                strings={strings}
+            />
             {permissionDenied && effectiveState.phase === 'inCall' && (
                 <div className="permission-denied-banner">
                     {resolveString('permissionDeniedSettings', strings)}

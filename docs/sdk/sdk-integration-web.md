@@ -57,11 +57,22 @@ function CallPage() {
     return (
         <SerenadaCallFlow
             session={session}
-            onDismiss={() => navigate('/')}
+            onEndCall={() => {
+                session.leave()
+                navigate('/')
+            }}
+            onDismiss={() => {
+                session.destroy()
+                navigate('/')
+            }}
         />
     )
 }
 ```
+
+If `onEndCall` is omitted, the prebuilt UI calls `session.leave()` before
+dismissing. When you provide `onEndCall`, your host owns the end button behavior,
+including leaving or destroying the session and updating navigation state.
 
 ## Create a Room
 

@@ -443,6 +443,11 @@ const CallRoom: React.FC = () => {
         navigate('/');
     }, [navigate, roomId]);
 
+    const handleEndCall = useCallback(() => {
+        session?.leave();
+        handleDismiss();
+    }, [handleDismiss, session]);
+
     const handleInvite = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         if (!roomId || isInviting) return;
@@ -671,6 +676,7 @@ const CallRoom: React.FC = () => {
             strings={strings}
             waitingActions={waitingActions}
             onDismiss={handleDismiss}
+            onEndCall={handleEndCall}
             onSnapshotCaptured={handleSnapshotCaptured}
             onSnapshotError={handleSnapshotError}
         />

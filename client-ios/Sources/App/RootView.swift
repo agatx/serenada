@@ -116,6 +116,9 @@ struct RootView: View {
                         onRemoteVideoFitChanged: { value in
                             SettingsStore().isRemoteVideoFitCover = value
                         },
+                        onEndCall: {
+                            callManager.dismissActiveCall()
+                        },
                         onDismiss: { callManager.dismissActiveCall() }
                     )
                     .onSnapshotCaptured { result in
