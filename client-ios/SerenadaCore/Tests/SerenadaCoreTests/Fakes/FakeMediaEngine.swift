@@ -76,7 +76,8 @@ final class FakeMediaEngine: SessionMediaEngine {
             remoteCid: remoteCid,
             onConnectionStateChange: onConnectionStateChange,
             onIceConnectionStateChange: onIceConnectionStateChange,
-            onSignalingStateChange: onSignalingStateChange
+            onSignalingStateChange: onSignalingStateChange,
+            onRenegotiationNeeded: onRenegotiationNeeded
         )
         if failNextCreatedSlotRemoteOffer {
             slot.failNextRemoteOffer = true

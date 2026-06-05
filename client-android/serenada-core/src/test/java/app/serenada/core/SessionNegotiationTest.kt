@@ -361,6 +361,53 @@ class SessionNegotiationTest {
     }
 
     @Test
+    fun `designated offerer sends normal offer for local track negotiation request`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
+        val slot = factory.fakeMedia.fakeSlots["zeta"]
+        assertNotNull(slot)
+        factory.simulateAnswerFromRemote("zeta", offerId = latestOfferId())
+        val offersBefore = factory.fakeProvider.sentMessages("offer").size
+        val slotOffersBefore = slot!!.createOfferCalls
+
+        factory.fakeProvider.simulateMessage(
+            from = "zeta",
+            type = "media_restart_request",
+            payload = JSONObject().apply {
+                put("from", "zeta")
+                put("reason", "local track negotiation")
+            },
+        )
+        ShadowLooper.idleMainLooper()
+
+        assertSame("Local track negotiation should keep the existing peer slot", slot, factory.fakeMedia.fakeSlots["zeta"])
+        assertFalse("Existing peer slot must not be closed", slot.closePeerConnectionCalled)
+        assertEquals("Exactly one normal offer should be sent", offersBefore + 1, factory.fakeProvider.sentMessages("offer").size)
+        assertEquals("Existing slot should create the offer", slotOffersBefore + 1, slot.createOfferCalls)
+        assertEquals("Local track negotiation must not request ICE restart", false, slot.createOfferIceRestartFlags.last())
+    }
+
+    @Test
+    fun `non offerer requests local track negotiation offer when renegotiation is needed`() {
+        factory.advanceToInCallWithTurn(localCid = "zeta", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
+        factory.simulateOfferFromRemote("alpha", offerId = "remote-offer")
+        ShadowLooper.idleMainLooper()
+        val slot = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull(slot)
+        val offersBefore = factory.fakeProvider.sentMessages("offer").size
+
+        slot!!.simulateRenegotiationNeeded()
+        ShadowLooper.idleMainLooper()
+
+        assertSame("Local track negotiation should keep the existing peer slot", slot, factory.fakeMedia.fakeSlots["alpha"])
+        assertFalse("Existing peer slot must not be closed", slot.closePeerConnectionCalled)
+        assertEquals("Non-offerer must not send an offer directly", offersBefore, factory.fakeProvider.sentMessages("offer").size)
+        val restartRequests = factory.fakeProvider.sentMessages("media_restart_request")
+        assertEquals("Non-offerer should ask the deterministic offer owner to renegotiate", 1, restartRequests.size)
+        assertEquals("alpha", restartRequests.single().peerId)
+        assertEquals("local track negotiation", restartRequests.single().payload?.optString("reason"))
+    }
+
+    @Test
     fun `media restart request is rate limited per peer`() {
         factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "zeta", localJoinedAt = 1, remoteJoinedAt = 2)
         val oldSlot = factory.fakeMedia.fakeSlots["zeta"]

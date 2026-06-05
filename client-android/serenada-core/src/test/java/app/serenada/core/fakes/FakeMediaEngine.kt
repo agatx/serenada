@@ -66,6 +66,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
             onConnectionStateChange = onConnectionStateChange,
             onIceConnectionStateChange = onIceConnectionStateChange,
             onSignalingStateChange = onSignalingStateChange,
+            onRenegotiationNeeded = onRenegotiationNeeded,
         )
         if (failNextCreatedSlotRemoteOffer) {
             slot.failNextRemoteOffer = true

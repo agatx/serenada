@@ -1,6 +1,7 @@
 import type { RoomState, SignalingMessage } from '../signaling/types.js';
 import type { ConnectionStatus, SerenadaLogger } from '../types.js';
 import { parseOfferPayload, parseAnswerPayload, parseIceCandidatePayload } from '../signaling/payloads.js';
+import { MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION } from '../signaling/protocolConstants.js';
 import { formatError } from '../formatError.js';
 import { normalizeIceServers } from '../iceServers.js';
 import {
@@ -236,8 +237,9 @@ export class MediaEngine {
                 }
                 case 'media_restart_request': {
                     const fromCid = typeof payload.from === 'string' ? payload.from.trim() : '';
+                    const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
                     if (fromCid && this.isCurrentParticipant(fromCid)) {
-                        void this.handleMediaRestartRequest(fromCid);
+                        void this.handleMediaRestartRequest(fromCid, reason);
                     }
                     break;
                 }
@@ -299,11 +301,7 @@ export class MediaEngine {
                         peer.pendingLocalTrackNegotiation = true;
                     }
                 } else if (!this.shouldIOffer(remoteCid) && peer.pc.remoteDescription) {
-                    if (peer.pc.signalingState === 'stable') {
-                        void this.createOfferTo(remoteCid);
-                    } else {
-                        peer.pendingLocalTrackNegotiation = true;
-                    }
+                    this.scheduleLocalTrackNegotiation(remoteCid, peer);
                 }
             }
             this.notifyChange();
@@ -985,6 +983,12 @@ export class MediaEngine {
             const c = peer.iceBuffer.shift();
             if (c) await peer.pc.addIceCandidate(c);
         }
+        if (this.localStream) {
+            await this.attachLocalTracksToPeer(fromCid, peer, this.localStream);
+        } else {
+            await this.startLocalMedia();
+        }
+        await this.applyAudioSenderParameters(peer.pc);
         const answer = await peer.pc.createAnswer();
         await peer.pc.setLocalDescription(answer);
         this.sendSignalingMessage('answer', { sdp: answer.sdp, offerId }, fromCid);
@@ -1167,6 +1171,8 @@ export class MediaEngine {
                         await videoTransceiver.sender.replaceTrack(newTrack);
                         if (videoTransceiver.direction !== 'sendrecv' && videoTransceiver.direction !== 'stopped' && this.videoCaptureSupported) {
                             videoTransceiver.direction = 'sendrecv';
+                        }
+                        if (newTrack && this.needsLocalTrackNegotiation(videoTransceiver)) {
                             this.scheduleLocalTrackNegotiation(remoteCid, peer);
                         }
                     } catch (err) {
@@ -1222,9 +1228,10 @@ export class MediaEngine {
     }
 
     private findTransceiver(pc: RTCPeerConnection, kind: 'audio' | 'video'): RTCRtpTransceiver | undefined {
-        return pc.getTransceivers().find(transceiver => (
+        const transceivers = pc.getTransceivers().filter(transceiver => (
             transceiver.receiver.track?.kind === kind || transceiver.sender.track?.kind === kind
         ));
+        return transceivers.find(transceiver => transceiver.mid !== null) ?? transceivers[0];
     }
 
     private async attachLocalTracksToPeer(remoteCid: string, peer: PeerState, stream: MediaStream): Promise<void> {
@@ -1238,26 +1245,40 @@ export class MediaEngine {
     }
 
     private async attachLocalTrackToPeer(peer: PeerState, track: MediaStreamTrack, stream: MediaStream): Promise<boolean> {
-        if (peer.pc.getSenders().some(sender => sender.track?.kind === track.kind)) {
-            return false;
-        }
-
         const transceiver = track.kind === 'audio' || track.kind === 'video'
             ? this.findTransceiver(peer.pc, track.kind)
             : undefined;
         if (transceiver) {
+            if (transceiver.sender.track?.kind === track.kind) {
+                return this.needsLocalTrackNegotiation(transceiver);
+            }
+            for (const sender of peer.pc.getSenders()) {
+                if (sender === transceiver.sender || sender.track?.kind !== track.kind) {
+                    continue;
+                }
+                try {
+                    await sender.replaceTrack(null);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to detach stale ${track.kind} track from peer: ${formatError(err)}`);
+                }
+            }
             try {
                 await transceiver.sender.replaceTrack(track);
+                let negotiationNeeded = this.needsLocalTrackNegotiation(transceiver);
                 if (transceiver.direction !== 'sendrecv' && transceiver.direction !== 'stopped') {
                     transceiver.direction = 'sendrecv';
-                    return true;
+                    negotiationNeeded = true;
                 }
+                return negotiationNeeded;
             } catch (err) {
                 this.logger?.log('warning', 'WebRTC', `Failed to attach ${track.kind} track to peer: ${formatError(err)}`);
             }
             return false;
         }
 
+        if (peer.pc.getSenders().some(sender => sender.track?.kind === track.kind)) {
+            return false;
+        }
         peer.pc.addTrack(track, stream);
         return true;
     }
@@ -1276,7 +1297,39 @@ export class MediaEngine {
             return;
         }
         peer.pendingLocalTrackNegotiation = false;
+        if (!this.hasUnnegotiatedLocalTracks(peer.pc)) {
+            return;
+        }
+        if (!this.shouldIOffer(remoteCid)) {
+            this.requestPeerMediaRecovery(remoteCid, MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION);
+            return;
+        }
         void this.createOfferTo(remoteCid);
+    }
+
+    private hasUnnegotiatedLocalTracks(pc: RTCPeerConnection): boolean {
+        for (const sender of pc.getSenders()) {
+            const track = sender.track;
+            if (!track || track.readyState !== 'live' || !track.enabled) {
+                continue;
+            }
+            const transceiver = pc.getTransceivers().find(candidate => candidate.sender === sender);
+            if (!transceiver) {
+                return true;
+            }
+            if (this.needsLocalTrackNegotiation(transceiver)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private needsLocalTrackNegotiation(transceiver: RTCRtpTransceiver): boolean {
+        const track = transceiver.sender.track;
+        if (!track || track.readyState !== 'live' || !track.enabled) {
+            return false;
+        }
+        return transceiver.currentDirection !== 'sendrecv' && transceiver.currentDirection !== 'sendonly';
     }
 
     private async refreshLocalVideoTrack(reason: string, forceRefresh = false): Promise<boolean> {
@@ -1498,16 +1551,32 @@ export class MediaEngine {
 
     private requestPeerMediaRecovery(remoteCid: string, reason: string): void {
         if (!this.isSignalingConnected || !this.isParticipantActive(remoteCid)) return;
-        this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Requesting media restart after ${reason}`);
+        if (reason === MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION) {
+            this.logger?.log('debug', 'WebRTC', `[${remoteCid}] Requesting offer after ${reason}`);
+        } else {
+            this.logger?.log('warning', 'WebRTC', `[${remoteCid}] Requesting media restart after ${reason}`);
+        }
         this.sendSignalingMessage('media_restart_request', { reason }, remoteCid);
     }
 
-    private async handleMediaRestartRequest(fromCid: string): Promise<void> {
+    private async handleMediaRestartRequest(fromCid: string, reason = ''): Promise<void> {
+        if (reason === MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION) {
+            await this.handlePeerLocalTrackNegotiationRequest(fromCid);
+            return;
+        }
         const now = Date.now();
         const lastHandledAt = this.mediaRestartHandledAtByCid.get(fromCid) ?? 0;
         if (now - lastHandledAt < OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS) return;
         this.mediaRestartHandledAtByCid.set(fromCid, now);
         await this.recreatePeerForMediaRecovery(fromCid, 'peer media restart request');
+    }
+
+    private async handlePeerLocalTrackNegotiationRequest(fromCid: string): Promise<void> {
+        if (!this.shouldIOffer(fromCid) || !this.isSignalingConnected || !this.isParticipantActive(fromCid)) return;
+        const peer = this.peers.get(fromCid);
+        if (!peer || peer.pc.signalingState !== 'stable') return;
+        this.logger?.log('debug', 'WebRTC', `[${fromCid}] Creating offer after peer local track negotiation request`);
+        await this.createOfferTo(fromCid);
     }
 
     private async recreatePeerForMediaRecovery(remoteCid: string, reason: string): Promise<void> {

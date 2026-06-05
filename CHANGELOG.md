@@ -4,6 +4,19 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.3] — 2026-06-04
+
+### Fixed
+- Web: answerers attach or start local media before creating an answer,
+  so initial audio/video is negotiated instead of waiting for media
+  recovery when the answerer is the deterministic non-offerer.
+- Web, Android, iOS: late local track negotiation uses a normal
+  deterministic-offerer renegotiation request, while true stalled
+  outbound media recovery keeps the peer-recreate path.
+- Web, Android, iOS: local sender replacement now prefers negotiated
+  transceivers and clears stale same-kind senders before attaching the
+  active track.
+
 ## [0.8.2] — 2026-06-02
 
 ### Added

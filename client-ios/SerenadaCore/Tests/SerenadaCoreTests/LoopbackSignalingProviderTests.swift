@@ -338,8 +338,6 @@ final class LoopbackSignalingProviderTests: XCTestCase {
         // Alice's media engine should know about the initial room state.
         XCTAssertFalse(mediaA.createdSlotCids.isEmpty == false && mediaA.createdSlotCids.contains("alice"),
                        "Should not create a slot for self")
-        let initialSlotCount = mediaA.createdSlotCids.count
-
         let (sessionB, _) = makeSession(provider: providerB)
         await advancePastPermissions(sessionB)
         await settle()

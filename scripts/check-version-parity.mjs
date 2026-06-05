@@ -38,6 +38,11 @@ const sources = [
         regex: /sdkVersion\s*=\s*"([^"]+)"/,
     },
     {
+        name: 'serenada-core (Kotlin constant)',
+        file: 'client-android/serenada-core/src/main/java/app/serenada/core/SerenadaCore.kt',
+        regex: /VERSION\s*=\s*"([^"]+)"/,
+    },
+    {
         name: 'serenada-webrtc (build.gradle.kts)',
         file: 'client-android/serenada-webrtc/build.gradle.kts',
         regex: /sdkVersion\s*=\s*"([^"]+)"/,

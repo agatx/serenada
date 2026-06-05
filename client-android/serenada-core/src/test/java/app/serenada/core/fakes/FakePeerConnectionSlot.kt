@@ -17,6 +17,7 @@ internal class FakePeerConnectionSlot(
     private val onConnectionStateChange: ((String, PeerConnection.PeerConnectionState) -> Unit)? = null,
     private val onIceConnectionStateChange: ((String, PeerConnection.IceConnectionState) -> Unit)? = null,
     private val onSignalingStateChange: ((String, PeerConnection.SignalingState) -> Unit)? = null,
+    private val onRenegotiationNeeded: ((String) -> Unit)? = null,
 ) : PeerConnectionSlotProtocol {
 
     // State
@@ -203,5 +204,9 @@ internal class FakePeerConnectionSlot(
     fun simulateIceConnectionStateChange(state: PeerConnection.IceConnectionState) {
         iceConnectionState = state
         onIceConnectionStateChange?.invoke(remoteCid, state)
+    }
+
+    fun simulateRenegotiationNeeded() {
+        onRenegotiationNeeded?.invoke(remoteCid)
     }
 }

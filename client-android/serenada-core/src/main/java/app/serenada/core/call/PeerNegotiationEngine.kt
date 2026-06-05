@@ -159,7 +159,8 @@ internal class PeerNegotiationEngine(
                 handleRemoteIce(slot, fromCid, candidate, offerIdFromPayload(msg.payload))
             }
             "media_restart_request" -> {
-                handleMediaRestartRequest(slot, fromCid)
+                val reason = msg.payload?.optString("reason").orEmpty().trim()
+                handleMediaRestartRequest(slot, fromCid, reason)
             }
         }
     }
@@ -282,7 +283,7 @@ internal class PeerNegotiationEngine(
             },
             { cid ->
                 handler.post {
-                    getSlot(cid)?.let { maybeSendOffer(it, force = true) }
+                    handleRenegotiationNeeded(cid)
                 }
             }
         )
@@ -608,7 +609,20 @@ internal class PeerNegotiationEngine(
         if (!force) slot.markOfferSent()
     }
 
-    private fun handleMediaRestartRequest(slot: PeerConnectionSlotProtocol, remoteCid: String) {
+    private fun handleRenegotiationNeeded(remoteCid: String) {
+        val slot = getSlot(remoteCid) ?: return
+        if (shouldIOffer(remoteCid, getCurrentRoomState())) {
+            maybeSendOffer(slot, force = true)
+        } else {
+            requestPeerLocalTrackNegotiation(remoteCid, slot)
+        }
+    }
+
+    private fun handleMediaRestartRequest(slot: PeerConnectionSlotProtocol, remoteCid: String, reason: String) {
+        if (reason == SignalingProtocolConstants.MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION) {
+            handleLocalTrackNegotiationRequest(slot, remoteCid)
+            return
+        }
         if (!canOffer(slot)) return
         val now = clock.nowMs()
         val lastHandledAt = lastMediaRestartHandledAtByCid[remoteCid]
@@ -617,6 +631,12 @@ internal class PeerNegotiationEngine(
         logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after media restart request from $remoteCid")
         val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
         maybeSendOffer(replacement)
+    }
+
+    private fun handleLocalTrackNegotiationRequest(slot: PeerConnectionSlotProtocol, remoteCid: String) {
+        if (!canOffer(slot) || slot.getSignalingState() != PeerConnection.SignalingState.STABLE) return
+        logger?.log(SerenadaLogLevel.DEBUG, TAG, "Creating offer after peer local track negotiation request from $remoteCid")
+        maybeSendOffer(slot, force = true)
     }
 
     // --- Outbound Media Watchdog ---
@@ -707,6 +727,16 @@ internal class PeerNegotiationEngine(
         if (!isSignalingConnected() || !isParticipantActive(remoteCid)) return
         logger?.log(SerenadaLogLevel.WARNING, TAG, "Requesting media restart from $remoteCid after $reason")
         val payload = JSONObject().apply { put("reason", reason) }
+        sendMessage("media_restart_request", payload, remoteCid)
+    }
+
+    private fun requestPeerLocalTrackNegotiation(remoteCid: String, slot: PeerConnectionSlotProtocol) {
+        if (!isSignalingConnected() || !isLocalMediaReady() || !isParticipantActive(remoteCid)) return
+        if (slot.getSignalingState() != PeerConnection.SignalingState.STABLE) return
+        logger?.log(SerenadaLogLevel.DEBUG, TAG, "Requesting local track negotiation offer from $remoteCid")
+        val payload = JSONObject().apply {
+            put("reason", SignalingProtocolConstants.MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION)
+        }
         sendMessage("media_restart_request", payload, remoteCid)
     }
 

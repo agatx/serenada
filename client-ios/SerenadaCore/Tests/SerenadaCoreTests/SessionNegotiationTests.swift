@@ -143,11 +143,16 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertNotNil(fakeSlot)
 
         // Verify offer was sent
+        await waitUntil {
+            (fakeSlot?.createOfferCalls ?? 0) > 0
+        }
         XCTAssertGreaterThan(fakeSlot?.createOfferCalls ?? 0, 0)
 
         // Simulate answer from remote
         harness.simulateAnswerFromRemote(fromCid: "remote")
-        await harness.yieldToMainActor()
+        await waitUntil {
+            fakeSlot?.setRemoteDescriptionCalls.last?.type == .answer
+        }
 
         XCTAssertEqual(fakeSlot?.setRemoteDescriptionCalls.last?.type, .answer, "Should set answer as remote desc")
         XCTAssertEqual(fakeSlot?.pendingIceRestart, false, "pendingIceRestart should be cleared after answer")
@@ -493,6 +498,66 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertTrue(oldSlot.closePeerConnectionCalled, "Old slot should be closed")
         XCTAssertGreaterThan(replacement.createOfferCalls, 0, "Replacement should send a fresh offer")
         XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBefore + 1)
+    }
+
+    func testDesignatedOffererSendsNormalOfferForLocalTrackNegotiationRequest() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "alpha",
+            remoteCid: "zeta",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+        let slot = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        let offerId = try XCTUnwrap(harness.fakeProvider.sentPeerMessages(ofType: "offer").last?.payload?["offerId"]?.stringValue)
+        harness.simulateAnswerFromRemote(fromCid: "zeta", offerId: offerId)
+        await harness.yieldToMainActor()
+        let offersBefore = harness.fakeProvider.sentPeerMessages(ofType: "offer").count
+        let slotOffersBefore = slot.createOfferCalls
+
+        harness.fakeProvider.simulateMessage(
+            from: "zeta",
+            type: "media_restart_request",
+            payload: [
+                "from": .string("zeta"),
+                "reason": .string("local track negotiation")
+            ]
+        )
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "offer").count == offersBefore + 1
+        }
+
+        let current = try XCTUnwrap(harness.fakeMedia.fakeSlots["zeta"])
+        XCTAssertTrue(current === slot, "Local track negotiation should keep the existing peer slot")
+        XCTAssertFalse(slot.closePeerConnectionCalled, "Existing peer slot must not be closed")
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBefore + 1)
+        XCTAssertEqual(slot.createOfferCalls, slotOffersBefore + 1, "Existing slot should create the offer")
+        XCTAssertEqual(slot.createOfferIceRestartFlags.last, false, "Local track negotiation must not request ICE restart")
+    }
+
+    func testNonOffererRequestsLocalTrackNegotiationOfferWhenRenegotiationIsNeeded() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "zeta",
+            remoteCid: "alpha",
+            localJoinedAt: 2,
+            remoteJoinedAt: 1
+        )
+        harness.simulateOfferFromRemote(fromCid: "alpha", offerId: "remote-offer")
+        await harness.yieldToMainActor()
+        let slot = try XCTUnwrap(harness.fakeMedia.fakeSlots["alpha"])
+        let offersBefore = harness.fakeProvider.sentPeerMessages(ofType: "offer").count
+
+        slot.simulateRenegotiationNeeded()
+        await waitUntil {
+            harness.fakeProvider.sentPeerMessages(ofType: "media_restart_request").count == 1
+        }
+
+        let current = try XCTUnwrap(harness.fakeMedia.fakeSlots["alpha"])
+        XCTAssertTrue(current === slot, "Local track negotiation should keep the existing peer slot")
+        XCTAssertFalse(slot.closePeerConnectionCalled, "Existing peer slot must not be closed")
+        XCTAssertEqual(harness.fakeProvider.sentPeerMessages(ofType: "offer").count, offersBefore, "Non-offerer must not send an offer directly")
+        let restartRequest = try XCTUnwrap(harness.fakeProvider.sentPeerMessages(ofType: "media_restart_request").first)
+        XCTAssertEqual(restartRequest.peerId, "alpha")
+        XCTAssertEqual(restartRequest.payload?["reason"]?.stringValue, "local track negotiation")
     }
 
     func testMediaRestartRequestIsRateLimitedPerPeer() async throws {

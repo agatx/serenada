@@ -585,9 +585,13 @@ schedule fresh negotiation against confirmed state.
 
 ### 4.16 `media_restart_request` (client → server → client)
 
-Asks the deterministic offer owner for a peer pair to recreate that pair and
-send a fresh offer because media stopped flowing even though SDP, ICE, and
-peer-connection states still look healthy.
+Asks the deterministic offer owner for a peer pair to send a fresh offer. Most
+requests are media-recovery requests, where media stopped flowing even though
+SDP, ICE, and peer-connection states still look healthy. A request with
+`reason: "local track negotiation"` is a lighter negotiation-only request: the
+receiver should keep the existing peer connection and create a new offer.
+This reason is a shared client wire constant verified by
+`node scripts/check-signaling-protocol-constants.mjs`.
 
 ```json
 {
@@ -605,8 +609,12 @@ peer-connection states still look healthy.
 - Relay like `offer`/`answer`/`ice` and add `from` to the payload.
 
 **Client behavior**
-- If the receiver is the deterministic offer owner for `from`, close and
-  recreate that peer connection, then send a fresh offer.
+- If the receiver is the deterministic offer owner for `from` and
+  `reason === "local track negotiation"`, keep the existing peer connection
+  and send a fresh offer.
+- If the receiver is the deterministic offer owner for `from` and the reason is
+  media recovery, close and recreate that peer connection, then send a fresh
+  offer.
 - If the receiver is not the offer owner, ignore the request.
 - Do not let this bypass perfect negotiation ownership; non-offerers request
   recovery instead of sending their own offer.

@@ -203,7 +203,8 @@ final class PeerNegotiationEngine {
             )
 
         case "media_restart_request":
-            handleMediaRestartRequest(slot: slot, remoteCid: fromCid)
+            let reason = message.payload?.objectValue?["reason"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            handleMediaRestartRequest(slot: slot, remoteCid: fromCid, reason: reason)
 
         default:
             break
@@ -352,8 +353,7 @@ final class PeerNegotiationEngine {
             },
             { [weak self] cid in
                 Task { @MainActor in
-                    guard let self, let slot = self.getSlot(cid) else { return }
-                    self.maybeSendOffer(slot: slot, force: true, iceRestart: false)
+                    self?.handleRenegotiationNeeded(remoteCid: cid)
                 }
             }
         ) else {
@@ -732,7 +732,20 @@ final class PeerNegotiationEngine {
         }
     }
 
-    private func handleMediaRestartRequest(slot: any PeerConnectionSlotProtocol, remoteCid: String) {
+    private func handleRenegotiationNeeded(remoteCid: String) {
+        guard let slot = getSlot(remoteCid) else { return }
+        if shouldIOffer(remoteCid: remoteCid, roomState: getCurrentRoomState()) {
+            maybeSendOffer(slot: slot, force: true, iceRestart: false)
+        } else {
+            requestPeerLocalTrackNegotiation(remoteCid: remoteCid, slot: slot)
+        }
+    }
+
+    private func handleMediaRestartRequest(slot: any PeerConnectionSlotProtocol, remoteCid: String, reason: String) {
+        if reason == SignalingProtocolConstants.mediaRestartReasonLocalTrackNegotiation {
+            handleLocalTrackNegotiationRequest(slot: slot, remoteCid: remoteCid)
+            return
+        }
         guard canOffer(slot: slot) else { return }
         let now = clock.nowMs()
         if let lastHandledAt = lastMediaRestartHandledAtByCid[remoteCid],
@@ -743,6 +756,12 @@ final class PeerNegotiationEngine {
         logger?.log(.warning, tag: "PeerNegotiationEngine", "Recreating peer after media restart request from \(remoteCid)")
         guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
         maybeSendOffer(slot: replacement)
+    }
+
+    private func handleLocalTrackNegotiationRequest(slot: any PeerConnectionSlotProtocol, remoteCid: String) {
+        guard canOffer(slot: slot), slot.getSignalingState() == "STABLE" else { return }
+        logger?.log(.debug, tag: "PeerNegotiationEngine", "Creating offer after peer local track negotiation request from \(remoteCid)")
+        maybeSendOffer(slot: slot, force: true)
     }
 
     // MARK: - Outbound Media Watchdog
@@ -837,6 +856,17 @@ final class PeerNegotiationEngine {
         guard isSignalingConnected(), isParticipantActive(remoteCid: remoteCid) else { return }
         logger?.log(.warning, tag: "PeerNegotiationEngine", "Requesting media restart from \(remoteCid) after \(reason)")
         sendMessage("media_restart_request", .object(["reason": .string(reason)]), remoteCid)
+    }
+
+    private func requestPeerLocalTrackNegotiation(remoteCid: String, slot: any PeerConnectionSlotProtocol) {
+        guard isSignalingConnected(), isLocalMediaReady(), isParticipantActive(remoteCid: remoteCid) else { return }
+        guard slot.getSignalingState() == "STABLE" else { return }
+        logger?.log(.debug, tag: "PeerNegotiationEngine", "Requesting local track negotiation offer from \(remoteCid)")
+        sendMessage(
+            "media_restart_request",
+            .object(["reason": .string(SignalingProtocolConstants.mediaRestartReasonLocalTrackNegotiation)]),
+            remoteCid
+        )
     }
 
     private func recreatePeerForMediaRecovery(remoteCid: String, reason: String) {

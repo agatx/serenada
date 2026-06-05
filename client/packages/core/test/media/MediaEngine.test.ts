@@ -88,8 +88,15 @@ class FakeRtcPeerConnection {
             return;
         }
 
+        if (description.type === 'offer') {
+            this.ensureLocalOfferTransceiver('audio', '0');
+            this.ensureLocalOfferTransceiver('video', '1');
+        }
         this.localDescription = description;
         this.signalingState = description.type === 'offer' ? 'have-local-offer' : 'stable';
+        if (description.type === 'answer') {
+            this.finalizeNegotiatedDirections();
+        }
         this.onsignalingstatechange?.();
     }
     async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
@@ -98,8 +105,15 @@ class FakeRtcPeerConnection {
             this.failNextRemoteOffer = false;
             throw new Error('set remote offer failed');
         }
+        if (description.type === 'offer') {
+            this.ensureRemoteOfferTransceiver('audio', '0');
+            this.ensureRemoteOfferTransceiver('video', '1');
+        }
         this.remoteDescription = description;
         this.signalingState = description.type === 'offer' ? 'have-remote-offer' : 'stable';
+        if (description.type === 'answer') {
+            this.finalizeNegotiatedDirections();
+        }
         this.onsignalingstatechange?.();
     }
     async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
@@ -107,6 +121,40 @@ class FakeRtcPeerConnection {
     }
     setConfiguration(configuration: RTCConfiguration): void {
         this.configurationUpdates.push(configuration);
+    }
+
+    private ensureRemoteOfferTransceiver(kind: 'audio' | 'video', mid: string): void {
+        if (this.transceivers.some(transceiver => transceiver.mid === mid)) {
+            return;
+        }
+        const sender = new FakeRtcRtpSender(null);
+        this.senders.push(sender);
+        this.transceivers.push(new FakeRtcRtpTransceiver(kind, sender, 'recvonly', mid));
+    }
+
+    private ensureLocalOfferTransceiver(kind: 'audio' | 'video', mid: string): void {
+        if (this.transceivers.some(transceiver => transceiver.mid === mid)) {
+            return;
+        }
+        const transceiver = this.transceivers.find(candidate => (
+            candidate.mid === null &&
+            (candidate.receiver.track?.kind === kind || candidate.sender.track?.kind === kind)
+        ));
+        if (transceiver) {
+            transceiver.mid = mid;
+            return;
+        }
+        const sender = new FakeRtcRtpSender(null);
+        this.senders.push(sender);
+        this.transceivers.push(new FakeRtcRtpTransceiver(kind, sender, 'recvonly', mid));
+    }
+
+    private finalizeNegotiatedDirections(): void {
+        for (const transceiver of this.transceivers) {
+            if (transceiver.mid !== null) {
+                transceiver.currentDirection = transceiver.direction;
+            }
+        }
     }
 }
 
@@ -133,11 +181,13 @@ class FakeRtcRtpSender {
 
 class FakeRtcRtpTransceiver {
     readonly receiver: RTCRtpReceiver;
+    currentDirection: RTCRtpTransceiverDirection | null = null;
 
     constructor(
         kind: 'audio' | 'video',
         public sender: FakeRtcRtpSender,
         public direction: RTCRtpTransceiverDirection,
+        public mid: string | null = null,
     ) {
         this.receiver = {
             track: createMediaTrack(kind),
@@ -389,6 +439,9 @@ describe('MediaEngine', () => {
         if (peer) {
             peer.remoteDescription = { type: 'answer', sdp: 'fake-answer-sdp' };
             peer.signalingState = 'stable';
+            peer.transceivers.forEach(transceiver => {
+                transceiver.currentDirection = transceiver.direction;
+            });
         }
 
         await engine.reacquireVideoTrack();
@@ -399,6 +452,108 @@ describe('MediaEngine', () => {
         });
         expect(peer?.senders.map(sender => sender.track?.kind)).toEqual(['audio', 'video']);
         expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(1);
+    });
+
+    it('moves answerer local tracks to negotiated transceivers before answering remote offers', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+        await engine.startLocalMedia();
+
+        const peer = engine.getPeerConnectionsMap().get('alpha') as FakeRtcPeerConnection | undefined;
+        expect(peer).toBeDefined();
+        expect(peer?.transceivers.filter(transceiver => transceiver.mid === null).map(transceiver => transceiver.sender.track?.kind)).toEqual(['audio', 'video']);
+
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'offer',
+            payload: { from: 'alpha', sdp: 'remote-offer', offerId: 'offer-1' },
+        });
+        await flushPromises();
+
+        await vi.waitFor(() => {
+            expect(sentMessages.filter(message => message.type === 'answer')).toHaveLength(1);
+        });
+        expect(peer?.transceivers.find(transceiver => transceiver.mid === '0')?.sender.track?.kind).toBe('audio');
+        expect(peer?.transceivers.find(transceiver => transceiver.mid === '1')?.sender.track?.kind).toBe('video');
+        expect(peer?.transceivers.filter(transceiver => transceiver.mid === null).map(transceiver => transceiver.sender.track)).toEqual([null, null]);
+    });
+
+    it('asks the offerer to renegotiate when non-offer late video needs a new m-line direction', async () => {
+        const getUserMedia = vi.fn().mockImplementation(async (constraints: MediaStreamConstraints) => {
+            if (constraints.video) {
+                return createMediaStream({ audio: false, video: true });
+            }
+            return createMediaStream();
+        });
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({ initialVideoEnabled: false }, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'zeta');
+        await engine.startLocalMedia();
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'offer',
+            payload: { from: 'alpha', sdp: 'remote-offer', offerId: 'offer-1' },
+        });
+        await flushPromises();
+
+        const peer = engine.getPeerConnectionsMap().get('alpha') as FakeRtcPeerConnection | undefined;
+        expect(peer).toBeDefined();
+        let videoTransceiver: FakeRtcRtpTransceiver | undefined;
+        await vi.waitFor(() => {
+            videoTransceiver = peer?.transceivers.find(transceiver => transceiver.mid === '1');
+            expect(videoTransceiver?.currentDirection).toBe('recvonly');
+        });
+        if (videoTransceiver) {
+            videoTransceiver.direction = 'sendrecv';
+        }
+        sentMessages.length = 0;
+
+        await engine.reacquireVideoTrack();
+        await flushPromises();
+
+        expect(peer?.closed).toBe(false);
+        expect(sentMessages.filter(message => message.type === 'offer')).toHaveLength(0);
+        expect(sentMessages.filter(message => message.type === 'media_restart_request')).toEqual([
+            { type: 'media_restart_request', payload: { reason: 'local track negotiation' }, to: 'alpha' },
+        ]);
     });
 
     it('does not restore camera after stopping screen share that started from audio-only media', async () => {
@@ -708,7 +863,9 @@ describe('MediaEngine', () => {
             type: 'offer',
             payload: { from: 'alpha', sdp: 'remote-offer', offerId: 'offer-1' },
         });
-        await flushPromises();
+        await vi.waitFor(() => {
+            expect(sentMessages.filter((message) => message.type === 'answer')).toHaveLength(1);
+        });
 
         const peer = engine.getPeerConnectionsMap().get('alpha') as FakeRtcPeerConnection | undefined;
         expect(peer).toBeDefined();
@@ -964,6 +1121,56 @@ describe('MediaEngine', () => {
         expect(replacement).toBeDefined();
         expect(replacement).not.toBe(peer);
         expect(peer?.closed).toBe(true);
+        expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(2);
+    });
+
+    it('renegotiates without recreating the offerer peer for local track negotiation requests', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({}, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await vi.waitFor(() => {
+            expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(1);
+        });
+
+        const firstOfferId = sentMessages.find((message) => message.type === 'offer')?.payload?.offerId;
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'answer',
+            payload: { from: 'zeta', sdp: 'remote-answer', offerId: firstOfferId },
+        });
+        await flushPromises();
+
+        const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+        expect(peer).toBeDefined();
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'media_restart_request',
+            payload: { from: 'zeta', reason: 'local track negotiation' },
+        });
+        await flushPromises();
+
+        expect(engine.getPeerConnectionsMap().get('zeta')).toBe(peer);
+        expect(peer?.closed).toBe(false);
         expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(2);
     });
 

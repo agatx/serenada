@@ -111,6 +111,34 @@ final class SessionTestHarness {
         }
     }
 
+    func waitForLocalMedia(attempts: Int = 32) async {
+        for _ in 0..<attempts {
+            if !fakeMedia.startLocalMediaCalls.isEmpty {
+                return
+            }
+            await yieldToMainActor()
+        }
+    }
+
+    func waitForIceServers(attempts: Int = 32) async {
+        for _ in 0..<attempts {
+            if fakeMedia.hasIceServers() {
+                return
+            }
+            await yieldToMainActor()
+        }
+    }
+
+    func waitForInitialOfferIfNeeded(localCid: String, remoteCid: String, attempts: Int = 32) async {
+        guard localCid < remoteCid else { return }
+        for _ in 0..<attempts {
+            if !fakeProvider.sentPeerMessages(ofType: "offer").isEmpty {
+                return
+            }
+            await yieldToMainActor()
+        }
+    }
+
     // MARK: - Negotiation Test Helpers
 
     /// Advance to inCall state with TURN credentials ready and ICE servers set.
@@ -123,6 +151,7 @@ final class SessionTestHarness {
     ) async {
         fakeProvider.iceServerResults = [.success(iceServers)]
         await advancePastPermissions()
+        await waitForLocalMedia()
         openSignaling()
         simulateJoinedResponse(
             cid: localCid,
@@ -135,6 +164,9 @@ final class SessionTestHarness {
         await yieldToMainActor()
         await fakeClock.advance(byMs: 100)
         await yieldToMainActor()
+        await waitForLocalMedia()
+        await waitForIceServers()
+        await waitForInitialOfferIfNeeded(localCid: localCid, remoteCid: remoteCid)
     }
 
     func simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp", offerId: String? = nil) {

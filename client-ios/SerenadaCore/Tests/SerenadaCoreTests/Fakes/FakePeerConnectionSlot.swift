@@ -36,17 +36,20 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     private let onConnectionStateChange: ((String, String) -> Void)?
     private let onIceConnectionStateChange: ((String, String) -> Void)?
     private let onSignalingStateChange: ((String, String) -> Void)?
+    private let onRenegotiationNeeded: ((String) -> Void)?
 
     init(
         remoteCid: String,
         onConnectionStateChange: ((String, String) -> Void)? = nil,
         onIceConnectionStateChange: ((String, String) -> Void)? = nil,
-        onSignalingStateChange: ((String, String) -> Void)? = nil
+        onSignalingStateChange: ((String, String) -> Void)? = nil,
+        onRenegotiationNeeded: ((String) -> Void)? = nil
     ) {
         self.remoteCid = remoteCid
         self.onConnectionStateChange = onConnectionStateChange
         self.onIceConnectionStateChange = onIceConnectionStateChange
         self.onSignalingStateChange = onSignalingStateChange
+        self.onRenegotiationNeeded = onRenegotiationNeeded
     }
 
     // MARK: - Offer Lifecycle
@@ -247,5 +250,9 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     func simulateSignalingStateChange(_ state: String) {
         signalingState = state
         onSignalingStateChange?(remoteCid, state)
+    }
+
+    func simulateRenegotiationNeeded() {
+        onRenegotiationNeeded?(remoteCid)
     }
 }

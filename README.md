@@ -164,9 +164,10 @@ bash tools/integration-test/run.sh    # Run signaling integration tests (require
 
 ### Version Parity
 
-Verify SDK versions match across all platforms:
+Verify SDK versions and shared protocol constants match across all platforms:
 ```bash
 node scripts/check-version-parity.mjs
+node scripts/check-signaling-protocol-constants.mjs
 ```
 
 ## Architecture

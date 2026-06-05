@@ -6,7 +6,7 @@ import Foundation
 /// room slot open for reconnect — peers MUST keep existing peer connections
 /// alive during the suspend window so established media survives arbitrary-
 /// length signaling outages.
-public enum ParticipantSignalingStatus: String, Codable, Equatable {
+public enum ParticipantSignalingStatus: String, Codable, Equatable, Sendable {
     case active
     case suspended
 }
