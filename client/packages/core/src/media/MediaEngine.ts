@@ -24,6 +24,7 @@ const ICE_STATE_PRIORITY: RTCIceConnectionState[] = ['failed', 'disconnected', '
 const CONN_STATE_PRIORITY: RTCPeerConnectionState[] = ['failed', 'disconnected', 'connecting', 'new', 'connected', 'closed'];
 const SIG_STATE_PRIORITY: RTCSignalingState[] = ['closed', 'have-local-offer', 'have-remote-offer', 'have-local-pranswer', 'have-remote-pranswer', 'stable'];
 const LEGACY_OFFER_ID = '__legacy__';
+const DEVICE_CHANGE_SETTLE_DELAY_MS = 2000;
 
 function getSignalingState(pc: RTCPeerConnection): RTCSignalingState {
     return pc.signalingState;
@@ -67,6 +68,12 @@ interface PeerState {
     lastOutboundMediaRecoveryAt: number;
 }
 
+interface PreferredAudioInputSelection {
+    device: MediaDeviceInfo | null;
+    currentMatchesPreferredRoute: boolean;
+    basis: 'default-input' | 'default-output' | 'already-matched' | 'none' | 'no-devices';
+}
+
 export interface MediaEngineConfig {
     turnsOnly?: boolean;
     logger?: SerenadaLogger;
@@ -104,6 +111,8 @@ export class MediaEngine {
     private requestingMedia = false;
     private destroyed = false;
     private cameraRecoveryInFlight = false;
+    private audioRecoveryInFlight = false;
+    private localMediaStartPromise: Promise<MediaStream | null> | null = null;
     private mediaRequestId = 0;
     private retryingTimer: number | null = null;
     private localVideoHeartbeatAt = Date.now();
@@ -117,6 +126,7 @@ export class MediaEngine {
     private onlineHandler: (() => void) | null = null;
     private networkChangeHandler: (() => void) | null = null;
     private deviceChangeHandler: (() => void) | null = null;
+    private deviceChangeSettleTimer: number | null = null;
     private turnsOnly: boolean;
     private logger?: SerenadaLogger;
     private offerSequence = 0;
@@ -250,34 +260,40 @@ export class MediaEngine {
     }
 
     async startLocalMedia(): Promise<MediaStream | null> {
+        if (this.localStream) return this.localStream;
+        if (this.localMediaStartPromise) return this.localMediaStartPromise;
+        const startPromise = this.startLocalMediaInternal();
+        this.localMediaStartPromise = startPromise;
+        try {
+            return await startPromise;
+        } finally {
+            if (this.localMediaStartPromise === startPromise) {
+                this.localMediaStartPromise = null;
+            }
+        }
+    }
+
+    private async startLocalMediaInternal(): Promise<MediaStream | null> {
         const requestId = this.mediaRequestId + 1;
         this.mediaRequestId = requestId;
 
-        if (this.localStream) return this.localStream;
         this.requestingMedia = true;
         try {
             if (!navigator.mediaDevices?.getUserMedia) {
                 this.requestingMedia = false;
                 return null;
             }
-            const audioConstraints: MediaTrackConstraints = {
-                echoCancellation: { ideal: true },
-                noiseSuppression: { ideal: true },
-                autoGainControl: { ideal: true },
-                channelCount: { ideal: 1 },
-                sampleRate: { ideal: 48000 }
-            };
+            const initialDevices = await this.enumerateMediaDevices();
+            const preferredInput = this.selectPreferredAudioInput(initialDevices, null);
+            const preferredDeviceId = preferredInput.device?.deviceId;
             let stream: MediaStream;
             if (!this.videoCaptureSupported || !this.initialVideoEnabled) {
-                stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: audioConstraints });
+                stream = await this.acquireInitialMedia(false, preferredDeviceId);
             } else {
                 try {
-                    stream = await navigator.mediaDevices.getUserMedia({
-                        video: { facingMode: this.facingMode },
-                        audio: audioConstraints
-                    });
+                    stream = await this.acquireInitialMedia({ facingMode: this.facingMode }, preferredDeviceId);
                 } catch {
-                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    stream = await this.acquireInitialMedia(true, preferredDeviceId);
                 }
             }
 
@@ -288,11 +304,17 @@ export class MediaEngine {
 
             this.applySpeechTrackHints(stream);
             this.localStream = stream;
-            await this.detectCameras();
+            const postStartDevices = await this.enumerateMediaDevices();
+            await this.detectCameras(postStartDevices);
             this.requestingMedia = false;
+            if (this.roomState && this.clientId) {
+                await this.refreshLocalAudioTrack('initial-route-check', postStartDevices, false);
+            }
+            const activeStream = this.localStream;
+            if (!activeStream) return null;
 
             for (const [remoteCid, peer] of this.peers) {
-                await this.attachLocalTracksToPeer(remoteCid, peer, stream);
+                await this.attachLocalTracksToPeer(remoteCid, peer, activeStream);
                 void this.applyAudioSenderParameters(peer.pc);
                 if (this.shouldIOffer(remoteCid) && !peer.pc.remoteDescription) {
                     if (peer.pc.signalingState === 'stable') {
@@ -305,7 +327,7 @@ export class MediaEngine {
                 }
             }
             this.notifyChange();
-            return stream;
+            return activeStream;
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `Error accessing media: ${formatError(err)}`);
             this.requestingMedia = false;
@@ -315,6 +337,7 @@ export class MediaEngine {
 
     stopLocalMedia(): void {
         this.mediaRequestId += 1;
+        this.localMediaStartPromise = null;
         if (this.screenShareTrack) {
             this.screenShareTrack.onended = null;
             this.screenShareTrack = null;
@@ -1218,6 +1241,139 @@ export class MediaEngine {
         this.notifyChange();
     }
 
+    private async acquireInitialMedia(
+        video: boolean | MediaTrackConstraints,
+        preferredDeviceId?: string,
+    ): Promise<MediaStream> {
+        try {
+            return await navigator.mediaDevices.getUserMedia({
+                video,
+                audio: this.createAudioConstraints(preferredDeviceId),
+            });
+        } catch (err) {
+            if (!preferredDeviceId) throw err;
+            this.logger?.log('warning', 'WebRTC', `Failed to acquire preferred initial audio input: ${formatError(err)}`);
+            return navigator.mediaDevices.getUserMedia({
+                video,
+                audio: this.createAudioConstraints(),
+            });
+        }
+    }
+
+    private async acquireAudioTrack(enabled: boolean, preferredDeviceId?: string): Promise<MediaStreamTrack> {
+        let audioStream: MediaStream;
+        try {
+            audioStream = await navigator.mediaDevices.getUserMedia({
+                video: false,
+                audio: this.createAudioConstraints(preferredDeviceId),
+            });
+        } catch (err) {
+            if (!preferredDeviceId) throw err;
+            this.logger?.log('warning', 'WebRTC', `Failed to acquire preferred audio input: ${formatError(err)}`);
+            audioStream = await navigator.mediaDevices.getUserMedia({
+                video: false,
+                audio: this.createAudioConstraints(),
+            });
+        }
+        const audioTrack = audioStream.getAudioTracks()[0];
+        if (!audioTrack) {
+            audioStream.getTracks().forEach(track => track.stop());
+            throw new Error('No audio track returned');
+        }
+        audioTrack.enabled = enabled;
+        this.applySpeechTrackHints(audioStream);
+        return audioTrack;
+    }
+
+    private async replaceAudioTrackOnAllPeers(newTrack: MediaStreamTrack, stream: MediaStream): Promise<void> {
+        await Promise.all(
+            Array.from(this.peers.entries()).map(async ([remoteCid, peer]) => {
+                const audioTransceiver = this.findTransceiver(peer.pc, 'audio');
+                if (audioTransceiver) {
+                    try {
+                        await audioTransceiver.sender.replaceTrack(newTrack);
+                        let negotiationNeeded = this.needsLocalTrackNegotiation(audioTransceiver);
+                        if (audioTransceiver.direction !== 'sendrecv' && audioTransceiver.direction !== 'stopped') {
+                            audioTransceiver.direction = 'sendrecv';
+                            negotiationNeeded = true;
+                        }
+                        if (negotiationNeeded) {
+                            this.scheduleLocalTrackNegotiation(remoteCid, peer);
+                        }
+                    } catch (err) {
+                        this.logger?.log('warning', 'WebRTC', `Failed to replace audio track on peer: ${formatError(err)}`);
+                    }
+                    return;
+                }
+                try {
+                    peer.pc.addTrack(newTrack, stream);
+                    this.scheduleLocalTrackNegotiation(remoteCid, peer);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to add audio track on peer: ${formatError(err)}`);
+                }
+            })
+        );
+    }
+
+    private async refreshLocalAudioTrack(reason: string, devices?: MediaDeviceInfo[] | null, updatePeers = true): Promise<boolean> {
+        const currentAudioTrack = this.localStream?.getAudioTracks()[0] ?? null;
+        if (!this.localStream) {
+            return false;
+        }
+        if (this.requestingMedia) {
+            return false;
+        }
+        if (this.audioRecoveryInFlight) {
+            return false;
+        }
+        const preferredInput = this.selectPreferredAudioInput(devices ?? null, currentAudioTrack);
+        if (preferredInput.basis === 'no-devices' || preferredInput.basis === 'none') {
+            return false;
+        }
+        if (preferredInput.currentMatchesPreferredRoute) {
+            return false;
+        }
+
+        const requestId = this.mediaRequestId;
+        this.audioRecoveryInFlight = true;
+        try {
+            const nextTrack = await this.acquireAudioTrack(currentAudioTrack?.enabled ?? true, preferredInput.device?.deviceId);
+            if (this.destroyed || !this.localStream || this.mediaRequestId !== requestId) {
+                nextTrack.stop();
+                return false;
+            }
+
+            const nextStream = new MediaStream();
+            let replacedAudio = false;
+            for (const track of this.localStream.getTracks()) {
+                if (track.kind !== 'audio') {
+                    nextStream.addTrack(track);
+                    continue;
+                }
+                if (!replacedAudio) {
+                    nextStream.addTrack(nextTrack);
+                    replacedAudio = true;
+                }
+            }
+            if (!replacedAudio) {
+                nextStream.addTrack(nextTrack);
+            }
+            this.localStream = nextStream;
+            if (updatePeers) {
+                await this.replaceAudioTrackOnAllPeers(nextTrack, nextStream);
+            }
+            if (currentAudioTrack && currentAudioTrack !== nextTrack) currentAudioTrack.stop();
+            this.logger?.log('info', 'WebRTC', `Refreshed local audio track (${reason})`);
+            this.notifyChange();
+            return true;
+        } catch (err) {
+            this.logger?.log('warning', 'WebRTC', `Failed to refresh local audio track (${reason}): ${formatError(err)}`);
+            return false;
+        } finally {
+            this.audioRecoveryInFlight = false;
+        }
+    }
+
     private ensureMediaTransceivers(pc: RTCPeerConnection): void {
         if (!this.findTransceiver(pc, 'audio') && !pc.getSenders().some(sender => sender.track?.kind === 'audio')) {
             pc.addTransceiver('audio', { direction: 'recvonly' });
@@ -1358,12 +1514,115 @@ export class MediaEngine {
         }
     }
 
-    private async detectCameras(): Promise<void> {
-        if (!navigator.mediaDevices?.enumerateDevices) return;
+    private async enumerateMediaDevices(): Promise<MediaDeviceInfo[] | null> {
+        if (!navigator.mediaDevices?.enumerateDevices) {
+            return null;
+        }
         try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            this.hasMultipleCameras = devices.filter(d => d.kind === 'videoinput').length > 1;
-        } catch { /* ignore */ }
+            return await navigator.mediaDevices.enumerateDevices();
+        } catch {
+            return null;
+        }
+    }
+
+    private async detectCameras(devices?: MediaDeviceInfo[] | null): Promise<void> {
+        const resolvedDevices = devices === undefined ? await this.enumerateMediaDevices() : devices;
+        if (!resolvedDevices) return;
+        this.hasMultipleCameras = resolvedDevices.filter(d => d.kind === 'videoinput').length > 1;
+    }
+
+    private createAudioConstraints(deviceId?: string): MediaTrackConstraints {
+        const constraints: MediaTrackConstraints = {
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl: { ideal: true },
+            channelCount: { ideal: 1 },
+            sampleRate: { ideal: 48000 },
+        };
+        if (deviceId) {
+            constraints.deviceId = { exact: deviceId };
+        }
+        return constraints;
+    }
+
+    private getTrackGroupId(track: MediaStreamTrack | null): string | null {
+        try {
+            const groupId = track?.getSettings().groupId;
+            return groupId ? groupId : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private isVirtualDefaultAudioDevice(device: MediaDeviceInfo): boolean {
+        return device.deviceId === 'default' || device.deviceId === 'communications';
+    }
+
+    private selectPreferredAudioInput(devices: MediaDeviceInfo[] | null, currentAudioTrack: MediaStreamTrack | null): PreferredAudioInputSelection {
+        if (!devices) {
+            return {
+                device: null,
+                currentMatchesPreferredRoute: false,
+                basis: 'no-devices',
+            };
+        }
+        const currentGroupId = currentAudioTrack?.readyState === 'live' ? this.getTrackGroupId(currentAudioTrack) : null;
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        const defaultInput = audioInputs.find(device => device.deviceId === 'default');
+        const defaultOutput = devices.find(device => device.kind === 'audiooutput' && device.deviceId === 'default');
+        const inputForGroup = (groupId: string): MediaDeviceInfo | null => {
+            const matchingInputs = audioInputs.filter(device => device.groupId === groupId);
+            return matchingInputs.find(device => !this.isVirtualDefaultAudioDevice(device)) ?? matchingInputs[0] ?? null;
+        };
+
+        if (defaultInput && (!defaultInput.groupId || currentGroupId !== defaultInput.groupId)) {
+            return {
+                device: defaultInput.groupId ? inputForGroup(defaultInput.groupId) ?? defaultInput : defaultInput,
+                currentMatchesPreferredRoute: false,
+                basis: 'default-input',
+            };
+        }
+
+        if (defaultOutput?.groupId && currentGroupId !== defaultOutput.groupId) {
+            return {
+                device: inputForGroup(defaultOutput.groupId),
+                currentMatchesPreferredRoute: false,
+                basis: 'default-output',
+            };
+        }
+
+        if (currentGroupId && (currentGroupId === defaultInput?.groupId || currentGroupId === defaultOutput?.groupId)) {
+            return {
+                device: null,
+                currentMatchesPreferredRoute: true,
+                basis: 'already-matched',
+            };
+        }
+
+        return {
+            device: null,
+            currentMatchesPreferredRoute: false,
+            basis: 'none',
+        };
+    }
+
+    private async refreshDevicesAfterChange(reason: string): Promise<void> {
+        const devices = await this.enumerateMediaDevices();
+        await Promise.all([
+            this.detectCameras(devices),
+            this.refreshLocalAudioTrack(reason, devices),
+        ]);
+    }
+
+    private handleDeviceChange(): void {
+        void this.refreshDevicesAfterChange('device-change');
+        if (this.deviceChangeSettleTimer !== null) {
+            window.clearTimeout(this.deviceChangeSettleTimer);
+        }
+        this.deviceChangeSettleTimer = window.setTimeout(() => {
+            this.deviceChangeSettleTimer = null;
+            void this.refreshDevicesAfterChange('device-change-settled');
+        }, DEVICE_CHANGE_SETTLE_DELAY_MS);
     }
 
     private setupEventListeners(): void {
@@ -1379,7 +1638,7 @@ export class MediaEngine {
         const conn = (navigator as any).connection;
         conn?.addEventListener?.('change', this.networkChangeHandler);
 
-        this.deviceChangeHandler = () => { void this.detectCameras(); };
+        this.deviceChangeHandler = () => { this.handleDeviceChange(); };
         navigator.mediaDevices?.addEventListener?.('devicechange', this.deviceChangeHandler);
         void this.detectCameras();
 
@@ -1433,6 +1692,10 @@ export class MediaEngine {
         const conn = (navigator as any).connection;
         if (this.networkChangeHandler) conn?.removeEventListener?.('change', this.networkChangeHandler);
         if (this.deviceChangeHandler) navigator.mediaDevices?.removeEventListener?.('devicechange', this.deviceChangeHandler);
+        if (this.deviceChangeSettleTimer !== null) {
+            window.clearTimeout(this.deviceChangeSettleTimer);
+            this.deviceChangeSettleTimer = null;
+        }
         if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
         if (this.pageShowHandler) window.removeEventListener('pageshow', this.pageShowHandler);
         if (this.heartbeatInterval !== null) window.clearInterval(this.heartbeatInterval);

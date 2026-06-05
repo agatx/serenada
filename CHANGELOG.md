@@ -4,6 +4,17 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.4] — 2026-06-05
+
+### Fixed
+- Web: local audio capture now follows the browser's current default
+  audio route before first capture and after device changes, so a
+  Bluetooth headset selected as the default input/output does not leave
+  calls on the built-in microphone.
+- Web: concurrent local media starts now share one in-flight capture,
+  avoiding duplicate `getUserMedia` calls during multi-party attach and
+  renegotiation flows.
+
 ## [0.8.3] — 2026-06-04
 
 ### Fixed

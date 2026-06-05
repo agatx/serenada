@@ -221,7 +221,7 @@ class FakeMediaStream {
 
 let trackId = 0;
 
-function createMediaTrack(kind: 'audio' | 'video'): MediaStreamTrack {
+function createMediaTrack(kind: 'audio' | 'video', settings: MediaTrackSettings = {}): MediaStreamTrack {
     trackId += 1;
     return {
         id: `${kind}-${trackId}`,
@@ -229,15 +229,26 @@ function createMediaTrack(kind: 'audio' | 'video'): MediaStreamTrack {
         enabled: true,
         muted: false,
         readyState: 'live',
+        getSettings: () => settings,
         stop() {},
     } as MediaStreamTrack;
 }
 
-function createMediaStream(options: { audio?: boolean; video?: boolean } = { audio: true }): MediaStream {
+function createMediaStream(options: { audio?: boolean; video?: boolean; audioSettings?: MediaTrackSettings; videoSettings?: MediaTrackSettings } = { audio: true }): MediaStream {
     const tracks: MediaStreamTrack[] = [];
-    if (options.audio !== false) tracks.push(createMediaTrack('audio'));
-    if (options.video) tracks.push(createMediaTrack('video'));
+    if (options.audio !== false) tracks.push(createMediaTrack('audio', options.audioSettings));
+    if (options.video) tracks.push(createMediaTrack('video', options.videoSettings));
     return new FakeMediaStream(tracks) as unknown as MediaStream;
+}
+
+function createMediaDevice(kind: MediaDeviceKind, deviceId: string, groupId: string, label: string): MediaDeviceInfo {
+    return {
+        kind,
+        deviceId,
+        groupId,
+        label,
+        toJSON: () => ({ kind, deviceId, groupId, label }),
+    } as MediaDeviceInfo;
 }
 
 function createOutboundStats(audioBytesSent: number, videoBytesSent: number, videoFramesSent: number): RTCStatsReport {
@@ -398,6 +409,183 @@ describe('MediaEngine', () => {
                 echoCancellation: { ideal: true },
             }),
         });
+    });
+
+    it('starts local media with the default audio input when it is available before capture', async () => {
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audioSettings: { deviceId: 'bt-mic', groupId: 'bluetooth' } }));
+        const devices = [
+            createMediaDevice('audioinput', 'default', 'bluetooth', 'Default - Headset Microphone'),
+            createMediaDevice('audioinput', 'built-in-mic', 'built-in', 'MacBook Pro Microphone'),
+            createMediaDevice('audioinput', 'bt-mic', 'bluetooth', 'Headset Microphone'),
+            createMediaDevice('audiooutput', 'default', 'bluetooth', 'Default - Headset'),
+            createMediaDevice('audiooutput', 'bt-speakers', 'bluetooth', 'Headset'),
+        ];
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue(devices),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+
+        await engine.startLocalMedia();
+
+        expect(getUserMedia).toHaveBeenCalledTimes(1);
+        expect(getUserMedia).toHaveBeenCalledWith({
+            video: false,
+            audio: expect.objectContaining({
+                deviceId: { exact: 'bt-mic' },
+            }),
+        });
+        expect(engine.localStream?.getAudioTracks()[0]?.getSettings().groupId).toBe('bluetooth');
+
+        engine.destroy();
+    });
+
+    it('refreshes the local audio input to match the default output route without renegotiating active peers', async () => {
+        const initialStream = createMediaStream({ audioSettings: { deviceId: 'built-in-mic', groupId: 'built-in' } });
+        const refreshedStream = createMediaStream({ audioSettings: { deviceId: 'bt-mic', groupId: 'bluetooth' } });
+        const getUserMedia = vi.fn()
+            .mockResolvedValueOnce(initialStream)
+            .mockResolvedValueOnce(refreshedStream);
+        let route: 'built-in' | 'bluetooth-output' = 'built-in';
+        const enumerateDevices = vi.fn().mockImplementation(async () => {
+            const outputGroup = route === 'bluetooth-output' ? 'bluetooth' : 'built-in';
+            return [
+                createMediaDevice('audioinput', 'default', 'built-in', 'Default - MacBook Pro Microphone'),
+                createMediaDevice('audioinput', 'built-in-mic', 'built-in', 'MacBook Pro Microphone'),
+                createMediaDevice('audioinput', 'bt-mic', 'bluetooth', 'Headset Microphone'),
+                createMediaDevice('audiooutput', 'default', outputGroup, 'Default - Output'),
+                createMediaDevice('audiooutput', 'built-in-speakers', 'built-in', 'MacBook Pro Speakers'),
+                createMediaDevice('audiooutput', 'bt-speakers', 'bluetooth', 'Headset'),
+            ];
+        });
+        let deviceChangeHandler: (() => void) | undefined;
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices,
+                    addEventListener: vi.fn((event: string, handler: () => void) => {
+                        if (event === 'devicechange') {
+                            deviceChangeHandler = handler;
+                        }
+                    }),
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown>; to?: string }> = [];
+        const engine = new MediaEngine({ initialVideoEnabled: false }, (type, payload, to) => {
+            sentMessages.push({ type, payload, to });
+        });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await engine.startLocalMedia();
+        await vi.waitFor(() => {
+            expect(sentMessages.filter((message) => message.type === 'offer')).toHaveLength(1);
+        });
+
+        const offerId = sentMessages.find((message) => message.type === 'offer')?.payload?.offerId;
+        engine.processSignalingMessage({
+            v: 1,
+            type: 'answer',
+            payload: { from: 'zeta', sdp: 'remote-answer', offerId },
+        });
+        await flushPromises();
+        sentMessages.length = 0;
+
+        const initialAudioTrack = initialStream.getAudioTracks()[0];
+        const refreshedAudioTrack = refreshedStream.getAudioTracks()[0];
+        if (initialAudioTrack) {
+            initialAudioTrack.enabled = false;
+        }
+
+        route = 'bluetooth-output';
+        deviceChangeHandler?.();
+        await vi.waitFor(() => {
+            expect(getUserMedia).toHaveBeenCalledTimes(2);
+            expect(engine.localStream?.getAudioTracks()[0]).toBe(refreshedAudioTrack);
+        });
+
+        expect(getUserMedia).toHaveBeenLastCalledWith({
+            video: false,
+            audio: expect.objectContaining({
+                deviceId: { exact: 'bt-mic' },
+            }),
+        });
+        const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+        const audioSender = peer?.senders.find(sender => sender.track?.kind === 'audio');
+        expect(refreshedAudioTrack?.enabled).toBe(false);
+        expect(audioSender?.track).toBe(refreshedAudioTrack);
+        expect(audioSender?.replaceTrackCalls.at(-1)).toBe(refreshedAudioTrack);
+        expect(sentMessages).toEqual([]);
+
+        engine.destroy();
+    });
+
+    it('prefers the default audio input route when refreshing after a device change', async () => {
+        const initialStream = createMediaStream({ audioSettings: { deviceId: 'built-in-mic', groupId: 'built-in' } });
+        const refreshedStream = createMediaStream({ audioSettings: { deviceId: 'bt-mic', groupId: 'bluetooth' } });
+        const getUserMedia = vi.fn()
+            .mockResolvedValueOnce(initialStream)
+            .mockResolvedValueOnce(refreshedStream);
+        let route: 'built-in' | 'bluetooth-input' = 'built-in';
+        const enumerateDevices = vi.fn().mockImplementation(async () => {
+            const inputGroup = route === 'bluetooth-input' ? 'bluetooth' : 'built-in';
+            return [
+                createMediaDevice('audioinput', 'default', inputGroup, 'Default - Microphone'),
+                createMediaDevice('audioinput', 'built-in-mic', 'built-in', 'MacBook Pro Microphone'),
+                createMediaDevice('audioinput', 'bt-mic', 'bluetooth', 'Headset Microphone'),
+                createMediaDevice('audiooutput', 'default', 'built-in', 'Default - MacBook Pro Speakers'),
+                createMediaDevice('audiooutput', 'built-in-speakers', 'built-in', 'MacBook Pro Speakers'),
+                createMediaDevice('audiooutput', 'bt-speakers', 'bluetooth', 'Headset'),
+            ];
+        });
+        let deviceChangeHandler: (() => void) | undefined;
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices,
+                    addEventListener: vi.fn((event: string, handler: () => void) => {
+                        if (event === 'devicechange') {
+                            deviceChangeHandler = handler;
+                        }
+                    }),
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+
+        await engine.startLocalMedia();
+        route = 'bluetooth-input';
+        deviceChangeHandler?.();
+
+        await vi.waitFor(() => {
+            expect(getUserMedia).toHaveBeenCalledTimes(2);
+            expect(engine.localStream?.getAudioTracks()[0]).toBe(refreshedStream.getAudioTracks()[0]);
+        });
+        expect(getUserMedia).toHaveBeenLastCalledWith({
+            video: false,
+            audio: expect.objectContaining({
+                deviceId: { exact: 'bt-mic' },
+            }),
+        });
+
+        engine.destroy();
     });
 
     it('uses the reserved video transceiver when video is enabled after an audio-only start', async () => {
