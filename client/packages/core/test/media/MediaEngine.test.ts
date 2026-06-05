@@ -588,6 +588,90 @@ describe('MediaEngine', () => {
         engine.destroy();
     });
 
+    it('keeps the current input when the default output route has no matching microphone', async () => {
+        const initialStream = createMediaStream({ audioSettings: { deviceId: 'built-in-mic', groupId: 'built-in' } });
+        const getUserMedia = vi.fn().mockResolvedValue(initialStream);
+        let route: 'built-in' | 'speaker-output' = 'built-in';
+        const enumerateDevices = vi.fn().mockImplementation(async () => {
+            const outputGroup = route === 'speaker-output' ? 'speaker' : 'built-in';
+            return [
+                createMediaDevice('audioinput', 'default', 'built-in', 'Default - Microphone'),
+                createMediaDevice('audioinput', 'built-in-mic', 'built-in', 'MacBook Pro Microphone'),
+                createMediaDevice('audiooutput', 'default', outputGroup, 'Default - Output'),
+                createMediaDevice('audiooutput', 'built-in-speakers', 'built-in', 'MacBook Pro Speakers'),
+                createMediaDevice('audiooutput', 'speaker', 'speaker', 'External Speaker'),
+            ];
+        });
+        let deviceChangeHandler: (() => void) | undefined;
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices,
+                    addEventListener: vi.fn((event: string, handler: () => void) => {
+                        if (event === 'devicechange') {
+                            deviceChangeHandler = handler;
+                        }
+                    }),
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+
+        await engine.startLocalMedia();
+        route = 'speaker-output';
+        deviceChangeHandler?.();
+        await flushPromises();
+
+        expect(getUserMedia).toHaveBeenCalledTimes(1);
+        expect(engine.localStream?.getAudioTracks()[0]).toBe(initialStream.getAudioTracks()[0]);
+
+        engine.destroy();
+    });
+
+    it('does not refresh audio repeatedly when current and default input group identity is unknown', async () => {
+        const initialStream = createMediaStream({ audioSettings: { deviceId: 'default' } });
+        const getUserMedia = vi.fn().mockResolvedValue(initialStream);
+        const devices = [
+            createMediaDevice('audioinput', 'default', '', 'Default - Microphone'),
+            createMediaDevice('audioinput', 'built-in-mic', '', 'MacBook Pro Microphone'),
+            createMediaDevice('audiooutput', 'default', '', 'Default - Output'),
+        ];
+        let deviceChangeHandler: (() => void) | undefined;
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue(devices),
+                    addEventListener: vi.fn((event: string, handler: () => void) => {
+                        if (event === 'devicechange') {
+                            deviceChangeHandler = handler;
+                        }
+                    }),
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+
+        await engine.startLocalMedia();
+        deviceChangeHandler?.();
+        await flushPromises();
+
+        expect(getUserMedia).toHaveBeenCalledTimes(1);
+        expect(getUserMedia).toHaveBeenLastCalledWith({
+            video: false,
+            audio: expect.objectContaining({
+                deviceId: { exact: 'default' },
+            }),
+        });
+
+        engine.destroy();
+    });
+
     it('uses the reserved video transceiver when video is enabled after an audio-only start', async () => {
         const getUserMedia = vi.fn().mockImplementation(async (constraints: MediaStreamConstraints) => {
             if (constraints.video) {

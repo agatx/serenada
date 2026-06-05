@@ -308,7 +308,7 @@ export class MediaEngine {
             await this.detectCameras(postStartDevices);
             this.requestingMedia = false;
             if (this.roomState && this.clientId) {
-                await this.refreshLocalAudioTrack('initial-route-check', postStartDevices, false);
+                await this.refreshLocalAudioTrack('initial-route-check', postStartDevices);
             }
             const activeStream = this.localStream;
             if (!activeStream) return null;
@@ -1333,6 +1333,9 @@ export class MediaEngine {
         if (preferredInput.currentMatchesPreferredRoute) {
             return false;
         }
+        if (!preferredInput.device) {
+            return false;
+        }
 
         const requestId = this.mediaRequestId;
         this.audioRecoveryInFlight = true;
@@ -1566,7 +1569,8 @@ export class MediaEngine {
                 basis: 'no-devices',
             };
         }
-        const currentGroupId = currentAudioTrack?.readyState === 'live' ? this.getTrackGroupId(currentAudioTrack) : null;
+        const hasCurrentAudioTrack = currentAudioTrack?.readyState === 'live';
+        const currentGroupId = hasCurrentAudioTrack ? this.getTrackGroupId(currentAudioTrack) : null;
         const audioInputs = devices.filter(device => device.kind === 'audioinput');
         const defaultInput = audioInputs.find(device => device.deviceId === 'default');
         const defaultOutput = devices.find(device => device.kind === 'audiooutput' && device.deviceId === 'default');
@@ -1575,17 +1579,33 @@ export class MediaEngine {
             return matchingInputs.find(device => !this.isVirtualDefaultAudioDevice(device)) ?? matchingInputs[0] ?? null;
         };
 
-        if (defaultInput && (!defaultInput.groupId || currentGroupId !== defaultInput.groupId)) {
+        if (defaultInput && !defaultInput.groupId) {
             return {
-                device: defaultInput.groupId ? inputForGroup(defaultInput.groupId) ?? defaultInput : defaultInput,
+                device: hasCurrentAudioTrack && !currentGroupId ? null : defaultInput,
+                currentMatchesPreferredRoute: hasCurrentAudioTrack && !currentGroupId,
+                basis: hasCurrentAudioTrack && !currentGroupId ? 'already-matched' : 'default-input',
+            };
+        }
+
+        if (defaultInput && currentGroupId !== defaultInput.groupId) {
+            return {
+                device: inputForGroup(defaultInput.groupId) ?? defaultInput,
                 currentMatchesPreferredRoute: false,
                 basis: 'default-input',
             };
         }
 
         if (defaultOutput?.groupId && currentGroupId !== defaultOutput.groupId) {
+            const outputInput = inputForGroup(defaultOutput.groupId);
+            if (!outputInput) {
+                return {
+                    device: null,
+                    currentMatchesPreferredRoute: false,
+                    basis: 'none',
+                };
+            }
             return {
-                device: inputForGroup(defaultOutput.groupId),
+                device: outputInput,
                 currentMatchesPreferredRoute: false,
                 basis: 'default-output',
             };
