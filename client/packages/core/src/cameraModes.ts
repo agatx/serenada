@@ -1,4 +1,4 @@
-import { DEFAULT_CAMERA_MODES, type ConfigurableCameraMode, type SerenadaConfig } from './types.js';
+import { DEFAULT_CAMERA_MODES, type ConfigurableCameraMode } from './types.js';
 
 /**
  * Resolve the configured {@link SerenadaConfig.cameraModes} list into the set

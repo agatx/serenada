@@ -34,7 +34,7 @@ const Footer: React.FC = () => {
 
         try {
             mediaQuery.addEventListener('change', handleMediaQueryChange);
-        } catch (e) {
+        } catch {
             // Fallback for older browsers
             mediaQuery.addListener(handleMediaQueryChange);
         }
@@ -43,7 +43,7 @@ const Footer: React.FC = () => {
             window.removeEventListener('beforeinstallprompt', handler);
             try {
                 mediaQuery.removeEventListener('change', handleMediaQueryChange);
-            } catch (e) {
+            } catch {
                 mediaQuery.removeListener(handleMediaQueryChange);
             }
         };
