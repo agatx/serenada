@@ -73,7 +73,7 @@ Key contract rules:
 - Public/provider-facing identifiers use `peerId`. Built-in `cid` naming stays internal to `SerenadaServerProvider`.
 - `hostPeerId` is optional in `JoinedEvent` and `RoomStateEvent`.
 - `roomStateUpdated` is optional. Incremental `peerJoined` / `peerLeft` is enough for a valid adapter.
-- `iceServersChanged` refreshes both existing and future peer connections.
+- `iceServersChanged` refreshes both existing and future peer connections. Providers with time-limited TURN credentials must push fresh servers through it before expiry (the SDK fetches `getIceServers()` only once, at join). See "ICE-server sourcing and refresh" in the customization guide.
 - `version` must be `1`.
 
 ### Reconnection ownership

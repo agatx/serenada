@@ -16,7 +16,7 @@ Provider mode is best for integrators who already have their own peer-message de
 - `hostPeerId` is optional. UI and session layers tolerate it being absent.
 - `peerId` is the provider-facing identifier. Built-in `cid` mapping stays internal.
 - `getIceServers()` supplies the initial ICE server list.
-- `iceServersChanged` rotates ICE servers for both current and future peer connections.
+- `iceServersChanged` rotates ICE servers for both current and future peer connections. Time-limited TURN credentials must be refreshed through this before they expire — see ICE-server sourcing and refresh.
 
 ### Reconnection ownership
 
@@ -29,13 +29,15 @@ This flag does not transfer initial join-timeout ownership to the provider. The 
 
 Only set `handlesReconnection = true` when your adapter already preserves identity and transport recovery semantics. The built-in `SerenadaServerProvider` does this on all platforms.
 
-### ICE-server sourcing
+### ICE-server sourcing and refresh
 
-Provider mode does not use Serenada's TURN token API. Your adapter owns ICE sourcing:
+Provider mode does not use Serenada's TURN token API. Your adapter owns the ICE credential lifecycle, including refresh:
 
-- Return STUN/TURN configs from `getIceServers()`.
-- Reject/throw on failure so the session can retry.
-- Emit `iceServersChanged` when credentials rotate.
+- Return STUN/TURN configs from `getIceServers()` — the one-time fetch at join. Reject/throw on failure so the session retries.
+- **Refresh time-limited credentials before they expire.** If your TURN credentials have a TTL, run your own timer and push fresh servers through the provider listener's `iceServersChanged` *before* the current ones lapse. A good default is to refresh at ~0.8 × TTL (the SDK uses the same ratio internally). The session applies the new servers to every current and future peer connection, so the next relay (re)allocation and any post-reconnect ICE restart use valid credentials.
+- The built-in `SerenadaServerProvider` works exactly this way (it drives a `turn-refresh` loop and pushes `iceServersChanged`). The SDK does not refresh provider credentials for you: `getIceServers()` is called only once, at join, and only your adapter knows the credentials' real lifetime.
+
+Why this matters: on relay-only networks (symmetric NAT, cross-LAN) a call that outlives its TURN credential TTL can no longer allocate a relay, so a mid-call ICE restart — for example after a network blip — fails and the call drops. Proactive `iceServersChanged` refresh keeps the relay path valid for the life of the call. See "Threading and actor guarantees" below for when and from which thread the listener may be called.
 
 `runTurnProbe()` also uses provider ICE servers in provider mode, so the same source feeds both diagnostics and live calls.
 

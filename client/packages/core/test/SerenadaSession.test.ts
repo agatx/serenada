@@ -563,6 +563,19 @@ describe('SerenadaSession', () => {
             }]);
         });
 
+        it('applies a provider iceServersChanged push to live peer connections', () => {
+            // Provider-driven refresh: a custom provider rotates TURN credentials by
+            // pushing iceServersChanged at any time; the session forwards them to the
+            // media engine, which applies them to current and future peers.
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            const rotated = [{ urls: ['turns:rotated.example.com'], username: 'next-user', credential: 'next-pass' }];
+
+            harness.signaling.emitIceServersChanged(rotated);
+
+            expect(harness.media.setIceServersCalls.at(-1)).toEqual(rotated);
+        });
+
         it('transitions to error when initial ICE server retries are exhausted', async () => {
             harness = new TestSessionHarness();
             harness.signaling.getIceServersResults = [
