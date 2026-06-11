@@ -10,6 +10,7 @@ final class FakeMediaEngine: SessionMediaEngine {
     private(set) var startLocalMediaCalls: [Bool] = []
     private(set) var releaseCalls = 0
     private(set) var toggleAudioCalls: [Bool] = []
+    private(set) var restartAudioUnitCalls = 0
     private(set) var toggleVideoCalls: [Bool] = []
     private(set) var iceServersSet = false
     private(set) var createdSlotCids: [String] = []
@@ -33,6 +34,10 @@ final class FakeMediaEngine: SessionMediaEngine {
 
     func toggleAudio(_ enabled: Bool) {
         toggleAudioCalls.append(enabled)
+    }
+
+    func restartAudioUnit() {
+        restartAudioUnitCalls += 1
     }
 
     @discardableResult

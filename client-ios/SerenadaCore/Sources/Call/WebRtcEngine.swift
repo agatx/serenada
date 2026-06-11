@@ -372,6 +372,21 @@ internal final class WebRtcEngine: SessionMediaEngine {
 #endif
     }
 
+    /// Restarts the audio unit by bouncing `RTCAudioSession.isAudioEnabled`, mirroring the
+    /// media-services-reset recovery in `DefaultAudioCoordinator`. Needed after a same-app audio
+    /// owner held and released the session: that takeover posts no interruption notification, so
+    /// WebRTC never restarts the unit on its own. No-op when local media is not running.
+    public func restartAudioUnit() {
+#if canImport(WebRTC)
+        guard localAudioTrack != nil else { return }
+        let audioSession = RTCAudioSession.sharedInstance()
+        audioSession.lockForConfiguration()
+        defer { audioSession.unlockForConfiguration() }
+        audioSession.isAudioEnabled = false
+        audioSession.isAudioEnabled = true
+#endif
+    }
+
     @discardableResult
     public func toggleVideo(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)

@@ -607,6 +607,17 @@ public final class SerenadaSession: ObservableObject {
                 playbackDuckingActive = false
                 peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
             }
+        case .audioSessionRestarted:
+            // External-audio policy reset (as in .externalAudioEnded), plus an audio-unit restart:
+            // a same-app owner held and released the session with no interruption notification, so
+            // WebRTC will not recover capture/playback on its own.
+            self.externalAudioMuted = false
+            self.updateEffectiveMicState()
+            if playbackDuckingActive {
+                playbackDuckingActive = false
+                peerSlots.values.forEach { $0.duckPlayback(ducked: false) }
+            }
+            webRtcEngine.restartAudioUnit()
         case .playbackDuckingStarted:
             if config.audioIntent.duckDuringExternalAudio {
                 playbackDuckingActive = true

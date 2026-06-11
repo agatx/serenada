@@ -135,6 +135,12 @@ public enum AudioCoordinatorEvent: Sendable {
     case externalAudioStarted
     /// Host-owned external audio ended and normal call audio may resume.
     case externalAudioEnded
+    /// The host re-activated the call audio session after a same-app audio owner (for example a
+    /// PTT framework transmit) held and released it. Same-app session takeovers post no
+    /// `AVAudioSession.interruptionNotification`, so WebRTC's internal interruption recovery never
+    /// runs; on this event the SDK restarts its audio unit so capture and playback resume, in
+    /// addition to the ``externalAudioEnded`` policy reset.
+    case audioSessionRestarted
     /// Another audio owner requested playback ducking without interrupting local capture.
     case playbackDuckingStarted
     /// Playback ducking is no longer needed.
