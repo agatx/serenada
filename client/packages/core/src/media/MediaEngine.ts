@@ -933,7 +933,10 @@ export class MediaEngine {
         // Inside the cooldown window, defer to its expiry instead of dropping:
         // ICE state changes are edge-triggered, so a dropped restart for a
         // connection parked in `failed` would never be retried.
-        const cooldownRemainingMs = peer.lastIceRestartAt + ICE_RESTART_COOLDOWN_MS - Date.now();
+        const cooldownRemainingMs = Math.min(
+            ICE_RESTART_COOLDOWN_MS,
+            Math.max(0, peer.lastIceRestartAt + ICE_RESTART_COOLDOWN_MS - Date.now()),
+        );
         peer.iceRestartTimer = window.setTimeout(() => {
             peer.iceRestartTimer = null;
             void this.triggerIceRestart(remoteCid, reason);

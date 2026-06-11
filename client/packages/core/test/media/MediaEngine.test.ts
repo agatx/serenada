@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MediaEngine } from '../../src/media/MediaEngine.js';
-import { OFFER_TIMEOUT_MS, OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS, OUTBOUND_MEDIA_STALL_SAMPLES } from '../../src/constants.js';
+import { ICE_RESTART_COOLDOWN_MS, OFFER_TIMEOUT_MS, OUTBOUND_MEDIA_RECOVERY_COOLDOWN_MS, OUTBOUND_MEDIA_STALL_SAMPLES } from '../../src/constants.js';
 
 interface SharedNegotiationScenario {
     id: string;
@@ -1657,6 +1657,39 @@ describe('MediaEngine', () => {
         expect(iceSpy).toHaveBeenCalledWith('zeta', 'negotiation-dirty', 0);
 
         iceSpy.mockRestore();
+    });
+
+    it('caps deferred ICE restart cooldown when the wall clock moves backwards', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        const engine = new MediaEngine({}, () => {});
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+
+        const internals = engine as unknown as {
+            peers: Map<string, { lastIceRestartAt: number; iceRestartTimer: number | null }>;
+            scheduleIceRestart: (cid: string, reason: string, delay: number) => void;
+            triggerIceRestart: (cid: string, reason: string) => Promise<void>;
+        };
+        const peer = internals.peers.get('zeta');
+        expect(peer).toBeDefined();
+        peer!.lastIceRestartAt = Date.now() + ICE_RESTART_COOLDOWN_MS * 10;
+        const restartSpy = vi.spyOn(internals, 'triggerIceRestart').mockResolvedValue(undefined);
+
+        internals.scheduleIceRestart('zeta', 'clock-regressed', 0);
+
+        expect(peer!.iceRestartTimer).not.toBeNull();
+        await vi.advanceTimersByTimeAsync(ICE_RESTART_COOLDOWN_MS - 1);
+        expect(restartSpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(restartSpy).toHaveBeenCalledWith('zeta', 'clock-regressed');
+
+        restartSpy.mockRestore();
+        engine.destroy();
     });
 
     it('scheduleDirtyPairRestart is a no-op when local should not offer', () => {

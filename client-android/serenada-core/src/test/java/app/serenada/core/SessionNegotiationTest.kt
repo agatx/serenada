@@ -91,6 +91,30 @@ class SessionNegotiationTest {
     }
 
     @Test
+    fun `stale local ICE from replaced slot is not sent`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+
+        val staleSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull("Original slot should be created", staleSlot)
+
+        factory.simulateRoomState(participants = listOf("alpha" to 1L), hostCid = "alpha")
+        factory.simulateRoomState(participants = listOf("alpha" to 1L, "remote" to 3L), hostCid = "alpha")
+        val replacementSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull("Replacement slot should be created", replacementSlot)
+        assertNotSame("Room rejoin should replace the slot", staleSlot, replacementSlot)
+
+        val iceMessagesBefore = factory.fakeProvider.sentMessages("ice").size
+        staleSlot!!.simulateLocalIceCandidate("candidate:stale-old-slot")
+        ShadowLooper.idleMainLooper()
+
+        val iceMessages = factory.fakeProvider.sentMessages("ice")
+        assertEquals("Stale slot ICE must not be sent", iceMessagesBefore, iceMessages.size)
+        assertFalse("Stale candidate must not be tagged onto replacement negotiation", iceMessages.any {
+            it.payload?.optJSONObject("candidate")?.optString("candidate") == "candidate:stale-old-slot"
+        })
+    }
+
+    @Test
     fun `local peer waits then answers when its peer ID sorts later`() {
         factory.advanceToInCallWithTurn(localCid = "zulu", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
 

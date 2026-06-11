@@ -14,6 +14,7 @@ import org.webrtc.VideoTrack
 
 internal class FakePeerConnectionSlot(
     override val remoteCid: String,
+    private val onLocalIceCandidate: ((String, IceCandidate) -> Unit)? = null,
     private val onConnectionStateChange: ((String, PeerConnection.PeerConnectionState) -> Unit)? = null,
     private val onIceConnectionStateChange: ((String, PeerConnection.IceConnectionState) -> Unit)? = null,
     private val onSignalingStateChange: ((String, PeerConnection.SignalingState) -> Unit)? = null,
@@ -219,6 +220,10 @@ internal class FakePeerConnectionSlot(
     fun simulateIceConnectionStateChange(state: PeerConnection.IceConnectionState) {
         iceConnectionState = state
         onIceConnectionStateChange?.invoke(remoteCid, state)
+    }
+
+    fun simulateLocalIceCandidate(candidate: String = "candidate:local") {
+        onLocalIceCandidate?.invoke(remoteCid, IceCandidate("0", 0, candidate))
     }
 
     fun simulateRenegotiationNeeded() {

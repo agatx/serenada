@@ -64,6 +64,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
         createdSlotCids.add(remoteCid)
         val slot = FakePeerConnectionSlot(
             remoteCid = remoteCid,
+            onLocalIceCandidate = onLocalIceCandidate,
             onConnectionStateChange = onConnectionStateChange,
             onIceConnectionStateChange = onIceConnectionStateChange,
             onSignalingStateChange = onSignalingStateChange,

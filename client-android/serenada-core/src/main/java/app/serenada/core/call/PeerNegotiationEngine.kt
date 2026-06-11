@@ -215,12 +215,14 @@ internal class PeerNegotiationEngine(
 
     private fun getOrCreateSlot(remoteCid: String): PeerConnectionSlotProtocol {
         getSlot(remoteCid)?.let { return it }
+        var callbackSlot: PeerConnectionSlotProtocol? = null
         val slot = createSlotViaEngine(
             remoteCid,
             { cid: String, candidate: IceCandidate ->
                 // Fires on the WebRTC signaling thread; negotiation state
                 // (offer ids) and the transport are main-thread-owned.
                 handler.post {
+                    if (getSlot(cid) !== callbackSlot) return@post
                     val payload = JSONObject().apply {
                         val candidateJson = JSONObject()
                         candidateJson.put("candidate", candidate.sdp)
@@ -291,6 +293,7 @@ internal class PeerNegotiationEngine(
                 }
             }
         )
+        callbackSlot = slot
         setSlot(remoteCid, slot)
         return slot
     }
