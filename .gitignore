@@ -54,3 +54,4 @@ client-ios/Resources/GoogleService-Info.plist
 /client-ios/SerenadaCore/.swiftpm
 /client-ios/SerenadaCallUI/.swiftpm
 /.reviewlens
+.gstack/

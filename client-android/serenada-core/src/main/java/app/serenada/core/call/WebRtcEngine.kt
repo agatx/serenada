@@ -291,6 +291,8 @@ internal class WebRtcEngine(
         cameraController.flipCamera(videoSource)
     }
 
+    override fun activeCameraMode(): LocalCameraMode = cameraController.activeCameraMode()
+
     override fun adjustWorldCameraZoom(scaleFactor: Float): Boolean {
         return cameraController.adjustWorldCameraZoom(scaleFactor)
     }

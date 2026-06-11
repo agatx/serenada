@@ -73,6 +73,10 @@ function mapErrorCode(serverCode: string): CallErrorCode {
             return 'roomEnded';
         case 'INVALID_RECONNECT_TOKEN':
             return 'sessionExpired';
+        case 'PERMISSION_DENIED':
+            return 'permissionDenied';
+        case 'MEDIA_UNSUPPORTED':
+            return 'webrtcUnavailable';
         case 'CONNECTION_FAILED':
             return 'connectionFailed';
         case 'ICE_SERVER_FETCH_FAILED':
@@ -81,7 +85,6 @@ function mapErrorCode(serverCode: string): CallErrorCode {
         case 'UNSUPPORTED_VERSION':
         case 'INVALID_ROOM_ID':
         case 'SERVER_NOT_CONFIGURED':
-        case 'TURN_REFRESH_FAILED':
         case 'NOT_IN_ROOM':
         case 'NOT_HOST':
             return 'serverError';
@@ -448,9 +451,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         this.permissionCheckDone = true;
         const stream = await this.media.startLocalMedia();
+        if (this.isInactive) {
+            return;
+        }
         if (stream) {
             this.broadcastLocalMediaState();
             this.rebuildState();
+        } else {
+            this.failOnLocalMediaError();
         }
     }
 
@@ -754,6 +762,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     private readonly handleError = (event: SignalingErrorEvent): void => {
         if (this.isInactive) {
+            return;
+        }
+        if (event.code === 'TURN_REFRESH_FAILED') {
+            // Non-fatal: media keeps flowing on the existing credentials until expiry.
+            this.config.logger?.log('warning', 'Session', `TURN refresh failed: ${event.message}`);
             return;
         }
         this.failWithError(event);
@@ -1404,8 +1417,32 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
         this.permissionCheckDone = true;
         this.permissionCheckInFlight = false;
-        await this.media.startLocalMedia();
+        const stream = await this.media.startLocalMedia();
+        if (this.isInactive) {
+            return;
+        }
+        if (!stream) {
+            this.failOnLocalMediaError();
+            return;
+        }
         this.rebuildState();
+    }
+
+    /**
+     * Surface a failed local-media acquisition as a terminal error instead of
+     * silently joining without media (or hanging in `awaitingPermissions`).
+     * A null stream without a recorded error means the attempt was superseded
+     * (e.g. concurrent stop) — not a failure.
+     */
+    private failOnLocalMediaError(): void {
+        const mediaError = this.media.lastLocalMediaError;
+        if (!mediaError) {
+            return;
+        }
+        const code = mediaError.name === 'NotAllowedError' || mediaError.name === 'PermissionDeniedError' || mediaError.name === 'SecurityError'
+            ? 'PERMISSION_DENIED'
+            : (mediaError.name === 'NotSupportedError' ? 'MEDIA_UNSUPPORTED' : 'LOCAL_MEDIA_FAILED');
+        this.failWithError({ code, message: mediaError.message });
     }
 
     private ensureStatsCollection(): void {

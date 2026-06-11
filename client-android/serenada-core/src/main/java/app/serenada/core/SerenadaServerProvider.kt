@@ -20,8 +20,10 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
@@ -50,6 +52,7 @@ internal class SerenadaServerProvider(
     )
 
     private var reconnectAttempts = 0
+    private var iceRefreshGeneration = 0
     private var reconnectRunnable: Runnable? = null
     private var turnRefreshRunnable: Runnable? = null
     private var reconnectTokenRefreshRunnable: Runnable? = null
@@ -232,18 +235,7 @@ internal class SerenadaServerProvider(
                 if (ttlMs != null) {
                     scheduleTurnRefresh(ttlMs)
                 }
-                scope.launch {
-                    runCatching { getIceServers() }
-                        .onSuccess { iceServers -> listener?.onIceServersChanged(iceServers) }
-                        .onFailure { error ->
-                            listener?.onError(
-                                ErrorEvent(
-                                    code = "TURN_REFRESH_FAILED",
-                                    message = error.message ?: "TURN refresh failed",
-                                )
-                            )
-                        }
-                }
+                scope.launch { refreshIceServersWithRetry() }
             }
             "offer", "answer", "ice", "media_restart_request", "content_state", "participant_media_state" -> emitPeerMessage(message)
             "negotiation_dirty" -> {
@@ -262,6 +254,38 @@ internal class SerenadaServerProvider(
             }
             "pong" -> signaling.recordPong()
         }
+    }
+
+    private suspend fun refreshIceServersWithRetry() {
+        val generation = ++iceRefreshGeneration
+        var lastError: Exception? = null
+        for (delayMs in WebRtcResilienceConstants.ICE_FETCH_RETRY_DELAYS_MS) {
+            if (delayMs > 0) {
+                delay(delayMs)
+            }
+            if (closedByClient || generation != iceRefreshGeneration) {
+                return
+            }
+            try {
+                val servers = getIceServers()
+                if (closedByClient || generation != iceRefreshGeneration) {
+                    return
+                }
+                listener?.onIceServersChanged(servers)
+                return
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                lastError = error
+            }
+        }
+        // Non-fatal: the call keeps running on the existing credentials,
+        // and the next turn-refreshed message retries with a fresh token.
+        logger?.log(
+            SerenadaLogLevel.WARNING,
+            "Signaling",
+            "Failed to refresh ICE servers after retries: ${lastError?.message ?: "unknown error"}",
+        )
     }
 
     private fun handleJoined(message: SignalingMessage) {

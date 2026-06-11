@@ -188,6 +188,18 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func setIceServers(_ servers: [IceServerConfig]) {
 #if canImport(WebRTC)
         iceServers = servers
+        if let peerConnection {
+            // Apply refreshed credentials to the live connection so a later
+            // ICE restart gathers relay candidates with current (not expired)
+            // TURN credentials.
+            let config = RTCConfiguration()
+            config.iceServers = servers.map {
+                RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
+            }
+            config.sdpSemantics = .unifiedPlan
+            _ = peerConnection.setConfiguration(config)
+            return
+        }
         _ = ensurePeerConnection()
 #endif
     }

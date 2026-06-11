@@ -11,7 +11,7 @@ import {
 } from './signaling/payloads.js';
 import type { RoomParticipant, SignalingMessage } from './signaling/types.js';
 import type { TransportKind } from './signaling/transports/types.js';
-import { TURN_FETCH_TIMEOUT_MS } from './constants.js';
+import { ICE_FETCH_RETRY_DELAYS_MS, TURN_FETCH_TIMEOUT_MS } from './constants.js';
 import { formatError } from './formatError.js';
 import { buildApiUrl, resolveServerUrls } from './serverUrls.js';
 
@@ -40,6 +40,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
     private previousParticipants = new Map<string, SignalingProviderParticipant>();
     private currentHostPeerId: string | null = null;
     private disconnected = false;
+    private iceRefreshGeneration = 0;
 
     constructor(config: SerenadaServerProviderConfig) {
         super();
@@ -313,16 +314,32 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
     }
 
     private async refreshIceServers(): Promise<void> {
-        try {
-            const servers = await this.getIceServers();
-            this.emit('iceServersChanged', servers);
-        } catch (error) {
-            this.logger?.log('warning', 'Signaling', `Failed to refresh ICE servers: ${formatError(error)}`);
-            this.emit('error', {
-                code: 'TURN_REFRESH_FAILED',
-                message: formatError(error),
-            });
+        const generation = this.iceRefreshGeneration + 1;
+        this.iceRefreshGeneration = generation;
+        let lastError: unknown = null;
+
+        for (const delayMs of ICE_FETCH_RETRY_DELAYS_MS) {
+            if (delayMs > 0) {
+                await wait(delayMs);
+            }
+            if (this.disconnected || generation !== this.iceRefreshGeneration) {
+                return;
+            }
+            try {
+                const servers = await this.getIceServers();
+                if (this.disconnected || generation !== this.iceRefreshGeneration) {
+                    return;
+                }
+                this.emit('iceServersChanged', servers);
+                return;
+            } catch (error) {
+                lastError = error;
+            }
         }
+
+        // Non-fatal: the call keeps running on the existing credentials,
+        // and the next turn-refreshed message retries with a fresh token.
+        this.logger?.log('warning', 'Signaling', `Failed to refresh ICE servers after retries: ${formatError(lastError)}`);
     }
 }
 
@@ -336,6 +353,12 @@ function mapParticipant(participant: RoomParticipant): SignalingProviderParticip
         videoEnabled: participant.videoEnabled,
         connectionStatus: participant.connectionStatus,
     };
+}
+
+function wait(delayMs: number): Promise<void> {
+    return new Promise((resolve) => {
+        globalThis.setTimeout(resolve, delayMs);
+    });
 }
 
 function toParticipantMap(participants: SignalingProviderParticipant[]): Map<string, SignalingProviderParticipant> {

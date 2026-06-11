@@ -75,6 +75,22 @@ class SessionNegotiationTest {
     }
 
     @Test
+    fun `stale deferred local offer is not sent after pending offer clears`() {
+        factory.fakeMedia.deferNextCreatedSlotOfferSdp = true
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull("Slot should be created", fakeSlot)
+        assertTrue("Deferred offer should not be sent yet", factory.fakeProvider.sentMessages("offer").isEmpty())
+
+        factory.simulateRoomState(participants = listOf("alpha" to 1L), hostCid = "alpha")
+        fakeSlot!!.flushPendingOfferSdp()
+        ShadowLooper.idleMainLooper()
+
+        assertTrue("Stale offer must not be sent after peer leaves", factory.fakeProvider.sentMessages("offer").isEmpty())
+    }
+
+    @Test
     fun `local peer waits then answers when its peer ID sorts later`() {
         factory.advanceToInCallWithTurn(localCid = "zulu", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
 

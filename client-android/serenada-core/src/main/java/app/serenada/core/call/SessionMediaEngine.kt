@@ -15,6 +15,12 @@ internal interface SessionMediaEngine {
     fun toggleAudio(enabled: Boolean)
     fun toggleVideo(enabled: Boolean): Boolean
     fun flipCamera()
+    /**
+     * Engine-side camera mode, updated synchronously by [flipCamera]. The
+     * session's state copy is posted asynchronously, so callers that flip in
+     * a loop must consult this instead. Null when the engine has no camera.
+     */
+    fun activeCameraMode(): LocalCameraMode? = null
     fun startScreenShare(intent: Intent): Boolean
     fun stopScreenShare(): Boolean
     fun setIceServers(servers: List<PeerConnection.IceServer>)

@@ -135,7 +135,7 @@ internal class PeerConnectionSlot(
     @Volatile private var isClosing = false
     private var peerConnection: PeerConnection? = null
     private var audioSender: RtpSender? = null
-    private var remoteVideoTrack: VideoTrack? = null
+    @Volatile private var remoteVideoTrack: VideoTrack? = null
     @Volatile private var playbackDucked = false
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
@@ -155,7 +155,7 @@ internal class PeerConnectionSlot(
                 logger?.log(
                     SerenadaLogLevel.DEBUG,
                     "PeerConnection",
-                    "[RemoteVideo][$remoteCid] syntheticBlack=${remoteBlackFrameAnalyzer.isSyntheticBlackDetected()} trackEnabled=${remoteVideoTrack?.enabled()}"
+                    "[RemoteVideo][$remoteCid] syntheticBlack=${remoteBlackFrameAnalyzer.isSyntheticBlackDetected()} trackPresent=${remoteVideoTrack != null}"
                 )
             }
         }
@@ -163,6 +163,19 @@ internal class PeerConnectionSlot(
 
     override fun setIceServers(servers: List<PeerConnection.IceServer>) {
         iceServers = servers
+        val pc = peerConnection
+        if (pc != null && !isClosing) {
+            // Apply refreshed credentials to the live connection so a later
+            // ICE restart gathers relay candidates with current (not expired)
+            // TURN credentials.
+            val config = PeerConnection.RTCConfiguration(servers).apply {
+                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            }
+            if (!pc.setConfiguration(config)) {
+                logger?.log(SerenadaLogLevel.WARNING, "PeerConnection", "[$remoteCid] Failed to apply refreshed ICE servers")
+            }
+            return
+        }
         ensurePeerConnection()
     }
 
@@ -662,8 +675,9 @@ internal class PeerConnectionSlot(
     override fun hasRemoteDescription(): Boolean = !isClosing && (remoteDescriptionSet || peerConnection?.remoteDescription != null)
 
     override fun isRemoteVideoTrackEnabled(): Boolean {
-        val track = remoteVideoTrack ?: return false
-        if (!track.enabled()) return false
+        // Do not call VideoTrack.enabled() here. It crosses into native WebRTC
+        // and can block the main-thread participant refresh path.
+        if (remoteVideoTrack == null) return false
         return !remoteBlackFrameAnalyzer.isVideoConsideredOff()
     }
 

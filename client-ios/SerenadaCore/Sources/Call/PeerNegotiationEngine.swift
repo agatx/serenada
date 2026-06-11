@@ -939,13 +939,19 @@ final class PeerNegotiationEngine {
 
         guard slot.iceRestartTask == nil else { return }
 
+        // Inside the cooldown window, defer to its expiry instead of dropping:
+        // ICE state changes are edge-triggered, so a dropped restart for a
+        // connection parked in failed would never be retried.
         let now = Double(clock.nowMs())
-        guard slot.lastIceRestartAt <= 0 || now - slot.lastIceRestartAt >= Double(WebRtcResilience.iceRestartCooldownMs) else { return }
+        let cooldownRemainingMs = slot.lastIceRestartAt > 0
+            ? slot.lastIceRestartAt + Double(WebRtcResilience.iceRestartCooldownMs) - now
+            : 0
+        let effectiveDelayMs = max(Double(delayMs), cooldownRemainingMs)
 
         slot.setIceRestartTask(Task { [weak self] in
             guard let clock = self?.clock else { return }
-            if delayMs > 0 {
-                try? await clock.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            if effectiveDelayMs > 0 {
+                try? await clock.sleep(nanoseconds: UInt64(effectiveDelayMs) * 1_000_000)
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {

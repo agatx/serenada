@@ -218,15 +218,19 @@ internal class PeerNegotiationEngine(
         val slot = createSlotViaEngine(
             remoteCid,
             { cid: String, candidate: IceCandidate ->
-                val payload = JSONObject().apply {
-                    val candidateJson = JSONObject()
-                    candidateJson.put("candidate", candidate.sdp)
-                    candidateJson.put("sdpMid", candidate.sdpMid)
-                    candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
-                    put("candidate", candidateJson)
-                    currentLocalOfferId(cid)?.let { put("offerId", it) }
+                // Fires on the WebRTC signaling thread; negotiation state
+                // (offer ids) and the transport are main-thread-owned.
+                handler.post {
+                    val payload = JSONObject().apply {
+                        val candidateJson = JSONObject()
+                        candidateJson.put("candidate", candidate.sdp)
+                        candidateJson.put("sdpMid", candidate.sdpMid)
+                        candidateJson.put("sdpMLineIndex", candidate.sdpMLineIndex)
+                        put("candidate", candidateJson)
+                        currentLocalOfferId(cid)?.let { put("offerId", it) }
+                    }
+                    sendMessage("ice", payload, cid)
                 }
-                sendMessage("ice", payload, cid)
             },
             { _, _ ->
                 handler.post { onRemoteParticipantsChanged() }
@@ -583,12 +587,17 @@ internal class PeerNegotiationEngine(
         val started = slot.createOffer(
             iceRestart = iceRestart,
             onSdp = { sdp ->
-                val payload = JSONObject().apply {
-                    put("sdp", sdp)
-                    put("offerId", offerId)
+                // Fires on the WebRTC signaling thread; the transport and the
+                // offer-timeout bookkeeping are main-thread-owned.
+                handler.post {
+                    if (pendingLocalOfferIds[slot.remoteCid] != offerId) return@post
+                    val payload = JSONObject().apply {
+                        put("sdp", sdp)
+                        put("offerId", offerId)
+                    }
+                    sendMessage("offer", payload, slot.remoteCid)
+                    scheduleOfferTimeout(slot.remoteCid)
                 }
-                sendMessage("offer", payload, slot.remoteCid)
-                scheduleOfferTimeout(slot.remoteCid)
             },
             onComplete = { success ->
                 handler.post {
@@ -783,10 +792,17 @@ internal class PeerNegotiationEngine(
         val slot = getSlot(remoteCid) ?: return
         if (!canOffer(slot)) { slot.markPendingIceRestart(); return }
         if (slot.iceRestartTask != null) return
-        if (slot.lastIceRestartAt > 0 && clock.nowMs() - slot.lastIceRestartAt < WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS) return
+        // Inside the cooldown window, defer to its expiry instead of dropping:
+        // ICE state changes are edge-triggered, so a dropped restart for a
+        // connection parked in FAILED would never be retried.
+        val cooldownRemainingMs = if (slot.lastIceRestartAt > 0) {
+            slot.lastIceRestartAt + WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS - clock.nowMs()
+        } else {
+            0L
+        }
         val runnable = Runnable { slot.cancelIceRestartTask(); triggerIceRestart(remoteCid, reason) }
         slot.setIceRestartTask(runnable)
-        handler.postDelayed(runnable, delayMs)
+        handler.postDelayed(runnable, maxOf(delayMs, cooldownRemainingMs))
     }
 
     private fun clearIceRestartTimer(remoteCid: String? = null) {

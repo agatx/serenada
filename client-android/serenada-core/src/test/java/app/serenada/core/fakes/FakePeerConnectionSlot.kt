@@ -48,6 +48,8 @@ internal class FakePeerConnectionSlot(
     var failNextRemoteOffer = false
     var failNextAnswer = false
     var failNextRollback = false
+    var deferNextOfferSdp = false
+    private var pendingOfferSdp: (() -> Unit)? = null
 
     // Offer lifecycle
     override fun beginOffer() { isMakingOffer = true }
@@ -90,9 +92,22 @@ internal class FakePeerConnectionSlot(
         }
         signalingState = PeerConnection.SignalingState.HAVE_LOCAL_OFFER
         onSignalingStateChange?.invoke(remoteCid, signalingState)
-        onSdp("fake-offer-sdp")
-        onComplete?.invoke(true)
+        val complete: () -> Unit = {
+            onSdp("fake-offer-sdp")
+            onComplete?.invoke(true)
+        }
+        if (deferNextOfferSdp) {
+            deferNextOfferSdp = false
+            pendingOfferSdp = complete
+        } else {
+            complete()
+        }
         return true
+    }
+
+    fun flushPendingOfferSdp() {
+        pendingOfferSdp?.invoke()
+        pendingOfferSdp = null
     }
 
     override fun createAnswer(onSdp: (String) -> Unit, onComplete: ((Boolean) -> Unit)?) {

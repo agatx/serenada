@@ -773,6 +773,11 @@ class SerenadaSession internal constructor(
         override fun onError(event: ErrorEvent) {
             runOnMain {
                 logger?.log(SerenadaLogLevel.DEBUG, "Session", "RX error ${event.code}")
+                if (event.code == "TURN_REFRESH_FAILED") {
+                    // Non-fatal: media keeps flowing on the existing credentials until expiry.
+                    logger?.log(SerenadaLogLevel.WARNING, "Session", "TURN refresh failed: ${event.message}")
+                    return@runOnMain
+                }
                 signalingMessageRouter.processErrorEvent(event)
             }
         }
@@ -881,10 +886,13 @@ class SerenadaSession internal constructor(
     /** Set a specific camera mode. Ignored when [mode] is not in the configured list. */
     fun setCameraMode(mode: LocalCameraMode) {
         assertMainThread()
-        if (mode == _state.value.localCameraMode) return
         if (mode !in availableCameraModes) return
+        // The session's state copy of the camera mode is posted asynchronously,
+        // so flipping in a loop must read the engine-side mode, which flipCamera
+        // updates synchronously.
         repeat(availableCameraModes.size) {
-            if (_state.value.localCameraMode == mode) return
+            val current = webRtcEngine.activeCameraMode() ?: _state.value.localCameraMode
+            if (current == mode) return
             flipCamera()
         }
     }

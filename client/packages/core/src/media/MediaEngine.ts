@@ -259,6 +259,12 @@ export class MediaEngine {
         }
     }
 
+    /** Details of the last failed local-media acquisition, if any. */
+    get lastLocalMediaError(): { name: string; message: string } | null {
+        return this._lastLocalMediaError;
+    }
+    private _lastLocalMediaError: { name: string; message: string } | null = null;
+
     async startLocalMedia(): Promise<MediaStream | null> {
         if (this.localStream) return this.localStream;
         if (this.localMediaStartPromise) return this.localMediaStartPromise;
@@ -278,9 +284,11 @@ export class MediaEngine {
         this.mediaRequestId = requestId;
 
         this.requestingMedia = true;
+        this._lastLocalMediaError = null;
         try {
             if (!navigator.mediaDevices?.getUserMedia) {
                 this.requestingMedia = false;
+                this._lastLocalMediaError = { name: 'NotSupportedError', message: 'getUserMedia is not supported' };
                 return null;
             }
             const initialDevices = await this.enumerateMediaDevices();
@@ -330,6 +338,10 @@ export class MediaEngine {
             return activeStream;
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `Error accessing media: ${formatError(err)}`);
+            this._lastLocalMediaError = {
+                name: err instanceof DOMException ? err.name : 'Error',
+                message: formatError(err),
+            };
             this.requestingMedia = false;
             return null;
         }
@@ -918,11 +930,14 @@ export class MediaEngine {
         if (!peer) return;
         if (!this.isSignalingConnected || !this.isParticipantActive(remoteCid)) { peer.pendingIceRestart = true; return; }
         if (peer.iceRestartTimer) return;
-        if (Date.now() - peer.lastIceRestartAt < ICE_RESTART_COOLDOWN_MS) return;
+        // Inside the cooldown window, defer to its expiry instead of dropping:
+        // ICE state changes are edge-triggered, so a dropped restart for a
+        // connection parked in `failed` would never be retried.
+        const cooldownRemainingMs = peer.lastIceRestartAt + ICE_RESTART_COOLDOWN_MS - Date.now();
         peer.iceRestartTimer = window.setTimeout(() => {
             peer.iceRestartTimer = null;
             void this.triggerIceRestart(remoteCid, reason);
-        }, delayMs);
+        }, Math.max(delayMs, cooldownRemainingMs));
     }
 
     private async triggerIceRestart(remoteCid: string, reason: string): Promise<void> {
