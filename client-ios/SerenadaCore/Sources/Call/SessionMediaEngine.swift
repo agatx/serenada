@@ -6,6 +6,9 @@ protocol SessionMediaEngine: AnyObject {
     func startLocalMedia(preferVideo: Bool)
     func release()
     func toggleAudio(_ enabled: Bool)
+    /// Restart the audio unit after the host re-activated the audio session that a same-app owner
+    /// (no interruption notification) held and released. See ``AudioCoordinatorEvent/audioSessionRestarted``.
+    func restartAudioUnit()
     @discardableResult func toggleVideo(_ enabled: Bool) -> Bool
     func flipCamera()
     func setHdVideoExperimentalEnabled(_ enabled: Bool)

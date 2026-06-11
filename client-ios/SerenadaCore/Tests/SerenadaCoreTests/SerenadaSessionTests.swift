@@ -53,6 +53,10 @@ private final class RetainedStreamAudioCoordinator: @unchecked Sendable, Serenad
     func deactivateCallSession() async {}
     func applyRouting(_ device: AudioDevice) async throws {}
     func setMicMuted(_ muted: Bool) async throws {}
+
+    func emit(_ event: AudioCoordinatorEvent) {
+        eventsContinuation?.yield(event)
+    }
 }
 
 @MainActor
@@ -134,6 +138,39 @@ final class SerenadaSessionTests: XCTestCase {
 
         await waitUntil { !media.startLocalMediaCalls.isEmpty }
         XCTAssertEqual(media.startLocalMediaCalls.first, false)
+        session.cancelJoin()
+    }
+
+    func testAudioSessionRestartedRestartsAudioUnitAndClearsExternalMute() async {
+        let provider = FakeSignalingProvider()
+        let media = FakeMediaEngine()
+        let coordinator = RetainedStreamAudioCoordinator()
+        let session = SerenadaSession(
+            roomId: "provider-room",
+            config: SerenadaConfig(
+                signalingProvider: provider,
+                audioCoordinator: coordinator
+            ),
+            initialSignalingProvider: provider,
+            mediaEngine: media
+        )
+
+        await yieldToMainActor()
+        if session.state.phase == .awaitingPermissions {
+            session.resumeJoin()
+            await yieldToMainActor()
+        }
+        await waitUntil { !media.startLocalMediaCalls.isEmpty }
+
+        coordinator.emit(.externalAudioStarted)
+        await waitUntil { session.isMicMutedByExternalAudio }
+        XCTAssertTrue(session.isMicMutedByExternalAudio, "externalAudioStarted should mute the WebRTC mic")
+
+        coordinator.emit(.audioSessionRestarted)
+        await waitUntil { media.restartAudioUnitCalls == 1 }
+        XCTAssertEqual(media.restartAudioUnitCalls, 1, "audioSessionRestarted must restart the audio unit (no interruption notification fires for a same-app takeover)")
+        XCTAssertFalse(session.isMicMutedByExternalAudio, "audioSessionRestarted should clear the external-audio mute")
+
         session.cancelJoin()
     }
 
