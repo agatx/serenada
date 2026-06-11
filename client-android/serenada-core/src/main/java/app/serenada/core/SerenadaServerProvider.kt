@@ -230,12 +230,18 @@ internal class SerenadaServerProvider(
                 )
             }
             "turn-refreshed" -> {
-                currentTurnToken = message.payload?.optString("turnToken").orEmpty().ifBlank { null }
-                val ttlMs = message.payload?.optLong("turnTokenTTLMs", 0L)?.takeIf { it > 0L }
-                if (ttlMs != null) {
-                    scheduleTurnRefresh(ttlMs)
+                // Mirror web: a tokenless turn-refreshed must not clobber valid
+                // credentials (and strip TURN from the live connection); keep
+                // the current token and skip the refresh entirely.
+                val refreshedToken = message.payload?.optString("turnToken").orEmpty().ifBlank { null }
+                if (refreshedToken != null) {
+                    currentTurnToken = refreshedToken
+                    val ttlMs = message.payload?.optLong("turnTokenTTLMs", 0L)?.takeIf { it > 0L }
+                    if (ttlMs != null) {
+                        scheduleTurnRefresh(ttlMs)
+                    }
+                    scope.launch { refreshIceServersWithRetry() }
                 }
-                scope.launch { refreshIceServersWithRetry() }
             }
             "offer", "answer", "ice", "media_restart_request", "content_state", "participant_media_state" -> emitPeerMessage(message)
             "negotiation_dirty" -> {

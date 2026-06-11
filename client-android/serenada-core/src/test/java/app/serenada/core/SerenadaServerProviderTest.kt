@@ -412,6 +412,49 @@ class SerenadaServerProviderTest {
     }
 
     @Test
+    fun `tokenless turn-refreshed keeps the current turn token`() = runBlocking {
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "local-cid",
+                to = null,
+                payload = JSONObject().apply {
+                    put("hostCid", "local-cid")
+                    put("turnToken", "turn-token")
+                    put(
+                        "participants",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("cid", "local-cid")
+                                put("joinedAt", 1L)
+                            }
+                        )
+                    )
+                },
+            )
+        )
+
+        signaling.receive(
+            SignalingMessage(
+                type = "turn-refreshed",
+                rid = "room-1",
+                sid = null,
+                cid = "local-cid",
+                to = null,
+                payload = JSONObject().apply { put("turnToken", "") },
+            )
+        )
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        val iceServers = provider.getIceServers()
+
+        assertEquals(listOf("serenada.app" to "turn-token"), apiClient.fetchTurnCredentialsCalls)
+        assertEquals(listOf("turn:turn.example.com:3478"), iceServers.flatMap { it.urls })
+    }
+
+    @Test
     fun `room state emits participant diffs and room ended uses payload fields`() {
         signaling.receive(
             SignalingMessage(

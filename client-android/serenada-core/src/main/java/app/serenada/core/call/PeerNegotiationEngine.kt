@@ -797,9 +797,12 @@ internal class PeerNegotiationEngine(
         if (slot.iceRestartTask != null) return
         // Inside the cooldown window, defer to its expiry instead of dropping:
         // ICE state changes are edge-triggered, so a dropped restart for a
-        // connection parked in FAILED would never be retried.
+        // connection parked in FAILED would never be retried. Clamp to one
+        // cooldown: nowMs() is wall-clock, so a backwards step would otherwise
+        // park the restart for the full skew.
         val cooldownRemainingMs = if (slot.lastIceRestartAt > 0) {
-            slot.lastIceRestartAt + WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS - clock.nowMs()
+            (slot.lastIceRestartAt + WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS - clock.nowMs())
+                .coerceIn(0L, WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS)
         } else {
             0L
         }

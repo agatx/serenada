@@ -313,6 +313,37 @@ class SessionNegotiationTest {
         assertTrue("Higher peer ID should not offer", factory.fakeProvider.sentMessages("offer").isEmpty())
     }
 
+    @Test
+    fun `deferred ICE restart cooldown is capped when the wall clock moves backwards`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["remote"]
+        assertNotNull(fakeSlot)
+        // A backwards wall-clock step after a previous restart leaves
+        // lastIceRestartAt far in the future relative to nowMs().
+        fakeSlot!!.recordIceRestart(factory.fakeClock.nowMs() + WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS * 10)
+        val offersBefore = fakeSlot.createOfferCalls
+
+        fakeSlot.simulateConnectionStateChange(PeerConnection.PeerConnectionState.FAILED)
+        ShadowLooper.idleMainLooper()
+        assertNotNull("ICE restart should be deferred, not dropped", fakeSlot.iceRestartTask)
+
+        ShadowLooper.idleMainLooper(WebRtcResilienceConstants.ICE_RESTART_COOLDOWN_MS, TimeUnit.MILLISECONDS)
+        ShadowLooper.idleMainLooper()
+
+        // The deferred runnable clears the task when it fires; an unclamped
+        // deferral would still be parked here (10x the cooldown away).
+        assertNull(
+            "Deferred restart must fire within one cooldown despite clock regression",
+            fakeSlot.iceRestartTask,
+        )
+        assertTrue(
+            "Restart offer should be sent once the clamped cooldown elapses",
+            fakeSlot.createOfferCalls > offersBefore,
+        )
+        assertEquals(true, fakeSlot.createOfferIceRestartFlags.last())
+    }
+
     // Group 7: Timer-Based (Android-specific via ShadowLooper)
 
     @Test

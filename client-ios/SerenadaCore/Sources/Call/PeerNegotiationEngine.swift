@@ -941,10 +941,12 @@ final class PeerNegotiationEngine {
 
         // Inside the cooldown window, defer to its expiry instead of dropping:
         // ICE state changes are edge-triggered, so a dropped restart for a
-        // connection parked in failed would never be retried.
+        // connection parked in failed would never be retried. Clamp to one
+        // cooldown: nowMs() is wall-clock, so a backwards step would otherwise
+        // park the restart for the full skew.
         let now = Double(clock.nowMs())
         let cooldownRemainingMs = slot.lastIceRestartAt > 0
-            ? slot.lastIceRestartAt + Double(WebRtcResilience.iceRestartCooldownMs) - now
+            ? min(Double(WebRtcResilience.iceRestartCooldownMs), max(0, slot.lastIceRestartAt + Double(WebRtcResilience.iceRestartCooldownMs) - now))
             : 0
         let effectiveDelayMs = max(Double(delayMs), cooldownRemainingMs)
 

@@ -351,7 +351,8 @@ internal final class WebRtcEngine: SessionMediaEngine {
             onConnectionStateChange: onConnectionStateChange,
             onIceConnectionStateChange: onIceConnectionStateChange,
             onSignalingStateChange: onSignalingStateChange,
-            onRenegotiationNeeded: onRenegotiationNeeded
+            onRenegotiationNeeded: onRenegotiationNeeded,
+            logger: logger
         )
         peerSlots.append(slot)
         return slot

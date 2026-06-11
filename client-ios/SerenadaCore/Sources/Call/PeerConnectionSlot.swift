@@ -131,6 +131,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private let onIceConnectionStateChange: (String, String) -> Void
     private let onSignalingStateChange: (String, String) -> Void
     private let onRenegotiationNeeded: (String) -> Void
+    private let logger: SerenadaLogger?
     private let rendererAttachmentQueue: DispatchQueue
 
     private var peerConnection: RTCPeerConnection?
@@ -161,7 +162,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         onConnectionStateChange: @escaping (String, String) -> Void,
         onIceConnectionStateChange: @escaping (String, String) -> Void,
         onSignalingStateChange: @escaping (String, String) -> Void,
-        onRenegotiationNeeded: @escaping (String) -> Void
+        onRenegotiationNeeded: @escaping (String) -> Void,
+        logger: SerenadaLogger? = nil
     ) {
         self.remoteCid = remoteCid
         self.factory = factory
@@ -174,6 +176,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         self.onIceConnectionStateChange = onIceConnectionStateChange
         self.onSignalingStateChange = onSignalingStateChange
         self.onRenegotiationNeeded = onRenegotiationNeeded
+        self.logger = logger
         self.rendererAttachmentQueue = DispatchQueue(
             label: "serenada.ios.webrtc.slot-renderer-\(remoteCid)",
             qos: .userInitiated
@@ -197,7 +200,9 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
             }
             config.sdpSemantics = .unifiedPlan
-            _ = peerConnection.setConfiguration(config)
+            if !peerConnection.setConfiguration(config) {
+                logger?.log(.warning, tag: "PeerConnection", "[\(remoteCid)] Failed to apply refreshed ICE servers")
+            }
             return
         }
         _ = ensurePeerConnection()

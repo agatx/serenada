@@ -330,6 +330,42 @@ final class SessionNegotiationTests: XCTestCase {
         XCTAssertTrue(offersAfter > offersBefore || hasTask || hasPending, "FAILED should trigger ICE restart")
     }
 
+    func testDeferredIceRestartCooldownCappedWhenClockMovesBackwards() async throws {
+        await harness.advanceToInCallWithTurn(
+            localCid: "local",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        let fakeSlot = harness.fakeMedia.fakeSlots["remote"]
+        XCTAssertNotNil(fakeSlot)
+        // A backwards wall-clock step after a previous restart leaves
+        // lastIceRestartAt far in the future relative to nowMs().
+        fakeSlot?.recordIceRestart(nowMs: harness.fakeClock.nowMs() + Int64(WebRtcResilience.iceRestartCooldownMs) * 10)
+        let offersBefore = fakeSlot?.createOfferCalls ?? 0
+
+        fakeSlot?.simulateConnectionStateChange(.failed)
+        await waitForIceRestartTask(fakeSlot)
+        XCTAssertNotNil(fakeSlot?.iceRestartTask, "ICE restart should be deferred, not dropped")
+
+        await harness.fakeClock.advance(byMs: Int64(WebRtcResilience.iceRestartCooldownMs))
+        await harness.yieldToMainActor()
+
+        // triggerIceRestart clears the task when the deferred sleep completes;
+        // an unclamped deferral would still be parked here (10x the cooldown away).
+        XCTAssertNil(
+            fakeSlot?.iceRestartTask,
+            "Deferred restart must fire within one cooldown despite clock regression"
+        )
+        XCTAssertGreaterThan(
+            fakeSlot?.createOfferCalls ?? 0,
+            offersBefore,
+            "Restart offer should be sent once the clamped cooldown elapses"
+        )
+        XCTAssertEqual(fakeSlot?.createOfferIceRestartFlags.last, true)
+    }
+
     func testConnectedClearsIceRestart() async throws {
         await harness.advanceToInCallWithTurn(
             localCid: "local",
