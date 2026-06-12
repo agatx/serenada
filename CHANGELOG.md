@@ -4,6 +4,25 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.5] — 2026-06-12
+
+### Added
+- iOS: host audio coordinators can report `audioSessionRestarted` after
+  same-app `AVAudioSession` takeovers, allowing the SDK to restart the
+  WebRTC audio unit when the host reactivates audio.
+
+### Fixed
+- Web, Android, iOS: call recovery is more robust around late local-media
+  attachment, duplicate/stale negotiation answers, deferred ICE restarts,
+  and peer replacement cleanup.
+- Web, Android, iOS: TURN credential refresh no longer clears live relay
+  configuration on empty or failed refreshes, and iOS now retries failed
+  mid-call refreshes before the current credentials age out.
+- Web: local media failures now surface as `mediaUnavailable` instead of
+  `unknown` when camera or microphone capture cannot start.
+- Android: answer SDP callbacks are delivered on the signaling thread only
+  while the negotiation is still current.
+
 ## [0.8.4] — 2026-06-05
 
 ### Fixed
