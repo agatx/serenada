@@ -420,11 +420,18 @@ internal class PeerNegotiationEngine(
                     flushPendingRemoteIce(remoteCid, offerId, targetSlot)
                     targetSlot.createAnswer(
                         onSdp = { answerSdp ->
-                            val payload = JSONObject().apply {
-                                put("sdp", answerSdp)
-                                put("offerId", offerId)
+                            // Fires on the WebRTC signaling thread; the transport and
+                            // negotiation bookkeeping are main-thread-owned (same hop
+                            // the offer and ICE callbacks make).
+                            handler.post {
+                                if (getSlot(remoteCid) !== targetSlot) return@post
+                                if (acceptedRemoteOfferIds[remoteCid] != offerId) return@post
+                                val payload = JSONObject().apply {
+                                    put("sdp", answerSdp)
+                                    put("offerId", offerId)
+                                }
+                                sendMessage("answer", payload, remoteCid)
                             }
-                            sendMessage("answer", payload, remoteCid)
                         },
                         onComplete = { answerSuccess ->
                             handler.post {

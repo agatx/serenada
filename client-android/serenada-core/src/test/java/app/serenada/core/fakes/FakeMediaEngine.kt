@@ -25,6 +25,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
     val fakeSlots = mutableMapOf<String, FakePeerConnectionSlot>()
     var failNextCreatedSlotRemoteOffer = false
     var deferNextCreatedSlotOfferSdp = false
+    var deferNextCreatedSlotAnswerSdp = false
 
     private var _iceServers: List<PeerConnection.IceServer>? = null
 
@@ -77,6 +78,10 @@ internal class FakeMediaEngine : SessionMediaEngine {
         if (deferNextCreatedSlotOfferSdp) {
             slot.deferNextOfferSdp = true
             deferNextCreatedSlotOfferSdp = false
+        }
+        if (deferNextCreatedSlotAnswerSdp) {
+            slot.deferNextAnswerSdp = true
+            deferNextCreatedSlotAnswerSdp = false
         }
         fakeSlots[remoteCid] = slot
         _iceServers?.let(slot::setIceServers)

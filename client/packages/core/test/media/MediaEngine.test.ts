@@ -411,6 +411,44 @@ describe('MediaEngine', () => {
         });
     });
 
+    it('records the DOMException name when getUserMedia rejects and clears it on a later success', async () => {
+        const getUserMedia = vi.fn().mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+            .mockResolvedValue(createMediaStream());
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+
+        const failed = await engine.startLocalMedia();
+        expect(failed).toBeNull();
+        expect(engine.lastLocalMediaError?.name).toBe('NotAllowedError');
+
+        const stream = await engine.startLocalMedia();
+        expect(stream).not.toBeNull();
+        expect(engine.lastLocalMediaError).toBeNull();
+    });
+
+    it('records NotSupportedError when getUserMedia is unavailable', async () => {
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { mediaDevices: {} },
+            configurable: true,
+        });
+        const engine = new MediaEngine({}, () => {});
+
+        const stream = await engine.startLocalMedia();
+
+        expect(stream).toBeNull();
+        expect(engine.lastLocalMediaError?.name).toBe('NotSupportedError');
+    });
+
     it('starts local media with the default audio input when it is available before capture', async () => {
         const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audioSettings: { deviceId: 'bt-mic', groupId: 'bluetooth' } }));
         const devices = [

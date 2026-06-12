@@ -49,6 +49,20 @@ final class SerenadaServerProviderTests: XCTestCase {
         func signalingProviderDidRefreshReconnectToken(_ event: ReconnectTokenRefreshedEvent) {
             reconnectTokenRefreshedEvents.append(event)
         }
+
+        var iceServersChangedEvents: [[IceServerConfig]] = []
+
+        func signalingProviderDidChangeIceServers(_ iceServers: [IceServerConfig]) {
+            iceServersChangedEvents.append(iceServers)
+        }
+
+        /// Ice-server change events that actually carry TURN credentials
+        /// (TurnManager's first ensure also emits a default STUN apply).
+        var turnServerEvents: [[IceServerConfig]] {
+            iceServersChangedEvents.filter { servers in
+                servers.contains { $0.urls.contains { $0.hasPrefix("turn") } }
+            }
+        }
     }
 
     private var signaling: FakeSessionSignaling!
@@ -298,6 +312,124 @@ final class SerenadaServerProviderTests: XCTestCase {
         XCTAssertEqual(apiClient.fetchTurnCredentialsCalls.first?.token, "turn-token")
         XCTAssertEqual(iceServers.map(\.urls), [["turn:turn-a.example.com:3478"], ["turns:turn-b.example.com:5349"]])
         XCTAssertEqual(delegate.joinedEvents.last?.peerId, "local-cid")
+    }
+
+    /// Waits until exactly one sleep is parked on the fake clock and the count
+    /// holds across several main-actor yields. The transient single sleep
+    /// (the about-to-be-cancelled fetch-timeout) is drained by the yields, so
+    /// a stable count of one means the retry delay is parked and its deadline
+    /// is anchored at the current fake time.
+    private func waitForStableRetrySleep() async {
+        for _ in 0..<32 {
+            await waitUntil { self.fakeClock.pendingSleepCount == 1 }
+            var stable = true
+            for _ in 0..<8 {
+                await Task.yield()
+                if fakeClock.pendingSleepCount != 1 {
+                    stable = false
+                    break
+                }
+            }
+            if stable {
+                return
+            }
+        }
+        XCTFail("Retry sleep never stabilized on the fake clock")
+    }
+
+    private func settle(yields: Int = 16) async {
+        for _ in 0..<yields {
+            await Task.yield()
+        }
+    }
+
+    private func deliverTurnRefreshed(token: String) {
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "turn-refreshed",
+                rid: "room-1",
+                cid: "local-cid",
+                payload: .object(["turnToken": .string(token)])
+            )
+        )
+    }
+
+    func testTurnRefreshRetriesAfterTransientFailureWithoutErrorEvent() async throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        apiClient.turnCredentialsResult = .failure(URLError(.networkConnectionLost))
+
+        deliverTurnRefreshed(token: "fresh-token")
+        await waitUntil { self.apiClient.fetchTurnCredentialsCalls.count == 1 }
+        XCTAssertTrue(delegate.turnServerEvents.isEmpty)
+
+        apiClient.turnCredentialsResult = .success(
+            TurnCredentials(username: "user", password: "pass", uris: ["turn:turn.example.com:3478"], ttl: 3600)
+        )
+        // Wait for the retry delay to be parked on the fake clock before advancing.
+        await waitForStableRetrySleep()
+        await fakeClock.advance(byMs: 1_000)
+        await waitUntil { self.delegate.turnServerEvents.count == 1 }
+
+        XCTAssertEqual(apiClient.fetchTurnCredentialsCalls.count, 2)
+        XCTAssertEqual(delegate.turnServerEvents.count, 1)
+        XCTAssertTrue(delegate.errorEvents.isEmpty, "TURN refresh failures must never surface as error events")
+    }
+
+    func testExhaustedTurnRefreshAllowsTheSameTokenToRetry() async throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        apiClient.turnCredentialsResult = .failure(URLError(.networkConnectionLost))
+
+        deliverTurnRefreshed(token: "fresh-token")
+        await waitUntil { self.apiClient.fetchTurnCredentialsCalls.count == 1 }
+        await waitForStableRetrySleep()
+        await fakeClock.advance(byMs: 1_000)
+        await waitUntil { self.apiClient.fetchTurnCredentialsCalls.count == 2 }
+        await waitForStableRetrySleep()
+        await fakeClock.advance(byMs: 2_000)
+        await waitUntil { self.apiClient.fetchTurnCredentialsCalls.count == 3 }
+        await waitForStableRetrySleep()
+        await fakeClock.advance(byMs: 4_000)
+        await waitUntil { self.apiClient.fetchTurnCredentialsCalls.count == 4 }
+        // Let the exhausted loop clear the token latch before re-delivering.
+        await settle()
+
+        XCTAssertEqual(apiClient.fetchTurnCredentialsCalls.count, 4)
+        XCTAssertTrue(delegate.turnServerEvents.isEmpty)
+        XCTAssertTrue(delegate.errorEvents.isEmpty)
+
+        // The server re-sends the same token (it has no fresher one until the
+        // TTL rolls). Exhaustion must clear the dedupe latch so this retries.
+        apiClient.turnCredentialsResult = .success(
+            TurnCredentials(username: "user", password: "pass", uris: ["turn:turn.example.com:3478"], ttl: 3600)
+        )
+        deliverTurnRefreshed(token: "fresh-token")
+        await waitUntil { self.delegate.turnServerEvents.count == 1 }
+
+        XCTAssertEqual(apiClient.fetchTurnCredentialsCalls.count, 5)
+        XCTAssertEqual(delegate.turnServerEvents.count, 1)
+    }
+
+    func testEmptyTurnCredentialRefreshIsRetriedNotApplied() async throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        apiClient.turnCredentialsResult = .success(
+            TurnCredentials(username: "user", password: "pass", uris: [], ttl: 3600)
+        )
+
+        deliverTurnRefreshed(token: "fresh-token")
+        await waitUntil { self.apiClient.fetchTurnCredentialsCalls.count == 1 }
+        XCTAssertTrue(
+            delegate.turnServerEvents.isEmpty,
+            "An empty credential list must not strip TURN from the live call"
+        )
+
+        apiClient.turnCredentialsResult = .success(
+            TurnCredentials(username: "user", password: "pass", uris: ["turn:turn.example.com:3478"], ttl: 3600)
+        )
+        await waitForStableRetrySleep()
+        await fakeClock.advance(byMs: 1_000)
+        await waitUntil { self.delegate.turnServerEvents.count == 1 }
+
+        XCTAssertEqual(delegate.turnServerEvents.count, 1)
     }
 
     func testRoomStateEmitsParticipantDiffsAndRoomEndedUsesPayloadFields() {

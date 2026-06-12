@@ -259,6 +259,136 @@ describe('SerenadaServerProvider', () => {
         });
     });
 
+    it('retries a failed mid-call ICE refresh and emits after a later success', async () => {
+        vi.useFakeTimers();
+        try {
+            const fetchMock = vi.fn()
+                .mockRejectedValueOnce(new Error('network blip'))
+                .mockResolvedValue({
+                    ok: true,
+                    json: async () => ({
+                        username: 'turn-user',
+                        password: 'turn-pass',
+                        uris: ['turn:turn.example.com:3478'],
+                    }),
+                });
+            vi.stubGlobal('fetch', fetchMock);
+
+            const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
+            const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;
+            const iceServersChanged = vi.fn();
+            const errors = vi.fn();
+            provider.on('iceServersChanged', iceServersChanged);
+            provider.on('error', errors);
+
+            engine.emitMessage({ v: 1, type: 'turn-refreshed', rid: 'room-1', payload: { turnToken: 'turn-token' } });
+
+            await vi.advanceTimersByTimeAsync(0);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(iceServersChanged).not.toHaveBeenCalled();
+
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            expect(iceServersChanged).toHaveBeenCalledTimes(1);
+            expect(errors).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('exhausted ICE refresh retries log instead of emitting an error event', async () => {
+        vi.useFakeTimers();
+        try {
+            const fetchMock = vi.fn().mockRejectedValue(new Error('still down'));
+            vi.stubGlobal('fetch', fetchMock);
+
+            const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
+            const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;
+            const iceServersChanged = vi.fn();
+            const errors = vi.fn();
+            provider.on('iceServersChanged', iceServersChanged);
+            provider.on('error', errors);
+
+            engine.emitMessage({ v: 1, type: 'turn-refreshed', rid: 'room-1', payload: { turnToken: 'turn-token' } });
+
+            await vi.advanceTimersByTimeAsync(0);
+            await vi.advanceTimersByTimeAsync(1000);
+            await vi.advanceTimersByTimeAsync(2000);
+            await vi.advanceTimersByTimeAsync(4000);
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            expect(fetchMock).toHaveBeenCalledTimes(4);
+            expect(iceServersChanged).not.toHaveBeenCalled();
+            expect(errors).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a newer turn-refreshed supersedes an in-flight ICE refresh retry loop', async () => {
+        vi.useFakeTimers();
+        try {
+            const fetchMock = vi.fn()
+                .mockRejectedValueOnce(new Error('blip for token-a'))
+                .mockResolvedValue({
+                    ok: true,
+                    json: async () => ({
+                        username: 'turn-user',
+                        password: 'turn-pass',
+                        uris: ['turn:turn.example.com:3478'],
+                    }),
+                });
+            vi.stubGlobal('fetch', fetchMock);
+
+            const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
+            const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;
+            const iceServersChanged = vi.fn();
+            provider.on('iceServersChanged', iceServersChanged);
+
+            engine.emitMessage({ v: 1, type: 'turn-refreshed', rid: 'room-1', payload: { turnToken: 'token-a' } });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            // Second refresh arrives while the first loop waits out its retry
+            // delay; the first loop must yield to the newer generation.
+            engine.emitMessage({ v: 1, type: 'turn-refreshed', rid: 'room-1', payload: { turnToken: 'token-b' } });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(iceServersChanged).toHaveBeenCalledTimes(1);
+
+            await vi.advanceTimersByTimeAsync(10_000);
+            // The superseded loop must not have fetched again after its delay.
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            expect(iceServersChanged).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('disconnect during an ICE refresh retry stops the loop', async () => {
+        vi.useFakeTimers();
+        try {
+            const fetchMock = vi.fn().mockRejectedValue(new Error('blip'));
+            vi.stubGlobal('fetch', fetchMock);
+
+            const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
+            const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;
+            const iceServersChanged = vi.fn();
+            provider.on('iceServersChanged', iceServersChanged);
+
+            engine.emitMessage({ v: 1, type: 'turn-refreshed', rid: 'room-1', payload: { turnToken: 'turn-token' } });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            provider.disconnect();
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(iceServersChanged).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('omits roomEnded.by when neither payload nor room state provide an owner', () => {
         const provider = new SerenadaServerProvider({ serverHost: 'serenada.app' });
         const engine = mockEngineInstances[0] as InstanceType<typeof MockSignalingEngine>;

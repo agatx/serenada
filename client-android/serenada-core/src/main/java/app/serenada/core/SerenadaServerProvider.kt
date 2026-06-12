@@ -277,6 +277,12 @@ internal class SerenadaServerProvider(
                 if (closedByClient || generation != iceRefreshGeneration) {
                     return
                 }
+                if (servers.isEmpty()) {
+                    // A degenerate refresh must not strip TURN from the live
+                    // connection; treat it as a failed attempt and retry.
+                    lastError = IllegalStateException("ICE server refresh returned no servers")
+                    continue
+                }
                 listener?.onIceServersChanged(servers)
                 return
             } catch (error: CancellationException) {

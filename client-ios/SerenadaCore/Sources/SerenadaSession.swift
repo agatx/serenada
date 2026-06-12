@@ -1132,6 +1132,13 @@ public final class SerenadaSession: ObservableObject {
     }
 
     fileprivate func handleProviderError(_ event: ErrorEvent) {
+        if event.code == "TURN_REFRESH_FAILED" {
+            // Non-fatal: media keeps flowing on the existing credentials until
+            // expiry. Built-in providers no longer emit this code, but custom
+            // SignalingProviders may (web and Android take the same early-out).
+            logger?.log(.warning, tag: "Session", "TURN refresh failed: \(event.message)")
+            return
+        }
         signalingMessageRouter?.processErrorEvent(event)
     }
 

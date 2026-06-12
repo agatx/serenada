@@ -92,6 +92,7 @@ export type CallErrorCode =
     | 'permissionDenied'
     | 'serverError'
     | 'webrtcUnavailable'
+    | 'mediaUnavailable'
     | 'unknown';
 
 /** Error with a machine-readable code and human-readable message. */

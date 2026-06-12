@@ -315,6 +315,90 @@ describe('SerenadaSession', () => {
             restore();
         });
 
+        it('resumeJoin surfaces a permission-denied media failure as terminal permissionDenied', async () => {
+            const restore = stubPermissionsPrompt();
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(harness.state.phase).toBe('awaitingPermissions');
+
+            harness.media.startLocalMediaResult = null;
+            harness.media.lastLocalMediaError = { name: 'NotAllowedError', message: 'denied' };
+            await harness.session.resumeJoin();
+
+            const sigState = harness.state.signalingState;
+            expect(sigState.kind).toBe('failed');
+            if (sigState.kind === 'failed') {
+                expect(sigState.reason).toBe('permissionDenied');
+            }
+            restore();
+        });
+
+        it('resumeJoin maps unsupported media to webrtcUnavailable and other failures to mediaUnavailable', async () => {
+            const restore = stubPermissionsPrompt();
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+
+            harness.media.startLocalMediaResult = null;
+            harness.media.lastLocalMediaError = { name: 'NotSupportedError', message: 'no gUM' };
+            await harness.session.resumeJoin();
+            let sigState = harness.state.signalingState;
+            expect(sigState.kind).toBe('failed');
+            if (sigState.kind === 'failed') {
+                expect(sigState.reason).toBe('webrtcUnavailable');
+            }
+            restore();
+
+            // NotReadableError (camera held by another app) must not surface
+            // as 'unknown' — it maps through LOCAL_MEDIA_FAILED to
+            // mediaUnavailable.
+            const restore2 = stubPermissionsPrompt();
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+
+            harness.media.startLocalMediaResult = null;
+            harness.media.lastLocalMediaError = { name: 'NotReadableError', message: 'camera busy' };
+            await harness.session.resumeJoin();
+            sigState = harness.state.signalingState;
+            expect(sigState.kind).toBe('failed');
+            if (sigState.kind === 'failed') {
+                expect(sigState.reason).toBe('mediaUnavailable');
+            }
+            restore2();
+        });
+
+        it('resumeJoin with a superseded (errorless) null stream does not fail the session', async () => {
+            const restore = stubPermissionsPrompt();
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+
+            harness.media.startLocalMediaResult = null;
+            harness.media.lastLocalMediaError = null;
+            await harness.session.resumeJoin();
+
+            expect(harness.state.signalingState.kind).not.toBe('failed');
+            restore();
+        });
+
+        it('initial-join media failure is surfaced without an awaitingPermissions stop', async () => {
+            // Permissions already granted (no prompt stub): the join path calls
+            // startLocalMedia directly and must surface a failure terminally.
+            harness = new TestSessionHarness();
+            harness.media.startLocalMediaResult = null;
+            harness.media.lastLocalMediaError = { name: 'NotReadableError', message: 'camera busy' };
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+
+            const sigState = harness.state.signalingState;
+            expect(sigState.kind).toBe('failed');
+            if (sigState.kind === 'failed') {
+                expect(sigState.reason).toBe('mediaUnavailable');
+            }
+        });
+
         it('fires onPermissionsRequired callback', async () => {
             const restore = stubPermissionsPrompt();
             harness = new TestSessionHarness();
@@ -1172,6 +1256,21 @@ describe('SerenadaSession', () => {
             if (sigState.kind === 'failed') {
                 expect(sigState.reason).toBe('roomEnded');
             }
+        });
+
+        it('TURN_REFRESH_FAILED from the provider is non-fatal', async () => {
+            // Built-in providers no longer emit this code, but custom
+            // SignalingProviders may; the call must survive it.
+            harness = new TestSessionHarness();
+            harness.simulateJoined({ clientId: 'me', participants: [{ cid: 'me' }] });
+            await vi.advanceTimersByTimeAsync(0);
+            const phaseBefore = harness.state.phase;
+
+            harness.simulateError('credential fetch failed', 'TURN_REFRESH_FAILED');
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(harness.state.signalingState.kind).not.toBe('failed');
+            expect(harness.state.phase).toBe(phaseBefore);
         });
     });
 

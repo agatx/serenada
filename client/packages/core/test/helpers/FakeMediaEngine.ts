@@ -45,6 +45,13 @@ export class FakeMediaEngine {
         getVideoTracks: () => [],
     } as unknown as MediaStream;
 
+    /**
+     * Mirrors MediaEngine.lastLocalMediaError. Set alongside
+     * startLocalMediaResult = null to simulate a failed (vs superseded)
+     * acquisition.
+     */
+    lastLocalMediaError: { name: string; message: string } | null = null;
+
     setOnChange(cb: () => void): void {
         this.onChange = cb;
     }

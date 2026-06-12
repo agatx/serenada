@@ -5,6 +5,7 @@ import android.os.Looper
 import app.serenada.core.call.SessionSignaling
 import app.serenada.core.call.SignalingMessage
 import app.serenada.core.fakes.FakeAPIClient
+import app.serenada.core.network.TurnCredentials
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.json.JSONArray
@@ -77,6 +78,7 @@ class SerenadaServerProviderTest {
         val roomEndedEvents = mutableListOf<RoomEndedEvent>()
         val errors = mutableListOf<ErrorEvent>()
         val reconnectTokenRefreshedEvents = mutableListOf<ReconnectTokenRefreshedEvent>()
+        val iceServersChangedEvents = mutableListOf<List<org.webrtc.PeerConnection.IceServer>>()
 
         override fun onConnected(info: ConnectionInfo) {
             connectionInfos += info
@@ -112,6 +114,10 @@ class SerenadaServerProviderTest {
 
         override fun onReconnectTokenRefreshed(event: ReconnectTokenRefreshedEvent) {
             reconnectTokenRefreshedEvents += event
+        }
+
+        override fun onIceServersChanged(iceServers: List<org.webrtc.PeerConnection.IceServer>) {
+            iceServersChangedEvents += iceServers
         }
     }
 
@@ -452,6 +458,113 @@ class SerenadaServerProviderTest {
 
         assertEquals(listOf("serenada.app" to "turn-token"), apiClient.fetchTurnCredentialsCalls)
         assertEquals(listOf("turn:turn.example.com:3478"), iceServers.flatMap { it.urls })
+    }
+
+    private fun deliverJoined(turnToken: String = "turn-token") {
+        signaling.receive(
+            SignalingMessage(
+                type = "joined",
+                rid = "room-1",
+                sid = null,
+                cid = "local-cid",
+                to = null,
+                payload = JSONObject().apply {
+                    put("hostCid", "local-cid")
+                    put("turnToken", turnToken)
+                    put(
+                        "participants",
+                        JSONArray().put(
+                            JSONObject().apply {
+                                put("cid", "local-cid")
+                                put("joinedAt", 1L)
+                            }
+                        )
+                    )
+                },
+            )
+        )
+    }
+
+    private fun deliverTurnRefreshed(turnToken: String) {
+        signaling.receive(
+            SignalingMessage(
+                type = "turn-refreshed",
+                rid = "room-1",
+                sid = null,
+                cid = "local-cid",
+                to = null,
+                payload = JSONObject().apply { put("turnToken", turnToken) },
+            )
+        )
+    }
+
+    @Test
+    fun `turn-refreshed fetches and emits refreshed ice servers`() {
+        deliverJoined()
+
+        deliverTurnRefreshed("fresh-token")
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("serenada.app" to "fresh-token"), apiClient.fetchTurnCredentialsCalls)
+        assertEquals(1, listener.iceServersChangedEvents.size)
+        assertEquals(
+            listOf("turn:turn.example.com:3478"),
+            listener.iceServersChangedEvents.single().flatMap { it.urls },
+        )
+        assertTrue(listener.errors.isEmpty())
+    }
+
+    @Test
+    fun `failed turn refresh retries and recovers without surfacing an error event`() {
+        deliverJoined()
+        apiClient.turnCredentialsResult = Result.failure(RuntimeException("network blip"))
+
+        deliverTurnRefreshed("fresh-token")
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, apiClient.fetchTurnCredentialsCalls.size)
+        assertTrue(listener.iceServersChangedEvents.isEmpty())
+
+        apiClient.turnCredentialsResult = Result.success(
+            TurnCredentials(username = "user", password = "pass", uris = listOf("turn:turn.example.com:3478"), ttl = 3600)
+        )
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(1_000L, TimeUnit.MILLISECONDS)
+
+        assertEquals(2, apiClient.fetchTurnCredentialsCalls.size)
+        assertEquals(1, listener.iceServersChangedEvents.size)
+        assertTrue("TURN refresh failures must never surface as error events", listener.errors.isEmpty())
+    }
+
+    @Test
+    fun `exhausted turn refresh retries log only - no error event, no emission`() {
+        deliverJoined()
+        apiClient.turnCredentialsResult = Result.failure(RuntimeException("still down"))
+
+        deliverTurnRefreshed("fresh-token")
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(8_000L, TimeUnit.MILLISECONDS)
+
+        assertEquals(4, apiClient.fetchTurnCredentialsCalls.size)
+        assertTrue(listener.iceServersChangedEvents.isEmpty())
+        assertTrue("TURN refresh exhaustion must never surface as an error event", listener.errors.isEmpty())
+    }
+
+    @Test
+    fun `empty ice server refresh result is retried, not applied`() {
+        deliverJoined()
+        apiClient.turnCredentialsResult = Result.success(
+            TurnCredentials(username = "user", password = "pass", uris = emptyList(), ttl = 3600)
+        )
+
+        deliverTurnRefreshed("fresh-token")
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("Empty server list must not be applied to the live call", listener.iceServersChangedEvents.isEmpty())
+
+        apiClient.turnCredentialsResult = Result.success(
+            TurnCredentials(username = "user", password = "pass", uris = listOf("turn:turn.example.com:3478"), ttl = 3600)
+        )
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(1_000L, TimeUnit.MILLISECONDS)
+
+        assertEquals(1, listener.iceServersChangedEvents.size)
     }
 
     @Test

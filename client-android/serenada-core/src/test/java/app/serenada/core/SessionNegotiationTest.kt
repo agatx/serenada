@@ -91,6 +91,57 @@ class SessionNegotiationTest {
     }
 
     @Test
+    fun `stale deferred answer is not sent after the peer leaves`() {
+        factory.fakeMedia.deferNextCreatedSlotAnswerSdp = true
+        factory.advanceToInCallWithTurn(localCid = "zulu", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull("Slot should be created", fakeSlot)
+
+        factory.simulateOfferFromRemote("alpha")
+        assertTrue("Answer SDP should be deferred, not sent", factory.fakeProvider.sentMessages("answer").isEmpty())
+
+        factory.simulateRoomState(participants = listOf("zulu" to 2L), hostCid = "zulu")
+        fakeSlot!!.flushPendingAnswerSdp()
+        ShadowLooper.idleMainLooper()
+
+        assertTrue("Stale answer must not be sent after the peer leaves", factory.fakeProvider.sentMessages("answer").isEmpty())
+    }
+
+    @Test
+    fun `TURN_REFRESH_FAILED provider error is non-fatal`() {
+        factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
+        assertEquals(CallPhase.InCall, factory.session.state.value.phase)
+
+        factory.fakeProvider.simulateError("TURN_REFRESH_FAILED", "credential fetch failed")
+        ShadowLooper.idleMainLooper()
+
+        assertEquals("Call must survive a TURN refresh failure", CallPhase.InCall, factory.session.state.value.phase)
+
+        factory.fakeProvider.simulateError("CONNECTION_FAILED", "gone")
+        ShadowLooper.idleMainLooper()
+
+        assertTrue("Other error codes must still terminate", factory.session.state.value.phase != CallPhase.InCall)
+    }
+
+    @Test
+    fun `deferred answer for a current negotiation is sent after the async hop`() {
+        factory.fakeMedia.deferNextCreatedSlotAnswerSdp = true
+        factory.advanceToInCallWithTurn(localCid = "zulu", remoteCid = "alpha", localJoinedAt = 2, remoteJoinedAt = 1)
+
+        val fakeSlot = factory.fakeMedia.fakeSlots["alpha"]
+        assertNotNull("Slot should be created", fakeSlot)
+
+        factory.simulateOfferFromRemote("alpha")
+        assertTrue("Answer SDP should be deferred, not sent", factory.fakeProvider.sentMessages("answer").isEmpty())
+
+        fakeSlot!!.flushPendingAnswerSdp()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals("Current answer must still be sent", 1, factory.fakeProvider.sentMessages("answer").size)
+    }
+
+    @Test
     fun `stale local ICE from replaced slot is not sent`() {
         factory.advanceToInCallWithTurn(localCid = "alpha", remoteCid = "remote", localJoinedAt = 1, remoteJoinedAt = 2)
 

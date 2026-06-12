@@ -77,6 +77,8 @@ function mapErrorCode(serverCode: string): CallErrorCode {
             return 'permissionDenied';
         case 'MEDIA_UNSUPPORTED':
             return 'webrtcUnavailable';
+        case 'LOCAL_MEDIA_FAILED':
+            return 'mediaUnavailable';
         case 'CONNECTION_FAILED':
             return 'connectionFailed';
         case 'ICE_SERVER_FETCH_FAILED':

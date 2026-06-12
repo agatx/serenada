@@ -330,6 +330,12 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
                 if (this.disconnected || generation !== this.iceRefreshGeneration) {
                     return;
                 }
+                if (servers.length === 0) {
+                    // A degenerate refresh must not strip TURN from the live
+                    // connection; treat it as a failed attempt and retry.
+                    lastError = new Error('ICE server refresh returned no servers');
+                    continue;
+                }
                 this.emit('iceServersChanged', servers);
                 return;
             } catch (error) {

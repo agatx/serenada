@@ -20,6 +20,9 @@ final class TurnManager {
     private var turnTokenExpiresAtMs: Int64?
     private var hasInitializedIceSetupForAttempt = false
     private var lastTurnTokenForAttempt: String?
+    // Bumped per fetch so a newer turn-refreshed supersedes an in-flight
+    // retry loop (mirrors the web/Android generation guard).
+    private var iceRefreshGeneration = 0
 
     /// Returns `false` to skip this refresh cycle — typically because all
     /// peers are on direct ICE paths and TURN credentials are unused.
@@ -94,45 +97,72 @@ final class TurnManager {
         turnRefreshTask = nil
     }
 
+    private enum TurnFetchOutcome {
+        case success(TurnCredentials)
+        case failed
+        case timedOut
+    }
+
     private func fetchTurnCredentials(token: String, applyDefaultOnFailure: Bool = true) {
         let roomIdAtFetchStart = getRoomId()
         let joinAttemptAtFetchStart = getJoinAttemptSerial()
-
-        enum TurnFetchOutcome {
-            case success(TurnCredentials)
-            case failed
-            case timedOut
-        }
+        iceRefreshGeneration += 1
+        let generation = iceRefreshGeneration
 
         Task {
-            let outcome = await withTaskGroup(of: TurnFetchOutcome.self) { group in
-                group.addTask { [apiClient, serverHost] in
-                    do {
-                        return .success(try await apiClient.fetchTurnCredentials(host: serverHost, token: token))
-                    } catch {
-                        return .failed
-                    }
+            // Retry over the shared delay schedule (matches web/Android):
+            // a transient blip at refresh time must not leave the call on
+            // aging credentials until the next TTL cycle.
+            for delayMs in WebRtcResilience.iceFetchRetryDelaysMs {
+                if delayMs > 0 {
+                    try? await self.clock.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
                 }
-                group.addTask { [clock] in
-                    try? await clock.sleep(nanoseconds: WebRtcResilience.turnFetchTimeoutNs)
-                    return .timedOut
+                guard self.iceRefreshGeneration == generation,
+                      self.getRoomId() == roomIdAtFetchStart,
+                      self.getJoinAttemptSerial() == joinAttemptAtFetchStart else { return }
+
+                let outcome = await self.performTurnFetch(token: token)
+
+                guard self.iceRefreshGeneration == generation,
+                      self.getRoomId() == roomIdAtFetchStart,
+                      self.getJoinAttemptSerial() == joinAttemptAtFetchStart else { return }
+
+                if case .success(let credentials) = outcome, !credentials.uris.isEmpty {
+                    self.applyTurnCredentials(credentials)
+                    return
                 }
-                let first = await group.next() ?? .failed
-                group.cancelAll()
-                return first
+                // Failed, timed out, or empty (a degenerate refresh must not
+                // strip TURN from the live call): retry on the next delay.
             }
 
-            guard self.getRoomId() == roomIdAtFetchStart else { return }
-            guard self.getJoinAttemptSerial() == joinAttemptAtFetchStart else { return }
+            // Exhausted: non-fatal — the call keeps running on the existing
+            // credentials. Clear the token latch so a re-delivered identical
+            // token is retried instead of deduped.
+            if self.lastTurnTokenForAttempt == token {
+                self.lastTurnTokenForAttempt = nil
+            }
+            if applyDefaultOnFailure {
+                self.applyDefaultIceServers()
+            }
+        }
+    }
 
-            switch outcome {
-            case .success(let credentials):
-                self.applyTurnCredentials(credentials)
-            case .timedOut, .failed:
-                if applyDefaultOnFailure {
-                    self.applyDefaultIceServers()
+    private func performTurnFetch(token: String) async -> TurnFetchOutcome {
+        await withTaskGroup(of: TurnFetchOutcome.self) { group in
+            group.addTask { [apiClient, serverHost] in
+                do {
+                    return .success(try await apiClient.fetchTurnCredentials(host: serverHost, token: token))
+                } catch {
+                    return .failed
                 }
             }
+            group.addTask { [clock] in
+                try? await clock.sleep(nanoseconds: WebRtcResilience.turnFetchTimeoutNs)
+                return .timedOut
+            }
+            let first = await group.next() ?? .failed
+            group.cancelAll()
+            return first
         }
     }
 

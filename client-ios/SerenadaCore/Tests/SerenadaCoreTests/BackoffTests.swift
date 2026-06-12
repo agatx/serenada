@@ -10,4 +10,10 @@ final class BackoffTests: XCTestCase {
         XCTAssertEqual(Backoff.reconnectDelayMs(attempt: 5), 5000)
         XCTAssertEqual(Backoff.reconnectDelayMs(attempt: 10), 5000)
     }
+
+    func testReconnectBackoffDoesNotTrapOnHugeAttemptCounts() {
+        // Pre-clamp, pow(2, attempt - 1) * base overflowed the Double-to-Int
+        // conversion and trapped after enough consecutive reconnect failures.
+        XCTAssertEqual(Backoff.reconnectDelayMs(attempt: 10_000), WebRtcResilience.reconnectBackoffCapMs)
+    }
 }

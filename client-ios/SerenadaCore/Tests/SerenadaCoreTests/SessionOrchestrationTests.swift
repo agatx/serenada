@@ -134,6 +134,33 @@ final class SessionOrchestrationTests: XCTestCase {
         XCTAssertGreaterThan(harness.fakeProvider.disconnectCalls, 0, "Provider should be disconnected on error")
     }
 
+    func testTurnRefreshFailedErrorIsNonFatal() async {
+        await harness.advancePastPermissions()
+        harness.openSignaling()
+        harness.simulateJoinedResponse(
+            cid: "my-cid",
+            participants: [
+                (cid: "my-cid", joinedAt: 1),
+                (cid: "remote-cid", joinedAt: 2)
+            ],
+            hostCid: "my-cid"
+        )
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .inCall)
+
+        // Built-in providers no longer emit this code, but custom
+        // SignalingProviders may; web and Android already survive it.
+        harness.simulateError(code: "TURN_REFRESH_FAILED", message: "credential fetch failed")
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(harness.session.state.phase, .inCall, "Call must survive a TURN refresh failure")
+        XCTAssertNil(harness.session.state.error)
+
+        harness.simulateError(code: "ROOM_CAPACITY_UNSUPPORTED", message: "boom")
+        await harness.yieldToMainActor()
+        XCTAssertEqual(harness.session.state.phase, .error, "Other error codes must still terminate")
+    }
+
     // MARK: - Test 5: Room State Update
 
     func testRoomStateUpdate() async {
