@@ -419,13 +419,19 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         private var attachedSource: SystemPictureInPictureSource?
         private var currentParticipant: SystemPictureInPictureParticipant?
         private var currentAvatarImage: UIImage?
-        private var foregroundObservers: [NSObjectProtocol] = []
+        private var foregroundObserver: NSObjectProtocol?
         private var isStoppingForForegroundActivation = false
 
         init(rendererProvider: CallRendererProvider) {
             self.rendererProvider = rendererProvider
             super.init()
             registerForegroundObservers()
+        }
+
+        deinit {
+            if let foregroundObserver {
+                NotificationCenter.default.removeObserver(foregroundObserver)
+            }
         }
 
         func configure(sourceView: SystemPictureInPictureSourceView) {
@@ -439,7 +445,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             sourceView?.update(
                 participant: participant,
                 avatarImage: avatarImage,
-                placeholderVisible: controller?.isPictureInPictureActive == true
+                placeholderVisible: controller?.isPictureInPictureActive == true && !isStoppingForForegroundActivation
             )
 
             guard enabled else {
@@ -496,6 +502,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             contentController = nil
             currentParticipant = nil
             currentAvatarImage = nil
+            isStoppingForForegroundActivation = false
             removeForegroundObservers()
         }
 
@@ -551,11 +558,13 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         }
 
         func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+            isStoppingForForegroundActivation = false
             updateSourcePlaceholder(visible: true, animated: false)
             attachCurrentRenderer()
         }
 
         func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+            isStoppingForForegroundActivation = false
             updateSourcePlaceholder(visible: true, animated: false)
             attachCurrentRenderer()
         }
@@ -571,26 +580,27 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         }
 
         private func registerForegroundObservers() {
-            let notifications = [
-                UIApplication.willEnterForegroundNotification,
-                UIApplication.didBecomeActiveNotification
-            ]
-            foregroundObservers = notifications.map { name in
-                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor [weak self] in
-                        self?.stopPictureInPictureForForegroundActivation()
-                    }
+            foregroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.stopPictureInPictureForForegroundActivation()
                 }
             }
         }
 
         private func removeForegroundObservers() {
-            foregroundObservers.forEach(NotificationCenter.default.removeObserver)
-            foregroundObservers.removeAll()
+            if let foregroundObserver {
+                NotificationCenter.default.removeObserver(foregroundObserver)
+                self.foregroundObserver = nil
+            }
         }
 
         private func stopPictureInPictureForForegroundActivation() {
-            guard controller?.isPictureInPictureActive == true else { return }
+            guard controller?.isPictureInPictureActive == true,
+                  !isStoppingForForegroundActivation else { return }
             isStoppingForForegroundActivation = true
             sourceView?.setPlaceholderVisible(false, animated: false)
             controller?.stopPictureInPicture()
