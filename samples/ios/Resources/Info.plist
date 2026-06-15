@@ -28,6 +28,11 @@
 	<string>Serenada Sample needs microphone access for audio calls.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

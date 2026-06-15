@@ -6,7 +6,8 @@ import SwiftUI
 private let sampleServerHost = "serenada.app"
 private let sampleCallFlowConfig = SerenadaCallFlowConfig(
     screenSharingEnabled: false,
-    inviteControlsEnabled: false
+    inviteControlsEnabled: false,
+    systemPictureInPictureEnabled: true
 )
 
 private enum ActiveCall {

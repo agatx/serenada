@@ -31,6 +31,9 @@ targets:
         CFBundleVersion: "1"
         CFBundleDisplayName: Serenada Sample
         UIApplicationSupportsIndirectInputEvents: YES
+        UIBackgroundModes:
+          - audio
+          - voip
         UILaunchScreen: {}
         NSCameraUsageDescription: Serenada Sample needs camera access for video calls.
         NSMicrophoneUsageDescription: Serenada Sample needs microphone access for audio calls.

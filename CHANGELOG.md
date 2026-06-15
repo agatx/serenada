@@ -4,6 +4,13 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.6] — 2026-06-14
+
+### Fixed
+- iOS: system Picture in Picture now stops as the app returns to the
+  foreground, restoring the inline call UI without briefly leaving the PiP
+  placeholder over the active video tile.
+
 ## [0.8.5] — 2026-06-12
 
 ### Added

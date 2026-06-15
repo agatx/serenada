@@ -90,7 +90,7 @@ SerenadaCallFlow(
 )
 ```
 
-When enabled on a supported iOS device, the SDK keeps the active large video feed or avatar visible in system PiP and lets the system return control bring the user back to the app. The SDK enables multitasking camera access on its capture sessions when iOS reports support, so local camera video can continue in PiP on supported devices. iOS does not support custom in-window PiP actions for video calls, so End Call remains available only after returning to the app.
+When enabled on a supported iOS device, the SDK keeps the active large video feed or avatar visible in system PiP and lets the system return control bring the user back to the app. As the app becomes active again, the SDK stops the system PiP session and restores the inline call UI. The SDK enables multitasking camera access on its capture sessions when iOS reports support, so local camera video can continue in PiP on supported devices. iOS does not support custom in-window PiP actions for video calls, so End Call remains available only after returning to the app.
 
 ## Session-First (Pre-Observation)
 

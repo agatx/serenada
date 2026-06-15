@@ -9,6 +9,7 @@ Minimal iOS host app demonstrating Serenada SDK integration with SwiftUI.
 - Starts a provider-mode demo backed by a local in-memory `SignalingProvider`
 - Shows incremental `peerJoined` events and peer-message delivery without Serenada transport
 - Demonstrates injecting a custom `SerenadaAudioCoordinator` for host-owned audio policy
+- Enables system Picture in Picture so the sample covers foreground return from PiP
 - Runs as a standalone XcodeGen app inside this repository
 - Resolves `SerenadaCore` and `SerenadaCallUI` directly from local source in `client-ios/`
 
@@ -32,7 +33,7 @@ xcodebuild \
   build
 ```
 
-The simulator is enough to verify project setup and call flow wiring. Use a physical device to validate camera and microphone behavior.
+The simulator is enough to verify project setup and call flow wiring. Use a physical device to validate camera, microphone, and system Picture in Picture behavior.
 For physical-device runs, set your Apple development team in Xcode signing settings first.
 
 If you change [project.yml](project.yml), regenerate the checked-in project with:

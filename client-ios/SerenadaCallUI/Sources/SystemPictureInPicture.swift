@@ -419,10 +419,13 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         private var attachedSource: SystemPictureInPictureSource?
         private var currentParticipant: SystemPictureInPictureParticipant?
         private var currentAvatarImage: UIImage?
+        private var foregroundObservers: [NSObjectProtocol] = []
+        private var isStoppingForForegroundActivation = false
 
         init(rendererProvider: CallRendererProvider) {
             self.rendererProvider = rendererProvider
             super.init()
+            registerForegroundObservers()
         }
 
         func configure(sourceView: SystemPictureInPictureSourceView) {
@@ -493,6 +496,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             contentController = nil
             currentParticipant = nil
             currentAvatarImage = nil
+            removeForegroundObservers()
         }
 
         private func ensureController() {
@@ -557,12 +561,39 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         }
 
         func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-            updateSourcePlaceholder(visible: true, animated: false)
+            updateSourcePlaceholder(visible: !isStoppingForForegroundActivation, animated: false)
         }
 
         func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
             updateSourcePlaceholder(visible: false, animated: true)
             detachRenderer()
+            isStoppingForForegroundActivation = false
+        }
+
+        private func registerForegroundObservers() {
+            let notifications = [
+                UIApplication.willEnterForegroundNotification,
+                UIApplication.didBecomeActiveNotification
+            ]
+            foregroundObservers = notifications.map { name in
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.stopPictureInPictureForForegroundActivation()
+                    }
+                }
+            }
+        }
+
+        private func removeForegroundObservers() {
+            foregroundObservers.forEach(NotificationCenter.default.removeObserver)
+            foregroundObservers.removeAll()
+        }
+
+        private func stopPictureInPictureForForegroundActivation() {
+            guard controller?.isPictureInPictureActive == true else { return }
+            isStoppingForForegroundActivation = true
+            sourceView?.setPlaceholderVisible(false, animated: false)
+            controller?.stopPictureInPicture()
         }
 
         private func updateSourcePlaceholder(visible: Bool, animated: Bool) {

@@ -73,7 +73,7 @@ Provider mode does not expose Serenada server helpers. These APIs require `serve
 | `inviteControlsEnabled` | Bool | `true` | Show/hide the built-in QR code and share-link UI in the waiting screen |
 | `debugOverlayEnabled` | Bool | `false` | Show/hide the in-call debug toggle and diagnostics panel |
 | `autoHideControls` | Bool | `true` | When `true`, the call controls bar fades out after a few seconds of idle time and a tap on the stage brings it back. When `false`, the controls stay visible for the entire call and the idle timer never runs. |
-| `systemPictureInPictureEnabled` | Bool | `false` | Android and iOS. Enables system Picture-in-Picture for waiting and active calls on supported mobile platforms. Android host apps must also set activity PiP manifest flags; iOS host apps must include background audio/VoIP modes. The SDK opts iOS capture sessions into multitasking camera access when supported and closes Android PiP by finishing the activity if the call ends while still in PiP. Custom PiP actions are not used, so call controls remain available after returning to the app. |
+| `systemPictureInPictureEnabled` | Bool | `false` | Android and iOS. Enables system Picture-in-Picture for waiting and active calls on supported mobile platforms. Android host apps must also set activity PiP manifest flags; iOS host apps must include background audio/VoIP modes. The SDK opts iOS capture sessions into multitasking camera access when supported, stops iOS system PiP as the app returns foreground, and closes Android PiP by finishing the activity if the call ends while still in PiP. Custom PiP actions are not used, so call controls remain available after returning to the app. |
 
 ### iOS
 
