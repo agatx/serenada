@@ -425,7 +425,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
         init(rendererProvider: CallRendererProvider) {
             self.rendererProvider = rendererProvider
             super.init()
-            registerForegroundObservers()
+            registerForegroundObserver()
         }
 
         deinit {
@@ -503,7 +503,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             currentParticipant = nil
             currentAvatarImage = nil
             isStoppingForForegroundActivation = false
-            removeForegroundObservers()
+            removeForegroundObserver()
         }
 
         private func ensureController() {
@@ -579,9 +579,9 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             isStoppingForForegroundActivation = false
         }
 
-        private func registerForegroundObservers() {
+        private func registerForegroundObserver() {
             foregroundObserver = NotificationCenter.default.addObserver(
-                forName: UIApplication.willEnterForegroundNotification,
+                forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
@@ -591,7 +591,7 @@ private struct SystemPictureInPictureHost: UIViewRepresentable {
             }
         }
 
-        private func removeForegroundObservers() {
+        private func removeForegroundObserver() {
             if let foregroundObserver {
                 NotificationCenter.default.removeObserver(foregroundObserver)
                 self.foregroundObserver = nil
