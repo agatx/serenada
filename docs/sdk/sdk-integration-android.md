@@ -31,8 +31,8 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("app.serenada:core:0.8.6")
-    implementation("app.serenada:call-ui:0.8.6")
+    implementation("app.serenada:core:0.8.7")
+    implementation("app.serenada:call-ui:0.8.7")
 }
 ```
 
@@ -490,7 +490,9 @@ val config = SerenadaConfig(
     serverHost = "serenada.app",      // required
     defaultAudioEnabled = true,       // mic on at join (default)
     defaultVideoEnabled = true,       // camera on at join (default)
-    cameraModes = DEFAULT_CAMERA_MODES, // available modes & cycle order; empty = audio-only (default: all supported modes)
+    videoMediaEnabled = true,          // set false for strict audio-only/PSTN calls
+    cameraModes = DEFAULT_CAMERA_MODES, // available camera modes & cycle order; empty = no camera capture
+    deferInitialAnswer = false,        // set true when a provider may delay the first answer
     transports = listOf(SerenadaTransport.WS, SerenadaTransport.SSE), // transport priority (default)
     audioCoordinator = null,          // custom SerenadaAudioCoordinator, or internal default
     audioIntent = AudioIntent(),      // audio policy passed to the coordinator

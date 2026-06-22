@@ -4,6 +4,24 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.7] — 2026-06-21
+
+### Added
+- Web, Android, iOS: `deferInitialAnswer` lets provider-owned calls keep
+  the first offer alive while waiting for a delayed first answer, such as a
+  PSTN pickup, then resumes normal renegotiation timing after that answer.
+- Web, Android, iOS: `videoMediaEnabled` adds strict audio-only media mode,
+  disabling camera capture, screen sharing, video transceivers, and remote
+  video for calls that must not negotiate video.
+
+### Changed
+- Web, Android, iOS: empty `cameraModes` now means no local camera capture;
+  screen sharing and remote video remain available unless
+  `videoMediaEnabled` is `false`.
+- Web, Android, iOS: deferred-answer two-party calls use host-based offerer
+  election so app-owned bridge/PSTN calls can reliably keep the app as the
+  initial offerer.
+
 ## [0.8.6] — 2026-06-14
 
 ### Fixed

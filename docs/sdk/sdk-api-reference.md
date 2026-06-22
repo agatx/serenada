@@ -13,6 +13,15 @@ All SDKs validate `SerenadaConfig` at construction time. Provide exactly one of:
 
 Provider mode keeps the same session/call APIs, but server-bound helpers are unavailable. `createRoom()`, native `createRoomId()`, `RoomWatcher`, `validateServerHost()`, and `runConnectivityChecks()` require `serverHost` and fail with `requires serverHost` when used in provider mode.
 
+### Media and negotiation configuration
+
+All SDKs expose the same media/negotiation flags on `SerenadaConfig`:
+
+- `defaultVideoEnabled`: controls whether camera capture starts enabled when video capture is available.
+- `cameraModes`: restricts local camera capture modes and order. An empty list disables camera capture and hides camera controls, but does not disable screen sharing or remote video by itself.
+- `videoMediaEnabled`: set to `false` for strict audio-only calls. The SDK disables camera capture, screen sharing, video transceivers, and remote video.
+- `deferInitialAnswer`: set to `true` for provider-owned calls where the host peer may wait longer than the normal offer timeout for the first answer, such as PSTN pickup. The SDK suppresses first-answer offer-timeout/ICE-restart churn until the first answer is applied; later renegotiations use normal timing.
+
 ### `createRoom()`
 
 Create a new room. Returns the room URL and ID. Call `join()` to start the call.

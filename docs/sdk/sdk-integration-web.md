@@ -9,7 +9,7 @@
 ## Installation
 
 ```bash
-npm install @agatx/serenada-core@0.8.6 @agatx/serenada-react-ui@0.8.6 lucide-react
+npm install @agatx/serenada-core@0.8.7 @agatx/serenada-react-ui@0.8.7 lucide-react
 ```
 
 `@agatx/serenada-core` is framework-agnostic vanilla TypeScript. `@agatx/serenada-react-ui` provides ready-made React components.
@@ -360,7 +360,9 @@ const serenada = createSerenadaCore({
     serverHost: 'serenada.app',    // required; bare host or full origin
     defaultAudioEnabled: true,     // mic on at join (default)
     defaultVideoEnabled: true,     // camera on at join (default)
-    cameraModes: ['selfie', 'world', 'composite'], // available modes & cycle order; empty = audio-only (default: all supported modes)
+    videoMediaEnabled: true,       // set false for strict audio-only/PSTN calls
+    cameraModes: ['selfie', 'world', 'composite'], // available camera modes & cycle order; empty = no camera capture
+    deferInitialAnswer: false,     // set true when a provider may delay the first answer
     transports: ['ws', 'sse'],     // transport priority (default)
     turnsOnly: false,              // optional; only use TURN relays when true
 })

@@ -402,7 +402,9 @@ let config = SerenadaConfig(
     serverHost: "serenada.app",       // required
     defaultAudioEnabled: true,        // mic on at join (default)
     defaultVideoEnabled: true,        // camera on at join (default)
-    cameraModes: [.selfie, .world, .composite], // available modes & cycle order; empty = audio-only (default: all supported modes)
+    videoMediaEnabled: true,        // set false for strict audio-only/PSTN calls
+    cameraModes: [.selfie, .world, .composite], // available camera modes & cycle order; empty = no camera capture
+    deferInitialAnswer: false,      // set true when a provider may delay the first answer
     transports: [.ws, .sse],          // transport priority (default)
     audioCoordinator: nil,            // custom SerenadaAudioCoordinator, or internal default
     audioIntent: AudioIntent()        // audio policy passed to the coordinator

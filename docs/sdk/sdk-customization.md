@@ -69,7 +69,7 @@ Provider mode does not expose Serenada server helpers. These APIs require `serve
 |---|---|---|---|
 | `uiVariant` | `SerenadaCallUiVariant` | `Standard` | Android and iOS. Selects the visual presentation for the prebuilt call UI. `Frontline` uses an audio-first layout optimized for large touch targets and field use, and keeps Frontline styling across lifecycle, 1:1, and multi-party states. |
 | `screenSharingEnabled` | Bool | `true` | Show/hide the screen-share control when the current browser/device supports screen capture |
-| `videoEnabled` | Bool | `true` | When `true`, the video on/off and camera-mode (flip) controls appear and the SDK requests camera permission on join. When `false`, both controls are hidden and URL-first call flows configure the internally-created session with no camera modes (camera is never requested). Session-first hosts that want audio-only should also pass `cameraModes: []` to `SerenadaConfig`. |
+| `videoEnabled` | Bool | `true` | When `true`, the video on/off and camera-mode (flip) controls appear and the SDK requests camera permission on join. When `false`, both controls are hidden and URL-first call flows configure the internally-created session with no camera modes (camera is never requested). Session-first hosts that need strict audio-only media should pass `videoMediaEnabled: false` / `videoMediaEnabled = false` to `SerenadaConfig`. |
 | `inviteControlsEnabled` | Bool | `true` | Show/hide the built-in QR code and share-link UI in the waiting screen |
 | `debugOverlayEnabled` | Bool | `false` | Show/hide the in-call debug toggle and diagnostics panel |
 | `autoHideControls` | Bool | `true` | When `true`, the call controls bar fades out after a few seconds of idle time and a tap on the stage brings it back. When `false`, the controls stay visible for the entire call and the idle timer never runs. |
@@ -192,11 +192,11 @@ Frontline v1 shows the current audio route as the first More sheet item. Android
 
 ## Camera Modes
 
-`SerenadaConfig.cameraModes` is a core-level setting that restricts which camera modes (`selfie`, `world`, `composite`) are available and in what order. It affects the call UI in three ways:
+`SerenadaConfig.cameraModes` is a core-level setting that restricts which camera modes (`selfie`, `world`, `composite`) are available and in what order. It controls camera capture only; set `videoMediaEnabled` to `false` for strict audio-only calls where the SDK must not negotiate or receive video media. It affects the call UI in three ways:
 
 - **Initial mode**: the first supported entry of the list is used when media starts.
 - **Flip-camera control**: hidden when only one mode is configured (nothing to cycle to). Also hidden while the local video is turned off.
-- **Video toggle & camera permission**: when the list is empty, the SDK treats the call as audio-only — the video toggle is hidden entirely and the camera is never requested. When camera modes are present but `defaultVideoEnabled` is `false`, the call joins with video off and requests camera access only if the user enables video.
+- **Video toggle & camera permission**: when the list is empty, the video toggle is hidden and the camera is never requested. Remote video and screen sharing can still work unless `videoMediaEnabled` is `false`. When camera modes are present but `defaultVideoEnabled` is `false`, the call joins with video off and requests camera access only if the user enables video.
 
 Platform-unsupported modes are dropped silently (`composite` on web; `composite` on devices without multi-camera support on iOS / Android). If a native camera source still fails at runtime, startup retries the remaining configured modes before continuing audio-only. `screenShare` is rejected — screen sharing is controlled separately.
 
@@ -205,7 +205,9 @@ Platform-unsupported modes are dropped silently (`composite` on web; `composite`
 | `[selfie, world, composite]` (default) | All supported camera modes available, start in selfie. |
 | `[world, selfie]` | Start in world (rear) camera; flip toggles between world and selfie. |
 | `[selfie]` | Selfie only — flip-camera control hidden. |
-| `[]` | Audio-only call — video toggle and camera controls hidden. |
+| `[]` | Camera capture disabled — video toggle and camera controls hidden; screen sharing and remote video remain available unless `videoMediaEnabled` is `false`. |
+
+For strict audio-only calls, such as PSTN bridge flows, set `videoMediaEnabled` to `false`. That disables camera capture, screen sharing, video transceivers, and remote video across web, Android, and iOS. If the provider may delay the first answer while waiting for a remote action such as human pickup, set `deferInitialAnswer` to `true`; the host peer keeps the initial offer alive and suppresses offer-timeout/ICE-restart churn until the first answer is applied.
 
 ### iOS
 

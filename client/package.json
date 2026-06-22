@@ -1,7 +1,7 @@
 {
   "name": "client",
   "private": true,
-  "version": "0.8.6",
+  "version": "0.8.7",
   "type": "module",
   "workspaces": [
     "packages/core",
@@ -15,8 +15,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agatx/serenada-core": "0.8.6",
-    "@agatx/serenada-react-ui": "0.8.6",
+    "@agatx/serenada-core": "0.8.7",
+    "@agatx/serenada-react-ui": "0.8.7",
     "i18next": "^25.7.3",
     "i18next-browser-languagedetector": "^8.2.0",
     "lucide-react": "^0.562.0",
