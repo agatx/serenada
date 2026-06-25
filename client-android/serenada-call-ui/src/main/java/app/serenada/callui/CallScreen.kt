@@ -71,12 +71,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import app.serenada.core.SnapshotSource
 import app.serenada.core.layout.CallScene
 import app.serenada.core.layout.ContentSource
 import app.serenada.core.layout.ContentType
 import app.serenada.core.layout.FitMode
 import app.serenada.core.layout.Insets
+import app.serenada.core.layout.LayoutMode
+import app.serenada.core.layout.LayoutRect
+import app.serenada.core.layout.LayoutResult
 import app.serenada.core.layout.OccupantType
+import app.serenada.core.layout.TileLayout
 import app.serenada.core.layout.ParticipantRole
 import app.serenada.core.layout.SceneParticipant
 import app.serenada.core.layout.StageTileSpec
@@ -140,6 +145,10 @@ internal fun CallScreen(
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit = { _, _ -> },
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit = { _, _ -> },
+    attachLocalContentSink: (VideoSink) -> Unit = {},
+    detachLocalContentSink: (VideoSink) -> Unit = {},
     onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
     onShareLink: (() -> Unit)? = null,
     onSnapshotRequested: ((app.serenada.core.SnapshotSource) -> Unit)? = null,
@@ -170,6 +179,11 @@ internal fun CallScreen(
     var remoteAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
     var pinnedParticipantId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Stream-keyed pin for the content stage: pin ANY tile (camera OR content) of
+    // ANY participant. Distinct from `pinnedParticipantId` (the legacy multi-party
+    // no-content focus pin, which is participant-keyed and stays byte-identical).
+    // null = default spotlight (the most-recent share / resolver primary).
+    var pinnedStageTile by remember { mutableStateOf<StageTileKey?>(null) }
     var showDebug by rememberSaveable { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var showRecoveringBadge by remember { mutableStateOf(false) }
@@ -190,6 +204,56 @@ internal fun CallScreen(
                 uiState.localVideoEnabled &&
                 !uiState.isScreenSharing &&
                 isWorldOrCompositeMode
+
+    // Independent screen-share content resolution. Track the order in which remote
+    // content became active (most-recent LAST) so multiple simultaneous sharers
+    // pick the right primary (design "Multiple Sharers": local receive order).
+    val remoteContentOrder = remember { mutableStateListOf<String>() }
+    val activeRemoteContentCids =
+        uiState.remoteParticipants.filter { it.content?.active == true }.map { it.cid }
+    LaunchedEffect(activeRemoteContentCids) {
+        val active = activeRemoteContentCids.toSet()
+        // Drop owners that stopped sharing or left.
+        remoteContentOrder.retainAll { it in active }
+        // Append newly-active owners at the end (most recent).
+        active.forEach { cid -> if (cid !in remoteContentOrder) remoteContentOrder.add(cid) }
+    }
+    val contentScene =
+        rememberContentScene(uiState, remoteContentOrder.toList())
+    // Independent content stage: the resolved content source that the content-stage
+    // layout renders. In 1:1 this is non-null ONLY for INDEPENDENT content (legacy
+    // 1:1 keeps the single swapped-video tile, byte-identical). In multi-party the
+    // existing content-stage already handled content, now resolver-driven.
+    val resolvedContentSource =
+        resolveContentSource(contentScene.primary, isMultiParty)
+    // Route a 1:1 INDEPENDENT share through the content-stage renderer (computeLayout
+    // CONTENT mode) instead of the bespoke 1:1 PIP layout. Never true flag-off.
+    // Derived from the shared [shouldRenderContentStage] gate (mirrors web): in 1:1
+    // the content-stage layout is present only for INDEPENDENT content.
+    val contentStagePhase = when (uiState.phase) {
+        CallPhase.InCall -> ContentStagePhase.InCall
+        CallPhase.Waiting -> ContentStagePhase.Waiting
+        else -> ContentStagePhase.Other
+    }
+    val oneToOneIndependentContent =
+        !isMultiParty &&
+            shouldRenderContentStage(
+                phase = contentStagePhase,
+                isMultiParty = false,
+                hasContentStageLayout = resolvedContentSource?.mode == ContentMode.INDEPENDENT,
+            )
+
+    // STREAM-KEYED STAGE: active whenever ANY participant is presenting an
+    // INDEPENDENT content stream (local or remote). In that case the whole stage
+    // switches to a single filmstrip+spotlight where EVERY stream is its own tile
+    // keyed {cid, kind} — a camera tile per camera-on participant and a content
+    // tile per sharer (incl the local user's own screen), so a sharer's camera and
+    // screen are two EQUAL peer tiles (not a camera-over-content PIP). This engages
+    // for a 1:1 + share exactly like multi-party. Legacy / flag-off content (no
+    // independent stream) is NOT stream-keyed and keeps the existing
+    // participant-keyed content path (byte-identical). Audio-only receivers resolve
+    // no content here, so the flag is false for them.
+    val streamKeyedStageActive = contentScene.all.any { it.mode == ContentMode.INDEPENDENT }
 
     // Screen Share Launcher
     val mediaProjectionManager = remember {
@@ -347,6 +411,7 @@ internal fun CallScreen(
         val controlsAnimationDuration = 320
         val showPip =
             !isMultiParty &&
+                    !oneToOneIndependentContent &&
                     (uiState.phase == CallPhase.InCall ||
                         uiState.phase == CallPhase.Waiting ||
                         uiState.connectionState == "CONNECTED")
@@ -405,13 +470,14 @@ internal fun CallScreen(
             Box(modifier = pipBackgroundModifier)
         }
 
-        if (isMultiParty) {
+        if (isMultiParty || oneToOneIndependentContent) {
             MultiPartyStage(
                 modifier = Modifier.fillMaxSize(),
                 remoteParticipants = uiState.remoteParticipants,
                 remoteAspectRatios = remoteTileAspectRatios,
                 localCid = uiState.localCid,
                 localVideoEnabled = uiState.localVideoEnabled,
+                localCameraEnabled = uiState.localCameraEnabled,
                 localAudioEnabled = uiState.localAudioEnabled,
                 localAudioLevel = uiState.localAudioLevel,
                 localDisplayName = uiState.localDisplayName,
@@ -425,9 +491,13 @@ internal fun CallScreen(
                 eglContext = eglContext,
                 attachRemoteSinkForCid = attachRemoteSinkForCid,
                 detachRemoteSinkForCid = detachRemoteSinkForCid,
+                attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                attachLocalContentSink = attachLocalContentSink,
+                detachLocalContentSink = detachLocalContentSink,
                 bottomPadding = animatedPipBottomPadding,
-                remoteContentCid = uiState.remoteContentCid,
-                remoteContentType = uiState.remoteContentType,
+                contentScene = contentScene,
+                resolvedContentSource = resolvedContentSource,
                 remoteVideoFitCover = remoteVideoFitCover,
                 onToggleRemoteVideoFit = {
                     val next = !remoteVideoFitCover
@@ -436,6 +506,9 @@ internal fun CallScreen(
                 },
                 pinnedParticipantId = pinnedParticipantId,
                 onPinnedParticipantIdChanged = { pinnedParticipantId = it },
+                streamKeyedStageActive = streamKeyedStageActive,
+                pinnedStageTile = pinnedStageTile,
+                onPinnedStageTileChanged = { pinnedStageTile = it },
                 onTap = toggleControlsVisibility,
                 onLocalPinchZoom = onLocalPinchZoom,
                 strings = strings,
@@ -589,7 +662,7 @@ internal fun CallScreen(
             }
         }
 
-        if (!isMultiParty && !uiState.localVideoEnabled) {
+        if (!isMultiParty && !oneToOneIndependentContent && !uiState.localVideoEnabled) {
             Box(modifier = localModifier) {
                 VideoPlaceholder(
                     text =
@@ -608,6 +681,7 @@ internal fun CallScreen(
 
         val showRemotePlaceholder =
             !isMultiParty &&
+                    !oneToOneIndependentContent &&
                     !uiState.remoteVideoEnabled &&
                     (uiState.phase == CallPhase.InCall ||
                             (uiState.phase == CallPhase.Waiting && effectiveLocalLarge))
@@ -717,30 +791,38 @@ internal fun CallScreen(
             uiState.phase == CallPhase.InCall &&
                     isWorldOrCompositeMode &&
                     uiState.isFlashAvailable
-        val showRemoteFitButton = uiState.remoteVideoEnabled && !effectiveLocalLarge && !isMultiParty
+        val showRemoteFitButton = uiState.remoteVideoEnabled && !effectiveLocalLarge && !isMultiParty && !streamKeyedStageActive
 
         // Snapshot lives in the same top-right cluster as flashlight/fit so the
         // shutter inherits the corner anchor. In multi-party mode the source
         // tracks the pinned tile, since the stage layout treats that
         // participant as the dominant preview. Without a pin there is no
         // clear "current large preview", so the shutter stays hidden.
-        val snapshotSource: app.serenada.core.SnapshotSource? = when {
+        val snapshotSource: SnapshotSource? = when {
             !config.snapshotEnabled || onSnapshotRequested == null -> null
             uiState.phase != CallPhase.InCall && uiState.phase != CallPhase.Waiting -> null
+            streamKeyedStageActive -> resolveStreamKeyedSnapshotSource(
+                pinnedTile = pinnedStageTile,
+                localCid = uiState.localCid,
+                localVideoEnabled = uiState.localVideoEnabled,
+                remotes = uiState.remoteParticipants.map {
+                    SnapshotVideoParticipant(cid = it.cid, videoEnabled = it.videoEnabled)
+                },
+            )
             isMultiParty -> {
                 val pinned = pinnedParticipantId
                 when {
                     pinned == null -> null
                     pinned == uiState.localCid && uiState.localVideoEnabled ->
-                        app.serenada.core.SnapshotSource.Local
+                        SnapshotSource.Local
                     else -> uiState.remoteParticipants
                         .firstOrNull { it.cid == pinned && it.videoEnabled }
-                        ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+                        ?.let { SnapshotSource.Remote(it.cid) }
                 }
             }
-            isLocalLarge && uiState.localVideoEnabled -> app.serenada.core.SnapshotSource.Local
+            isLocalLarge && uiState.localVideoEnabled -> SnapshotSource.Local
             else -> uiState.remoteParticipants.firstOrNull { it.videoEnabled }
-                ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+                ?.let { SnapshotSource.Remote(it.cid) }
         }
         val snapshotHandler = onSnapshotRequested
         val showSnapshotButton =
@@ -1486,6 +1568,384 @@ internal fun aspectRatioRendererEvents(
     }
 }
 
+/**
+ * Build the resolved content scene from [uiState] (content vs camera resolution).
+ * Pure [resolveContentScene] under a [remember] so it only recomputes when the
+ * inputs that matter change. The legacy/flag-off path resolves every owner to
+ * [ContentMode.LEGACY], reproducing today's content decisions exactly.
+ */
+@Composable
+internal fun rememberContentScene(
+    uiState: CallUiState,
+    remoteContentOrder: List<String>,
+): ContentScene {
+    val localContentKey = uiState.localContent
+    val remoteContentKey = uiState.remoteParticipants.map {
+        Triple(it.cid, it.content, it.supportsIndependentContentVideo)
+    }
+    return remember(
+        uiState.localCid,
+        uiState.isScreenSharing,
+        uiState.localCameraMode,
+        localContentKey,
+        remoteContentKey,
+        uiState.independentContentEnabled,
+        uiState.videoMediaEnabled,
+        remoteContentOrder,
+    ) {
+        val local = uiState.localCid?.let { cid ->
+            ContentLocalParticipant(
+                cid = cid,
+                isScreenSharing = uiState.isScreenSharing,
+                cameraMode = uiState.localCameraMode,
+                content = uiState.localContent,
+            )
+        }
+        resolveContentScene(
+            ResolveContentInput(
+                local = local,
+                remotes = uiState.remoteParticipants.map {
+                    ContentRemoteParticipant(
+                        cid = it.cid,
+                        content = it.content,
+                        supportsIndependentContentVideo = it.supportsIndependentContentVideo,
+                    )
+                },
+                independentContentEnabled = uiState.independentContentEnabled,
+                localVideoMediaEnabled = uiState.videoMediaEnabled,
+                remoteContentOrder = remoteContentOrder,
+            ),
+        )
+    }
+}
+
+/**
+ * Stream-keyed filmstrip + spotlight stage, active whenever ANY participant is
+ * presenting an INDEPENDENT content stream (1:1 OR multi-party). Mirrors the web
+ * model (`SerenadaCallFlow.tsx`): EVERY stream is its own tile keyed {cid, kind}
+ * — a camera tile per camera-on participant (local + remote) and a content tile
+ * per sharer (local + remote, incl the local user's own screen). A sharer's
+ * camera and screen are TWO EQUAL peer tiles, not a camera-over-content PIP.
+ *
+ * Reuses the conformance-locked [computeLayout] via a composite-id FOCUS scene:
+ * each [SceneParticipant.id] is an opaque "cid::kind" tile id, the spotlight is
+ * pinned so the engine runs its single-primary + filmstrip geometry over the
+ * tiles. The CONTENT / FOCUS layout code paths are untouched — this reuses the
+ * geometry, not the participant-keyed content mode.
+ */
+@Composable
+private fun StreamKeyedStage(
+    contentScene: ContentScene,
+    remoteParticipants: List<RemoteParticipant>,
+    remoteAspectRatios: MutableMap<String, Float>,
+    localCid: String,
+    localVideoEnabled: Boolean,
+    localCameraEnabled: Boolean,
+    localAudioEnabled: Boolean,
+    localAudioLevel: Float,
+    localDisplayName: String?,
+    localMirror: Boolean,
+    localCameraMode: LocalCameraMode,
+    localRendererEvents: RendererCommon.RendererEvents,
+    eglContext: EglBase.Context,
+    attachLocalSink: (VideoSink) -> Unit,
+    detachLocalSink: (VideoSink) -> Unit,
+    attachLocalContentSink: (VideoSink) -> Unit,
+    detachLocalContentSink: (VideoSink) -> Unit,
+    attachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    viewportWidthPx: Float,
+    viewportHeightPx: Float,
+    topChromePx: Float,
+    bottomChromePx: Float,
+    remoteVideoFitCover: Boolean,
+    onToggleRemoteVideoFit: () -> Unit,
+    pinnedStageTile: StageTileKey?,
+    onPinnedStageTileChanged: (StageTileKey?) -> Unit,
+    localContentZoomState: androidx.compose.foundation.gestures.TransformableState,
+    onTap: () -> Unit,
+    strings: Map<SerenadaString, String>?,
+) {
+    val density = LocalDensity.current
+
+    val remoteParticipantsByCid = remember(remoteParticipants) {
+        remoteParticipants.associateBy { it.cid }
+    }
+    val contentByOwner = remember(contentScene) {
+        contentScene.all.associateBy { it.ownerCid }
+    }
+
+    // ---- Derive the stream-keyed tile list (pure, unit-tested) ---------------
+    val cameras = remember(remoteParticipants, localCid, localVideoEnabled) {
+        remoteParticipants.map {
+            StageCameraParticipant(cid = it.cid, isLocal = false)
+        } + StageCameraParticipant(cid = localCid, isLocal = true)
+    }
+    val stageTiles = remember(cameras, contentScene) {
+        deriveStageTiles(cameras = cameras, content = contentScene.all)
+    }
+    val spotlightId = pickStageSpotlightTileId(stageTiles, pinnedStageTile, contentScene.primary)
+
+    // Drop a stale pin when its tile disappears (pinned sharer stopped / pinned
+    // camera turned off) so the spotlight reverts to the most-recent-share default.
+    LaunchedEffect(pinnedStageTile, stageTiles) {
+        val pinned = pinnedStageTile ?: return@LaunchedEffect
+        val pinnedId = stageTileId(pinned)
+        if (stageTiles.none { it.id == pinnedId }) {
+            onPinnedStageTileChanged(null)
+        }
+    }
+
+    if (stageTiles.isEmpty() || spotlightId == null) return
+
+    // ---- Build a composite-id FOCUS scene and run computeLayout -------------
+    val computedLayout = remember(
+        stageTiles, spotlightId, remoteAspectRatios.toMap(),
+        viewportWidthPx, viewportHeightPx, topChromePx, bottomChromePx, remoteVideoFitCover,
+    ) {
+        val participants = stageTiles.map { tile ->
+            SceneParticipant(
+                id = tile.id,
+                // The spotlight tile is LOCAL so the engine never demotes it to a
+                // PIP; filmstrip tiles are REMOTE. Role only affects PIP/order in
+                // FOCUS mode, which emits no PIP, so this is purely structural.
+                role = if (tile.id == spotlightId) ParticipantRole.LOCAL else ParticipantRole.REMOTE,
+                videoEnabled = true,
+                videoAspectRatio = if (tile.kind == StageTileKind.CAMERA) remoteAspectRatios[tile.cid] else null,
+            )
+        }
+        val scene = CallScene(
+            viewportWidth = viewportWidthPx,
+            viewportHeight = viewportHeightPx,
+            safeAreaInsets = Insets(top = topChromePx, bottom = bottomChromePx),
+            participants = participants,
+            localParticipantId = spotlightId,
+            activeSpeakerId = null,
+            // Pin the spotlight → FOCUS mode. With a single tile the engine would
+            // derive SOLO (no tiles); handle that edge directly below.
+            pinnedParticipantId = spotlightId,
+            contentSource = null,
+            userPrefs = UserLayoutPrefs(
+                dominantFit = if (remoteVideoFitCover) FitMode.COVER else FitMode.CONTAIN,
+            ),
+        )
+        if (stageTiles.size == 1) {
+            // Lone tile (single sharer, cameras off / alone): SOLO bypasses FOCUS
+            // in computeLayout, so emit the full-area spotlight directly —
+            // identical to computePrimaryWithFilmstrip with no strip.
+            LayoutResult(
+                mode = LayoutMode.FOCUS,
+                tiles = listOf(
+                    TileLayout(
+                        id = spotlightId,
+                        type = OccupantType.PARTICIPANT,
+                        frame = LayoutRect(0f, 0f, viewportWidthPx, viewportHeightPx),
+                        fit = if (remoteVideoFitCover) FitMode.COVER else FitMode.CONTAIN,
+                        cornerRadius = 0f,
+                        zOrder = 0,
+                    ),
+                ),
+                localPip = null,
+            )
+        } else {
+            computeLayout(scene)
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Resolve {cid,kind} keys BEFORE the composable `key {}` block so the block
+        // needs no early `return@key`. A labeled return inside the inlined forEach+key
+        // emits a `$$$$$NON_LOCAL_RETURN$$$$$` synthetic that R8 9.2.x cannot dex (the
+        // APK fails to assemble even though Kotlin compiles and unit tests pass).
+        val orderedTiles = computedLayout.tiles
+            .mapNotNull { tile -> parseStageTileId(tile.id)?.let { parsed -> tile to parsed } }
+        orderedTiles.forEach { (tile, tileKey) ->
+            key(tile.id) {
+                val isContentTile = tileKey.kind == StageTileKind.CONTENT
+                val isLocalTile = tileKey.cid == localCid
+                val ownerContent = if (isContentTile) contentByOwner[tileKey.cid] else null
+                val tileRemote = if (isLocalTile) null else remoteParticipantsByCid[tileKey.cid]
+
+                val tileWidthDp = with(density) { tile.frame.width.toDp() }
+                val tileHeightDp = with(density) { tile.frame.height.toDp() }
+                val tileXDp = with(density) { tile.frame.x.toDp() }
+                val tileYDp = with(density) { tile.frame.y.toDp() }
+                val tileCornerRadiusDp = with(density) { tile.cornerRadius.toDp() }
+
+                val isPinned = stageTileKeyEquals(pinnedStageTile, tileKey)
+                val togglePin = {
+                    onPinnedStageTileChanged(
+                        if (stageTileKeyEquals(pinnedStageTile, tileKey)) null else tileKey,
+                    )
+                }
+
+                // The local user's own screen content tile is pinch-zoomable when in
+                // a world/composite camera content framing (matches the legacy path).
+                val isLocalContentZoomable =
+                    isContentTile && isLocalTile && localCameraMode.isContentMode
+
+                @OptIn(ExperimentalFoundationApi::class)
+                Box(
+                    modifier = Modifier
+                        .offset(x = tileXDp, y = tileYDp)
+                        .size(width = tileWidthDp, height = tileHeightDp)
+                        .clip(RoundedCornerShape(tileCornerRadiusDp))
+                        .background(Color(0xFF111111))
+                        .then(
+                            if (isLocalContentZoomable) Modifier.transformable(state = localContentZoomState)
+                            else Modifier
+                        )
+                        .combinedClickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            // Long-press pins/unpins ANY tile (camera OR content).
+                            onLongClick = togglePin,
+                            onClick = onTap,
+                        )
+                ) {
+                    if (isContentTile) {
+                        // Content tile: dedicated content (screen share) track via the
+                        // content sink. Camera + screen are EQUAL tiles (no PIP).
+                        // Content carries no audio — audio plays via the per-peer path.
+                        IndependentContentTile(
+                            loading = ownerContent?.loading == true,
+                            waitingForParticipants = ownerContent?.waitingForParticipants == true,
+                            width = tileWidthDp,
+                            height = tileHeightDp,
+                            eglContext = eglContext,
+                            onAttach = if (isLocalTile) {
+                                attachLocalContentSink
+                            } else {
+                                { sink -> attachRemoteContentSinkForCid(tileKey.cid, sink) }
+                            },
+                            onDetach = if (isLocalTile) {
+                                detachLocalContentSink
+                            } else {
+                                { sink -> detachRemoteContentSinkForCid(tileKey.cid, sink) }
+                            },
+                            rendererName = if (isLocalTile) {
+                                "stage-local-content"
+                            } else {
+                                "stage-remote-content-${tileKey.cid}"
+                            },
+                            strings = strings,
+                            // Content respects the fit/cover toggle (cover crops to fill).
+                            contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                        )
+                    } else if (isLocalTile) {
+                        // Local camera tile.
+                        if (localVideoEnabled) {
+                            val localGeo = computeFitCoverGeometry(
+                                tileWidthDp, tileHeightDp, remoteAspectRatios[localCid] ?: 0f,
+                            )
+                            val localIsCover = tile.fit != FitMode.CONTAIN
+                            val localAnimatedScale by animateFloatAsState(
+                                targetValue = if (localIsCover) localGeo.coverScale else 1f,
+                                animationSpec = tween(durationMillis = 260),
+                                label = "stage_local_camera_scale",
+                            )
+                            TextureVideoSurface(
+                                modifier = Modifier
+                                    .size(localGeo.fitWidth, localGeo.fitHeight)
+                                    .align(Alignment.Center)
+                                    .graphicsLayer {
+                                        scaleX = localAnimatedScale
+                                        scaleY = localAnimatedScale
+                                    },
+                                rendererName = "stage-local-camera",
+                                eglContext = eglContext,
+                                onAttach = attachLocalSink,
+                                onDetach = detachLocalSink,
+                                mirror = localMirror,
+                                contentScale = ContentScale.Crop,
+                                rendererEvents = localRendererEvents,
+                            )
+                        } else {
+                            VideoPlaceholder(
+                                text = resolveString(SerenadaString.CallCameraOff, strings),
+                                fontSize = 10.sp,
+                                displayName = localDisplayName,
+                                // Name is shown in the audio chip below; don't repeat
+                                // it under the avatar.
+                                showNameLabel = false,
+                            )
+                        }
+                    } else if (tileRemote != null) {
+                        // Remote camera tile — its own equal peer tile.
+                        RemoteParticipantStageTile(
+                            participant = tileRemote,
+                            width = tileWidthDp,
+                            height = tileHeightDp,
+                            cornerRadius = tileCornerRadiusDp,
+                            contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                            eglContext = eglContext,
+                            onAspectRatioChanged = { ratio -> remoteAspectRatios[tileRemote.cid] = ratio },
+                            attachRemoteSink = { sink -> attachRemoteSinkForCid(tileRemote.cid, sink) },
+                            detachRemoteSink = { sink -> detachRemoteSinkForCid(tileRemote.cid, sink) },
+                            strings = strings,
+                        )
+                    }
+
+                    // Pin indicator on the pinned tile.
+                    if (isPinned) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(8.dp)
+                                .background(Color.Black.copy(alpha = 0.56f), RoundedCornerShape(6.dp))
+                                .padding(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = Color.White,
+                            )
+                        }
+                    }
+
+                    // Audio badge: content tiles carry no audio, so suppress it there.
+                    if (!isContentTile) {
+                        val tileAudioMuted = if (isLocalTile) !localAudioEnabled else tileRemote?.audioEnabled == false
+                        val tileName = if (isLocalTile) localDisplayName else tileRemote?.displayName
+                        // Remote tiles render their displayName inside the camera-off
+                        // placeholder, so hide it from the badge in that case.
+                        val tileNameForBadge =
+                            if (!isLocalTile && tileRemote?.videoEnabled == false) null else tileName
+                        val tileAudioLevel = if (isLocalTile) localAudioLevel else tileRemote?.audioLevel ?: 0f
+                        ParticipantBadge(
+                            modifier = Modifier.align(Alignment.BottomStart),
+                            muted = tileAudioMuted,
+                            displayName = tileNameForBadge,
+                            audioLevel = tileAudioLevel,
+                        )
+                    }
+
+                    // Fit toggle on the spotlight (primary) tile.
+                    if (tile.zOrder == 0) {
+                        IconButton(
+                            onClick = onToggleRemoteVideoFit,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(8.dp)
+                                .size(44.dp)
+                                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (remoteVideoFitCover) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                contentDescription = resolveString(SerenadaString.CallToggleVideoFit, strings),
+                                tint = Color.White,
+                            )
+                        }
+                    }
+                }
+            } // key(tile.id)
+        }
+    }
+}
+
 @Composable
 private fun MultiPartyStage(
     modifier: Modifier,
@@ -1493,6 +1953,7 @@ private fun MultiPartyStage(
     remoteAspectRatios: MutableMap<String, Float>,
     localCid: String?,
     localVideoEnabled: Boolean,
+    localCameraEnabled: Boolean,
     localAudioEnabled: Boolean,
     localAudioLevel: Float,
     localDisplayName: String?,
@@ -1506,13 +1967,20 @@ private fun MultiPartyStage(
     eglContext: EglBase.Context,
     attachRemoteSinkForCid: (String, VideoSink) -> Unit,
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    attachLocalContentSink: (VideoSink) -> Unit,
+    detachLocalContentSink: (VideoSink) -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
-    remoteContentCid: String?,
-    remoteContentType: String?,
+    contentScene: ContentScene,
+    resolvedContentSource: ResolvedContentSource?,
     remoteVideoFitCover: Boolean,
     onToggleRemoteVideoFit: () -> Unit,
     pinnedParticipantId: String?,
     onPinnedParticipantIdChanged: (String?) -> Unit,
+    streamKeyedStageActive: Boolean,
+    pinnedStageTile: StageTileKey?,
+    onPinnedStageTileChanged: (StageTileKey?) -> Unit,
     onTap: () -> Unit,
     onLocalPinchZoom: (Float) -> Unit,
     strings: Map<SerenadaString, String>?,
@@ -1529,9 +1997,13 @@ private fun MultiPartyStage(
         }
     }
 
-    // Content source: local world/composite/screen share or remote content
-    val hasLocalContent = isScreenSharing || localCameraMode.isContentMode
-    val hasContentSource = hasLocalContent || remoteContentCid != null
+    // Content source (content-vs-camera resolution) comes from the pure resolver
+    // (`resolvedContentSource`), NOT inferred from camera mode. In legacy / flag-off
+    // mode the resolver yields the same owner + type as before (byte-identical):
+    // local screen share / world / composite, or the single received content.
+    // INDEPENDENT content never reaches this legacy layout — it routes to
+    // StreamKeyedStage above (streamKeyedStageActive), checked first.
+    val hasContentSource = resolvedContentSource != null
     val useComputedLayout = localCid != null && (pinnedParticipantId != null || hasContentSource)
 
     Box(modifier = modifier) {
@@ -1543,27 +2015,50 @@ private fun MultiPartyStage(
                 val topChromePx = with(density) { 20.dp.toPx() }
                 val bottomChromePx = with(density) { (bottomPadding + 4.dp).toPx() }
 
-                if (useComputedLayout) {
+                if (streamKeyedStageActive && localCid != null) {
+                StreamKeyedStage(
+                    contentScene = contentScene,
+                    remoteParticipants = remoteParticipants,
+                    remoteAspectRatios = remoteAspectRatios,
+                    localCid = localCid,
+                    localVideoEnabled = localVideoEnabled,
+                    localCameraEnabled = localCameraEnabled,
+                    localAudioEnabled = localAudioEnabled,
+                    localAudioLevel = localAudioLevel,
+                    localDisplayName = localDisplayName,
+                    localMirror = localMirror,
+                    localCameraMode = localCameraMode,
+                    localRendererEvents = localRendererEvents,
+                    eglContext = eglContext,
+                    attachLocalSink = attachLocalSink,
+                    detachLocalSink = detachLocalSink,
+                    attachLocalContentSink = attachLocalContentSink,
+                    detachLocalContentSink = detachLocalContentSink,
+                    attachRemoteSinkForCid = attachRemoteSinkForCid,
+                    detachRemoteSinkForCid = detachRemoteSinkForCid,
+                    attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                    detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                    viewportWidthPx = fullWidthPx,
+                    viewportHeightPx = fullHeightPx,
+                    topChromePx = topChromePx,
+                    bottomChromePx = bottomChromePx,
+                    remoteVideoFitCover = remoteVideoFitCover,
+                    onToggleRemoteVideoFit = onToggleRemoteVideoFit,
+                    pinnedStageTile = pinnedStageTile,
+                    onPinnedStageTileChanged = onPinnedStageTileChanged,
+                    localContentZoomState = localContentZoomState,
+                    onTap = onTap,
+                    strings = strings,
+                )
+                } else if (useComputedLayout) {
                 // Focus/content mode: use computeLayout for primary + filmstrip rendering
-                val contentSource = if (hasLocalContent) {
-                    val type = when {
-                        isScreenSharing -> ContentType.SCREEN_SHARE
-                        localCameraMode == LocalCameraMode.WORLD -> ContentType.WORLD_CAMERA
-                        else -> ContentType.COMPOSITE_CAMERA
-                    }
+                val contentSource = resolvedContentSource?.let {
                     ContentSource(
-                        type = type,
-                        ownerParticipantId = localCid,
+                        type = it.type,
+                        ownerParticipantId = it.ownerCid,
                         aspectRatio = null,
                     )
-                } else if (remoteContentCid != null) {
-                    val type = ContentType.fromWire(remoteContentType)
-                    ContentSource(
-                        type = type,
-                        ownerParticipantId = remoteContentCid,
-                        aspectRatio = null,
-                    )
-                } else null
+                }
 
                 val computedLayout = remember(
                     pinnedParticipantId, contentSource, remoteParticipants, remoteAspectRatios.toMap(),
@@ -1645,7 +2140,7 @@ private fun MultiPartyStage(
                                 )
                         ) {
                             if (isLocalContent || (isLocal && !isLocalPlaceholder)) {
-                                // Local content tile or local filmstrip tile: render local video
+                                // Legacy local content tile or local filmstrip tile: render local video
                                 if (localVideoEnabled || isLocalContent) {
                                     val localIsCover = !isLocalContent && tile.fit != FitMode.CONTAIN
                                     val localGeo = computeFitCoverGeometry(tileWidthDp, tileHeightDp, localAspectRatio)
@@ -1677,7 +2172,8 @@ private fun MultiPartyStage(
                                     )
                                 }
                             } else if (isRemoteContent) {
-                                // Remote content tile: render the content owner's video
+                                // Legacy remote content tile: the single received video IS
+                                // the content (rendered via the camera sink, byte-identical).
                                 val ownerParticipant = remoteParticipants.firstOrNull { it.cid == contentOwnerCid }
                                 if (ownerParticipant != null) {
                                     RemoteParticipantStageTile(
@@ -1902,6 +2398,73 @@ private fun MultiPartyStage(
                     muted = !localAudioEnabled,
                     displayName = localDisplayName,
                     audioLevel = localAudioLevel,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * An INDEPENDENT content (screen share) tile. Renders the dedicated content track
+ * via the supplied content sink (content fits inside the tile, legibility over
+ * crop), or a status overlay when the content media is not yet flowing
+ * (`loading`, receiver-side hold) or the local share is waiting for participants.
+ */
+@Composable
+internal fun BoxScope.IndependentContentTile(
+    loading: Boolean,
+    waitingForParticipants: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    height: androidx.compose.ui.unit.Dp,
+    eglContext: EglBase.Context,
+    onAttach: (VideoSink) -> Unit,
+    onDetach: (VideoSink) -> Unit,
+    rendererName: String,
+    strings: Map<SerenadaString, String>?,
+    contentScale: ContentScale = ContentScale.Fit,
+) {
+    // Always attach the sink so frames flow as soon as media arrives; overlay a
+    // status layer while loading / waiting (never a stale camera frame).
+    TextureVideoSurface(
+        modifier = Modifier.size(width, height).align(Alignment.Center),
+        rendererName = rendererName,
+        eglContext = eglContext,
+        onAttach = onAttach,
+        onDetach = onDetach,
+        mirror = false,
+        // Screen content respects the fit/cover toggle: contain (legible, black bars)
+        // or cover (crop-to-fill), matching camera video.
+        contentScale = contentScale,
+    )
+    if (loading || waitingForParticipants) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color(0xFF111111)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 16.dp).testTag(
+                    if (waitingForParticipants) "call.contentWaiting" else "call.contentLoading",
+                ),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(36.dp),
+                    color = Color.White.copy(alpha = 0.7f),
+                    strokeWidth = 3.dp,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = resolveString(
+                        if (waitingForParticipants) {
+                            SerenadaString.CallContentWaitingForParticipants
+                        } else {
+                            SerenadaString.CallContentConnecting
+                        },
+                        strings,
+                    ),
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
@@ -2305,6 +2868,9 @@ private fun VideoPlaceholder(
     fontSize: androidx.compose.ui.unit.TextUnit = 16.sp,
     displayName: String? = null,
     peerId: String? = null,
+    // When false, render the avatar but NOT the name text under it (the name is
+    // shown elsewhere, e.g. the audio chip) so it isn't displayed twice.
+    showNameLabel: Boolean = true,
 ) {
     val avatarCache = LocalAvatarCache.current
     val isLargeTile = fontSize >= 14.sp
@@ -2328,17 +2894,19 @@ private fun VideoPlaceholder(
                         size = avatarSize,
                         fontSize = avatarFontSize,
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    if (showNameLabel) Spacer(modifier = Modifier.height(12.dp))
                 }
-                Text(
-                    text = displayNameToShow ?: text,
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = if (displayNameToShow != null) 18.sp else fontSize,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (showNameLabel || avatarCache == null) {
+                    Text(
+                        text = displayNameToShow ?: text,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = if (displayNameToShow != null) 18.sp else fontSize,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         } else {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {

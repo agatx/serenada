@@ -68,7 +68,7 @@ Provider mode does not expose Serenada server helpers. These APIs require `serve
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `uiVariant` | `SerenadaCallUiVariant` | `Standard` | Android and iOS. Selects the visual presentation for the prebuilt call UI. `Frontline` uses an audio-first layout optimized for large touch targets and field use, and keeps Frontline styling across lifecycle, 1:1, and multi-party states. |
-| `screenSharingEnabled` | Bool | `true` | Show/hide the screen-share control when the current browser/device supports screen capture |
+| `screenSharingEnabled` | Bool | `true` | Show/hide the screen-share control when the current browser/device supports screen capture. On iOS the control is also hidden when the active session reports `isScreenShareAvailable == false`, such as `SerenadaConfig.screenShareMode == .disabled`. |
 | `videoEnabled` | Bool | `true` | When `true`, the video on/off and camera-mode (flip) controls appear and the SDK requests camera permission on join. When `false`, both controls are hidden and URL-first call flows configure the internally-created session with no camera modes (camera is never requested). Session-first hosts that need strict audio-only media should pass `videoMediaEnabled: false` / `videoMediaEnabled = false` to `SerenadaConfig`. |
 | `inviteControlsEnabled` | Bool | `true` | Show/hide the built-in QR code and share-link UI in the waiting screen |
 | `debugOverlayEnabled` | Bool | `false` | Show/hide the in-call debug toggle and diagnostics panel |

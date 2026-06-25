@@ -249,11 +249,18 @@ func worstStatus(_ statuses: DebugStatus...) -> DebugStatus {
     return .good
 }
 
+private struct StreamKeyedStageState {
+    let tiles: [StageTile]
+    let spotlightId: String?
+    let active: Bool
+}
+
 struct CallScreenView: View {
     let roomId: String
     let uiState: CallUiState
     let roomShareURL: URL?
     let screenShareExtensionBundleId: String?
+    let screenShareAvailable: Bool
     let roomName: String?
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
@@ -268,6 +275,10 @@ struct CallScreenView: View {
     let onInviteToRoom: () async -> Result<Void, Error>
     let onSnapshotRequested: ((SnapshotSource) -> Void)?
     let rendererProvider: CallRendererProvider
+    /// Resolved content (screen share) scene for this render. With the
+    /// independent flag off (default) every owner is LEGACY and the existing
+    /// single-video-as-content presentation is preserved byte-identically.
+    let contentScene: ContentScene
     let initialRemoteVideoFitCover: Bool
     let onRemoteVideoFitChanged: ((Bool) -> Void)?
     let onSystemPictureInPictureSourceChanged: ((SystemPictureInPictureSource) -> Void)?
@@ -287,12 +298,18 @@ struct CallScreenView: View {
     @State private var showRecoveringBadge = false
     @State private var remoteTileAspectRatios: [String: CGFloat] = [:]
     @State private var pinnedParticipantId: String?
+    /// Stream-keyed pin for the INDEPENDENT content stage: pin ANY tile (camera OR
+    /// content) of ANY participant. Distinct from `pinnedParticipantId` (the legacy
+    /// multi-party / no-content focus pin, which is participant-keyed and stays
+    /// byte-identical). `nil` = default spotlight (the resolver's most-recent share).
+    @State private var pinnedTile: StageTileKey?
 
     init(
         roomId: String,
         uiState: CallUiState,
         roomShareURL: URL?,
         screenShareExtensionBundleId: String? = nil,
+        screenShareAvailable: Bool = true,
         roomName: String? = nil,
         config: SerenadaCallFlowConfig = SerenadaCallFlowConfig(),
         strings: [SerenadaString: String]? = nil,
@@ -307,6 +324,7 @@ struct CallScreenView: View {
         onInviteToRoom: @escaping () async -> Result<Void, Error>,
         onSnapshotRequested: ((SnapshotSource) -> Void)? = nil,
         rendererProvider: CallRendererProvider,
+        contentScene: ContentScene = ContentScene(primary: nil, local: nil, remotes: []),
         initialRemoteVideoFitCover: Bool = true,
         onRemoteVideoFitChanged: ((Bool) -> Void)? = nil,
         onSystemPictureInPictureSourceChanged: ((SystemPictureInPictureSource) -> Void)? = nil,
@@ -316,6 +334,7 @@ struct CallScreenView: View {
         self.uiState = uiState
         self.roomShareURL = roomShareURL
         self.screenShareExtensionBundleId = screenShareExtensionBundleId
+        self.screenShareAvailable = screenShareAvailable
         self.roomName = roomName
         self.config = config
         self.strings = strings
@@ -330,6 +349,7 @@ struct CallScreenView: View {
         self.onInviteToRoom = onInviteToRoom
         self.onSnapshotRequested = onSnapshotRequested
         self.rendererProvider = rendererProvider
+        self.contentScene = contentScene
         self.initialRemoteVideoFitCover = initialRemoteVideoFitCover
         self.onRemoteVideoFitChanged = onRemoteVideoFitChanged
         self.onSystemPictureInPictureSourceChanged = onSystemPictureInPictureSourceChanged
@@ -361,27 +381,73 @@ struct CallScreenView: View {
             localCameraMode: uiState.localCameraMode
         )
         let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
+        let streamStage = streamKeyedStageState
+        let streamKeyedStageActive = streamStage.active
+        let stageSpotlightId = streamStage.spotlightId
+        let stageTiles = streamStage.tiles
+        // In the stream-keyed stage prefer the spotlight's CAMERA owner (content
+        // tiles have no PiP-able camera target, so fall back to a remote camera).
+        let stageSpotlightCameraCid: String? = {
+            guard streamKeyedStageActive, let id = stageSpotlightId, let key = parseStageTileId(id), key.kind == .camera else { return nil }
+            return key.cid
+        }()
         let systemPictureInPictureSource = selectSystemPictureInPictureSource(
             localSourceId: uiState.localCid,
-            localIsPrimary: !isMultiParty && showLocalAsPrimarySurface,
+            localIsPrimary: !isMultiParty && !streamKeyedStageActive && showLocalAsPrimarySurface,
             localVideoEnabled: uiState.localVideoEnabled,
             remoteParticipants: uiState.remoteParticipants,
-            preferredSourceIds: isMultiParty ? [pinnedParticipantId] : []
+            preferredSourceIds: streamKeyedStageActive ? [stageSpotlightCameraCid] : (isMultiParty ? [pinnedParticipantId] : [])
         )
 
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if uiState.phase == .waiting {
-                if showLocalAsPrimarySurface {
-                    largeLocalView
-                        .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
-                } else {
-                    waitingMainSurface
-                        .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
-                    smallLocalView
-                }
+            if streamKeyedStageActive {
+                // STREAM-KEYED STAGE: an INDEPENDENT content stream is active
+                // (1:1 or group). Every stream is its own tile keyed {cid, kind} —
+                // a camera tile per camera-on participant and a content tile per
+                // sharer (incl the local user's own screen). A sharer's camera and
+                // screen are TWO EQUAL peer tiles (not a camera-over-content PIP).
+                // Single spotlight = the resolver's most-recent share by default;
+                // tap any tile to pin/unpin. Mirrors web's filmstrip pivot. Never
+                // reachable flag-off / legacy (the resolver yields no independent
+                // content), so the branches below stay byte-identical.
+                StreamKeyedStage(
+                    remoteParticipants: uiState.remoteParticipants,
+                    remoteTileAspectRatios: $remoteTileAspectRatios,
+                    localCid: uiState.localCid,
+                    localVideoEnabled: uiState.localVideoEnabled,
+                    localAudioEnabled: uiState.localAudioEnabled,
+                    localAudioLevel: uiState.localAudioLevel,
+                    localDisplayName: uiState.localDisplayName,
+                    localMirror: uiState.isFrontCamera,
+                    localCameraMode: uiState.localCameraMode,
+                    contentScene: contentScene,
+                    remoteVideoFitCover: $remoteVideoFitCover,
+                    bottomPadding: pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible),
+                    rendererProvider: rendererProvider,
+                    pinnedTile: $pinnedTile,
+                    strings: strings,
+                    onAdjustCameraZoom: onAdjustCameraZoom,
+                    onTapBackground: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            if areControlsVisible {
+                                areControlsVisible = false
+                                wereControlsLastHiddenByAutoHide = false
+                            } else {
+                                areControlsVisible = true
+                                if wereControlsLastHiddenByAutoHide {
+                                    isControlsAutoHideEnabled = false
+                                    wereControlsLastHiddenByAutoHide = false
+                                }
+                            }
+                        }
+                    }
+                )
+                .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
             } else if isMultiParty {
+                // Multi-party stage WITHOUT independent content (pin focus or a
+                // legacy single-video-as-content tile). Byte-identical to today.
                 MultiPartyStage(
                     remoteParticipants: uiState.remoteParticipants,
                     remoteTileAspectRatios: $remoteTileAspectRatios,
@@ -395,6 +461,8 @@ struct CallScreenView: View {
                     isScreenSharing: uiState.isScreenSharing,
                     remoteContentCid: uiState.remoteContentCid,
                     remoteContentType: uiState.remoteContentType,
+                    contentScene: contentScene,
+                    resolvedContentSource: resolvedContentSource,
                     remoteVideoFitCover: $remoteVideoFitCover,
                     bottomPadding: pipBottomPadding(isLandscape: isLandscape, areControlsVisible: areControlsVisible),
                     rendererProvider: rendererProvider,
@@ -417,6 +485,19 @@ struct CallScreenView: View {
                     }
                 )
                 .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
+            } else if uiState.phase == .waiting {
+                // Waiting, NOT routed to the content stage. A 1:1 INDEPENDENT
+                // share while waiting is handled above by `streamKeyedStageActive`
+                // (the local content tile + "waiting for participants" hold);
+                // legacy/flag-off waiting is unchanged (byte-identical).
+                if showLocalAsPrimarySurface {
+                    largeLocalView
+                        .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
+                } else {
+                    waitingMainSurface
+                        .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
+                    smallLocalView
+                }
             } else if showLocalAsPrimarySurface {
                 largeLocalView
                     .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
@@ -447,7 +528,10 @@ struct CallScreenView: View {
                 smallLocalView
             }
 
-            if !isMultiParty {
+            // The bespoke tap/pinch background layer is only for the single-
+            // surface layouts. Both stages (stream-keyed and multi-party) own
+            // their own background tap handling, so suppress it there.
+            if !isMultiParty && !streamKeyedStageActive {
                 backgroundInteractionLayer(isPinchZoomEnabled: isPinchZoomEnabled)
             }
             overlays
@@ -460,6 +544,14 @@ struct CallScreenView: View {
             remoteTileAspectRatios = remoteTileAspectRatios.filter { active.contains($0.key) }
             if let pinned = pinnedParticipantId, pinned != uiState.localCid, !active.contains(pinned) {
                 pinnedParticipantId = nil
+            }
+        }
+        .onChange(of: stageTiles.map(\.id)) { ids in
+            // Drop a stale stream-key pin when its tile disappears (the pinned
+            // sharer stopped, left, or the pinned camera turned off) so the
+            // spotlight reverts to the most-recent-share default.
+            if let pinnedTile, !ids.contains(stageTileId(pinnedTile)) {
+                self.pinnedTile = nil
             }
         }
         .onChange(of: isPinchZoomEnabled) { enabled in
@@ -697,6 +789,21 @@ struct CallScreenView: View {
     }
 
     private var currentSnapshotSource: SnapshotSource? {
+        // Stream-keyed content stage: the spotlight may be a content stream, but
+        // snapshot capture is currently camera-source based. Keep the shutter
+        // available by targeting the spotlight owner's camera when that camera is
+        // enabled instead of hiding it whenever their content is large.
+        let streamStage = streamKeyedStageState
+        if streamStage.active {
+            guard let spotlightId = streamStage.spotlightId, let key = parseStageTileId(spotlightId) else { return nil }
+            if key.cid == uiState.localCid {
+                return uiState.localVideoEnabled ? .local : nil
+            }
+            if let remote = uiState.remoteParticipants.first(where: { $0.cid == key.cid }), remote.videoEnabled {
+                return .remote(cid: remote.cid)
+            }
+            return nil
+        }
         // Multi-party stage has no single dominant preview unless the user
         // pins one. With a pinned tile the stage layout treats that
         // participant as the large preview, so the shutter targets them.
@@ -729,7 +836,7 @@ struct CallScreenView: View {
             remoteVideoEnabled: uiState.remoteVideoEnabled,
             isLocalLarge: isLocalLarge,
             localVideoEnabled: uiState.localVideoEnabled
-        ) && !isMultiParty
+        ) && !isMultiParty && !streamKeyedStageActive
         return uiState.isFlashAvailable || shareShown || fitCoverShown
     }
 
@@ -793,7 +900,7 @@ struct CallScreenView: View {
                     remoteVideoEnabled: uiState.remoteVideoEnabled,
                     isLocalLarge: isLocalLarge,
                     localVideoEnabled: uiState.localVideoEnabled
-                ) && !isMultiParty {
+                ) && !isMultiParty && !streamKeyedStageActive {
                     iconButton(system: remoteVideoFitCover ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", accessibilityLabel: remoteVideoFitCover ? str(.callA11yVideoFit) : str(.callA11yVideoFill)) {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             remoteVideoFitCover.toggle()
@@ -894,7 +1001,7 @@ struct CallScreenView: View {
                 }
             }
 
-            if config.screenSharingEnabled {
+            if config.screenSharingEnabled && screenShareAvailable {
                 if shouldUseBroadcastPicker(
                     isScreenSharing: uiState.isScreenSharing,
                     screenShareExtensionBundleId: screenShareExtensionBundleId
@@ -1012,6 +1119,52 @@ struct CallScreenView: View {
     private var isMultiParty: Bool {
         uiState.remoteParticipants.count > 1
     }
+
+    // MARK: - Independent content stage routing (Phase 4b)
+
+    /// The content-role source for the LEGACY multi-party content path, or nil. In
+    /// the stream-keyed pivot this only feeds `MultiPartyStage` for a LEGACY
+    /// single-video-as-content tile (independent content routes through the
+    /// stream-keyed stage instead). Legacy 1:1 returns nil (byte-identical).
+    private var resolvedContentSource: ResolvedContentSource? {
+        resolveContentSource(contentScene.primary, isMultiParty: isMultiParty)
+    }
+
+    /// Snapshot of the stream-keyed stage derivation for one render. This keeps
+    /// body-level branch decisions from recomputing content resolution, tile
+    /// derivation, and spotlight selection independently.
+    private var streamKeyedStageState: StreamKeyedStageState {
+        let stageContentAll = stageContent(for: contentScene)
+        guard stageContentAll.contains(where: { $0.mode == .independent }),
+              let localCid = uiState.localCid else {
+            return StreamKeyedStageState(tiles: [], spotlightId: nil, active: false)
+        }
+        let cameras: [StageCameraParticipant] =
+            uiState.remoteParticipants.map {
+                StageCameraParticipant(cid: $0.cid, isLocal: false)
+            }
+            + [StageCameraParticipant(cid: localCid, isLocal: true)]
+        let tiles = deriveStageTiles(cameras: cameras, content: stageContentAll)
+        let spotlightId = pickStageSpotlightTileId(tiles: tiles, pinnedTile: pinnedTile, contentPrimary: contentScene.primary)
+        let active = !tiles.isEmpty && spotlightId != nil && shouldRenderContentStage(
+            phase: contentStagePhase(uiState.phase),
+            isMultiParty: isMultiParty,
+            hasContentStageLayout: true
+        )
+        return StreamKeyedStageState(tiles: tiles, spotlightId: spotlightId, active: active)
+    }
+
+    private var stageTiles: [StageTile] {
+        streamKeyedStageState.tiles
+    }
+
+    private var stageSpotlightId: String? {
+        streamKeyedStageState.spotlightId
+    }
+
+    private var streamKeyedStageActive: Bool {
+        streamKeyedStageState.active
+    }
 }
 
 private func quantizedStageTileAspectRatio(_ size: CGSize) -> CGFloat {
@@ -1036,6 +1189,11 @@ private struct MultiPartyStage: View {
     let isScreenSharing: Bool
     let remoteContentCid: String?
     let remoteContentType: String?
+    /// Resolved content scene (Phase 4b). Drives independent content tiles.
+    let contentScene: ContentScene
+    /// The content-role source for this render (the resolver's chosen primary),
+    /// or nil. In independent mode this carries `mode == .independent`.
+    let resolvedContentSource: ResolvedContentSource?
     @Binding var remoteVideoFitCover: Bool
     let bottomPadding: CGFloat
     let rendererProvider: CallRendererProvider
@@ -1055,12 +1213,13 @@ private struct MultiPartyStage: View {
         resolveString(key, overrides: strings)
     }
 
-    private var hasLocalContent: Bool {
-        isScreenSharing || localCameraMode.isContentMode
-    }
-
+    /// Whether a content-stage layout should be computed this render. Driven by
+    /// the resolver's chosen primary (`resolvedContentSource`) instead of
+    /// inferring content from `cameraMode`. A pin also forces the computed
+    /// layout. Flag-off ⇒ `resolvedContentSource` reproduces the legacy
+    /// single-sharer content-stage entry (byte-identical for the common case).
     private var hasContentSource: Bool {
-        hasLocalContent || remoteContentCid != nil
+        resolvedContentSource != nil || remoteContentCid != nil
     }
 
     var body: some View {
@@ -1070,22 +1229,15 @@ private struct MultiPartyStage: View {
             let useComputedLayout = localCid != nil && (pinnedParticipantId != nil || hasContentSource)
 
             if useComputedLayout, let localCid {
+                // Content source for the layout, driven by the resolver's chosen
+                // primary. Falls back to the legacy diagnostics pointer only when
+                // the resolver yielded nothing (e.g. a pin with no active share),
+                // preserving the existing multi-party content-stage behavior.
                 let activeContentSource: ContentSource? = {
-                    if hasLocalContent {
-                        let type: ContentType = {
-                            if isScreenSharing { return .screenShare }
-                            if localCameraMode == .world { return .worldCamera }
-                            return .compositeCamera
-                        }()
-                        return ContentSource(type: type, ownerParticipantId: localCid, aspectRatio: nil)
+                    if let resolved = resolvedContentSource {
+                        return ContentSource(type: resolved.type, ownerParticipantId: resolved.ownerCid, aspectRatio: nil)
                     } else if let remoteCid = remoteContentCid {
-                        let type: ContentType = {
-                            switch remoteContentType {
-                            case ContentTypeWire.worldCamera: return .worldCamera
-                            case ContentTypeWire.compositeCamera: return .compositeCamera
-                            default: return .screenShare
-                            }
-                        }()
+                        let type = ContentType.fromWire(remoteContentType)
                         return ContentSource(type: type, ownerParticipantId: remoteCid, aspectRatio: nil)
                     }
                     return nil
@@ -1316,6 +1468,297 @@ private struct MultiPartyStage: View {
     }
 }
 
+/// Stream-keyed filmstrip + spotlight stage for active INDEPENDENT content.
+///
+/// Every stream is its own tile keyed `{cid, kind}`: a camera tile per camera-on
+/// participant (local + remote) and a content tile per independent sharer (local
+/// + remote, including the local user's own screen). A sharer's camera and screen
+/// are TWO EQUAL peer tiles — NOT a camera-over-content PIP. A single spotlight is
+/// the resolver's most-recent share by default; tap any tile to pin it as the
+/// spotlight, tap the spotlight again to unpin (revert to default).
+///
+/// Geometry reuses the conformance-locked ``computeLayout`` via a composite-id
+/// FOCUS scene: each `SceneParticipant.id` is the opaque `"cid::kind"` tile id and
+/// `pinnedParticipantId` is the spotlight id, so the engine runs
+/// `computePrimaryWithFilmstrip` (single spotlight + filmstrip) over the
+/// stream-keyed tiles. The lone-tile edge (1:1 share with both cameras off) would
+/// derive `.solo` in the engine, so it is emitted directly as a full-area
+/// spotlight (no filmstrip), matching web. Tile ids are opaque to the engine; the
+/// content/focus engine code paths are untouched.
+private struct StreamKeyedStage: View {
+    let remoteParticipants: [RemoteParticipant]
+    @Binding var remoteTileAspectRatios: [String: CGFloat]
+    let localCid: String?
+    let localVideoEnabled: Bool
+    let localAudioEnabled: Bool
+    let localAudioLevel: Float
+    let localDisplayName: String?
+    let localMirror: Bool
+    let localCameraMode: LocalCameraMode
+    let contentScene: ContentScene
+    @Binding var remoteVideoFitCover: Bool
+    let bottomPadding: CGFloat
+    let rendererProvider: CallRendererProvider
+    @Binding var pinnedTile: StageTileKey?
+    let strings: [SerenadaString: String]?
+    let onAdjustCameraZoom: (CGFloat) -> Void
+    let onTapBackground: () -> Void
+
+    @State private var lastMagnificationValue: CGFloat = 1
+
+    private func str(_ key: SerenadaString) -> String {
+        resolveString(key, overrides: strings)
+    }
+
+    private var tiles: [StageTile] {
+        guard let localCid else { return [] }
+        let cameras: [StageCameraParticipant] =
+            remoteParticipants.map { StageCameraParticipant(cid: $0.cid, isLocal: false) }
+            + [StageCameraParticipant(cid: localCid, isLocal: true)]
+        return deriveStageTiles(cameras: cameras, content: stageContent(for: contentScene))
+    }
+
+    private var spotlightId: String? {
+        pickStageSpotlightTileId(tiles: tiles, pinnedTile: pinnedTile, contentPrimary: contentScene.primary)
+    }
+
+    private func resolvedContent(for cid: String) -> ResolvedContent? {
+        if let local = contentScene.local, local.ownerCid == cid { return local }
+        return contentScene.remotes.first(where: { $0.ownerCid == cid })
+    }
+
+    private func remote(for cid: String) -> RemoteParticipant? {
+        remoteParticipants.first(where: { $0.cid == cid })
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let tiles = self.tiles
+            ZStack {
+                frontlineFallbackBackground
+                if let spotlightId, !tiles.isEmpty, let layoutTiles = computedTiles(tiles: tiles, spotlightId: spotlightId, geometry: geometry) {
+                    ForEach(layoutTiles, id: \.id) { tile in
+                        tileView(tile, spotlightId: spotlightId)
+                            .frame(width: tile.frame.width, height: tile.frame.height)
+                            .clipShape(RoundedRectangle(cornerRadius: tile.cornerRadius))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: tile.cornerRadius)
+                                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                            )
+                            .position(
+                                x: tile.frame.x + tile.frame.width / 2,
+                                y: tile.frame.y + tile.frame.height / 2
+                            )
+                    }
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onTapBackground() }
+    }
+
+    private var frontlineFallbackBackground: some View {
+        Color.black
+    }
+
+    /// Build the composite-id FOCUS scene and run ``computeLayout``. Handles the
+    /// lone-tile edge by emitting a full-area spotlight directly (the engine would
+    /// otherwise derive `.solo`, which yields no tiles + a PIP). Mirrors web.
+    private func computedTiles(tiles: [StageTile], spotlightId: String, geometry: GeometryProxy) -> [TileLayout]? {
+        if tiles.count == 1 {
+            return [TileLayout(
+                id: spotlightId,
+                type: .participant,
+                frame: LayoutRect(x: 0, y: 0, width: geometry.size.width, height: geometry.size.height),
+                fit: remoteVideoFitCover ? .cover : .contain,
+                cornerRadius: 0,
+                zOrder: 0
+            )]
+        }
+
+        let participants: [SceneParticipant] = tiles.map { tile in
+            SceneParticipant(
+                // Spotlight is `.local` so the engine never demotes it to a PIP;
+                // filmstrip tiles are `.remote`. Role only affects PIP/order here,
+                // and FOCUS emits no PIP, so this is purely structural.
+                id: tile.id,
+                role: tile.id == spotlightId ? .local : .remote,
+                videoEnabled: true,
+                videoAspectRatio: tile.kind == .camera ? remoteTileAspectRatios[tile.cid] : nil
+            )
+        }
+
+        let scene = CallScene(
+            viewportWidth: geometry.size.width,
+            viewportHeight: geometry.size.height,
+            safeAreaInsets: LayoutInsets(top: 20, bottom: bottomPadding + 4, left: 0, right: 0),
+            participants: participants,
+            localParticipantId: spotlightId,
+            activeSpeakerId: nil,
+            // Pin the spotlight tile → FOCUS mode (single spotlight + filmstrip).
+            pinnedParticipantId: spotlightId,
+            contentSource: nil,
+            userPrefs: UserLayoutPrefs(dominantFit: remoteVideoFitCover ? .cover : .contain)
+        )
+        return computeLayout(scene: scene).tiles
+    }
+
+    @ViewBuilder
+    private func tileView(_ tile: TileLayout, spotlightId: String) -> some View {
+        if let key = parseStageTileId(tile.id) {
+            let isLocal = key.cid == localCid
+            let isContent = key.kind == .content
+            let isSpotlight = tile.zOrder == 0
+            let pinned = stageTileKeyEquals(pinnedTile, key)
+
+            ZStack {
+                Color.black
+
+                if isContent {
+                    contentTileBody(key: key, fit: tile.fit)
+                } else if isLocal {
+                    cameraTileBody(isLocal: true, cid: key.cid, fit: tile.fit)
+                } else {
+                    cameraTileBody(isLocal: false, cid: key.cid, fit: tile.fit)
+                }
+
+                if pinned {
+                    pinIndicator
+                }
+
+                // Fit/cover toggle on the spotlight tile only (matches MultiPartyStage).
+                if isSpotlight {
+                    fitButton
+                }
+
+                if !isContent {
+                    cameraBadge(isLocal: isLocal, cid: key.cid)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: tile.cornerRadius))
+            // Tap any tile to pin it; tap the spotlight again to unpin (revert to
+            // most-recent-share default).
+            .onTapGesture {
+                pinnedTile = stageTileKeyEquals(pinnedTile, key) ? nil : key
+            }
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        guard isContent, isLocal, localCameraMode.isContentMode else { return }
+                        let delta = value / max(lastMagnificationValue, 0.001)
+                        lastMagnificationValue = value
+                        onAdjustCameraZoom(delta)
+                    }
+                    .onEnded { _ in lastMagnificationValue = 1 }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func contentTileBody(key: StageTileKey, fit: FitMode) -> some View {
+        let owner = resolvedContent(for: key.cid)
+        let isLocal = key.cid == localCid
+        // Receiver-side hold: content active but media not arrived → status overlay
+        // over the content sink (never a stale frame). The sink renders frames as
+        // they arrive; the overlay covers the brief connecting gap.
+        WebRTCVideoView(
+            kind: isLocal ? .localContent : .remoteContentForCid(key.cid),
+            rendererProvider: rendererProvider,
+            // Content respects the fit/cover toggle: cover crops the share to fill.
+            videoContentMode: fit == .contain ? .scaleAspectFit : .scaleAspectFill
+        )
+        if let owner, owner.loading || owner.waitingForParticipants {
+            ContentStatusOverlay(
+                text: owner.waitingForParticipants
+                    ? str(.callContentWaitingForParticipants)
+                    : str(.callContentConnecting)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func cameraTileBody(isLocal: Bool, cid: String, fit: FitMode) -> some View {
+        if isLocal {
+            if localVideoEnabled {
+                WebRTCVideoView(
+                    kind: .local,
+                    rendererProvider: rendererProvider,
+                    videoContentMode: fit == .contain ? .scaleAspectFit : .scaleAspectFill,
+                    isMirrored: localMirror
+                )
+            } else {
+                VideoPlaceholderTile(text: str(.callCameraOff), compact: true)
+            }
+        } else if let remote = remote(for: cid) {
+            if remote.videoEnabled {
+                WebRTCVideoView(
+                    kind: .remoteForCid(cid),
+                    rendererProvider: rendererProvider,
+                    videoContentMode: fit == .contain ? .scaleAspectFit : .scaleAspectFill,
+                    onVideoSizeChanged: { size in
+                        remoteTileAspectRatios[cid] = quantizedStageTileAspectRatio(size)
+                    }
+                )
+            } else {
+                VideoPlaceholderTile(text: str(.callVideoOff), compact: false, displayName: remote.displayName, peerId: remote.peerId)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cameraBadge(isLocal: Bool, cid: String) -> some View {
+        let tileRemote = isLocal ? nil : remote(for: cid)
+        let muted = isLocal ? !localAudioEnabled : tileRemote?.audioEnabled == false
+        let name = isLocal ? localDisplayName : tileRemote?.displayName
+        let nameForBadge: String? = (!isLocal && tileRemote?.videoEnabled == false) ? nil : name
+        let level: Float? = isLocal ? localAudioLevel : tileRemote?.audioLevel
+        ParticipantBadge(muted: muted, displayName: nameForBadge, audioLevel: level)
+    }
+
+    private var pinIndicator: some View {
+        VStack {
+            HStack {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(6)
+                    .background(Color.black.opacity(0.56))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .padding(8)
+                Spacer()
+            }
+            Spacer()
+        }
+    }
+
+    private var fitButton: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        remoteVideoFitCover.toggle()
+                    }
+                } label: {
+                    Image(systemName: remoteVideoFitCover
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.black.opacity(0.4))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(8)
+            }
+        }
+    }
+}
+
 private struct RemoteParticipantStageTile: View {
     let participant: RemoteParticipant
     let size: CGSize
@@ -1383,6 +1826,31 @@ private struct MultiPartyLocalPip: View {
             RoundedRectangle(cornerRadius: cornerRadius)
                 .stroke(Color.white.opacity(0.32), lineWidth: 1)
         )
+    }
+}
+
+/// Status overlay drawn ON TOP of an independent content tile while the content
+/// is connecting (media not arrived yet — receiver-side hold) or the local user
+/// is sharing with no participants receiving yet ("waiting for participants",
+/// pitfall #8). Never replaces the content sink with a stale frame.
+private struct ContentStatusOverlay: View {
+    let text: String
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                Text(text)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 

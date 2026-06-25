@@ -449,6 +449,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
     getRemoteStream(cid: string): MediaStream | undefined { return this.media.getRemoteStream(cid); }
     /** Local content (screen share) stream for optional local preview. */
     getLocalContentStream(): MediaStream | null { return this.media.getLocalContentStream(); }
+    /** Whether this session negotiated the independent content video path. */
+    get independentContentVideoEnabled(): boolean { return this.config.enableIndependentContentVideo === true; }
     /** Current WebRTC call statistics, or `null` if not yet collecting. */
     get callStats(): CallStats | null { return this.statsCollector.stats; }
     /**

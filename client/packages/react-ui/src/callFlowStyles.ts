@@ -262,6 +262,26 @@ const CALL_FLOW_CSS = `
   backdrop-filter: blur(6px);
 }
 
+/* Independent screen share: capture is live but no peer is receiving yet. */
+[data-serenada-callflow] .content-waiting-badge {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+  z-index: 3;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 [data-serenada-callflow].multi-party-call .video-local-container-stage {
   right: 16px;
   bottom: 108px;

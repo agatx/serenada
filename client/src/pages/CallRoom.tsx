@@ -14,6 +14,8 @@ import { getConfiguredServerHost } from '../utils/serverHost';
 import { parseTurnsOnly } from '../utils/turnsOnly';
 import { getDisplayName, setDisplayName } from '../utils/displayName';
 
+const BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED = true;
+
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
     const base64 = (base64String + padding)
@@ -286,6 +288,10 @@ const CallRoom: React.FC = () => {
             serverHost: getConfiguredServerHost(),
             logger: new ConsoleSerenadaLogger(),
             turnsOnly,
+            // Bundled web app opt-in: the headless SDK default remains false for
+            // external integrators, but this app intentionally ships the
+            // independent screen-share media path.
+            enableIndependentContentVideo: BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED,
         });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
         const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });

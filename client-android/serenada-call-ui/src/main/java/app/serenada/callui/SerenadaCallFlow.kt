@@ -76,6 +76,13 @@ fun SerenadaCallFlow(
     theme: SerenadaCallFlowTheme = SerenadaCallFlowTheme(),
     roomName: String? = null,
     initialRemoteVideoFitCover: Boolean = true,
+    // Independent screen share (Phase 4b). The url-first owned session uses default
+    // config flags (off); a host that builds its own session with
+    // enableIndependentContentVideo=true must echo the flag here, or the prebuilt UI
+    // resolves every share as LEGACY and never renders the remote content tile (the
+    // SDK still negotiates + receives the content track; only the UI was gated off).
+    independentContentEnabled: Boolean = false,
+    videoMediaEnabled: Boolean = true,
     strings: Map<SerenadaString, String>? = null,
     onShareLink: (() -> Unit)? = null,
     onInviteToRoom: (() -> Unit)? = null,
@@ -201,7 +208,17 @@ fun SerenadaCallFlow(
         }
     }
 
-    val uiState = rememberCallUiState(state, diagnostics)
+    // Independent-content / video-media flags come from the caller (defaulting
+    // off / on for the url-first owned-session path, byte-identical to legacy). A
+    // host that builds its own session with enableIndependentContentVideo=true
+    // passes independentContentEnabled=true so the UI renders the dedicated
+    // content tile instead of the legacy single-video-as-content path.
+    val uiState = rememberCallUiState(
+        state = state,
+        diagnostics = diagnostics,
+        independentContentEnabled = independentContentEnabled,
+        videoMediaEnabled = videoMediaEnabled,
+    )
     val roomId = state.roomId ?: activeSession.roomId
     val roomShareUrl = activeSession.roomUrl
     val internalConfig =
@@ -250,6 +267,10 @@ fun SerenadaCallFlow(
         detachRemoteSinkForCid = { cid, sink -> activeSession.detachRemoteSinkForCid(cid, sink) },
         attachRemoteSink = { sink -> activeSession.attachRemoteSink(sink) },
         detachRemoteSink = { sink -> activeSession.detachRemoteSink(sink) },
+        attachRemoteContentSinkForCid = { cid, sink -> activeSession.attachRemoteContentRenderer(sink, cid) },
+        detachRemoteContentSinkForCid = { cid, sink -> activeSession.detachRemoteContentRenderer(sink, cid) },
+        attachLocalContentSink = { sink -> activeSession.attachLocalContentRenderer(sink) },
+        detachLocalContentSink = { sink -> activeSession.detachLocalContentRenderer(sink) },
         onSnapshotRequested = if (config.snapshotEnabled && (onSnapshotCaptured != null || onSnapshotError != null)) {
             { source ->
                 coroutineScope.launch {
@@ -366,6 +387,10 @@ fun SerenadaCallFlow(
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit = { _, _ -> },
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit = { _, _ -> },
+    attachLocalContentSink: (VideoSink) -> Unit = {},
+    detachLocalContentSink: (VideoSink) -> Unit = {},
     onSnapshotRequested: ((SnapshotSource) -> Unit)? = null,
     onDismiss: () -> Unit = {},
 ) {
@@ -421,6 +446,10 @@ fun SerenadaCallFlow(
                 detachRemoteSinkForCid = detachRemoteSinkForCid,
                 attachRemoteSink = attachRemoteSink,
                 detachRemoteSink = detachRemoteSink,
+                attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                attachLocalContentSink = attachLocalContentSink,
+                detachLocalContentSink = detachLocalContentSink,
                 initialRemoteVideoFitCover = initialRemoteVideoFitCover,
                 onRemoteVideoFitChanged = onRemoteVideoFitChanged,
                 onSnapshotRequested = onSnapshotRequested,
@@ -456,6 +485,10 @@ fun SerenadaCallFlow(
                 detachRemoteSinkForCid = detachRemoteSinkForCid,
                 attachRemoteSink = attachRemoteSink,
                 detachRemoteSink = detachRemoteSink,
+                attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                attachLocalContentSink = attachLocalContentSink,
+                detachLocalContentSink = detachLocalContentSink,
                 onSnapshotRequested = onSnapshotRequested,
             )
         }
@@ -466,8 +499,10 @@ fun SerenadaCallFlow(
 private fun rememberCallUiState(
     state: CallState,
     diagnostics: CallDiagnostics,
+    independentContentEnabled: Boolean,
+    videoMediaEnabled: Boolean,
 ): CallUiState {
-    return remember(state, diagnostics) {
+    return remember(state, diagnostics, independentContentEnabled, videoMediaEnabled) {
         // Hide presumed-lost remotes from the call grid — the SDK keeps their
         // peer connections open in case they reattach, but the active grid
         // should not display them. Host apps wanting different presentation
@@ -484,6 +519,8 @@ private fun rememberCallUiState(
             callStartedAtMs = state.callStartedAtMs,
             localAudioEnabled = state.localAudioEnabled,
             localVideoEnabled = state.localVideoEnabled,
+            localCameraEnabled = state.localCameraEnabled,
+            localContent = state.localContent,
             localDisplayName = state.localDisplayName,
             localAudioLevel = state.localAudioLevel,
             remoteParticipants = visibleRemotes,
@@ -502,6 +539,8 @@ private fun rememberCallUiState(
             isFlashEnabled = diagnostics.isFlashEnabled,
             remoteContentCid = diagnostics.remoteContentCid,
             remoteContentType = diagnostics.remoteContentType,
+            independentContentEnabled = independentContentEnabled,
+            videoMediaEnabled = videoMediaEnabled,
         )
     }
 }

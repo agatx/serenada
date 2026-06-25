@@ -41,6 +41,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 
+internal const val INDEPENDENT_CONTENT_VIDEO_ENABLED = true
+
 class CallManager(context: Context) : RoomWatcherDelegate {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -150,6 +152,10 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
                 transports = transports,
                 proximityMonitoringEnabled = true,
+                // Bundled Android app opt-in: the SDK default remains false for
+                // external integrators, but this app intentionally ships the
+                // independent screen-share media path.
+                enableIndependentContentVideo = INDEPENDENT_CONTENT_VIDEO_ENABLED,
             ),
             context = appContext,
         )
@@ -723,7 +729,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         if (!_uiState.value.isScreenSharing) return
         activeSession?.stopScreenShare()
         currentRoomId?.let { roomId ->
-            CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
+            CallService.start(
+                appContext,
+                roomId,
+                roomName = savedRoomNameForNotification(roomId),
+                clearMediaProjection = true,
+            )
         }
     }
 
@@ -733,7 +744,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             return
         }
         if (attemptsRemaining <= 0) {
-            CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
+            CallService.start(
+                appContext,
+                roomId,
+                roomName = savedRoomNameForNotification(roomId),
+                clearMediaProjection = true,
+            )
             Log.w("CallManager", "Failed to start screen sharing: media projection foreground type not ready")
             return
         }

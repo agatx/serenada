@@ -11,6 +11,14 @@ struct JoinRecoveryState: Equatable {
     let participantCount: Int
 }
 
+private final class SessionRendererBox {
+    weak var value: AnyObject?
+
+    init(value: AnyObject) {
+        self.value = value
+    }
+}
+
 private struct AudioCoordinatorTimeoutError: LocalizedError {
     var errorDescription: String? {
         "Audio coordinator operation timed out"
@@ -246,6 +254,9 @@ public final class SerenadaSession: ObservableObject {
     /// the last broadcast `content_state`. `nil` when not sharing content.
     private var localContent: ParticipantContent?
     private var peerSlots: [String: any PeerConnectionSlotProtocol] = [:]
+    private var defaultRemoteRendererRegistrations: [SessionRendererBox] = []
+    private var remoteRendererRegistrations: [String: [SessionRendererBox]] = [:]
+    private var remoteContentRendererRegistrations: [String: [SessionRendererBox]] = [:]
     private var pendingMessages: [SignalingMessage] = []
     private var pendingJoinRoom: String?
     private var joinAttemptSerial: Int64 = 0
@@ -898,31 +909,137 @@ public final class SerenadaSession: ObservableObject {
     /// token gets no renderer at all. Falls back to any non-self
     /// participant, then to any peer slot, before giving up.
     public func attachRemoteRenderer(_ renderer: AnyObject) {
-        let participants = currentRoomState?.participants ?? []
-        let cid = participants.first(where: { $0.cid != clientId && $0.signalingStatus != .suspended })?.cid
-            ?? participants.first(where: { $0.cid != clientId })?.cid
-            ?? peerSlots.keys.first
-        guard let cid else { return }
-        attachRemoteRenderer(renderer, forParticipant: cid)
+        rememberRenderer(renderer, in: &defaultRemoteRendererRegistrations)
+        compactRendererRegistrations()
+        guard let cid = preferredRemoteRendererCid() else { return }
+        peerSlots[cid]?.attachRemoteRenderer(renderer)
     }
 
     /// Detach a previously attached remote video renderer.
-    public func detachRemoteRenderer(_ renderer: AnyObject) { peerSlots.values.forEach { $0.detachRemoteRenderer(renderer) } }
-    public func attachRemoteRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.attachRemoteRenderer(renderer) }
-    public func detachRemoteRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.detachRemoteRenderer(renderer) }
+    public func detachRemoteRenderer(_ renderer: AnyObject) {
+        forgetRenderer(renderer, in: &defaultRemoteRendererRegistrations)
+        peerSlots.values.forEach { $0.detachRemoteRenderer(renderer) }
+    }
+
+    public func attachRemoteRenderer(_ renderer: AnyObject, forParticipant cid: String) {
+        rememberRenderer(renderer, for: cid, in: &remoteRendererRegistrations)
+        peerSlots[cid]?.attachRemoteRenderer(renderer)
+    }
+
+    public func detachRemoteRenderer(_ renderer: AnyObject, forParticipant cid: String) {
+        forgetRenderer(renderer, for: cid, in: &remoteRendererRegistrations)
+        peerSlots[cid]?.detachRemoteRenderer(renderer)
+    }
 
     // MARK: - Content (screen share) renderer APIs
     // Camera renderers stay on attachRemoteRenderer / attachLocalRenderer above.
     // These render the independent CONTENT (screen share) stream separately.
 
     /// Attach a renderer to a specific peer's remote CONTENT (screen share) track.
-    public func attachRemoteContentRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.attachRemoteContentRenderer(renderer) }
+    public func attachRemoteContentRenderer(_ renderer: AnyObject, forParticipant cid: String) {
+        rememberRenderer(renderer, for: cid, in: &remoteContentRendererRegistrations)
+        peerSlots[cid]?.attachRemoteContentRenderer(renderer)
+    }
+
     /// Detach a previously attached remote content renderer for a peer.
-    public func detachRemoteContentRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.detachRemoteContentRenderer(renderer) }
+    public func detachRemoteContentRenderer(_ renderer: AnyObject, forParticipant cid: String) {
+        forgetRenderer(renderer, for: cid, in: &remoteContentRendererRegistrations)
+        peerSlots[cid]?.detachRemoteContentRenderer(renderer)
+    }
+
     /// Attach a renderer to the LOCAL content (screen share) track for local preview.
     public func attachLocalContentRenderer(_ renderer: AnyObject) { webRtcEngine.attachLocalContentRenderer(renderer) }
     /// Detach a previously attached local content renderer.
     public func detachLocalContentRenderer(_ renderer: AnyObject) { webRtcEngine.detachLocalContentRenderer(renderer) }
+
+    private func preferredRemoteRendererCid() -> String? {
+        let participants = currentRoomState?.participants ?? []
+        return participants.first(where: { $0.cid != clientId && $0.signalingStatus != .suspended })?.cid
+            ?? participants.first(where: { $0.cid != clientId })?.cid
+            ?? peerSlots.keys.first
+    }
+
+    private func replayRendererRegistrations(to slot: any PeerConnectionSlotProtocol, cid: String) {
+        compactRendererRegistrations()
+        var attachedCameraRenderers = Set<ObjectIdentifier>()
+
+        func attachCamera(_ renderer: AnyObject) {
+            guard attachedCameraRenderers.insert(ObjectIdentifier(renderer)).inserted else { return }
+            slot.attachRemoteRenderer(renderer)
+        }
+
+        if preferredRemoteRendererCid() == cid {
+            for box in defaultRemoteRendererRegistrations {
+                if let renderer = box.value {
+                    attachCamera(renderer)
+                }
+            }
+        }
+
+        for box in remoteRendererRegistrations[cid] ?? [] {
+            if let renderer = box.value {
+                attachCamera(renderer)
+            }
+        }
+
+        var attachedContentRenderers = Set<ObjectIdentifier>()
+        for box in remoteContentRendererRegistrations[cid] ?? [] {
+            guard let renderer = box.value,
+                  attachedContentRenderers.insert(ObjectIdentifier(renderer)).inserted else {
+                continue
+            }
+            slot.attachRemoteContentRenderer(renderer)
+        }
+    }
+
+    private func rememberRenderer(_ renderer: AnyObject, in boxes: inout [SessionRendererBox]) {
+        boxes.removeAll { $0.value == nil }
+        guard !boxes.contains(where: { $0.value === renderer }) else { return }
+        boxes.append(SessionRendererBox(value: renderer))
+    }
+
+    private func rememberRenderer(
+        _ renderer: AnyObject,
+        for cid: String,
+        in registrations: inout [String: [SessionRendererBox]]
+    ) {
+        var boxes = registrations[cid] ?? []
+        rememberRenderer(renderer, in: &boxes)
+        registrations[cid] = boxes
+    }
+
+    private func forgetRenderer(_ renderer: AnyObject, in boxes: inout [SessionRendererBox]) {
+        boxes.removeAll { $0.value == nil || $0.value === renderer }
+    }
+
+    private func forgetRenderer(
+        _ renderer: AnyObject,
+        for cid: String,
+        in registrations: inout [String: [SessionRendererBox]]
+    ) {
+        guard var boxes = registrations[cid] else { return }
+        forgetRenderer(renderer, in: &boxes)
+        if boxes.isEmpty {
+            registrations.removeValue(forKey: cid)
+        } else {
+            registrations[cid] = boxes
+        }
+    }
+
+    private func compactRendererRegistrations() {
+        defaultRemoteRendererRegistrations.removeAll { $0.value == nil }
+        compactRendererRegistrations(&remoteRendererRegistrations)
+        compactRendererRegistrations(&remoteContentRendererRegistrations)
+    }
+
+    private func compactRendererRegistrations(_ registrations: inout [String: [SessionRendererBox]]) {
+        for cid in Array(registrations.keys) {
+            registrations[cid]?.removeAll { $0.value == nil }
+            if registrations[cid]?.isEmpty == true {
+                registrations.removeValue(forKey: cid)
+            }
+        }
+    }
 
     // MARK: - Join Flow
 
@@ -2368,8 +2485,10 @@ public final class SerenadaSession: ObservableObject {
             getSlot: { [weak self] cid in self?.peerSlots[cid] },
             getAllSlots: { [weak self] in self?.peerSlots ?? [:] },
             setSlot: { [weak self] cid, slot in
-                self?.peerSlots[cid] = slot
-                if let self, self.playbackDuckingActive {
+                guard let self else { return }
+                self.peerSlots[cid] = slot
+                self.replayRendererRegistrations(to: slot, cid: cid)
+                if self.playbackDuckingActive {
                     slot.duckPlayback(ducked: true)
                 }
             },

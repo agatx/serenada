@@ -72,6 +72,7 @@
 		A166AEDB8228E8C0BB59B927 /* SerenadaBroadcastExtensionSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 5010B18934D00FB7363928E1 /* SerenadaBroadcastExtensionSupport */; };
 		A281E4C5D7AE35EEF75A87A8 /* SerenadaSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7830FA5A71601737755C721D /* SerenadaSessionTests.swift */; };
 		A3E593BBB26536974F9B5152 /* JoinSnapshotFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0824DD6CEC2DF4431D724B4D /* JoinSnapshotFeature.swift */; };
+		A7D6649A27EAD9A6EEAE4B8F /* FrontlineContentRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80C10125BB70FC3DBF526B46 /* FrontlineContentRenderingTests.swift */; };
 		A943CC93EAF10E990017D277 /* SerenadaBroadcast.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 68ABF3375C20336F82397BA3 /* SerenadaBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AD701F4DE41EA9DFCC2125CE /* JoinScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34F0B8DB451442FAB82D1D94 /* JoinScreen.swift */; };
 		AFA7404C26B9F90435638F49 /* SessionPostReconnectGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970E7AEDB3E705CBF2F03E95 /* SessionPostReconnectGateTests.swift */; };
@@ -82,6 +83,7 @@
 		BD10E73D0A99AF24A662C4F6 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */; };
 		BED32D7AA3653B78E9DE382C /* SessionSuspendedSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A249E2EA4288C34C4B5FFD48 /* SessionSuspendedSurfaceTests.swift */; };
 		BFBDD07B636A41D2067D38F6 /* ToggleVideoGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D41B59EB63DD65F8AD1DF16 /* ToggleVideoGateTests.swift */; };
+		C023886262C8B5863112F6F7 /* ContentRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE0C82FFB22C8FA1FC76AD5 /* ContentRenderingTests.swift */; };
 		C0500F3658A11A038780B5FD /* LoopbackSignalingProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 801D5040B2102E7DFFFDC2B2 /* LoopbackSignalingProviderTests.swift */; };
 		C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9816C392666DC51C1838319 /* RecentCallStoreTests.swift */; };
 		C8363EE39A1335203566D71B /* RoomStatuses.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8B7715C6AFF6FAA67DB5D01 /* RoomStatuses.swift */; };
@@ -209,6 +211,7 @@
 		6A7E704E0AE11C565FB076AE /* SerenadaiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SerenadaiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6CE28EAA8E90B562F29DF6DB /* AudioLevelMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLevelMonitorTests.swift; sourceTree = "<group>"; };
 		6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushKeyStore.swift; sourceTree = "<group>"; };
+		6FE0C82FFB22C8FA1FC76AD5 /* ContentRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentRenderingTests.swift; sourceTree = "<group>"; };
 		70D055EA10214AFAD5F76FFE /* layout_conformance_v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = layout_conformance_v1.json; sourceTree = "<group>"; };
 		7830FA5A71601737755C721D /* SerenadaSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaSessionTests.swift; sourceTree = "<group>"; };
 		79D3BC3109B79353E8157F76 /* RoomWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomWatcherTests.swift; sourceTree = "<group>"; };
@@ -216,6 +219,7 @@
 		7C5B216BB8A302914AB1CA5B /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		7EE887624CBDA34B0B333C6A /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		801D5040B2102E7DFFFDC2B2 /* LoopbackSignalingProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackSignalingProviderTests.swift; sourceTree = "<group>"; };
+		80C10125BB70FC3DBF526B46 /* FrontlineContentRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontlineContentRenderingTests.swift; sourceTree = "<group>"; };
 		81A96E9CB8251A2DD66AED1D /* ScreenShareSampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenShareSampleHandler.swift; sourceTree = "<group>"; };
 		8656DA5A095E572174461E96 /* L10nTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10nTests.swift; sourceTree = "<group>"; };
 		8662332FB191C23A57DDBA4D /* AppConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConstants.swift; sourceTree = "<group>"; };
@@ -527,6 +531,8 @@
 			isa = PBXGroup;
 			children = (
 				C03DA37A007DFCE3DA069244 /* CallScreenStateTests.swift */,
+				6FE0C82FFB22C8FA1FC76AD5 /* ContentRenderingTests.swift */,
+				80C10125BB70FC3DBF526B46 /* FrontlineContentRenderingTests.swift */,
 			);
 			name = SerenadaCallUITests;
 			path = SerenadaCallUI/Tests/SerenadaCallUITests;
@@ -869,6 +875,7 @@
 				85B89222838ED1AA3AF9F938 /* CallScreenStateTests.swift in Sources */,
 				9ADDE9F64E5B64AB5128AF50 /* CameraModeFlowTests.swift in Sources */,
 				80AC65E9FEE68E60586E6055 /* CaptureResolutionSelectionTests.swift in Sources */,
+				C023886262C8B5863112F6F7 /* ContentRenderingTests.swift in Sources */,
 				CEEA0CFAF57BC2B4A48F8441 /* DeepLinkParserTests.swift in Sources */,
 				8149EFE501BB29983C52316D /* EndpointHostParserTests.swift in Sources */,
 				0587ECB1D9436E518EF012E9 /* FakeAPIClient.swift in Sources */,
@@ -880,6 +887,7 @@
 				B896B31FAF7939AF63947C4C /* FakeSessionSignaling.swift in Sources */,
 				467581ED7FB87064203AA780 /* FakeSignalingProvider.swift in Sources */,
 				AFCDC333087CBBB6BFF4566F /* FakeSignalingTransport.swift in Sources */,
+				A7D6649A27EAD9A6EEAE4B8F /* FrontlineContentRenderingTests.swift in Sources */,
 				6B5F236A91FDD3905C7AFD49 /* IceCandidateSanitizerTests.swift in Sources */,
 				8E9504DE50322BC481210CFC /* IndependentContentMediaTests.swift in Sources */,
 				80542D178A13933DFD054765 /* IndependentContentStateTests.swift in Sources */,

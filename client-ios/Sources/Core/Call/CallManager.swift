@@ -6,6 +6,8 @@ import SerenadaCore
 
 @MainActor
 final class CallManager: ObservableObject {
+    static let independentContentVideoEnabled = true
+
     @Published private(set) var uiState = CallUiState()
     @Published private(set) var serverHost: String
     @Published private(set) var selectedLanguage: String
@@ -426,7 +428,13 @@ final class CallManager: ObservableObject {
                 serverHost: host,
                 defaultAudioEnabled: settingsStore.isDefaultMicrophoneEnabled,
                 defaultVideoEnabled: frontline ? false : settingsStore.isDefaultCameraEnabled,
-                enableIndependentContentVideo: true,
+                // Bundled host apps opt into independent screen-share content;
+                // the SDK library default remains disabled for integrators that
+                // need legacy single-video receiver behavior.
+                enableIndependentContentVideo: Self.independentContentVideoEnabled,
+                // Full-device screen sharing via the embedded broadcast upload
+                // extension. The app group + extension bundle ID must match the
+                // SerenadaBroadcast target's entitlement and PRODUCT_BUNDLE_IDENTIFIER.
                 screenShareMode: .broadcast(
                     BroadcastIPCConfig(
                         appGroupIdentifier: AppConstants.appGroupIdentifier,

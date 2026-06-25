@@ -23,18 +23,29 @@ class CallService : Service() {
             val roomId = intent.getStringExtra(EXTRA_ROOM_ID).orEmpty()
             val roomName = intent.getStringExtra(EXTRA_ROOM_NAME).orEmpty()
             val includeMediaProjection = intent.getBooleanExtra(EXTRA_INCLUDE_MEDIA_PROJECTION, false)
+            val clearMediaProjection = intent.getBooleanExtra(EXTRA_CLEAR_MEDIA_PROJECTION, false)
+            val shouldIncludeMediaProjection =
+                when {
+                    includeMediaProjection -> true
+                    clearMediaProjection -> false
+                    else -> mediaProjectionForegroundActive
+                }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 var serviceTypes =
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
                             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                if (includeMediaProjection) {
+                if (shouldIncludeMediaProjection) {
                     serviceTypes = serviceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                 }
                 startForeground(NOTIFICATION_ID, buildNotification(roomId, roomName), serviceTypes)
-                mediaProjectionForegroundActive = includeMediaProjection
+                mediaProjectionForegroundActive = shouldIncludeMediaProjection
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification(roomId, roomName))
-                mediaProjectionForegroundActive = false
+                // Pre-Q has no foreground-service-TYPE gating for MediaProjection, so a
+                // running foreground service is sufficient. Mark ready when this start
+                // was for a screen share, else startScreenShareWhenForegroundReady never
+                // passes its gate and the share silently does nothing on old Android.
+                mediaProjectionForegroundActive = shouldIncludeMediaProjection
             }
         }
         return START_NOT_STICKY
@@ -96,6 +107,7 @@ class CallService : Service() {
         private const val EXTRA_ROOM_ID = "room_id"
         private const val EXTRA_ROOM_NAME = "room_name"
         private const val EXTRA_INCLUDE_MEDIA_PROJECTION = "include_media_projection"
+        private const val EXTRA_CLEAR_MEDIA_PROJECTION = "clear_media_projection"
         @Volatile
         private var mediaProjectionForegroundActive = false
 
@@ -105,13 +117,15 @@ class CallService : Service() {
             context: Context,
             roomId: String,
             roomName: String? = null,
-            includeMediaProjection: Boolean = false
+            includeMediaProjection: Boolean = false,
+            clearMediaProjection: Boolean = false
         ) {
             val intent = Intent(context, CallService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_ROOM_ID, roomId)
                 putExtra(EXTRA_ROOM_NAME, roomName)
                 putExtra(EXTRA_INCLUDE_MEDIA_PROJECTION, includeMediaProjection)
+                putExtra(EXTRA_CLEAR_MEDIA_PROJECTION, clearMediaProjection)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

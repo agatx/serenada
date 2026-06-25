@@ -74,6 +74,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -106,8 +107,12 @@ import app.serenada.core.layout.ContentSource
 import app.serenada.core.layout.ContentType
 import app.serenada.core.layout.FitMode
 import app.serenada.core.layout.Insets
+import app.serenada.core.layout.LayoutMode
+import app.serenada.core.layout.LayoutRect
+import app.serenada.core.layout.LayoutResult
 import app.serenada.core.layout.OccupantType
 import app.serenada.core.layout.ParticipantRole
+import app.serenada.core.layout.TileLayout
 import app.serenada.core.layout.SceneParticipant
 import app.serenada.core.layout.UserLayoutPrefs
 import app.serenada.core.layout.clampStageTileAspectRatio
@@ -145,6 +150,19 @@ private enum class FrontlineFeed {
     Remote,
 }
 
+private enum class FrontlineRemoteScreenShareMode {
+    Independent,
+    Legacy,
+}
+
+private data class FrontlineRemoteScreenShareSource(
+    val ownerCid: String,
+    val mode: FrontlineRemoteScreenShareMode,
+    val loading: Boolean = false,
+) {
+    val id: String = "${mode.name.lowercase(Locale.US)}:$ownerCid"
+}
+
 @Composable
 internal fun FrontlineCallScreen(
     uiState: CallUiState,
@@ -175,6 +193,10 @@ internal fun FrontlineCallScreen(
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
     attachRemoteSink: (VideoSink) -> Unit,
     detachRemoteSink: (VideoSink) -> Unit,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit = { _, _ -> },
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit = { _, _ -> },
+    attachLocalContentSink: (VideoSink) -> Unit = {},
+    detachLocalContentSink: (VideoSink) -> Unit = {},
     initialRemoteVideoFitCover: Boolean = true,
     onRemoteVideoFitChanged: ((Boolean) -> Unit)? = null,
     onSnapshotRequested: ((SnapshotSource) -> Unit)?,
@@ -207,6 +229,7 @@ internal fun FrontlineCallScreen(
     var showConnectionStatusBadge by remember { mutableStateOf(false) }
     var debugTapTimestampMs by remember { mutableStateOf(0L) }
     var remoteVideoFitCover by rememberSaveable { mutableStateOf(initialRemoteVideoFitCover) }
+    var remoteScreenShareFullscreenSourceId by rememberSaveable { mutableStateOf<String?>(null) }
     var localAspectRatio by remember { mutableStateOf<Float?>(null) }
     val remoteTileAspectRatios = remember { mutableStateMapOf<String, Float>() }
     var pinnedSpotlightId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -214,12 +237,45 @@ internal fun FrontlineCallScreen(
     var lastVideoStartedParticipantId by rememberSaveable { mutableStateOf<String?>(null) }
     var previousRemoteVideoEnabled by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
 
+    // Independent screen-share content resolution (mirrors CallScreen). Track the
+    // order in which remote content became active (most-recent LAST) so multiple
+    // simultaneous sharers pick the right primary (design "Multiple Sharers":
+    // local receive order). Only meaningful with the flag on + a real content
+    // track; flag-off the resolver yields LEGACY for every owner and the new path
+    // never engages.
+    val remoteContentOrder = remember { mutableStateListOf<String>() }
+    val activeRemoteContentCids =
+        uiState.remoteParticipants.filter { it.content?.active == true }.map { it.cid }
+    LaunchedEffect(activeRemoteContentCids) {
+        val active = activeRemoteContentCids.toSet()
+        remoteContentOrder.retainAll { it in active }
+        active.forEach { cid -> if (cid !in remoteContentOrder) remoteContentOrder.add(cid) }
+    }
+    val contentScene = rememberContentScene(uiState, remoteContentOrder.toList())
+    // Non-null ONLY for an INDEPENDENT screen-share primary (flag on + real track).
+    // Drives the dedicated content track + simultaneous owner camera; null keeps
+    // the Frontline legacy single-video-as-content path byte-identical.
+    val frontlineIndependentContent = resolveFrontlineIndependentContent(contentScene)
+    val independentContentActive = frontlineIndependentContent != null
+    // Whenever ANY participant presents an INDEPENDENT content stream the stage
+    // switches to the shared {cid, kind} stream-keyed model (see
+    // FrontlineStreamKeyedStage). Spotlight ids then become composite "cid::kind"
+    // tile ids instead of the legacy "content:cid" form.
+    val streamKeyedStageActive = contentScene.all.any { it.mode == ContentMode.INDEPENDENT }
+
+    // LEGACY content owner (single swapped video). Unchanged from today; gated off
+    // when the dedicated independent path is active so the legacy camera-as-content
+    // collapse does not also fire. When independent, the content owner is the
+    // resolver's primary (its camera stays a normal tile alongside the content).
     val localContentMode =
-        uiState.localCameraMode == LocalCameraMode.WORLD ||
-            uiState.localCameraMode == LocalCameraMode.COMPOSITE ||
-            uiState.isScreenSharing
+        !independentContentActive &&
+            (
+                uiState.localCameraMode == LocalCameraMode.WORLD ||
+                    uiState.localCameraMode == LocalCameraMode.COMPOSITE ||
+                    uiState.isScreenSharing
+                )
     val localSpotlightId = uiState.localCid ?: "local"
-    val activeContentOwnerId = when {
+    val legacyContentOwnerId = when {
         uiState.isScreenSharing -> localSpotlightId
         uiState.localVideoEnabled &&
             (
@@ -228,6 +284,11 @@ internal fun FrontlineCallScreen(
                 ) -> localSpotlightId
         uiState.remoteContentCid != null -> uiState.remoteContentCid
         else -> null
+    }
+    val activeContentOwnerId = when {
+        frontlineIndependentContent != null ->
+            if (frontlineIndependentContent.isLocal) localSpotlightId else frontlineIndependentContent.ownerCid
+        else -> legacyContentOwnerId
     }
     val activeContentSpotlightId = activeContentOwnerId?.frontlineContentSpotlightId()
     val isCallSurfacePhase =
@@ -271,6 +332,105 @@ internal fun FrontlineCallScreen(
         pipFeed != null &&
             uiState.localVideoEnabled &&
             remote != null
+    val frontlineStageTiles = remember(streamKeyedStageActive, uiState.remoteParticipants, localSpotlightId, contentScene) {
+        if (streamKeyedStageActive) {
+            val cameras =
+                uiState.remoteParticipants.map {
+                    StageCameraParticipant(cid = it.cid, isLocal = false)
+                } + StageCameraParticipant(cid = localSpotlightId, isLocal = true)
+            deriveStageTiles(cameras = cameras, content = contentScene.all)
+        } else {
+            emptyList()
+        }
+    }
+    val frontlineStageTileIds = remember(frontlineStageTiles) { frontlineStageTiles.map { it.id }.toSet() }
+    val frontlineStageSpotlightId = remember(
+        frontlineStageTiles,
+        frontlineStageTileIds,
+        lastVideoStartedParticipantId,
+        contentScene.primary,
+        pinnedSpotlightId,
+        selectedSpotlightId,
+    ) {
+        if (frontlineStageTiles.isEmpty()) {
+            null
+        } else {
+            val recencyDefaultId =
+                lastVideoStartedParticipantId
+                    ?.let { stageTileId(StageTileKey(it, StageTileKind.CAMERA)) }
+                    ?.takeIf { it in frontlineStageTileIds }
+            val defaultSpotlightId = pickStageSpotlightTileId(frontlineStageTiles, null, contentScene.primary)
+            pinnedSpotlightId?.takeIf { it in frontlineStageTileIds }
+                ?: selectedSpotlightId?.takeIf { it in frontlineStageTileIds }
+                ?: defaultSpotlightId?.takeIf { contentScene.primary != null }
+                ?: recencyDefaultId
+                ?: defaultSpotlightId
+        }
+    }
+    val spotlightedRemoteScreenShareSource = when {
+        !isCallSurfacePhase -> null
+        streamKeyedStageActive -> {
+            val key = frontlineStageSpotlightId?.let { parseStageTileId(it) }
+            val ownerContent = key?.let { contentScene.remotes.firstOrNull { content -> content.ownerCid == it.cid } }
+            if (
+                key != null &&
+                    key.kind == StageTileKind.CONTENT &&
+                    key.cid != localSpotlightId &&
+                    ownerContent?.type == ContentType.SCREEN_SHARE
+            ) {
+                FrontlineRemoteScreenShareSource(
+                    ownerCid = key.cid,
+                    mode = FrontlineRemoteScreenShareMode.Independent,
+                    loading = ownerContent.loading,
+                )
+            } else {
+                null
+            }
+        }
+        activeContentOwnerId != null &&
+            activeContentOwnerId != localSpotlightId &&
+            activeContentOwnerId == uiState.remoteContentCid &&
+            ContentType.fromWire(uiState.remoteContentType) == ContentType.SCREEN_SHARE -> {
+            if (uiState.remoteParticipants.size <= 1) {
+                if (largeFeed == FrontlineFeed.Remote) {
+                    FrontlineRemoteScreenShareSource(activeContentOwnerId, FrontlineRemoteScreenShareMode.Legacy)
+                } else {
+                    null
+                }
+            } else {
+                val activeRemoteCids = uiState.remoteParticipants.map { it.cid }.toSet()
+                val availableSpotlightIds = activeRemoteCids + localSpotlightId + listOfNotNull(activeContentSpotlightId)
+                val defaultPrimary =
+                    lastVideoStartedParticipantId?.takeIf { it in availableSpotlightIds }
+                        ?: uiState.remoteParticipants.firstOrNull()?.cid
+                        ?: localSpotlightId
+                val effectiveSpotlight =
+                    pinnedSpotlightId?.takeIf { it in availableSpotlightIds }
+                        ?: selectedSpotlightId?.takeIf { it in availableSpotlightIds }
+                        ?: defaultPrimary
+                if (effectiveSpotlight == activeContentSpotlightId) {
+                    FrontlineRemoteScreenShareSource(activeContentOwnerId, FrontlineRemoteScreenShareMode.Legacy)
+                } else {
+                    null
+                }
+            }
+        }
+        else -> null
+    }
+    val remoteScreenShareFullscreenSource =
+        spotlightedRemoteScreenShareSource?.takeIf { source ->
+            frontlineRemoteScreenShareFullscreenActive(
+                requestedSourceId = remoteScreenShareFullscreenSourceId,
+                currentSourceId = source.id,
+            )
+        }
+    val remoteScreenShareFullscreenActive = remoteScreenShareFullscreenSource != null
+    val enterRemoteScreenShareFullscreen: (FrontlineRemoteScreenShareSource) -> Unit = { source ->
+        isMoreSheetVisible = false
+        isAudioRouteSheetVisible = false
+        showDebug = false
+        remoteScreenShareFullscreenSourceId = source.id
+    }
     val roomLink = roomShareUrl?.takeIf { it.isNotBlank() }
     val shareLinkAction: (() -> Unit)? = when {
         onShareLink != null -> onShareLink
@@ -344,8 +504,24 @@ internal fun FrontlineCallScreen(
             showDebug = false
         }
     }
-    LaunchedEffect(activeContentSpotlightId) {
-        if (activeContentSpotlightId != null) {
+    LaunchedEffect(spotlightedRemoteScreenShareSource?.id) {
+        val requested = remoteScreenShareFullscreenSourceId ?: return@LaunchedEffect
+        if (requested != spotlightedRemoteScreenShareSource?.id) {
+            remoteScreenShareFullscreenSourceId = null
+        }
+    }
+    LaunchedEffect(activeContentSpotlightId, streamKeyedStageActive) {
+        if (streamKeyedStageActive) {
+            // Stream-keyed: do NOT persist the default spotlight as a selection.
+            // FrontlineStreamKeyedStage computes the default itself from
+            // contentScene.primary (pickStageSpotlightTileId), so selectedSpotlightId
+            // stays null until an explicit tap; an unpin then reverts to that default.
+            // Writing the default here made it indistinguishable from a user tap and
+            // could clobber a user selection when another share became primary (codex P2).
+            // Only drop stale legacy "content:cid" ids left from the legacy path.
+            if (selectedSpotlightId.isFrontlineContentSpotlightId()) selectedSpotlightId = null
+            if (pinnedSpotlightId.isFrontlineContentSpotlightId()) pinnedSpotlightId = null
+        } else if (activeContentSpotlightId != null) {
             selectedSpotlightId = activeContentSpotlightId
         } else {
             if (selectedSpotlightId.isFrontlineContentSpotlightId()) selectedSpotlightId = null
@@ -374,8 +550,14 @@ internal fun FrontlineCallScreen(
         remoteTileAspectRatios.keys
             .filter { it !in activeCids }
             .forEach { remoteTileAspectRatios.remove(it) }
-        if (pinnedSpotlightId != null && pinnedSpotlightId !in activeSpotlightIds) pinnedSpotlightId = null
-        if (selectedSpotlightId != null && selectedSpotlightId !in activeSpotlightIds) selectedSpotlightId = null
+        // Stream-keyed pin/select ids are composite "cid::kind" tile ids, validated
+        // and cleared inside FrontlineStreamKeyedStage; skip the legacy-id check
+        // here (these ids are never in `activeSpotlightIds`, so it would wrongly
+        // clear a valid stream-keyed pin/select on every recomposition).
+        if (!streamKeyedStageActive) {
+            if (pinnedSpotlightId != null && pinnedSpotlightId !in activeSpotlightIds) pinnedSpotlightId = null
+            if (selectedSpotlightId != null && selectedSpotlightId !in activeSpotlightIds) selectedSpotlightId = null
+        }
         if (
             lastVideoStartedParticipantId != null &&
                 uiState.remoteParticipants.none { it.cid == lastVideoStartedParticipantId && it.videoEnabled }
@@ -484,6 +666,19 @@ internal fun FrontlineCallScreen(
                         attachRemoteSinkForCid = attachRemoteSinkForCid,
                         detachRemoteSinkForCid = detachRemoteSinkForCid,
                     )
+                } else if (remoteScreenShareFullscreenSource != null) {
+                    FrontlineRemoteScreenShareFullscreenSurface(
+                        source = remoteScreenShareFullscreenSource,
+                        remote = uiState.remoteParticipants.firstOrNull { it.cid == remoteScreenShareFullscreenSource.ownerCid },
+                        eglContext = eglContext,
+                        attachRemoteSinkForCid = attachRemoteSinkForCid,
+                        detachRemoteSinkForCid = detachRemoteSinkForCid,
+                        attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                        detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                        strings = strings,
+                        onExit = { remoteScreenShareFullscreenSourceId = null },
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 } else if (isLandscape) {
                     Row(Modifier.fillMaxSize()) {
                         FrontlineContentArea(
@@ -504,6 +699,8 @@ internal fun FrontlineCallScreen(
                             lastVideoStartedParticipantId = lastVideoStartedParticipantId,
                             remoteVideoFitCover = remoteVideoFitCover,
                             onToggleRemoteVideoFit = toggleRemoteVideoFit,
+                            spotlightedRemoteScreenShareSource = spotlightedRemoteScreenShareSource,
+                            onEnterRemoteScreenShareFullscreen = enterRemoteScreenShareFullscreen,
                             onPinnedSpotlightIdChanged = { pinnedSpotlightId = it },
                             onSelectedSpotlightIdChanged = { selectedSpotlightId = it },
                             localZoomTransformState = localZoomTransformState,
@@ -515,6 +712,12 @@ internal fun FrontlineCallScreen(
                             detachRemoteSink = detachRemoteSink,
                             attachRemoteSinkForCid = attachRemoteSinkForCid,
                             detachRemoteSinkForCid = detachRemoteSinkForCid,
+                            contentScene = contentScene,
+                            frontlineIndependentContent = frontlineIndependentContent,
+                            attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                            detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                            attachLocalContentSink = attachLocalContentSink,
+                            detachLocalContentSink = detachLocalContentSink,
                             pip = pip,
                             strings = strings,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -568,6 +771,8 @@ internal fun FrontlineCallScreen(
                             lastVideoStartedParticipantId = lastVideoStartedParticipantId,
                             remoteVideoFitCover = remoteVideoFitCover,
                             onToggleRemoteVideoFit = toggleRemoteVideoFit,
+                            spotlightedRemoteScreenShareSource = spotlightedRemoteScreenShareSource,
+                            onEnterRemoteScreenShareFullscreen = enterRemoteScreenShareFullscreen,
                             onPinnedSpotlightIdChanged = { pinnedSpotlightId = it },
                             onSelectedSpotlightIdChanged = { selectedSpotlightId = it },
                             localZoomTransformState = localZoomTransformState,
@@ -579,6 +784,12 @@ internal fun FrontlineCallScreen(
                             detachRemoteSink = detachRemoteSink,
                             attachRemoteSinkForCid = attachRemoteSinkForCid,
                             detachRemoteSinkForCid = detachRemoteSinkForCid,
+                            contentScene = contentScene,
+                            frontlineIndependentContent = frontlineIndependentContent,
+                            attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                            detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                            attachLocalContentSink = attachLocalContentSink,
+                            detachLocalContentSink = detachLocalContentSink,
                             pip = pip,
                             strings = strings,
                             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -615,7 +826,7 @@ internal fun FrontlineCallScreen(
                 }
 
                 AnimatedVisibility(
-                    visible = showReconnectingBadge && !isSystemPictureInPicture,
+                    visible = showReconnectingBadge && !isSystemPictureInPicture && !remoteScreenShareFullscreenActive,
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier
@@ -649,7 +860,7 @@ internal fun FrontlineCallScreen(
                     }
                 }
 
-                if (showSnapshotFlash && !isSystemPictureInPicture) {
+                if (showSnapshotFlash && !isSystemPictureInPicture && !remoteScreenShareFullscreenActive) {
                     LaunchedEffect(Unit) {
                         delay(220)
                         showSnapshotFlash = false
@@ -662,7 +873,7 @@ internal fun FrontlineCallScreen(
                     )
                 }
 
-                if (config.debugOverlayEnabled && !isSystemPictureInPicture) {
+                if (config.debugOverlayEnabled && !isSystemPictureInPicture && !remoteScreenShareFullscreenActive) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopStart)
@@ -700,7 +911,7 @@ internal fun FrontlineCallScreen(
                 }
 
                 FrontlineMoreSheet(
-                    visible = isMoreSheetVisible && !moreOpensAudioRouteDirectly,
+                    visible = isMoreSheetVisible && !moreOpensAudioRouteDirectly && !remoteScreenShareFullscreenActive,
                     audioRouteDevice = currentAudioRoute,
                     audioRouteOptions = audioRouteOptions,
                     screenSharingEnabled = config.screenSharingEnabled,
@@ -732,7 +943,7 @@ internal fun FrontlineCallScreen(
                     modifier = Modifier.zIndex(8f),
                 )
                 CallAudioRouteSheet(
-                    visible = isAudioRouteSheetVisible,
+                    visible = isAudioRouteSheetVisible && !remoteScreenShareFullscreenActive,
                     devices = audioRouteOptions,
                     currentDevice = currentAudioRoute,
                     strings = strings,
@@ -767,6 +978,8 @@ private fun FrontlineContentArea(
     lastVideoStartedParticipantId: String?,
     remoteVideoFitCover: Boolean,
     onToggleRemoteVideoFit: () -> Unit,
+    spotlightedRemoteScreenShareSource: FrontlineRemoteScreenShareSource?,
+    onEnterRemoteScreenShareFullscreen: (FrontlineRemoteScreenShareSource) -> Unit,
     onPinnedSpotlightIdChanged: (String?) -> Unit,
     onSelectedSpotlightIdChanged: (String?) -> Unit,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
@@ -778,6 +991,12 @@ private fun FrontlineContentArea(
     detachRemoteSink: (VideoSink) -> Unit,
     attachRemoteSinkForCid: (String, VideoSink) -> Unit,
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    contentScene: ContentScene,
+    frontlineIndependentContent: FrontlineIndependentContent?,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    attachLocalContentSink: (VideoSink) -> Unit,
+    detachLocalContentSink: (VideoSink) -> Unit,
     pip: @Composable (Modifier) -> Unit,
     strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
@@ -788,10 +1007,49 @@ private fun FrontlineContentArea(
             .clipToBounds()
     ) {
         val waitingForRemote = uiState.isFrontlineWaitingForRemote()
+        // INDEPENDENT content (flag on + real screen-share track) routes through the
+        // content stage like the standard CallScreen's `oneToOneIndependentContent`:
+        // a dedicated content tile renders the content track while the sharer's
+        // camera stays a normal participant tile (simultaneous camera + content),
+        // including the "sharing, waiting for participants" hold while alone. Never
+        // reachable flag-off, so the legacy branches below stay byte-identical.
+        val useIndependentContentStage = isCallSurfacePhase && frontlineIndependentContent != null
         when {
             !isCallSurfacePhase -> {
                 FrontlinePhaseSurface(
                     uiState = uiState,
+                    strings = strings,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            useIndependentContentStage || uiState.remoteParticipants.size > 1 -> {
+                FrontlineMultiPartyStage(
+                    uiState = uiState,
+                    localContentMode = localContentMode,
+                    eglContext = eglContext,
+                    localAspectRatio = localAspectRatio,
+                    remoteAspectRatios = remoteAspectRatios,
+                    activeContentSpotlightId = activeContentSpotlightId,
+                    pinnedSpotlightId = pinnedSpotlightId,
+                    selectedSpotlightId = selectedSpotlightId,
+                    lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+                    remoteVideoFitCover = remoteVideoFitCover,
+                    onToggleRemoteVideoFit = onToggleRemoteVideoFit,
+                    onEnterRemoteScreenShareFullscreen = onEnterRemoteScreenShareFullscreen,
+                    onPinnedSpotlightIdChanged = onPinnedSpotlightIdChanged,
+                    onSelectedSpotlightIdChanged = onSelectedSpotlightIdChanged,
+                    localZoomTransformState = localZoomTransformState,
+                    localRendererEvents = localRendererEvents,
+                    attachLocalSink = attachLocalSink,
+                    detachLocalSink = detachLocalSink,
+                    attachRemoteSinkForCid = attachRemoteSinkForCid,
+                    detachRemoteSinkForCid = detachRemoteSinkForCid,
+                    contentScene = contentScene,
+                    frontlineIndependentContent = frontlineIndependentContent,
+                    attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+                    detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+                    attachLocalContentSink = attachLocalContentSink,
+                    detachLocalContentSink = detachLocalContentSink,
                     strings = strings,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -808,31 +1066,6 @@ private fun FrontlineContentArea(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            uiState.remoteParticipants.size > 1 -> {
-                FrontlineMultiPartyStage(
-                    uiState = uiState,
-                    localContentMode = localContentMode,
-                    eglContext = eglContext,
-                    localAspectRatio = localAspectRatio,
-                    remoteAspectRatios = remoteAspectRatios,
-                    activeContentSpotlightId = activeContentSpotlightId,
-                    pinnedSpotlightId = pinnedSpotlightId,
-                    selectedSpotlightId = selectedSpotlightId,
-                    lastVideoStartedParticipantId = lastVideoStartedParticipantId,
-                    remoteVideoFitCover = remoteVideoFitCover,
-                    onToggleRemoteVideoFit = onToggleRemoteVideoFit,
-                    onPinnedSpotlightIdChanged = onPinnedSpotlightIdChanged,
-                    onSelectedSpotlightIdChanged = onSelectedSpotlightIdChanged,
-                    localZoomTransformState = localZoomTransformState,
-                    localRendererEvents = localRendererEvents,
-                    attachLocalSink = attachLocalSink,
-                    detachLocalSink = detachLocalSink,
-                    attachRemoteSinkForCid = attachRemoteSinkForCid,
-                    detachRemoteSinkForCid = detachRemoteSinkForCid,
-                    strings = strings,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
             else -> {
                 FrontlineLargeSurface(
                     feed = largeFeed,
@@ -842,6 +1075,7 @@ private fun FrontlineContentArea(
                     eglContext = eglContext,
                     localRendererEvents = localRendererEvents,
                     remoteVideoFitCover = remoteVideoFitCover,
+                    remoteVideoIsScreenShare = spotlightedRemoteScreenShareSource != null,
                     localZoomTransformState = localZoomTransformState,
                     attachLocalRenderer = attachLocalRenderer,
                     detachLocalRenderer = detachLocalRenderer,
@@ -856,6 +1090,7 @@ private fun FrontlineContentArea(
         if (
             isCallSurfacePhase &&
                 !waitingForRemote &&
+                !useIndependentContentStage &&
                 uiState.remoteParticipants.size <= 1 &&
                 uiState.localVideoEnabled &&
                 largeFeed == FrontlineFeed.Local
@@ -871,6 +1106,7 @@ private fun FrontlineContentArea(
         val showLargeFeedChip =
             isCallSurfacePhase &&
                 !waitingForRemote &&
+                !useIndependentContentStage &&
                 uiState.remoteParticipants.size <= 1 &&
                 (
                     (chipIsLocal && uiState.localVideoEnabled) ||
@@ -889,6 +1125,7 @@ private fun FrontlineContentArea(
         }
 
         if (
+            !useIndependentContentStage &&
             frontlineShowsRemoteFitButton(
                 isCallSurfacePhase = isCallSurfacePhase,
                 waitingForRemote = waitingForRemote,
@@ -898,16 +1135,22 @@ private fun FrontlineContentArea(
             )
         ) {
             FrontlineRemoteFitButton(
-                remoteVideoFitCover = remoteVideoFitCover,
+                remoteVideoFitCover = if (spotlightedRemoteScreenShareSource == null) remoteVideoFitCover else false,
                 strings = strings,
-                onClick = onToggleRemoteVideoFit,
+                onClick = {
+                    if (spotlightedRemoteScreenShareSource != null) {
+                        onEnterRemoteScreenShareFullscreen(spotlightedRemoteScreenShareSource)
+                    } else {
+                        onToggleRemoteVideoFit()
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 16.dp),
             )
         }
 
-        if (isCallSurfacePhase && !waitingForRemote && uiState.remoteParticipants.size <= 1 && pipFeed != null && !pipInPanel) {
+        if (isCallSurfacePhase && !waitingForRemote && !useIndependentContentStage && uiState.remoteParticipants.size <= 1 && pipFeed != null && !pipInPanel) {
             pip(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -971,6 +1214,7 @@ private fun FrontlineMultiPartyStage(
     lastVideoStartedParticipantId: String?,
     remoteVideoFitCover: Boolean,
     onToggleRemoteVideoFit: () -> Unit,
+    onEnterRemoteScreenShareFullscreen: (FrontlineRemoteScreenShareSource) -> Unit,
     onPinnedSpotlightIdChanged: (String?) -> Unit,
     onSelectedSpotlightIdChanged: (String?) -> Unit,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
@@ -979,14 +1223,81 @@ private fun FrontlineMultiPartyStage(
     detachLocalSink: (VideoSink) -> Unit,
     attachRemoteSinkForCid: (String, VideoSink) -> Unit,
     detachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    contentScene: ContentScene,
+    frontlineIndependentContent: FrontlineIndependentContent?,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    attachLocalContentSink: (VideoSink) -> Unit,
+    detachLocalContentSink: (VideoSink) -> Unit,
     strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
     val localId = uiState.localCid ?: "local"
+    val isIndependentContent = frontlineIndependentContent != null
+
+    // STREAM-KEYED STAGE: whenever ANY participant presents an INDEPENDENT content
+    // stream, switch to the shared {cid, kind} filmstrip+spotlight model (same as
+    // the standard CallScreen). EVERY stream is its own tile — a camera tile per
+    // camera-on participant and a content tile per sharer (incl the local user's
+    // own screen) — so a sharer's camera and screen are EQUAL peer tiles (no
+    // camera-PIP-on-content), and multiple simultaneous sharers each get a tile.
+    // The Frontline pin/select/recency behavior is preserved, now expressed
+    // through the shared model (the spotlight ids are composite "cid::kind" tile
+    // ids stored in pinnedSpotlightId / selectedSpotlightId). Never engages
+    // flag-off (no independent content ⇒ false), so the legacy multi-party /
+    // legacy-content path below stays byte-identical.
+    val streamKeyedStageActive = contentScene.all.any { it.mode == ContentMode.INDEPENDENT }
+    if (streamKeyedStageActive) {
+        FrontlineStreamKeyedStage(
+            contentScene = contentScene,
+            uiState = uiState,
+            localId = localId,
+            localContentMode = localContentMode,
+            eglContext = eglContext,
+            localAspectRatio = localAspectRatio,
+            remoteAspectRatios = remoteAspectRatios,
+            pinnedSpotlightId = pinnedSpotlightId,
+            selectedSpotlightId = selectedSpotlightId,
+            lastVideoStartedParticipantId = lastVideoStartedParticipantId,
+            remoteVideoFitCover = remoteVideoFitCover,
+            onToggleRemoteVideoFit = onToggleRemoteVideoFit,
+            onEnterRemoteScreenShareFullscreen = onEnterRemoteScreenShareFullscreen,
+            onPinnedSpotlightIdChanged = onPinnedSpotlightIdChanged,
+            onSelectedSpotlightIdChanged = onSelectedSpotlightIdChanged,
+            localZoomTransformState = localZoomTransformState,
+            localRendererEvents = localRendererEvents,
+            attachLocalSink = attachLocalSink,
+            detachLocalSink = detachLocalSink,
+            attachRemoteSinkForCid = attachRemoteSinkForCid,
+            detachRemoteSinkForCid = detachRemoteSinkForCid,
+            attachRemoteContentSinkForCid = attachRemoteContentSinkForCid,
+            detachRemoteContentSinkForCid = detachRemoteContentSinkForCid,
+            attachLocalContentSink = attachLocalContentSink,
+            detachLocalContentSink = detachLocalContentSink,
+            strings = strings,
+            modifier = modifier,
+        )
+        return
+    }
+
     val hasLocalContent = localContentMode
     val activeContentOwnerId = activeContentSpotlightId?.removePrefix(FRONTLINE_CONTENT_SPOTLIGHT_PREFIX)
     val contentSource = when {
+        // INDEPENDENT: content source comes from the shared resolver (screen-share
+        // only); the owner's CAMERA is kept as a separate participant tile below.
+        frontlineIndependentContent != null -> {
+            val ownerId = if (frontlineIndependentContent.isLocal) localId else frontlineIndependentContent.ownerCid
+            ContentSource(
+                type = frontlineIndependentContent.type,
+                ownerParticipantId = ownerId,
+                aspectRatio = if (frontlineIndependentContent.isLocal) {
+                    localAspectRatio.takeIf { it > 0f }
+                } else {
+                    remoteAspectRatios[ownerId]
+                },
+            )
+        }
         hasLocalContent && activeContentOwnerId == localId -> {
             val type = when {
                 uiState.isScreenSharing -> ContentType.SCREEN_SHARE
@@ -1025,6 +1336,10 @@ private fun FrontlineMultiPartyStage(
     val spotlightIsRemote =
         uiState.remoteParticipants.any { it.cid == effectiveSpotlightId } ||
             (spotlightIsContent && contentSource.ownerParticipantId != localId)
+    val spotlightIsRemoteScreenShare =
+        spotlightIsContent &&
+            contentSource.ownerParticipantId != localId &&
+            contentSource.type == ContentType.SCREEN_SHARE
 
     BoxWithConstraints(modifier = modifier) {
         val viewportWidthPx = with(density) { maxWidth.toPx() }
@@ -1043,6 +1358,8 @@ private fun FrontlineMultiPartyStage(
             spotlightIsRemote,
             contentSource,
             remoteVideoFitCover,
+            isIndependentContent,
+            spotlightIsRemoteScreenShare,
         ) {
             val baseParticipants =
                 uiState.remoteParticipants.map { participant ->
@@ -1053,11 +1370,16 @@ private fun FrontlineMultiPartyStage(
                         videoAspectRatio = remoteAspectRatios[participant.cid],
                     )
                 } + if (
-                    frontlineIncludesNormalLocalStageTile(
-                        localSpotlightId = localId,
-                        activeContentOwnerId = contentSource?.ownerParticipantId,
-                        contentTileIsSpotlight = spotlightIsContent,
-                    )
+                    // INDEPENDENT: the local camera is a separate track from content,
+                    // so it always renders as its own tile (simultaneous camera +
+                    // content). LEGACY: keep today's collapse rule (camera swapped to
+                    // the single content video).
+                    isIndependentContent ||
+                        frontlineIncludesNormalLocalStageTile(
+                            localSpotlightId = localId,
+                            activeContentOwnerId = contentSource?.ownerParticipantId,
+                            contentTileIsSpotlight = spotlightIsContent,
+                        )
                 ) {
                     listOf(
                         SceneParticipant(
@@ -1093,11 +1415,12 @@ private fun FrontlineMultiPartyStage(
                     pinnedParticipantId = if (spotlightIsContent) null else effectiveSpotlightId,
                     contentSource = if (spotlightIsContent) contentSource else null,
                     userPrefs = UserLayoutPrefs(
-                        dominantFit = if (spotlightIsRemote && !remoteVideoFitCover) {
-                            FitMode.CONTAIN
-                        } else {
-                            FitMode.COVER
-                        },
+                        dominantFit = if (
+                            frontlineRemoteScreenShareUsesFit(
+                                isRemoteScreenShare = spotlightIsRemoteScreenShare,
+                                remoteVideoFitCover = if (spotlightIsRemote) remoteVideoFitCover else true,
+                            )
+                        ) FitMode.CONTAIN else FitMode.COVER,
                     ),
                 )
             )
@@ -1117,6 +1440,8 @@ private fun FrontlineMultiPartyStage(
                     val isLocal = tile.id == localId && !isContentTile
                     val isLocalContent = isContentTile && contentOwnerCid == localId
                     val isRemoteContent = isContentTile && contentOwnerCid != null && contentOwnerCid != localId
+                    val isRemoteScreenShare =
+                        isRemoteContent && contentSource?.type == ContentType.SCREEN_SHARE
                     val remote = if (isRemoteContent) {
                         uiState.remoteParticipants.firstOrNull { it.cid == contentOwnerCid }
                     } else if (!isLocal) {
@@ -1134,6 +1459,10 @@ private fun FrontlineMultiPartyStage(
                     val tileX = with(density) { tile.frame.x.toDp() }
                     val tileY = with(density) { tile.frame.y.toDp() }
                     val tileCornerRadius = with(density) { tile.cornerRadius.toDp() }
+                    val tileModifier = Modifier
+                        .offset(x = tileX, y = tileY)
+                        .size(width = tileWidth, height = tileHeight)
+                        .clip(RoundedCornerShape(tileCornerRadius))
                     FrontlineLayoutTile(
                         tileId = tile.id,
                         isLocal = isLocal,
@@ -1154,12 +1483,28 @@ private fun FrontlineMultiPartyStage(
                         detachLocalSink = detachLocalSink,
                         attachRemoteSinkForCid = attachRemoteSinkForCid,
                         detachRemoteSinkForCid = detachRemoteSinkForCid,
-                        contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                        contentScale = if (
+                            frontlineRemoteScreenShareUsesFit(
+                                isRemoteScreenShare = isRemoteScreenShare,
+                                remoteVideoFitCover = remoteVideoFitCover,
+                            )
+                        ) ContentScale.Fit else ContentScale.Crop,
                         cornerRadius = tileCornerRadius,
                         pinned = tileSpotlightId == pinnedSpotlightId,
                         showRemoteFitButton = showRemoteFitButton,
-                        remoteVideoFitCover = remoteVideoFitCover,
-                        onToggleRemoteVideoFit = onToggleRemoteVideoFit,
+                        remoteVideoFitCover = if (isRemoteScreenShare) false else remoteVideoFitCover,
+                        onToggleRemoteVideoFit = {
+                            if (isRemoteScreenShare) {
+                                onEnterRemoteScreenShareFullscreen(
+                                    FrontlineRemoteScreenShareSource(
+                                        ownerCid = contentOwnerCid,
+                                        mode = FrontlineRemoteScreenShareMode.Legacy,
+                                    ),
+                                )
+                            } else {
+                                onToggleRemoteVideoFit()
+                            }
+                        },
                         onSelect = { onSelectedSpotlightIdChanged(tileSpotlightId) },
                         onTogglePinned = {
                             onPinnedSpotlightIdChanged(
@@ -1167,10 +1512,7 @@ private fun FrontlineMultiPartyStage(
                             )
                         },
                         strings = strings,
-                        modifier = Modifier
-                            .offset(x = tileX, y = tileY)
-                            .size(width = tileWidth, height = tileHeight)
-                            .clip(RoundedCornerShape(tileCornerRadius)),
+                        modifier = tileModifier,
                     )
                 }
             }
@@ -1216,6 +1558,345 @@ private fun FrontlineMultiPartyStage(
                             .size(width = pipWidth, height = pipHeight)
                             .clip(RoundedCornerShape(pipCornerRadius)),
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Frontline stream-keyed filmstrip + spotlight stage. Reuses the SAME shared tile
+ * model as the standard CallScreen ([deriveStageTiles] / [pickStageSpotlightTileId])
+ * over `{cid, kind}` tiles, so a sharer's camera and screen are EQUAL peer tiles
+ * (no camera-PIP-on-content) and each simultaneous sharer gets a content tile.
+ *
+ * Pin / select / recency are preserved: the spotlight is resolved with the
+ * Frontline precedence (pin > tap-select > most-recent share, then the
+ * recently-started camera, then the first tile). Spotlight ids stored in
+ * [pinnedSpotlightId] / [selectedSpotlightId] are composite "cid::kind" tile ids.
+ *
+ * The spotlight tile is rendered through the conformance-locked [computeLayout]
+ * via a composite-id FOCUS scene (opaque tile ids), reusing its single-primary +
+ * filmstrip geometry without touching the CONTENT / FOCUS code paths.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FrontlineStreamKeyedStage(
+    contentScene: ContentScene,
+    uiState: CallUiState,
+    localId: String,
+    localContentMode: Boolean,
+    eglContext: EglBase.Context,
+    localAspectRatio: Float,
+    remoteAspectRatios: MutableMap<String, Float>,
+    pinnedSpotlightId: String?,
+    selectedSpotlightId: String?,
+    lastVideoStartedParticipantId: String?,
+    remoteVideoFitCover: Boolean,
+    onToggleRemoteVideoFit: () -> Unit,
+    onEnterRemoteScreenShareFullscreen: (FrontlineRemoteScreenShareSource) -> Unit,
+    onPinnedSpotlightIdChanged: (String?) -> Unit,
+    onSelectedSpotlightIdChanged: (String?) -> Unit,
+    localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
+    localRendererEvents: RendererCommon.RendererEvents,
+    attachLocalSink: (VideoSink) -> Unit,
+    detachLocalSink: (VideoSink) -> Unit,
+    attachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    attachLocalContentSink: (VideoSink) -> Unit,
+    detachLocalContentSink: (VideoSink) -> Unit,
+    strings: Map<SerenadaString, String>?,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val remoteByCid = remember(uiState.remoteParticipants) {
+        uiState.remoteParticipants.associateBy { it.cid }
+    }
+    val contentByOwner = remember(contentScene) { contentScene.all.associateBy { it.ownerCid } }
+
+    // Stream-keyed tiles (pure, unit-tested): remote cameras, local camera, then a
+    // content tile per INDEPENDENT sharer (incl the local user's own screen).
+    val cameras = remember(uiState.remoteParticipants, localId, uiState.localVideoEnabled) {
+        uiState.remoteParticipants.map {
+            StageCameraParticipant(cid = it.cid, isLocal = false)
+        } + StageCameraParticipant(cid = localId, isLocal = true)
+    }
+    val stageTiles = remember(cameras, contentScene) {
+        deriveStageTiles(cameras = cameras, content = contentScene.all)
+    }
+
+    // Frontline spotlight precedence over the {cid, kind} tiles: an explicit pin
+    // wins, then a tap-selection, then the shared default (most-recent share, then
+    // the recently-started camera, then the first tile).
+    val tileIds = stageTiles.map { it.id }.toSet()
+    val recencyDefaultId =
+        lastVideoStartedParticipantId
+            ?.let { stageTileId(StageTileKey(it, StageTileKind.CAMERA)) }
+            ?.takeIf { it in tileIds }
+    val defaultSpotlightId =
+        pickStageSpotlightTileId(stageTiles, null, contentScene.primary)
+    val spotlightId =
+        pinnedSpotlightId?.takeIf { it in tileIds }
+            ?: selectedSpotlightId?.takeIf { it in tileIds }
+            ?: defaultSpotlightId?.takeIf { contentScene.primary != null }
+            ?: recencyDefaultId
+            ?: defaultSpotlightId
+
+    // Drop stale pin/select ids whose tile disappeared so the spotlight reverts.
+    LaunchedEffect(stageTiles, pinnedSpotlightId, selectedSpotlightId) {
+        if (pinnedSpotlightId != null && pinnedSpotlightId !in tileIds) onPinnedSpotlightIdChanged(null)
+        if (selectedSpotlightId != null && selectedSpotlightId !in tileIds) onSelectedSpotlightIdChanged(null)
+    }
+
+    if (stageTiles.isEmpty() || spotlightId == null) return
+    val spotlightKey = parseStageTileId(spotlightId)
+    val spotlightIsRemoteScreenShare =
+        spotlightKey != null &&
+            spotlightKey.kind == StageTileKind.CONTENT &&
+            spotlightKey.cid != localId &&
+            contentByOwner[spotlightKey.cid]?.type == ContentType.SCREEN_SHARE
+    val spotlightFit = if (
+        frontlineRemoteScreenShareUsesFit(
+            isRemoteScreenShare = spotlightIsRemoteScreenShare,
+            remoteVideoFitCover = remoteVideoFitCover,
+        )
+    ) FitMode.CONTAIN else FitMode.COVER
+
+    BoxWithConstraints(modifier = modifier) {
+        val viewportWidthPx = with(density) { maxWidth.toPx() }
+        val viewportHeightPx = with(density) { maxHeight.toPx() }
+
+        val computedLayout = remember(
+            stageTiles, spotlightId, remoteAspectRatios.toMap(), localAspectRatio,
+            viewportWidthPx, viewportHeightPx, spotlightFit,
+        ) {
+            val participants = stageTiles.map { tile ->
+                SceneParticipant(
+                    id = tile.id,
+                    role = if (tile.id == spotlightId) ParticipantRole.LOCAL else ParticipantRole.REMOTE,
+                    videoEnabled = true,
+                    videoAspectRatio = if (tile.kind == StageTileKind.CAMERA) {
+                        if (tile.isLocal) localAspectRatio.takeIf { it > 0f } else remoteAspectRatios[tile.cid]
+                    } else {
+                        null
+                    },
+                )
+            }
+            val scene = CallScene(
+                viewportWidth = viewportWidthPx,
+                viewportHeight = viewportHeightPx,
+                safeAreaInsets = Insets(),
+                participants = participants,
+                localParticipantId = spotlightId,
+                activeSpeakerId = null,
+                pinnedParticipantId = spotlightId,
+                contentSource = null,
+                userPrefs = UserLayoutPrefs(
+                    dominantFit = spotlightFit,
+                ),
+            )
+            if (stageTiles.size == 1) {
+                LayoutResult(
+                    mode = LayoutMode.FOCUS,
+                    tiles = listOf(
+                        TileLayout(
+                            id = spotlightId,
+                            type = OccupantType.PARTICIPANT,
+                            frame = LayoutRect(0f, 0f, viewportWidthPx, viewportHeightPx),
+                            fit = spotlightFit,
+                            cornerRadius = 0f,
+                            zOrder = 0,
+                        ),
+                    ),
+                    localPip = null,
+                )
+            } else {
+                computeLayout(scene)
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Resolve {cid,kind} keys BEFORE the composable `key {}` block so the block
+            // needs no early `return@key`. A labeled return inside the inlined
+            // forEach+key emits a `$$$$$NON_LOCAL_RETURN$$$$$` synthetic that R8 9.2.x
+            // cannot represent in dex — the APK fails to assemble even though Kotlin
+            // compiles and unit tests pass (dexing only runs at APK assembly).
+            val orderedTiles = computedLayout.tiles.sortedBy { it.zOrder }
+                .mapNotNull { tile -> parseStageTileId(tile.id)?.let { parsed -> tile to parsed } }
+            orderedTiles.forEach { (tile, tileKey) ->
+                key(tile.id) {
+                    val isContentTile = tileKey.kind == StageTileKind.CONTENT
+                    val isLocalTile = tileKey.cid == localId
+                    val tileRemote = if (isLocalTile) null else remoteByCid[tileKey.cid]
+                    val ownerContent = if (isContentTile) contentByOwner[tileKey.cid] else null
+                    val isRemoteScreenShare =
+                        isContentTile && !isLocalTile && ownerContent?.type == ContentType.SCREEN_SHARE
+
+                    val tileWidth = with(density) { tile.frame.width.toDp() }
+                    val tileHeight = with(density) { tile.frame.height.toDp() }
+                    val tileX = with(density) { tile.frame.x.toDp() }
+                    val tileY = with(density) { tile.frame.y.toDp() }
+                    val tileCornerRadius = with(density) { tile.cornerRadius.toDp() }
+                    val tileModifier = Modifier
+                        .offset(x = tileX, y = tileY)
+                        .size(width = tileWidth, height = tileHeight)
+                        .clip(RoundedCornerShape(tileCornerRadius))
+
+                    val onSelect = { onSelectedSpotlightIdChanged(tile.id) }
+                    val onTogglePinned = {
+                        onPinnedSpotlightIdChanged(if (tile.id == pinnedSpotlightId) null else tile.id)
+                    }
+
+                    if (isContentTile) {
+                        // Content tile: dedicated content (screen share) track, an
+                        // EQUAL peer tile (no camera PIP). Content carries no audio.
+                        Box(
+                            modifier = tileModifier
+                                .background(Color(0xFF111111))
+                                .clipToBounds()
+                                .combinedClickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onLongClick = onTogglePinned,
+                                    onClick = onSelect,
+                                )
+                        ) {
+                            IndependentContentTile(
+                                loading = ownerContent?.loading == true,
+                                waitingForParticipants = ownerContent?.waitingForParticipants == true,
+                                width = tileWidth,
+                                height = tileHeight,
+                                eglContext = eglContext,
+                                onAttach = if (isLocalTile) {
+                                    attachLocalContentSink
+                                } else {
+                                    { sink -> attachRemoteContentSinkForCid(tileKey.cid, sink) }
+                                },
+                                onDetach = if (isLocalTile) {
+                                    detachLocalContentSink
+                                } else {
+                                    { sink -> detachRemoteContentSinkForCid(tileKey.cid, sink) }
+                                },
+                                rendererName = if (isLocalTile) {
+                                    "frontline-stage-local-content"
+                                } else {
+                                    "frontline-stage-remote-content-${tileKey.cid}"
+                                },
+                                strings = strings,
+                                contentScale = if (
+                                    frontlineRemoteScreenShareUsesFit(
+                                        isRemoteScreenShare = isRemoteScreenShare,
+                                        remoteVideoFitCover = remoteVideoFitCover,
+                                    )
+                                ) ContentScale.Fit else ContentScale.Crop,
+                            )
+                            if (tile.id == pinnedSpotlightId) {
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.62f),
+                                    shape = CircleShape,
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(8.dp)
+                                        .size(28.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PushPin,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.padding(6.dp),
+                                    )
+                                }
+                            }
+                            // Owner label: whose screen this is. Content carries no
+                            // audio, so a screen-share glyph instead of the mic chip.
+                            val contentOwnerName = if (isLocalTile) {
+                                localDisplayName(uiState, strings)
+                            } else {
+                                remoteDisplayName(tileRemote)
+                            }
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.62f),
+                                shape = RoundedCornerShape(50),
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(8.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ScreenShare,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                    if (contentOwnerName.isNotEmpty()) {
+                                        Text(
+                                            text = contentOwnerName,
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
+                            }
+                            if (tile.zOrder == 0 && isRemoteScreenShare) {
+                                FrontlineRemoteFitButton(
+                                    remoteVideoFitCover = false,
+                                    strings = strings,
+                                    onClick = {
+                                        onEnterRemoteScreenShareFullscreen(
+                                            FrontlineRemoteScreenShareSource(
+                                                ownerCid = tileKey.cid,
+                                                mode = FrontlineRemoteScreenShareMode.Independent,
+                                                loading = ownerContent.loading,
+                                            ),
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(8.dp),
+                                )
+                            }
+                        }
+                    } else {
+                        // Camera tile (local or remote) — reuse the existing Frontline
+                        // tile so name chips / accents / fit toggle stay consistent.
+                        FrontlineLayoutTile(
+                            tileId = tileKey.cid,
+                            isLocal = isLocalTile,
+                            isContentTile = false,
+                            isLocalContent = false,
+                            remote = tileRemote,
+                            uiState = uiState,
+                            eglContext = eglContext,
+                            localContentMode = localContentMode,
+                            localZoomTransformState = localZoomTransformState,
+                            localRendererEvents = localRendererEvents,
+                            onRemoteAspectRatioChanged = tileRemote?.let { participant ->
+                                { ratio: Float -> remoteAspectRatios[participant.cid] = ratio }
+                            },
+                            attachLocalSink = attachLocalSink,
+                            detachLocalSink = detachLocalSink,
+                            attachRemoteSinkForCid = attachRemoteSinkForCid,
+                            detachRemoteSinkForCid = detachRemoteSinkForCid,
+                            contentScale = if (tile.fit == FitMode.CONTAIN) ContentScale.Fit else ContentScale.Crop,
+                            cornerRadius = tileCornerRadius,
+                            pinned = tile.id == pinnedSpotlightId,
+                            showRemoteFitButton = tile.zOrder == 0 && tileRemote != null,
+                            remoteVideoFitCover = remoteVideoFitCover,
+                            onToggleRemoteVideoFit = onToggleRemoteVideoFit,
+                            onSelect = onSelect,
+                            onTogglePinned = onTogglePinned,
+                            strings = strings,
+                            modifier = tileModifier,
+                        )
+                    }
                 }
             }
         }
@@ -1470,6 +2151,102 @@ private fun FrontlineRemoteVideoSurface(
 }
 
 @Composable
+private fun FrontlineRemoteScreenShareFullscreenSurface(
+    source: FrontlineRemoteScreenShareSource,
+    remote: RemoteParticipant?,
+    eglContext: EglBase.Context,
+    attachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteSinkForCid: (String, VideoSink) -> Unit,
+    attachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    detachRemoteContentSinkForCid: (String, VideoSink) -> Unit,
+    strings: Map<SerenadaString, String>?,
+    onExit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var zoomScale by remember(source.id) { mutableStateOf(FRONTLINE_REMOTE_SCREEN_SHARE_MIN_ZOOM_SCALE) }
+    var panOffset by remember(source.id) { mutableStateOf(FrontlineScreenSharePanOffset()) }
+    val density = LocalDensity.current
+
+    BoxWithConstraints(
+        modifier = modifier
+            .background(FrontlineBlack)
+            .clipToBounds()
+    ) {
+        val viewportWidth = maxWidth
+        val viewportHeight = maxHeight
+        val viewportWidthPx = with(density) { maxWidth.toPx() }
+        val viewportHeightPx = with(density) { maxHeight.toPx() }
+        val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+            val nextScale = frontlineRemoteScreenShareZoomScale(
+                currentScale = zoomScale,
+                change = zoomChange,
+            )
+            panOffset = frontlineRemoteScreenSharePanOffset(
+                currentOffset = panOffset,
+                panChangeX = frontlineRemoteScreenShareViewportPanChange(panChange.x, nextScale),
+                panChangeY = frontlineRemoteScreenShareViewportPanChange(panChange.y, nextScale),
+                scale = nextScale,
+                viewportWidth = viewportWidthPx,
+                viewportHeight = viewportHeightPx,
+            )
+            zoomScale = nextScale
+        }
+        val transformModifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = zoomScale
+                scaleY = zoomScale
+                translationX = panOffset.x
+                translationY = panOffset.y
+            }
+            .transformable(transformState)
+
+        when (source.mode) {
+            FrontlineRemoteScreenShareMode.Independent -> {
+                Box(modifier = transformModifier) {
+                    IndependentContentTile(
+                        loading = source.loading,
+                        waitingForParticipants = false,
+                        width = viewportWidth,
+                        height = viewportHeight,
+                        eglContext = eglContext,
+                        onAttach = { sink -> attachRemoteContentSinkForCid(source.ownerCid, sink) },
+                        onDetach = { sink -> detachRemoteContentSinkForCid(source.ownerCid, sink) },
+                        rendererName = "frontline-fullscreen-remote-content-${source.ownerCid}",
+                        strings = strings,
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+            }
+            FrontlineRemoteScreenShareMode.Legacy -> {
+                if (remote?.videoEnabled == true) {
+                    FrontlineRemoteVideoSurface(
+                        remote = remote,
+                        width = maxWidth,
+                        height = maxHeight,
+                        rendererName = "frontline-fullscreen-remote-${source.ownerCid}",
+                        eglContext = eglContext,
+                        contentScale = ContentScale.Fit,
+                        onAttach = { sink -> attachRemoteSinkForCid(source.ownerCid, sink) },
+                        onDetach = { sink -> detachRemoteSinkForCid(source.ownerCid, sink) },
+                        modifier = transformModifier,
+                    )
+                }
+            }
+        }
+
+        FrontlineRemoteFitButton(
+            remoteVideoFitCover = true,
+            strings = strings,
+            onClick = onExit,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp),
+        )
+    }
+}
+
+@Composable
 private fun FrontlineLargeSurface(
     feed: FrontlineFeed,
     uiState: CallUiState,
@@ -1478,6 +2255,7 @@ private fun FrontlineLargeSurface(
     eglContext: EglBase.Context,
     localRendererEvents: RendererCommon.RendererEvents,
     remoteVideoFitCover: Boolean,
+    remoteVideoIsScreenShare: Boolean,
     localZoomTransformState: androidx.compose.foundation.gestures.TransformableState,
     attachLocalRenderer: (SurfaceViewRenderer, RendererCommon.RendererEvents?) -> Unit,
     detachLocalRenderer: (SurfaceViewRenderer) -> Unit,
@@ -1515,7 +2293,12 @@ private fun FrontlineLargeSurface(
                     height = maxHeight,
                     rendererName = "frontline-remote-main",
                     eglContext = eglContext,
-                    contentScale = if (remoteVideoFitCover) ContentScale.Crop else ContentScale.Fit,
+                    contentScale = if (
+                        frontlineRemoteScreenShareUsesFit(
+                            isRemoteScreenShare = remoteVideoIsScreenShare,
+                            remoteVideoFitCover = remoteVideoFitCover,
+                        )
+                    ) ContentScale.Fit else ContentScale.Crop,
                     onAttach = attachRemoteSink,
                     onDetach = detachRemoteSink,
                     modifier = Modifier.fillMaxSize(),

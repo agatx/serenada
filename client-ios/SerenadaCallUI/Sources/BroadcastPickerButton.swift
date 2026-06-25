@@ -11,7 +11,6 @@ struct BroadcastPickerButton: View {
 
     var body: some View {
         Button {
-            onPrepareStart()
             triggerCount += 1
         } label: {
             Image(systemName: systemImage)
@@ -26,7 +25,8 @@ struct BroadcastPickerButton: View {
         .overlay {
             BroadcastPickerHost(
                 preferredExtension: preferredExtension,
-                triggerCount: triggerCount
+                triggerCount: triggerCount,
+                onTriggered: onPrepareStart
             )
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
@@ -38,6 +38,7 @@ struct BroadcastPickerButton: View {
 private struct BroadcastPickerHost: UIViewRepresentable {
     let preferredExtension: String
     let triggerCount: Int
+    let onTriggered: () -> Void
 
     func makeUIView(context: Context) -> BroadcastPickerContainerView {
         BroadcastPickerContainerView(preferredExtension: preferredExtension)
@@ -45,7 +46,7 @@ private struct BroadcastPickerHost: UIViewRepresentable {
 
     func updateUIView(_ uiView: BroadcastPickerContainerView, context: Context) {
         uiView.preferredExtension = preferredExtension
-        uiView.triggerIfNeeded(triggerCount)
+        uiView.triggerIfNeeded(triggerCount, onTriggered: onTriggered)
     }
 }
 
@@ -80,13 +81,16 @@ private final class BroadcastPickerContainerView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func triggerIfNeeded(_ triggerCount: Int) {
+    func triggerIfNeeded(_ triggerCount: Int, onTriggered: @escaping () -> Void) {
         guard triggerCount != lastTriggerCount else { return }
         lastTriggerCount = triggerCount
 
         DispatchQueue.main.async { [weak self] in
             guard let button = self?.pickerView.subviews.compactMap({ $0 as? UIButton }).first else { return }
             button.sendActions(for: .touchUpInside)
+            // Starting the SDK path can flip SwiftUI state and remove this picker host.
+            // Do it only after ReplayKit has received the tap.
+            onTriggered()
         }
     }
 }

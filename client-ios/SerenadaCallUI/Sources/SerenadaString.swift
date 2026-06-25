@@ -9,6 +9,12 @@ public enum SerenadaString: String, CaseIterable {
     case callReconnecting
     case callTakingLongerThanUsual
     case callWaitingOverlay
+    /// Overlay shown on a content (screen share) tile while content is active
+    /// but the content media has not arrived yet (receiver-side hold / loading).
+    case callContentConnecting
+    /// Overlay shown on the local content tile when the user is sharing but no
+    /// remote participant is receiving content yet (independent start-and-wait).
+    case callContentWaitingForParticipants
     case callInviteToRoom
     case callInviteSent
     case callInviteFailed
@@ -73,6 +79,8 @@ public let serenadaDefaultStrings: [SerenadaString: String] = [
     .callReconnecting: "Reconnecting",
     .callTakingLongerThanUsual: "Taking longer than usual",
     .callWaitingOverlay: "Waiting for someone to join...",
+    .callContentConnecting: "Connecting screen share…",
+    .callContentWaitingForParticipants: "Sharing screen, waiting for participants…",
     .callInviteToRoom: "Invite to room",
     .callInviteSent: "Invite sent",
     .callInviteFailed: "Failed to send invite",

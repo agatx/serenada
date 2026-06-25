@@ -85,12 +85,18 @@ struct WebRTCVideoView: UIViewRepresentable {
         case local
         case remote
         case remoteForCid(String)
+        /// Local CONTENT (screen share) preview — independent mode only.
+        case localContent
+        /// A specific peer's remote CONTENT (screen share) track.
+        case remoteContentForCid(String)
 
         var isLocal: Bool {
-            if case .local = self {
+            switch self {
+            case .local, .localContent:
                 return true
+            case .remote, .remoteForCid, .remoteContentForCid:
+                return false
             }
-            return false
         }
     }
 
@@ -154,6 +160,29 @@ struct WebRTCVideoView: UIViewRepresentable {
             }
             context.coordinator.renderer = renderer
             return renderer
+        case .localContent:
+            // Local content (screen share) preview. Never mirrored.
+            let renderer = RTCMTLVideoView(frame: .zero)
+            renderer.videoContentMode = videoContentMode
+            renderer.clipsToBounds = true
+            renderer.isUserInteractionEnabled = false
+            renderer.delegate = context.coordinator
+            Task { @MainActor in
+                rendererProvider.attachLocalContentRenderer(renderer)
+            }
+            context.coordinator.renderer = renderer
+            return renderer
+        case .remoteContentForCid(let cid):
+            let renderer = RTCMTLVideoView(frame: .zero)
+            renderer.videoContentMode = videoContentMode
+            renderer.clipsToBounds = true
+            renderer.isUserInteractionEnabled = false
+            renderer.delegate = context.coordinator
+            Task { @MainActor in
+                rendererProvider.attachRemoteContentRenderer(renderer, forCid: cid)
+            }
+            context.coordinator.renderer = renderer
+            return renderer
         }
 #else
         let placeholder = UIView(frame: .zero)
@@ -170,6 +199,10 @@ struct WebRTCVideoView: UIViewRepresentable {
             label.text = "Local video\n(WebRTC stub)"
         case .remote, .remoteForCid:
             label.text = "Remote video\n(WebRTC stub)"
+        case .localContent:
+            label.text = "Local content\n(WebRTC stub)"
+        case .remoteContentForCid:
+            label.text = "Remote content\n(WebRTC stub)"
         }
         placeholder.addSubview(label)
 
@@ -245,6 +278,10 @@ struct WebRTCVideoView: UIViewRepresentable {
                 coordinator.rendererProvider?.detachRemoteRenderer(renderer)
             case .remoteForCid(let cid):
                 coordinator.rendererProvider?.detachRemoteRenderer(renderer, forCid: cid)
+            case .localContent:
+                coordinator.rendererProvider?.detachLocalContentRenderer(renderer)
+            case .remoteContentForCid(let cid):
+                coordinator.rendererProvider?.detachRemoteContentRenderer(renderer, forCid: cid)
             }
         }
 #endif

@@ -25,6 +25,31 @@ private enum FrontlineFeed {
     case remote
 }
 
+private enum FrontlineRemoteScreenShareSource: Equatable {
+    case independent(ownerCid: String)
+    case legacy(ownerCid: String)
+
+    var id: String {
+        switch self {
+        case .independent(let ownerCid): return "independent:\(ownerCid)"
+        case .legacy(let ownerCid): return "legacy:\(ownerCid)"
+        }
+    }
+
+    var ownerCid: String {
+        switch self {
+        case .independent(let ownerCid), .legacy(let ownerCid): return ownerCid
+        }
+    }
+
+    var videoKind: WebRTCVideoView.Kind {
+        switch self {
+        case .independent(let ownerCid): return .remoteContentForCid(ownerCid)
+        case .legacy(let ownerCid): return .remoteForCid(ownerCid)
+        }
+    }
+}
+
 func frontlineIsWaitingForRemote(_ uiState: CallUiState) -> Bool {
     (uiState.phase == .waiting || uiState.phase == .inCall) && uiState.remoteParticipants.isEmpty
 }
@@ -98,9 +123,15 @@ struct FrontlineCallScreenView: View {
     let sessionPhase: SerenadaCallPhase
     let roomShareURL: URL?
     let screenShareExtensionBundleId: String?
+    let screenShareAvailable: Bool
     let roomName: String?
     let config: SerenadaCallFlowConfig
     let strings: [SerenadaString: String]?
+    /// Resolved independent-content (screen share) scene for this render. With the
+    /// independent flag off (default) every owner is LEGACY,
+    /// ``resolveFrontlineIndependentContent`` returns nil, and the existing
+    /// single-video-as-content presentation is preserved byte-identically.
+    let contentScene: ContentScene
     let availableAudioDevices: [AudioDevice]
     let currentAudioDevice: AudioDevice?
     let onToggleAudio: () -> Void
@@ -137,6 +168,7 @@ struct FrontlineCallScreenView: View {
     @State private var previousRemoteVideoEnabled: [String: Bool] = [:]
     @State private var broadcastTriggerCount = 0
     @State private var showConnectionStatusBadge = false
+    @State private var remoteScreenShareFullscreenSourceId: String?
 
     init(
         roomId: String,
@@ -144,9 +176,11 @@ struct FrontlineCallScreenView: View {
         sessionPhase: SerenadaCallPhase,
         roomShareURL: URL?,
         screenShareExtensionBundleId: String?,
+        screenShareAvailable: Bool = true,
         roomName: String?,
         config: SerenadaCallFlowConfig,
         strings: [SerenadaString: String]?,
+        contentScene: ContentScene = ContentScene(primary: nil, local: nil, remotes: []),
         availableAudioDevices: [AudioDevice],
         currentAudioDevice: AudioDevice?,
         onToggleAudio: @escaping () -> Void,
@@ -173,9 +207,11 @@ struct FrontlineCallScreenView: View {
         self.sessionPhase = sessionPhase
         self.roomShareURL = roomShareURL
         self.screenShareExtensionBundleId = screenShareExtensionBundleId
+        self.screenShareAvailable = screenShareAvailable
         self.roomName = roomName
         self.config = config
         self.strings = strings
+        self.contentScene = contentScene
         self.availableAudioDevices = availableAudioDevices
         self.currentAudioDevice = currentAudioDevice
         self.onToggleAudio = onToggleAudio
@@ -206,8 +242,76 @@ struct FrontlineCallScreenView: View {
         uiState.phase == .waiting || uiState.phase == .inCall
     }
 
+    /// Non-nil ONLY for an INDEPENDENT screen-share primary (flag on + a real
+    /// content track). Drives the dedicated content track + simultaneous owner
+    /// camera. Nil keeps the Frontline legacy single-video-as-content path
+    /// byte-identical. Reuses the shared pure resolver, same as ``CallScreenView``.
+    private var frontlineIndependentContent: FrontlineIndependentContent? {
+        resolveFrontlineIndependentContent(contentScene)
+    }
+
+    /// True when an INDEPENDENT content stage must render: the stream-keyed
+    /// filmstrip+spotlight where the sharer's camera and screen are TWO EQUAL peer
+    /// tiles (NOT a camera-PIP-on-content), with a content tile per simultaneous
+    /// sharer. Never reachable flag-off, so the legacy branches stay byte-identical.
+    private var useIndependentContentStage: Bool {
+        isCallSurfacePhase && frontlineIndependentContent != nil
+    }
+
+    /// The resolver's per-owner content with local LAST (mirrors web's
+    /// `ContentScene.all`), the input order ``deriveStageTiles`` expects.
+    private var stageContentAll: [ResolvedContent] {
+        stageContent(for: contentScene)
+    }
+
+    /// The full stream-keyed tile list for the INDEPENDENT content stage (one tile
+    /// per camera-on participant + one per independent sharer, keyed {cid, kind}).
+    /// Empty unless an independent content stream is present, so the legacy
+    /// synthetic-content stage is never affected.
+    private var frontlineStageTiles: [StageTile] {
+        guard useIndependentContentStage else { return [] }
+        let cameras: [StageCameraParticipant] =
+            uiState.remoteParticipants.map {
+                StageCameraParticipant(cid: $0.cid, isLocal: false)
+            }
+            + [StageCameraParticipant(cid: localSpotlightId, isLocal: true)]
+        return deriveStageTiles(cameras: cameras, content: stageContentAll)
+    }
+
+    /// The Frontline spotlight tile id for the INDEPENDENT stage, honoring the
+    /// existing pin → select → recency precedence, expressed through the shared
+    /// {cid,kind} stage-tile id namespace. Pin/select hold the stage-tile id; the
+    /// recency default maps the most-recently-started camera's participant to its
+    /// CAMERA tile, falling back to the resolver's content primary.
+    private var frontlineStageSpotlightId: String? {
+        let tiles = frontlineStageTiles
+        guard !tiles.isEmpty else { return nil }
+        let presentIds = Set(tiles.map(\.id))
+        if let pinnedSpotlightId, presentIds.contains(pinnedSpotlightId) { return pinnedSpotlightId }
+        if let selectedSpotlightId, presentIds.contains(selectedSpotlightId) { return selectedSpotlightId }
+        // Default = the resolver's most-recent share (its content tile). An active
+        // share ALWAYS wins the default spotlight over camera recency: a later
+        // camera-start must not steal the spotlight from an active screen share
+        // (matches Android/web; codex P1).
+        if contentScene.primary != nil {
+            return pickStageSpotlightTileId(tiles: tiles, pinnedTile: nil, contentPrimary: contentScene.primary)
+        }
+        // No active content primary: fall back to the most-recently-started camera,
+        // then the first tile.
+        if let recentCamera = lastVideoStartedParticipantId {
+            let cameraId = stageTileId(StageTileKey(cid: recentCamera, kind: .camera))
+            if presentIds.contains(cameraId) { return cameraId }
+        }
+        return pickStageSpotlightTileId(tiles: tiles, pinnedTile: nil, contentPrimary: nil)
+    }
+
+    /// Legacy content owner collapse (single swapped video). Unchanged from today,
+    /// but gated OFF when the dedicated independent path is active so the legacy
+    /// camera-as-content collapse does not also fire (the owner camera must stay a
+    /// normal tile alongside the content).
     private var localContentMode: Bool {
-        uiState.localCameraMode == .world || uiState.localCameraMode == .composite || uiState.isScreenSharing
+        guard frontlineIndependentContent == nil else { return false }
+        return uiState.localCameraMode == .world || uiState.localCameraMode == .composite || uiState.isScreenSharing
     }
 
     private var isLocalCameraZoomEnabled: Bool {
@@ -233,7 +337,23 @@ struct FrontlineCallScreenView: View {
     }
 
     private var currentSystemPictureInPictureSource: SystemPictureInPictureSource {
-        selectSystemPictureInPictureSource(
+        // INDEPENDENT stage: prefer the spotlight's CAMERA owner. A stream-keyed id
+        // ("cid::kind") maps to its cid for a camera tile, or to "" (ignored) for a
+        // content tile — content has no PiP-able camera target.
+        if useIndependentContentStage {
+            return selectSystemPictureInPictureSource(
+                localSourceId: localSpotlightId,
+                localIsPrimary: false,
+                localVideoEnabled: uiState.localVideoEnabled,
+                remoteParticipants: uiState.remoteParticipants,
+                preferredSourceIds: [frontlineStageSpotlightId],
+                sourceIdForPreferredSourceId: { sourceId in
+                    guard let key = parseStageTileId(sourceId) else { return sourceId }
+                    return key.kind == .camera ? key.cid : ""
+                }
+            )
+        }
+        return selectSystemPictureInPictureSource(
             localSourceId: localSpotlightId,
             localIsPrimary: uiState.remoteParticipants.count <= 1 && largeFeed == .local,
             localVideoEnabled: uiState.localVideoEnabled,
@@ -254,60 +374,74 @@ struct FrontlineCallScreenView: View {
             let isLandscape = geometry.size.width > geometry.size.height
             let isTabletLandscape = isLandscape && geometry.size.width >= 1100 && geometry.size.height >= 720
             let panelWidth = isLandscape ? (geometry.size.width >= 720 ? 320.0 : 260.0) : geometry.size.width
-            let pipFeed = pipFeed
+            // INDEPENDENT content stage owns the sharer's camera as its own tile +
+            // PIP, so the bespoke 1:1 swap-PIP (floating and in-panel) is suppressed.
+            // `useIndependentContentStage` is only ever true flag-on with a real
+            // content track, so the flag-off path is byte-identical.
+            let pipFeed = useIndependentContentStage ? nil : pipFeed
             let pipInPanel = isTabletLandscape && pipFeed != nil
             let pipSize = frontlinePipSize(containerSize: geometry.size, inPanel: pipInPanel)
+            let fullscreenSource = remoteScreenShareFullscreenSource
 
             ZStack {
                 frontlineBlack.ignoresSafeArea()
 
-                if isLandscape {
-                    HStack(spacing: 0) {
-                        contentArea(
-                            pipFeed: pipFeed,
-                            pipInPanel: pipInPanel,
-                            pipSize: pipSize
-                        )
-                        .frame(width: max(0, geometry.size.width - panelWidth), height: geometry.size.height)
-
-                        controlsPanel(
-                            isLandscape: true,
-                            isTabletLandscape: isTabletLandscape,
-                            panelWidth: panelWidth,
-                            pipFeed: pipFeed,
-                            pipInPanel: pipInPanel,
-                            pipSize: pipSize
-                        )
-                        .frame(width: panelWidth, height: geometry.size.height)
-                    }
-                    .ignoresSafeArea()
+                if let fullscreenSource {
+                    FrontlineRemoteScreenShareFullscreenSurface(
+                        source: fullscreenSource,
+                        rendererProvider: rendererProvider,
+                        strings: strings,
+                        onExit: { remoteScreenShareFullscreenSourceId = nil }
+                    )
                 } else {
-                    VStack(spacing: 0) {
-                        contentArea(
-                            pipFeed: pipFeed,
-                            pipInPanel: false,
-                            pipSize: pipSize
-                        )
-                        .frame(width: geometry.size.width)
-                        .frame(maxHeight: .infinity)
+                    if isLandscape {
+                        HStack(spacing: 0) {
+                            contentArea(
+                                pipFeed: pipFeed,
+                                pipInPanel: pipInPanel,
+                                pipSize: pipSize
+                            )
+                            .frame(width: max(0, geometry.size.width - panelWidth), height: geometry.size.height)
 
-                        controlsPanel(
-                            isLandscape: false,
-                            isTabletLandscape: false,
-                            panelWidth: panelWidth,
-                            pipFeed: pipFeed,
-                            pipInPanel: false,
-                            pipSize: pipSize
-                        )
+                            controlsPanel(
+                                isLandscape: true,
+                                isTabletLandscape: isTabletLandscape,
+                                panelWidth: panelWidth,
+                                pipFeed: pipFeed,
+                                pipInPanel: pipInPanel,
+                                pipSize: pipSize
+                            )
+                            .frame(width: panelWidth, height: geometry.size.height)
+                        }
+                        .ignoresSafeArea()
+                    } else {
+                        VStack(spacing: 0) {
+                            contentArea(
+                                pipFeed: pipFeed,
+                                pipInPanel: false,
+                                pipSize: pipSize
+                            )
+                            .frame(width: geometry.size.width)
+                            .frame(maxHeight: .infinity)
+
+                            controlsPanel(
+                                isLandscape: false,
+                                isTabletLandscape: false,
+                                panelWidth: panelWidth,
+                                pipFeed: pipFeed,
+                                pipInPanel: false,
+                                pipSize: pipSize
+                            )
+                        }
+                        .ignoresSafeArea(edges: .bottom)
                     }
-                    .ignoresSafeArea(edges: .bottom)
-                }
 
-                reconnectingBadge
-                debugOverlay
-                snapshotFlashOverlay
-                moreSheet
-                audioRouteSheet
+                    reconnectingBadge
+                    debugOverlay
+                    snapshotFlashOverlay
+                    moreSheet
+                    audioRouteSheet
+                }
             }
         }
         .background(frontlineBlack)
@@ -345,12 +479,32 @@ struct FrontlineCallScreenView: View {
         .onChange(of: uiState.remoteParticipants.map { "\($0.cid):\($0.videoEnabled)" }) { _ in
             updateLastVideoStartedParticipant()
         }
+        .onChange(of: frontlineStageTiles.map(\.id)) { ids in
+            // INDEPENDENT stage: a stream-keyed pin/select clears when its exact
+            // tile disappears (sharer stopped, camera off, peer left) even if the
+            // participant list is unchanged — so the spotlight reverts to default.
+            guard useIndependentContentStage else { return }
+            let present = Set(ids)
+            if let pinnedSpotlightId, !present.contains(pinnedSpotlightId) { self.pinnedSpotlightId = nil }
+            if let selectedSpotlightId, !present.contains(selectedSpotlightId) { self.selectedSpotlightId = nil }
+        }
         .onChange(of: activeContentSpotlightId) { id in
+            // Legacy synthetic-content auto-select only. The INDEPENDENT stage
+            // resolves its spotlight through the {cid,kind} model (default =
+            // resolver primary), so do NOT auto-select the legacy `content:` id
+            // there (it would not match a stream-keyed tile anyway).
+            guard !useIndependentContentStage else { return }
             if let id {
                 selectedSpotlightId = id
             } else {
                 if selectedSpotlightId?.isFrontlineContentSpotlightId == true { selectedSpotlightId = nil }
                 if pinnedSpotlightId?.isFrontlineContentSpotlightId == true { pinnedSpotlightId = nil }
+            }
+        }
+        .onChange(of: spotlightedRemoteScreenShareSource?.id) { currentSourceId in
+            guard let requested = remoteScreenShareFullscreenSourceId else { return }
+            if requested != currentSourceId {
+                remoteScreenShareFullscreenSourceId = nil
             }
         }
         .onChange(of: localContentMode) { enabled in
@@ -371,6 +525,13 @@ struct FrontlineCallScreenView: View {
     }
 
     private var activeContentOwnerId: String? {
+        // INDEPENDENT: the resolver's primary owns the content; its camera stays a
+        // normal tile alongside the dedicated content track.
+        if let independent = frontlineIndependentContent {
+            return independent.isLocal ? localSpotlightId : independent.ownerCid
+        }
+        // LEGACY (flag off / non-capable / world|composite camera-as-content):
+        // unchanged from today.
         if uiState.isScreenSharing { return localSpotlightId }
         if uiState.localVideoEnabled && (uiState.localCameraMode == .world || uiState.localCameraMode == .composite) {
             return localSpotlightId
@@ -382,7 +543,60 @@ struct FrontlineCallScreenView: View {
         activeContentOwnerId.map { $0.frontlineContentSpotlightId }
     }
 
+    private var spotlightedRemoteScreenShareSource: FrontlineRemoteScreenShareSource? {
+        guard isCallSurfacePhase else { return nil }
+        if useIndependentContentStage {
+            guard let spotlightId = frontlineStageSpotlightId,
+                  let key = parseStageTileId(spotlightId),
+                  key.kind == .content,
+                  key.cid != localSpotlightId,
+                  contentScene.remotes.contains(where: { $0.ownerCid == key.cid && $0.type == .screenShare }) else {
+                return nil
+            }
+            return .independent(ownerCid: key.cid)
+        }
+
+        guard let ownerCid = activeContentOwnerId,
+              ownerCid != localSpotlightId,
+              ownerCid == uiState.remoteContentCid,
+              ContentType.fromWire(uiState.remoteContentType) == .screenShare else {
+            return nil
+        }
+
+        if uiState.remoteParticipants.count <= 1 {
+            return largeFeed == .remote ? .legacy(ownerCid: ownerCid) : nil
+        }
+
+        guard let activeContentSpotlightId else { return nil }
+        var availableIds = Set(uiState.remoteParticipants.map(\.cid))
+        availableIds.insert(localSpotlightId)
+        availableIds.insert(activeContentSpotlightId)
+        let defaultPrimary = lastVideoStartedParticipantId.flatMap { availableIds.contains($0) ? $0 : nil }
+            ?? uiState.remoteParticipants.first?.cid
+            ?? localSpotlightId
+        let effectiveSpotlight = pinnedSpotlightId.flatMap { availableIds.contains($0) ? $0 : nil }
+            ?? selectedSpotlightId.flatMap { availableIds.contains($0) ? $0 : nil }
+            ?? defaultPrimary
+        return effectiveSpotlight == activeContentSpotlightId ? .legacy(ownerCid: ownerCid) : nil
+    }
+
+    private var remoteScreenShareFullscreenSource: FrontlineRemoteScreenShareSource? {
+        guard frontlineRemoteScreenShareFullscreenActive(
+            requestedSourceId: remoteScreenShareFullscreenSourceId,
+            currentSourceId: spotlightedRemoteScreenShareSource?.id
+        ) else {
+            return nil
+        }
+        return spotlightedRemoteScreenShareSource
+    }
+
     private var frontlineActiveSpotlightIds: Set<String> {
+        // INDEPENDENT stage: the valid spotlight ids are the stream-keyed tile ids
+        // ({cid, kind}). A pin/select on a camera or content tile clears when that
+        // exact tile disappears (sharer stopped, camera off, peer left).
+        if useIndependentContentStage {
+            return Set(frontlineStageTiles.map(\.id))
+        }
         var ids = Set(uiState.remoteParticipants.map(\.cid))
         ids.insert(localSpotlightId)
         if let activeContentSpotlightId {
@@ -439,7 +653,9 @@ struct FrontlineCallScreenView: View {
         pipInPanel: Bool,
         pipSize: CGSize
     ) -> some View {
-        let showRemoteFitButton = frontlineShowsRemoteFitButton(
+        let useIndependentContentStage = useIndependentContentStage
+        let remoteScreenShareSource = spotlightedRemoteScreenShareSource
+        let showRemoteFitButton = !useIndependentContentStage && frontlineShowsRemoteFitButton(
             isCallSurfacePhase: isCallSurfacePhase,
             waitingForRemote: frontlineIsWaitingForRemote(uiState),
             remoteParticipantCount: uiState.remoteParticipants.count,
@@ -455,17 +671,25 @@ struct FrontlineCallScreenView: View {
                     onRequestPermissions: onRequestPermissions,
                     onDismiss: onDismiss
                 )
+            } else if useIndependentContentStage || uiState.remoteParticipants.count > 1 {
+                // INDEPENDENT content (flag on + real screen-share track) routes
+                // through the content stage like ``CallScreenView``'s
+                // `oneToOneIndependentContent`: a dedicated content tile renders the
+                // content track while the sharer's camera stays a normal participant
+                // tile (simultaneous camera + content), including the "sharing,
+                // waiting for participants" hold while alone. Never reachable
+                // flag-off, so the legacy branches below stay byte-identical.
+                multiPartyStage
+                    .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
             } else if frontlineIsWaitingForRemote(uiState) {
                 waitingSurface
-                    .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
-            } else if uiState.remoteParticipants.count > 1 {
-                multiPartyStage
                     .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
             } else {
                 largeSurface(feed: largeFeed)
             }
 
             if isCallSurfacePhase,
+               !useIndependentContentStage,
                !frontlineIsWaitingForRemote(uiState),
                uiState.remoteParticipants.count <= 1,
                uiState.localVideoEnabled,
@@ -488,9 +712,15 @@ struct FrontlineCallScreenView: View {
 
             if showRemoteFitButton {
                 FrontlineRemoteFitButton(
-                    remoteVideoFitCover: remoteVideoFitCover,
+                    remoteVideoFitCover: remoteScreenShareSource == nil ? remoteVideoFitCover : false,
                     strings: strings,
-                    onClick: toggleRemoteVideoFit
+                    onClick: {
+                        if let remoteScreenShareSource {
+                            enterRemoteScreenShareFullscreen(remoteScreenShareSource)
+                        } else {
+                            toggleRemoteVideoFit()
+                        }
+                    }
                 )
                 .padding(.trailing, 16)
                 .padding(.bottom, 16)
@@ -498,6 +728,7 @@ struct FrontlineCallScreenView: View {
             }
 
             if isCallSurfacePhase,
+               !useIndependentContentStage,
                !frontlineIsWaitingForRemote(uiState),
                uiState.remoteParticipants.count <= 1,
                let pipFeed,
@@ -528,6 +759,7 @@ struct FrontlineCallScreenView: View {
 
     private var shouldShowLargeNameChip: Bool {
         guard isCallSurfacePhase,
+              !useIndependentContentStage,
               !frontlineIsWaitingForRemote(uiState),
               uiState.remoteParticipants.count <= 1 else {
             return false
@@ -569,7 +801,10 @@ struct FrontlineCallScreenView: View {
             WebRTCVideoView(
                 kind: remote.map { .remoteForCid($0.cid) } ?? .remote,
                 rendererProvider: rendererProvider,
-                videoContentMode: remoteVideoFitCover ? .scaleAspectFill : .scaleAspectFit
+                videoContentMode: frontlineRemoteScreenShareUsesFit(
+                    isRemoteScreenShare: spotlightedRemoteScreenShareSource != nil,
+                    remoteVideoFitCover: remoteVideoFitCover
+                ) ? .scaleAspectFit : .scaleAspectFill
             )
             .ignoresSafeArea()
             .systemPictureInPictureSourceFrame(onChange: onSystemPictureInPictureSourceFrameChanged)
@@ -583,22 +818,47 @@ struct FrontlineCallScreenView: View {
         }
     }
 
+    @ViewBuilder
     private var multiPartyStage: some View {
-        FrontlineMultiPartyStage(
-            uiState: uiState,
-            localSpotlightId: localSpotlightId,
-            activeContentSpotlightId: activeContentSpotlightId,
-            localContentMode: localContentMode,
-            remoteTileAspectRatios: $remoteTileAspectRatios,
-            pinnedSpotlightId: $pinnedSpotlightId,
-            selectedSpotlightId: $selectedSpotlightId,
-            lastVideoStartedParticipantId: lastVideoStartedParticipantId,
-            remoteVideoFitCover: $remoteVideoFitCover,
-            rendererProvider: rendererProvider,
-            strings: strings,
-            onAdjustCameraZoom: onAdjustCameraZoom,
-            onRemoteVideoFitChanged: onRemoteVideoFitChanged
-        )
+        if useIndependentContentStage {
+            // INDEPENDENT: stream-keyed filmstrip+spotlight where the sharer's
+            // camera and screen are TWO EQUAL peer tiles and each simultaneous
+            // sharer gets its own content tile. Reuses the shared {cid,kind} model;
+            // keeps Frontline's pin/select/recency via `frontlineStageSpotlightId`.
+            FrontlineStreamKeyedStage(
+                uiState: uiState,
+                localSpotlightId: localSpotlightId,
+                tiles: frontlineStageTiles,
+                spotlightId: frontlineStageSpotlightId,
+                contentScene: contentScene,
+                remoteTileAspectRatios: $remoteTileAspectRatios,
+                pinnedSpotlightId: $pinnedSpotlightId,
+                selectedSpotlightId: $selectedSpotlightId,
+                remoteVideoFitCover: $remoteVideoFitCover,
+                rendererProvider: rendererProvider,
+                strings: strings,
+                onAdjustCameraZoom: onAdjustCameraZoom,
+                onRemoteVideoFitChanged: onRemoteVideoFitChanged,
+                onRemoteScreenShareFullscreen: enterRemoteScreenShareFullscreen
+            )
+        } else {
+            FrontlineMultiPartyStage(
+                uiState: uiState,
+                localSpotlightId: localSpotlightId,
+                activeContentSpotlightId: activeContentSpotlightId,
+                localContentMode: localContentMode,
+                remoteTileAspectRatios: $remoteTileAspectRatios,
+                pinnedSpotlightId: $pinnedSpotlightId,
+                selectedSpotlightId: $selectedSpotlightId,
+                lastVideoStartedParticipantId: lastVideoStartedParticipantId,
+                remoteVideoFitCover: $remoteVideoFitCover,
+                rendererProvider: rendererProvider,
+                strings: strings,
+                onAdjustCameraZoom: onAdjustCameraZoom,
+                onRemoteVideoFitChanged: onRemoteVideoFitChanged,
+                onRemoteScreenShareFullscreen: enterRemoteScreenShareFullscreen
+            )
+        }
     }
 
     private func localVideoView(contentMode: UIView.ContentMode) -> some View {
@@ -747,7 +1007,7 @@ struct FrontlineCallScreenView: View {
             visible: isMoreSheetVisible && shouldShowMoreButton && !moreOpensAudioRouteDirectly,
             showsAudioRoute: showsAudioRoute,
             audioRouteDevice: currentAudioRoute,
-            screenSharingEnabled: config.screenSharingEnabled,
+            screenSharingEnabled: config.screenSharingEnabled && screenShareAvailable,
             inviteEnabled: config.inviteControlsEnabled,
             shareEnabled: config.inviteControlsEnabled && roomShareURL != nil,
             isScreenSharing: uiState.isScreenSharing,
@@ -766,11 +1026,11 @@ struct FrontlineCallScreenView: View {
                 onToggleScreenShare()
             },
             onStartBroadcastPicker: {
-                onToggleScreenShare()
                 broadcastTriggerCount += 1
-                DispatchQueue.main.async {
-                    setMoreSheetVisible(false)
-                }
+            },
+            onBroadcastPickerTriggered: {
+                onToggleScreenShare()
+                setMoreSheetVisible(false)
             },
             onInvite: {
                 setMoreSheetVisible(false)
@@ -842,6 +1102,15 @@ struct FrontlineCallScreenView: View {
         onRemoteVideoFitChanged?(remoteVideoFitCover)
     }
 
+    private func enterRemoteScreenShareFullscreen(_ source: FrontlineRemoteScreenShareSource) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isMoreSheetVisible = false
+            isAudioRouteSheetVisible = false
+            showDebugPanel = false
+            remoteScreenShareFullscreenSourceId = source.id
+        }
+    }
+
     private func updateLastVideoStartedParticipant() {
         let next = Dictionary(uniqueKeysWithValues: uiState.remoteParticipants.map { ($0.cid, $0.videoEnabled) })
         if !previousRemoteVideoEnabled.isEmpty {
@@ -873,6 +1142,116 @@ private extension String {
         hasPrefix(frontlineContentSpotlightPrefix)
             ? String(dropFirst(frontlineContentSpotlightPrefix.count))
             : self
+    }
+}
+
+private struct FrontlineRemoteScreenShareFullscreenSurface: View {
+    let source: FrontlineRemoteScreenShareSource
+    let rendererProvider: CallRendererProvider
+    let strings: [SerenadaString: String]?
+    let onExit: () -> Void
+
+    @State private var zoomScale: CGFloat = CGFloat(frontlineRemoteScreenShareMinZoomScale)
+    @State private var panOffset: CGSize = .zero
+    @State private var lastMagnificationValue: CGFloat = 1
+    @State private var dragStartOffset: CGSize?
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                frontlineBlack.ignoresSafeArea()
+                WebRTCVideoView(
+                    kind: source.videoKind,
+                    rendererProvider: rendererProvider,
+                    videoContentMode: .scaleAspectFit
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .scaleEffect(zoomScale)
+                .offset(panOffset)
+                .contentShape(Rectangle())
+                .simultaneousGesture(magnificationGesture(viewportSize: geometry.size))
+                .simultaneousGesture(dragGesture(viewportSize: geometry.size))
+                .ignoresSafeArea()
+
+                FrontlineRemoteFitButton(
+                    remoteVideoFitCover: true,
+                    strings: strings,
+                    onClick: onExit
+                )
+                .padding(.trailing, 16)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
+            .clipped()
+        }
+        .background(frontlineBlack)
+        .ignoresSafeArea()
+        .onChange(of: source.id) { _ in resetTransform() }
+    }
+
+    private func magnificationGesture(viewportSize: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                let delta = value / max(lastMagnificationValue, 0.001)
+                lastMagnificationValue = value
+                setZoomScale(
+                    CGFloat(frontlineRemoteScreenShareZoomScale(currentScale: Double(zoomScale), change: Double(delta))),
+                    viewportSize: viewportSize
+                )
+            }
+            .onEnded { _ in
+                lastMagnificationValue = 1
+                clampPanOffset(viewportSize: viewportSize)
+            }
+    }
+
+    private func dragGesture(viewportSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if dragStartOffset == nil {
+                    dragStartOffset = panOffset
+                }
+                let startOffset = dragStartOffset ?? .zero
+                let next = frontlineRemoteScreenSharePanOffset(
+                    currentX: Double(startOffset.width),
+                    currentY: Double(startOffset.height),
+                    deltaX: Double(value.translation.width),
+                    deltaY: Double(value.translation.height),
+                    scale: Double(zoomScale),
+                    viewportWidth: Double(viewportSize.width),
+                    viewportHeight: Double(viewportSize.height)
+                )
+                panOffset = CGSize(width: CGFloat(next.x), height: CGFloat(next.y))
+            }
+            .onEnded { _ in
+                dragStartOffset = nil
+                clampPanOffset(viewportSize: viewportSize)
+            }
+    }
+
+    private func setZoomScale(_ nextScale: CGFloat, viewportSize: CGSize) {
+        zoomScale = nextScale
+        clampPanOffset(viewportSize: viewportSize)
+    }
+
+    private func clampPanOffset(viewportSize: CGSize) {
+        let clamped = frontlineRemoteScreenSharePanOffset(
+            currentX: Double(panOffset.width),
+            currentY: Double(panOffset.height),
+            deltaX: 0,
+            deltaY: 0,
+            scale: Double(zoomScale),
+            viewportWidth: Double(viewportSize.width),
+            viewportHeight: Double(viewportSize.height)
+        )
+        panOffset = CGSize(width: CGFloat(clamped.x), height: CGFloat(clamped.y))
+    }
+
+    private func resetTransform() {
+        zoomScale = CGFloat(frontlineRemoteScreenShareMinZoomScale)
+        panOffset = .zero
+        lastMagnificationValue = 1
+        dragStartOffset = nil
     }
 }
 
@@ -1398,6 +1777,7 @@ private struct FrontlineMoreSheet: View {
     let onAudioRoute: () -> Void
     let onToggleScreenShare: () -> Void
     let onStartBroadcastPicker: () -> Void
+    let onBroadcastPickerTriggered: () -> Void
     let onInvite: () -> Void
     let onShare: () -> Void
 
@@ -1434,7 +1814,8 @@ private struct FrontlineMoreSheet: View {
                            let screenShareExtensionBundleId {
                             FrontlineBroadcastTrigger(
                                 preferredExtension: screenShareExtensionBundleId,
-                                triggerCount: broadcastTriggerCount
+                                triggerCount: broadcastTriggerCount,
+                                onTriggered: onBroadcastPickerTriggered
                             )
                             .frame(width: 1, height: 1)
                             .allowsHitTesting(false)
@@ -1625,6 +2006,7 @@ private struct FrontlineSheetItem: View {
 private struct FrontlineBroadcastTrigger: UIViewRepresentable {
     let preferredExtension: String
     let triggerCount: Int
+    let onTriggered: () -> Void
 
     func makeUIView(context: Context) -> FrontlineBroadcastPickerContainerView {
         FrontlineBroadcastPickerContainerView(preferredExtension: preferredExtension)
@@ -1632,7 +2014,7 @@ private struct FrontlineBroadcastTrigger: UIViewRepresentable {
 
     func updateUIView(_ uiView: FrontlineBroadcastPickerContainerView, context: Context) {
         uiView.preferredExtension = preferredExtension
-        uiView.triggerIfNeeded(triggerCount)
+        uiView.triggerIfNeeded(triggerCount, onTriggered: onTriggered)
     }
 }
 
@@ -1665,13 +2047,43 @@ private final class FrontlineBroadcastPickerContainerView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func triggerIfNeeded(_ triggerCount: Int) {
+    func triggerIfNeeded(_ triggerCount: Int, onTriggered: @escaping () -> Void) {
         guard triggerCount != lastTriggerCount else { return }
         lastTriggerCount = triggerCount
         DispatchQueue.main.async { [weak self] in
             guard let button = self?.pickerView.subviews.compactMap({ $0 as? UIButton }).first else { return }
             button.sendActions(for: .touchUpInside)
+            // Starting the SDK path can flip SwiftUI state and remove this picker host.
+            // Do it only after ReplayKit has received the tap.
+            onTriggered()
         }
+    }
+}
+
+/// Name label for a content (screen share) tile: identifies whose screen it is.
+/// Content carries no audio, so this shows a screen-share glyph instead of the
+/// mic/audio indicator used by `FrontlineNameChip`.
+private struct FrontlineContentNameChip: View {
+    let label: String
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: compact ? 5 : 7) {
+            Image(systemName: "rectangle.on.rectangle")
+                .font(.system(size: compact ? 10 : 11, weight: .semibold))
+                .foregroundStyle(.white)
+            if !label.isEmpty {
+                Text(label)
+                    .font(.system(size: compact ? 11 : 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, compact ? 7 : 9)
+        .padding(.vertical, compact ? 4 : 5)
+        .background(Color.black.opacity(0.62))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.16), lineWidth: 1))
     }
 }
 
@@ -1751,6 +2163,292 @@ private struct FrontlineLocalAvatar: View {
     }
 }
 
+/// Stream-keyed filmstrip + spotlight stage for active INDEPENDENT content on the
+/// Frontline screen.
+///
+/// Every stream is its own tile keyed `{cid, kind}`: a camera tile per camera-on
+/// participant (local + remote) and a content tile per independent sharer (local +
+/// remote, including the local user's own screen). The sharer's camera and screen
+/// are TWO EQUAL peer tiles — NOT a camera-PIP-on-content. A single spotlight is
+/// chosen by ``FrontlineCallScreenView/frontlineStageSpotlightId`` (pin → select →
+/// recency → resolver primary). Tap any tile to SELECT it as the spotlight;
+/// long-press to PIN/unpin (Frontline's existing pin/select model, now expressed
+/// through the shared {cid,kind} ids). Geometry reuses the conformance-locked
+/// ``computeLayout`` via a composite-id FOCUS scene; the lone-tile edge is emitted
+/// directly (the engine would otherwise derive `.solo`). Only ever instantiated
+/// flag-on with a real independent content track.
+private struct FrontlineStreamKeyedStage: View {
+    let uiState: CallUiState
+    let localSpotlightId: String
+    let tiles: [StageTile]
+    let spotlightId: String?
+    let contentScene: ContentScene
+    @Binding var remoteTileAspectRatios: [String: CGFloat]
+    @Binding var pinnedSpotlightId: String?
+    @Binding var selectedSpotlightId: String?
+    @Binding var remoteVideoFitCover: Bool
+    let rendererProvider: CallRendererProvider
+    let strings: [SerenadaString: String]?
+    let onAdjustCameraZoom: (CGFloat) -> Void
+    let onRemoteVideoFitChanged: ((Bool) -> Void)?
+    let onRemoteScreenShareFullscreen: (FrontlineRemoteScreenShareSource) -> Void
+
+    @State private var lastMagnificationValue: CGFloat = 1
+
+    private func str(_ key: SerenadaString) -> String {
+        resolveString(key, overrides: strings)
+    }
+
+    private func resolvedContent(for cid: String) -> ResolvedContent? {
+        if let local = contentScene.local, local.ownerCid == cid { return local }
+        return contentScene.remotes.first(where: { $0.ownerCid == cid })
+    }
+
+    private func remote(for cid: String) -> RemoteParticipant? {
+        uiState.remoteParticipants.first(where: { $0.cid == cid })
+    }
+
+    private func isRemoteScreenShareContentTile(_ id: String) -> Bool {
+        guard let key = parseStageTileId(id), key.kind == .content, key.cid != localSpotlightId else { return false }
+        return resolvedContent(for: key.cid)?.type == .screenShare
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                frontlineBlack
+                if let spotlightId, !tiles.isEmpty, let layoutTiles = computedTiles(spotlightId: spotlightId, geometry: geometry) {
+                    ForEach(layoutTiles.sorted(by: { $0.zOrder < $1.zOrder }), id: \.id) { tile in
+                        tileView(tile, spotlightId: spotlightId)
+                            .frame(width: tile.frame.width, height: tile.frame.height)
+                            .clipShape(RoundedRectangle(cornerRadius: tile.cornerRadius))
+                            .position(x: tile.frame.x + tile.frame.width / 2, y: tile.frame.y + tile.frame.height / 2)
+                    }
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .background(frontlineBlack)
+        }
+    }
+
+    private func computedTiles(spotlightId: String, geometry: GeometryProxy) -> [TileLayout]? {
+        let spotlightIsRemoteScreenShare = isRemoteScreenShareContentTile(spotlightId)
+        let spotlightFit: FitMode = frontlineRemoteScreenShareUsesFit(
+            isRemoteScreenShare: spotlightIsRemoteScreenShare,
+            remoteVideoFitCover: remoteVideoFitCover
+        ) ? .contain : .cover
+        if tiles.count == 1 {
+            return [TileLayout(
+                id: spotlightId,
+                type: .participant,
+                frame: LayoutRect(x: 0, y: 0, width: geometry.size.width, height: geometry.size.height),
+                fit: spotlightFit,
+                cornerRadius: 0,
+                zOrder: 0
+            )]
+        }
+        let participants: [SceneParticipant] = tiles.map { tile in
+            SceneParticipant(
+                id: tile.id,
+                role: tile.id == spotlightId ? .local : .remote,
+                videoEnabled: true,
+                videoAspectRatio: tile.kind == .camera ? remoteTileAspectRatios[tile.cid] : nil
+            )
+        }
+        let scene = CallScene(
+            viewportWidth: geometry.size.width,
+            viewportHeight: geometry.size.height,
+            safeAreaInsets: LayoutInsets(),
+            participants: participants,
+            localParticipantId: spotlightId,
+            activeSpeakerId: nil,
+            pinnedParticipantId: spotlightId,
+            contentSource: nil,
+            userPrefs: UserLayoutPrefs(dominantFit: spotlightFit)
+        )
+        return computeLayout(scene: scene).tiles
+    }
+
+    @ViewBuilder
+    private func tileView(_ tile: TileLayout, spotlightId: String) -> some View {
+        if let key = parseStageTileId(tile.id) {
+            let isLocal = key.cid == localSpotlightId
+            let isContent = key.kind == .content
+            let isSpotlight = tile.zOrder == 0
+            let pinned = tile.id == pinnedSpotlightId
+            let localZoomEnabled = isContent && isLocal && frontlineAllowsLocalCameraZoom(
+                phase: uiState.phase,
+                localVideoEnabled: uiState.localVideoEnabled,
+                localCameraMode: uiState.localCameraMode,
+                isScreenSharing: uiState.isScreenSharing
+            )
+            let tileShape = RoundedRectangle(cornerRadius: tile.cornerRadius)
+
+            ZStack(alignment: .bottomLeading) {
+                frontlineSurface
+
+                if isContent {
+                    contentTileBody(key: key)
+                    if localZoomEnabled {
+                        Color.clear
+                            .contentShape(tileShape)
+                            .accessibilityHidden(true)
+                            .simultaneousGesture(localZoomGesture(enabled: true))
+                    }
+                } else {
+                    cameraTileBody(isLocal: isLocal, cid: key.cid, fit: tile.fit)
+                }
+
+                if pinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Color.black.opacity(0.62))
+                        .clipShape(Circle())
+                        .padding(8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+
+                if !isContent {
+                    FrontlineNameChip(
+                        label: cameraName(isLocal: isLocal, cid: key.cid),
+                        muted: isLocal ? !uiState.localAudioEnabled : remote(for: key.cid)?.audioEnabled == false,
+                        audioLevel: isLocal ? uiState.localAudioLevel : remote(for: key.cid)?.audioLevel ?? 0,
+                        compact: true
+                    )
+                    .padding(6)
+                } else {
+                    // Content (screen share) tile: label whose screen this is.
+                    // Content carries no audio, so no mic indicator.
+                    FrontlineContentNameChip(
+                        label: cameraName(isLocal: isLocal, cid: key.cid),
+                        compact: true
+                    )
+                    .padding(6)
+                }
+
+                if isSpotlight && !isLocal && isContent && resolvedContent(for: key.cid)?.type == .screenShare {
+                    FrontlineRemoteFitButton(
+                        remoteVideoFitCover: false,
+                        strings: strings,
+                        onClick: { onRemoteScreenShareFullscreen(.independent(ownerCid: key.cid)) }
+                    )
+                    .padding(8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                } else if isSpotlight && !isLocal && remote(for: key.cid)?.videoEnabled == true {
+                    FrontlineRemoteFitButton(
+                        remoteVideoFitCover: remoteVideoFitCover,
+                        strings: strings,
+                        onClick: toggleRemoteVideoFit
+                    )
+                    .padding(8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+            }
+            .clipShape(tileShape)
+            .overlay {
+                if !isContent && isLocal && uiState.localVideoEnabled {
+                    tileShape
+                        .strokeBorder(frontlineAccent, lineWidth: frontlinePipVideoAccentLineWidth)
+                        .allowsHitTesting(false)
+                }
+            }
+            .contentShape(tileShape)
+            .onTapGesture { selectedSpotlightId = tile.id }
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.5)
+                    .onEnded { _ in
+                        pinnedSpotlightId = tile.id == pinnedSpotlightId ? nil : tile.id
+                    }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func contentTileBody(key: StageTileKey) -> some View {
+        let owner = resolvedContent(for: key.cid)
+        let isLocal = key.cid == localSpotlightId
+        let isRemoteScreenShare = !isLocal && owner?.type == .screenShare
+        WebRTCVideoView(
+            kind: isLocal ? .localContent : .remoteContentForCid(key.cid),
+            rendererProvider: rendererProvider,
+            videoContentMode: frontlineRemoteScreenShareUsesFit(
+                isRemoteScreenShare: isRemoteScreenShare,
+                remoteVideoFitCover: remoteVideoFitCover
+            ) ? .scaleAspectFit : .scaleAspectFill
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if let owner, owner.loading || owner.waitingForParticipants {
+            FrontlineContentStatusOverlay(
+                text: owner.waitingForParticipants
+                    ? str(.callContentWaitingForParticipants)
+                    : str(.callContentConnecting)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func cameraTileBody(isLocal: Bool, cid: String, fit: FitMode) -> some View {
+        if isLocal {
+            if uiState.localVideoEnabled {
+                WebRTCVideoView(
+                    kind: .local,
+                    rendererProvider: rendererProvider,
+                    videoContentMode: fit == .contain ? .scaleAspectFit : .scaleAspectFill,
+                    isMirrored: uiState.isFrontCamera && !uiState.isScreenSharing,
+                    onVideoSizeChanged: { remoteTileAspectRatios[localSpotlightId] = quantizedFrontlineAspectRatio($0) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                FrontlineLocalAvatar(size: 86, fontSize: 34, displayName: uiState.localDisplayName, strings: strings)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else if let remote = remote(for: cid) {
+            if remote.videoEnabled {
+                WebRTCVideoView(
+                    kind: .remoteForCid(cid),
+                    rendererProvider: rendererProvider,
+                    videoContentMode: fit == .contain ? .scaleAspectFit : .scaleAspectFill,
+                    onVideoSizeChanged: { remoteTileAspectRatios[cid] = quantizedFrontlineAspectRatio($0) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                FrontlineAvatar(peerId: remote.peerId, displayName: remoteDisplayName(remote), size: 86, fontSize: 32)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func cameraName(isLocal: Bool, cid: String) -> String {
+        if isLocal {
+            return uiState.localDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? uiState.localDisplayName!
+                : str(.frontlineYou)
+        }
+        return remoteDisplayName(remote(for: cid))
+    }
+
+    private func toggleRemoteVideoFit() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            remoteVideoFitCover.toggle()
+        }
+        onRemoteVideoFitChanged?(remoteVideoFitCover)
+    }
+
+    private func localZoomGesture(enabled: Bool) -> some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                guard enabled else { return }
+                let delta = value / max(lastMagnificationValue, 0.001)
+                lastMagnificationValue = value
+                guard abs(delta - 1) > 0.01 else { return }
+                onAdjustCameraZoom(delta)
+            }
+            .onEnded { _ in lastMagnificationValue = 1 }
+    }
+}
+
 private struct FrontlineMultiPartyStage: View {
     let uiState: CallUiState
     let localSpotlightId: String
@@ -1765,6 +2463,7 @@ private struct FrontlineMultiPartyStage: View {
     let strings: [SerenadaString: String]?
     let onAdjustCameraZoom: (CGFloat) -> Void
     let onRemoteVideoFitChanged: ((Bool) -> Void)?
+    let onRemoteScreenShareFullscreen: (FrontlineRemoteScreenShareSource) -> Void
 
     @State private var lastMagnificationValue: CGFloat = 1
     @State private var localAspectRatio: CGFloat?
@@ -1831,6 +2530,10 @@ private struct FrontlineMultiPartyStage: View {
         let spotlightIsRemote =
             uiState.remoteParticipants.contains { $0.cid == effectiveSpotlight } ||
             (spotlightIsContent && contentSource?.ownerParticipantId != localSpotlightId)
+        let spotlightIsRemoteScreenShare =
+            spotlightIsContent &&
+            contentSource?.ownerParticipantId != localSpotlightId &&
+            contentSource?.type == .screenShare
 
         var participants = uiState.remoteParticipants.map {
             SceneParticipant(
@@ -1840,6 +2543,8 @@ private struct FrontlineMultiPartyStage: View {
                 videoAspectRatio: remoteTileAspectRatios[$0.cid]
             )
         }
+        // LEGACY: keep today's collapse rule (camera swapped into the single
+        // content video).
         if frontlineIncludesNormalLocalStageTile(
             localSpotlightId: localSpotlightId,
             activeContentOwnerId: contentSource?.ownerParticipantId,
@@ -1874,7 +2579,12 @@ private struct FrontlineMultiPartyStage: View {
             activeSpeakerId: nil,
             pinnedParticipantId: spotlightIsContent ? nil : effectiveSpotlight,
             contentSource: spotlightIsContent ? contentSource : nil,
-            userPrefs: UserLayoutPrefs(dominantFit: spotlightIsRemote && !remoteVideoFitCover ? .contain : .cover)
+            userPrefs: UserLayoutPrefs(
+                dominantFit: frontlineRemoteScreenShareUsesFit(
+                    isRemoteScreenShare: spotlightIsRemoteScreenShare,
+                    remoteVideoFitCover: spotlightIsRemote ? remoteVideoFitCover : true
+                ) ? .contain : .cover
+            )
         ))
     }
 
@@ -1887,6 +2597,7 @@ private struct FrontlineMultiPartyStage: View {
         let tileSpotlightId = isContentTile ? (activeContentSpotlightId ?? tile.id) : tile.id
         let isLocal = tile.id == localSpotlightId && !isContentTile
         let isLocalContent = isContentTile && contentOwnerCid == localSpotlightId
+        let isRemoteScreenShare = isContentTile && contentOwnerCid != localSpotlightId && contentSource?.type == .screenShare
         let localZoomEnabled = isLocalContent && frontlineAllowsLocalCameraZoom(
             phase: uiState.phase,
             localVideoEnabled: uiState.localVideoEnabled,
@@ -1915,7 +2626,12 @@ private struct FrontlineMultiPartyStage: View {
             remote: remote,
             uiState: uiState,
             rendererProvider: rendererProvider,
-            videoContentMode: isLocalContent && uiState.isScreenSharing ? .scaleAspectFit : (tile.fit == .contain ? .scaleAspectFit : .scaleAspectFill),
+            videoContentMode: isLocalContent && uiState.isScreenSharing
+                ? .scaleAspectFit
+                : (frontlineRemoteScreenShareUsesFit(
+                    isRemoteScreenShare: isRemoteScreenShare,
+                    remoteVideoFitCover: remoteVideoFitCover
+                ) ? .scaleAspectFit : .scaleAspectFill),
             cornerRadius: tile.cornerRadius,
             pinned: tileSpotlightId == pinnedSpotlightId,
             strings: strings,
@@ -1928,8 +2644,14 @@ private struct FrontlineMultiPartyStage: View {
             localZoomEnabled: localZoomEnabled,
             localZoomGesture: localZoomGesture(enabled: localZoomEnabled),
             showRemoteFitButton: showRemoteFitButton,
-            remoteVideoFitCover: remoteVideoFitCover,
-            onToggleRemoteVideoFit: toggleRemoteVideoFit
+            remoteVideoFitCover: isRemoteScreenShare ? false : remoteVideoFitCover,
+            onToggleRemoteVideoFit: {
+                if isRemoteScreenShare, let contentOwnerCid {
+                    onRemoteScreenShareFullscreen(.legacy(ownerCid: contentOwnerCid))
+                } else {
+                    toggleRemoteVideoFit()
+                }
+            }
         )
     }
 
@@ -1952,13 +2674,7 @@ private struct FrontlineMultiPartyStage: View {
             return ContentSource(type: type, ownerParticipantId: owner, aspectRatio: localAspectRatio)
         }
         if owner == uiState.remoteContentCid {
-            let type: ContentType = {
-                switch uiState.remoteContentType {
-                case ContentTypeWire.worldCamera: return .worldCamera
-                case ContentTypeWire.compositeCamera: return .compositeCamera
-                default: return .screenShare
-                }
-            }()
+            let type = ContentType.fromWire(uiState.remoteContentType)
             return ContentSource(type: type, ownerParticipantId: owner, aspectRatio: remoteTileAspectRatios[owner])
         }
         return nil
@@ -1974,6 +2690,31 @@ private struct FrontlineMultiPartyStage: View {
                 onAdjustCameraZoom(delta)
             }
             .onEnded { _ in lastMagnificationValue = 1 }
+    }
+}
+
+/// Status overlay drawn ON TOP of a Frontline independent content tile while the
+/// content is connecting (media not arrived yet — receiver-side hold) or the local
+/// user is sharing with no participants receiving yet ("waiting for participants").
+/// Never replaces the content sink with a stale frame.
+private struct FrontlineContentStatusOverlay: View {
+    let text: String
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                Text(text)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 

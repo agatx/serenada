@@ -119,7 +119,10 @@ struct RootView: View {
                         onEndCall: {
                             callManager.dismissActiveCall()
                         },
-                        onDismiss: { callManager.dismissActiveCall() }
+                        onDismiss: { callManager.dismissActiveCall() },
+                        // Keep the prebuilt UI in lockstep with the bundled app's
+                        // session opt-in from CallManager.
+                        independentContentVideo: CallManager.independentContentVideoEnabled
                     )
                     .onSnapshotCaptured { result in
                         SnapshotSaver.save(jpegData: result.jpegData) { outcome in
