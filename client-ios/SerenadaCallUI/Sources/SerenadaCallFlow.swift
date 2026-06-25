@@ -37,6 +37,19 @@ public struct SerenadaCallFlow: View {
         let initialRemoteVideoFitCover: Bool
         let onInviteToRoom: (() async -> Result<Void, Error>)?
         let onRemoteVideoFitChanged: ((Bool) -> Void)?
+        /// Local `SerenadaConfig.enableIndependentContentVideo`. Drives whether
+        /// the UI renders a remote share as a dedicated independent content tile
+        /// (per-peer, gated further by the peer's advertised capability) or via
+        /// the legacy single-video path. `config` is private on the session, so
+        /// the URL-first flow (which owns the config) threads it here; the
+        /// session-first public initializer defaults to `false` so the bundled
+        /// flow stays byte-identical to the legacy presentation. Hosts that flip
+        /// the SDK flag pass it via the `independentContentVideo:` initializer.
+        var independentContentEnabled: Bool = false
+        /// Local `SerenadaConfig.videoMediaEnabled`. When `false` the local user
+        /// is an audio-only receiver and ALL content UI is suppressed. Defaults
+        /// to `true` (the SDK default), matching the legacy behavior.
+        var videoMediaEnabled: Bool = true
     }
 
     // MARK: - URL-first init
@@ -69,14 +82,24 @@ public struct SerenadaCallFlow: View {
         onInviteToRoom: (() async -> Result<Void, Error>)? = nil,
         onRemoteVideoFitChanged: ((Bool) -> Void)? = nil,
         onEndCall: (() -> Void)? = nil,
-        onDismiss: (() -> Void)? = nil
+        onDismiss: (() -> Void)? = nil,
+        // Independent screen share (Phase 4b). `SerenadaConfig` is private on the
+        // session, so a host that builds its own session with
+        // `enableIndependentContentVideo=true` must echo the same two flags here
+        // to opt the prebuilt UI into independent content rendering. Default
+        // off/on keeps the bundled flow byte-identical to the legacy
+        // presentation. The SDK flag is the single switch gating both core and UI.
+        independentContentVideo: Bool = false,
+        videoMediaEnabled: Bool = true
     ) {
         self.mode = .sessionFirst(SessionParams(
             session: session,
             roomName: roomName,
             initialRemoteVideoFitCover: initialRemoteVideoFitCover,
             onInviteToRoom: onInviteToRoom,
-            onRemoteVideoFitChanged: onRemoteVideoFitChanged
+            onRemoteVideoFitChanged: onRemoteVideoFitChanged,
+            independentContentEnabled: independentContentVideo,
+            videoMediaEnabled: videoMediaEnabled
         ))
         self.config = config
         self.strings = strings
@@ -169,7 +192,12 @@ private struct URLFirstCallFlow: View {
                         roomName: nil,
                         initialRemoteVideoFitCover: true,
                         onInviteToRoom: nil,
-                        onRemoteVideoFitChanged: nil
+                        onRemoteVideoFitChanged: nil,
+                        // The URL-first flow owns the SerenadaConfig, so it knows
+                        // both independent-content flags and threads them to the
+                        // UI directly (the session does not expose its config).
+                        independentContentEnabled: serenadaConfig.enableIndependentContentVideo,
+                        videoMediaEnabled: serenadaConfig.videoMediaEnabled
                     ),
                     config: config,
                     strings: strings,
@@ -227,6 +255,10 @@ private struct SessionFirstCallFlow: View {
     @ObservedObject private var session: SerenadaSession
     @State private var systemPictureInPictureSource: SystemPictureInPictureSource = .remote(cid: nil)
     @State private var systemPictureInPictureSourceFrame: CGRect?
+    /// Local receive order of active remote content owners (most recent LAST),
+    /// used to pick the primary among multiple simultaneous sharers (design
+    /// "Multiple Sharers", local receive order — no server-stamped ordering).
+    @State private var remoteContentOrder: [String] = []
 
     init(
         params: SerenadaCallFlow.SessionParams,
@@ -291,11 +323,13 @@ private struct SessionFirstCallFlow: View {
                     frontlineCallScreen(state: state, callUiState: callUiState)
                 } else {
                     // Session-first mode renders through bridge using session as renderer provider
+                    let contentScene = resolveScene(state)
                     CallScreenView(
                         roomId: session.roomId,
                         uiState: callUiState,
                         roomShareURL: session.roomUrl,
                         screenShareExtensionBundleId: session.screenShareExtensionBundleId,
+                        screenShareAvailable: session.isScreenShareAvailable,
                         roomName: params.roomName,
                         config: config,
                         strings: strings,
@@ -310,6 +344,7 @@ private struct SessionFirstCallFlow: View {
                         onInviteToRoom: inviteToRoom,
                         onSnapshotRequested: makeSnapshotHandler(),
                         rendererProvider: session,
+                        contentScene: contentScene,
                         initialRemoteVideoFitCover: params.initialRemoteVideoFitCover,
                         onRemoteVideoFitChanged: params.onRemoteVideoFitChanged,
                         onSystemPictureInPictureSourceChanged: { systemPictureInPictureSource = $0 },
@@ -368,6 +403,20 @@ private struct SessionFirstCallFlow: View {
                 )
             }
         }
+        .onChange(of: activeRemoteContentCids(state)) { activeCids in
+            // Maintain LOCAL receive order, most recent LAST: drop owners that
+            // stopped sharing / left, then append newly-active cids at the end.
+            // pickPrimaryContent walks this back-to-front to choose the primary
+            // among multiple simultaneous sharers (design "Multiple Sharers").
+            let active = Set(activeCids)
+            var next = remoteContentOrder.filter { active.contains($0) }
+            for cid in activeCids where !next.contains(cid) {
+                next.append(cid)
+            }
+            if next != remoteContentOrder {
+                remoteContentOrder = next
+            }
+        }
     }
 
     private func frontlineCallScreen(state: CallState, callUiState: CallUiState) -> some View {
@@ -377,9 +426,15 @@ private struct SessionFirstCallFlow: View {
             sessionPhase: state.phase,
             roomShareURL: session.roomUrl,
             screenShareExtensionBundleId: session.screenShareExtensionBundleId,
+            screenShareAvailable: session.isScreenShareAvailable,
             roomName: params.roomName,
             config: config,
             strings: strings,
+            // Resolved independent-content scene (Phase 4b). Flag-off (the default)
+            // ⇒ every owner LEGACY and `resolveFrontlineIndependentContent` returns
+            // nil, so the Frontline legacy single-video-as-content path stays
+            // byte-identical. Reuses the same pure resolver as the standard screen.
+            contentScene: resolveScene(state),
             availableAudioDevices: session.availableAudioDevices,
             currentAudioDevice: session.currentAudioDevice,
             onToggleAudio: { session.toggleAudio() },
@@ -404,7 +459,15 @@ private struct SessionFirstCallFlow: View {
     }
 
     private func toggleScreenShare() {
-        if session.state.localParticipant.cameraMode == .screenShare {
+        // Decide stop-vs-start from the ACTUAL sharing state, not
+        // `cameraMode == .screenShare`. In INDEPENDENT mode the core never sets
+        // `cameraMode = .screenShare` (the screen rides a separate content
+        // track), so keying on cameraMode would make the slash button re-call
+        // `startScreenShare()` and bail at the `isScreenSharing` guard. The
+        // diagnostics flag is the authoritative signal and is true in BOTH the
+        // legacy (cameraMode = .screenShare) and independent paths, so the
+        // legacy stop decision stays identical.
+        if session.diagnostics.isScreenSharing {
             session.stopScreenShare()
         } else {
             session.startScreenShare()
@@ -462,6 +525,51 @@ private struct SessionFirstCallFlow: View {
                 }
             }
         }
+    }
+
+    /// The set of remote cids that are currently presenting active content,
+    /// in the call's stable participant order.
+    private func activeRemoteContentCids(_ state: CallState) -> [String] {
+        state.remoteParticipants
+            .filter { !$0.presumedLost && $0.content?.active == true }
+            .map { $0.cid }
+    }
+
+    /// Resolve the content scene from the rich session `CallState` + the local
+    /// independent-content flags threaded via `SessionParams`. Pure resolver
+    /// (``resolveContentScene``); flag-off ⇒ every owner LEGACY, byte-identical.
+    private func resolveScene(_ state: CallState) -> ContentScene {
+        let local = state.localParticipant
+        let visibleRemotes = state.remoteParticipants.filter { !$0.presumedLost }
+        let input = ResolveContentInput(
+            local: local.cid.map { cid in
+                ContentLocalParticipant(
+                    cid: cid,
+                    isScreenSharing: session.diagnostics.isScreenSharing,
+                    cameraMode: local.cameraMode,
+                    content: local.content
+                )
+            },
+            remotes: visibleRemotes.map { rp in
+                ContentRemoteParticipant(
+                    cid: rp.cid,
+                    content: rp.content,
+                    supportsIndependentContentVideo: rp.supportsIndependentContentVideo
+                )
+            },
+            independentContentEnabled: params.independentContentEnabled,
+            localVideoMediaEnabled: params.videoMediaEnabled,
+            // Core exposes no public "is a content track present" query (same as
+            // Android). Independent mode is gated by the flag + per-peer
+            // capability + content.active in the resolver; once active, we assume
+            // media is present and the content sink renders as frames arrive (a
+            // status overlay covers the brief connecting gap). On-device frame
+            // liveness is not observable here.
+            remoteContentHasMedia: { _ in true },
+            localContentHasMedia: { true },
+            remoteContentOrder: remoteContentOrder
+        )
+        return resolveContentScene(input)
     }
 
     private func mapSessionToUiState(_ session: SerenadaSession) -> CallUiState {
@@ -542,5 +650,19 @@ extension SerenadaSession: CallRendererProvider {
 
     public func detachRemoteRenderer(_ renderer: AnyObject, forCid cid: String) {
         detachRemoteRenderer(renderer, forParticipant: cid)
+    }
+
+    // CallRendererProvider content bridge → SerenadaSession's content renderer
+    // API (`forParticipant:`). Phase 4b independent screen share. The local
+    // content renderer methods (`attachLocalContentRenderer(_:)` /
+    // `detachLocalContentRenderer(_:)`) are already provided by SerenadaSession
+    // (Phase 4a) and satisfy the protocol directly. No-ops when the SDK is
+    // flag-off (the session has no content track / no content slot).
+    public func attachRemoteContentRenderer(_ renderer: AnyObject, forCid cid: String) {
+        attachRemoteContentRenderer(renderer, forParticipant: cid)
+    }
+
+    public func detachRemoteContentRenderer(_ renderer: AnyObject, forCid cid: String) {
+        detachRemoteContentRenderer(renderer, forParticipant: cid)
     }
 }

@@ -286,6 +286,10 @@ const CallRoom: React.FC = () => {
             serverHost: getConfiguredServerHost(),
             logger: new ConsoleSerenadaLogger(),
             turnsOnly,
+            // TEST ENABLE: independent screen-share content stream, for manual
+            // validation. SDK library default is false; revert or gate behind the
+            // legacy-receiver interop gate before production rollout.
+            enableIndependentContentVideo: true,
         });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
         const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });

@@ -34,7 +34,11 @@ class CallService : Service() {
                 mediaProjectionForegroundActive = includeMediaProjection
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification(roomId, roomName))
-                mediaProjectionForegroundActive = false
+                // Pre-Q has no foreground-service-TYPE gating for MediaProjection, so a
+                // running foreground service is sufficient. Mark ready when this start
+                // was for a screen share, else startScreenShareWhenForegroundReady never
+                // passes its gate and the share silently does nothing on old Android.
+                mediaProjectionForegroundActive = includeMediaProjection
             }
         }
         return START_NOT_STICKY

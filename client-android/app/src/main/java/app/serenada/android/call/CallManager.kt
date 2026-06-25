@@ -150,6 +150,10 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
                 transports = transports,
                 proximityMonitoringEnabled = true,
+                // TEST ENABLE: independent screen-share content stream, for manual
+                // validation. SDK library default is false; revert or gate behind the
+                // legacy-receiver interop gate before production rollout.
+                enableIndependentContentVideo = true,
             ),
             context = appContext,
         )

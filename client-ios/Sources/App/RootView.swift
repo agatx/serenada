@@ -119,7 +119,13 @@ struct RootView: View {
                         onEndCall: {
                             callManager.dismissActiveCall()
                         },
-                        onDismiss: { callManager.dismissActiveCall() }
+                        onDismiss: { callManager.dismissActiveCall() },
+                        // The session is built with enableIndependentContentVideo=true
+                        // (CallManager), so the prebuilt UI must echo the flag or it
+                        // resolves every share as LEGACY and never renders the remote
+                        // screen-share content tile (the SDK still negotiates + receives
+                        // the content track; only the UI presentation was gated off).
+                        independentContentVideo: true
                     )
                     .onSnapshotCaptured { result in
                         SnapshotSaver.save(jpegData: result.jpegData) { outcome in

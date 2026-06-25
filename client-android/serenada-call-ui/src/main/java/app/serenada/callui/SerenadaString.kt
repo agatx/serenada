@@ -15,6 +15,10 @@ enum class SerenadaString {
     CallToggleFlashlight,
     CallToggleVideoFit,
     CallTakeSnapshot,
+    /** Shown on a content (screen share) tile while the content media is connecting. */
+    CallContentConnecting,
+    /** Shown on a local content tile when sharing with no participant receiving yet. */
+    CallContentWaitingForParticipants,
     FrontlineYou,
     FrontlineWaiting,
     FrontlineVideo,
@@ -59,6 +63,8 @@ val serenadaDefaultStrings: Map<SerenadaString, String> = mapOf(
     SerenadaString.CallToggleFlashlight to "Toggle flashlight",
     SerenadaString.CallToggleVideoFit to "Toggle video fit",
     SerenadaString.CallTakeSnapshot to "Take photo",
+    SerenadaString.CallContentConnecting to "Connecting screen share...",
+    SerenadaString.CallContentWaitingForParticipants to "Sharing, waiting for participants...",
     SerenadaString.FrontlineYou to "You",
     SerenadaString.FrontlineWaiting to "Waiting",
     SerenadaString.FrontlineVideo to "VIDEO",

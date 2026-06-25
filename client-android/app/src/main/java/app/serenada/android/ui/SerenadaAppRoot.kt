@@ -349,6 +349,10 @@ fun SerenadaAppRoot(
                         SerenadaCallFlow(
                             session = session,
                             initialRemoteVideoFitCover = callManager.isRemoteVideoFitCover,
+                            // Session is built with enableIndependentContentVideo=true
+                            // (CallManager); echo it so the UI renders the remote
+                            // screen-share content tile instead of the legacy path.
+                            independentContentEnabled = true,
                             config = SerenadaCallFlowConfig(
                                 uiVariant = callUiVariant,
                                 screenSharingEnabled = true,
