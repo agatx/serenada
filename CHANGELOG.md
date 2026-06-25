@@ -4,6 +4,21 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] — 2026-06-25
+
+### Added
+- Web, Android, iOS: independent screen-share content video support behind
+  `enableIndependentContentVideo`, allowing capable peers to keep camera video
+  active while sending or receiving screen share on a separate content stream.
+- Web, Android, iOS, server: `content_state` signaling and participant content
+  metadata advertise screen-share activity and revisions so UIs can render
+  dedicated content tiles across one-to-one and multi-party calls.
+
+### Changed
+- Web, Android, iOS: prebuilt call UIs now render independent content streams
+  separately from camera tiles when enabled, while legacy or flag-off peers
+  continue using the single-video screen-share fallback per connection.
+
 ## [0.8.7] — 2026-06-21
 
 ### Added
