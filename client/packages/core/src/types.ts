@@ -37,9 +37,9 @@ export type PeerConnectionState = 'new' | 'connecting' | 'connected' | 'disconne
 export type ParticipantSignalingStatus = 'active' | 'suspended';
 
 /**
- * Latest content (screen share) presentation state for a participant. Surfaced
+ * Active content (screen share) presentation state for a participant. Surfaced
  * on both {@link Participant} and {@link LocalParticipant}. Absent when the
- * participant has no active or recorded content.
+ * participant is not currently sharing content.
  */
 export interface ParticipantContent {
     /** `true` while the participant is presenting content. */
@@ -69,14 +69,16 @@ export interface Participant {
     /**
      * Whether the participant's camera video specifically is enabled. Precise
      * camera signal distinct from {@link videoEnabled} (which carries the legacy
-     * "any video active" meaning). Phase 1 (independent-content flag off):
-     * mirrors {@link videoEnabled}.
+     * "any video active" meaning for older callers). Currently mirrors
+     * {@link videoEnabled}; independent screen-share state is carried by
+     * {@link content}.
      */
     cameraEnabled: boolean;
     videoEnabled: boolean;
     /**
-     * Latest content (screen share) presentation state, or absent when the
-     * participant has no recorded content. Driven by received `content_state`.
+     * Active content (screen share) presentation state, or absent when the
+     * participant is not currently sharing content. Driven by received
+     * `content_state`.
      */
     content?: ParticipantContent;
     /**
@@ -120,14 +122,15 @@ export interface LocalParticipant {
     audioEnabled: boolean;
     /**
      * Whether the local camera video specifically is enabled. Precise camera
-     * signal distinct from {@link videoEnabled}. Phase 1 (independent-content
-     * flag off): mirrors {@link videoEnabled}.
+     * signal distinct from {@link videoEnabled}. Currently mirrors
+     * {@link videoEnabled}; independent screen-share state is carried by
+     * {@link content}.
      */
     cameraEnabled: boolean;
     videoEnabled: boolean;
     /**
-     * Latest local content (screen share) presentation state, or absent when no
-     * content has been shared. Driven by local screen-share state.
+     * Active local content (screen share) presentation state, or absent when
+     * content is not currently being shared. Driven by local screen-share state.
      */
     content?: ParticipantContent;
     cameraMode: CameraMode;

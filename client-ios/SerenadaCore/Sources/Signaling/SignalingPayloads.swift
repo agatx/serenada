@@ -2,6 +2,14 @@ import Foundation
 
 // MARK: - Shared Parsing Helpers
 
+private let maxSafeContentRevision = 9_007_199_254_740_991.0
+
+func parseContentRevision(from value: JSONValue?) -> Int64? {
+    guard case .number(let raw) = value else { return nil }
+    guard raw >= 0, raw <= maxSafeContentRevision, raw.rounded(.towardZero) == raw else { return nil }
+    return Int64(raw)
+}
+
 /// Parse a JSON array of participant objects into typed Participant values.
 func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
     guard let values = arrayValue else { return nil }
@@ -45,7 +53,7 @@ func parseContentState(from value: JSONValue?) -> ParticipantContentState? {
     let contentType = active ? obj["contentType"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty : nil
     let updatedAtMs = obj["updatedAtMs"]?.intValue.map(Int64.init)
     let epoch = obj["epoch"]?.intValue.map(Int64.init)
-    let revision = obj["revision"]?.intValue.map(Int64.init)
+    let revision = parseContentRevision(from: obj["revision"])
     return ParticipantContentState(
         active: active,
         contentType: contentType,
@@ -251,14 +259,14 @@ struct ContentStatePayload {
     }
 
     init(from payload: JSONValue?, sid: String? = nil) {
-        guard let obj = payload?.objectValue else {
+        guard let obj = payload?.objectValue, let activeValue = obj["active"]?.boolValue else {
             fromCid = nil; self.sid = sid; active = false; contentType = nil; revision = nil; return
         }
         fromCid = obj["from"]?.stringValue
         self.sid = sid
-        active = obj["active"]?.boolValue == true
+        active = activeValue
         contentType = active ? obj["contentType"]?.stringValue : nil
-        revision = obj["revision"]?.intValue.map(Int64.init)
+        revision = parseContentRevision(from: obj["revision"])
     }
 }
 

@@ -60,6 +60,7 @@ import type {
     RoomState,
     SignalingMessage,
 } from './signaling/types.js';
+import { parseContentRevision } from './signaling/payloads.js';
 
 /**
  * Internal per-remote content tracking record. `content` is the public-facing
@@ -326,7 +327,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean }>();
     // Remote capabilities/mediaPolicy advertised at join, keyed by CID. Stored
     // verbatim (allowlisted upstream); consumers apply defaults for missing
-    // keys. Phase 1: stored only — no media behavior keys off these yet.
+    // keys. Media routing and UI use these for per-peer independent content
+    // negotiation and video-media policy decisions.
     private readonly remoteCapabilities = new Map<string, ParticipantCapabilities>();
     private readonly remoteMediaPolicies = new Map<string, ParticipantMediaPolicy>();
     // Latest accepted content (screen share) presentation state per remote CID,
@@ -450,7 +452,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     /** Local content (screen share) stream for optional local preview. */
     getLocalContentStream(): MediaStream | null { return this.media.getLocalContentStream(); }
     /** Whether this session negotiated the independent content video path. */
-    get independentContentVideoEnabled(): boolean { return this.config.enableIndependentContentVideo === true; }
+    get independentContentVideoEnabled(): boolean { return this.media.enableIndependentContentVideo; }
     /** Current WebRTC call statistics, or `null` if not yet collecting. */
     get callStats(): CallStats | null { return this.statsCollector.stats; }
     /**
@@ -1176,7 +1178,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const payload = message.payload as Record<string, unknown> | null;
         if (!payload || typeof payload.active !== 'boolean') return;
 
-        const revision = typeof payload.revision === 'number' ? payload.revision : undefined;
+        const revision = parseContentRevision(payload.revision);
         const contentType = typeof payload.contentType === 'string' && payload.contentType !== ''
             ? payload.contentType
             : undefined;
@@ -1244,19 +1246,17 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /**
      * Build the local participant's public content state from local
-     * screen-share state. Absent when not sharing AND no prior content was sent
-     * (revision still 0). When sharing, `active=true`; after a stop the last
-     * revision still reflects the most recent send.
+     * screen-share state. The revision high-water mark stays internal when the
+     * share is inactive; public content is absent unless content is active.
      */
     private buildLocalContent(): ParticipantContent | undefined {
-        const revision = this.media.lastContentRevision;
-        if (!this.media.isScreenSharing && revision === 0) {
+        if (!this.media.isScreenSharing) {
             return undefined;
         }
         return {
-            active: this.media.isScreenSharing,
+            active: true,
             type: 'screenShare',
-            revision,
+            revision: this.media.lastContentRevision,
         };
     }
 
@@ -1417,6 +1417,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 const peerState = this.remoteMediaStates.get(participant.cid);
                 const status = participant.connectionStatus ?? 'active';
                 const videoEnabled = peerState?.videoEnabled ?? participant.videoEnabled ?? true;
+                const trackedContent = this.remoteContentStates.get(participant.cid)?.content;
                 // Per-role inbound liveness for stall diagnostics. Both default
                 // to false until the first liveness sample. Flag off / legacy
                 // peers: the single inbound video routes to `camera`, so
@@ -1427,11 +1428,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
                     displayName: participant.displayName,
                     peerId: participant.peerId,
                     audioEnabled: peerState?.audioEnabled ?? participant.audioEnabled ?? true,
-                    // Phase 1 (independent-content flag off): cameraEnabled
-                    // mirrors the legacy videoEnabled.
+                    // `videoEnabled` remains the camera-specific compatibility
+                    // signal; independent screen-share state is exposed via content.
                     cameraEnabled: videoEnabled,
                     videoEnabled,
-                    content: this.remoteContentStates.get(participant.cid)?.content,
+                    content: trackedContent?.active === true ? trackedContent : undefined,
                     cameraReceiving: roleLiveness.camera,
                     contentReceiving: roleLiveness.content,
                     connectionState: this.media.connectionState,

@@ -53,7 +53,8 @@ public struct LocalParticipant: Equatable {
     public var videoEnabled: Bool = true
     /// Whether the local camera (specifically) is enabled. Distinct from
     /// ``videoEnabled``, which retains its legacy "video active" meaning while
-    /// the independent-content flag is off. Phase 1 mirrors ``videoEnabled``.
+    /// independent screen-share state is carried by ``content``. Currently
+    /// mirrors ``videoEnabled``.
     public var cameraEnabled: Bool = true
     /// Current camera mode (selfie, world, or composite).
     public var cameraMode: LocalCameraMode = .selfie
@@ -116,7 +117,9 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     /// Whether remote video is enabled.
     public var videoEnabled: Bool
     /// Whether the remote camera (specifically) is enabled. Distinct from
-    /// ``videoEnabled`` (legacy "video active"). Phase 1 mirrors ``videoEnabled``.
+    /// ``videoEnabled`` (legacy "video active"). Currently mirrors
+    /// ``videoEnabled`` while independent screen-share state is carried by
+    /// ``content``.
     public var cameraEnabled: Bool
     /// `true` while this peer's CAMERA-role inbound video bytes are advancing
     /// (the camera video is flowing). Mirrors web's `cameraReceiving`. Only

@@ -17,7 +17,7 @@ internal final class SerenadaServerProvider: SignalingProvider {
     @MainActor private var currentRoomId: String?
     @MainActor private var currentMaxParticipants = 4
     /// Mirrors `SerenadaConfig.enableIndependentContentVideo`; advertised in
-    /// `join.capabilities.independentContentVideo`. Phase 1: always false.
+    /// `join.capabilities.independentContentVideo`.
     @MainActor private var currentIndependentContentVideo = false
     /// Mirrors `SerenadaConfig.videoMediaEnabled`; advertised in
     /// `join.mediaPolicy.videoMediaEnabled`.

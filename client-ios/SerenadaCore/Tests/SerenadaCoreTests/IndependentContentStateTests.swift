@@ -172,6 +172,26 @@ final class IndependentContentStateTests: XCTestCase {
         harness.tearDown()
     }
 
+    func testMalformedContentStateWithoutBooleanActiveDoesNotClearContent() async {
+        let harness = SessionTestHarness()
+        await harness.advanceToInCallWithTurn(localCid: "local-cid-1", remoteCid: "remote-cid-1")
+
+        await sendRemoteContentState(harness, from: "remote-cid-1", sid: "S-r", active: true, revision: 1)
+        XCTAssertEqual(remoteContent(harness, cid: "remote-cid-1")?.active, true)
+
+        harness.fakeProvider.simulateMessage(
+            from: "remote-cid-1",
+            type: "content_state",
+            payload: ["from": .string("remote-cid-1"), "revision": .number(2)],
+            sid: "S-r"
+        )
+        await harness.yieldToMainActor()
+
+        XCTAssertEqual(remoteContent(harness, cid: "remote-cid-1")?.active, true)
+        XCTAssertEqual(remoteContent(harness, cid: "remote-cid-1")?.revision, 1)
+        harness.tearDown()
+    }
+
     func testReceiverDiscardsEqualRevisionWithinSameSession() async {
         let harness = SessionTestHarness()
         await harness.advanceToInCallWithTurn(localCid: "local-cid-1", remoteCid: "remote-cid-1")

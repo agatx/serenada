@@ -224,6 +224,17 @@ final class SignalingPayloadsTests: XCTestCase {
         XCTAssertNil(parsed.revision)
     }
 
+    func testContentStatePayloadMissingActiveIsInvalid() {
+        let payload: JSONValue = .object([
+            "from": .string("C-peer"),
+            "contentType": .string("screenShare"),
+        ])
+        let parsed = ContentStatePayload(from: payload)
+        XCTAssertNil(parsed.fromCid)
+        XCTAssertFalse(parsed.active)
+        XCTAssertNil(parsed.revision)
+    }
+
     // MARK: - parseContentState revision
 
     func testParseContentStateParsesRevision() {
@@ -247,6 +258,18 @@ final class SignalingPayloadsTests: XCTestCase {
         ])
         let parsed = parseContentState(from: value)
         XCTAssertNil(parsed?.revision)
+    }
+
+    func testParseContentStateIgnoresMalformedNumericRevisions() {
+        for revision in [-1.0, 1.5, 9_007_199_254_740_992.0] {
+            let value: JSONValue = .object([
+                "active": .bool(true),
+                "contentType": .string("screenShare"),
+                "revision": .number(revision),
+            ])
+            let parsed = parseContentState(from: value)
+            XCTAssertNil(parsed?.revision)
+        }
     }
 
     // MARK: - Participant capabilities / mediaPolicy parse + defaults

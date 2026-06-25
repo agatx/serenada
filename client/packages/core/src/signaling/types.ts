@@ -14,7 +14,7 @@ export type ParticipantContentState = {
     /**
      * Per-participant monotonic generation marker, scoped to the sender's
      * current session (the envelope's `(cid, sid)`). Orders presentation-state
-     * changes; opaque to the server (relayed/persisted verbatim).
+     * changes. Receivers ignore malformed revisions for ordering.
      */
     revision?: number;
 };

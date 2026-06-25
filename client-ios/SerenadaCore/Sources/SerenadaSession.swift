@@ -1653,8 +1653,8 @@ public final class SerenadaSession: ObservableObject {
                 cid: p.cid, displayName: p.displayName, peerId: p.peerId,
                 audioEnabled: audioEnabled,
                 videoEnabled: videoEnabled,
-                // cameraEnabled mirrors videoEnabled until the camera m-line is
-                // wired precisely; the camera/content split is per-peer routing.
+                // `videoEnabled` remains the camera-specific compatibility signal;
+                // `content` carries independent screen-share state.
                 cameraEnabled: videoEnabled,
                 cameraReceiving: liveness.camera,
                 contentReceiving: liveness.content,
@@ -2290,9 +2290,8 @@ public final class SerenadaSession: ObservableObject {
     ) {
         var nextState = state; var nextDiag = diagnostics
         mutate(&nextState, &nextDiag)
-        // Phase 1: local cameraEnabled mirrors videoEnabled (legacy meaning);
-        // local content reflects the last broadcast content_state. Enforced
-        // centrally so every mutation path keeps the invariants.
+        // Keep local camera state and independent content state in sync with the
+        // canonical session fields on every snapshot.
         nextState.localParticipant.cameraEnabled = nextState.localParticipant.videoEnabled
         nextState.localParticipant.content = localContent
         nextState.phase = currentRequiredPermissions != nil ? .awaitingPermissions : mapPhase(internalPhase)

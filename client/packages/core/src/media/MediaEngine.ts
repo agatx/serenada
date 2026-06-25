@@ -979,6 +979,7 @@ export class MediaEngine {
             let cameraBytes = 0;
             let contentBytes = 0;
             const contentTrackId = this.roleReceiverTrackId(peer, 'content');
+            const contentMid = this.roleReceiverMid(peer, 'content');
             try {
                 const report = await peer.pc.getStats();
                 report.forEach((stat) => {
@@ -988,7 +989,10 @@ export class MediaEngine {
                     const kind = getStatString(stat, 'kind') ?? getStatString(stat, 'mediaType');
                     if (kind !== 'video') return;
                     const trackId = getStatString(stat, 'trackIdentifier');
-                    if (contentTrackId !== null && trackId === contentTrackId) {
+                    const mid = getStatString(stat, 'mid');
+                    const matchesContentTrack = contentTrackId !== null && trackId === contentTrackId;
+                    const matchesContentMid = trackId === null && contentMid !== null && mid === contentMid;
+                    if (matchesContentTrack || matchesContentMid) {
                         contentBytes += value;
                     } else {
                         // Camera role, legacy single video, or any video stat we
@@ -1057,6 +1061,12 @@ export class MediaEngine {
         const transceiver = peer.mediaRoles[role];
         const id = transceiver?.receiver?.track?.id;
         return typeof id === 'string' && id !== '' ? id : null;
+    }
+
+    /** Receiver m-line id bound to a peer's role transceiver, if any. */
+    private roleReceiverMid(peer: PeerState, role: VideoRole): string | null {
+        const mid = peer.mediaRoles[role]?.mid;
+        return typeof mid === 'string' && mid !== '' ? mid : null;
     }
 
     destroy(): void {

@@ -139,7 +139,7 @@ class IndependentScreenShareContractTest {
     }
 
     @Test
-    fun `independent screen share signals content_state before attach and populates local content`() {
+    fun `independent screen share signals content_state after start succeeds and populates local content`() {
         factory = newFactory(enableIndependentContentVideo = true)
         factory.advanceToInCallWithCapablePeer(remoteIndependentCapable = true)
 
@@ -160,7 +160,7 @@ class IndependentScreenShareContractTest {
     }
 
     @Test
-    fun `independent screen share start failure rolls back content_state`() {
+    fun `independent screen share start failure does not emit content_state`() {
         factory = newFactory(enableIndependentContentVideo = true)
         factory.advanceToInCallWithCapablePeer(remoteIndependentCapable = true)
         factory.fakeMedia.startScreenShareResult = false
@@ -169,11 +169,7 @@ class IndependentScreenShareContractTest {
         ShadowLooper.idleMainLooper()
 
         assertFalse(factory.session.diagnostics.value.isScreenSharing)
-        // Active broadcast then a strictly-greater rollback to inactive.
-        val states = contentStates()
-        assertTrue(states.size >= 2)
-        assertEquals(true, states[states.size - 2].payload?.optBoolean("active"))
-        assertEquals(false, states.last().payload?.optBoolean("active"))
+        assertTrue("failed start should stay silent", contentStates().isEmpty())
         assertNull(factory.session.state.value.localContent)
     }
 

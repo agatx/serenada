@@ -336,4 +336,20 @@ class SignalingPayloadsTest {
         assertTrue(content.active)
         assertNull(content.revision)
     }
+
+    @Test
+    fun toParticipantList_ignoresUnsafeContentStateRevision() {
+        val arr = JSONArray().apply {
+            put(JSONObject().apply {
+                put("cid", "C-1")
+                put("contentState", JSONObject().apply {
+                    put("active", true)
+                    put("revision", 9_007_199_254_740_992L)
+                })
+            })
+        }
+        val content = arr.toParticipantList().single().contentState!!
+        assertTrue(content.active)
+        assertNull(content.revision)
+    }
 }

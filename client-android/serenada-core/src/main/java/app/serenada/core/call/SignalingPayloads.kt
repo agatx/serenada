@@ -4,6 +4,8 @@ import app.serenada.core.ParticipantSignalingStatus
 import org.json.JSONArray
 import org.json.JSONObject
 
+private const val MAX_SAFE_CONTENT_REVISION = 9_007_199_254_740_991L
+
 /**
  * Typed payload data classes for inbound signaling messages.
  * Replaces raw JSONObject parsing scattered across SerenadaSession.
@@ -206,7 +208,7 @@ internal fun JSONObject.optRevision(): Long? {
         is Int -> value.toLong()
         is Long -> value
         else -> null
-    }?.takeIf { it >= 0 }
+    }?.takeIf { it in 0..MAX_SAFE_CONTENT_REVISION }
 }
 
 /**

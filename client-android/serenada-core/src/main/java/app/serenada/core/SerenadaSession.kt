@@ -973,18 +973,16 @@ class SerenadaSession internal constructor(
     /**
      * Independent content share path (flag on): the screen rides a SEPARATE
      * content track, so the camera preference is NOT touched (pitfall #6) and
-     * `cameraMode` is never set to screenShare. Signal `content_state` BEFORE the
-     * per-peer attach inside the engine (pitfall #9), rolling back on failure.
+     * `cameraMode` is never set to screenShare. Signal `content_state` only after
+     * capture/attach succeeds so peers do not render a transient failed share.
      */
     private fun startScreenShareIndependent(intent: Intent) {
-        broadcastLocalContentState(true, ContentTypeWire.SCREEN_SHARE)
         if (!webRtcEngine.startScreenShare(intent)) {
-            // Roll back the content_state we signaled (strictly greater revision).
-            broadcastLocalContentState(false)
             logger?.log(SerenadaLogLevel.WARNING, "Session", "Failed to start screen sharing")
             return
         }
         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = true))
+        broadcastLocalContentState(true, ContentTypeWire.SCREEN_SHARE)
     }
 
     /** Stop screen sharing and return to camera. */
@@ -1292,8 +1290,8 @@ class SerenadaSession internal constructor(
                 callStartedAtMs = callStartTimeMs,
                 localAudioEnabled = config.defaultAudioEnabled,
                 localVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled,
-                // The camera/content media split is not yet precise; localCameraEnabled
-                // intentionally tracks localVideoEnabled until the camera m-line is wired.
+                // `localVideoEnabled` remains the camera-specific compatibility
+                // signal; independent screen share is exposed via localContent.
                 localCameraEnabled = videoCaptureSupported && config.defaultVideoEnabled,
                 localContent = null,
                 localDisplayName = displayName,
@@ -1664,8 +1662,8 @@ class SerenadaSession internal constructor(
                 peerId = participant?.peerId,
                 audioEnabled = audioEnabled,
                 videoEnabled = videoEnabled,
-                // The camera/content media split is not yet precise; cameraEnabled
-                // intentionally tracks videoEnabled until the camera m-line is wired.
+                // `videoEnabled` is the legacy/public camera signal. Keep
+                // `cameraEnabled` mirrored here for backward-compatible callers.
                 cameraEnabled = videoEnabled,
                 content = remoteContentStates[cid],
                 cameraReceiving = roleLiveness.camera,
@@ -2341,8 +2339,8 @@ class SerenadaSession internal constructor(
         val requestedEnabled = userPreferredVideoEnabled && !shouldPause
         val effectiveEnabled = webRtcEngine.toggleVideo(requestedEnabled)
         if (_state.value.localVideoEnabled != effectiveEnabled) {
-            // The camera/content media split is not yet precise; localCameraEnabled
-            // intentionally tracks localVideoEnabled until the camera m-line is wired.
+            // `localVideoEnabled` remains the camera-specific public signal in
+            // independent mode; `localContent` carries screen-share state.
             updateState(_state.value.copy(localVideoEnabled = effectiveEnabled, localCameraEnabled = effectiveEnabled))
             broadcastLocalMediaState()
         }

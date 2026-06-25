@@ -164,7 +164,8 @@ Join a room.
   not supported in this protocol version.
 - Allowlisted values are stored per participant from the latest successful join.
   If a later join/reconnect omits `capabilities` or `mediaPolicy`, the server
-  clears the omitted object and receivers apply the protocol defaults.
+  preserves the previously stored object for that participant. A present but
+  empty object clears the stored allowlisted values back to receiver defaults.
 
 **Server behavior**
 - Validate `rid` as a signed 27-character room token (generated via `/api/room-id`).
@@ -331,8 +332,9 @@ Fields:
   per-share revision below.
 - `revision` *(number, optional)*: the sender's monotonically increasing
   content-transition counter (see section 4.3.1 for receiver tracking, which is
-  keyed by `cid`). Persisted and relayed verbatim; the server does not compare
-  revisions.
+  keyed by `cid`). Safe non-negative integer revisions are persisted; live
+  relay preserves the payload verbatim so receivers must ignore malformed
+  revisions before applying ordering.
 
 Older servers may omit `contentState` entirely; SDKs should treat that as
 "unknown — preserve current local state" rather than implicitly clearing.
@@ -414,17 +416,19 @@ persisted form, the field meanings, and the reconnect-aware lifecycle).
 - `active` *(boolean, required)*: whether the sender is currently sharing.
 - `contentType` *(string, optional)*: present only when `active`; `"screenShare"`.
 - `revision` *(number, required when sending)*: the sender's monotonically
-  increasing counter. Every state change increments it, including a rollback to
-  `active:false`, which uses a strictly greater `revision` than the `active:true`
-  it supersedes. Receivers track it keyed by `cid` (see Receiver behavior below).
+  increasing safe non-negative integer counter. Every state change increments
+  it, including a rollback to `active:false`, which uses a strictly greater
+  `revision` than the `active:true` it supersedes. Receivers track it keyed by
+  `cid` (see Receiver behavior below).
 
 **Server behavior**
 - Relays the message to other participants verbatim (the server adds `from` =
-  sender CID; `revision` passes through untouched).
-- Persists the latest value (including `revision`) on the sender's participant
-  record, scoped to the owning `sid`. The server does **not** compare or order
-  revisions — it stores latest-wins and lets receivers apply the ordering rules
-  below.
+  sender CID; live `revision` passes through untouched).
+- Persists the latest value on the sender's participant record, scoped to the
+  owning `sid`. A `revision` is persisted only when it is a safe non-negative
+  integer; fractional, negative, unsafe, or non-number values are ignored for
+  the persisted snapshot. The server does **not** compare or order revisions —
+  it stores latest-wins and lets receivers apply the ordering rules below.
 
 **Receiver behavior (revision semantics)**
 
@@ -435,6 +439,9 @@ The server relays `content_state` with `from = senderCID` and **no envelope
 - Within a given `cid`, the receiver keeps only the **highest** `revision` and
   discards any `revision` ≤ the one it already tracks (handles out-of-order
   delivery, e.g. a stale `active:false` arriving after a newer `active:true`).
+- Receivers ignore malformed revisions (fractional, negative, unsafe, or
+  non-number) for ordering. The rest of an otherwise valid `content_state`
+  message is handled as revisionless for compatibility with older senders.
 - The receiver resets its tracked revision for a `cid` when that participant
   leaves (absent from the next `room_state`). A genuine rejoin yields a **new
   `cid`** and therefore fresh tracking, so a rejoin that restarts at

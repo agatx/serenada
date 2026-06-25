@@ -172,9 +172,9 @@ final class SignalingMessageRouter {
         switch message.type {
         case "content_state":
             let fromCid = message.payload?["from"]?.stringValue ?? message.from
-            let active = message.payload?["active"]?.boolValue == true
+            guard let active = message.payload?["active"]?.boolValue else { return }
             let contentType = active ? message.payload?["contentType"]?.stringValue : nil
-            let revision = message.payload?["revision"]?.intValue.map(Int64.init)
+            let revision = parseContentRevision(from: message.payload?["revision"])
             onContentState(ContentStatePayload(fromCid: fromCid, sid: message.sid, active: active, contentType: contentType, revision: revision))
         case "participant_media_state":
             let payload = MediaStatePayload(from: message.payload.map { .object($0) })

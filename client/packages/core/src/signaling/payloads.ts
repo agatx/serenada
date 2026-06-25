@@ -88,6 +88,12 @@ export interface IceCandidatePayload {
     offerId?: string;
 }
 
+export function parseContentRevision(raw: unknown): number | undefined {
+    return typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0
+        ? raw
+        : undefined;
+}
+
 function parseContentState(raw: unknown): ParticipantContentState | undefined {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
     const rec = raw as Record<string, unknown>;
@@ -97,7 +103,7 @@ function parseContentState(raw: unknown): ParticipantContentState | undefined {
         contentType: typeof rec.contentType === 'string' && rec.contentType !== '' ? rec.contentType : undefined,
         updatedAtMs: typeof rec.updatedAtMs === 'number' ? rec.updatedAtMs : undefined,
         epoch: typeof rec.epoch === 'number' ? rec.epoch : undefined,
-        revision: typeof rec.revision === 'number' ? rec.revision : undefined,
+        revision: parseContentRevision(rec.revision),
     };
 }
 

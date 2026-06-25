@@ -23,7 +23,7 @@ data class JoinOptions(
     val appPeerId: String? = null,
     /**
      * Advertised as `capabilities.independentContentVideo` at `join`. Mirrors
-     * [SerenadaConfig.enableIndependentContentVideo]. Phase 1: always false.
+     * [SerenadaConfig.enableIndependentContentVideo].
      */
     val independentContentVideo: Boolean = false,
     /**

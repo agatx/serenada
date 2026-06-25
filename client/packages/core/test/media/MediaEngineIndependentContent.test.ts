@@ -133,17 +133,24 @@ class FakePeerConnection {
      * receiver track id. `role` index: video transceivers sorted by mid →
      * [0]=camera, [1]=content. `legacy` writes the single video transceiver.
      */
-    setInboundVideoBytes(opts: { camera?: number; content?: number; legacy?: number }): void {
+    setInboundVideoBytes(
+        opts: { camera?: number; content?: number; legacy?: number },
+        statOpts: { omitTrackIdentifier?: boolean } = {},
+    ): void {
         const videoTransceivers = this.transceivers
             .filter(t => t.kind === 'video')
             .sort((a, b) => Number(a.mid) - Number(b.mid));
         const write = (transceiver: FakeTransceiver | undefined, bytes: number, key: string) => {
             const trackId = transceiver?.receiver?.track?.id;
             if (!trackId) return;
-            this.statsReport.set(key, {
+            const stat: Record<string, unknown> = {
                 type: 'inbound-rtp', id: key, timestamp: Date.now(),
-                kind: 'video', trackIdentifier: trackId, bytesReceived: bytes,
-            } as unknown as RTCStats);
+                kind: 'video', mid: transceiver?.mid, bytesReceived: bytes,
+            };
+            if (!statOpts.omitTrackIdentifier) {
+                stat.trackIdentifier = trackId;
+            }
+            this.statsReport.set(key, stat as unknown as RTCStats);
         };
         if (opts.camera !== undefined) write(videoTransceivers[0], opts.camera, 'in-camera');
         if (opts.content !== undefined) write(videoTransceivers[1], opts.content, 'in-content');
@@ -1506,6 +1513,17 @@ describe('MediaEngine independent content', () => {
             peer.setInboundVideoBytes({ camera: 1000, content: 2000 });
             await h.engine.sampleInboundRoleLiveness();
             peer.setInboundVideoBytes({ camera: 1500, content: 5000 });
+            await h.engine.sampleInboundRoleLiveness();
+            expect(h.engine.getRoleLiveness('zeta')).toEqual({ camera: true, content: true });
+        });
+
+        it('falls back to content mid when inbound stats omit trackIdentifier', async () => {
+            const h = makeEngine({ enableIndependentContentVideo: true });
+            await joinAsOwnerCapable(h);
+            const peer = capablePeer(h);
+            peer.setInboundVideoBytes({ camera: 1000, content: 2000 }, { omitTrackIdentifier: true });
+            await h.engine.sampleInboundRoleLiveness();
+            peer.setInboundVideoBytes({ camera: 1500, content: 5000 }, { omitTrackIdentifier: true });
             await h.engine.sampleInboundRoleLiveness();
             expect(h.engine.getRoleLiveness('zeta')).toEqual({ camera: true, content: true });
         });

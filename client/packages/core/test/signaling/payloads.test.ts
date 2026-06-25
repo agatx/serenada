@@ -436,6 +436,16 @@ describe('parseParticipants — independent screen share fields', () => {
         expect(result?.participants[0].contentState?.revision).toBeUndefined();
     });
 
+    it('omits malformed numeric revisions', () => {
+        for (const revision of [1.5, -1, Number.MAX_SAFE_INTEGER + 1]) {
+            const result = parseJoinedPayload({
+                hostCid: 'h',
+                participants: [{ cid: 'a', contentState: { active: true, revision } }],
+            });
+            expect(result?.participants[0].contentState?.revision).toBeUndefined();
+        }
+    });
+
     it('parses allowlisted capabilities keys', () => {
         const result = parseJoinedPayload({
             hostCid: 'h',

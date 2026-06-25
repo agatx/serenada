@@ -35,10 +35,8 @@ data class SerenadaConfig(
      * share) video stream. Advertised at `join` as
      * `capabilities.independentContentVideo`. Immutable per session.
      *
-     * Defaults to false. Until the platform's media engine and UI/API surface
-     * fully consume content video, this must stay false so the client keeps the
-     * legacy single-video screen-share behavior. Phase 1 only signals the flag;
-     * it does not change any media behavior.
+     * Defaults to false so external integrators keep the legacy single-video
+     * screen-share behavior until their UI can render the content stream.
      */
     val enableIndependentContentVideo: Boolean = false,
     /**

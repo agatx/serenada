@@ -31,8 +31,9 @@ data class RemoteParticipant(
     val videoEnabled: Boolean,
     /**
      * Camera video specifically. In the current (flag-off) build this mirrors
-     * [videoEnabled]; once independent content video ships it reports
-     * camera-active independently from screen share.
+     * [videoEnabled]; in independent content mode `videoEnabled` is also kept as
+     * the camera-specific compatibility signal while `content` carries screen
+     * share state.
      */
     val cameraEnabled: Boolean = videoEnabled,
     /**

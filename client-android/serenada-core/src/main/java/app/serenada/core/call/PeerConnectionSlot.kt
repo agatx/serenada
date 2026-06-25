@@ -889,12 +889,14 @@ internal class PeerConnectionSlot(
             ))
             return
         }
-        // Receiver track id bound to the content role, if any. Captured before
-        // getStats so the match is against the role bound at sample time. Null
-        // for legacy peers and the flag-off path (no content transceiver), so
-        // every video stat falls through to the camera bucket.
+        // Receiver track id and m-line id bound to the content role, if any.
+        // Prefer track id when WebRTC reports it, but fall back to mid when
+        // trackIdentifier is absent so content stats are not mis-attributed as
+        // camera. Null for legacy peers and the flag-off path, so every video
+        // stat falls through to the camera bucket.
         val contentTrackId = contentTransceiver?.receiver?.track()?.id()
             ?.takeIf { it.isNotEmpty() }
+        val contentMid = contentTransceiver?.mid?.takeIf { it.isNotEmpty() }
         pc.getStats { report ->
             var bytes = 0L
             var cameraBytes = 0L
@@ -905,7 +907,10 @@ internal class PeerConnectionSlot(
                 bytes += statBytes
                 if (getMediaKind(stat) != "video") continue
                 val trackId = memberString(stat, "trackIdentifier")
-                if (contentTrackId != null && trackId == contentTrackId) {
+                val mid = memberString(stat, "mid")
+                val matchesContentTrack = contentTrackId != null && trackId == contentTrackId
+                val matchesContentMid = trackId == null && contentMid != null && mid == contentMid
+                if (matchesContentTrack || matchesContentMid) {
                     contentBytes += statBytes
                 } else {
                     cameraBytes += statBytes

@@ -150,11 +150,45 @@ describe('SerenadaSession — independent screen share (Phase 1)', () => {
                 payload: { active: false, revision: 2 },
                 sid: 'S-1',
             });
-            expect(remote('peer-1')?.content).toEqual({
-                active: false,
-                type: 'screenShare',
-                revision: 2,
+            expect(remote('peer-1')?.content).toBeUndefined();
+        });
+
+        it('ignores malformed live revisions for ordering without poisoning the high-water mark', () => {
+            joinInCall(['peer-1']);
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'content_state',
+                payload: { active: true, contentType: 'screenShare', revision: 5 },
+                sid: 'S-1',
             });
+
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'content_state',
+                payload: { active: true, contentType: 'screenShare', revision: Number.MAX_SAFE_INTEGER + 1 },
+                sid: 'S-1',
+            });
+            expect(remote('peer-1')?.content).toEqual({
+                active: true,
+                type: 'screenShare',
+                revision: 0,
+            });
+
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'content_state',
+                payload: { active: false, revision: 5 },
+                sid: 'S-1',
+            });
+            expect(remote('peer-1')?.content?.active).toBe(true);
+
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'content_state',
+                payload: { active: false, revision: 6 },
+                sid: 'S-1',
+            });
+            expect(remote('peer-1')?.content).toBeUndefined();
         });
 
         it('supersedes by identity when a new sid arrives, even with a lower revision', () => {
@@ -282,11 +316,7 @@ describe('SerenadaSession — independent screen share (Phase 1)', () => {
                     { peerId: 'peer-1', joinedAt: 2, contentState: { active: false, contentType: 'screenShare', revision: 6 } },
                 ],
             });
-            expect(remote('peer-1')?.content).toEqual({
-                active: false,
-                type: 'screenShare',
-                revision: 6,
-            });
+            expect(remote('peer-1')?.content).toBeUndefined();
         });
 
         it('does not let a revisionless snapshot overwrite a cached live state', () => {
@@ -361,14 +391,10 @@ describe('SerenadaSession — independent screen share (Phase 1)', () => {
                 revision: 1,
             });
 
-            // After stopping, content reflects active:false but keeps the latest
-            // revision from the most recent send.
+            // After stopping, public content is absent; the latest revision stays
+            // internal so the next send remains monotonic.
             harness.media.emit({ isScreenSharing: false, lastContentRevision: 2 });
-            expect(harness.state.localParticipant?.content).toEqual({
-                active: false,
-                type: 'screenShare',
-                revision: 2,
-            });
+            expect(harness.state.localParticipant?.content).toBeUndefined();
         });
 
         it('seeds local content revision from recovered snapshots', () => {
@@ -385,11 +411,7 @@ describe('SerenadaSession — independent screen share (Phase 1)', () => {
             });
 
             expect(harness.media.lastContentRevision).toBe(7);
-            expect(harness.state.localParticipant?.content).toEqual({
-                active: false,
-                type: 'screenShare',
-                revision: 7,
-            });
+            expect(harness.state.localParticipant?.content).toBeUndefined();
 
             harness.signaling.emitRoomStateUpdated({
                 hostPeerId: 'me',
