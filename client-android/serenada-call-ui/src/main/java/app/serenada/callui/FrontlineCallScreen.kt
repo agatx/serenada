@@ -332,18 +332,26 @@ internal fun FrontlineCallScreen(
         pipFeed != null &&
             uiState.localVideoEnabled &&
             remote != null
-    val frontlineStageTiles =
+    val frontlineStageTiles = remember(streamKeyedStageActive, uiState.remoteParticipants, localSpotlightId, contentScene) {
         if (streamKeyedStageActive) {
             val cameras =
                 uiState.remoteParticipants.map {
-                    StageCameraParticipant(cid = it.cid, isLocal = false, cameraOn = it.videoEnabled)
-                } + StageCameraParticipant(cid = localSpotlightId, isLocal = true, cameraOn = uiState.localVideoEnabled)
+                    StageCameraParticipant(cid = it.cid, isLocal = false)
+                } + StageCameraParticipant(cid = localSpotlightId, isLocal = true)
             deriveStageTiles(cameras = cameras, content = contentScene.all)
         } else {
             emptyList()
         }
-    val frontlineStageTileIds = frontlineStageTiles.map { it.id }.toSet()
-    val frontlineStageSpotlightId =
+    }
+    val frontlineStageTileIds = remember(frontlineStageTiles) { frontlineStageTiles.map { it.id }.toSet() }
+    val frontlineStageSpotlightId = remember(
+        frontlineStageTiles,
+        frontlineStageTileIds,
+        lastVideoStartedParticipantId,
+        contentScene.primary,
+        pinnedSpotlightId,
+        selectedSpotlightId,
+    ) {
         if (frontlineStageTiles.isEmpty()) {
             null
         } else {
@@ -358,6 +366,7 @@ internal fun FrontlineCallScreen(
                 ?: recencyDefaultId
                 ?: defaultSpotlightId
         }
+    }
     val spotlightedRemoteScreenShareSource = when {
         !isCallSurfacePhase -> null
         streamKeyedStageActive -> {
@@ -1611,8 +1620,8 @@ private fun FrontlineStreamKeyedStage(
     // content tile per INDEPENDENT sharer (incl the local user's own screen).
     val cameras = remember(uiState.remoteParticipants, localId, uiState.localVideoEnabled) {
         uiState.remoteParticipants.map {
-            StageCameraParticipant(cid = it.cid, isLocal = false, cameraOn = it.videoEnabled)
-        } + StageCameraParticipant(cid = localId, isLocal = true, cameraOn = uiState.localVideoEnabled)
+            StageCameraParticipant(cid = it.cid, isLocal = false)
+        } + StageCameraParticipant(cid = localId, isLocal = true)
     }
     val stageTiles = remember(cameras, contentScene) {
         deriveStageTiles(cameras = cameras, content = contentScene.all)

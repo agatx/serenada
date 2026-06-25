@@ -272,9 +272,9 @@ struct FrontlineCallScreenView: View {
         guard useIndependentContentStage else { return [] }
         let cameras: [StageCameraParticipant] =
             uiState.remoteParticipants.map {
-                StageCameraParticipant(cid: $0.cid, isLocal: false, cameraOn: $0.videoEnabled)
+                StageCameraParticipant(cid: $0.cid, isLocal: false)
             }
-            + [StageCameraParticipant(cid: localSpotlightId, isLocal: true, cameraOn: uiState.localVideoEnabled)]
+            + [StageCameraParticipant(cid: localSpotlightId, isLocal: true)]
         return deriveStageTiles(cameras: cameras, content: stageContentAll)
     }
 

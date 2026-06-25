@@ -652,11 +652,10 @@ fun resolveStreamKeyedSnapshotSource(
         ?.let { SnapshotSource.Remote(it.cid) }
 }
 
-/** A participant whose camera state the stage needs (local or remote). */
+/** A participant whose camera/avatar tile the stage needs (local or remote). */
 data class StageCameraParticipant(
     val cid: String,
     val isLocal: Boolean,
-    val cameraOn: Boolean,
 )
 
 /**
@@ -664,10 +663,10 @@ data class StageCameraParticipant(
  *
  * Order (stable, matches the engine's "local last" filmstrip convention):
  *   1. remote camera tiles (input order),
- *   2. local camera tile (if camera on),
+ *   2. local camera tile,
  *   3. content tiles (input order; local content last via [ContentScene.all]).
  *
- * A sharer's camera and content are BOTH present when both are on. Content tiles
+ * A sharer's camera/avatar tile and content are BOTH present. Content tiles
  * are emitted only for INDEPENDENT content; a legacy single-video sharer shows up
  * as their camera tile (the screen replaced the camera), so they are NOT
  * duplicated as a content tile. Audio-only peers (camera off, no content)

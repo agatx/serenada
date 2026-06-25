@@ -761,8 +761,8 @@ class ContentRenderingTest {
         waitingForParticipants = false,
     )
 
-    private fun cam(cid: String, isLocal: Boolean, cameraOn: Boolean) =
-        StageCameraParticipant(cid = cid, isLocal = isLocal, cameraOn = cameraOn)
+    private fun cam(cid: String, isLocal: Boolean) =
+        StageCameraParticipant(cid = cid, isLocal = isLocal)
 
     // ---- pickPrimaryContent ----------------------------------------------------
 
@@ -862,7 +862,7 @@ class ContentRenderingTest {
     fun deriveStageTiles_includesSharersOwnCameraAsRealTile() {
         // The sharer r1 has BOTH a camera tile and a content tile.
         val tiles = deriveStageTiles(
-            cameras = listOf(cam("r1", false, true), cam("me", true, true)),
+            cameras = listOf(cam("r1", false), cam("me", true)),
             content = listOf(resolvedContent(ownerCid = "r1")),
         )
         val ids = tiles.map { it.id }
@@ -874,7 +874,7 @@ class ContentRenderingTest {
     @Test
     fun deriveStageTiles_showsLocalOwnScreenAsContentTile() {
         val tiles = deriveStageTiles(
-            cameras = listOf(cam("me", true, true)),
+            cameras = listOf(cam("me", true)),
             content = listOf(resolvedContent(ownerCid = "me", isLocal = true)),
         )
         val selfScreen = tiles.first { it.id == "me::content" }
@@ -884,7 +884,7 @@ class ContentRenderingTest {
     @Test
     fun deriveStageTiles_ordersRemoteCamerasThenLocalCameraThenContent() {
         val tiles = deriveStageTiles(
-            cameras = listOf(cam("r1", false, true), cam("me", true, true)),
+            cameras = listOf(cam("r1", false), cam("me", true)),
             content = listOf(resolvedContent(ownerCid = "r1")),
         )
         assertEquals(listOf("r1::camera", "me::camera", "r1::content"), tiles.map { it.id })
@@ -895,7 +895,7 @@ class ContentRenderingTest {
         // Video-off participants keep an avatar/placeholder camera tile (identity +
         // audio status) so the filmstrip never collapses to a single stretched tile.
         val tiles = deriveStageTiles(
-            cameras = listOf(cam("r1", false, false), cam("me", true, true)),
+            cameras = listOf(cam("r1", false), cam("me", true)),
             content = listOf(resolvedContent(ownerCid = "r1")),
         )
         val ids = tiles.map { it.id }
@@ -909,7 +909,7 @@ class ContentRenderingTest {
         // Every participant shows in the filmstrip; a camera-off peer gets an avatar
         // camera tile rather than being dropped.
         val tiles = deriveStageTiles(
-            cameras = listOf(cam("r1", false, true), cam("r2", false, false), cam("me", true, true)),
+            cameras = listOf(cam("r1", false), cam("r2", false), cam("me", true)),
             content = listOf(resolvedContent(ownerCid = "r1")),
         )
         assertTrue(tiles.any { it.id == "r2::camera" })
@@ -931,7 +931,7 @@ class ContentRenderingTest {
         // video IS the content. r2's screen already renders as its camera tile, so
         // it must NOT also get a content tile (that would show one stream twice).
         val tiles = deriveStageTiles(
-            cameras = listOf(cam("r1", false, true), cam("r2", false, true)),
+            cameras = listOf(cam("r1", false), cam("r2", false)),
             content = listOf(
                 resolvedContent(ownerCid = "r1", mode = ContentMode.INDEPENDENT),
                 resolvedContent(ownerCid = "r2", mode = ContentMode.LEGACY),
@@ -946,7 +946,7 @@ class ContentRenderingTest {
     // ---- pickStageSpotlightTileId ----------------------------------------------
 
     private fun spotlightTiles() = deriveStageTiles(
-        cameras = listOf(cam("r1", false, true), cam("me", true, true)),
+        cameras = listOf(cam("r1", false), cam("me", true)),
         content = listOf(resolvedContent(ownerCid = "r1"), resolvedContent(ownerCid = "r2")),
     )
 
@@ -1015,7 +1015,7 @@ class ContentRenderingTest {
         assertTrue(scene.all.any { it.mode == ContentMode.INDEPENDENT })
 
         val tiles = deriveStageTiles(
-            cameras = listOf(cam("r1", false, true), cam("me", true, true)),
+            cameras = listOf(cam("r1", false), cam("me", true)),
             content = scene.all,
         )
         // 1:1 (2 participants) + a share → 3 tiles: both cameras + r1's screen.

@@ -1680,8 +1680,8 @@ private fun StreamKeyedStage(
     // ---- Derive the stream-keyed tile list (pure, unit-tested) ---------------
     val cameras = remember(remoteParticipants, localCid, localVideoEnabled) {
         remoteParticipants.map {
-            StageCameraParticipant(cid = it.cid, isLocal = false, cameraOn = it.videoEnabled)
-        } + StageCameraParticipant(cid = localCid, isLocal = true, cameraOn = localVideoEnabled)
+            StageCameraParticipant(cid = it.cid, isLocal = false)
+        } + StageCameraParticipant(cid = localCid, isLocal = true)
     }
     val stageTiles = remember(cameras, contentScene) {
         deriveStageTiles(cameras = cameras, content = contentScene.all)

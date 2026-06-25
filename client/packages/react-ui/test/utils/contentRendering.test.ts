@@ -22,10 +22,11 @@ import {
 // Only getVideoTracks()/readyState are read by the helper.
 // ---------------------------------------------------------------------------
 
-function fakeStream(opts: { live?: boolean; tracks?: number } = {}): MediaStream {
+function fakeStream(opts: { live?: boolean; enabled?: boolean; tracks?: number } = {}): MediaStream {
     const trackCount = opts.tracks ?? 1;
     const readyState = opts.live === false ? 'ended' : 'live';
-    const tracks = Array.from({ length: trackCount }, () => ({ readyState }));
+    const enabled = opts.enabled !== false;
+    const tracks = Array.from({ length: trackCount }, () => ({ readyState, enabled }));
     return {
         getVideoTracks: () => tracks,
     } as unknown as MediaStream;
@@ -44,6 +45,7 @@ function baseInput(over: Partial<ResolveContentInput> = {}): ResolveContentInput
         localStream: null,
         remotes: [],
         remoteStreams: new Map(),
+        independentContentEnabled: true,
         legacyRemoteContent: null,
         accessors: noStreams(),
         localVideoMediaEnabled: true,
@@ -55,7 +57,7 @@ describe('contentRendering — independent (flag-on) content', () => {
     it('renders remote content from the content stream when content.active', () => {
         const contentStream = fakeStream();
         const input = baseInput({
-            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 3 } }],
+            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 3 }, supportsIndependentContentVideo: true }],
             accessors: {
                 getLocalContentStream: () => null,
                 getRemoteContentStream: (cid) => (cid === 'r1' ? contentStream : undefined),
@@ -93,6 +95,28 @@ describe('contentRendering — independent (flag-on) content', () => {
         expect(remotes[0].stream).not.toBe(framelessContentStream);
     });
 
+    it('treats a non-capable remote as LEGACY even if a content stream accessor is present', () => {
+        const apparentContentStream = fakeStream();
+        const cameraStream = fakeStream();
+        const input = baseInput({
+            remotes: [{
+                cid: 'legacy',
+                content: { active: true, type: 'screenShare', revision: 5 },
+                supportsIndependentContentVideo: false,
+            }],
+            remoteStreams: new Map([['legacy', cameraStream]]),
+            accessors: {
+                getLocalContentStream: () => null,
+                getRemoteContentStream: (cid) => (cid === 'legacy' ? apparentContentStream : undefined),
+            },
+        });
+
+        const remotes = resolveRemoteContents(input);
+        expect(remotes).toHaveLength(1);
+        expect(remotes[0].mode).toBe('legacy');
+        expect(remotes[0].stream).toBe(cameraStream);
+    });
+
     it('shows camera AND content as separate streams for the same owner', () => {
         // The helper resolves content; the owner's camera is sourced separately
         // by the component. Here we assert content does NOT pull the camera/legacy
@@ -100,7 +124,7 @@ describe('contentRendering — independent (flag-on) content', () => {
         const contentStream = fakeStream();
         const cameraStream = fakeStream();
         const input = baseInput({
-            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 } }],
+            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true }],
             remoteStreams: new Map([['r1', cameraStream]]),
             accessors: {
                 getLocalContentStream: () => null,
@@ -128,6 +152,23 @@ describe('contentRendering — independent (flag-on) content', () => {
         expect(local!.mode).toBe('independent');
         expect(local!.stream).toBe(localContent);
         expect(local!.isLocal).toBe(true);
+    });
+});
+
+describe('contentRendering — media liveness', () => {
+    it('treats disabled video tracks as not live media', () => {
+        const input = baseInput({
+            local: { cid: 'me', cameraMode: 'selfie', content: { active: true, type: 'screenShare', revision: 1 } },
+            accessors: {
+                getLocalContentStream: () => fakeStream({ enabled: false }),
+                getRemoteContentStream: () => undefined,
+            },
+        });
+
+        const local = resolveLocalContent(input);
+        expect(local?.mode).toBe('independent');
+        expect(local?.stream).toBeNull();
+        expect(local?.loading).toBe(true);
     });
 });
 
@@ -193,7 +234,7 @@ describe('contentRendering — flag-off / legacy single-video-as-content', () =>
 describe('contentRendering — receiver-side hold', () => {
     it('holds (loading, no stream) when content.active but content media absent', () => {
         const input = baseInput({
-            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 } }],
+            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true }],
             // No content stream yet (receiver track not promoted / pending attach).
             accessors: noStreams(),
             remoteStreams: new Map(), // no legacy fallback stream either
@@ -220,7 +261,7 @@ describe('contentRendering — receiver-side hold', () => {
     it('treats an ended content track as loading (held), not flowing', () => {
         const ended = fakeStream({ live: false });
         const input = baseInput({
-            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 } }],
+            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true }],
             accessors: {
                 getLocalContentStream: () => null,
                 getRemoteContentStream: () => ended,
@@ -272,7 +313,7 @@ describe('contentRendering — audio-only suppression', () => {
 
     it('suppresses ALL content UI for an audio-only receiver (remote content)', () => {
         const input = baseInput({
-            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 } }],
+            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true }],
             localVideoMediaEnabled: false,
             accessors: { getLocalContentStream: () => null, getRemoteContentStream: () => fakeStream() },
         });
@@ -296,8 +337,8 @@ describe('contentRendering — multiple simultaneous sharers', () => {
         const s2 = fakeStream();
         const input = baseInput({
             remotes: [
-                { cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 } },
-                { cid: 'r2', content: { active: true, type: 'screenShare', revision: 1 } },
+                { cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true },
+                { cid: 'r2', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true },
             ],
             accessors: {
                 getLocalContentStream: () => null,
@@ -435,7 +476,7 @@ describe('contentRendering — resolveContentScene aggregate', () => {
         const r1Content = fakeStream();
         const input = baseInput({
             local: { cid: 'me', cameraMode: 'selfie', content: { active: true, type: 'screenShare', revision: 1 } },
-            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 } }],
+            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true }],
             remoteContentOrder: ['r1'],
             accessors: {
                 getLocalContentStream: () => localContent,
@@ -555,8 +596,8 @@ function content(over: Partial<ResolvedContent> = {}): ResolvedContent {
     };
 }
 
-function camera(cid: string, isLocal: boolean, cameraOn: boolean): StageCameraParticipant {
-    return { cid, isLocal, cameraOn };
+function camera(cid: string, isLocal: boolean): StageCameraParticipant {
+    return { cid, isLocal };
 }
 
 describe('contentRendering — stage tile id encoding', () => {
@@ -605,7 +646,7 @@ describe('contentRendering — deriveStageTiles', () => {
     it("INCLUDES the sharer's own camera as a real filmstrip tile (not excluded)", () => {
         // The sharer r1 has BOTH a camera tile and a content tile.
         const tiles = deriveStageTiles({
-            cameras: [camera('r1', false, true), camera('me', true, true)],
+            cameras: [camera('r1', false), camera('me', true)],
             content: [content({ ownerId: 'r1', stream: fakeStream() })],
         });
         const ids = tiles.map((t) => t.id);
@@ -616,7 +657,7 @@ describe('contentRendering — deriveStageTiles', () => {
 
     it("shows the LOCAL user's OWN screen as a content tile (self-preview)", () => {
         const tiles = deriveStageTiles({
-            cameras: [camera('me', true, true)],
+            cameras: [camera('me', true)],
             content: [content({ ownerId: 'me', isLocal: true, stream: fakeStream() })],
         });
         const selfScreen = tiles.find((t) => t.id === 'me::content');
@@ -626,7 +667,7 @@ describe('contentRendering — deriveStageTiles', () => {
 
     it('orders remote cameras first, then local camera, then content tiles', () => {
         const tiles = deriveStageTiles({
-            cameras: [camera('r1', false, true), camera('me', true, true)],
+            cameras: [camera('r1', false), camera('me', true)],
             content: [content({ ownerId: 'r1', stream: fakeStream() })],
         });
         expect(tiles.map((t) => t.id)).toEqual(['r1::camera', 'me::camera', 'r1::content']);
@@ -636,7 +677,7 @@ describe('contentRendering — deriveStageTiles', () => {
         // Video-off participants stay in the filmstrip as an avatar tile (identity +
         // audio status) so the strip never collapses to one stretched tile.
         const tiles = deriveStageTiles({
-            cameras: [camera('r1', false, false), camera('me', true, true)],
+            cameras: [camera('r1', false), camera('me', true)],
             content: [content({ ownerId: 'r1', stream: fakeStream() })],
         });
         const ids = tiles.map((t) => t.id);
@@ -649,7 +690,7 @@ describe('contentRendering — deriveStageTiles', () => {
         // Every participant shows in the filmstrip; a camera-off peer gets an avatar
         // camera tile rather than being dropped.
         const tiles = deriveStageTiles({
-            cameras: [camera('r1', false, true), camera('r2', false, false), camera('me', true, true)],
+            cameras: [camera('r1', false), camera('r2', false), camera('me', true)],
             content: [content({ ownerId: 'r1', stream: fakeStream() })],
         });
         expect(tiles.some((t) => t.id === 'r2::camera')).toBe(true);
@@ -669,7 +710,7 @@ describe('contentRendering — deriveStageTiles', () => {
         // video IS the content. r2's screen already renders as its camera tile,
         // so it must NOT also get a content tile (that would show one stream twice).
         const tiles = deriveStageTiles({
-            cameras: [camera('r1', false, true), camera('r2', false, true)],
+            cameras: [camera('r1', false), camera('r2', false)],
             content: [
                 content({ ownerId: 'r1', stream: fakeStream(), mode: 'independent' }),
                 content({ ownerId: 'r2', stream: fakeStream(), mode: 'legacy' }),
@@ -684,7 +725,7 @@ describe('contentRendering — deriveStageTiles', () => {
 
 describe('contentRendering — pickStageSpotlightTileId', () => {
     const tiles = deriveStageTiles({
-        cameras: [camera('r1', false, true), camera('me', true, true)],
+        cameras: [camera('r1', false), camera('me', true)],
         content: [
             content({ ownerId: 'r1', stream: fakeStream() }),
             content({ ownerId: 'r2', stream: fakeStream() }),
@@ -736,7 +777,7 @@ describe('contentRendering — 1:1 + share engages the filmstrip stage', () => {
         // One remote (r1) is sharing an independent screen; both cameras on.
         const scene = resolveContentScene(baseInput({
             local: { cid: 'me', cameraMode: 'selfie' },
-            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 } }],
+            remotes: [{ cid: 'r1', content: { active: true, type: 'screenShare', revision: 1 }, supportsIndependentContentVideo: true }],
             accessors: {
                 getLocalContentStream: () => null,
                 getRemoteContentStream: (cid) => (cid === 'r1' ? fakeStream() : undefined),
@@ -746,7 +787,7 @@ describe('contentRendering — 1:1 + share engages the filmstrip stage', () => {
         expect(scene.all.some((c) => c.mode === 'independent')).toBe(true);
 
         const tiles = deriveStageTiles({
-            cameras: [camera('r1', false, true), camera('me', true, true)],
+            cameras: [camera('r1', false), camera('me', true)],
             content: scene.all,
         });
         // 1:1 (2 participants) + a share → 3 tiles: both cameras + r1's screen.

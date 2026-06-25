@@ -729,7 +729,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         if (!_uiState.value.isScreenSharing) return
         activeSession?.stopScreenShare()
         currentRoomId?.let { roomId ->
-            CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
+            CallService.start(
+                appContext,
+                roomId,
+                roomName = savedRoomNameForNotification(roomId),
+                clearMediaProjection = true,
+            )
         }
     }
 
@@ -739,7 +744,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             return
         }
         if (attemptsRemaining <= 0) {
-            CallService.start(appContext, roomId, roomName = savedRoomNameForNotification(roomId))
+            CallService.start(
+                appContext,
+                roomId,
+                roomName = savedRoomNameForNotification(roomId),
+                clearMediaProjection = true,
+            )
             Log.w("CallManager", "Failed to start screen sharing: media projection foreground type not ready")
             return
         }

@@ -133,6 +133,8 @@ export class SerenadaCore {
             getRemoteContentStream: () => undefined,
             getRemoteStream: () => undefined,
             getLocalContentStream: () => null,
+            get independentContentVideoEnabled() { return false; },
+            getRemoteIndependentContentVideo: () => false,
             get callStats() { return null; },
             get callQualitySummary() { return null; },
             get hasMultipleCameras() { return false; },

@@ -95,6 +95,7 @@ export interface SerenadaCallFlowTheme {
 export type SerenadaString =
     | 'joiningCall'
     | 'waitingForOther'
+    | 'contentWaitingForParticipants'
     | 'shareLink'
     | 'copied'
     | 'endCall'
@@ -124,6 +125,7 @@ export type SerenadaString =
 export const serenadaDefaultStrings: Record<SerenadaString, string> = {
     joiningCall: 'Joining call\u2026',
     waitingForOther: 'Waiting for the other person to join',
+    contentWaitingForParticipants: 'Sharing screen, waiting for participants\u2026',
     shareLink: 'Share this link to invite someone',
     copied: 'Copied!',
     endCall: 'End call',

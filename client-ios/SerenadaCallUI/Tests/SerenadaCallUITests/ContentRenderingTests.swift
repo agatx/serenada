@@ -550,8 +550,8 @@ final class ContentRenderingTests: XCTestCase {
     func testDeriveStageTilesRemoteCamerasFirstThenLocalThenContent() {
         // Sharer "me" has both camera + content; remote "peer" camera on.
         let cameras = [
-            StageCameraParticipant(cid: "peer", isLocal: false, cameraOn: true),
-            StageCameraParticipant(cid: "me", isLocal: true, cameraOn: true)
+            StageCameraParticipant(cid: "peer", isLocal: false),
+            StageCameraParticipant(cid: "me", isLocal: true)
         ]
         let content = [independentResolved(cid: "me", isLocal: true)]
         let tiles = deriveStageTiles(cameras: cameras, content: content)
@@ -561,7 +561,7 @@ final class ContentRenderingTests: XCTestCase {
     func testDeriveStageTilesSharerCameraAndScreenAreTwoEqualTiles() {
         // The whole point of the pivot: a sharer's camera + screen are two peer
         // tiles, not a camera-over-content PIP.
-        let cameras = [StageCameraParticipant(cid: "me", isLocal: true, cameraOn: true)]
+        let cameras = [StageCameraParticipant(cid: "me", isLocal: true)]
         let content = [independentResolved(cid: "me", isLocal: true)]
         let tiles = deriveStageTiles(cameras: cameras, content: content)
         XCTAssertEqual(tiles.count, 2)
@@ -572,7 +572,7 @@ final class ContentRenderingTests: XCTestCase {
     func testDeriveStageTilesCameraOffStillEmitsAvatarTilePlusContent() {
         // Video-off participants keep an avatar/placeholder camera tile (identity +
         // audio status) so the filmstrip never collapses to a single stretched tile.
-        let cameras = [StageCameraParticipant(cid: "me", isLocal: true, cameraOn: false)]
+        let cameras = [StageCameraParticipant(cid: "me", isLocal: true)]
         let content = [independentResolved(cid: "me", isLocal: true)]
         let tiles = deriveStageTiles(cameras: cameras, content: content)
         XCTAssertEqual(tiles.map(\.id), ["me::camera", "me::content"])
@@ -581,7 +581,7 @@ final class ContentRenderingTests: XCTestCase {
     func testDeriveStageTilesLegacyContentIsNotADuplicateTile() {
         // A legacy sharer shows as their camera tile (the screen replaced the
         // camera); no separate content tile.
-        let cameras = [StageCameraParticipant(cid: "peer", isLocal: false, cameraOn: true)]
+        let cameras = [StageCameraParticipant(cid: "peer", isLocal: false)]
         let content = [legacyResolved(cid: "peer", isLocal: false)]
         let tiles = deriveStageTiles(cameras: cameras, content: content)
         XCTAssertEqual(tiles.map(\.id), ["peer::camera"])
@@ -589,9 +589,9 @@ final class ContentRenderingTests: XCTestCase {
 
     func testDeriveStageTilesMultipleSharersEachGetContentTile() {
         let cameras = [
-            StageCameraParticipant(cid: "a", isLocal: false, cameraOn: false),
-            StageCameraParticipant(cid: "b", isLocal: false, cameraOn: false),
-            StageCameraParticipant(cid: "me", isLocal: true, cameraOn: false)
+            StageCameraParticipant(cid: "a", isLocal: false),
+            StageCameraParticipant(cid: "b", isLocal: false),
+            StageCameraParticipant(cid: "me", isLocal: true)
         ]
         let content = [independentResolved(cid: "a", isLocal: false), independentResolved(cid: "b", isLocal: false)]
         let tiles = deriveStageTiles(cameras: cameras, content: content)
@@ -613,8 +613,8 @@ final class ContentRenderingTests: XCTestCase {
 
     func testPickStageSpotlightDefaultsToContentPrimaryTile() {
         let cameras = [
-            StageCameraParticipant(cid: "peer", isLocal: false, cameraOn: true),
-            StageCameraParticipant(cid: "me", isLocal: true, cameraOn: true)
+            StageCameraParticipant(cid: "peer", isLocal: false),
+            StageCameraParticipant(cid: "me", isLocal: true)
         ]
         let primary = independentResolved(cid: "peer", isLocal: false)
         let tiles = deriveStageTiles(cameras: cameras, content: [primary])
@@ -624,8 +624,8 @@ final class ContentRenderingTests: XCTestCase {
 
     func testPickStageSpotlightPinnedCameraTileWins() {
         let cameras = [
-            StageCameraParticipant(cid: "peer", isLocal: false, cameraOn: true),
-            StageCameraParticipant(cid: "me", isLocal: true, cameraOn: true)
+            StageCameraParticipant(cid: "peer", isLocal: false),
+            StageCameraParticipant(cid: "me", isLocal: true)
         ]
         let primary = independentResolved(cid: "peer", isLocal: false)
         let tiles = deriveStageTiles(cameras: cameras, content: [primary])
@@ -635,7 +635,7 @@ final class ContentRenderingTests: XCTestCase {
     }
 
     func testPickStageSpotlightPinnedContentTileWins() {
-        let cameras = [StageCameraParticipant(cid: "me", isLocal: true, cameraOn: true)]
+        let cameras = [StageCameraParticipant(cid: "me", isLocal: true)]
         let localContent = independentResolved(cid: "me", isLocal: true)
         let remoteContent = independentResolved(cid: "peer", isLocal: false)
         let tiles = deriveStageTiles(cameras: cameras, content: [remoteContent, localContent])
@@ -647,7 +647,7 @@ final class ContentRenderingTests: XCTestCase {
     func testPickStageSpotlightStalePinFallsBackToContentPrimary() {
         // The pinned tile is no longer present (its owner stopped sharing / camera
         // off) ⇒ revert to the most-recent-share default.
-        let cameras = [StageCameraParticipant(cid: "peer", isLocal: false, cameraOn: true)]
+        let cameras = [StageCameraParticipant(cid: "peer", isLocal: false)]
         let primary = independentResolved(cid: "peer", isLocal: false)
         let tiles = deriveStageTiles(cameras: cameras, content: [primary])
         let stalePin = StageTileKey(cid: "gone", kind: .camera)
@@ -656,7 +656,7 @@ final class ContentRenderingTests: XCTestCase {
     }
 
     func testPickStageSpotlightFallsBackToFirstTile() {
-        let cameras = [StageCameraParticipant(cid: "peer", isLocal: false, cameraOn: true)]
+        let cameras = [StageCameraParticipant(cid: "peer", isLocal: false)]
         let tiles = deriveStageTiles(cameras: cameras, content: [])
         let spotlight = pickStageSpotlightTileId(tiles: tiles, pinnedTile: nil, contentPrimary: nil)
         XCTAssertEqual(spotlight, "peer::camera")

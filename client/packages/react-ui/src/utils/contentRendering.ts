@@ -10,10 +10,10 @@
  *
  * Backward / flag-off compatibility is the default path and must stay
  * byte-identical to today:
- *   - When the SDK has no independent content stream for an owner
- *     (`getLocalContentStream()` / `getRemoteContentStream(cid)` returns
- *     nothing), the single video that the SDK already routes (the local stream
- *     or `remoteStreams.get(cid)`) is presented as content, exactly as today.
+ *   - When `independentContentEnabled` is false, or a remote peer did not
+ *     advertise `supportsIndependentContentVideo`, the single video that the SDK
+ *     already routes (the local stream or `remoteStreams.get(cid)`) is presented
+ *     as content, exactly as today.
  *   - The legacy "is the local user sharing" signal stays `cameraMode ===
  *     'screenShare'`, and the legacy remote signal stays the received
  *     `content_state` peer message — these drive content-active when there is
@@ -37,6 +37,11 @@ export interface ContentRemoteParticipant {
     cid: string;
     /** Precise content presentation state. Absent on legacy peers / flag off. */
     content?: { active: boolean; type: string; revision: number };
+    /**
+     * Whether this peer advertised independent content video at join.
+     * Defaults false, matching the signaling contract.
+     */
+    supportsIndependentContentVideo?: boolean;
 }
 
 /** Legacy `content_state` peer-message signal for a remote sharer (flag-off path). */
@@ -88,6 +93,11 @@ export interface ResolveContentInput {
     remotes: readonly ContentRemoteParticipant[];
     /** Per-cid legacy combined streams (`session.remoteStreams`) — the legacy content fallback for remote owners. */
     remoteStreams: ReadonlyMap<string, MediaStream>;
+    /**
+     * Whether the local session negotiated independent content video. When false,
+     * all owners resolve through the legacy single-video path.
+     */
+    independentContentEnabled: boolean;
     /** Latest legacy `content_state` peer message for a single remote sharer (flag-off path). */
     legacyRemoteContent: LegacyRemoteContentSignal | null | undefined;
     accessors: ContentStreamAccessors;
@@ -153,11 +163,15 @@ export function resolveLocalContent(input: ResolveContentInput): ResolvedContent
     if (!localVideoMediaEnabled) return null;
     if (!localContentActive(local)) return null;
 
-    // Only a real screen share is independent content; a camera-framing local
-    // content_state (world/composite) has no content track and renders via the
-    // camera/legacy path (mirrors the remote gate + mobile's isScreenShareContent).
-    const independentStream = accessors.getLocalContentStream() ?? null;
-    if (independentStream && localContentType(local) === 'screenShare') {
+    // INDEPENDENT only when the build flag is on AND precise content state
+    // exists AND it is a SCREEN SHARE. With the flag off, the single camera
+    // video IS the content — byte-identical to today.
+    const independent =
+        input.independentContentEnabled &&
+        local.content?.active === true &&
+        localContentType(local) === 'screenShare';
+    if (independent) {
+        const independentStream = accessors.getLocalContentStream() ?? null;
         // Independent mode: dedicated content stream. "Waiting for participants"
         // when capture is live but the SDK reports no flowing track yet is a
         // host concern; here we surface the live independent stream.
@@ -200,17 +214,19 @@ export function resolveRemoteContents(input: ResolveContentInput): ResolvedConte
     for (const remote of remotes) {
         if (!remoteContentActive(remote, legacyRemoteContent)) continue;
 
-        // Only a SCREEN SHARE rides the dedicated content track. A camera-framing
-        // content_state (worldCamera/compositeCamera) carries NO content track, yet
-        // the negotiated content transceiver still yields a (frameless) stream — so
-        // gating on stream presence alone resolved a phantom INDEPENDENT tile that
-        // rendered BLACK (e.g. a frontline peer entering world-camera mode showed as
-        // a black content spotlight on the other side). Gate on the content TYPE so
-        // camera-framing falls to the legacy/camera path (mirrors mobile's
-        // isScreenShareContent).
+        // INDEPENDENT is resolved PER PEER: the local build flag is on AND this
+        // remote peer advertised independent-content capability AND its content
+        // is active AND the content is a SCREEN SHARE. A NON-capable peer routes
+        // its share through the single-video path, so it must resolve LEGACY even
+        // if a stale/empty content stream accessor is present.
         const contentType = remoteContentType(remote, legacyRemoteContent);
-        const independentStream = accessors.getRemoteContentStream(remote.cid);
-        if (independentStream && contentType === 'screenShare') {
+        const independent =
+            input.independentContentEnabled &&
+            remote.supportsIndependentContentVideo === true &&
+            remote.content?.active === true &&
+            contentType === 'screenShare';
+        if (independent) {
+            const independentStream = accessors.getRemoteContentStream(remote.cid) ?? null;
             const hasLiveTrack = streamHasLiveVideo(independentStream);
             resolved.push({
                 ownerId: remote.cid,
@@ -436,7 +452,7 @@ function streamHasLiveVideo(stream: MediaStream | null | undefined): boolean {
     if (!stream) return false;
     const tracks = stream.getVideoTracks();
     if (tracks.length === 0) return false;
-    return tracks.some((t) => t.readyState !== 'ended');
+    return tracks.some((t) => t.readyState !== 'ended' && t.enabled !== false);
 }
 
 // ===========================================================================
@@ -493,11 +509,10 @@ export function stageTileKeyEquals(a: StageTileKey | null, b: StageTileKey | nul
     return a.cid === b.cid && a.kind === b.kind;
 }
 
-/** A participant whose camera state the stage needs (local or remote). */
+/** A participant whose camera/avatar tile the stage needs (local or remote). */
 export interface StageCameraParticipant {
     cid: string;
     isLocal: boolean;
-    cameraOn: boolean;
 }
 
 export interface DeriveStageTilesInput {
@@ -517,10 +532,10 @@ export interface DeriveStageTilesInput {
  *
  * Order (stable, matches the engine's "local last" filmstrip convention):
  *   1. remote camera tiles (input order),
- *   2. local camera tile (if camera on),
+ *   2. local camera tile,
  *   3. content tiles (input order; local content last via `ContentScene.all`).
  *
- * A sharer's camera and content are BOTH present when both are on. Content
+ * A sharer's camera/avatar tile and content are BOTH present. Content
  * tiles are emitted only for INDEPENDENT content; a legacy single-video sharer
  * shows up as their camera tile (the screen replaced the camera), so they are
  * not duplicated as a content tile. Every participant gets a camera tile (an

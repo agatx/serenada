@@ -453,7 +453,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const isControlsAutoHideEnabledRef = useRef(true);
     const waitingTimerRef = useRef<number | null>(null);
     const prevParticipantCountRef = useRef(0);
-    const stageViewportRef = useRef<HTMLDivElement | null>(null);
+    const [stageViewportNode, setStageViewportNode] = useState<HTMLDivElement | null>(null);
+    const stageViewportRef = useCallback((node: HTMLDivElement | null) => {
+        setStageViewportNode(node);
+    }, []);
     const debugTapRef = useRef(0);
     const debugTapTimeoutRef = useRef<number | null>(null);
 
@@ -913,8 +916,13 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                 ? { cid: localParticipant.cid, cameraMode: localParticipant.cameraMode, content: localParticipant.content }
                 : null,
             localStream,
-            remotes: effectiveState.remoteParticipants.map((p) => ({ cid: p.cid, content: p.content })),
+            remotes: effectiveState.remoteParticipants.map((p) => ({
+                cid: p.cid,
+                content: p.content,
+                supportsIndependentContentVideo: session?.getRemoteIndependentContentVideo(p.cid) === true,
+            })),
             remoteStreams,
+            independentContentEnabled: session?.independentContentVideoEnabled === true,
             legacyRemoteContent: remoteContentState
                 ? { cid: remoteContentState.cid, contentType: remoteContentState.contentType }
                 : null,
@@ -973,9 +981,9 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         // multi-party (pin/content) and now also 1:1 independent content, both of
         // which mount `stageViewportRef`. Legacy 1:1 never renders the stage, so
         // this stays inert there (byte-identical).
-        if (!useContentStageLayout || !stageViewportRef.current) return;
+        if (!useContentStageLayout || !stageViewportNode) return;
 
-        const node = stageViewportRef.current;
+        const node = stageViewportNode;
         const updateViewportSize = () => {
             const rect = node.getBoundingClientRect();
             setStageViewportSize({
@@ -994,7 +1002,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
 
         window.addEventListener('resize', updateViewportSize);
         return () => window.removeEventListener('resize', updateViewportSize);
-    }, [useContentStageLayout]);
+    }, [stageViewportNode, useContentStageLayout]);
 
     const primaryContent = contentScene.primary;
 
@@ -1028,17 +1036,14 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             ...remoteStreamEntries.map(([cid]) => ({
                 cid,
                 isLocal: false,
-                cameraOn: remoteParticipantMap.get(cid)?.cameraEnabled !== false,
             })),
-            { cid: localParticipant.cid, isLocal: true, cameraOn: !isCameraOff },
+            { cid: localParticipant.cid, isLocal: true },
         ];
         return deriveStageTiles({ cameras, content: contentScene.all });
     }, [
         streamKeyedStageActive,
         localParticipant,
         remoteStreamEntries,
-        remoteParticipantMap,
-        isCameraOff,
         contentScene.all,
     ]);
 
@@ -1503,7 +1508,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                         <div style={spinnerStyle} />
                                                         {ownerContent?.isLocal && ownerContent.waitingForParticipants && (
                                                             <span className="video-camera-off-label">
-                                                                {resolveString('waitingForOther', strings)}
+                                                                {resolveString('contentWaitingForParticipants', strings)}
                                                             </span>
                                                         )}
                                                     </div>
@@ -1566,7 +1571,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                 />
                                                 {isContentTile && ownerContent?.isLocal && ownerContent.waitingForParticipants && (
                                                     <div className="content-waiting-badge" data-testid="call.contentWaiting">
-                                                        {resolveString('waitingForOther', strings)}
+                                                        {resolveString('contentWaitingForParticipants', strings)}
                                                     </div>
                                                 )}
                                                 {isPrimaryTile && (
@@ -1637,7 +1642,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                         <div style={spinnerStyle} />
                                                         {primaryContent?.isLocal && primaryContent.waitingForParticipants && (
                                                             <span className="video-camera-off-label">
-                                                                {resolveString('waitingForOther', strings)}
+                                                                {resolveString('contentWaitingForParticipants', strings)}
                                                             </span>
                                                         )}
                                                     </div>
@@ -1685,7 +1690,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                 />
                                                 {isContentTile && primaryContent?.isLocal && primaryContent.waitingForParticipants && (
                                                     <div className="content-waiting-badge" data-testid="call.contentWaiting">
-                                                        {resolveString('waitingForOther', strings)}
+                                                        {resolveString('contentWaitingForParticipants', strings)}
                                                     </div>
                                                 )}
                                                 {isPrimaryTile && (

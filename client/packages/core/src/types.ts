@@ -346,6 +346,13 @@ export interface SerenadaSessionHandle {
     getRemoteStream(cid: string): MediaStream | undefined;
     /** Local content (screen share) stream for optional local preview. */
     getLocalContentStream(): MediaStream | null;
+    /** Whether this session negotiated the independent content video path. */
+    readonly independentContentVideoEnabled: boolean;
+    /**
+     * Whether a remote participant advertised independent content video support.
+     * Missing capabilities default to `false`.
+     */
+    getRemoteIndependentContentVideo(cid: string): boolean;
     readonly callStats: CallStats | null;
     /**
      * Aggregate call-quality summary. Updated live during the

@@ -646,22 +646,21 @@ func stageTileKeyEquals(_ a: StageTileKey?, _ b: StageTileKey?) -> Bool {
     return a.cid == b.cid && a.kind == b.kind
 }
 
-/// A participant whose camera state the stage needs (local or remote).
+/// A participant whose camera/avatar tile the stage needs (local or remote).
 struct StageCameraParticipant: Equatable {
     let cid: String
     let isLocal: Bool
-    let cameraOn: Bool
 }
 
 /// Derive the full ordered stream-keyed tile list for the stage.
 ///
 /// Order (stable, matches the engine's "local last" filmstrip convention):
 ///   1. remote camera tiles (input order),
-///   2. local camera tile (if camera on),
+///   2. local camera tile,
 ///   3. content tiles (input order; local content last via the caller's `content`
 ///      ordering — see ``stageContent(for:)`` which appends local last).
 ///
-/// A sharer's camera and content are BOTH present when both are on. Content tiles
+/// A sharer's camera/avatar tile and content are BOTH present. Content tiles
 /// are emitted only for INDEPENDENT content; a legacy single-video sharer shows up
 /// as their camera tile (the screen replaced the camera), so they are not
 /// duplicated as a content tile. Audio-only peers (camera off, no content)

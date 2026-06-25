@@ -249,6 +249,12 @@ func worstStatus(_ statuses: DebugStatus...) -> DebugStatus {
     return .good
 }
 
+private struct StreamKeyedStageState {
+    let tiles: [StageTile]
+    let spotlightId: String?
+    let active: Bool
+}
+
 struct CallScreenView: View {
     let roomId: String
     let uiState: CallUiState
@@ -375,6 +381,10 @@ struct CallScreenView: View {
             localCameraMode: uiState.localCameraMode
         )
         let shouldRunAutoHideTask = areControlsVisible && uiState.phase == .inCall && isControlsAutoHideEnabled
+        let streamStage = streamKeyedStageState
+        let streamKeyedStageActive = streamStage.active
+        let stageSpotlightId = streamStage.spotlightId
+        let stageTiles = streamStage.tiles
         // In the stream-keyed stage prefer the spotlight's CAMERA owner (content
         // tiles have no PiP-able camera target, so fall back to a remote camera).
         let stageSpotlightCameraCid: String? = {
@@ -779,13 +789,13 @@ struct CallScreenView: View {
     }
 
     private var currentSnapshotSource: SnapshotSource? {
-        // Stream-keyed content stage: the spotlight is a specific stream. A camera
-        // tile in the spotlight is snapshot-able; a content (screen-share) tile is
-        // not, so hide the shutter there. `stageSpotlightId` already folds in the
-        // pin, so this targets exactly what is large.
-        if streamKeyedStageActive {
-            guard let spotlightId = stageSpotlightId, let key = parseStageTileId(spotlightId) else { return nil }
-            if key.kind == .content { return nil }
+        // Stream-keyed content stage: the spotlight may be a content stream, but
+        // snapshot capture is currently camera-source based. Keep the shutter
+        // available by targeting the spotlight owner's camera when that camera is
+        // enabled instead of hiding it whenever their content is large.
+        let streamStage = streamKeyedStageState
+        if streamStage.active {
+            guard let spotlightId = streamStage.spotlightId, let key = parseStageTileId(spotlightId) else { return nil }
             if key.cid == uiState.localCid {
                 return uiState.localVideoEnabled ? .local : nil
             }
@@ -1120,52 +1130,40 @@ struct CallScreenView: View {
         resolveContentSource(contentScene.primary, isMultiParty: isMultiParty)
     }
 
-    /// The resolver's per-owner content with local LAST (mirrors web's
-    /// `ContentScene.all`), the input order `deriveStageTiles` expects.
-    private var stageContentAll: [ResolvedContent] {
-        stageContent(for: contentScene)
-    }
-
-    /// True whenever ANY participant is presenting an INDEPENDENT content stream
-    /// (local or remote). Gates the stream-keyed filmstrip+spotlight stage. NOT
-    /// gated on participant count — a 1:1 + share gets the same stage as a group.
-    /// Never true flag-off / legacy (the resolver yields no `.independent`
-    /// content), so the legacy/no-content paths stay byte-identical.
-    private var hasIndependentContent: Bool {
-        stageContentAll.contains { $0.mode == .independent }
-    }
-
-    /// The full stream-keyed tile list for the stage (one tile per camera-on
-    /// participant + one per independent sharer, keyed {cid, kind}). Empty unless
-    /// an independent content stream is present, so the legacy paths are untouched.
-    private var stageTiles: [StageTile] {
-        guard hasIndependentContent, let localCid = uiState.localCid else { return [] }
+    /// Snapshot of the stream-keyed stage derivation for one render. This keeps
+    /// body-level branch decisions from recomputing content resolution, tile
+    /// derivation, and spotlight selection independently.
+    private var streamKeyedStageState: StreamKeyedStageState {
+        let stageContentAll = stageContent(for: contentScene)
+        guard stageContentAll.contains(where: { $0.mode == .independent }),
+              let localCid = uiState.localCid else {
+            return StreamKeyedStageState(tiles: [], spotlightId: nil, active: false)
+        }
         let cameras: [StageCameraParticipant] =
             uiState.remoteParticipants.map {
-                StageCameraParticipant(cid: $0.cid, isLocal: false, cameraOn: $0.videoEnabled)
+                StageCameraParticipant(cid: $0.cid, isLocal: false)
             }
-            + [StageCameraParticipant(cid: localCid, isLocal: true, cameraOn: uiState.localVideoEnabled)]
-        return deriveStageTiles(cameras: cameras, content: stageContentAll)
-    }
-
-    /// The spotlight (primary) tile id: a pinned tile if present, else the
-    /// most-recent active share (reusing `contentScene.primary`).
-    private var stageSpotlightId: String? {
-        pickStageSpotlightTileId(tiles: stageTiles, pinnedTile: pinnedTile, contentPrimary: contentScene.primary)
-    }
-
-    /// Whether the stream-keyed content stage should render this frame. Gated on
-    /// an active independent content stream AND the call phase (`shouldRenderContentStage`):
-    /// `.inCall` always; `.waiting` only with a resolved stage (a local share
-    /// started before anyone joined). 1:1 and group share the same gate (the stage
-    /// is content-active gated, not participant-count gated).
-    private var streamKeyedStageActive: Bool {
-        guard !stageTiles.isEmpty, stageSpotlightId != nil else { return false }
-        return shouldRenderContentStage(
+            + [StageCameraParticipant(cid: localCid, isLocal: true)]
+        let tiles = deriveStageTiles(cameras: cameras, content: stageContentAll)
+        let spotlightId = pickStageSpotlightTileId(tiles: tiles, pinnedTile: pinnedTile, contentPrimary: contentScene.primary)
+        let active = !tiles.isEmpty && spotlightId != nil && shouldRenderContentStage(
             phase: contentStagePhase(uiState.phase),
             isMultiParty: isMultiParty,
             hasContentStageLayout: true
         )
+        return StreamKeyedStageState(tiles: tiles, spotlightId: spotlightId, active: active)
+    }
+
+    private var stageTiles: [StageTile] {
+        streamKeyedStageState.tiles
+    }
+
+    private var stageSpotlightId: String? {
+        streamKeyedStageState.spotlightId
+    }
+
+    private var streamKeyedStageActive: Bool {
+        streamKeyedStageState.active
     }
 }
 
@@ -1515,8 +1513,8 @@ private struct StreamKeyedStage: View {
     private var tiles: [StageTile] {
         guard let localCid else { return [] }
         let cameras: [StageCameraParticipant] =
-            remoteParticipants.map { StageCameraParticipant(cid: $0.cid, isLocal: false, cameraOn: $0.videoEnabled) }
-            + [StageCameraParticipant(cid: localCid, isLocal: true, cameraOn: localVideoEnabled)]
+            remoteParticipants.map { StageCameraParticipant(cid: $0.cid, isLocal: false) }
+            + [StageCameraParticipant(cid: localCid, isLocal: true)]
         return deriveStageTiles(cameras: cameras, content: stageContent(for: contentScene))
     }
 
