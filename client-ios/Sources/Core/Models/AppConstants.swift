@@ -5,6 +5,7 @@ enum AppConstants {
     static let ruHost = "serenada-app.ru"
     static let predefinedHosts = [defaultHost, ruHost]
     static let appGroupIdentifier = "group.app.serenada.ios"
+    static let broadcastExtensionBundleIdentifier = "app.serenada.ios.broadcast"
 
     static let languageAuto = "auto"
     static let languageEn = "en"

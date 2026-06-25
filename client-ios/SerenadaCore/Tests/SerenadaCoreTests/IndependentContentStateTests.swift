@@ -85,6 +85,22 @@ final class IndependentContentStateTests: XCTestCase {
         XCTAssertEqual([r1, r2, r3], [1, 2, 3])
     }
 
+    func testOutgoingContentStateRevisionSeedsFromSnapshot() {
+        var revisions: [Int64] = []
+        let router = makeRecordingRouter { type, payload in
+            guard type == "content_state" else { return }
+            if let r = payload?.objectValue?["revision"]?.intValue { revisions.append(Int64(r)) }
+        }
+
+        router.seedContentRevision(7)
+        let r1 = router.broadcastContentState(active: true, contentType: ContentTypeWire.screenShare)
+        router.seedContentRevision(3)
+        let r2 = router.broadcastContentState(active: false)
+
+        XCTAssertEqual(revisions, [8, 9])
+        XCTAssertEqual([r1, r2], [8, 9])
+    }
+
     func testOutgoingActiveStateCarriesContentTypeAndInactiveDoesNot() {
         var lastPayload: [String: JSONValue]?
         let router = makeRecordingRouter { type, payload in
@@ -252,6 +268,25 @@ final class IndependentContentStateTests: XCTestCase {
         XCTAssertEqual(remoteContent(harness, cid: "remote-cid-1")?.active, true,
                        "snapshot at a lower revision does not override the higher cached state")
         XCTAssertEqual(remoteContent(harness, cid: "remote-cid-1")?.revision, 5)
+        harness.tearDown()
+    }
+
+    func testRevisionlessLiveStopDoesNotLowerSnapshotGate() async {
+        let harness = SessionTestHarness()
+        await harness.advanceToInCallWithTurn(localCid: "local-cid-1", remoteCid: "remote-cid-1")
+
+        await sendRemoteContentState(harness, from: "remote-cid-1", sid: "S-r", active: true, revision: 5)
+        XCTAssertEqual(remoteContent(harness, cid: "remote-cid-1")?.active, true)
+
+        await sendRemoteContentState(harness, from: "remote-cid-1", sid: "S-r", active: false, revision: nil)
+        XCTAssertNil(remoteContent(harness, cid: "remote-cid-1"))
+
+        await sendRoomStateSnapshot(
+            harness, localCid: "local-cid-1", remoteCid: "remote-cid-1",
+            snapshotActive: true, snapshotRevision: 5
+        )
+        XCTAssertNil(remoteContent(harness, cid: "remote-cid-1"),
+                     "revisionless live stop keeps the revision 5 high-water, so revision 5 snapshot cannot reactivate")
         harness.tearDown()
     }
 

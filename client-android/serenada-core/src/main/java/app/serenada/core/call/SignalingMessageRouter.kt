@@ -116,11 +116,11 @@ internal class SignalingMessageRouter(
         assertMainThread()
         when (message.type) {
             "content_state" -> {
-                val payload = message.payload
-                val fromCid = payload?.optString("from")?.ifBlank { null } ?: message.from
-                val active = payload?.optBoolean("active") ?: false
-                val contentType = if (active) payload?.optString("contentType")?.ifBlank { null } else null
-                val revision = if (payload?.has("revision") == true) payload.optLong("revision") else null
+                val payload = message.payload ?: return
+                val fromCid = payload.optString("from").ifBlank { null } ?: message.from
+                val active = payload.opt("active") as? Boolean ?: return
+                val contentType = if (active) payload.optString("contentType").ifBlank { null } else null
+                val revision = payload.optRevision()
                 onContentStateReceived(fromCid, active, contentType, revision)
             }
             "participant_media_state" -> {

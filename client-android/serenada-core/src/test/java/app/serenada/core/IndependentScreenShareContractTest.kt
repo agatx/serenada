@@ -330,12 +330,11 @@ class IndependentScreenShareContractTest {
         factory.session.stopScreenShare()
         ShadowLooper.idleMainLooper()
 
-        // Two broadcasts on stop: clear the screen share, then restore the
-        // suppressed world-camera framing so peers keep presenting the camera.
+        // One broadcast on stop: replace the screen-share content with the
+        // suppressed world-camera framing so peers keep presenting the camera
+        // without an inactive flicker.
         val states = contentStates()
-        assertEquals(afterStart + 2, states.size)
-        val clearShare = states[states.size - 2].payload
-        assertEquals(false, clearShare?.optBoolean("active"))
+        assertEquals(afterStart + 1, states.size)
         val restore = states.last().payload
         assertEquals(true, restore?.optBoolean("active"))
         assertEquals(ContentTypeWire.WORLD_CAMERA, restore?.optString("contentType"))

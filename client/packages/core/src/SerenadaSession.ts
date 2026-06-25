@@ -1179,7 +1179,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             ? payload.contentType
             : undefined;
 
-        if (this.applyRemoteContentState(message.from, message.sid, payload.active, contentType, revision)) {
+        if (this.applyRemoteContentState(message.from, message.sid, payload.active, contentType, revision, false)) {
             this.rebuildState();
         }
     }
@@ -1193,8 +1193,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
      * - within the same `(cid, sid)`, only a strictly-greater `revision` is
      *   accepted; a `revision` ≤ the tracked one is discarded (out-of-order /
      *   duplicate / a stale snapshot behind a newer live update);
-     * - a missing `revision` is always accepted (legacy senders) and advances
-     *   presentation state without revision gating.
+     * - a missing `revision` in a live message is always accepted (legacy
+     *   senders advance presentation state without revision gating);
+     * - a missing `revision` in a snapshot seeds only an empty cache. A live
+     *   cache is more authoritative than a revisionless snapshot.
+     *
+     * Hosted signaling currently relays `content_state` without sender `sid`,
+     * but custom `SignalingProvider` implementations can surface one; keep the
+     * sid branch so those providers get the documented supersede-by-session
+     * behavior while hosted traffic follows the cid-keyed path.
      * Returns `true` when the tracked state changed (caller rebuilds state).
      */
     private applyRemoteContentState(
@@ -1203,6 +1210,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         active: boolean,
         contentType: string | undefined,
         revision: number | undefined,
+        isSnapshot: boolean,
     ): boolean {
         const existing = this.remoteContentStates.get(cid);
         if (existing && revision !== undefined) {
@@ -1212,6 +1220,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
             if (sameSession && revision <= existing.revision) {
                 return false;
             }
+        } else if (existing && revision === undefined && isSnapshot) {
+            return false;
         }
 
         this.remoteContentStates.set(cid, {
@@ -1273,9 +1283,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
             }
             remoteCids.add(participant.cid);
             // Each authoritative snapshot is the source of truth: when it omits
-            // capabilities/mediaPolicy for a still-present CID (the server resets
-            // these to defaults on an omitting rejoin), clear the stored entry so
-            // accessors fall back to contract defaults instead of stale values.
+            // capabilities/mediaPolicy for a still-present CID, clear the stored
+            // entry so accessors fall back to contract defaults instead of stale
+            // values.
             if (participant.capabilities) {
                 this.remoteCapabilities.set(participant.cid, participant.capabilities);
             } else {
@@ -1301,6 +1311,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                     snapshot.active,
                     snapshot.contentType,
                     snapshot.revision,
+                    true,
                 );
             }
         }
@@ -1620,15 +1631,12 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (!this.isConnected || this.roomState === null) return;
         this.mediaLivenessEmitInFlight = true;
         try {
-            // Refresh per-role inbound liveness on the same cadence and re-render
-            // so `cameraReceiving`/`contentReceiving` on remote participants stay
-            // current for stall diagnostics. Independent of the server-facing
-            // `media_liveness` emit below (which is gated on connection state).
-            await this.media.sampleInboundRoleLiveness();
+            // Refresh total + per-role inbound liveness from one stats sample
+            // per peer, then re-render so `cameraReceiving`/`contentReceiving`
+            // stay current for stall diagnostics.
+            const { flowingCids } = await this.media.sampleInboundLiveness();
             if (this.isInactive) return;
             this.rebuildState();
-            const flowing = await this.media.getInboundFlowingCids();
-            if (this.isInactive) return;
             // Emit even when `flowing` is empty. The empty heartbeat keeps this
             // client a "fresh reporter" on the server, which is what lets the
             // server fast-evict suspended ghosts (a suspended CID that no active
@@ -1636,7 +1644,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             // all dropped at once has no inbound flow, stops reporting entirely,
             // and the ghosts — plus the survivor's "Reconnecting" UI — linger
             // until the 10-minute hard-eviction timer instead of the 30s sweep.
-            this.signaling.broadcast('media_liveness', { cids: flowing });
+            this.signaling.broadcast('media_liveness', { cids: flowingCids });
         } catch (error) {
             this.config.logger?.log(
                 'debug',

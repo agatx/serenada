@@ -121,7 +121,11 @@ class FakePeerConnection {
      * an empty report (matches the legacy fake behavior).
      */
     statsReport: Map<string, RTCStats> = new Map();
-    async getStats(): Promise<RTCStatsReport> { return this.statsReport as unknown as RTCStatsReport; }
+    getStatsCalls = 0;
+    async getStats(): Promise<RTCStatsReport> {
+        this.getStatsCalls += 1;
+        return this.statsReport as unknown as RTCStatsReport;
+    }
 
     /**
      * Set the cumulative inbound video `bytesReceived` for a role by writing an
@@ -441,7 +445,7 @@ describe('MediaEngine independent content', () => {
         engine.destroy();
     });
 
-    it('starting screen share broadcasts content_state before attaching, via replaceTrack with no renegotiation, leaving camera untouched', async () => {
+    it('starting screen share broadcasts content_state after a viable attach, via replaceTrack with no renegotiation, leaving camera untouched', async () => {
         const h = makeEngine({ enableIndependentContentVideo: true });
         const peer = await joinAsOwnerCapable(h);
         const videoTransceivers = peer.transceivers.filter(t => t.kind === 'video').sort((a, b) => Number(a.mid) - Number(b.mid));
@@ -454,7 +458,6 @@ describe('MediaEngine independent content', () => {
         await h.engine.startScreenShare();
         await flush();
 
-        // content_state active:true broadcast first.
         const contentStates = h.sent.filter(m => m.type === 'content_state');
         expect(contentStates[0]?.payload).toMatchObject({ active: true, contentType: 'screenShare' });
         // Content sender got the display track via replaceTrack.
@@ -466,10 +469,10 @@ describe('MediaEngine independent content', () => {
         expect(h.engine.isScreenSharing).toBe(true);
     });
 
-    it('content_state rollback uses a strictly greater revision than the failed active:true (zero peers attached)', async () => {
+    it('full attach failure rolls back without a transient content_state flicker', async () => {
         // One legacy peer whose single-video swap fails → zero attached, none
-        // pending → rollback. The rollback active:false must carry a strictly
-        // greater revision than the start active:true so receivers order it last.
+        // pending → rollback. No active:true is sent, so receivers never show a
+        // false sharing indicator.
         const h = makeEngine({ enableIndependentContentVideo: true });
         h.engine.updateSignalingConnected(true);
         await h.engine.startLocalMedia();
@@ -488,11 +491,7 @@ describe('MediaEngine independent content', () => {
         await flush();
 
         const states = h.sent.filter(m => m.type === 'content_state');
-        const activeTrue = states.find(m => m.payload?.active === true);
-        const activeFalse = states.find(m => m.payload?.active === false);
-        expect(activeTrue).toBeDefined();
-        expect(activeFalse).toBeDefined();
-        expect(Number(activeFalse?.payload?.revision)).toBeGreaterThan(Number(activeTrue?.payload?.revision));
+        expect(states).toHaveLength(0);
         expect(h.engine.isScreenSharing).toBe(false);
     });
 
@@ -1480,6 +1479,24 @@ describe('MediaEngine independent content', () => {
             // "content stalled" derivation: content.active && !contentReceiving.
             const contentActive = true;
             expect(contentActive && !liveness.content).toBe(true);
+        });
+
+        it('samples total flow and per-role liveness with one getStats call per peer', async () => {
+            const h = makeEngine({ enableIndependentContentVideo: true });
+            await joinAsOwnerCapable(h);
+            const peer = capablePeer(h);
+
+            peer.setInboundVideoBytes({ camera: 1000, content: 2000 });
+            await h.engine.sampleInboundLiveness();
+            expect(peer.getStatsCalls).toBe(1);
+
+            peer.setInboundVideoBytes({ camera: 1500, content: 2500 });
+            const sample = await h.engine.sampleInboundLiveness();
+
+            expect(peer.getStatsCalls).toBe(2);
+            expect(sample.flowingCids).toEqual(['zeta']);
+            expect(sample.roleLiveness.get('zeta')).toEqual({ camera: true, content: true });
+            expect(h.engine.getRoleLiveness('zeta')).toEqual({ camera: true, content: true });
         });
 
         it('content bytes flowing → contentReceiving true', async () => {

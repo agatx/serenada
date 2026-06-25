@@ -68,6 +68,11 @@ export interface RoleLiveness {
     content: boolean;
 }
 
+export interface InboundLivenessSample {
+    flowingCids: string[];
+    roleLiveness: Map<string, RoleLiveness>;
+}
+
 interface PeerState {
     pc: RTCPeerConnection;
     remoteStream: MediaStream | null;
@@ -167,14 +172,14 @@ export class MediaEngine {
     private peers = new Map<string, PeerState>();
     private readonly initialVideoEnabled: boolean;
     // Per-remote-CID tally of cumulative `inbound-rtp.bytesReceived`. Sampled
-    // on every `getInboundFlowingCids()` call; a CID is "flowing" when its
+    // by `sampleInboundLiveness()`; a CID is "flowing" when its
     // current sample exceeds the previous one. Drives #3's `media_liveness`
     // emission (see SerenadaSession.startMediaLivenessTimer).
     private lastInboundBytesByCid = new Map<string, number>();
     // Per-remote-CID, per-role tally of cumulative inbound video
     // `bytesReceived`, split by the BOUND transceiver role (camera vs content)
     // so a stalled CONTENT stream is distinguishable from a healthy camera on
-    // the same peer. Sampled on every `sampleInboundRoleLiveness()` call; a role
+    // the same peer. Sampled by `sampleInboundLiveness()`; a role
     // is "receiving" when its current sample exceeds the previous one. The
     // derived booleans are cached in `roleLivenessByCid` for synchronous reads
     // from the public participant state. Separate from `lastInboundBytesByCid`
@@ -644,14 +649,15 @@ export class MediaEngine {
         }
     }
 
-    // --- Independent content screen share (flag ON): signal-before-attach ---
+    // --- Independent content screen share (flag ON) ---
 
     /**
      * Global start sequence (design "Starting Screen Share"): acquire the
      * display track, record it as the pending local content track, subscribe to
-     * its `onended`, broadcast `content_state {active:true}` FIRST, then attach
-     * per peer (capable → content sender or pending; legacy → swap single
-     * sender). Roll back only if zero peers attached and none is pending.
+     * its `onended`, attach per peer (capable -> content sender or pending;
+     * legacy -> swap single sender), then broadcast `content_state {active:true}`
+     * only once the share has a viable attach path. Roll back silently if zero
+     * peers attached and none is pending.
      */
     private async startScreenShareIndependent(): Promise<void> {
         let displayTrack: MediaStreamTrack | null = null;
@@ -690,10 +696,8 @@ export class MediaEngine {
         displayTrack.onended = () => { void this.stopScreenShare(); };
 
         this.isScreenSharing = true;
-        // 1) Signal before touching any sender so receivers classify as content.
-        this.sendContentState({ active: true, contentType: 'screenShare' });
 
-        // 2) Attach per peer.
+        // Attach per peer.
         let attachedCount = 0;
         let pendingCount = 0;
         await Promise.all(Array.from(this.peers.entries()).map(async ([remoteCid, peer]) => {
@@ -713,15 +717,18 @@ export class MediaEngine {
             }
         }));
 
-        // 3) Roll back only if the share can never flow anywhere.
+        // Roll back only if the share can never flow anywhere. Because the
+        // active:true signal is delayed until after this check, peers do not see
+        // a false "is sharing" flicker on full attach failure.
         if (attachedCount === 0 && pendingCount === 0 && this.peers.size > 0) {
-            this.sendContentState({ active: false });
             // Restore any legacy senders we touched (none attached, but be safe).
             this.releaseLocalContentTrack();
             this.isScreenSharing = false;
             this.notifyChange();
             return;
         }
+
+        this.sendContentState({ active: true, contentType: 'screenShare' });
 
         // No-eligible-peer / no-peer case: start-and-wait (capture live, content
         // pending). The revision bump is owned by `sendContentState`.
@@ -956,26 +963,38 @@ export class MediaEngine {
     }
 
     /**
-     * Sample inbound RTP `bytesReceived` per remote peer and return the CIDs
-     * whose totals advanced since the previous sample. Drives #3's
-     * `media_liveness{cids}` emission so the server can defer hard-eviction
-     * of suspended peers whose media is still being received locally.
+     * Sample inbound RTP once per peer and refresh both the total-media liveness
+     * used by `media_liveness{cids}` and the per-role video liveness used by
+     * camera/content stall diagnostics.
      *
-     * Conservative on first call (no baseline → empty result). Cleans up
-     * tracking for peers that have left.
+     * Conservative on first sample for a peer (no baseline -> not flowing).
+     * Cleans up tracking for peers that have left.
      */
-    async getInboundFlowingCids(): Promise<string[]> {
+    async sampleInboundLiveness(): Promise<InboundLivenessSample> {
         const flowing: string[] = [];
         const seen = new Set<string>();
         for (const [cid, peer] of this.peers) {
             seen.add(cid);
             let bytes = 0;
+            let cameraBytes = 0;
+            let contentBytes = 0;
+            const contentTrackId = this.roleReceiverTrackId(peer, 'content');
             try {
                 const report = await peer.pc.getStats();
                 report.forEach((stat) => {
                     if (stat.type !== 'inbound-rtp') return;
-                    const value = (stat as unknown as Record<string, unknown>)['bytesReceived'];
-                    if (typeof value === 'number') bytes += value;
+                    const value = getStatNumber(stat, 'bytesReceived');
+                    bytes += value;
+                    const kind = getStatString(stat, 'kind') ?? getStatString(stat, 'mediaType');
+                    if (kind !== 'video') return;
+                    const trackId = getStatString(stat, 'trackIdentifier');
+                    if (contentTrackId !== null && trackId === contentTrackId) {
+                        contentBytes += value;
+                    } else {
+                        // Camera role, legacy single video, or any video stat we
+                        // cannot positively attribute to content -> count as camera.
+                        cameraBytes += value;
+                    }
                 });
             } catch {
                 continue;
@@ -985,65 +1004,15 @@ export class MediaEngine {
                 flowing.push(cid);
             }
             this.lastInboundBytesByCid.set(cid, bytes);
+            const previousRole = this.lastInboundRoleBytesByCid.get(cid);
+            this.roleLivenessByCid.set(cid, {
+                camera: previousRole !== undefined && cameraBytes > previousRole.camera,
+                content: previousRole !== undefined && contentBytes > previousRole.content,
+            });
+            this.lastInboundRoleBytesByCid.set(cid, { camera: cameraBytes, content: contentBytes });
         }
         for (const cid of [...this.lastInboundBytesByCid.keys()]) {
             if (!seen.has(cid)) this.lastInboundBytesByCid.delete(cid);
-        }
-        return flowing;
-    }
-
-    /**
-     * Sample inbound video `bytesReceived` per remote peer, SPLIT by the bound
-     * transceiver role (camera vs content), and refresh the cached per-role
-     * liveness booleans (read synchronously via {@link getRoleLiveness}). This
-     * is the per-role counterpart to {@link getInboundFlowingCids}: it lets a
-     * consumer tell that a peer's CONTENT (screen share) video stalled while its
-     * camera/audio are still healthy, and which peer it is.
-     *
-     * Role attribution: each `inbound-rtp` video stat is matched to a peer's
-     * bound camera/content transceiver by the receiver track identity
-     * (`trackIdentifier`). Legacy peers (and the whole flag-off path) have no
-     * bound content role, so their single inbound video routes to `camera` and
-     * `content` stays `false` — keeping behavior byte-identical for camera-only
-     * consumers aside from the additive fields. Audio is excluded (audio
-     * liveness stays in {@link getInboundFlowingCids}).
-     *
-     * Conservative on first sample for a peer (no baseline → both `false`).
-     * Cleans up tracking for peers that have left. Returns the refreshed
-     * snapshot for callers that want it directly.
-     */
-    async sampleInboundRoleLiveness(): Promise<Map<string, RoleLiveness>> {
-        const seen = new Set<string>();
-        for (const [cid, peer] of this.peers) {
-            seen.add(cid);
-            const contentTrackId = this.roleReceiverTrackId(peer, 'content');
-            let cameraBytes = 0;
-            let contentBytes = 0;
-            try {
-                const report = await peer.pc.getStats();
-                report.forEach((stat) => {
-                    if (stat.type !== 'inbound-rtp') return;
-                    const kind = getStatString(stat, 'kind') ?? getStatString(stat, 'mediaType');
-                    if (kind !== 'video') return;
-                    const bytes = getStatNumber(stat, 'bytesReceived');
-                    const trackId = getStatString(stat, 'trackIdentifier');
-                    if (contentTrackId !== null && trackId === contentTrackId) {
-                        contentBytes += bytes;
-                    } else {
-                        // Camera role, legacy single video, or any video stat we
-                        // cannot positively attribute to content → count as camera.
-                        cameraBytes += bytes;
-                    }
-                });
-            } catch {
-                continue;
-            }
-            const previous = this.lastInboundRoleBytesByCid.get(cid);
-            this.roleLivenessByCid.set(cid, {
-                camera: previous !== undefined && cameraBytes > previous.camera,
-                content: previous !== undefined && contentBytes > previous.content,
-            });
-            this.lastInboundRoleBytesByCid.set(cid, { camera: cameraBytes, content: contentBytes });
         }
         for (const cid of [...this.lastInboundRoleBytesByCid.keys()]) {
             if (!seen.has(cid)) this.lastInboundRoleBytesByCid.delete(cid);
@@ -1051,14 +1020,33 @@ export class MediaEngine {
         for (const cid of [...this.roleLivenessByCid.keys()]) {
             if (!seen.has(cid)) this.roleLivenessByCid.delete(cid);
         }
-        return new Map(this.roleLivenessByCid);
+        return { flowingCids: flowing, roleLiveness: new Map(this.roleLivenessByCid) };
+    }
+
+    /**
+     * Sample inbound RTP `bytesReceived` per remote peer and return the CIDs
+     * whose totals advanced since the previous sample. Kept for focused callers;
+     * the session uses `sampleInboundLiveness()` to avoid duplicate `getStats()`.
+     */
+    async getInboundFlowingCids(): Promise<string[]> {
+        const { flowingCids } = await this.sampleInboundLiveness();
+        return flowingCids;
+    }
+
+    /**
+     * Sample inbound video `bytesReceived` per remote peer, split by the bound
+     * transceiver role. Kept for focused callers; the session uses
+     * `sampleInboundLiveness()` to avoid duplicate `getStats()`.
+     */
+    async sampleInboundRoleLiveness(): Promise<Map<string, RoleLiveness>> {
+        const { roleLiveness } = await this.sampleInboundLiveness();
+        return roleLiveness;
     }
 
     /**
      * Latest cached per-role inbound liveness for a peer (camera/content
      * receiving), or both `false` when no sample has been taken yet. Synchronous
-     * so the session can read it while assembling participant state. Refreshed
-     * by {@link sampleInboundRoleLiveness}.
+     * so the session can read it while assembling participant state.
      */
     getRoleLiveness(cid: string): RoleLiveness {
         return this.roleLivenessByCid.get(cid) ?? { camera: false, content: false };

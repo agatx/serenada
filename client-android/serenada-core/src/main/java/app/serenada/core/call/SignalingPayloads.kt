@@ -134,13 +134,13 @@ internal fun JSONObject?.toReconnectTokenRefreshedPayload(): ReconnectTokenRefre
 internal fun JSONObject?.toContentStatePayload(): ContentStatePayload? {
     this ?: return null
     val fromCid = optString("from").ifBlank { return null }
-    val active = optBoolean("active")
+    val active = opt("active") as? Boolean ?: return null
     val contentType = if (active) optString("contentType").ifBlank { null } else null
     return ContentStatePayload(
         fromCid = fromCid,
         active = active,
         contentType = contentType,
-        revision = if (has("revision")) optLong("revision") else null,
+        revision = optRevision(),
     )
 }
 
@@ -189,16 +189,24 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
 }
 
 private fun JSONObject.toParticipantContentState(): ParticipantContentState? {
-    if (!has("active")) return null
-    val active = optBoolean("active")
+    val active = opt("active") as? Boolean ?: return null
     val rawType = optString("contentType").ifBlank { null }
     return ParticipantContentState(
         active = active,
         contentType = if (active) rawType else null,
         updatedAtMs = if (has("updatedAtMs")) optLong("updatedAtMs", -1).takeIf { it >= 0 } else null,
         epoch = if (has("epoch")) optLong("epoch", -1).takeIf { it >= 0 } else null,
-        revision = if (has("revision")) optLong("revision") else null,
+        revision = optRevision(),
     )
+}
+
+internal fun JSONObject.optRevision(): Long? {
+    if (!has("revision") || isNull("revision")) return null
+    return when (val value = opt("revision")) {
+        is Int -> value.toLong()
+        is Long -> value
+        else -> null
+    }?.takeIf { it >= 0 }
 }
 
 /**

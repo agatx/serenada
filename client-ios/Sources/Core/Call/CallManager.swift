@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import SerenadaBroadcastExtensionSupport
 import SerenadaCallUI
 import SerenadaCore
 
@@ -425,6 +426,13 @@ final class CallManager: ObservableObject {
                 serverHost: host,
                 defaultAudioEnabled: settingsStore.isDefaultMicrophoneEnabled,
                 defaultVideoEnabled: frontline ? false : settingsStore.isDefaultCameraEnabled,
+                enableIndependentContentVideo: true,
+                screenShareMode: .broadcast(
+                    BroadcastIPCConfig(
+                        appGroupIdentifier: AppConstants.appGroupIdentifier,
+                        extensionBundleId: AppConstants.broadcastExtensionBundleIdentifier
+                    )
+                ),
                 cameraModes: cameraModes,
                 proximityMonitoringEnabled: true
             )

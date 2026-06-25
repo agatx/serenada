@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  * suspended peers whose media is still flowing locally. Verifies that:
  *   - The SDK broadcasts `media_liveness` when inbound bytes advance for a
  *     peer.
- *   - Emission skips peers with no flow.
+ *   - Emission still sends an empty heartbeat when no peer is flowing.
  *   - Emission stops after `session.leave()` (terminal cleanup path).
  *   - Emission pauses while transport is disconnected and resumes after
  *     reconnect.
@@ -44,7 +44,7 @@ class SessionMediaLivenessTest {
             localJoinedAt = 1,
             remoteJoinedAt = 2,
         )
-        // Baseline tick: bytes=0 → no flow.
+        // Baseline tick: bytes=0 -> empty heartbeat.
         factory.fakeMedia.fakeSlots["remote"]?.inboundBytesSample = 0
         ShadowLooper.idleMainLooper(WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS, TimeUnit.MILLISECONDS)
         val baseline = livenessBroadcasts().size
@@ -62,7 +62,7 @@ class SessionMediaLivenessTest {
     }
 
     @Test
-    fun `skips broadcast when no peer is currently flowing`() {
+    fun `broadcasts empty heartbeat when no peer is currently flowing`() {
         factory.advanceToInCallWithTurn(
             localCid = "alpha",
             remoteCid = "remote",
@@ -73,7 +73,9 @@ class SessionMediaLivenessTest {
         // Several ticks with no growth.
         ShadowLooper.idleMainLooper(WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS * 3, TimeUnit.MILLISECONDS)
 
-        assertEquals(0, livenessBroadcasts().size)
+        val broadcasts = livenessBroadcasts()
+        assertTrue(broadcasts.isNotEmpty())
+        assertEquals(0, broadcasts.last().payload?.optJSONArray("cids")?.length() ?: -1)
         assertTrue(
             "Slot should have been polled at least once",
             (factory.fakeMedia.fakeSlots["remote"]?.collectInboundBytesCalls ?: 0) > 0,

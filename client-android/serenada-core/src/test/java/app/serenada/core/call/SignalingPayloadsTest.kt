@@ -307,4 +307,33 @@ class SignalingPayloadsTest {
         assertTrue(content.active)
         assertEquals(3L, content.revision)
     }
+
+    @Test
+    fun toContentStatePayload_ignoresMalformedRevision() {
+        val payload = JSONObject().apply {
+            put("from", "C-1")
+            put("active", true)
+            put("revision", "bad")
+        }.toContentStatePayload()
+
+        assertEquals("C-1", payload!!.fromCid)
+        assertTrue(payload.active)
+        assertNull(payload.revision)
+    }
+
+    @Test
+    fun toParticipantList_ignoresMalformedContentStateRevision() {
+        val arr = JSONArray().apply {
+            put(JSONObject().apply {
+                put("cid", "C-1")
+                put("contentState", JSONObject().apply {
+                    put("active", true)
+                    put("revision", 1.5)
+                })
+            })
+        }
+        val content = arr.toParticipantList().single().contentState!!
+        assertTrue(content.active)
+        assertNull(content.revision)
+    }
 }

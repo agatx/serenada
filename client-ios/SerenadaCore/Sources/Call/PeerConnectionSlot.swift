@@ -643,14 +643,14 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             logger?.log(.debug, tag: "PeerConnection", "[\(remoteCid)] Ignoring unbound remote video track (mid=\(incomingMid))")
             return
         }
-        // No transceiver (legacy didAdd:stream delivery). For a capable peer this
-        // path cannot distinguish camera from content, and because native libwebrtc
-        // hands each callback a DISTINCT RTCVideoTrack wrapper for the same track, it
-        // re-set (clobbered) the already-classified remote camera with a churned or
-        // content wrapper on every stream callback -> remote video blanked on iOS.
-        // The transceiver-carrying didAdd:rtpReceiver / didStartReceivingOn paths are
-        // authoritative for capable peers, so ignore the nil-transceiver delivery.
-        // (Android's onAddStream is a no-op, which is why this only bit iOS.)
+        // No transceiver. A nil track here is a legacy didRemove:stream delivery;
+        // clear the camera binding so capable peers do not leave a stale frozen
+        // frame behind. Non-nil legacy didAdd:stream delivery stays ignored:
+        // transceiver-carrying callbacks are authoritative for capable peers.
+        if track == nil {
+            attachRemoteCameraTrack(nil)
+            return
+        }
         logger?.log(.debug, tag: "PeerConnection", "[\(remoteCid)] Ignoring nil-transceiver remote video delivery (capable peer)")
     }
 
@@ -975,13 +975,17 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             onComplete(RoleInboundBytes(cameraBytes: 0, contentBytes: 0))
             return
         }
-        // Capture the bound CONTENT receiver's track id on the main actor before
-        // the off-actor stats callback. A non-nil id means we can positively
-        // attribute a video inbound-rtp stat to content; everything else (the
-        // camera role, a legacy single video, an unattributable stat) is camera.
+        // Capture the bound CONTENT receiver's track id and m-line id on the
+        // main actor before the off-actor stats callback. Prefer track id when
+        // WebRTC reports it, but fall back to mid when trackIdentifier is absent
+        // so a bound content transceiver is not mis-attributed as camera.
         let contentTrackId: String? = {
             let id = contentTransceiver?.receiver.track?.trackId
             return (id?.isEmpty == false) ? id : nil
+        }()
+        let contentMid: String? = {
+            let mid = contentTransceiver?.mid
+            return (mid?.isEmpty == false) ? mid : nil
         }()
         peerConnection.statistics { report in
             var cameraBytes: Int64 = 0
@@ -990,7 +994,10 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 guard mediaKind(for: stat) == "video" else { continue }
                 let bytes = memberInt64(stat, key: "bytesReceived") ?? 0
                 let trackId = memberString(stat, key: "trackIdentifier")
-                if let contentTrackId, trackId == contentTrackId {
+                let mid = memberString(stat, key: "mid")
+                let matchesContentTrack = contentTrackId != nil && trackId == contentTrackId
+                let matchesContentMid = trackId == nil && contentMid != nil && mid == contentMid
+                if matchesContentTrack || matchesContentMid {
                     contentBytes += bytes
                 } else {
                     cameraBytes += bytes

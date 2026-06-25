@@ -257,6 +257,21 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
         let rotationRaw = ptr.load(fromByteOffset: BroadcastHeaderOffset.rotation, as: UInt32.self)
 
         guard width > 0, height > 0 else { return }
+        guard let frameLayout = validateFrameLayout(
+            width: width,
+            height: height,
+            planeCount: planeCount,
+            plane0BytesPerRow: plane0BytesPerRow,
+            plane0Height: plane0Height,
+            plane1BytesPerRow: plane1BytesPerRow,
+            plane1Height: plane1Height
+        ) else { return }
+
+        // Confirm the writer did not start another publish after we sampled the
+        // header but before we trust its dimensions for allocation/copy sizes.
+        OSMemoryBarrier()
+        let seqNoBeforeCopy = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+        guard seqNoBeforeCopy == seqNo else { return }
 
         let rotation: RTCVideoRotation
         switch rotationRaw {
@@ -275,8 +290,8 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
 
         if planeCount > 1 {
             // Multi-planar (NV12 / 420v / 420f)
-            let plane0Size = plane0BytesPerRow * plane0Height
-            let plane1Size = plane1BytesPerRow * plane1Height
+            let plane0Size = frameLayout.plane0Size
+            let plane1Size = frameLayout.plane1Size
 
             let status = CVPixelBufferCreate(
                 kCFAllocatorDefault,
@@ -288,6 +303,12 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
             guard status == kCVReturnSuccess, let pixelBuffer else { return }
 
             CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            guard plane0Height <= CVPixelBufferGetHeightOfPlane(pixelBuffer, 0),
+                  plane1Height <= CVPixelBufferGetHeightOfPlane(pixelBuffer, 1)
+            else {
+                CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+                return
+            }
             if let dest0 = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) {
                 let destBpr0 = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
                 if destBpr0 == plane0BytesPerRow {
@@ -322,10 +343,14 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
             guard status == kCVReturnSuccess, let pixelBuffer else { return }
 
             CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            guard height <= CVPixelBufferGetHeight(pixelBuffer) else {
+                CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+                return
+            }
             if let dest = CVPixelBufferGetBaseAddress(pixelBuffer) {
                 let destBpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
                 if destBpr == plane0BytesPerRow {
-                    memcpy(dest, dataStart, plane0BytesPerRow * height)
+                    memcpy(dest, dataStart, frameLayout.plane0Size)
                 } else {
                     for row in 0 ..< height {
                         memcpy(dest.advanced(by: row * destBpr), dataStart.advanced(by: row * plane0BytesPerRow), min(destBpr, plane0BytesPerRow))
@@ -359,6 +384,48 @@ final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
         let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: deliverBuffer)
         let frame = RTCVideoFrame(buffer: rtcBuffer, rotation: rotation, timeStampNs: timestampNs)
         delegate?.capturer(self, didCapture: frame)
+    }
+
+    private struct BroadcastFrameLayout {
+        let plane0Size: Int
+        let plane1Size: Int
+    }
+
+    private func validateFrameLayout(
+        width: Int,
+        height: Int,
+        planeCount: Int,
+        plane0BytesPerRow: Int,
+        plane0Height: Int,
+        plane1BytesPerRow: Int,
+        plane1Height: Int
+    ) -> BroadcastFrameLayout? {
+        guard width > 0, height > 0 else { return nil }
+        guard mmapSize > BroadcastShared.headerSize else { return nil }
+        let availableBytes = UInt64(mmapSize - BroadcastShared.headerSize)
+
+        func byteCount(bytesPerRow: Int, rows: Int) -> UInt64? {
+            guard bytesPerRow > 0, rows > 0 else { return nil }
+            let count = UInt64(bytesPerRow) * UInt64(rows)
+            return count <= availableBytes ? count : nil
+        }
+
+        let plane0Rows = planeCount > 1 ? plane0Height : height
+        guard let plane0Size64 = byteCount(bytesPerRow: plane0BytesPerRow, rows: plane0Rows) else {
+            return nil
+        }
+
+        if planeCount > 1 {
+            guard planeCount == 2,
+                  let plane1Size64 = byteCount(bytesPerRow: plane1BytesPerRow, rows: plane1Height)
+            else { return nil }
+            let (total, overflow) = plane0Size64.addingReportingOverflow(plane1Size64)
+            guard !overflow, total <= availableBytes else { return nil }
+            return BroadcastFrameLayout(plane0Size: Int(plane0Size64), plane1Size: Int(plane1Size64))
+        }
+
+        guard planeCount == 1, plane0Size64 <= availableBytes else { return nil }
+        return BroadcastFrameLayout(plane0Size: Int(plane0Size64), plane1Size: 0)
     }
 
     // MARK: - Shared Memory

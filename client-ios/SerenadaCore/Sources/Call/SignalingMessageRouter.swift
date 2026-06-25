@@ -226,6 +226,14 @@ final class SignalingMessageRouter {
         return outgoingContentRevision
     }
 
+    /// Advance the outgoing counter past a server-persisted local snapshot so
+    /// post-reconnect sends are strictly greater than the revision peers already
+    /// cached for this same CID.
+    func seedContentRevision(_ revision: Int64?) {
+        guard let revision, revision > outgoingContentRevision else { return }
+        outgoingContentRevision = revision
+    }
+
     func broadcastMediaState(audioEnabled: Bool, videoEnabled: Bool) {
         let payload: [String: JSONValue] = [
             "audioEnabled": .bool(audioEnabled),

@@ -288,6 +288,34 @@ describe('SerenadaSession — independent screen share (Phase 1)', () => {
                 revision: 6,
             });
         });
+
+        it('does not let a revisionless snapshot overwrite a cached live state', () => {
+            joinInCall(['peer-1']);
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'content_state',
+                payload: { active: true, contentType: 'screenShare' },
+            });
+            expect(remote('peer-1')?.content).toEqual({
+                active: true,
+                type: 'screenShare',
+                revision: 0,
+            });
+
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [
+                    { peerId: 'me', joinedAt: 1 },
+                    { peerId: 'peer-1', joinedAt: 2, contentState: { active: false, contentType: 'screenShare' } },
+                ],
+            });
+
+            expect(remote('peer-1')?.content).toEqual({
+                active: true,
+                type: 'screenShare',
+                revision: 0,
+            });
+        });
     });
 
     describe('cameraEnabled mirrors videoEnabled (flag off)', () => {
@@ -416,10 +444,9 @@ describe('SerenadaSession — independent screen share (Phase 1)', () => {
             expect(harness.session.getRemoteIndependentContentVideo('peer-1')).toBe(true);
             expect(harness.session.getRemoteVideoMediaEnabled('peer-1')).toBe(false);
 
-            // A later authoritative snapshot for the SAME CID omits both fields
-            // (server reset them to defaults on an omitting rejoin). The stored
-            // entries must be cleared so accessors fall back to contract
-            // defaults instead of returning the stale advertised values.
+            // A later authoritative snapshot for the SAME CID omits both fields.
+            // The stored entries must be cleared so accessors fall back to
+            // contract defaults instead of returning the stale advertised values.
             harness.signaling.emitRoomStateUpdated({
                 hostPeerId: 'me',
                 participants: [

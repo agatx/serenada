@@ -190,6 +190,34 @@ class IndependentContentVideoTest {
     }
 
     @Test
+    fun `malformed revision is treated as revisionless without lowering high water`() {
+        factory.advanceToInCallWithTurn(localCid = "local", remoteCid = "remote")
+        factory.fakeProvider.simulateMessage(
+            from = "remote", type = "content_state",
+            payload = contentState(active = true, revision = 9),
+        )
+        ShadowLooper.idleMainLooper()
+        assertTrue(remoteContent("remote")!!.active)
+
+        factory.fakeProvider.simulateMessage(
+            from = "remote", type = "content_state",
+            payload = JSONObject().apply {
+                put("active", false)
+                put("revision", "bad")
+            },
+        )
+        ShadowLooper.idleMainLooper()
+        assertNull(remoteContent("remote"))
+
+        factory.fakeProvider.simulateMessage(
+            from = "remote", type = "content_state",
+            payload = contentState(active = true, revision = 7),
+        )
+        ShadowLooper.idleMainLooper()
+        assertNull(remoteContent("remote"))
+    }
+
+    @Test
     fun `peer leave resets revision tracking so a rejoin restarting low is accepted`() {
         factory.advanceToInCallWithTurn(localCid = "local", remoteCid = "remote")
         factory.fakeProvider.simulateMessage(
@@ -242,6 +270,36 @@ class IndependentContentVideoTest {
         assertEquals(startRevision, r0)
         assertTrue(sent[0].payload!!.getBoolean("active"))
         assertFalse(sent[1].payload!!.getBoolean("active"))
+    }
+
+    @Test
+    fun `local content revision seeds from recovered snapshot`() {
+        factory.fakeProvider.enqueueIceServers(Result.success(emptyList()))
+        factory.grantPermissionsAndStart()
+        factory.openSignaling()
+        factory.simulateJoinedResponse(cid = "local")
+        factory.fakeProvider.simulateRoomStateUpdatedWith(
+            participants = listOf(
+                SignalingProviderParticipant(
+                    peerId = "local",
+                    joinedAt = 1L,
+                    contentState = SignalingProviderParticipantContentState(
+                        active = false,
+                        contentType = null,
+                        revision = 7,
+                    ),
+                ),
+                SignalingProviderParticipant(peerId = "remote", joinedAt = 2L),
+            ),
+            hostPeerId = "local",
+        )
+        ShadowLooper.idleMainLooper()
+
+        factory.session.startScreenShare(Intent())
+        ShadowLooper.idleMainLooper()
+
+        val sent = factory.fakeProvider.sentMessages("content_state")
+        assertEquals(8L, sent.last().payload!!.getLong("revision"))
     }
 
     // ── Capabilities / policy storage ───────────────────────────────

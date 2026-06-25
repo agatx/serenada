@@ -167,14 +167,11 @@ func TestLegacyJoinOmitsCapabilitiesAndMediaPolicy(t *testing.T) {
 	}
 }
 
-// TestOmittedRejoinResetsStoredCapabilitiesAndMediaPolicy verifies that a
-// (re)join from the same CID that OMITS capabilities/mediaPolicy is
-// authoritative: the previously-stored allowlisted values are reset, not
-// preserved. A participant that earlier advertised independentContentVideo=true
-// and videoMediaEnabled=false must, after an omitting rejoin, forward as
-// defaults (independentContentVideo absent → false, videoMediaEnabled absent →
-// true). Regression guard for the stale-preservation bug.
-func TestOmittedRejoinResetsStoredCapabilitiesAndMediaPolicy(t *testing.T) {
+// TestOmittedRejoinPreservesStoredCapabilitiesAndMediaPolicy verifies that a
+// token-recovery reconnect from the same CID that OMITS capabilities/mediaPolicy
+// does not erase the previously advertised static media contract. A present
+// object is authoritative; an omitted object means "no update".
+func TestOmittedRejoinPreservesStoredCapabilitiesAndMediaPolicy(t *testing.T) {
 	t.Setenv("TURN_SECRET", "test-reconnect-secret")
 	rid := mustTestRoomID(t)
 	hub := newHub(4)
@@ -210,26 +207,26 @@ func TestOmittedRejoinResetsStoredCapabilitiesAndMediaPolicy(t *testing.T) {
 	hub.registerClient(a2)
 	hub.handleMessage(a2, joinWithReconnect(rid, aJoined.CID, aJoined.ReconnectToken))
 
-	// The stored record must no longer carry the stale advertised values.
+	// The stored record must still carry the earlier advertised values because
+	// the reconnect did not include replacement capabilities/mediaPolicy objects.
 	room.mu.Lock()
 	p = room.participantByCID(aJoined.CID)
 	if p == nil {
 		room.mu.Unlock()
 		t.Fatal("expected A's record after reconnect")
 	}
-	staleICV := p.Capabilities != nil && p.Capabilities.IndependentContentVideo != nil && *p.Capabilities.IndependentContentVideo
-	staleVME := p.MediaPolicy != nil && p.MediaPolicy.VideoMediaEnabled != nil && !*p.MediaPolicy.VideoMediaEnabled
+	preservedICV := p.Capabilities != nil && p.Capabilities.IndependentContentVideo != nil && *p.Capabilities.IndependentContentVideo
+	preservedVME := p.MediaPolicy != nil && p.MediaPolicy.VideoMediaEnabled != nil && !*p.MediaPolicy.VideoMediaEnabled
 	room.mu.Unlock()
-	if staleICV {
-		t.Fatalf("expected stale independentContentVideo cleared on omitting rejoin, got %+v", p.Capabilities)
+	if !preservedICV {
+		t.Fatalf("expected independentContentVideo preserved on omitting rejoin, got %+v", p.Capabilities)
 	}
-	if staleVME {
-		t.Fatalf("expected stale videoMediaEnabled cleared on omitting rejoin, got %+v", p.MediaPolicy)
+	if !preservedVME {
+		t.Fatalf("expected videoMediaEnabled preserved on omitting rejoin, got %+v", p.MediaPolicy)
 	}
 
-	// A peer's joined/room_state snapshot must now show defaults for A:
-	// independentContentVideo absent (or false), videoMediaEnabled absent
-	// (or true) — never the stale advertised values.
+	// A peer's joined snapshot must still advertise A's independent-content
+	// support and video media policy after A reconnected without those objects.
 	b := fakeClient(hub)
 	hub.registerClient(b)
 	hub.handleMessage(b, joinPayload(rid, 4, 4))
@@ -239,11 +236,11 @@ func TestOmittedRejoinResetsStoredCapabilitiesAndMediaPolicy(t *testing.T) {
 	if aEntry == nil {
 		t.Fatal("expected A in B's joined snapshot")
 	}
-	if aEntry.Capabilities != nil && aEntry.Capabilities.IndependentContentVideo != nil && *aEntry.Capabilities.IndependentContentVideo {
-		t.Fatalf("expected forwarded independentContentVideo default (absent/false), got %+v", aEntry.Capabilities)
+	if aEntry.Capabilities == nil || aEntry.Capabilities.IndependentContentVideo == nil || !*aEntry.Capabilities.IndependentContentVideo {
+		t.Fatalf("expected forwarded independentContentVideo=true preserved, got %+v", aEntry.Capabilities)
 	}
-	if aEntry.MediaPolicy != nil && aEntry.MediaPolicy.VideoMediaEnabled != nil && !*aEntry.MediaPolicy.VideoMediaEnabled {
-		t.Fatalf("expected forwarded videoMediaEnabled default (absent/true), got %+v", aEntry.MediaPolicy)
+	if aEntry.MediaPolicy == nil || aEntry.MediaPolicy.VideoMediaEnabled == nil || *aEntry.MediaPolicy.VideoMediaEnabled {
+		t.Fatalf("expected forwarded videoMediaEnabled=false preserved, got %+v", aEntry.MediaPolicy)
 	}
 }
 

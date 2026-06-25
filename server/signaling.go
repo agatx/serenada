@@ -270,8 +270,9 @@ type roomParticipant struct {
 	// reconstruct UI without waiting for the sender to toggle again.
 	ContentState *ParticipantContentState
 	// Capabilities and MediaPolicy are the allowlisted values advertised at join,
-	// stored so they can be forwarded in joined/room_state. Updated on every
-	// join (including reconnect), mirroring DisplayName/PeerID.
+	// stored so they can be forwarded in joined/room_state. Updated on joins
+	// that include the corresponding object; omitted objects on reconnect leave
+	// the previous static advertisement intact.
 	Capabilities *ParticipantCapabilities
 	MediaPolicy  *ParticipantMediaPolicy
 	// SessionID is the sid of the transport currently (or most recently) owning
@@ -957,9 +958,9 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		CreateMaxParticipants int     `json:"createMaxParticipants"`
 		DisplayName           *string `json:"displayName"`
 		PeerID                *string `json:"peerId"`
-		Capabilities          struct {
+		Capabilities          *struct {
 			TrickleIce              *bool `json:"trickleIce"`
-			MaxParticipants         int   `json:"maxParticipants"`
+			MaxParticipants         *int  `json:"maxParticipants"`
 			IndependentContentVideo *bool `json:"independentContentVideo"`
 		} `json:"capabilities"`
 		MediaPolicy *struct {
@@ -976,17 +977,14 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	// Only present fields are carried; nil when the client advertised nothing,
 	// so the wire entries stay omitted (and clients apply their own defaults).
 	var parsedCapabilities *ParticipantCapabilities
-	if joinPayload.Capabilities.TrickleIce != nil ||
-		joinPayload.Capabilities.MaxParticipants != 0 ||
-		joinPayload.Capabilities.IndependentContentVideo != nil {
+	if joinPayload.Capabilities != nil && (joinPayload.Capabilities.TrickleIce != nil ||
+		joinPayload.Capabilities.MaxParticipants != nil ||
+		joinPayload.Capabilities.IndependentContentVideo != nil) {
 		parsedCapabilities = &ParticipantCapabilities{
 			TrickleIce:              joinPayload.Capabilities.TrickleIce,
 			IndependentContentVideo: joinPayload.Capabilities.IndependentContentVideo,
 		}
-		if joinPayload.Capabilities.MaxParticipants != 0 {
-			maxP := joinPayload.Capabilities.MaxParticipants
-			parsedCapabilities.MaxParticipants = &maxP
-		}
+		parsedCapabilities.MaxParticipants = joinPayload.Capabilities.MaxParticipants
 	}
 	var parsedMediaPolicy *ParticipantMediaPolicy
 	if joinPayload.MediaPolicy != nil {
@@ -996,7 +994,10 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 	}
 
 	// Client capability: largest room size this client supports (default 2 for legacy)
-	clientMaxParticipants := joinPayload.Capabilities.MaxParticipants
+	clientMaxParticipants := 0
+	if joinPayload.Capabilities != nil && joinPayload.Capabilities.MaxParticipants != nil {
+		clientMaxParticipants = *joinPayload.Capabilities.MaxParticipants
+	}
 	if clientMaxParticipants < 2 {
 		clientMaxParticipants = 2
 	}
@@ -1252,19 +1253,34 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		p.PeerID = trimmed
 	}
 
-	// Store the allowlisted capabilities/mediaPolicy on every join (including
-	// reconnect) so the values stay current and are forwarded in
-	// joined/room_state. Each join is authoritative: assign the freshly parsed
-	// records verbatim, even when nil. Per the wire contract, an omitted
-	// capabilities/mediaPolicy (or an omitted allowlisted key) means "apply
-	// defaults", so a (re)join that drops these objects must clear any stale
-	// previously-stored values rather than preserve them. Receivers then apply
-	// their own defaults (independentContentVideo → false, videoMediaEnabled →
-	// true). The maxParticipants room-capacity clamp above reads the raw join
-	// payload and is unaffected by this storage reset.
+	// Store allowlisted capabilities/mediaPolicy only when the object is present
+	// on this join. Token-recovery reconnects from third-party SDKs may omit
+	// these static records; omission means "no update" for the participant record.
+	// When the object is present, merge only present allowlisted keys (for
+	// example maxParticipants can refresh without erasing independentContentVideo);
+	// a present-but-empty object intentionally clears back to defaults.
 	if p != nil {
-		p.Capabilities = parsedCapabilities
-		p.MediaPolicy = parsedMediaPolicy
+		if joinPayload.Capabilities != nil {
+			if parsedCapabilities == nil {
+				p.Capabilities = nil
+			} else {
+				if p.Capabilities == nil {
+					p.Capabilities = &ParticipantCapabilities{}
+				}
+				if parsedCapabilities.TrickleIce != nil {
+					p.Capabilities.TrickleIce = parsedCapabilities.TrickleIce
+				}
+				if parsedCapabilities.MaxParticipants != nil {
+					p.Capabilities.MaxParticipants = parsedCapabilities.MaxParticipants
+				}
+				if parsedCapabilities.IndependentContentVideo != nil {
+					p.Capabilities.IndependentContentVideo = parsedCapabilities.IndependentContentVideo
+				}
+			}
+		}
+		if joinPayload.MediaPolicy != nil {
+			p.MediaPolicy = parsedMediaPolicy
+		}
 	}
 
 	if room.HostCID == "" {

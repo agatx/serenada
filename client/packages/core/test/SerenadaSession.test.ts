@@ -1320,7 +1320,7 @@ describe('SerenadaSession', () => {
             const broadcasts = livenessBroadcasts();
             expect(broadcasts.length).toBeGreaterThanOrEqual(1);
             expect(broadcasts[0].payload).toEqual({ cids: [] });
-            expect(harness.media.getInboundFlowingCidsCalls).toBeGreaterThan(0);
+            expect(harness.media.sampleInboundLivenessCalls).toBeGreaterThan(0);
         });
 
         it('skips broadcast while transport is disconnected; resumes after reconnect', async () => {
@@ -1372,7 +1372,7 @@ describe('SerenadaSession', () => {
 
             await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS + 50);
 
-            expect(harness.media.sampleInboundRoleLivenessCalls).toBeGreaterThan(0);
+            expect(harness.media.sampleInboundLivenessCalls).toBeGreaterThan(0);
             const after = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
             expect(after?.cameraReceiving).toBe(true);
             expect(after?.contentReceiving).toBe(false);

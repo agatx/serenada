@@ -132,6 +132,18 @@ export class FakeMediaEngine {
      * right list.
      */
     inboundFlowingCids: string[] = [];
+    sampleInboundLivenessCalls = 0;
+    async sampleInboundLiveness(): Promise<{
+        flowingCids: string[];
+        roleLiveness: Map<string, { camera: boolean; content: boolean }>;
+    }> {
+        this.sampleInboundLivenessCalls += 1;
+        return {
+            flowingCids: [...this.inboundFlowingCids],
+            roleLiveness: new Map(this.roleLiveness),
+        };
+    }
+
     getInboundFlowingCidsCalls = 0;
     async getInboundFlowingCids(): Promise<string[]> {
         this.getInboundFlowingCidsCalls += 1;

@@ -996,39 +996,33 @@ class SerenadaSession internal constructor(
             return
         }
         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
-        broadcastLocalContentState(false)
         // Legacy stop restores the camera onto the single sender, so re-apply the
         // camera preference. Independent stop never touched the camera, so the
         // re-apply is unnecessary (the content track was separate).
         if (!config.enableIndependentContentVideo) {
+            broadcastLocalContentState(false)
             applyLocalVideoPreference()
         } else {
-            restoreCameraContentHintAfterIndependentStop()
+            val restoredType = cameraContentTypeAfterIndependentStop()
+            if (restoredType != null) {
+                broadcastLocalContentState(true, restoredType)
+            } else {
+                broadcastLocalContentState(false)
+            }
         }
     }
 
     /**
-     * Independent-stop only: re-emit the world/composite camera content hint that
-     * was suppressed for the duration of the share.
-     *
-     * In independent mode the camera stays in WORLD/COMPOSITE while a screen share
-     * runs, but [onCameraModeChanged]'s hint and any flip suppress the
-     * camera-framing `content_state` because the screen share owns `content_state`
-     * (gotcha #6). Clearing the screen-share content on stop ([broadcastLocalContentState]
-     * `active=false`) therefore leaves remote peers with NO content presented even
-     * though the camera is still in a content framing. Re-broadcast the
-     * camera-mode hint so the pre-share world/composite presentation is restored.
-     * SELFIE (no camera content framing) re-emits nothing — the inactive state
-     * already broadcast above is correct.
+     * Independent-stop only: content type that should remain active when the
+     * camera is still in a world/composite content framing. SELFIE has no
+     * content framing, so stopping the share emits inactive instead.
      */
-    private fun restoreCameraContentHintAfterIndependentStop() {
+    private fun cameraContentTypeAfterIndependentStop(): String? {
         val cameraMode = webRtcEngine.activeCameraMode() ?: _state.value.localCameraMode
-        when (cameraMode) {
-            LocalCameraMode.WORLD ->
-                broadcastLocalContentState(true, ContentTypeWire.WORLD_CAMERA)
-            LocalCameraMode.COMPOSITE ->
-                broadcastLocalContentState(true, ContentTypeWire.COMPOSITE_CAMERA)
-            else -> Unit
+        return when (cameraMode) {
+            LocalCameraMode.WORLD -> ContentTypeWire.WORLD_CAMERA
+            LocalCameraMode.COMPOSITE -> ContentTypeWire.COMPOSITE_CAMERA
+            else -> null
         }
     }
 
@@ -1431,11 +1425,15 @@ class SerenadaSession internal constructor(
                     // session-side state once (pitfall #9: one content_state).
                     if (_diagnostics.value.isScreenSharing) {
                         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
-                        broadcastLocalContentState(false)
-                        // Restore the world/composite camera content hint that was
-                        // suppressed during the share (independent mode only).
                         if (config.enableIndependentContentVideo) {
-                            restoreCameraContentHintAfterIndependentStop()
+                            val restoredType = cameraContentTypeAfterIndependentStop()
+                            if (restoredType != null) {
+                                broadcastLocalContentState(true, restoredType)
+                            } else {
+                                broadcastLocalContentState(false)
+                            }
+                        } else {
+                            broadcastLocalContentState(false)
                         }
                     }
                     // Independent stop never preempted the camera, so don't
@@ -1599,6 +1597,7 @@ class SerenadaSession internal constructor(
     // --- Internal: Participants ---
 
     private fun updateParticipants(roomState: RoomState) {
+        seedLocalContentRevisionFromSnapshot(roomState)
         seedRemoteContentFromRoomState(roomState)
         val count = roomState.participants.size
         val isHostNow = clientId != null && clientId == roomState.hostCid
@@ -1626,6 +1625,16 @@ class SerenadaSession internal constructor(
         if (phase == CallPhase.InCall) {
             startMediaLivenessTimer()
             startOutboundMediaWatchdog()
+        }
+    }
+
+    private fun seedLocalContentRevisionFromSnapshot(roomState: RoomState) {
+        val localRevision = roomState.participants
+            .firstOrNull { it.cid == clientId }
+            ?.contentState
+            ?.revision
+        if (localRevision != null && localRevision > localContentRevision) {
+            localContentRevision = localRevision
         }
     }
 
@@ -1791,8 +1800,7 @@ class SerenadaSession internal constructor(
             if (participant.cid == myCid) continue
             // Each authoritative snapshot is the source of truth: clear stored
             // caps/mediaPolicy for a still-present CID whose snapshot omits them
-            // (the server resets these to defaults on an omitting rejoin) so
-            // accessors fall back to contract defaults instead of stale values.
+            // so accessors fall back to contract defaults instead of stale values.
             val caps = participant.capabilities
             if (caps != null) remoteCapabilities[participant.cid] = caps else remoteCapabilities.remove(participant.cid)
             val policy = participant.mediaPolicy
@@ -2104,8 +2112,9 @@ class SerenadaSession internal constructor(
         val stale = lastInboundBytesByCid.keys.filterNot { activeCids.contains(it) }
         for (cid in stale) lastInboundBytesByCid.remove(cid)
 
-        if (flowing.isEmpty()) return
         if (!_diagnostics.value.isSignalingConnected) return
+        // Emit even when `flowing` is empty so the server knows this client is
+        // still a fresh reporter that sees no media from suspended peers.
         val payload = JSONObject().apply { put("cids", JSONArray(flowing)) }
         signalingProvider.broadcast("media_liveness", payload)
         mediaLivenessEmitCount += 1

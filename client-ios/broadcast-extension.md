@@ -15,6 +15,7 @@ by passing the mode at session construction:
 ```swift
 SerenadaConfig(
     serverHost: "serenada.app",
+    enableIndependentContentVideo: true,
     screenShareMode: .broadcast(
         BroadcastIPCConfig(
             appGroupIdentifier: "group.app.serenada.ios",
