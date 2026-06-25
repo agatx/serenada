@@ -8,6 +8,7 @@ import {
     type RelayFailedEvent,
     type RoomEndedEvent,
     type RoomStateEvent,
+    type SignalingProviderParticipant,
 } from '../../src/SignalingProvider.js';
 
 export class FakeSignalingProvider extends SignalingProviderEmitter {
@@ -82,7 +83,7 @@ export class FakeSignalingProvider extends SignalingProviderEmitter {
 
     emitJoined(event: {
         peerId: string;
-        participants: Array<{ peerId: string; joinedAt?: number }>;
+        participants: SignalingProviderParticipant[];
         hostPeerId?: string;
         maxParticipants?: number;
     }): void {

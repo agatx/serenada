@@ -497,3 +497,41 @@ describe('pending join', () => {
         engine.destroy();
     });
 });
+
+describe('join capabilities / mediaPolicy advertisement', () => {
+    function joinWith(config: { videoMediaEnabled?: boolean; enableIndependentContentVideo?: boolean }) {
+        const engine = new SignalingEngine({
+            wsUrl: 'ws://localhost/ws',
+            httpBaseUrl: 'http://localhost',
+            transports: ['ws'],
+            ...config,
+        });
+        engine.connect();
+        const ws = lastTransport();
+        ws.simulateOpen();
+        engine.joinRoom('room-caps');
+        const join = ws.sentMessages.find((m) => m.type === 'join');
+        engine.destroy();
+        return join;
+    }
+
+    it('defaults to independentContentVideo=false and videoMediaEnabled=true', () => {
+        const join = joinWith({});
+        expect(join?.payload?.capabilities).toMatchObject({
+            trickleIce: true,
+            maxParticipants: 4,
+            independentContentVideo: false,
+        });
+        expect(join?.payload?.mediaPolicy).toEqual({ videoMediaEnabled: true });
+    });
+
+    it('advertises independentContentVideo=true when the flag is on', () => {
+        const join = joinWith({ enableIndependentContentVideo: true });
+        expect((join?.payload?.capabilities as Record<string, unknown>).independentContentVideo).toBe(true);
+    });
+
+    it('advertises videoMediaEnabled=false for strict audio-only calls', () => {
+        const join = joinWith({ videoMediaEnabled: false });
+        expect(join?.payload?.mediaPolicy).toEqual({ videoMediaEnabled: false });
+    });
+});

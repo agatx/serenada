@@ -26,17 +26,27 @@ public struct JoinOptions: Equatable, Sendable {
     /// server-issued) — lets host applications correlate a participant to their
     /// own user identity (avatar lookup, telemetry).
     public var appPeerId: String?
+    /// Static build capability advertised in `join.capabilities`. Mirrors
+    /// `SerenadaConfig.enableIndependentContentVideo`. Phase 1: always `false`.
+    public var independentContentVideo: Bool
+    /// Per-session media policy advertised in `join.mediaPolicy`. Mirrors
+    /// `SerenadaConfig.videoMediaEnabled`.
+    public var videoMediaEnabled: Bool
 
     public init(
         reconnectPeerId: String? = nil,
         maxParticipants: Int? = nil,
         displayName: String? = nil,
-        appPeerId: String? = nil
+        appPeerId: String? = nil,
+        independentContentVideo: Bool = false,
+        videoMediaEnabled: Bool = true
     ) {
         self.reconnectPeerId = reconnectPeerId
         self.maxParticipants = maxParticipants
         self.displayName = displayName
         self.appPeerId = appPeerId
+        self.independentContentVideo = independentContentVideo
+        self.videoMediaEnabled = videoMediaEnabled
     }
 }
 
@@ -45,17 +55,40 @@ public struct SignalingProviderParticipantContentState: Equatable, Sendable {
     public let contentType: String?
     public let updatedAtMs: Int64?
     public let epoch: Int64?
+    /// Per-`(cid, sid)` monotonic revision marker. `nil` for older sources.
+    public let revision: Int64?
 
     public init(
         active: Bool,
         contentType: String? = nil,
         updatedAtMs: Int64? = nil,
-        epoch: Int64? = nil
+        epoch: Int64? = nil,
+        revision: Int64? = nil
     ) {
         self.active = active
         self.contentType = contentType
         self.updatedAtMs = updatedAtMs
         self.epoch = epoch
+        self.revision = revision
+    }
+}
+
+/// Static build capabilities a participant advertised at `join`, surfaced to
+/// the session by the provider. Missing keys default per their documentation.
+public struct SignalingProviderParticipantCapabilities: Equatable, Sendable {
+    public let independentContentVideo: Bool?
+
+    public init(independentContentVideo: Bool? = nil) {
+        self.independentContentVideo = independentContentVideo
+    }
+}
+
+/// Per-session media policy a participant advertised at `join`.
+public struct SignalingProviderParticipantMediaPolicy: Equatable, Sendable {
+    public let videoMediaEnabled: Bool?
+
+    public init(videoMediaEnabled: Bool? = nil) {
+        self.videoMediaEnabled = videoMediaEnabled
     }
 }
 
@@ -69,6 +102,10 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
     public let videoEnabled: Bool?
     public let signalingStatus: ParticipantSignalingStatus
     public let contentState: SignalingProviderParticipantContentState?
+    /// Static build capabilities advertised at `join`.
+    public let capabilities: SignalingProviderParticipantCapabilities?
+    /// Per-session media policy advertised at `join`.
+    public let mediaPolicy: SignalingProviderParticipantMediaPolicy?
 
     public init(
         peerId: String,
@@ -78,7 +115,9 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
         audioEnabled: Bool? = nil,
         videoEnabled: Bool? = nil,
         signalingStatus: ParticipantSignalingStatus = .active,
-        contentState: SignalingProviderParticipantContentState? = nil
+        contentState: SignalingProviderParticipantContentState? = nil,
+        capabilities: SignalingProviderParticipantCapabilities? = nil,
+        mediaPolicy: SignalingProviderParticipantMediaPolicy? = nil
     ) {
         self.peerId = peerId
         self.joinedAt = joinedAt
@@ -88,6 +127,8 @@ public struct SignalingProviderParticipant: Equatable, Sendable {
         self.videoEnabled = videoEnabled
         self.signalingStatus = signalingStatus
         self.contentState = contentState
+        self.capabilities = capabilities
+        self.mediaPolicy = mediaPolicy
     }
 }
 
@@ -167,11 +208,17 @@ public struct PeerMessage: Equatable, Sendable {
     public let from: String
     public let type: String
     public let payload: SignalingPayload?
+    /// Sender's session id (`sid`) from the wire envelope, when the transport
+    /// surfaces it. Used to scope `content_state` revision tracking to the
+    /// originating `(cid, sid)` so a rejoin that restarts its revision counter
+    /// is accepted by identity. `nil` for transports that do not expose it.
+    public let sid: String?
 
-    public init(from: String, type: String, payload: SignalingPayload? = nil) {
+    public init(from: String, type: String, payload: SignalingPayload? = nil, sid: String? = nil) {
         self.from = from
         self.type = type
         self.payload = payload
+        self.sid = sid
     }
 }
 

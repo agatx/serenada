@@ -411,6 +411,92 @@ describe('parseJoinedPayload — Phase 1 fields', () => {
     });
 });
 
+describe('parseParticipants — independent screen share fields', () => {
+    it('parses content state revision', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [
+                { cid: 'a', contentState: { active: true, contentType: 'screenShare', revision: 7 } },
+            ],
+        });
+        expect(result?.participants[0].contentState).toEqual({
+            active: true,
+            contentType: 'screenShare',
+            updatedAtMs: undefined,
+            epoch: undefined,
+            revision: 7,
+        });
+    });
+
+    it('omits revision when not a number', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [{ cid: 'a', contentState: { active: true, revision: 'nope' } }],
+        });
+        expect(result?.participants[0].contentState?.revision).toBeUndefined();
+    });
+
+    it('parses allowlisted capabilities keys', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [
+                {
+                    cid: 'a',
+                    capabilities: {
+                        trickleIce: true,
+                        maxParticipants: 4,
+                        independentContentVideo: true,
+                        unknownKey: 'ignored',
+                    },
+                },
+            ],
+        });
+        expect(result?.participants[0].capabilities).toEqual({
+            trickleIce: true,
+            maxParticipants: 4,
+            independentContentVideo: true,
+        });
+        // Unknown keys are dropped, not stored.
+        expect((result?.participants[0].capabilities as Record<string, unknown>).unknownKey).toBeUndefined();
+    });
+
+    it('parses mediaPolicy.videoMediaEnabled', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [
+                { cid: 'a', mediaPolicy: { videoMediaEnabled: false } },
+                { cid: 'b', mediaPolicy: { videoMediaEnabled: true } },
+            ],
+        });
+        expect(result?.participants[0].mediaPolicy).toEqual({ videoMediaEnabled: false });
+        expect(result?.participants[1].mediaPolicy).toEqual({ videoMediaEnabled: true });
+    });
+
+    it('leaves capabilities/mediaPolicy undefined when absent or malformed', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [
+                { cid: 'a' },
+                { cid: 'b', capabilities: 'bad', mediaPolicy: 42 },
+            ],
+        });
+        expect(result?.participants[0].capabilities).toBeUndefined();
+        expect(result?.participants[0].mediaPolicy).toBeUndefined();
+        // Malformed (non-object) capabilities/mediaPolicy → undefined.
+        expect(result?.participants[1].capabilities).toBeUndefined();
+        expect(result?.participants[1].mediaPolicy).toBeUndefined();
+    });
+
+    it('omits independentContentVideo when not a boolean (caller defaults to false)', () => {
+        const result = parseJoinedPayload({
+            hostCid: 'h',
+            participants: [{ cid: 'a', capabilities: { independentContentVideo: 'yes' } }],
+        });
+        expect(result?.participants[0].capabilities).toEqual({});
+        expect(result?.participants[0].capabilities?.independentContentVideo).toBeUndefined();
+    });
+});
+
 describe('parseRoomStatePayload — Phase 1 fields', () => {
     it('parses epoch and content state', () => {
         const result = parseRoomStatePayload({

@@ -162,6 +162,70 @@ class SerenadaServerProviderTest {
     }
 
     @Test
+    fun `join advertises content capability and media policy from options`() {
+        provider.joinRoom(
+            roomId = "room-1",
+            options = JoinOptions(
+                maxParticipants = 4,
+                independentContentVideo = true,
+                videoMediaEnabled = false,
+            ),
+        )
+        signaling.open(activeTransport = "ws")
+
+        val joinPayload = signaling.sentMessages.single { it.type == "join" }.payload!!
+        val capabilities = joinPayload.getJSONObject("capabilities")
+        assertTrue(capabilities.getBoolean("trickleIce"))
+        assertTrue(capabilities.getBoolean("independentContentVideo"))
+        val mediaPolicy = joinPayload.getJSONObject("mediaPolicy")
+        assertEquals(false, mediaPolicy.getBoolean("videoMediaEnabled"))
+    }
+
+    @Test
+    fun `join defaults advertise content capability off and video policy on`() {
+        provider.joinRoom(
+            roomId = "room-1",
+            options = JoinOptions(maxParticipants = 4),
+        )
+        signaling.open(activeTransport = "ws")
+
+        val joinPayload = signaling.sentMessages.single { it.type == "join" }.payload!!
+        val capabilities = joinPayload.getJSONObject("capabilities")
+        assertEquals(false, capabilities.getBoolean("independentContentVideo"))
+        val mediaPolicy = joinPayload.getJSONObject("mediaPolicy")
+        assertTrue(mediaPolicy.getBoolean("videoMediaEnabled"))
+    }
+
+    @Test
+    fun `room_state forwards capabilities and media policy to delegate`() {
+        signaling.receive(
+            SignalingMessage(
+                type = "room_state",
+                rid = "room-1",
+                sid = null,
+                cid = null,
+                to = null,
+                payload = JSONObject().apply {
+                    put("hostCid", "local-cid")
+                    put(
+                        "participants",
+                        JSONArray()
+                            .put(participantJson("local-cid", 1L))
+                            .put(participantJson("peer-a", 2L).apply {
+                                put("capabilities", JSONObject().apply { put("independentContentVideo", true) })
+                                put("mediaPolicy", JSONObject().apply { put("videoMediaEnabled", false) })
+                            }),
+                    )
+                },
+            ),
+        )
+
+        val peer = listener.roomStateEvents.last().participants.first { it.peerId == "peer-a" }
+        assertTrue(peer.capabilities!!.independentContentVideo)
+        assertEquals(false, peer.mediaPolicy!!.videoMediaEnabled)
+    }
+
+    @Test
     fun `auto rejoin after transport drop carries server-assigned cid and token`() {
         // Initial fresh join — no reconnect peer id from the host app.
         provider.joinRoom(

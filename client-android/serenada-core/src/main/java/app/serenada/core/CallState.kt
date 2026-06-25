@@ -3,6 +3,7 @@ package app.serenada.core
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.LocalCameraMode
+import app.serenada.core.call.ParticipantContent
 import app.serenada.core.call.RemoteParticipant
 
 /**
@@ -60,6 +61,18 @@ data class CallState(
     val localAudioEnabled: Boolean = true,
     /** Whether local video is currently enabled. */
     val localVideoEnabled: Boolean = true,
+    /**
+     * Whether the local camera video specifically is enabled. In the current
+     * (flag-off) build this mirrors [localVideoEnabled]; once independent
+     * content video ships it tracks camera-active independently from screen
+     * share.
+     */
+    val localCameraEnabled: Boolean = true,
+    /**
+     * Local content (screen share) presentation state. Null when the local
+     * user is not sharing content.
+     */
+    val localContent: ParticipantContent? = null,
     /** Local participant display name, if set. */
     val localDisplayName: String? = null,
     /**

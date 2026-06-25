@@ -135,8 +135,8 @@ final class FakeSignalingProvider: SignalingProvider {
         delegate?.signalingProviderDidLeavePeer(PeerEvent(peerId: peerId, joinedAt: joinedAt))
     }
 
-    func simulateMessage(from: String, type: String, payload: SignalingPayload? = nil) {
-        delegate?.signalingProviderDidReceiveMessage(PeerMessage(from: from, type: type, payload: payload))
+    func simulateMessage(from: String, type: String, payload: SignalingPayload? = nil, sid: String? = nil) {
+        delegate?.signalingProviderDidReceiveMessage(PeerMessage(from: from, type: type, payload: payload, sid: sid))
     }
 
     func simulateRoomEnded(by: String? = nil, reason: String = "room ended") {

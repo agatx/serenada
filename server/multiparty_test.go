@@ -50,6 +50,16 @@ type joinPayloadOptions struct {
 	ReconnectCID string
 	DisplayName  *string
 	PeerID       *string
+	// TrickleIce / IndependentContentVideo / VideoMediaEnabled exercise the
+	// allowlisted capability + mediaPolicy parsing. Nil → field omitted from the
+	// wire payload entirely (so we can assert default-handling and presence).
+	TrickleIce              *bool
+	IndependentContentVideo *bool
+	VideoMediaEnabled       *bool
+	// ExtraCapabilities / ExtraMediaPolicy inject unknown keys to prove the
+	// server allowlist drops them. Marshalled into the respective objects.
+	ExtraCapabilities map[string]interface{}
+	ExtraMediaPolicy  map[string]interface{}
 }
 
 // joinPayload builds a raw JSON join message with optional capabilities.
@@ -58,22 +68,49 @@ func joinPayload(rid string, capMax int, createMax int) []byte {
 }
 
 func joinPayloadWithOptions(rid string, capMax int, createMax int, options joinPayloadOptions) []byte {
-	type caps struct {
-		MaxParticipants int `json:"maxParticipants,omitempty"`
+	// Build capabilities as a generic map so optional fields and unknown keys can
+	// be injected without the typed-struct omitting them.
+	caps := map[string]interface{}{}
+	if capMax != 0 {
+		caps["maxParticipants"] = capMax
 	}
-	payload := struct {
-		Capabilities          caps    `json:"capabilities,omitempty"`
-		CreateMaxParticipants int     `json:"createMaxParticipants,omitempty"`
-		ReconnectCID          string  `json:"reconnectCid,omitempty"`
-		DisplayName           *string `json:"displayName,omitempty"`
-		PeerID                *string `json:"peerId,omitempty"`
-	}{
-		Capabilities:          caps{MaxParticipants: capMax},
-		CreateMaxParticipants: createMax,
-		ReconnectCID:          options.ReconnectCID,
-		DisplayName:           options.DisplayName,
-		PeerID:                options.PeerID,
+	if options.TrickleIce != nil {
+		caps["trickleIce"] = *options.TrickleIce
 	}
+	if options.IndependentContentVideo != nil {
+		caps["independentContentVideo"] = *options.IndependentContentVideo
+	}
+	for k, v := range options.ExtraCapabilities {
+		caps[k] = v
+	}
+
+	payload := map[string]interface{}{}
+	if len(caps) > 0 {
+		payload["capabilities"] = caps
+	}
+	if createMax != 0 {
+		payload["createMaxParticipants"] = createMax
+	}
+	if options.ReconnectCID != "" {
+		payload["reconnectCid"] = options.ReconnectCID
+	}
+	if options.DisplayName != nil {
+		payload["displayName"] = *options.DisplayName
+	}
+	if options.PeerID != nil {
+		payload["peerId"] = *options.PeerID
+	}
+	if options.VideoMediaEnabled != nil || len(options.ExtraMediaPolicy) > 0 {
+		mp := map[string]interface{}{}
+		if options.VideoMediaEnabled != nil {
+			mp["videoMediaEnabled"] = *options.VideoMediaEnabled
+		}
+		for k, v := range options.ExtraMediaPolicy {
+			mp[k] = v
+		}
+		payload["mediaPolicy"] = mp
+	}
+
 	payloadBytes, _ := json.Marshal(payload)
 
 	msg := Message{

@@ -25,9 +25,11 @@
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.broadcast-services-upload</string>
 		<key>NSExtensionPrincipalClass</key>
-		<string>$(PRODUCT_MODULE_NAME).SampleHandler</string>
+		<string>$(PRODUCT_MODULE_NAME).ScreenShareSampleHandler</string>
 		<key>RPBroadcastProcessMode</key>
 		<string>RPBroadcastProcessModeSampleBuffer</string>
 	</dict>
+	<key>SerenadaBroadcastAppGroupIdentifier</key>
+	<string>group.app.serenada.ios</string>
 </dict>
 </plist>

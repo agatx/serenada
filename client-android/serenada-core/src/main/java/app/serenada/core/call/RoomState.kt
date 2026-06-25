@@ -30,6 +30,18 @@ internal data class Participant(
      * waiting for the sender to toggle again.
      */
     val contentState: ParticipantContentState? = null,
+    /**
+     * Static build capabilities advertised by this participant at `join`,
+     * forwarded verbatim by the server. Absent for older clients; callers
+     * apply per-field defaults (e.g. `independentContentVideo` → false).
+     */
+    val capabilities: ParticipantCapabilities? = null,
+    /**
+     * Per-session media policy advertised by this participant at `join`,
+     * forwarded verbatim by the server. Absent for older clients; callers
+     * default `videoMediaEnabled` → true.
+     */
+    val mediaPolicy: ParticipantMediaPolicy? = null,
 )
 
 internal data class ParticipantContentState(
@@ -37,6 +49,36 @@ internal data class ParticipantContentState(
     val contentType: String? = null,
     val updatedAtMs: Long? = null,
     val epoch: Long? = null,
+    /**
+     * Per-`(cid, sid)` monotonic revision of this content state. Lets the
+     * receiver order quick stop/start toggles and discard stale, out-of-order
+     * updates. Absent on older senders that do not stamp a revision.
+     */
+    val revision: Long? = null,
+)
+
+/**
+ * Allowlisted static capabilities advertised by a participant. Only known keys
+ * are modeled; unknown keys are dropped by the server before forwarding.
+ */
+internal data class ParticipantCapabilities(
+    /**
+     * Whether the participant can negotiate, send, receive, classify, expose,
+     * and render an independent content (screen share) video stream. Defaults
+     * to false when absent.
+     */
+    val independentContentVideo: Boolean = false,
+)
+
+/**
+ * Allowlisted per-session media policy advertised by a participant.
+ */
+internal data class ParticipantMediaPolicy(
+    /**
+     * Whether this participant negotiates any video media at all. Defaults to
+     * true when absent (no deployed audio-only client predates this signal).
+     */
+    val videoMediaEnabled: Boolean = true,
 )
 
 /**

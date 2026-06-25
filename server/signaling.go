@@ -200,6 +200,28 @@ type Participant struct {
 	VideoEnabled     *bool                    `json:"videoEnabled,omitempty"`
 	ConnectionStatus string                   `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
 	ContentState     *ParticipantContentState `json:"contentState,omitempty"`
+	// Capabilities and MediaPolicy are the allowlisted values advertised at join,
+	// forwarded verbatim so SDKs can decide per-peer whether to negotiate
+	// independent content video and whether to offer video at all. Omitted when
+	// the participant advertised nothing.
+	Capabilities *ParticipantCapabilities `json:"capabilities,omitempty"`
+	MediaPolicy  *ParticipantMediaPolicy  `json:"mediaPolicy,omitempty"`
+}
+
+// ParticipantCapabilities is the allowlisted subset of join.payload.capabilities
+// the server stores and forwards. Unknown keys are dropped at parse time. The
+// server does not interpret these for media routing; SDKs do.
+type ParticipantCapabilities struct {
+	TrickleIce              *bool `json:"trickleIce,omitempty"`
+	MaxParticipants         *int  `json:"maxParticipants,omitempty"`
+	IndependentContentVideo *bool `json:"independentContentVideo,omitempty"`
+}
+
+// ParticipantMediaPolicy is the allowlisted subset of join.payload.mediaPolicy.
+// videoMediaEnabled signals whether this participant negotiates any video
+// m-line (camera or content). Clients default a missing value to true.
+type ParticipantMediaPolicy struct {
+	VideoMediaEnabled *bool `json:"videoMediaEnabled,omitempty"`
 }
 
 // ParticipantContentState is the latest ephemeral content metadata (screen
@@ -211,7 +233,15 @@ type ParticipantContentState struct {
 	Active      bool   `json:"active"`
 	ContentType string `json:"contentType,omitempty"`
 	UpdatedAtMs int64  `json:"updatedAtMs,omitempty"`
-	Epoch       int64  `json:"epoch,omitempty"`
+	// Epoch is the ROOM state epoch at which this transition was recorded. It is
+	// distinct from Revision: Epoch orders against room membership changes, while
+	// Revision is the sender's per-(cid,sid) monotonic counter for content
+	// transitions. Both are relayed/persisted verbatim; the server does not
+	// compare revisions itself.
+	Epoch int64 `json:"epoch,omitempty"`
+	// Revision is the sender's per-(cid,sid) monotonically increasing content
+	// transition counter, relayed and persisted verbatim. Opaque to the server.
+	Revision int64 `json:"revision,omitempty"`
 }
 
 // roomParticipant is the server-side stable participant record keyed by CID.
@@ -238,6 +268,16 @@ type roomParticipant struct {
 	// share active, content camera mode, etc.) so a reattaching peer can
 	// reconstruct UI without waiting for the sender to toggle again.
 	ContentState *ParticipantContentState
+	// Capabilities and MediaPolicy are the allowlisted values advertised at join,
+	// stored so they can be forwarded in joined/room_state. Updated on every
+	// join (including reconnect), mirroring DisplayName/PeerID.
+	Capabilities *ParticipantCapabilities
+	MediaPolicy  *ParticipantMediaPolicy
+	// SessionID is the sid of the transport currently (or most recently) owning
+	// this participant record. Captured on attach/reattach. It scopes the
+	// persisted ContentState/Revision: a reattach that preserves the sid keeps
+	// the content state; a new sid supersedes it.
+	SessionID string
 }
 
 // roomTombstone records that a room has explicitly ended. Reconnect attempts
@@ -505,6 +545,9 @@ func (r *Room) attachParticipant(cid string, client *Client, joinedAtMs int64) *
 		JoinedAt: joinedAtMs,
 		Client:   client,
 	}
+	if client != nil {
+		p.SessionID = client.sid
+	}
 	r.byCID[cid] = p
 	r.byClient[client] = cid
 	r.cancelNoActiveTimer()
@@ -515,6 +558,17 @@ func (r *Room) attachParticipant(cid string, client *Client, joinedAtMs int64) *
 // attaching a new live *Client. Caller must ensure the old Client pointer
 // was previously detached via detachClient or evictClient.
 func (r *Room) reattachClient(p *roomParticipant, client *Client) {
+	// A recoverable transport disconnect (suspend → reattach within the
+	// reconnect window) PRESERVES the persisted ContentState so peers do not
+	// flicker the share off. We update SessionID to the reattaching transport's
+	// sid: the persisted content state stays valid until the sender either sends
+	// a fresh content_state (latest-wins, naturally superseding) or the slot is
+	// cleared on explicit leave / hard eviction. This matches the design's
+	// "old sid's state is removed when that old session expires" rule rather
+	// than clearing eagerly on reattach.
+	if client != nil {
+		p.SessionID = client.sid
+	}
 	p.Client = client
 	p.SuspendedAt = 0
 	if p.hardEvictionTimer != nil {
@@ -571,6 +625,8 @@ func (r *Room) snapshotParticipants() []Participant {
 			AudioEnabled: p.AudioEnabled,
 			VideoEnabled: p.VideoEnabled,
 			ContentState: p.ContentState,
+			Capabilities: p.Capabilities,
+			MediaPolicy:  p.MediaPolicy,
 		}
 		if p.Client == nil {
 			entry.ConnectionStatus = connectionStatusSuspended
@@ -891,7 +947,9 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		return
 	}
 
-	// Parse join payload before acquiring locks
+	// Parse join payload before acquiring locks. capabilities and mediaPolicy are
+	// allowlisted: unmarshalling into typed structs with known keys silently
+	// drops any unknown keys the client may send, which is the required behavior.
 	var joinPayload struct {
 		ReconnectCID          string  `json:"reconnectCid"`
 		ReconnectToken        string  `json:"reconnectToken"`
@@ -899,12 +957,40 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 		DisplayName           *string `json:"displayName"`
 		PeerID                *string `json:"peerId"`
 		Capabilities          struct {
-			MaxParticipants int `json:"maxParticipants"`
+			TrickleIce              *bool `json:"trickleIce"`
+			MaxParticipants         int   `json:"maxParticipants"`
+			IndependentContentVideo *bool `json:"independentContentVideo"`
 		} `json:"capabilities"`
+		MediaPolicy *struct {
+			VideoMediaEnabled *bool `json:"videoMediaEnabled"`
+		} `json:"mediaPolicy"`
 	}
 	if len(msg.Payload) > 0 {
 		if err := json.Unmarshal(msg.Payload, &joinPayload); err != nil {
 			log.Printf("[JOIN] Failed to parse payload: %v", err)
+		}
+	}
+
+	// Build the allowlisted capability/policy records to store on the participant.
+	// Only present fields are carried; nil when the client advertised nothing,
+	// so the wire entries stay omitted (and clients apply their own defaults).
+	var parsedCapabilities *ParticipantCapabilities
+	if joinPayload.Capabilities.TrickleIce != nil ||
+		joinPayload.Capabilities.MaxParticipants != 0 ||
+		joinPayload.Capabilities.IndependentContentVideo != nil {
+		parsedCapabilities = &ParticipantCapabilities{
+			TrickleIce:              joinPayload.Capabilities.TrickleIce,
+			IndependentContentVideo: joinPayload.Capabilities.IndependentContentVideo,
+		}
+		if joinPayload.Capabilities.MaxParticipants != 0 {
+			maxP := joinPayload.Capabilities.MaxParticipants
+			parsedCapabilities.MaxParticipants = &maxP
+		}
+	}
+	var parsedMediaPolicy *ParticipantMediaPolicy
+	if joinPayload.MediaPolicy != nil {
+		parsedMediaPolicy = &ParticipantMediaPolicy{
+			VideoMediaEnabled: joinPayload.MediaPolicy.VideoMediaEnabled,
 		}
 	}
 
@@ -1163,6 +1249,21 @@ func (h *Hub) handleJoin(c *Client, msg Message) {
 			trimmed = string(runes[:maxPeerIDLength])
 		}
 		p.PeerID = trimmed
+	}
+
+	// Store the allowlisted capabilities/mediaPolicy on every join (including
+	// reconnect) so the values stay current and are forwarded in
+	// joined/room_state. Each join is authoritative: assign the freshly parsed
+	// records verbatim, even when nil. Per the wire contract, an omitted
+	// capabilities/mediaPolicy (or an omitted allowlisted key) means "apply
+	// defaults", so a (re)join that drops these objects must clear any stale
+	// previously-stored values rather than preserve them. Receivers then apply
+	// their own defaults (independentContentVideo → false, videoMediaEnabled →
+	// true). The maxParticipants room-capacity clamp above reads the raw join
+	// payload and is unaffected by this storage reset.
+	if p != nil {
+		p.Capabilities = parsedCapabilities
+		p.MediaPolicy = parsedMediaPolicy
 	}
 
 	if room.HostCID == "" {
@@ -1600,6 +1701,15 @@ func applyContentStateUpdate(room *Room, senderCID string, payload map[string]in
 		Epoch:       room.Epoch,
 		UpdatedAtMs: time.Now().UnixMilli(),
 	}
+	// revision is the sender's per-(cid,sid) monotonic counter. The server keeps
+	// it verbatim (latest-wins, like the rest of content_state) so a reconnecting
+	// peer learns the sender's current revision via room_state. The server does
+	// NOT compare or order revisions itself — that comparison is a receiver-side
+	// rule (a stale active:false that should not override a newer active:true is
+	// the receiver's responsibility to discard). JSON numbers decode as float64.
+	if revision, ok := payload["revision"].(float64); ok {
+		state.Revision = int64(revision)
+	}
 	// contentType is meaningful only while a share is active. `active=false`
 	// collapses to a cleared state so suspended peers don't see a stale
 	// "screen sharing" indicator after the share stops.
@@ -1609,6 +1719,13 @@ func applyContentStateUpdate(room *Room, senderCID string, payload map[string]in
 		}
 	}
 	p.ContentState = state
+	// Capture the owning sid so the persisted state is scoped to the session
+	// that produced it. The relay envelope carries the sender's sid on c.sid;
+	// reattachClient already keeps SessionID current, so persisting it here keeps
+	// the content state attributable to the live session for lifecycle decisions.
+	if p.Client != nil && p.Client.sid != "" {
+		p.SessionID = p.Client.sid
+	}
 }
 
 func (h *Hub) handleMediaState(c *Client, msg Message) {

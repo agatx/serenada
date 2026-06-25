@@ -40,11 +40,38 @@ internal class PeerConnectionSlot(
     private val currentVideoSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy,
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
     private val peerConnectionDisposeQueue: PeerConnectionDisposeQueue,
+    // Independent-content gate for THIS peer (per-peer). False ⇒ legacy
+    // single-video path, byte-identical to today. See [attachLocalTracks].
+    override val supportsIndependentContentVideo: Boolean = false,
+    // Whether the local participant is the deterministic offer owner for this
+    // connection. The owner pre-creates camera/content transceivers up front;
+    // the answerer binds roles from the applied remote offer. Evaluated lazily
+    // so it tracks glare/ownership the same way the negotiation engine does.
+    private val isOfferOwner: () -> Boolean = { false },
+    // Conservative content (screen share) sender encoding profile, applied to the
+    // content sender so a typical display track fits the negotiated envelope.
+    private val contentSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy =
+        { WebRtcEngine.VideoSenderPolicy(null, null, null, null) },
     private val logger: SerenadaLogger? = null,
 ) : PeerConnectionSlotProtocol {
     private companion object {
         const val DEFERRED_DISPOSE_DELAY_MS = 250L
     }
+
+    // --- Independent-content role binding (capable peers only) ---
+    // Camera/content video transceivers bound ONCE by object identity / mid:
+    // first video m-line → camera, second → content. Never recomputed from
+    // media/track state once bound (design "Role binding invariants"). Empty for
+    // legacy peers (those keep using the single-video [attachTrackToTransceiver]).
+    private var cameraTransceiver: RtpTransceiver? = null
+    private var contentTransceiver: RtpTransceiver? = null
+    // The local content (screen share) track for this peer. Attached to the
+    // content sender once the content transceiver binds (covers answerer /
+    // late-join / setTrack-reject fallback). attachBoundVideoTracks reconciles
+    // the sender to match this field, so a pending attach is implicit: while a
+    // track is set but no transceiver is bound yet, the next bind re-runs the
+    // reconcile and attaches it.
+    private var localContentTrack: VideoTrack? = null
 
     private data class MediaTotals(
         var inboundPacketsReceived: Long = 0L,
@@ -136,11 +163,19 @@ internal class PeerConnectionSlot(
     @Volatile private var isClosing = false
     private var peerConnection: PeerConnection? = null
     private var audioSender: RtpSender? = null
+    // Camera remote track (the default video track for legacy peers). For
+    // capable peers this is the track on the bound CAMERA transceiver.
     @Volatile private var remoteVideoTrack: VideoTrack? = null
+    // Content remote track (capable peers: track on the bound CONTENT
+    // transceiver). Null for legacy peers; their single track is presented as
+    // content by the session based on content_state, not by a separate track.
+    @Volatile private var remoteContentVideoTrack: VideoTrack? = null
     @Volatile private var playbackDucked = false
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()
+    // Sinks attached specifically to the remote CONTENT track (capable peers).
+    private val remoteContentSinks = LinkedHashSet<VideoSink>()
     private var lastRealtimeStatsSample: RealtimeStatsSample? = null
     // Written from the stats executor thread, read from the provider handler.
     @Volatile private var lastPathIsDirect: Boolean? = null
@@ -205,6 +240,8 @@ internal class PeerConnectionSlot(
                 if (!isCurrentPeerConnection(observerPeerConnection)) return
                 val track = transceiver?.receiver?.track()
                 if (track is AudioTrack) {
+                    // Audio routing is independent of camera/content video
+                    // classification (pitfall #4): never disturb the audio sink.
                     track.setVolume(if (playbackDucked) 0.15 else 1.0)
                 }
                 if (track is VideoTrack) {
@@ -216,13 +253,40 @@ internal class PeerConnectionSlot(
                         )
                         return
                     }
-                    remoteVideoTrack?.removeSink(remoteVideoStateSink)
-                    remoteSinks.forEach { sink -> remoteVideoTrack?.removeSink(sink) }
-                    remoteVideoTrack = track
-                    remoteBlackFrameAnalyzer.onTrackAttached()
-                    track.addSink(remoteVideoStateSink)
-                    remoteSinks.forEach { sink -> track.addSink(sink) }
-                    onRemoteVideoTrack(remoteCid, track)
+                    // Capable peers: classify by the PERSISTED transceiver role
+                    // bound by m-line order. The track may arrive before the
+                    // answerer's binding ran, so (re)bind from m-line order first.
+                    if (supportsIndependentContentVideo) {
+                        ensureVideoRolesBound(observerPeerConnection)
+                        // Classify by the stable m-line id (mid), NOT transceiver object
+                        // identity. Native libwebrtc delivers a DIFFERENT RtpTransceiver
+                        // wrapper to onTrack than the one cached in camera/contentTransceiver
+                        // (same underlying native transceiver), so `===` matched neither and
+                        // the inbound remote CAMERA was dropped to `else` -> no remote video.
+                        // mid is the negotiated m-line id and is stable across wrapper
+                        // instances; identity is kept as a fallback before mids are assigned.
+                        val incomingMid = transceiver.mid
+                        when {
+                            incomingMid != null && incomingMid == contentTransceiver?.mid ->
+                                { attachRemoteContentTrack(track); return }
+                            incomingMid != null && incomingMid == cameraTransceiver?.mid ->
+                                { attachRemoteCameraTrack(track); return }
+                            transceiver === contentTransceiver -> { attachRemoteContentTrack(track); return }
+                            transceiver === cameraTransceiver -> { attachRemoteCameraTrack(track); return }
+                            else -> {
+                                // Unbound extra video m-line: do not promote it.
+                                logger?.log(
+                                    SerenadaLogLevel.DEBUG,
+                                    "PeerConnection",
+                                    "[$remoteCid] Ignoring unbound remote video track (mid=$incomingMid)"
+                                )
+                                return
+                            }
+                        }
+                    }
+                    // Legacy peer: single video track is the camera track. The
+                    // session presents it as content when content_state is active.
+                    attachRemoteCameraTrack(track)
                 }
             }
 
@@ -253,17 +317,28 @@ internal class PeerConnectionSlot(
 
         observerPeerConnection = pc
         peerConnection = pc
-        attachLocalTracks(localAudioTrack, localVideoTrack)
+        attachLocalTracks(
+            audioTrack = localAudioTrack,
+            cameraTrack = localVideoTrack,
+            contentTrack = localContentTrack,
+            supportsIndependentContentVideo = supportsIndependentContentVideo,
+        )
         ensureReceiveTransceivers(pc)
         applyAudioSenderParameters(pc)
         applyVideoSenderParameters(currentVideoSenderPolicy())
         return true
     }
 
-    override fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {
+    override fun attachLocalTracks(
+        audioTrack: AudioTrack?,
+        cameraTrack: VideoTrack?,
+        contentTrack: VideoTrack?,
+        supportsIndependentContentVideo: Boolean,
+    ) {
         if (isClosing) return
         localAudioTrack = audioTrack
-        localVideoTrack = videoTrack
+        localVideoTrack = cameraTrack
+        localContentTrack = contentTrack
         val pc = peerConnection ?: run {
             if (!ensurePeerConnection()) return
             peerConnection
@@ -278,14 +353,192 @@ internal class PeerConnectionSlot(
                 if (audioTrack != null) applyAudioSenderParameters(pc)
             }
         )
-        attachTrackToTransceiver(
-            pc = pc,
-            track = videoTrack,
-            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-            onAttached = { _ ->
-                if (videoTrack != null) applyVideoSenderParameters(currentVideoSenderPolicy())
+
+        if (this.supportsIndependentContentVideo) {
+            attachIndependentVideoTracks(pc, cameraTrack, contentTrack)
+        } else {
+            // Legacy single-video path: one video transceiver carries whichever
+            // video track the engine supplied (camera, or the display track when
+            // the engine has routed an active share onto the camera track).
+            attachTrackToTransceiver(
+                pc = pc,
+                track = cameraTrack,
+                mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                onAttached = { _ ->
+                    if (cameraTrack != null) applyVideoSenderParameters(currentVideoSenderPolicy())
+                }
+            )
+        }
+    }
+
+    /**
+     * Independent-capable peer attach: ensure the ordered camera/content
+     * transceivers exist (offer owner) or are bound (answerer), then attach the
+     * camera and pending/active content tracks via their bound senders.
+     */
+    private fun attachIndependentVideoTracks(
+        pc: PeerConnection,
+        cameraTrack: VideoTrack?,
+        contentTrack: VideoTrack?,
+    ) {
+        if (!videoReceiveEnabled) return
+        // Drop stale (disposed) cached role transceivers before touching them: a
+        // reconnect / deferred-dispose race can leave a reference to a transceiver
+        // whose native object was disposed, and ANY access (getDirection, sender,
+        // mid) then throws IllegalStateException — which crashed the screen-share
+        // start (attachBoundVideoTracks -> ensureRoleSendCapable -> getDirection).
+        // Cleared roles re-bind from the current peer connection's live m-lines.
+        if (cameraTransceiver?.isLiveTransceiver() == false) cameraTransceiver = null
+        if (contentTransceiver?.isLiveTransceiver() == false) contentTransceiver = null
+        // Bind any existing live video m-lines first (re-acquires a fresh wrapper
+        // after a clear, and is the answerer's normal path); then the offer owner
+        // creates any still-missing role m-line. Running both is safe: an already-
+        // bound role short-circuits ensureOwnerVideoTransceivers, so no duplicate.
+        ensureVideoRolesBound(pc)
+        if (isOfferOwner()) {
+            ensureOwnerVideoTransceivers(pc)
+        }
+        // The content track (if any) attaches the moment the content transceiver
+        // binds — see attachBoundVideoTracks, which reconciles purely from
+        // localContentTrack and is the single role-state-driven attach point.
+        attachBoundVideoTracks()
+    }
+
+    /**
+     * Offer-owner only: pre-create the camera transceiver first then the content
+     * transceiver second, both send-capable up front (no track yet sends
+     * nothing). Idempotent — re-entry binds nothing new.
+     */
+    private fun ensureOwnerVideoTransceivers(pc: PeerConnection) {
+        if (cameraTransceiver == null) {
+            cameraTransceiver = pc.addTransceiver(
+                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV),
+            )
+        }
+        if (contentTransceiver == null) {
+            contentTransceiver = pc.addTransceiver(
+                MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV),
+            )
+            contentTransceiver?.let { applyContentSenderParameters(it) }
+        }
+    }
+
+    /**
+     * Bind video roles by m-line order from the current transceiver list: first
+     * video m-line → camera, second → content. Binds ONCE per role by
+     * transceiver object identity; never recomputes an already-bound role. Extra
+     * video m-lines beyond the second are answered inactive and never promoted.
+     */
+    private fun ensureVideoRolesBound(pc: PeerConnection?) {
+        pc ?: return
+        if (cameraTransceiver != null && contentTransceiver != null) return
+        val videoTransceivers = pc.transceivers
+            .filter {
+                it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO &&
+                    it.currentDirection != RtpTransceiver.RtpTransceiverDirection.STOPPED
             }
+        for (transceiver in videoTransceivers) {
+            if (transceiver === cameraTransceiver || transceiver === contentTransceiver) continue
+            when {
+                cameraTransceiver == null -> {
+                    cameraTransceiver = transceiver
+                    ensureRoleSendCapable(transceiver)
+                }
+                contentTransceiver == null -> {
+                    contentTransceiver = transceiver
+                    ensureRoleSendCapable(transceiver)
+                    applyContentSenderParameters(transceiver)
+                }
+                else -> {
+                    // Extra video m-line: never promoted. Answer inactive.
+                    if (transceiver.direction != RtpTransceiver.RtpTransceiverDirection.INACTIVE &&
+                        transceiver.direction != RtpTransceiver.RtpTransceiverDirection.STOPPED
+                    ) {
+                        runCatching { transceiver.direction = RtpTransceiver.RtpTransceiverDirection.INACTIVE }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Attach the camera and content tracks to their bound role senders.
+     *
+     * Single role-state-driven attach point (pitfall #1): re-attaches whenever a
+     * role is bound and the sender does not already carry the right track, so
+     * pending content attaches regardless of how it became pending (owner,
+     * answerer, late-join, setTrack-reject retry). Idempotent via the
+     * `sender.track !== track` guard.
+     */
+    private fun attachBoundVideoTracks() {
+        val camera = cameraTransceiver
+        val cameraTrack = localVideoTrack
+        if (camera != null) {
+            ensureRoleSendCapable(camera)
+            if (camera.sender.track() !== cameraTrack) {
+                camera.sender.setTrack(cameraTrack, false)
+                if (cameraTrack != null) applyVideoSenderParameters(currentVideoSenderPolicy())
+            }
+        }
+        // Reconcile the content sender to match the current local content track:
+        // attach when a track is set (pending or live), detach (setTrack null)
+        // when it has been cleared on stop. The `sender.track !== track`
+        // idempotence guard makes a re-entry a no-op.
+        val content = contentTransceiver
+        val contentTrack = localContentTrack
+        if (content != null && content.sender.track() !== contentTrack) {
+            if (contentTrack != null) {
+                ensureRoleSendCapable(content)
+                replaceContentTrackWithFallback(content, contentTrack)
+            } else {
+                // Detach on stop: clear the content sender (no renegotiation).
+                runCatching { content.sender.setTrack(null, false) }
+            }
+        }
+    }
+
+    /**
+     * Replace the content sender's track. On setTrack rejection (returns false or
+     * throws for an incompatible envelope), force a renegotiation for this peer's
+     * content m-line (structural change), so the share re-attaches after the
+     * forced renegotiation instead of leaving the content sender empty.
+     */
+    private fun replaceContentTrackWithFallback(content: RtpTransceiver, track: VideoTrack?) {
+        // setTrack returns a boolean success AND can throw; treat either as reject.
+        val ok = runCatching { content.sender.setTrack(track, false) }.getOrDefault(false)
+        if (ok) {
+            if (track != null) applyContentSenderParameters(content)
+            return
+        }
+        // Durable retry: `localContentTrack` stays set, so the post-renegotiation
+        // setRemoteDescription → attachBoundVideoTracks re-attaches it (the
+        // content sender would otherwise stay empty after a structural change).
+        logger?.log(
+            SerenadaLogLevel.WARNING,
+            "PeerConnection",
+            "[$remoteCid] Failed to setTrack on content sender; renegotiating",
         )
+        onRenegotiationNeeded(remoteCid)
+    }
+
+    /** False once the native transceiver has been disposed (any access throws). */
+    private fun RtpTransceiver.isLiveTransceiver(): Boolean =
+        runCatching { this.direction }.isSuccess
+
+    private fun ensureRoleSendCapable(transceiver: RtpTransceiver) {
+        // A disposed transceiver throws on any access; never crash the caller.
+        val direction = runCatching { transceiver.direction }.getOrNull() ?: return
+        if (direction != RtpTransceiver.RtpTransceiverDirection.SEND_RECV &&
+            direction != RtpTransceiver.RtpTransceiverDirection.STOPPED
+        ) {
+            runCatching { transceiver.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV }
+        }
+    }
+
+    private fun applyContentSenderParameters(transceiver: RtpTransceiver) {
+        applySenderParameters(transceiver.sender, contentSenderPolicy())
     }
 
     override fun setAudioTrack(track: AudioTrack?) {
@@ -333,6 +586,37 @@ internal class PeerConnectionSlot(
         }
     }
 
+    /** Bind/replace the remote CAMERA track and rewire camera sinks + analyzer. */
+    private fun attachRemoteCameraTrack(track: VideoTrack) {
+        if (track === remoteVideoTrack) return
+        remoteVideoTrack?.removeSink(remoteVideoStateSink)
+        remoteSinks.forEach { sink -> remoteVideoTrack?.removeSink(sink) }
+        remoteVideoTrack = track
+        remoteBlackFrameAnalyzer.onTrackAttached()
+        track.addSink(remoteVideoStateSink)
+        remoteSinks.forEach { sink -> track.addSink(sink) }
+        onRemoteVideoTrack(remoteCid, track)
+    }
+
+    /** Bind/replace the remote CONTENT (screen share) track and rewire its sinks. */
+    private fun attachRemoteContentTrack(track: VideoTrack) {
+        if (track === remoteContentVideoTrack) return
+        remoteContentSinks.forEach { sink -> remoteContentVideoTrack?.removeSink(sink) }
+        remoteContentVideoTrack = track
+        remoteContentSinks.forEach { sink -> track.addSink(sink) }
+    }
+
+    override fun attachRemoteContentSink(sink: VideoSink) {
+        if (isClosing) return
+        if (!remoteContentSinks.add(sink)) return
+        remoteContentVideoTrack?.addSink(sink)
+    }
+
+    override fun detachRemoteContentSink(sink: VideoSink) {
+        remoteContentVideoTrack?.removeSink(sink)
+        remoteContentSinks.remove(sink)
+    }
+
     override fun closePeerConnection(deferDispose: Boolean) {
         if (isClosing && peerConnection == null) return
         isClosing = true
@@ -347,6 +631,13 @@ internal class PeerConnectionSlot(
         remoteSinks.forEach { sink -> track?.removeSink(sink) }
         remoteSinks.clear()
         remoteVideoTrack = null
+        val contentTrack = remoteContentVideoTrack
+        remoteContentSinks.forEach { sink -> contentTrack?.removeSink(sink) }
+        remoteContentSinks.clear()
+        remoteContentVideoTrack = null
+        cameraTransceiver = null
+        contentTransceiver = null
+        localContentTrack = null
         audioSender = null
         remoteBlackFrameAnalyzer.onTrackDetached()
         remoteDescriptionSet = false
@@ -482,6 +773,15 @@ internal class PeerConnectionSlot(
                 if (!isCurrentPeerConnection(pc)) return
                 remoteDescriptionSet = true
                 flushPendingIceCandidates()
+                if (supportsIndependentContentVideo && videoReceiveEnabled) {
+                    // Answerer: materialize role bindings from the applied offer
+                    // (m-line order). Owner: re-bind is idempotent. Then attach any
+                    // live/pending camera+content tracks via their bound senders —
+                    // this is the single bind/attach point that also re-attaches
+                    // a setTrack-reject fallback once the m-line re-negotiates.
+                    ensureVideoRolesBound(pc)
+                    attachBoundVideoTracks()
+                }
                 onComplete?.invoke(true)
             }
 
@@ -590,6 +890,42 @@ internal class PeerConnectionSlot(
                 bytes += memberLong(stat, "bytesReceived") ?: 0L
             }
             onComplete(bytes)
+        }
+    }
+
+    override fun collectInboundRoleBytes(onComplete: (InboundRoleBytes) -> Unit) {
+        if (isClosing) {
+            onComplete(InboundRoleBytes(cameraBytes = 0L, contentBytes = 0L))
+            return
+        }
+        val pc = peerConnection
+        if (pc == null) {
+            onComplete(InboundRoleBytes(cameraBytes = 0L, contentBytes = 0L))
+            return
+        }
+        // Receiver track id bound to the content role, if any. Captured before
+        // getStats so the match is against the role bound at sample time. Null
+        // for legacy peers and the flag-off path (no content transceiver), so
+        // every video stat falls through to the camera bucket.
+        val contentTrackId = contentTransceiver?.receiver?.track()?.id()
+            ?.takeIf { it.isNotEmpty() }
+        pc.getStats { report ->
+            var cameraBytes = 0L
+            var contentBytes = 0L
+            for (stat in report.statsMap.values) {
+                if (stat.type != "inbound-rtp") continue
+                if (getMediaKind(stat) != "video") continue
+                val bytes = memberLong(stat, "bytesReceived") ?: 0L
+                val trackId = memberString(stat, "trackIdentifier")
+                if (contentTrackId != null && trackId == contentTrackId) {
+                    contentBytes += bytes
+                } else {
+                    // Camera role, legacy single video, or any video stat we
+                    // cannot positively attribute to content → count as camera.
+                    cameraBytes += bytes
+                }
+            }
+            onComplete(InboundRoleBytes(cameraBytes = cameraBytes, contentBytes = contentBytes))
         }
     }
 
@@ -704,7 +1040,19 @@ internal class PeerConnectionSlot(
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
         if (isClosing) return
         val pc = peerConnection ?: return
+        if (supportsIndependentContentVideo) {
+            // Camera and content ride separate senders with separate profiles.
+            // The camera policy applies to the camera sender only; the content
+            // sender keeps its own conservative content profile.
+            cameraTransceiver?.sender?.let { applySenderParameters(it, policy) }
+            contentTransceiver?.sender?.let { applySenderParameters(it, contentSenderPolicy()) }
+            return
+        }
         val sender = pc.senders.firstOrNull { it.track()?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND } ?: return
+        applySenderParameters(sender, policy)
+    }
+
+    private fun applySenderParameters(sender: RtpSender, policy: WebRtcEngine.VideoSenderPolicy) {
         try {
             val params = sender.parameters
             val encodings = params.encodings
@@ -758,6 +1106,11 @@ internal class PeerConnectionSlot(
                 RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
             )
         }
+        // Capable peers manage their own video m-lines: the owner pre-creates the
+        // ordered camera+content transceivers, and the answerer materializes them
+        // from the remote offer. Adding a generic recvonly video transceiver here
+        // would create an unbound extra m-line, so it is skipped for them.
+        if (supportsIndependentContentVideo) return
         if (videoReceiveEnabled && localVideoTrack == null) {
             pc.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,

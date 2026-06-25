@@ -17,6 +17,7 @@ This native client mirrors Android/web call flow and signaling semantics:
 - In-call realtime stats model + top-left double-tap debug panel
 - Diagnostics screen (permissions, media, connectivity, ICE gather probe, report export)
 - Settings for server host, language, call defaults, saved-room order, invite-notification filter, and app version
+- Independent content video (screen share) SDK surface in `SerenadaCore`: `cameraEnabled`/`content` on `LocalParticipant` and `RemoteParticipant` (camera-specific state alongside legacy `videoEnabled`), the signaled `mediaPolicy.videoMediaEnabled` session policy, and content renderer APIs `SerenadaSession.attachRemoteContentRenderer(_:forParticipant:)`/`detachRemoteContentRenderer(_:forParticipant:)` plus `attachLocalContentRenderer(_:)`/`detachLocalContentRenderer(_:)` (existing `attachRemoteRenderer(_:forParticipant:)` stays camera-specific). Gated behind `SerenadaConfig.enableIndependentContentVideo` (default `false`, **not yet enabled** — held on media + UI readiness and the legacy-receiver interop gate); with the flag off, screen share behaves exactly as today. See the root README and protocol spec for the cross-platform contract.
 
 ## Requirements
 - Xcode 16+

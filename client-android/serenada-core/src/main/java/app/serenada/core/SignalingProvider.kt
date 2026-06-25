@@ -21,6 +21,17 @@ data class JoinOptions(
      * to their own user identity (avatar lookup, telemetry).
      */
     val appPeerId: String? = null,
+    /**
+     * Advertised as `capabilities.independentContentVideo` at `join`. Mirrors
+     * [SerenadaConfig.enableIndependentContentVideo]. Phase 1: always false.
+     */
+    val independentContentVideo: Boolean = false,
+    /**
+     * Advertised as `mediaPolicy.videoMediaEnabled` at `join`. Mirrors
+     * [SerenadaConfig.videoMediaEnabled]. Lets remote peers avoid offering
+     * video toward a strict audio-only participant.
+     */
+    val videoMediaEnabled: Boolean = true,
 )
 
 /**
@@ -36,6 +47,25 @@ data class SignalingProviderParticipantContentState(
     val contentType: String? = null,
     val updatedAtMs: Long? = null,
     val epoch: Long? = null,
+    /** Per-`(cid, sid)` monotonic revision; null on older senders. */
+    val revision: Long? = null,
+)
+
+/**
+ * Allowlisted static capabilities a participant advertised at `join`, surfaced
+ * verbatim by the provider. Unknown keys are dropped upstream.
+ */
+data class SignalingProviderParticipantCapabilities(
+    /** Whether the participant supports an independent content video stream. */
+    val independentContentVideo: Boolean = false,
+)
+
+/**
+ * Allowlisted per-session media policy a participant advertised at `join`.
+ */
+data class SignalingProviderParticipantMediaPolicy(
+    /** Whether the participant negotiates any video media. Defaults true. */
+    val videoMediaEnabled: Boolean = true,
 )
 
 data class SignalingProviderParticipant(
@@ -48,6 +78,10 @@ data class SignalingProviderParticipant(
     val videoEnabled: Boolean? = null,
     val connectionStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE,
     val contentState: SignalingProviderParticipantContentState? = null,
+    /** Static capabilities advertised by this participant; null when absent. */
+    val capabilities: SignalingProviderParticipantCapabilities? = null,
+    /** Per-session media policy advertised by this participant; null when absent. */
+    val mediaPolicy: SignalingProviderParticipantMediaPolicy? = null,
 )
 
 /**

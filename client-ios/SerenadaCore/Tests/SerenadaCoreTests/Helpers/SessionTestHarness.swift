@@ -174,6 +174,49 @@ final class SessionTestHarness {
         await waitForInitialOfferIfNeeded(localCid: localCid, remoteCid: remoteCid)
     }
 
+    /// Advance to inCall with a remote whose join capabilities/media policy are
+    /// supplied verbatim — needed by independent-content per-peer routing tests.
+    /// Mirrors ``advanceToInCallWithTurn`` but seeds the `joined` snapshot with
+    /// full ``SignalingProviderParticipant`` records.
+    func advanceToInCallWithCapabilities(
+        localCid: String = "local-cid-1",
+        remoteCid: String = "remote-cid-1",
+        remoteIndependentContentVideo: Bool? = nil,
+        remoteVideoMediaEnabled: Bool? = nil,
+        hostCid: String? = nil,
+        iceServers: [IceServerConfig] = [IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")]
+    ) async {
+        fakeProvider.iceServerResults = [.success(iceServers)]
+        await advancePastPermissions()
+        await waitForLocalMedia()
+        openSignaling()
+        let remoteCaps = remoteIndependentContentVideo.map {
+            SignalingProviderParticipantCapabilities(independentContentVideo: $0)
+        }
+        let remotePolicy = remoteVideoMediaEnabled.map {
+            SignalingProviderParticipantMediaPolicy(videoMediaEnabled: $0)
+        }
+        fakeProvider.simulateJoined(
+            peerId: localCid,
+            participants: [
+                SignalingProviderParticipant(peerId: localCid, joinedAt: 1),
+                SignalingProviderParticipant(
+                    peerId: remoteCid,
+                    joinedAt: 2,
+                    capabilities: remoteCaps,
+                    mediaPolicy: remotePolicy
+                )
+            ],
+            hostPeerId: hostCid ?? localCid
+        )
+        await yieldToMainActor()
+        await fakeClock.advance(byMs: 100)
+        await yieldToMainActor()
+        await waitForLocalMedia()
+        await waitForIceServers()
+        await waitForInitialOfferIfNeeded(localCid: localCid, remoteCid: remoteCid)
+    }
+
     func simulateOfferFromRemote(fromCid: String, sdp: String = "remote-offer-sdp", offerId: String? = nil) {
         var payload: [String: JSONValue] = [
             "from": .string(fromCid),

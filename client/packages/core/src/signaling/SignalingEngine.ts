@@ -34,6 +34,16 @@ export interface SignalingEngineConfig {
     httpBaseUrl: string;
     transports?: TransportKind[];
     logger?: SerenadaLogger;
+    /**
+     * Per-session media policy advertised in `join.mediaPolicy.videoMediaEnabled`.
+     * Defaults to `true` (any video media negotiable).
+     */
+    videoMediaEnabled?: boolean;
+    /**
+     * Static build capability advertised in
+     * `join.capabilities.independentContentVideo`. Defaults to `false`.
+     */
+    enableIndependentContentVideo?: boolean;
 }
 
 export type SignalingStateListener = () => void;
@@ -76,6 +86,8 @@ export class SignalingEngine {
     private wsUrl: string;
     private httpBaseUrl: string;
     private transportOrder: TransportKind[];
+    private readonly videoMediaEnabled: boolean;
+    private readonly independentContentVideo: boolean;
 
     // Internal state
     private transport: SignalingTransport | null = null;
@@ -120,6 +132,8 @@ export class SignalingEngine {
         this.wsUrl = config.wsUrl;
         this.httpBaseUrl = config.httpBaseUrl;
         this.transportOrder = config.transports ?? ['ws', 'sse'];
+        this.videoMediaEnabled = config.videoMediaEnabled !== false;
+        this.independentContentVideo = config.enableIndependentContentVideo === true;
         this.logger = config.logger;
         this.loadReconnectStorage();
     }
@@ -184,7 +198,12 @@ export class SignalingEngine {
 
         if (this.transport && this.transport.isOpen()) {
             const payload: Record<string, unknown> = {
-                capabilities: { trickleIce: true, maxParticipants: 4 },
+                capabilities: {
+                    trickleIce: true,
+                    maxParticipants: 4,
+                    independentContentVideo: this.independentContentVideo,
+                },
+                mediaPolicy: { videoMediaEnabled: this.videoMediaEnabled },
                 createMaxParticipants: options?.createMaxParticipants ?? this.lastCreateMaxParticipants ?? 4,
             };
             const displayName = options?.displayName ?? this.lastDisplayName;

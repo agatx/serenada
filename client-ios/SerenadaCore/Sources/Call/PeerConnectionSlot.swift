@@ -7,6 +7,10 @@ import Foundation
 internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public let remoteCid: String
 
+    /// Per-peer independent-content gate (resolved by the session, ANDed with
+    /// the engine's local flag). `false` ⇒ legacy single-video path.
+    public let supportsIndependentContentVideo: Bool
+
     public private(set) var sentOffer = false
     public private(set) var isMakingOffer = false
     public private(set) var pendingIceRestart = false
@@ -121,6 +125,13 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         static let freezeWindowMs: Int64 = 60_000
     }
 
+    // Conservative independent-content sender profile (design "Content encoding
+    // profile"): legibility of mostly-static content over motion.
+    // ~1080p (resolution governed by the source) / ~5 fps / modest bitrate.
+    private static let contentTargetFps: Int = 5
+    private static let contentMaxBitrateBps: Int = 1_500_000
+    private static let contentMinBitrateBps: Int = 300_000
+
     private let factory: RTCPeerConnectionFactory?
     private var iceServers: [IceServerConfig]?
     private var localAudioTrack: RTCAudioTrack?
@@ -134,12 +145,44 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private let videoReceiveEnabled: Bool
     private let logger: SerenadaLogger?
     private let rendererAttachmentQueue: DispatchQueue
+    /// Whether the local participant is the deterministic offer owner for this
+    /// connection. Evaluated lazily so it tracks glare/ownership the same way
+    /// the negotiation engine does. The owner pre-creates camera/content
+    /// transceivers up front; the answerer binds roles from the applied offer.
+    private let isOfferOwner: () -> Bool
 
     private var peerConnection: RTCPeerConnection?
     private var observerProxy: SlotPeerConnectionObserverProxy?
     private var remoteVideoTrack: RTCVideoTrack?
     private var pendingRemoteIceCandidates: [IceCandidatePayload] = []
     private var remoteRenderers: [WeakRendererBox] = []
+
+    // --- Independent-content role binding (capable peers only) ---
+    // Camera/content video transceivers bound ONCE by object identity / mid:
+    // first video m-line → camera, second → content. Never recomputed from
+    // media/track state once bound (design "Role binding invariants"). Nil for
+    // legacy peers (those keep the single-video attachTrackToTransceiver path).
+    private var cameraTransceiver: RTCRtpTransceiver?
+    private var contentTransceiver: RTCRtpTransceiver?
+    // The local content (screen share) track for this peer. Attached to the
+    // content sender once the content transceiver binds (covers answerer /
+    // late-join / replaceTrack-reject fallback). attachBoundVideoTracks
+    // reconciles the sender to match this field, so a pending attach is
+    // implicit: while a track is set but no transceiver is bound yet, the next
+    // bind re-runs the reconcile and attaches it.
+    private var localContentTrack: RTCVideoTrack?
+    // FIX 2: on the LEGACY single-video path, whether the single video track the
+    // engine last routed is the screen-share (display) track during an
+    // independent share (true) vs the camera track (false). Drives the single
+    // sender's encoding profile (content vs camera). Persisted so the
+    // ensurePeerConnection re-attach (reconnect/recreate) re-applies the right
+    // profile. Always false for capable peers (they use the content transceiver).
+    private var legacyVideoCarriesContent = false
+    // Remote content (screen share) track for capable peers: the track on the
+    // bound CONTENT transceiver. Nil for legacy peers; their single track is
+    // presented as content by the session based on content_state.
+    private var remoteContentTrack: RTCVideoTrack?
+    private var remoteContentRenderers: [WeakRendererBox] = []
     private var lastRealtimeStatsSample: RealtimeStatsSample?
     // Written from the stats callback queue, read from the main actor gate.
     private let pathDirectLock = NSLock()
@@ -159,6 +202,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         localAudioTrack: RTCAudioTrack?,
         localVideoTrack: RTCVideoTrack?,
         videoReceiveEnabled: Bool = true,
+        supportsIndependentContentVideo: Bool = false,
+        isOfferOwner: @escaping () -> Bool = { false },
         onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
         onRemoteVideoTrack: @escaping (String, RTCVideoTrack?) -> Void,
         onConnectionStateChange: @escaping (String, String) -> Void,
@@ -173,6 +218,8 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         self.localAudioTrack = localAudioTrack
         self.localVideoTrack = localVideoTrack
         self.videoReceiveEnabled = videoReceiveEnabled
+        self.supportsIndependentContentVideo = supportsIndependentContentVideo
+        self.isOfferOwner = isOfferOwner
         self.onLocalIceCandidate = onLocalIceCandidate
         self.onRemoteVideoTrack = onRemoteVideoTrack
         self.onConnectionStateChange = onConnectionStateChange
@@ -188,6 +235,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #else
     public init(remoteCid: String) {
         self.remoteCid = remoteCid
+        self.supportsIndependentContentVideo = false
     }
 #endif
 
@@ -265,7 +313,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                     self.onRenegotiationNeeded(self.remoteCid)
                 }
             },
-            onRemoteVideoTrack: { [weak self] track in
+            onRemoteVideoTrack: { [weak self] track, transceiver in
                 Task { @MainActor in
                     guard let self else { return }
                     guard self.videoReceiveEnabled else {
@@ -276,9 +324,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                         )
                         return
                     }
-                    self.remoteVideoTrack = track
-                    self.attachRemoteTrackToRegisteredRenderers()
-                    self.onRemoteVideoTrack(self.remoteCid, track)
+                    self.routeRemoteVideoTrack(track, transceiver: transceiver)
                 }
             },
             onRemoteAudioTrack: { [weak self] track in
@@ -295,7 +341,15 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         }
 
         self.peerConnection = peerConnection
-        attachLocalTracks(audioTrack: localAudioTrack, videoTrack: localVideoTrack)
+        attachLocalTracks(
+            audioTrack: localAudioTrack,
+            cameraTrack: localVideoTrack,
+            contentTrack: localContentTrack,
+            supportsIndependentContentVideo: supportsIndependentContentVideo,
+            // Re-apply the last-known legacy content/camera encoding choice on a
+            // reconnect/recreate (FIX 2).
+            legacyVideoCarriesContent: legacyVideoCarriesContent
+        )
         ensureReceiveTransceivers(on: peerConnection)
         return true
 #else
@@ -303,29 +357,226 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
-    public func attachLocalTracks(audioTrack: AnyObject? = nil, videoTrack: AnyObject? = nil) {
+    public func attachLocalTracks(
+        audioTrack: AnyObject? = nil,
+        cameraTrack: AnyObject? = nil,
+        contentTrack: AnyObject? = nil,
+        supportsIndependentContentVideo: Bool = false,
+        legacyVideoCarriesContent: Bool = false
+    ) {
 #if canImport(WebRTC)
         if let audioTrack = audioTrack as? RTCAudioTrack {
             self.localAudioTrack = audioTrack
         } else if audioTrack == nil {
             self.localAudioTrack = nil
         }
-        if let videoTrack = videoTrack as? RTCVideoTrack {
-            self.localVideoTrack = videoTrack
-        } else if videoTrack == nil {
+        if let cameraTrack = cameraTrack as? RTCVideoTrack {
+            self.localVideoTrack = cameraTrack
+        } else if cameraTrack == nil {
             self.localVideoTrack = nil
         }
+        if let contentTrack = contentTrack as? RTCVideoTrack {
+            self.localContentTrack = contentTrack
+        } else if contentTrack == nil {
+            self.localContentTrack = nil
+        }
+        // FIX 2: only the legacy path uses this; capable peers always content-
+        // profile the dedicated content transceiver. Persist for the reconnect
+        // re-attach in ensurePeerConnection.
+        self.legacyVideoCarriesContent = self.supportsIndependentContentVideo ? false : legacyVideoCarriesContent
 
         guard let peerConnection = peerConnection ?? (ensurePeerConnection() ? self.peerConnection : nil) else {
             return
         }
 
         attachTrackToTransceiver(peerConnection: peerConnection, track: localAudioTrack, mediaType: .audio)
-        attachTrackToTransceiver(peerConnection: peerConnection, track: localVideoTrack, mediaType: .video)
+
+        if self.supportsIndependentContentVideo {
+            attachIndependentVideoTracks(peerConnection)
+        } else {
+            // Legacy single-video path: one video transceiver carries whichever
+            // video track the engine supplied (camera, or the display track when
+            // the engine has routed an active share onto the camera track).
+            attachTrackToTransceiver(peerConnection: peerConnection, track: localVideoTrack, mediaType: .video)
+            // FIX 2: when the single sender carries the content (display) track
+            // during an independent share, give it the conservative screen-content
+            // encoding profile (the camera default would over-send a mostly-static
+            // screen). Restore camera params (clear the overrides) when it goes
+            // back to the camera track. Mirrors web's applyLegacyContentSenderEncoding
+            // / restoreLegacySenderCameraEncoding. Inert when not sharing (the
+            // engine only sets legacyVideoCarriesContent during an active share),
+            // so flag-off is byte-identical.
+            applyLegacyVideoSenderEncoding(peerConnection)
+        }
 #endif
     }
 
 #if canImport(WebRTC)
+    /// Independent-capable peer attach: ensure the ordered camera/content
+    /// transceivers exist (offer owner) or are bound (answerer), then attach the
+    /// camera and pending/active content tracks via their bound senders.
+    private func attachIndependentVideoTracks(_ peerConnection: RTCPeerConnection) {
+        guard videoReceiveEnabled else { return }
+        if isOfferOwner() {
+            ensureOwnerVideoTransceivers(peerConnection)
+        } else {
+            // Answerer: roles bind from the applied remote offer (m-line order).
+            ensureVideoRolesBound(peerConnection)
+        }
+        // The content track (if any) attaches the moment the content transceiver
+        // binds — attachBoundVideoTracks reconciles purely from localContentTrack
+        // and is the single role-state-driven attach point.
+        attachBoundVideoTracks()
+    }
+
+    /// Offer-owner only: pre-create the camera transceiver first then the content
+    /// transceiver second, both send-capable up front (no track yet sends
+    /// nothing). Idempotent — re-entry binds nothing new.
+    private func ensureOwnerVideoTransceivers(_ peerConnection: RTCPeerConnection) {
+        if cameraTransceiver == nil {
+            let cameraInit = RTCRtpTransceiverInit()
+            cameraInit.direction = .sendRecv
+            cameraTransceiver = peerConnection.addTransceiver(of: .video, init: cameraInit)
+        }
+        if contentTransceiver == nil {
+            let contentInit = RTCRtpTransceiverInit()
+            contentInit.direction = .sendRecv
+            contentTransceiver = peerConnection.addTransceiver(of: .video, init: contentInit)
+            if let contentTransceiver { applyContentSenderParameters(contentTransceiver) }
+        }
+    }
+
+    /// Bind video roles by m-line order from the current transceiver list: first
+    /// video m-line → camera, second → content. Binds ONCE per role by
+    /// transceiver object identity; never recomputes an already-bound role. Extra
+    /// video m-lines beyond the second are answered inactive and never promoted.
+    private func ensureVideoRolesBound(_ peerConnection: RTCPeerConnection) {
+        if cameraTransceiver != nil && contentTransceiver != nil { return }
+        let videoTransceivers = peerConnection.transceivers.filter {
+            $0.mediaType == .video && !$0.isStopped
+        }
+        for transceiver in videoTransceivers {
+            if transceiver === cameraTransceiver || transceiver === contentTransceiver { continue }
+            if cameraTransceiver == nil {
+                cameraTransceiver = transceiver
+                ensureRoleSendCapable(transceiver)
+            } else if contentTransceiver == nil {
+                contentTransceiver = transceiver
+                ensureRoleSendCapable(transceiver)
+                applyContentSenderParameters(transceiver)
+            } else {
+                // Extra video m-line: never promoted. Answer inactive.
+                if transceiver.direction != .inactive && !transceiver.isStopped {
+                    transceiver.setDirection(.inactive, error: nil)
+                }
+            }
+        }
+    }
+
+    /// Attach the camera and content tracks to their bound role senders.
+    ///
+    /// Single role-state-driven attach point (pitfall #1): re-attaches whenever a
+    /// role is bound and the sender does not already carry the right track, so
+    /// pending content attaches regardless of how it became pending (owner,
+    /// answerer, late-join, replaceTrack-reject retry). Idempotent via the
+    /// `sender.track !== track` guard.
+    private func attachBoundVideoTracks() {
+        if let camera = cameraTransceiver {
+            ensureRoleSendCapable(camera)
+            if camera.sender.track !== localVideoTrack {
+                camera.sender.track = localVideoTrack
+            }
+        }
+        // Reconcile the content sender to match the current local content track:
+        // attach when a track is set (pending or live), detach (track = nil)
+        // when it has been cleared on stop. The `sender.track !== track`
+        // idempotence guard makes a re-entry a no-op.
+        if let content = contentTransceiver, content.sender.track !== localContentTrack {
+            if let track = localContentTrack {
+                ensureRoleSendCapable(content)
+                replaceContentTrackWithFallback(content, track: track)
+            } else {
+                // Detach on stop: clear the content sender (no renegotiation).
+                content.sender.track = nil
+            }
+        }
+    }
+
+    /// Replace the content sender's track. On rejection (an incompatible
+    /// codec/resolution envelope) force a renegotiation for this peer's content
+    /// m-line (structural change). `localContentTrack` stays set, so the
+    /// post-renegotiation setRemoteDescription → attachBoundVideoTracks
+    /// re-attaches it instead of leaving the content sender empty (pitfall #2).
+    ///
+    /// `RTCRtpSender.track` does not surface a success boolean or throw, so we
+    /// assign and then verify the assignment took; a mismatch triggers the
+    /// renegotiation fallback.
+    private func replaceContentTrackWithFallback(_ content: RTCRtpTransceiver, track: RTCVideoTrack) {
+        content.sender.track = track
+        if content.sender.track === track {
+            applyContentSenderParameters(content)
+            return
+        }
+        logger?.log(
+            .warning,
+            tag: "PeerConnection",
+            "[\(remoteCid)] Failed to set content sender track; renegotiating"
+        )
+        onRenegotiationNeeded(remoteCid)
+    }
+
+    private func ensureRoleSendCapable(_ transceiver: RTCRtpTransceiver) {
+        if transceiver.direction != .sendRecv && !transceiver.isStopped {
+            transceiver.setDirection(.sendRecv, error: nil)
+        }
+    }
+
+    /// Conservative content (screen share) sender profile for the independent
+    /// content transceiver: legibility of mostly-static content over motion
+    /// (~1080p / ~5 fps / modest bitrate, design "Content encoding profile").
+    /// Applied so a typical display track fits the negotiated envelope and the
+    /// `replaceTrack` path stays renegotiation-free in the steady state.
+    private func applyContentSenderParameters(_ transceiver: RTCRtpTransceiver) {
+        let params = transceiver.sender.parameters
+        guard let encoding = params.encodings.first else { return }
+        encoding.maxBitrateBps = NSNumber(value: Self.contentMaxBitrateBps)
+        encoding.minBitrateBps = NSNumber(value: Self.contentMinBitrateBps)
+        encoding.maxFramerate = NSNumber(value: Self.contentTargetFps)
+        params.degradationPreference = NSNumber(value: RTCDegradationPreference.maintainResolution.rawValue)
+        transceiver.sender.parameters = params
+    }
+
+    /// FIX 2: select the legacy single video sender's encoding profile per
+    /// `legacyVideoCarriesContent`. During an independent share the single sender
+    /// carries the content (display) track and gets the conservative content
+    /// profile (mirrors `applyContentSenderParameters` for capable peers but on
+    /// the single sender); otherwise it carries the camera track and the content
+    /// overrides are cleared so the camera regains its default (unbounded)
+    /// profile. Best-effort. Only called from the legacy attach path.
+    private func applyLegacyVideoSenderEncoding(_ peerConnection: RTCPeerConnection) {
+        guard let transceiver = peerConnection.transceivers.first(where: { $0.mediaType == .video }) else {
+            return
+        }
+        if legacyVideoCarriesContent {
+            applyContentSenderParameters(transceiver)
+        } else {
+            restoreLegacyVideoSenderCameraEncoding(transceiver)
+        }
+    }
+
+    /// FIX 2 restore leg: clear the content-specific encoding overrides so the
+    /// legacy single sender's camera track regains its default profile. Mirrors
+    /// web's `restoreLegacySenderCameraEncoding`.
+    private func restoreLegacyVideoSenderCameraEncoding(_ transceiver: RTCRtpTransceiver) {
+        let params = transceiver.sender.parameters
+        guard let encoding = params.encodings.first else { return }
+        encoding.maxBitrateBps = nil
+        encoding.minBitrateBps = nil
+        encoding.maxFramerate = nil
+        params.degradationPreference = nil
+        transceiver.sender.parameters = params
+    }
+
     // Look up the transceiver by its stable mediaType (Unified Plan) instead of
     // sender.track?.kind. The latter mis-reports when the sender's track is nil
     // (e.g. the recv-only transceiver created by ensureReceiveTransceivers), which
@@ -347,6 +598,79 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             _ = peerConnection.add(track, streamIds: ["serenada"])
         }
     }
+
+    /// Classify and bind an inbound remote video track by its PERSISTED
+    /// transceiver role for capable peers; legacy peers route every video track
+    /// as camera. The remote AUDIO track is handled separately and never
+    /// disturbed by this routing (pitfall #4).
+    private func routeRemoteVideoTrack(_ track: RTCVideoTrack?, transceiver: RTCRtpTransceiver?) {
+        guard supportsIndependentContentVideo else {
+            // Legacy peer: single video track is the camera track. The session
+            // presents it as content when content_state is active.
+            attachRemoteCameraTrack(track)
+            return
+        }
+        // Capable peer: (re)bind roles from the current m-line order first — the
+        // track may arrive before the answerer's binding ran — then classify by
+        // the persisted role binding.
+        if let peerConnection { ensureVideoRolesBound(peerConnection) }
+        if let transceiver {
+            // Classify by the stable m-line id (mid), NOT object identity. Native
+            // libwebrtc delivers a DIFFERENT RTCRtpTransceiver wrapper to this
+            // callback than the one cached in camera/contentTransceiver (same
+            // underlying native transceiver), so `===` matched neither and the
+            // inbound remote CAMERA was dropped -> no remote video. mid is the
+            // negotiated m-line id, stable across wrappers; identity is kept as a
+            // fallback before mids are assigned.
+            let incomingMid = transceiver.mid
+            if !incomingMid.isEmpty, incomingMid == contentTransceiver?.mid {
+                attachRemoteContentTrack(track)
+                return
+            }
+            if !incomingMid.isEmpty, incomingMid == cameraTransceiver?.mid {
+                attachRemoteCameraTrack(track)
+                return
+            }
+            if transceiver === contentTransceiver {
+                attachRemoteContentTrack(track)
+                return
+            }
+            if transceiver === cameraTransceiver {
+                attachRemoteCameraTrack(track)
+                return
+            }
+            // Unbound extra video m-line: do not promote it.
+            logger?.log(.debug, tag: "PeerConnection", "[\(remoteCid)] Ignoring unbound remote video track (mid=\(incomingMid))")
+            return
+        }
+        // No transceiver (legacy didAdd:stream delivery). For a capable peer this
+        // path cannot distinguish camera from content, and because native libwebrtc
+        // hands each callback a DISTINCT RTCVideoTrack wrapper for the same track, it
+        // re-set (clobbered) the already-classified remote camera with a churned or
+        // content wrapper on every stream callback -> remote video blanked on iOS.
+        // The transceiver-carrying didAdd:rtpReceiver / didStartReceivingOn paths are
+        // authoritative for capable peers, so ignore the nil-transceiver delivery.
+        // (Android's onAddStream is a no-op, which is why this only bit iOS.)
+        logger?.log(.debug, tag: "PeerConnection", "[\(remoteCid)] Ignoring nil-transceiver remote video delivery (capable peer)")
+    }
+
+    /// Bind/replace the remote CAMERA track and rewire camera renderers.
+    private func attachRemoteCameraTrack(_ track: RTCVideoTrack?) {
+        if track === remoteVideoTrack { return }
+        detachRemoteTrackFromRegisteredRenderers()
+        remoteVideoTrack = track
+        attachRemoteTrackToRegisteredRenderers()
+        onRemoteVideoTrack(remoteCid, track)
+    }
+
+    /// Bind/replace the remote CONTENT (screen share) track and rewire its
+    /// renderers. Independent-capable peers only.
+    private func attachRemoteContentTrack(_ track: RTCVideoTrack?) {
+        if track === remoteContentTrack { return }
+        detachRemoteContentTrackFromRegisteredRenderers()
+        remoteContentTrack = track
+        attachRemoteContentTrackToRegisteredRenderers()
+    }
 #endif
 
     public func closePeerConnection() {
@@ -355,12 +679,19 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 
 #if canImport(WebRTC)
         detachRemoteTrackFromRegisteredRenderers()
+        detachRemoteContentTrackFromRegisteredRenderers()
         peerConnection?.close()
         peerConnection = nil
         observerProxy = nil
         remoteVideoTrack = nil
+        remoteContentTrack = nil
+        cameraTransceiver = nil
+        contentTransceiver = nil
+        localContentTrack = nil
+        legacyVideoCarriesContent = false
         pendingRemoteIceCandidates.removeAll()
         remoteRenderers.removeAll()
+        remoteContentRenderers.removeAll()
         lastRealtimeStatsSample = nil
         freezeSamples.removeAll()
         onRemoteVideoTrack(remoteCid, nil)
@@ -464,6 +795,18 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
                 guard let self else { return }
                 if error == nil {
                     self.flushPendingIceCandidates()
+                    if self.supportsIndependentContentVideo,
+                       self.videoReceiveEnabled,
+                       let pc = self.peerConnection {
+                        // Answerer: materialize role bindings from the applied
+                        // offer (m-line order). Owner: re-bind is idempotent.
+                        // Then attach any live/pending camera+content tracks via
+                        // their bound senders — this is the single bind/attach
+                        // point that also re-attaches a replaceTrack-reject
+                        // fallback once the m-line re-negotiates (pitfall #1/#2).
+                        self.ensureVideoRolesBound(pc)
+                        self.attachBoundVideoTracks()
+                    }
                     onComplete?(true)
                 } else {
                     onComplete?(false)
@@ -540,6 +883,30 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
+    public func attachRemoteContentRenderer(_ renderer: AnyObject) {
+#if canImport(WebRTC)
+        remoteContentRenderers.append(WeakRendererBox(value: renderer))
+        compactContentRenderers()
+        guard let renderer = renderer as? RTCVideoRenderer else { return }
+        let track = remoteContentTrack
+        rendererAttachmentQueue.async {
+            track?.add(renderer)
+        }
+#endif
+    }
+
+    public func detachRemoteContentRenderer(_ renderer: AnyObject) {
+#if canImport(WebRTC)
+        if let renderer = renderer as? RTCVideoRenderer {
+            let track = remoteContentTrack
+            rendererAttachmentQueue.async {
+                track?.remove(renderer)
+            }
+        }
+        remoteContentRenderers.removeAll { $0.value === renderer || $0.value == nil }
+#endif
+    }
+
     public func collectRealtimeCallStats(onComplete: @escaping (RealtimeCallStats) -> Void) {
 #if canImport(WebRTC)
         guard let peerConnection else {
@@ -599,6 +966,40 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         }
 #else
         onComplete(0)
+#endif
+    }
+
+    public func collectInboundRoleBytes(onComplete: @escaping (RoleInboundBytes) -> Void) {
+#if canImport(WebRTC)
+        guard let peerConnection else {
+            onComplete(RoleInboundBytes(cameraBytes: 0, contentBytes: 0))
+            return
+        }
+        // Capture the bound CONTENT receiver's track id on the main actor before
+        // the off-actor stats callback. A non-nil id means we can positively
+        // attribute a video inbound-rtp stat to content; everything else (the
+        // camera role, a legacy single video, an unattributable stat) is camera.
+        let contentTrackId: String? = {
+            let id = contentTransceiver?.receiver.track?.trackId
+            return (id?.isEmpty == false) ? id : nil
+        }()
+        peerConnection.statistics { report in
+            var cameraBytes: Int64 = 0
+            var contentBytes: Int64 = 0
+            for stat in report.statistics.values where stat.type == "inbound-rtp" {
+                guard mediaKind(for: stat) == "video" else { continue }
+                let bytes = memberInt64(stat, key: "bytesReceived") ?? 0
+                let trackId = memberString(stat, key: "trackIdentifier")
+                if let contentTrackId, trackId == contentTrackId {
+                    contentBytes += bytes
+                } else {
+                    cameraBytes += bytes
+                }
+            }
+            Task { @MainActor in onComplete(RoleInboundBytes(cameraBytes: cameraBytes, contentBytes: contentBytes)) }
+        }
+#else
+        onComplete(RoleInboundBytes(cameraBytes: 0, contentBytes: 0))
 #endif
     }
 
@@ -756,6 +1157,11 @@ private extension PeerConnectionSlot {
             transceiverInit.direction = .recvOnly
             _ = peerConnection.addTransceiver(of: .audio, init: transceiverInit)
         }
+        // Capable peers manage their own video m-lines: the owner pre-creates the
+        // ordered camera+content transceivers, and the answerer materializes them
+        // from the remote offer. Adding a generic recv-only video transceiver here
+        // would create an unbound extra m-line, so it is skipped for them.
+        if supportsIndependentContentVideo { return }
         if videoReceiveEnabled && peerConnection.transceivers.contains(where: { $0.mediaType == .video }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
             transceiverInit.direction = .recvOnly
@@ -803,6 +1209,32 @@ private extension PeerConnectionSlot {
 
     private func compactRenderers() {
         remoteRenderers.removeAll { $0.value == nil }
+    }
+
+    private func attachRemoteContentTrackToRegisteredRenderers() {
+        compactContentRenderers()
+        guard let remoteContentTrack else { return }
+        let renderers = remoteContentRenderers.compactMap { $0.value as? RTCVideoRenderer }
+        rendererAttachmentQueue.async {
+            for renderer in renderers {
+                remoteContentTrack.add(renderer)
+            }
+        }
+    }
+
+    private func detachRemoteContentTrackFromRegisteredRenderers() {
+        compactContentRenderers()
+        guard let remoteContentTrack else { return }
+        let renderers = remoteContentRenderers.compactMap { $0.value as? RTCVideoRenderer }
+        rendererAttachmentQueue.async {
+            for renderer in renderers {
+                remoteContentTrack.remove(renderer)
+            }
+        }
+    }
+
+    private func compactContentRenderers() {
+        remoteContentRenderers.removeAll { $0.value == nil }
     }
 
     private func buildRealtimeCallStats(_ report: RTCStatisticsReport) -> RealtimeCallStats {
@@ -1089,7 +1521,10 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     private let onIceConnectionState: (RTCIceConnectionState) -> Void
     private let onSignalingState: (RTCSignalingState) -> Void
     private let onRenegotiationNeeded: () -> Void
-    private let onRemoteVideoTrack: (RTCVideoTrack?) -> Void
+    // Carries the originating transceiver (when known) so the slot can classify
+    // the track by its PERSISTED role binding (camera vs content) for capable
+    // peers. `nil` transceiver ⇒ legacy single-video routing (camera).
+    private let onRemoteVideoTrack: (RTCVideoTrack?, RTCRtpTransceiver?) -> Void
     private let onRemoteAudioTrack: (RTCAudioTrack) -> Void
 
     init(
@@ -1098,7 +1533,7 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         onIceConnectionState: @escaping (RTCIceConnectionState) -> Void,
         onSignalingState: @escaping (RTCSignalingState) -> Void,
         onRenegotiationNeeded: @escaping () -> Void,
-        onRemoteVideoTrack: @escaping (RTCVideoTrack?) -> Void,
+        onRemoteVideoTrack: @escaping (RTCVideoTrack?, RTCRtpTransceiver?) -> Void,
         onRemoteAudioTrack: @escaping (RTCAudioTrack) -> Void
     ) {
         self.onIceCandidate = onIceCandidate
@@ -1110,6 +1545,15 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         self.onRemoteAudioTrack = onRemoteAudioTrack
     }
 
+    /// Resolve the transceiver that owns `rtpReceiver` (Unified Plan) so the
+    /// slot can classify the remote track by its bound role.
+    private func transceiver(
+        for rtpReceiver: RTCRtpReceiver,
+        in peerConnection: RTCPeerConnection
+    ) -> RTCRtpTransceiver? {
+        peerConnection.transceivers.first { $0.receiver === rtpReceiver }
+    }
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
         onSignalingState(stateChanged)
     }
@@ -1118,11 +1562,14 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         if let track = stream.audioTracks.first {
             onRemoteAudioTrack(track)
         }
-        onRemoteVideoTrack(stream.videoTracks.first)
+        // Plan-B style stream callback carries no transceiver; treat as camera
+        // (legacy routing). The Unified-Plan didAdd:rtpReceiver path below is the
+        // role-aware one for capable peers.
+        onRemoteVideoTrack(stream.videoTracks.first, nil)
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
-        onRemoteVideoTrack(nil)
+        onRemoteVideoTrack(nil, nil)
     }
 
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
@@ -1145,13 +1592,20 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         if let track = rtpReceiver.track as? RTCAudioTrack {
             onRemoteAudioTrack(track)
         } else if let track = rtpReceiver.track as? RTCVideoTrack {
-            onRemoteVideoTrack(track)
+            onRemoteVideoTrack(track, transceiver(for: rtpReceiver, in: peerConnection))
         }
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {
+        // Unified-Plan: a transceiver began receiving. Route its receiver track
+        // with the transceiver so the slot can (re)classify by role — covers the
+        // case where the role binding ran after didAdd:rtpReceiver.
+        if let track = transceiver.receiver.track as? RTCVideoTrack {
+            onRemoteVideoTrack(track, transceiver)
+        }
+    }
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCIceGatheringState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChangeLocalCandidate local: RTCIceCandidate, remoteCandidate remote: RTCIceCandidate, lastReceivedMs: Int32, changeReason reason: String) {}
 }
@@ -1163,4 +1617,40 @@ private final class WeakRendererBox {
         self.value = value
     }
 }
+
+#if DEBUG
+// Test-only seam (Debug builds only; compiled out of Release). Lets a unit test
+// drive the private remote-video classification path
+// (`routeRemoteVideoTrack`) with bound camera/content transceivers, simulating
+// the libwebrtc "fresh wrapper per access, same negotiated mid" behavior that
+// `routeRemoteVideoTrack` must classify by `mid` (not object identity). No
+// production code path calls these; they only forward to existing private
+// members so the real classification logic under test is unchanged.
+extension PeerConnectionSlot {
+    /// Bind the camera/content role transceivers exactly as the production
+    /// binding would (the cached wrappers whose `mid` later comparisons run
+    /// against), for the receive-classification test.
+    func _test_bindRoleTransceivers(
+        peerConnection: RTCPeerConnection,
+        camera: RTCRtpTransceiver,
+        content: RTCRtpTransceiver
+    ) {
+        self.peerConnection = peerConnection
+        self.cameraTransceiver = camera
+        self.contentTransceiver = content
+    }
+
+    /// Invoke the real private classifier with the given inbound track and the
+    /// transceiver wrapper the (fake) onTrack callback would deliver.
+    func _test_routeRemoteVideoTrack(_ track: RTCVideoTrack?, transceiver: RTCRtpTransceiver?) {
+        routeRemoteVideoTrack(track, transceiver: transceiver)
+    }
+
+    /// The remote CAMERA track currently bound by the classifier.
+    var _test_remoteCameraTrack: RTCVideoTrack? { remoteVideoTrack }
+
+    /// The remote CONTENT (screen share) track currently bound by the classifier.
+    var _test_remoteContentTrack: RTCVideoTrack? { remoteContentTrack }
+}
+#endif
 #endif

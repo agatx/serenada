@@ -36,6 +36,24 @@ export type PeerConnectionState = 'new' | 'connecting' | 'connected' | 'disconne
  */
 export type ParticipantSignalingStatus = 'active' | 'suspended';
 
+/**
+ * Latest content (screen share) presentation state for a participant. Surfaced
+ * on both {@link Participant} and {@link LocalParticipant}. Absent when the
+ * participant has no active or recorded content.
+ */
+export interface ParticipantContent {
+    /** `true` while the participant is presenting content. */
+    active: boolean;
+    /** Content kind. Currently always `'screenShare'`. */
+    type: string;
+    /**
+     * Per-participant monotonic generation marker for the content state, scoped
+     * to the sender's current session. Orders presentation-state changes; does
+     * not bind RTP media to a share.
+     */
+    revision: number;
+}
+
 /** Remote participant in a call. */
 export interface Participant {
     cid: string;
@@ -48,7 +66,37 @@ export interface Participant {
      */
     peerId?: string;
     audioEnabled: boolean;
+    /**
+     * Whether the participant's camera video specifically is enabled. Precise
+     * camera signal distinct from {@link videoEnabled} (which carries the legacy
+     * "any video active" meaning). Phase 1 (independent-content flag off):
+     * mirrors {@link videoEnabled}.
+     */
+    cameraEnabled: boolean;
     videoEnabled: boolean;
+    /**
+     * Latest content (screen share) presentation state, or absent when the
+     * participant has no recorded content. Driven by received `content_state`.
+     */
+    content?: ParticipantContent;
+    /**
+     * Per-role inbound media liveness, sampled from this peer's inbound RTP.
+     * `cameraReceiving` is `true` while the peer's CAMERA video bytes are
+     * advancing; `contentReceiving` is `true` while its CONTENT (screen share)
+     * video bytes are advancing. Each is only meaningful when that role's track
+     * is expected/active — derive a stall as `content?.active && !contentReceiving`
+     * (and analogously for the camera). Drives the per-role stall diagnostics so
+     * a consumer can tell a frozen screen share apart from a healthy camera, and
+     * which peer ({@link cid}) it is.
+     *
+     * Flag off / legacy peers: the single inbound video routes to the camera
+     * role, so `cameraReceiving` tracks that one video and `contentReceiving`
+     * stays `false`. Both default to `false` before the first liveness sample.
+     * Audio liveness is not split here (it stays in the global `media_liveness`
+     * signal). Additive: existing fields are unchanged.
+     */
+    cameraReceiving: boolean;
+    contentReceiving: boolean;
     connectionState: PeerConnectionState;
     signalingStatus: ParticipantSignalingStatus;
     /**
@@ -70,7 +118,18 @@ export interface LocalParticipant {
     /** Host-supplied stable identity — see {@link Participant.peerId}. */
     peerId?: string;
     audioEnabled: boolean;
+    /**
+     * Whether the local camera video specifically is enabled. Precise camera
+     * signal distinct from {@link videoEnabled}. Phase 1 (independent-content
+     * flag off): mirrors {@link videoEnabled}.
+     */
+    cameraEnabled: boolean;
     videoEnabled: boolean;
+    /**
+     * Latest local content (screen share) presentation state, or absent when no
+     * content has been shared. Driven by local screen-share state.
+     */
+    content?: ParticipantContent;
     cameraMode: CameraMode;
     /**
      * Camera modes the user can cycle through, in preference order.
@@ -198,6 +257,14 @@ export interface SerenadaConfig {
      */
     videoMediaEnabled?: boolean;
     /**
+     * Static capability gate for the independent screen-share content stream.
+     * When `true`, this build can negotiate a dedicated content video stream
+     * separate from the camera. Advertised to peers at join via
+     * `capabilities.independentContentVideo`. Immutable per session. Defaults to
+     * `false`. Phase 1: advertisement only; not yet consumed by media.
+     */
+    enableIndependentContentVideo?: boolean;
+    /**
      * Camera modes available in the call UI, in preference order. The first
      * entry is the initial mode. When only one mode is listed the flip-camera
      * control is hidden; an empty array disables camera capture (the video
@@ -263,6 +330,21 @@ export interface SerenadaSessionHandle {
     readonly state: CallState;
     readonly localStream: MediaStream | null;
     readonly remoteStreams: Map<string, MediaStream>;
+    /**
+     * Remote camera stream for a participant, or `undefined`. In independent
+     * content mode this is the camera-only stream; otherwise it falls back to
+     * the legacy combined stream (same as `remoteStreams.get(cid)`).
+     */
+    getRemoteCameraStream(cid: string): MediaStream | undefined;
+    /**
+     * Remote content (screen share) stream for a participant when the
+     * independent content video stream is negotiated, else `undefined`.
+     */
+    getRemoteContentStream(cid: string): MediaStream | undefined;
+    /** Legacy camera stream accessor — same as `remoteStreams.get(cid)`. */
+    getRemoteStream(cid: string): MediaStream | undefined;
+    /** Local content (screen share) stream for optional local preview. */
+    getLocalContentStream(): MediaStream | null;
     readonly callStats: CallStats | null;
     /**
      * Aggregate call-quality summary. Updated live during the

@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     let remoteCid: String
+    let supportsIndependentContentVideo: Bool
 
     private(set) var sentOffer = false
     private(set) var isMakingOffer = false
@@ -41,12 +42,14 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     init(
         remoteCid: String,
+        supportsIndependentContentVideo: Bool = false,
         onConnectionStateChange: ((String, String) -> Void)? = nil,
         onIceConnectionStateChange: ((String, String) -> Void)? = nil,
         onSignalingStateChange: ((String, String) -> Void)? = nil,
         onRenegotiationNeeded: ((String) -> Void)? = nil
     ) {
         self.remoteCid = remoteCid
+        self.supportsIndependentContentVideo = supportsIndependentContentVideo
         self.onConnectionStateChange = onConnectionStateChange
         self.onIceConnectionStateChange = onIceConnectionStateChange
         self.onSignalingStateChange = onSignalingStateChange
@@ -103,7 +106,50 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         return ready
     }
 
-    func attachLocalTracks(audioTrack: AnyObject?, videoTrack: AnyObject?) {}
+    /// Records each role-aware attach so routing tests can assert on the per-peer
+    /// camera/content track wiring without a real peer connection.
+    struct AttachLocalTracksCall {
+        let hasAudio: Bool
+        let hasCamera: Bool
+        let hasContent: Bool
+        let supportsIndependentContentVideo: Bool
+        let legacyVideoCarriesContent: Bool
+    }
+    private(set) var attachLocalTracksCalls: [AttachLocalTracksCall] = []
+    /// When true, the NEXT `attachLocalTracks` carrying a content track models a
+    /// per-peer content `replaceTrack` REJECT: the real slot's
+    /// `replaceContentTrackWithFallback` verifies the assignment, and on a
+    /// mismatch fires `onRenegotiationNeeded` while leaving `localContentTrack`
+    /// set (durable retry) — it never throws. This lets a multi-peer attach test
+    /// confirm the failing peer goes to recovery (renegotiation) WITHOUT being
+    /// torn down, while a sibling peer's attach is unaffected. Auto-resets.
+    var failNextContentAttachWithRenegotiation = false
+    /// Count of content-attach rejections this fake simulated (for assertions).
+    private(set) var contentAttachRejectionCount = 0
+    func attachLocalTracks(
+        audioTrack: AnyObject?,
+        cameraTrack: AnyObject?,
+        contentTrack: AnyObject?,
+        supportsIndependentContentVideo: Bool,
+        legacyVideoCarriesContent: Bool
+    ) {
+        attachLocalTracksCalls.append(
+            AttachLocalTracksCall(
+                hasAudio: audioTrack != nil,
+                hasCamera: cameraTrack != nil,
+                hasContent: contentTrack != nil,
+                supportsIndependentContentVideo: supportsIndependentContentVideo,
+                legacyVideoCarriesContent: legacyVideoCarriesContent
+            )
+        )
+        if failNextContentAttachWithRenegotiation, contentTrack != nil {
+            failNextContentAttachWithRenegotiation = false
+            contentAttachRejectionCount += 1
+            // Mirror the real slot's reject path: fall back to renegotiation,
+            // do NOT throw, do NOT close the peer connection.
+            onRenegotiationNeeded?(remoteCid)
+        }
+    }
 
     func closePeerConnection() {
         closePeerConnectionCalled = true
@@ -202,6 +248,15 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         detachRemoteRendererCalls.append(renderer)
     }
 
+    private(set) var attachRemoteContentRendererCalls: [AnyObject] = []
+    private(set) var detachRemoteContentRendererCalls: [AnyObject] = []
+    func attachRemoteContentRenderer(_ renderer: AnyObject) {
+        attachRemoteContentRendererCalls.append(renderer)
+    }
+    func detachRemoteContentRenderer(_ renderer: AnyObject) {
+        detachRemoteContentRendererCalls.append(renderer)
+    }
+
     // MARK: - Stats
 
     /// Stats returned from the next `collectRealtimeCallStats()` call. Tests
@@ -224,6 +279,17 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
+    }
+
+    /// Per-role cumulative inbound video bytes returned from the next
+    /// `collectInboundRoleBytes()` call. Drives the session's per-role liveness
+    /// derivation (`cameraReceiving` / `contentReceiving`) without a real PC's
+    /// inbound-rtp stats — tests advance these to model camera/content flow.
+    var roleInboundBytesSample = RoleInboundBytes(cameraBytes: 0, contentBytes: 0)
+    var collectInboundRoleBytesCalls = 0
+    func collectInboundRoleBytes(onComplete: @escaping (RoleInboundBytes) -> Void) {
+        collectInboundRoleBytesCalls += 1
+        onComplete(roleInboundBytesSample)
     }
     var outboundMediaSample: OutboundMediaSample? = OutboundMediaSample(
         expectsAudio: true,

@@ -1,5 +1,6 @@
 package app.serenada.core.fakes
 
+import app.serenada.core.call.InboundRoleBytes
 import app.serenada.core.call.OutboundMediaSample
 import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RealtimeCallStats
@@ -14,6 +15,7 @@ import org.webrtc.VideoTrack
 
 internal class FakePeerConnectionSlot(
     override val remoteCid: String,
+    override val supportsIndependentContentVideo: Boolean = false,
     private val onLocalIceCandidate: ((String, IceCandidate) -> Unit)? = null,
     private val onConnectionStateChange: ((String, PeerConnection.PeerConnectionState) -> Unit)? = null,
     private val onIceConnectionStateChange: ((String, PeerConnection.IceConnectionState) -> Unit)? = null,
@@ -79,7 +81,73 @@ internal class FakePeerConnectionSlot(
         appliedIceServerUrls += servers.map { it.urls }
     }
     override fun ensurePeerConnection(): Boolean { ensurePeerConnectionCalls++; return true }
-    override fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?) {}
+
+    // Per-track attach tracking so tests can assert camera vs content lifecycle.
+    data class AttachLocalTracksCall(
+        val hasAudio: Boolean,
+        val hasCamera: Boolean,
+        val hasContent: Boolean,
+        val supportsIndependentContentVideo: Boolean,
+    )
+    val attachLocalTracksCalls = mutableListOf<AttachLocalTracksCall>()
+    var lastCameraTrackAttached: VideoTrack? = null; private set
+    var lastContentTrackAttached: VideoTrack? = null; private set
+
+    override fun attachLocalTracks(
+        audioTrack: AudioTrack?,
+        cameraTrack: VideoTrack?,
+        contentTrack: VideoTrack?,
+        supportsIndependentContentVideo: Boolean,
+    ) {
+        lastCameraTrackAttached = cameraTrack
+        lastContentTrackAttached = contentTrack
+        attachLocalTracksCalls += AttachLocalTracksCall(
+            hasAudio = audioTrack != null,
+            hasCamera = cameraTrack != null,
+            hasContent = contentTrack != null,
+            supportsIndependentContentVideo = supportsIndependentContentVideo,
+        )
+    }
+
+    // --- Independent content attach modeling (capable peers) ---
+    // A real WebRTC VideoTrack cannot be constructed in a unit test, so the
+    // content sender is modeled by a boolean rather than the track object.
+    // [contentAttachedToSender] is true while this peer's content sender carries
+    // the active share. Lets tests assert per-peer attach-failure ISOLATION (a
+    // healthy peer carries the share while a failing one does not).
+    var contentAttachedToSender = false; private set
+
+    /**
+     * Inject a content setTrack REJECTION for the next [simulateContentAttach]
+     * (capable peer). Mirrors the real slot's `replaceContentTrackWithFallback`
+     * reject path: the content does NOT land on the sender and the slot fires
+     * [onRenegotiationNeeded] for itself (durable retry — the engine keeps the
+     * content track set, so a later re-attach fills the sender). Consumed once.
+     */
+    var failNextContentAttach = false
+    var renegotiationRequestedCount = 0; private set
+
+    /**
+     * Drive this slot's modeled content sender the way the real
+     * `WebRtcEngine.attachLocalTracksToSlot` → `PeerConnectionSlot` reconcile
+     * does. [attach] true = the engine is supplying the active content track
+     * (start / re-attach); false = detach (stop). A pending [failNextContentAttach]
+     * turns an attach into a reject (sender stays empty, renegotiation fires for
+     * this peer only). Detach always succeeds.
+     */
+    fun simulateContentAttach(attach: Boolean) {
+        if (!attach) {
+            contentAttachedToSender = false
+            return
+        }
+        if (failNextContentAttach) {
+            failNextContentAttach = false
+            renegotiationRequestedCount += 1
+            onRenegotiationNeeded?.invoke(remoteCid)
+            return
+        }
+        contentAttachedToSender = true
+    }
     override fun setAudioTrack(track: AudioTrack?) {}
     override fun closePeerConnection(deferDispose: Boolean) {
         closePeerConnectionCalled = true
@@ -199,6 +267,14 @@ internal class FakePeerConnectionSlot(
     override fun detachRemoteSink(sink: VideoSink) {
         detachRemoteSinkCalls += sink
     }
+    val attachRemoteContentSinkCalls = mutableListOf<VideoSink>()
+    val detachRemoteContentSinkCalls = mutableListOf<VideoSink>()
+    override fun attachRemoteContentSink(sink: VideoSink) {
+        attachRemoteContentSinkCalls += sink
+    }
+    override fun detachRemoteContentSink(sink: VideoSink) {
+        detachRemoteContentSinkCalls += sink
+    }
     /**
      * Stats returned from the next `collectWebRtcStats()` call. Tests can set
      * this to drive the StatsPoller merge + CallQualityTracker. Defaults to
@@ -217,6 +293,20 @@ internal class FakePeerConnectionSlot(
         collectInboundBytesCalls += 1
         onComplete(inboundBytesSample)
     }
+
+    /**
+     * Cumulative per-role inbound VIDEO bytes returned from the next
+     * `collectInboundRoleBytes()`. Tests set this to drive the session's per-role
+     * liveness derivation (camera/content receiving). The real slot computes this
+     * split by matching inbound-rtp `trackIdentifier` to the bound content
+     * receiver track; that path is exercised on-device.
+     */
+    var inboundRoleBytesSample: InboundRoleBytes = InboundRoleBytes(cameraBytes = 0L, contentBytes = 0L)
+    var collectInboundRoleBytesCalls = 0
+    override fun collectInboundRoleBytes(onComplete: (InboundRoleBytes) -> Unit) {
+        collectInboundRoleBytesCalls += 1
+        onComplete(inboundRoleBytesSample)
+    }
     var outboundMediaSample: OutboundMediaSample? = OutboundMediaSample(
         expectsAudio = true,
         expectsVideo = true,
@@ -230,7 +320,19 @@ internal class FakePeerConnectionSlot(
         onComplete(outboundMediaSample)
     }
     override fun collectAudioLevels(onComplete: (inboundLevel: Float?, mediaSourceLevel: Float?) -> Unit) { onComplete(null, null) }
-    override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {}
+
+    /**
+     * Video sender policies applied to this slot, in order. Lets tests assert
+     * which encoding profile a slot received (e.g. a legacy slot carrying the
+     * content track during an independent share should get the content profile,
+     * FIX 2). The last entry is the currently-applied policy.
+     */
+    val appliedVideoSenderPolicies = mutableListOf<WebRtcEngine.VideoSenderPolicy>()
+    val lastAppliedVideoSenderPolicy: WebRtcEngine.VideoSenderPolicy?
+        get() = appliedVideoSenderPolicies.lastOrNull()
+    override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
+        appliedVideoSenderPolicies += policy
+    }
 
     // Test drivers
     fun simulateConnectionStateChange(state: PeerConnection.PeerConnectionState) {

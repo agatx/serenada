@@ -6,6 +6,7 @@ import app.serenada.core.ErrorEvent
 import app.serenada.core.JoinedEvent
 import app.serenada.core.PeerMessage
 import app.serenada.core.RoomStateEvent
+import app.serenada.core.SignalingProviderParticipant
 import org.json.JSONObject
 
 /**
@@ -31,7 +32,7 @@ internal class SignalingMessageRouter(
     // code, not the coarse mapped `CallError` type.
     private val onError: (callError: CallError, serverCode: String?) -> Unit,
     private val onRoomEnded: () -> Unit,
-    private val onContentStateReceived: (fromCid: String, active: Boolean, contentType: String?) -> Unit,
+    private val onContentStateReceived: (fromCid: String, active: Boolean, contentType: String?, revision: Long?) -> Unit,
     private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean?, videoEnabled: Boolean?) -> Unit,
     private val onTurnRefreshed: (SignalingMessage) -> Unit,
     private val onSignalingPayload: (SignalingMessage) -> Unit,
@@ -60,10 +61,11 @@ internal class SignalingMessageRouter(
         }
     }
 
-    fun broadcastContentState(active: Boolean, contentType: String? = null) {
+    fun broadcastContentState(active: Boolean, contentType: String? = null, revision: Long) {
         val payload = JSONObject().apply {
             put("active", active)
             if (active && contentType != null) put("contentType", contentType)
+            put("revision", revision)
         }
         sendMessage("content_state", payload, null)
     }
@@ -85,15 +87,7 @@ internal class SignalingMessageRouter(
 
         val cid = event.peerId
         val participants = dedupeParticipants(
-            event.participants.map { Participant(
-                cid = it.peerId,
-                joinedAt = it.joinedAt,
-                displayName = it.displayName,
-                peerId = it.appPeerId,
-                audioEnabled = it.audioEnabled,
-                videoEnabled = it.videoEnabled,
-                signalingStatus = it.connectionStatus,
-            ) },
+            event.participants.map { it.toRoomParticipant() },
             cid,
         )
         val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), cid)
@@ -110,15 +104,7 @@ internal class SignalingMessageRouter(
 
         val localPeerId = getClientId()
         val participants = dedupeParticipants(
-            event.participants.map { Participant(
-                cid = it.peerId,
-                joinedAt = it.joinedAt,
-                displayName = it.displayName,
-                peerId = it.appPeerId,
-                audioEnabled = it.audioEnabled,
-                videoEnabled = it.videoEnabled,
-                signalingStatus = it.connectionStatus,
-            ) },
+            event.participants.map { it.toRoomParticipant() },
             localPeerId,
         )
         val hostPeerId = resolveHostPeerId(event.hostPeerId, participants, getHostCid(), localPeerId)
@@ -134,7 +120,8 @@ internal class SignalingMessageRouter(
                 val fromCid = payload?.optString("from")?.ifBlank { null } ?: message.from
                 val active = payload?.optBoolean("active") ?: false
                 val contentType = if (active) payload?.optString("contentType")?.ifBlank { null } else null
-                onContentStateReceived(fromCid, active, contentType)
+                val revision = if (payload?.has("revision") == true) payload.optLong("revision") else null
+                onContentStateReceived(fromCid, active, contentType, revision)
             }
             "participant_media_state" -> {
                 val parsed = message.payload.toMediaStatePayload() ?: return
@@ -188,7 +175,7 @@ internal class SignalingMessageRouter(
 
     private fun handleContentState(msg: SignalingMessage) {
         val payload = msg.payload.toContentStatePayload() ?: return
-        onContentStateReceived(payload.fromCid, payload.active, payload.contentType)
+        onContentStateReceived(payload.fromCid, payload.active, payload.contentType, payload.revision)
     }
 
     private fun handleError(msg: SignalingMessage) {
@@ -217,4 +204,35 @@ internal class SignalingMessageRouter(
         if (resolved.isNullOrBlank()) return null
         return RoomState(hostCid = resolved, participants = parsed.participants, maxParticipants = parsed.maxParticipants)
     }
+
+    /**
+     * Maps a provider-surfaced participant to the internal room model, carrying
+     * the content state, capabilities, and media policy through verbatim so the
+     * session can surface them without losing them at the provider boundary.
+     */
+    private fun SignalingProviderParticipant.toRoomParticipant(): Participant =
+        Participant(
+            cid = peerId,
+            joinedAt = joinedAt,
+            displayName = displayName,
+            peerId = appPeerId,
+            audioEnabled = audioEnabled,
+            videoEnabled = videoEnabled,
+            signalingStatus = connectionStatus,
+            contentState = contentState?.let {
+                ParticipantContentState(
+                    active = it.active,
+                    contentType = it.contentType,
+                    updatedAtMs = it.updatedAtMs,
+                    epoch = it.epoch,
+                    revision = it.revision,
+                )
+            },
+            capabilities = capabilities?.let {
+                ParticipantCapabilities(independentContentVideo = it.independentContentVideo)
+            },
+            mediaPolicy = mediaPolicy?.let {
+                ParticipantMediaPolicy(videoMediaEnabled = it.videoMediaEnabled)
+            },
+        )
 }

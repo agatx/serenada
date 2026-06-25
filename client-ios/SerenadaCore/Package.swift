@@ -15,6 +15,14 @@ let package = Package(
         .library(
             name: "SerenadaCore",
             targets: ["SerenadaCore"]
+        ),
+        // Extension-safe surface for a broadcast upload extension: the IPC
+        // config derivation, the shared-memory layout, the frame writer, and the
+        // open `SerenadaBroadcastSampleHandler` base class. Pulls in no WebRTC or
+        // SerenadaCore app APIs, so an app-extension target can depend on it.
+        .library(
+            name: "SerenadaBroadcastExtensionSupport",
+            targets: ["SerenadaBroadcastExtensionSupport"]
         )
     ],
     targets: [
@@ -23,12 +31,13 @@ let package = Package(
             path: "../Vendor/WebRTC/WebRTC.xcframework"
         ),
         .target(
+            name: "SerenadaBroadcastExtensionSupport",
+            path: "BroadcastSupport"
+        ),
+        .target(
             name: "SerenadaCore",
-            dependencies: ["WebRTC"],
-            path: "Sources",
-            swiftSettings: [
-                .define("BROADCAST_EXTENSION")
-            ]
+            dependencies: ["WebRTC", "SerenadaBroadcastExtensionSupport"],
+            path: "Sources"
         ),
         .testTarget(
             name: "SerenadaCoreTests",

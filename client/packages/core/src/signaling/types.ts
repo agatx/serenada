@@ -11,6 +11,33 @@ export type ParticipantContentState = {
     contentType?: string;
     updatedAtMs?: number;
     epoch?: number;
+    /**
+     * Per-participant monotonic generation marker, scoped to the sender's
+     * current session (the envelope's `(cid, sid)`). Orders presentation-state
+     * changes; opaque to the server (relayed/persisted verbatim).
+     */
+    revision?: number;
+};
+
+/**
+ * Capabilities a participant advertises at `join`. The server allowlists known
+ * keys and forwards them verbatim. Clients apply defaults for missing keys
+ * (`independentContentVideo` → `false`).
+ */
+export type ParticipantCapabilities = {
+    trickleIce?: boolean;
+    maxParticipants?: number;
+    /** Static build capability for the independent content (screen share) stream. */
+    independentContentVideo?: boolean;
+};
+
+/**
+ * Per-session media policy a participant advertises at `join`. Clients apply
+ * defaults for missing keys (`videoMediaEnabled` → `true`).
+ */
+export type ParticipantMediaPolicy = {
+    /** Whether this participant negotiates any video media at all. */
+    videoMediaEnabled?: boolean;
 };
 
 export type RoomParticipant = {
@@ -26,6 +53,10 @@ export type RoomParticipant = {
     // connection alive until the participant returns or is fully removed.
     connectionStatus?: ParticipantConnectionStatus;
     contentState?: ParticipantContentState;
+    /** Capabilities advertised at join (allowlisted server-side). */
+    capabilities?: ParticipantCapabilities;
+    /** Per-session media policy advertised at join (allowlisted server-side). */
+    mediaPolicy?: ParticipantMediaPolicy;
 };
 
 export type RoomState = {

@@ -50,12 +50,38 @@ final class FakeMediaEngine: SessionMediaEngine {
     func setHdVideoExperimentalEnabled(_ enabled: Bool) {}
     @discardableResult func toggleFlashlight() -> Bool { false }
     private(set) var startScreenShareCalls = 0
+    private(set) var stopScreenShareCalls = 0
+    /// Drives the result delivered to `startScreenShare`'s sync return AND the
+    /// `onComplete` callback, so session-level tests can exercise both confirmed
+    /// start (content_state broadcast) and cancellation/failure branches.
+    var startScreenShareResult = false
+    /// When true, model the broadcast PENDING window: return `true`
+    /// (request accepted, reader listening) WITHOUT firing `onComplete`, so the
+    /// share is not yet confirmed. A subsequent `stopScreenShare` then fires
+    /// `onScreenShareStopped` (cancel the pending start) like the real controller.
+    var deferStartScreenShareCompletion = false
+    private var deferredStartScreenShareCompletion: ((Bool) -> Void)?
     func startScreenShare(onComplete: ((Bool) -> Void)?) -> Bool {
         startScreenShareCalls += 1
-        onComplete?(false)
-        return false
+        if deferStartScreenShareCompletion {
+            deferredStartScreenShareCompletion = onComplete
+            return true
+        }
+        onComplete?(startScreenShareResult)
+        return startScreenShareResult
     }
-    func stopScreenShare() -> Bool { false }
+    func completeDeferredStartScreenShare(started: Bool) {
+        let completion = deferredStartScreenShareCompletion
+        deferredStartScreenShareCompletion = nil
+        completion?(started)
+    }
+    func stopScreenShare() -> Bool {
+        stopScreenShareCalls += 1
+        // Mirror the real controller: drive the session's screen-share-stopped
+        // callback so the session-side stop signaling path runs in tests.
+        onScreenShareStopped?()
+        return true
+    }
     private(set) var adjustCaptureZoomCalls: [CGFloat] = []
     var adjustCaptureZoomResult: Double? = 1.25
     @discardableResult func adjustCaptureZoom(by scaleDelta: CGFloat) -> Double? {
@@ -72,6 +98,10 @@ final class FakeMediaEngine: SessionMediaEngine {
 
     func hasIceServers() -> Bool { _iceServers != nil }
 
+    /// Per-cid record of the independent-content gate + offer-owner resolution
+    /// each slot was created with, so routing tests can assert on them.
+    private(set) var createdSlotSupportsIndependentContentVideo: [String: Bool] = [:]
+    private(set) var createdSlotIsOfferOwner: [String: Bool] = [:]
     func createSlot(
         remoteCid: String,
         onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
@@ -79,11 +109,16 @@ final class FakeMediaEngine: SessionMediaEngine {
         onConnectionStateChange: @escaping (String, String) -> Void,
         onIceConnectionStateChange: @escaping (String, String) -> Void,
         onSignalingStateChange: @escaping (String, String) -> Void,
-        onRenegotiationNeeded: @escaping (String) -> Void
+        onRenegotiationNeeded: @escaping (String) -> Void,
+        supportsIndependentContentVideo: Bool,
+        isOfferOwner: @escaping () -> Bool
     ) -> (any PeerConnectionSlotProtocol)? {
         createdSlotCids.append(remoteCid)
+        createdSlotSupportsIndependentContentVideo[remoteCid] = supportsIndependentContentVideo
+        createdSlotIsOfferOwner[remoteCid] = isOfferOwner()
         let slot = FakePeerConnectionSlot(
             remoteCid: remoteCid,
+            supportsIndependentContentVideo: supportsIndependentContentVideo,
             onConnectionStateChange: onConnectionStateChange,
             onIceConnectionStateChange: onIceConnectionStateChange,
             onSignalingStateChange: onSignalingStateChange,
@@ -111,6 +146,15 @@ final class FakeMediaEngine: SessionMediaEngine {
     }
     func detachLocalRenderer(_ renderer: AnyObject) {
         detachLocalRendererCalls.append(renderer)
+    }
+
+    private(set) var attachLocalContentRendererCalls: [AnyObject] = []
+    private(set) var detachLocalContentRendererCalls: [AnyObject] = []
+    func attachLocalContentRenderer(_ renderer: AnyObject) {
+        attachLocalContentRendererCalls.append(renderer)
+    }
+    func detachLocalContentRenderer(_ renderer: AnyObject) {
+        detachLocalContentRendererCalls.append(renderer)
     }
 
     func setOnCameraFacingChanged(_ handler: @escaping (Bool) -> Void) {

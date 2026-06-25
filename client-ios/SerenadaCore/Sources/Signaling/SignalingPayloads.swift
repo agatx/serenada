@@ -17,6 +17,8 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
         // Unknown status values fall back to .active per protocol spec.
         let signalingStatus: ParticipantSignalingStatus = (obj["connectionStatus"]?.stringValue == "suspended") ? .suspended : .active
         let contentState = parseContentState(from: obj["contentState"])
+        let capabilities = parseCapabilities(from: obj["capabilities"])
+        let mediaPolicy = parseMediaPolicy(from: obj["mediaPolicy"])
         result.append(Participant(
             cid: cid,
             joinedAt: joinedAt,
@@ -25,7 +27,9 @@ func parseParticipants(from arrayValue: [JSONValue]?) -> [Participant]? {
             audioEnabled: audioEnabled,
             videoEnabled: videoEnabled,
             signalingStatus: signalingStatus,
-            contentState: contentState
+            contentState: contentState,
+            capabilities: capabilities,
+            mediaPolicy: mediaPolicy
         ))
     }
     return result
@@ -41,11 +45,33 @@ func parseContentState(from value: JSONValue?) -> ParticipantContentState? {
     let contentType = active ? obj["contentType"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty : nil
     let updatedAtMs = obj["updatedAtMs"]?.intValue.map(Int64.init)
     let epoch = obj["epoch"]?.intValue.map(Int64.init)
+    let revision = obj["revision"]?.intValue.map(Int64.init)
     return ParticipantContentState(
         active: active,
         contentType: contentType,
         updatedAtMs: updatedAtMs,
-        epoch: epoch
+        epoch: epoch,
+        revision: revision
+    )
+}
+
+/// Parse a participant's static build `capabilities`, surfaced in
+/// `joined`/`room_state`. Only allowlisted keys are read; unknown keys are
+/// ignored. Returns `nil` when the object is absent so callers can apply the
+/// documented per-field defaults.
+func parseCapabilities(from value: JSONValue?) -> ParticipantCapabilities? {
+    guard let obj = value?.objectValue else { return nil }
+    return ParticipantCapabilities(
+        independentContentVideo: obj["independentContentVideo"]?.boolValue
+    )
+}
+
+/// Parse a participant's per-session `mediaPolicy`, surfaced in
+/// `joined`/`room_state`. Returns `nil` when the object is absent.
+func parseMediaPolicy(from value: JSONValue?) -> ParticipantMediaPolicy? {
+    guard let obj = value?.objectValue else { return nil }
+    return ParticipantMediaPolicy(
+        videoMediaEnabled: obj["videoMediaEnabled"]?.boolValue
     )
 }
 
@@ -206,22 +232,33 @@ struct ErrorPayload {
 /// Payload for "content_state" message — remote participant shares content state.
 struct ContentStatePayload {
     let fromCid: String?
+    /// Sender's session id (`sid`), used together with `fromCid` to scope
+    /// `revision` tracking so a rejoin restarting at `revision:1` is accepted
+    /// by identity. `nil` when the transport does not surface a sender sid.
+    let sid: String?
     let active: Bool
     let contentType: String?
+    /// Per-`(cid, sid)` monotonically increasing revision. `nil` when the
+    /// sender is too old to emit it.
+    let revision: Int64?
 
-    init(fromCid: String?, active: Bool, contentType: String?) {
+    init(fromCid: String?, sid: String? = nil, active: Bool, contentType: String?, revision: Int64? = nil) {
         self.fromCid = fromCid
+        self.sid = sid
         self.active = active
         self.contentType = contentType
+        self.revision = revision
     }
 
-    init(from payload: JSONValue?) {
+    init(from payload: JSONValue?, sid: String? = nil) {
         guard let obj = payload?.objectValue else {
-            fromCid = nil; active = false; contentType = nil; return
+            fromCid = nil; self.sid = sid; active = false; contentType = nil; revision = nil; return
         }
         fromCid = obj["from"]?.stringValue
+        self.sid = sid
         active = obj["active"]?.boolValue == true
         contentType = active ? obj["contentType"]?.stringValue : nil
+        revision = obj["revision"]?.intValue.map(Int64.init)
     }
 }
 

@@ -226,6 +226,23 @@ In custom-provider mode:
 
 On web, provider-delivered peer messages are exposed through `session.onPeerMessage(...)`. Raw Serenada transport envelopes are no longer part of the public SDK surface.
 
+### Independent Content Video (Screen Share)
+
+Screen share is moving from the single camera-video path to its own independent **content** stream, so a capable peer can send camera and screen share at the same time. The SDK surface for this is in place and stable, but the media path is gated behind a config flag that is **off by default and not yet enabled** on any platform — flipping it is held until each platform's media + UI are ready and the legacy-receiver interop gate passes. With the flag off, behavior is exactly today's: screen share reuses the camera video path and replaces the camera track while sharing.
+
+- **Config flag** `enableIndependentContentVideo` (`SerenadaConfig`, default `false`). It gates one thing only: advertising `capabilities.independentContentVideo=true` at join. It does not change media behavior until the per-platform media engine, UI, and interop gate are all ready.
+- **Session media policy** `videoMediaEnabled` (`SerenadaConfig`, default `true`) is now also signaled at join as `mediaPolicy.videoMediaEnabled`. It is immutable for the session and controls whether *any* video (camera or content) is negotiated. Strict audio-only (`videoMediaEnabled=false`) negotiates no video at all.
+- **New participant state** (remote `Participant` and `LocalParticipant`):
+  - `cameraEnabled` — camera video specifically. With the flag on this is the precise camera signal; with the flag off it mirrors `videoEnabled`.
+  - `videoEnabled` — retained legacy "video active" field; mirrors `cameraEnabled` when the flag is on.
+  - `content` — `{ active, type, revision }`, the screen-share presentation state (absent when not sharing). `type` is currently `"screenShare"`; `revision` orders quick stop/start toggles.
+- **New content rendering APIs** (the existing camera renderer APIs stay camera-specific):
+  - Web: `session.getRemoteContentStream(cid)`, `session.getRemoteCameraStream(cid)`, `session.getLocalContentStream()`.
+  - Android: `session.attachRemoteContentRenderer(renderer, cid)` / `detachRemoteContentRenderer(renderer, cid)`, `session.attachLocalContentRenderer(renderer)` / `detachLocalContentRenderer(renderer)`.
+  - iOS: `session.attachRemoteContentRenderer(_:forParticipant:)` / `detachRemoteContentRenderer(_:forParticipant:)`, `session.attachLocalContentRenderer(_:)` / `detachLocalContentRenderer(_:)`.
+
+When enabled, capability and policy are negotiated **per peer**: a capable peer receives camera and screen share on independent streams; a legacy peer falls back to the single-video model for that connection only (screen share preempts camera on that peer). See the [Protocol Specification](docs/serenada_protocol_v1.md) for the `join` capability/`mediaPolicy` fields and `content_state` wire format.
+
 ### Pluggable Audio Coordinators
 
 On iOS and Android, the SDKs support a pluggable audio session model via `SerenadaAudioCoordinator`. This lets the host app control the process-global audio session, routing policies, and Bluetooth state machines (useful when embedding Serenada alongside another audio engine like a push-to-talk system), while retaining the SDK's internal call routing and proximity monitor behaviors.

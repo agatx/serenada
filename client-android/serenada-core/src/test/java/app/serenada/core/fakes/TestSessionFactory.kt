@@ -24,6 +24,7 @@ internal class TestSessionFactory(
     val handlesReconnection: Boolean = false,
     defaultVideoEnabled: Boolean = true,
     videoMediaEnabled: Boolean = true,
+    enableIndependentContentVideo: Boolean = false,
     cameraModes: List<LocalCameraMode>? = null,
     deferInitialAnswer: Boolean = false,
     audioCoordinator: SerenadaAudioCoordinator? = null,
@@ -42,6 +43,7 @@ internal class TestSessionFactory(
             signalingProvider = fakeProvider,
             defaultVideoEnabled = defaultVideoEnabled,
             videoMediaEnabled = videoMediaEnabled,
+            enableIndependentContentVideo = enableIndependentContentVideo,
             cameraModes = cameraModes,
             deferInitialAnswer = deferInitialAnswer,
             audioCoordinator = audioCoordinator,
@@ -171,6 +173,64 @@ internal class TestSessionFactory(
             participants = listOf(localCid to localJoinedAt, remoteCid to remoteJoinedAt),
             hostCid = hostCid,
         )
+    }
+
+    /**
+     * Drive to in-call with a SINGLE remote peer whose advertised capabilities
+     * are explicit, so independent-content per-peer routing can be exercised at
+     * the session level. [remoteIndependentCapable] controls
+     * `capabilities.independentContentVideo`; [remoteVideoMediaEnabled] controls
+     * the peer's `mediaPolicy.videoMediaEnabled`.
+     */
+    fun advanceToInCallWithCapablePeer(
+        localCid: String = "local-cid-1",
+        remoteCid: String = "remote-cid-2",
+        remoteIndependentCapable: Boolean = true,
+        remoteVideoMediaEnabled: Boolean = true,
+        iceServers: List<PeerConnection.IceServer> = listOf(
+            PeerConnection.IceServer.builder("turn:turn.example.com:3478")
+                .setUsername("user")
+                .setPassword("pass")
+                .createIceServer()
+        ),
+    ) {
+        fakeProvider.enqueueIceServers(Result.success(iceServers))
+        grantPermissionsAndStart()
+        openSignaling()
+        simulateJoinedResponse(
+            cid = localCid,
+            participants = listOf(localCid to 1L),
+            hostCid = localCid,
+        )
+        simulateRoomStateWithCapabilities(
+            participants = listOf(
+                app.serenada.core.SignalingProviderParticipant(peerId = localCid, joinedAt = 1L),
+                app.serenada.core.SignalingProviderParticipant(
+                    peerId = remoteCid,
+                    joinedAt = 2L,
+                    capabilities = if (remoteIndependentCapable) {
+                        app.serenada.core.SignalingProviderParticipantCapabilities(independentContentVideo = true)
+                    } else {
+                        null
+                    },
+                    mediaPolicy = app.serenada.core.SignalingProviderParticipantMediaPolicy(
+                        videoMediaEnabled = remoteVideoMediaEnabled,
+                    ),
+                ),
+            ),
+            hostCid = minOf(localCid, remoteCid),
+        )
+    }
+
+    fun simulateRoomStateWithCapabilities(
+        participants: List<app.serenada.core.SignalingProviderParticipant>,
+        hostCid: String,
+    ) {
+        fakeProvider.simulateRoomStateUpdatedWith(
+            participants = participants,
+            hostPeerId = hostCid,
+        )
+        ShadowLooper.idleMainLooper()
     }
 
     fun tearDown() {

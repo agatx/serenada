@@ -12,6 +12,8 @@ export class FakeMediaEngine {
     localStream: MediaStream | null = null;
     remoteStreams = new Map<string, MediaStream>();
     isScreenSharing = false;
+    /** Mirrors MediaEngine.lastContentRevision (read for local content state). */
+    lastContentRevision = 0;
     canScreenShare = false;
     facingMode: 'user' | 'environment' = 'user';
     hasMultipleCameras = false;
@@ -71,6 +73,23 @@ export class FakeMediaEngine {
     async stopScreenShare(): Promise<void> { /* no-op */ }
     async flipCamera(): Promise<void> { /* no-op */ }
 
+    // Independent-content stream accessors (Phase 2). Tests can override the maps.
+    remoteCameraStreams = new Map<string, MediaStream>();
+    remoteContentStreams = new Map<string, MediaStream>();
+    localContentStream: MediaStream | null = null;
+    getRemoteCameraStream(cid: string): MediaStream | undefined {
+        return this.remoteCameraStreams.get(cid) ?? this.remoteStreams.get(cid);
+    }
+    getRemoteContentStream(cid: string): MediaStream | undefined {
+        return this.remoteContentStreams.get(cid);
+    }
+    getRemoteStream(cid: string): MediaStream | undefined {
+        return this.remoteStreams.get(cid);
+    }
+    getLocalContentStream(): MediaStream | null {
+        return this.localContentStream;
+    }
+
     processSignalingMessage(msg: SignalingMessage): void {
         this.processSignalingMessageCalls.push(msg);
     }
@@ -112,6 +131,23 @@ export class FakeMediaEngine {
         return [...this.inboundFlowingCids];
     }
 
+    /**
+     * Per-role inbound liveness snapshot, read synchronously by
+     * SerenadaSession.rebuildState to populate `cameraReceiving` /
+     * `contentReceiving`. Tests can seed this map to drive the participant
+     * state. `sampleInboundRoleLiveness()` is a no-op refresh here (the real
+     * engine recomputes from RTP stats); tests set the snapshot directly.
+     */
+    roleLiveness = new Map<string, { camera: boolean; content: boolean }>();
+    sampleInboundRoleLivenessCalls = 0;
+    async sampleInboundRoleLiveness(): Promise<Map<string, { camera: boolean; content: boolean }>> {
+        this.sampleInboundRoleLivenessCalls += 1;
+        return new Map(this.roleLiveness);
+    }
+    getRoleLiveness(cid: string): { camera: boolean; content: boolean } {
+        return this.roleLiveness.get(cid) ?? { camera: false, content: false };
+    }
+
     cleanupAllPeers(): void {
         this.cleanupAllPeersCalls++;
         this.remoteStreams = new Map();
@@ -139,7 +175,7 @@ export class FakeMediaEngine {
     // --- Test helpers ---
 
     /** Apply a partial state update and trigger onChange (which triggers rebuildState). */
-    emit(partial: Partial<Pick<FakeMediaEngine, 'localStream' | 'remoteStreams' | 'isScreenSharing' | 'canScreenShare' | 'facingMode' | 'hasMultipleCameras' | 'iceConnectionState' | 'connectionState' | 'signalingState' | 'connectionStatus'>>): void {
+    emit(partial: Partial<Pick<FakeMediaEngine, 'localStream' | 'remoteStreams' | 'isScreenSharing' | 'lastContentRevision' | 'canScreenShare' | 'facingMode' | 'hasMultipleCameras' | 'iceConnectionState' | 'connectionState' | 'signalingState' | 'connectionStatus'>>): void {
         Object.assign(this, partial);
         this.onChange?.();
     }

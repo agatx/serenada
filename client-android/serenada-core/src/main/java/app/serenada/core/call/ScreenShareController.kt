@@ -10,11 +10,13 @@ import android.os.Looper
 import android.util.DisplayMetrics
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 import kotlin.math.roundToInt
 import org.webrtc.EglBase
 import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SurfaceTextureHelper
+import org.webrtc.VideoCapturer
 
 internal class ScreenShareController(
     private val appContext: Context,
@@ -24,21 +26,54 @@ internal class ScreenShareController(
     private val videoSourceProvider: () -> org.webrtc.VideoSource?,
     private val onScreenShareStopped: () -> Unit,
     private val onStateChanged: (Boolean) -> Unit,
+    // When true, screen share rides a SEPARATE content source/capturer and the
+    // camera capture is left untouched. [contentCapturerObserverProvider]
+    // returns the capturer observer of the dedicated content source.
+    private val independentContentEnabled: Boolean = false,
+    private val contentCapturerObserverProvider: () -> org.webrtc.CapturerObserver? = { null },
     private val logger: SerenadaLogger? = null,
 ) {
     var isScreenSharing: Boolean = false
         private set
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    // Independent-mode screen capturer + its texture helper, owned here so the
+    // shared stop path releases them exactly once.
+    private var contentCapturer: VideoCapturer? = null
+    private var contentTextureHelper: SurfaceTextureHelper? = null
+    // Idempotency latch for the shared stop path (API / external onStop). Ensures
+    // capture stops once, MediaProjection.stop() runs once, and the capturer is
+    // released once per logical stop, regardless of how stop is entered.
+    private val stopInFlight = AtomicBoolean(false)
 
     fun startScreenShare(intent: Intent): Boolean {
         if (isScreenSharing) return true
-        val observer = capturerObserverProvider() ?: return false
-        val previousSource = cameraController.currentCameraSource
-        cameraController.resetScreenShareCameraState()
-        cameraController.disposeVideoCapturer()
+        return if (independentContentEnabled) {
+            startScreenShareIndependent(intent)
+        } else {
+            startScreenShareLegacy(intent)
+        }
+    }
+
+    /**
+     * Shared capturer bring-up for both screen-share paths: constructs the
+     * [ScreenCapturerAndroid] (wiring the external-stop [MediaProjection.Callback]
+     * into the shared idempotent stop path), creates the [SurfaceTextureHelper],
+     * selects the capture profile, then initializes and starts capture. On any
+     * failure it disposes both the capturer and texture helper and returns null.
+     * Callers own the path-specific observer choice plus the success side effects.
+     */
+    private fun createAndStartScreenCapturer(
+        intent: Intent,
+        observer: org.webrtc.CapturerObserver,
+        threadName: String,
+        profileLogLabel: String,
+    ): Pair<VideoCapturer, SurfaceTextureHelper>? {
         val capturer = ScreenCapturerAndroid(intent, object : MediaProjection.Callback() {
             override fun onStop() {
+                // External stop (OS revokes / user stops via the system control).
+                // Route into the SHARED idempotent stop path, then notify so the
+                // session can broadcast content_state once (pitfall #9).
                 mainHandler.post {
                     if (isScreenSharing) {
                         stopScreenShare()
@@ -47,38 +82,103 @@ internal class ScreenShareController(
                 }
             }
         })
-        val textureHelper = SurfaceTextureHelper.create("ScreenCaptureThread", eglBase.eglBaseContext)
+        val textureHelper = SurfaceTextureHelper.create(threadName, eglBase.eglBaseContext)
         val captureProfile = selectScreenShareCaptureProfile()
         return try {
             capturer.initialize(textureHelper, appContext, observer)
             capturer.startCapture(captureProfile.width, captureProfile.height, captureProfile.fps)
-            cameraController.setScreenShareVideoCapturer(capturer, textureHelper)
-            cameraController.cameraSourceBeforeScreenShare = previousSource
-            isScreenSharing = true
-            cameraController.isScreenSharing = true
-            onStateChanged(true)
             logger?.log(
                 SerenadaLogLevel.DEBUG,
                 "ScreenShare",
-                "Screen share capture profile: ${captureProfile.width}x${captureProfile.height}@${captureProfile.fps}fps"
+                "$profileLogLabel: ${captureProfile.width}x${captureProfile.height}@${captureProfile.fps}fps"
             )
-            cameraController.applyTorchForCurrentMode()
-            true
+            Pair(capturer, textureHelper)
         } catch (e: Exception) {
             logger?.log(SerenadaLogLevel.WARNING, "ScreenShare", "Failed to start screen sharing: ${e.message}")
             runCatching { capturer.dispose() }
             runCatching { textureHelper.dispose() }
+            null
+        }
+    }
+
+    // --- Legacy single-video screen share (flag OFF): byte-identical to today ---
+
+    private fun startScreenShareLegacy(intent: Intent): Boolean {
+        val observer = capturerObserverProvider() ?: return false
+        val previousSource = cameraController.currentCameraSource
+        cameraController.resetScreenShareCameraState()
+        cameraController.disposeVideoCapturer()
+        val started = createAndStartScreenCapturer(
+            intent,
+            observer,
+            "ScreenCaptureThread",
+            "Screen share capture profile",
+        )
+        if (started == null) {
             val videoSource = videoSourceProvider()
             if (cameraController.canCaptureVideo &&
                 !cameraController.restartVideoCapturer(previousSource, videoSource)) {
                 cameraController.restartVideoCapturer(CameraCaptureController.LocalCameraSource.SELFIE, videoSource)
             }
-            false
+            return false
         }
+        val (capturer, textureHelper) = started
+        cameraController.setScreenShareVideoCapturer(capturer, textureHelper)
+        cameraController.cameraSourceBeforeScreenShare = previousSource
+        isScreenSharing = true
+        cameraController.isScreenSharing = true
+        onStateChanged(true)
+        cameraController.applyTorchForCurrentMode()
+        return true
     }
 
+    // --- Independent content screen share (flag ON): camera untouched ---
+
+    private fun startScreenShareIndependent(intent: Intent): Boolean {
+        val observer = contentCapturerObserverProvider() ?: return false
+        val started = createAndStartScreenCapturer(
+            intent,
+            observer,
+            "ContentCaptureThread",
+            "Independent content capture profile",
+        ) ?: return false
+        val (capturer, textureHelper) = started
+        contentCapturer = capturer
+        contentTextureHelper = textureHelper
+        stopInFlight.set(false)
+        isScreenSharing = true
+        // Camera capture is intentionally left running.
+        onStateChanged(true)
+        return true
+    }
+
+    /**
+     * Shared idempotent stop path (API, external MediaProjection onStop). The
+     * latch makes a second entry (e.g. the onStop re-entry after a programmatic
+     * stop) a no-op: capture stops once, the capturer/MediaProjection is released
+     * once. Returns true once stopped (or already stopped).
+     */
     fun stopScreenShare(): Boolean {
         if (!isScreenSharing) return true
+        if (independentContentEnabled) {
+            if (!stopInFlight.compareAndSet(false, true)) return true
+            isScreenSharing = false
+            cameraController.isScreenSharing = false
+            // Dispose the content capturer (calls MediaProjection.stop() under the
+            // hood) and its texture helper exactly once. Camera is left untouched.
+            runCatching { contentCapturer?.stopCapture() }
+            runCatching { contentCapturer?.dispose() }
+            contentCapturer = null
+            runCatching { contentTextureHelper?.dispose() }
+            contentTextureHelper = null
+            onStateChanged(false)
+            stopInFlight.set(false)
+            return true
+        }
+        return stopScreenShareLegacy()
+    }
+
+    private fun stopScreenShareLegacy(): Boolean {
         val sourceToRestore = cameraController.cameraSourceBeforeScreenShare ?: cameraController.currentCameraSource
         isScreenSharing = false
         cameraController.isScreenSharing = false
@@ -94,6 +194,17 @@ internal class ScreenShareController(
     }
 
     fun reset() {
+        if (independentContentEnabled) {
+            isScreenSharing = false
+            cameraController.isScreenSharing = false
+            runCatching { contentCapturer?.stopCapture() }
+            runCatching { contentCapturer?.dispose() }
+            contentCapturer = null
+            runCatching { contentTextureHelper?.dispose() }
+            contentTextureHelper = null
+            stopInFlight.set(false)
+            return
+        }
         isScreenSharing = false
         cameraController.isScreenSharing = false
         cameraController.cameraSourceBeforeScreenShare = null
@@ -173,5 +284,11 @@ internal class ScreenShareController(
         const val SCREEN_SHARE_MAX_HEIGHT = 1080
         const val SCREEN_SHARE_TARGET_FPS = 30
         const val SCREEN_SHARE_MIN_FPS = 15
+
+        // Conservative independent-content sender profile (design "Content
+        // encoding profile"): legibility of mostly-static content over motion.
+        const val CONTENT_TARGET_FPS = 5
+        const val CONTENT_MAX_BITRATE_BPS = 1_500_000
+        const val CONTENT_MIN_BITRATE_BPS = 300_000
     }
 }

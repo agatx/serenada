@@ -28,6 +28,7 @@ import app.serenada.core.call.CallQualityTracker
 import app.serenada.core.call.ReconnectReason
 import app.serenada.core.call.ConnectionStatusTracker
 import app.serenada.core.call.FrameSnapshotCapture
+import app.serenada.core.call.InboundRoleBytes
 import app.serenada.core.call.JoinFlowCoordinator
 import app.serenada.core.call.LiveSessionClock
 import app.serenada.core.call.PeerNegotiationEngine
@@ -43,8 +44,12 @@ import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.ContentTypeWire
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.LocalFrameSnapshotCapture
+import app.serenada.core.call.ParticipantCapabilities
+import app.serenada.core.call.ParticipantContent
+import app.serenada.core.call.ParticipantMediaPolicy
 import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RemoteParticipant
+import app.serenada.core.call.RoleLiveness
 import app.serenada.core.call.SerenadaPeerConnectionState
 import app.serenada.core.call.RoomState
 import app.serenada.core.call.Participant
@@ -236,6 +241,21 @@ class SerenadaSession internal constructor(
     private var hostCid: String? = null
     private var currentRoomState: RoomState? = null
     private val remoteMediaStates = mutableMapOf<String, RemoteMediaState>()
+    // Latest accepted content (screen share) presentation state per remote cid,
+    // sourced from `content_state` peer messages. A stale, out-of-order update
+    // (revision <= tracked) is discarded; see [onContentStateReceived].
+    private val remoteContentStates = mutableMapOf<String, ParticipantContent>()
+    // Latest tracked revision per remote cid. Cleared when the peer leaves so a
+    // rejoin that restarts numbering is accepted by identity.
+    private val remoteContentRevisions = mutableMapOf<String, Long>()
+    // Outgoing per-session content revision for the local participant. Bumped on
+    // every content_state we broadcast so receivers can order quick toggles.
+    private var localContentRevision: Long = 0L
+    // Static capabilities advertised by each remote participant at join, sourced
+    // from joined/room_state. Absent entries default to no capability.
+    private val remoteCapabilities = mutableMapOf<String, ParticipantCapabilities>()
+    // Per-session media policy advertised by each remote participant at join.
+    private val remoteMediaPolicies = mutableMapOf<String, ParticipantMediaPolicy>()
     private var callStartTimeMs: Long? = null
     private var pendingJoinRoom: String? = null
     private val recoveryStorage = RecoveryStorage(appContext)
@@ -297,6 +317,8 @@ class SerenadaSession internal constructor(
                     maxParticipants = 4,
                     displayName = displayName,
                     appPeerId = peerId,
+                    independentContentVideo = config.enableIndependentContentVideo,
+                    videoMediaEnabled = config.videoMediaEnabled,
                 ),
             )
         },
@@ -361,13 +383,8 @@ class SerenadaSession internal constructor(
             delegate?.invoke()?.onSessionEnded(this, EndReason.Error(callError))
         },
         onRoomEnded = { cleanupCall(EndReason.RemoteEnded) },
-        onContentStateReceived = { fromCid, active, contentType ->
-            updateDiagnostics(
-                _diagnostics.value.copy(
-                    remoteContentCid = if (active) fromCid else null,
-                    remoteContentType = contentType,
-                )
-            )
+        onContentStateReceived = { fromCid, active, contentType, revision ->
+            handleRemoteContentState(fromCid, active, contentType, revision)
         },
         onMediaStateReceived = { fromCid, audioEnabled, videoEnabled ->
             val existing = remoteMediaStates[fromCid]
@@ -472,8 +489,19 @@ class SerenadaSession internal constructor(
     // disconnected (baseline samples preserved so the next post-reconnect
     // tick can detect flow).
     private val lastInboundBytesByCid = mutableMapOf<String, Long>()
+    // Per-remote-cid, per-role tally of cumulative inbound VIDEO bytesReceived,
+    // split by the BOUND transceiver role (camera vs content) so a stalled
+    // CONTENT stream is distinguishable from a healthy camera on the same peer.
+    // Sampled on the same media-liveness tick; a role is "receiving" when its
+    // sample advances over the previous one. The derived booleans are cached in
+    // [roleLivenessByCid] for synchronous reads while assembling participant
+    // state. Separate from [lastInboundBytesByCid] (the all-RTP audio-inclusive
+    // sum for the server `media_liveness` eviction-deferral signal, unchanged).
+    private val lastInboundRoleBytesByCid = mutableMapOf<String, InboundRoleBytes>()
+    private val roleLivenessByCid = mutableMapOf<String, RoleLiveness>()
     private var mediaLivenessTickRunnable: Runnable? = null
     private var mediaLivenessEmitInFlight = false
+    private var roleLivenessSampleInFlight = false
     private var mediaLivenessEmitCount = 0
     private var outboundMediaWatchdogRunnable: Runnable? = null
     private var iceFetchGeneration = 0
@@ -529,7 +557,9 @@ class SerenadaSession internal constructor(
                 onConnState: (String, org.webrtc.PeerConnection.PeerConnectionState) -> Unit,
                 onIceConnState: (String, org.webrtc.PeerConnection.IceConnectionState) -> Unit,
                 onSigState: (String, org.webrtc.PeerConnection.SignalingState) -> Unit,
-                onRenegotiation: (String) -> Unit ->
+                onRenegotiation: (String) -> Unit,
+                supportsIndependentContentVideo: Boolean,
+                isOfferOwner: () -> Boolean ->
                 webRtcEngine.createSlot(
                     remoteCid = remoteCid,
                     onLocalIceCandidate = onLocalIce,
@@ -538,9 +568,12 @@ class SerenadaSession internal constructor(
                     onIceConnectionStateChange = onIceConnState,
                     onSignalingStateChange = onSigState,
                     onRenegotiationNeeded = onRenegotiation,
+                    supportsIndependentContentVideo = supportsIndependentContentVideo,
+                    isOfferOwner = isOfferOwner,
                 )
             },
             engineRemoveSlot = { slot: PeerConnectionSlotProtocol -> webRtcEngine.removeSlot(slot) },
+            peerIndependentContentCapability = { cid -> resolvePeerIndependentContentCapability(cid) },
             sendMessage = { type: String, payload: org.json.JSONObject?, to: String? -> sendMessage(type, payload, to) },
             onRemoteParticipantsChanged = { refreshRemoteParticipants() },
             onAggregatePeerStateChanged = { ice: IceConnectionState, conn: PeerConnectionState, sig: RtcSignalingState ->
@@ -745,6 +778,7 @@ class SerenadaSession internal constructor(
         override fun onPeerLeft(event: PeerEvent) {
             runOnMain {
                 remoteMediaStates.remove(event.peerId)
+                forgetRemoteContentTracking(event.peerId)
                 currentRoomState = removeParticipant(currentRoomState, event.peerId, clientId)
                 currentRoomState?.let { roomState ->
                     hostCid = roomState.hostCid
@@ -878,9 +912,20 @@ class SerenadaSession internal constructor(
     fun flipCamera() {
         assertMainThread()
         if (availableCameraModes.size <= 1) return
-        if (!_diagnostics.value.isScreenSharing) {
+        val sharing = _diagnostics.value.isScreenSharing
+        if (config.enableIndependentContentVideo) {
+            // Independent mode: the camera is a separate track, so flipping it
+            // during a screen share is valid and leaves the content track
+            // untouched (pitfall #6). Do NOT broadcast a camera-framing
+            // content_state while sharing — the screen share owns content_state.
+            webRtcEngine.flipCamera()
+            return
+        }
+        // Legacy mode: a single video track carries the share, so flip is blocked
+        // while sharing (it would clobber the display track).
+        if (!sharing) {
             val currentMode = _state.value.localCameraMode
-            if (currentMode.isContentMode) signalingMessageRouter.broadcastContentState(false)
+            if (currentMode.isContentMode) broadcastLocalContentState(false)
             webRtcEngine.flipCamera()
         }
     }
@@ -904,6 +949,15 @@ class SerenadaSession internal constructor(
         assertMainThread()
         if (!videoMediaEnabled) return
         if (_diagnostics.value.isScreenSharing) return
+        if (config.enableIndependentContentVideo) {
+            startScreenShareIndependent(intent)
+        } else {
+            startScreenShareLegacy(intent)
+        }
+    }
+
+    /** Legacy single-video screen share path (flag off): byte-identical to today. */
+    private fun startScreenShareLegacy(intent: Intent) {
         val wasVideoPreferred = userPreferredVideoEnabled
         userPreferredVideoEnabled = true
         if (!webRtcEngine.startScreenShare(intent)) {
@@ -912,8 +966,25 @@ class SerenadaSession internal constructor(
             return
         }
         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = true))
-        signalingMessageRouter.broadcastContentState(true, ContentTypeWire.SCREEN_SHARE)
+        broadcastLocalContentState(true, ContentTypeWire.SCREEN_SHARE)
         applyLocalVideoPreference()
+    }
+
+    /**
+     * Independent content share path (flag on): the screen rides a SEPARATE
+     * content track, so the camera preference is NOT touched (pitfall #6) and
+     * `cameraMode` is never set to screenShare. Signal `content_state` BEFORE the
+     * per-peer attach inside the engine (pitfall #9), rolling back on failure.
+     */
+    private fun startScreenShareIndependent(intent: Intent) {
+        broadcastLocalContentState(true, ContentTypeWire.SCREEN_SHARE)
+        if (!webRtcEngine.startScreenShare(intent)) {
+            // Roll back the content_state we signaled (strictly greater revision).
+            broadcastLocalContentState(false)
+            logger?.log(SerenadaLogLevel.WARNING, "Session", "Failed to start screen sharing")
+            return
+        }
+        updateDiagnostics(_diagnostics.value.copy(isScreenSharing = true))
     }
 
     /** Stop screen sharing and return to camera. */
@@ -925,8 +996,40 @@ class SerenadaSession internal constructor(
             return
         }
         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
-        signalingMessageRouter.broadcastContentState(false)
-        applyLocalVideoPreference()
+        broadcastLocalContentState(false)
+        // Legacy stop restores the camera onto the single sender, so re-apply the
+        // camera preference. Independent stop never touched the camera, so the
+        // re-apply is unnecessary (the content track was separate).
+        if (!config.enableIndependentContentVideo) {
+            applyLocalVideoPreference()
+        } else {
+            restoreCameraContentHintAfterIndependentStop()
+        }
+    }
+
+    /**
+     * Independent-stop only: re-emit the world/composite camera content hint that
+     * was suppressed for the duration of the share.
+     *
+     * In independent mode the camera stays in WORLD/COMPOSITE while a screen share
+     * runs, but [onCameraModeChanged]'s hint and any flip suppress the
+     * camera-framing `content_state` because the screen share owns `content_state`
+     * (gotcha #6). Clearing the screen-share content on stop ([broadcastLocalContentState]
+     * `active=false`) therefore leaves remote peers with NO content presented even
+     * though the camera is still in a content framing. Re-broadcast the
+     * camera-mode hint so the pre-share world/composite presentation is restored.
+     * SELFIE (no camera content framing) re-emits nothing — the inactive state
+     * already broadcast above is correct.
+     */
+    private fun restoreCameraContentHintAfterIndependentStop() {
+        val cameraMode = webRtcEngine.activeCameraMode() ?: _state.value.localCameraMode
+        when (cameraMode) {
+            LocalCameraMode.WORLD ->
+                broadcastLocalContentState(true, ContentTypeWire.WORLD_CAMERA)
+            LocalCameraMode.COMPOSITE ->
+                broadcastLocalContentState(true, ContentTypeWire.COMPOSITE_CAMERA)
+            else -> Unit
+        }
     }
 
     /** Capture a JPEG snapshot of the local video frame. */
@@ -1114,6 +1217,34 @@ class SerenadaSession internal constructor(
         peerSlots[cid]?.detachRemoteSink(sink)
     }
 
+    // --- Content (screen share) renderer APIs ---
+    // Camera renderers stay on attachRemoteRenderer / attachLocalSink above.
+    // These render the independent CONTENT (screen share) stream separately.
+
+    /** Attach a sink to a specific peer's remote CONTENT (screen share) track. */
+    fun attachRemoteContentRenderer(renderer: org.webrtc.VideoSink, participantCid: String) {
+        assertMainThread()
+        peerSlots[participantCid]?.attachRemoteContentSink(renderer)
+    }
+
+    /** Detach a previously attached remote content renderer for a peer. */
+    fun detachRemoteContentRenderer(renderer: org.webrtc.VideoSink, participantCid: String) {
+        assertMainThread()
+        peerSlots[participantCid]?.detachRemoteContentSink(renderer)
+    }
+
+    /** Attach a sink to the LOCAL content (screen share) track for local preview. */
+    fun attachLocalContentRenderer(renderer: org.webrtc.VideoSink) {
+        assertMainThread()
+        webRtcEngine.attachLocalContentSink(renderer)
+    }
+
+    /** Detach a previously attached local content renderer. */
+    fun detachLocalContentRenderer(renderer: org.webrtc.VideoSink) {
+        assertMainThread()
+        webRtcEngine.detachLocalContentSink(renderer)
+    }
+
     /** Get the EGL context for custom rendering or renderer initialization. */
     fun eglContext(): EglBase.Context {
         assertMainThread()
@@ -1167,6 +1298,10 @@ class SerenadaSession internal constructor(
                 callStartedAtMs = callStartTimeMs,
                 localAudioEnabled = config.defaultAudioEnabled,
                 localVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled,
+                // The camera/content media split is not yet precise; localCameraEnabled
+                // intentionally tracks localVideoEnabled until the camera m-line is wired.
+                localCameraEnabled = videoCaptureSupported && config.defaultVideoEnabled,
+                localContent = null,
                 localDisplayName = displayName,
                 remoteParticipants = emptyList(),
                 localCameraMode = initialCameraMode,
@@ -1248,14 +1383,34 @@ class SerenadaSession internal constructor(
                 handler.post {
                     val previousMode = _state.value.localCameraMode
                     updateState(_state.value.copy(localCameraMode = mode))
+                    if (config.enableIndependentContentVideo) {
+                        // Independent mode: the camera mode never represents screen
+                        // share (isScreenSharing is owned by start/stopScreenShare,
+                        // not derived from the camera mode), and a real screen share
+                        // owns `content_state` on the separate content track. The
+                        // world/composite framing remains a CAMERA-path presentation
+                        // hint, but it must NEVER collide with an active screen
+                        // share's content_state — so suppress the camera-framing
+                        // hint while screen sharing.
+                        if (_diagnostics.value.isScreenSharing) return@post
+                        val isContent = mode.isContentMode
+                        val wasContent = previousMode.isContentMode
+                        if (isContent) {
+                            val type = if (mode == LocalCameraMode.WORLD) ContentTypeWire.WORLD_CAMERA else ContentTypeWire.COMPOSITE_CAMERA
+                            broadcastLocalContentState(true, type)
+                        } else if (wasContent) {
+                            broadcastLocalContentState(false)
+                        }
+                        return@post
+                    }
                     updateDiagnostics(_diagnostics.value.copy(isScreenSharing = mode == LocalCameraMode.SCREEN_SHARE))
                     val isContent = mode.isContentMode
                     val wasContent = previousMode.isContentMode
                     if (isContent) {
                         val type = if (mode == LocalCameraMode.WORLD) ContentTypeWire.WORLD_CAMERA else ContentTypeWire.COMPOSITE_CAMERA
-                        signalingMessageRouter.broadcastContentState(true, type)
+                        broadcastLocalContentState(true, type)
                     } else if (wasContent) {
-                        signalingMessageRouter.broadcastContentState(false)
+                        broadcastLocalContentState(false)
                     }
                 }
             },
@@ -1271,11 +1426,23 @@ class SerenadaSession internal constructor(
             },
             onScreenShareStopped = {
                 handler.post {
+                    // External stop (OS revokes MediaProjection / system control).
+                    // The engine already ran the idempotent stop path; mirror the
+                    // session-side state once (pitfall #9: one content_state).
                     if (_diagnostics.value.isScreenSharing) {
                         updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
-                        signalingMessageRouter.broadcastContentState(false)
+                        broadcastLocalContentState(false)
+                        // Restore the world/composite camera content hint that was
+                        // suppressed during the share (independent mode only).
+                        if (config.enableIndependentContentVideo) {
+                            restoreCameraContentHintAfterIndependentStop()
+                        }
                     }
-                    applyLocalVideoPreference()
+                    // Independent stop never preempted the camera, so don't
+                    // re-apply the camera preference (pitfall #6).
+                    if (!config.enableIndependentContentVideo) {
+                        applyLocalVideoPreference()
+                    }
                 }
             },
             onFeatureDegradation = { degradation ->
@@ -1285,6 +1452,7 @@ class SerenadaSession internal constructor(
             },
             isHdVideoExperimentalEnabled = config.isHdVideoExperimentalEnabled,
             videoMediaEnabled = videoMediaEnabled,
+            enableIndependentContentVideo = config.enableIndependentContentVideo,
             availableCameraModes = availableCameraModes,
             logger = logger,
         )
@@ -1431,6 +1599,7 @@ class SerenadaSession internal constructor(
     // --- Internal: Participants ---
 
     private fun updateParticipants(roomState: RoomState) {
+        seedRemoteContentFromRoomState(roomState)
         val count = roomState.participants.size
         val isHostNow = clientId != null && clientId == roomState.hostCid
         val phase = if (count <= 1) CallPhase.Waiting else CallPhase.InCall
@@ -1474,12 +1643,25 @@ class SerenadaSession internal constructor(
             val peerState = remoteMediaStates[cid]
             val signalingStatus = participant?.signalingStatus ?: ParticipantSignalingStatus.ACTIVE
             val audioEnabled = peerState?.audioEnabled ?: participant?.audioEnabled ?: true
+            val videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled()
+            // Per-role inbound liveness for stall diagnostics. Both default to
+            // false until the first sample. Flag off / legacy peers: the single
+            // inbound video routes to the camera role, so contentReceiving stays
+            // false (additive, byte-identical for camera-only consumers).
+            val roleLiveness = roleLivenessFor(cid)
             RemoteParticipant(
                 cid = cid,
                 displayName = participant?.displayName,
                 peerId = participant?.peerId,
                 audioEnabled = audioEnabled,
-                videoEnabled = peerState?.videoEnabled ?: participant?.videoEnabled ?: slot.isRemoteVideoTrackEnabled(),
+                videoEnabled = videoEnabled,
+                // The camera/content media split is not yet precise; cameraEnabled
+                // intentionally tracks videoEnabled until the camera m-line is wired.
+                cameraEnabled = videoEnabled,
+                content = remoteContentStates[cid],
+                cameraReceiving = roleLiveness.camera,
+                contentReceiving = roleLiveness.content,
+                supportsIndependentContentVideo = remoteSupportsIndependentContentVideo(cid),
                 connectionState = SerenadaPeerConnectionState.fromRtcState(slot.getConnectionState()),
                 signalingStatus = signalingStatus,
                 presumedLost = signalingStatus == ParticipantSignalingStatus.SUSPENDED && cid in presumedLostRemoteCids,
@@ -1489,17 +1671,19 @@ class SerenadaSession internal constructor(
         val currentState = _state.value
         val currentDiagnostics = _diagnostics.value
         val activeCids = remoteParticipants.map { it.cid }.toSet()
-        val clearContent = currentDiagnostics.remoteContentCid != null && currentDiagnostics.remoteContentCid !in activeCids
+        // Re-derive the diagnostics content pointer from the per-cid map if it
+        // currently points at a peer no longer in the room. Re-pointing (not just
+        // nulling) keeps a still-active sharer's identity when a DIFFERENT peer
+        // departs. With one sharer (legacy / flag-off) this clears to null exactly
+        // as before.
+        val pointerStale = currentDiagnostics.remoteContentCid != null &&
+            currentDiagnostics.remoteContentCid !in activeCids
         if (currentState.remoteParticipants == remoteParticipants) {
-            if (clearContent) {
-                updateDiagnostics(currentDiagnostics.copy(remoteContentCid = null, remoteContentType = null))
-            }
+            if (pointerStale) refreshContentDiagnosticsPointer(preferredCid = null)
             return
         }
         updateState(currentState.copy(remoteParticipants = remoteParticipants))
-        if (clearContent) {
-            updateDiagnostics(currentDiagnostics.copy(remoteContentCid = null, remoteContentType = null))
-        }
+        if (pointerStale) refreshContentDiagnosticsPointer(preferredCid = null)
     }
 
     // --- Internal: State ---
@@ -1595,6 +1779,178 @@ class SerenadaSession internal constructor(
         )
     }
 
+    /**
+     * Store per-participant capabilities/media policy and replay any persisted
+     * content state carried in `joined`/`room_state` (e.g. for a peer that was
+     * already sharing when we reconnected). Reuses the same supersede-by-revision
+     * rule so a live `content_state` is never overwritten by an older snapshot.
+     */
+    private fun seedRemoteContentFromRoomState(roomState: RoomState) {
+        val myCid = clientId
+        for (participant in roomState.participants) {
+            if (participant.cid == myCid) continue
+            // Each authoritative snapshot is the source of truth: clear stored
+            // caps/mediaPolicy for a still-present CID whose snapshot omits them
+            // (the server resets these to defaults on an omitting rejoin) so
+            // accessors fall back to contract defaults instead of stale values.
+            val caps = participant.capabilities
+            if (caps != null) remoteCapabilities[participant.cid] = caps else remoteCapabilities.remove(participant.cid)
+            val policy = participant.mediaPolicy
+            if (policy != null) remoteMediaPolicies[participant.cid] = policy else remoteMediaPolicies.remove(participant.cid)
+            val content = participant.contentState ?: continue
+            handleRemoteContentState(
+                fromCid = participant.cid,
+                active = content.active,
+                contentType = content.contentType,
+                revision = content.revision,
+            )
+        }
+    }
+
+    /**
+     * Apply an inbound `content_state` from [fromCid].
+     *
+     * Revision handling (revision is scoped to the sender's `(cid, sid)` on the
+     * wire; the SDK does not currently receive the sender's `sid` on relayed
+     * peer messages, so tracking is keyed by `cid` and reset when the peer
+     * leaves — a rejoin therefore supersedes by identity):
+     * - a missing revision is always accepted (older senders / forward compat);
+     * - a revision <= the tracked one is discarded as stale/out-of-order;
+     * - otherwise it is accepted and becomes the new tracked revision.
+     */
+    private fun handleRemoteContentState(
+        fromCid: String,
+        active: Boolean,
+        contentType: String?,
+        revision: Long?,
+    ) {
+        if (revision != null) {
+            val tracked = remoteContentRevisions[fromCid]
+            if (tracked != null && revision <= tracked) return
+            remoteContentRevisions[fromCid] = revision
+        }
+        if (active) {
+            remoteContentStates[fromCid] = ParticipantContent(
+                active = true,
+                type = contentType ?: ContentTypeWire.SCREEN_SHARE,
+                revision = revision ?: 0L,
+            )
+        } else {
+            remoteContentStates.remove(fromCid)
+        }
+        // Derive the single diagnostics content pointer from the per-cid map
+        // rather than blindly tracking the last sender. With multiple sharers, a
+        // peer's `active:false` must only clear the pointer if it was pointing at
+        // THAT peer; otherwise the pointer keeps reflecting a still-active sharer.
+        // Prefer the peer that just went active so a fresh start re-points
+        // immediately. Mirrors iOS's per-cid correctness; flag-off (legacy
+        // single-content) is unchanged because there is only ever one entry.
+        refreshContentDiagnosticsPointer(preferredCid = if (active) fromCid else null)
+        refreshRemoteParticipants()
+    }
+
+    /**
+     * Recompute [CallDiagnostics.remoteContentCid] / [CallDiagnostics.remoteContentType]
+     * from the per-cid [remoteContentStates] map. The pointer is single by design
+     * (a diagnostics convenience); when several peers share, it points at one
+     * active sharer ([preferredCid] when it is itself active, otherwise the
+     * current pointer if still active, otherwise any active sharer), or null when
+     * no peer is sharing. A peer's stop therefore only clears the pointer when no
+     * other peer is actively sharing.
+     */
+    private fun refreshContentDiagnosticsPointer(preferredCid: String?) {
+        val current = _diagnostics.value
+        val target = when {
+            preferredCid != null && remoteContentStates[preferredCid]?.active == true -> preferredCid
+            current.remoteContentCid != null && remoteContentStates[current.remoteContentCid]?.active == true ->
+                current.remoteContentCid
+            else -> remoteContentStates.entries.firstOrNull { it.value.active }?.key
+        }
+        val targetType = target?.let { remoteContentStates[it]?.type }
+        if (current.remoteContentCid == target && current.remoteContentType == targetType) return
+        updateDiagnostics(
+            current.copy(
+                remoteContentCid = target,
+                remoteContentType = targetType,
+            )
+        )
+    }
+
+    /**
+     * Whether [cid] advertised independent content video at join. Defaults to
+     * false when absent. Consumed by the media engine in a later phase; exposed
+     * now so the stored capability is observable and testable.
+     */
+    internal fun remoteSupportsIndependentContentVideo(cid: String): Boolean =
+        remoteCapabilities[cid]?.independentContentVideo ?: false
+
+    /**
+     * Whether [cid] permits any video media (signaled `mediaPolicy`). Defaults
+     * to true when absent, per the audio-only compatibility boundary.
+     */
+    internal fun remoteVideoMediaEnabled(cid: String): Boolean =
+        remoteMediaPolicies[cid]?.videoMediaEnabled ?: true
+
+    /**
+     * Resolve the per-peer independent-content routing inputs for a slot. A peer
+     * is routed via the independent camera+content path only when ALL hold: the
+     * local build flag is on, BOTH ends' `videoMediaEnabled` are true, and the
+     * peer advertised `independentContentVideo`. When the flag is off this is
+     * always `supported=false`, so every peer uses the legacy single-video path
+     * (byte-identical to today). Mirrors web's `isPeerIndependentCapable`.
+     */
+    private fun resolvePeerIndependentContentCapability(
+        cid: String,
+    ): PeerNegotiationEngine.PeerIndependentContentCapability {
+        val supported = config.enableIndependentContentVideo &&
+            videoMediaEnabled &&
+            remoteVideoMediaEnabled(cid) &&
+            remoteSupportsIndependentContentVideo(cid)
+        return PeerNegotiationEngine.PeerIndependentContentCapability(
+            supported = supported,
+        )
+    }
+
+    /**
+     * Drop all tracked content/capability/policy state for a departed peer so a
+     * later rejoin (which may restart its revision numbering) is accepted by
+     * identity rather than discarded as stale.
+     */
+    private fun forgetRemoteContentTracking(cid: String) {
+        remoteContentStates.remove(cid)
+        remoteContentRevisions.remove(cid)
+        remoteCapabilities.remove(cid)
+        remoteMediaPolicies.remove(cid)
+        // Drop per-role liveness baselines so a rejoin starts fresh (conservative
+        // first sample) rather than diffing against a departed peer's totals.
+        lastInboundRoleBytesByCid.remove(cid)
+        roleLivenessByCid.remove(cid)
+    }
+
+    /**
+     * Broadcast a `content_state` carrying a strictly-greater per-session
+     * revision and mirror the new presentation state into [CallState.localContent].
+     * Every send (start, stop, rollback) bumps the revision so receivers can
+     * order quick toggles and discard stale, out-of-order updates.
+     */
+    private fun broadcastLocalContentState(active: Boolean, contentType: String? = null) {
+        localContentRevision += 1
+        val revision = localContentRevision
+        signalingMessageRouter.broadcastContentState(active, contentType, revision)
+        val nextContent = if (active) {
+            ParticipantContent(
+                active = true,
+                type = contentType ?: ContentTypeWire.SCREEN_SHARE,
+                revision = revision,
+            )
+        } else {
+            null
+        }
+        if (_state.value.localContent != nextContent) {
+            updateState(_state.value.copy(localContent = nextContent))
+        }
+    }
+
     // --- Internal: Suspended-peer presentation ---
 
     /**
@@ -1678,6 +2034,11 @@ class SerenadaSession internal constructor(
         if (mediaLivenessTickRunnable != null) return
         val runnable = object : Runnable {
             override fun run() {
+                // Per-role inbound stall diagnostics refresh on the same cadence
+                // as (but independently of) the server-facing media_liveness
+                // broadcast, so cameraReceiving/contentReceiving stay current even
+                // while the broadcast is gated (e.g. transport blip).
+                sampleInboundRoleLiveness()
                 emitMediaLiveness()
                 handler.postDelayed(this, WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS)
             }
@@ -1749,6 +2110,70 @@ class SerenadaSession internal constructor(
         signalingProvider.broadcast("media_liveness", payload)
         mediaLivenessEmitCount += 1
     }
+
+    /**
+     * Per-role counterpart to [emitMediaLiveness]: sample each peer's inbound
+     * video bytes split by bound role (camera vs content), diff against the
+     * previous sample, and refresh the cached [roleLivenessByCid] booleans that
+     * surface as `cameraReceiving`/`contentReceiving` on each remote participant.
+     * Conservative on the first sample for a peer (no baseline → both false).
+     * Independent of the server-facing broadcast gate (it only needs slots), so
+     * stall diagnostics stay current through a transport blip. Cleans up tracking
+     * for peers that have left.
+     */
+    private fun sampleInboundRoleLiveness() {
+        if (_state.value.phase == CallPhase.Idle || _state.value.phase == CallPhase.Ending) return
+        if (roleLivenessSampleInFlight) return
+        val slots = peerSlots.toMap()
+        if (slots.isEmpty()) {
+            // No peers: drop any stale tracking and clear booleans if needed.
+            if (lastInboundRoleBytesByCid.isNotEmpty() || roleLivenessByCid.isNotEmpty()) {
+                lastInboundRoleBytesByCid.clear()
+                roleLivenessByCid.clear()
+                refreshRemoteParticipants()
+            }
+            return
+        }
+        roleLivenessSampleInFlight = true
+        val newSamples = mutableMapOf<String, InboundRoleBytes>()
+        var remaining = slots.size
+        for ((cid, slot) in slots) {
+            slot.collectInboundRoleBytes { sample ->
+                handler.post {
+                    newSamples[cid] = sample
+                    remaining -= 1
+                    if (remaining == 0) finalizeRoleLivenessSample(newSamples)
+                }
+            }
+        }
+    }
+
+    private fun finalizeRoleLivenessSample(newSamples: Map<String, InboundRoleBytes>) {
+        roleLivenessSampleInFlight = false
+        for ((cid, sample) in newSamples) {
+            val previous = lastInboundRoleBytesByCid[cid]
+            roleLivenessByCid[cid] = RoleLiveness(
+                camera = previous != null && sample.cameraBytes > previous.cameraBytes,
+                content = previous != null && sample.contentBytes > previous.contentBytes,
+            )
+            lastInboundRoleBytesByCid[cid] = sample
+        }
+        // Drop tracking for peers that left the room.
+        val activeCids = peerSlots.keys
+        val staleBytes = lastInboundRoleBytesByCid.keys.filterNot { activeCids.contains(it) }
+        for (cid in staleBytes) lastInboundRoleBytesByCid.remove(cid)
+        val staleLiveness = roleLivenessByCid.keys.filterNot { activeCids.contains(it) }
+        for (cid in staleLiveness) roleLivenessByCid.remove(cid)
+        refreshRemoteParticipants()
+    }
+
+    /**
+     * Latest cached per-role inbound liveness for a peer, or both false when no
+     * sample has been taken yet. Read synchronously while assembling participant
+     * state (mirrors web's `getRoleLiveness`).
+     */
+    private fun roleLivenessFor(cid: String): RoleLiveness =
+        roleLivenessByCid[cid] ?: RoleLiveness()
 
     // --- Internal: Local signaling-state computation ---
 
@@ -1868,6 +2293,9 @@ class SerenadaSession internal constructor(
         unregisterConnectivityListener()
         clientId = null; hostCid = null; currentRoomState = null; callStartTimeMs = null
         pendingJoinRoom = null; pendingMessages.clear(); remoteMediaStates.clear()
+        remoteContentStates.clear(); remoteContentRevisions.clear()
+        remoteCapabilities.clear(); remoteMediaPolicies.clear()
+        localContentRevision = 0L
         connectionStatusTracker.cancelTimer()
         userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled; isVideoPausedByProximity = false
         reconnectToken = null; reconnectTokenTTLMs = null; reconnectRecoveryPending = false; hasInitialIceServers = false
@@ -1876,7 +2304,10 @@ class SerenadaSession internal constructor(
         stopMediaLivenessTimer()
         stopOutboundMediaWatchdog()
         lastInboundBytesByCid.clear()
+        lastInboundRoleBytesByCid.clear()
+        roleLivenessByCid.clear()
         mediaLivenessEmitInFlight = false
+        roleLivenessSampleInFlight = false
         localSuspendedSinceMs = null
         sessionStartTs = null
         sessionActivated = false
@@ -1940,7 +2371,9 @@ class SerenadaSession internal constructor(
         val requestedEnabled = userPreferredVideoEnabled && !shouldPause
         val effectiveEnabled = webRtcEngine.toggleVideo(requestedEnabled)
         if (_state.value.localVideoEnabled != effectiveEnabled) {
-            updateState(_state.value.copy(localVideoEnabled = effectiveEnabled))
+            // The camera/content media split is not yet precise; localCameraEnabled
+            // intentionally tracks localVideoEnabled until the camera m-line is wired.
+            updateState(_state.value.copy(localVideoEnabled = effectiveEnabled, localCameraEnabled = effectiveEnabled))
             broadcastLocalMediaState()
         }
     }

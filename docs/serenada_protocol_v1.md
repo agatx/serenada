@@ -121,7 +121,11 @@ Join a room.
     "ua": "optional user agent string",
     "capabilities": {
       "trickleIce": true,
-      "maxParticipants": 4
+      "maxParticipants": 4,
+      "independentContentVideo": false
+    },
+    "mediaPolicy": {
+      "videoMediaEnabled": true
     },
     "createMaxParticipants": 4,
     "displayName": "optional display name",
@@ -137,6 +141,30 @@ Join a room.
   to their own user identity (for avatar lookup, telemetry, etc.) — distinct from
   `cid`, which is per-call and server-issued. Trimmed and truncated to 128
   characters; an empty string clears the stored value (matching `displayName`).
+- `capabilities.independentContentVideo` *(boolean, optional)*: advertises that
+  this client can negotiate, send, receive, classify, and render an **independent
+  content video stream** (screen share) separate from camera video. Static per
+  session. Treated as `false` when omitted. The server stores and forwards it
+  verbatim; it does not interpret it for media routing.
+- `mediaPolicy.videoMediaEnabled` *(boolean, optional)*: the participant's
+  **session video policy** — whether any video m-line (camera or content) is
+  negotiated at all for this participant. Immutable for the session. Treated as
+  `true` when `mediaPolicy` (or the field) is omitted, which is safe: only clients
+  new enough to support strict audio-only emit `mediaPolicy`, and every client old
+  enough to omit it has always negotiated video. A peer with
+  `videoMediaEnabled=false` is an audio-only participant; offerers must not create
+  video m-lines toward it.
+
+**Capabilities / mediaPolicy allowlist**
+- The server stores only **allowlisted** keys:
+  - `capabilities`: `trickleIce`, `maxParticipants`, `independentContentVideo`.
+  - `mediaPolicy`: `videoMediaEnabled`.
+- Any other key under `capabilities` or `mediaPolicy` is **dropped** (not stored,
+  not forwarded). Opaque pass-through of arbitrary future keys is intentionally
+  not supported in this protocol version.
+- Allowlisted values are stored per participant and re-applied on every join,
+  including reconnect; a reconnect that omits the objects keeps the previously
+  stored values.
 
 **Server behavior**
 - Validate `rid` as a signed 27-character room token (generated via `/api/room-id`).
@@ -182,7 +210,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `peerId` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, `connectionStatus` *(string, optional)*, and `contentState` *(object, optional)*. See section 4.3 for the meaning of `connectionStatus` and `contentState`.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `peerId` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, `connectionStatus` *(string, optional)*, `contentState` *(object, optional)*, `capabilities` *(object, optional)*, and `mediaPolicy` *(object, optional)*. See section 4.3 for the meaning of `connectionStatus`, `contentState`, `capabilities`, and `mediaPolicy`.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 - `reconnectToken` *(string, optional)*: opaque proof bound to `(cid, rid, expiresAt)` that the SDK persists and presents on a future `join` to reattach or recover the same CID. Format is implementation-defined; clients should treat it as opaque.
@@ -248,8 +276,8 @@ during the outage.
     "maxParticipants": 4,
     "epoch": 7,
     "participants": [
-      { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice" },
-      { "cid": "C-c3d4...", "joinedAt": 1735171215000, "connectionStatus": "suspended", "contentState": { "active": true, "contentType": "screen" } }
+      { "cid": "C-a1b2...", "joinedAt": 1735171200000, "displayName": "Alice", "capabilities": { "trickleIce": true, "maxParticipants": 4, "independentContentVideo": false }, "mediaPolicy": { "videoMediaEnabled": true } },
+      { "cid": "C-c3d4...", "joinedAt": 1735171215000, "connectionStatus": "suspended", "contentState": { "active": true, "contentType": "screenShare", "revision": 7 } }
     ]
   }
 }
@@ -294,15 +322,61 @@ again.
 Fields:
 - `active` *(boolean, required)*: whether content is currently being
   shared. When `false`, `contentType` is omitted.
-- `contentType` *(string, optional)*: free-form content kind (for
-  example `"screen"`).
+- `contentType` *(string, optional)*: content kind (for example
+  `"screenShare"`).
 - `updatedAtMs` *(number, optional)*: unix-ms timestamp of the last
   content state transition.
 - `epoch` *(number, optional)*: room state epoch at which the latest
-  content state transition was recorded.
+  content state transition was recorded. This is the **room** epoch, not the
+  per-share revision below.
+- `revision` *(number, optional)*: the sender's monotonically increasing
+  content-transition counter (see section 4.3.1 for receiver tracking, which is
+  keyed by `cid`). Persisted and relayed verbatim; the server does not compare
+  revisions.
 
 Older servers may omit `contentState` entirely; SDKs should treat that as
 "unknown — preserve current local state" rather than implicitly clearing.
+
+**Content-state lifecycle (server, reconnect-aware)**
+
+The server persists the latest `contentState` per participant, scoped to the
+session (`sid`) that produced it, and:
+
+- includes it in `room_state` so a reconnecting peer reconstructs content UI
+  immediately;
+- **clears** it on an **explicit leave** (`leave` / `POST /api/leave`) or on
+  **session expiry / hard eviction** — the whole participant record is removed,
+  so the content state goes with it;
+- does **NOT** clear it on a merely recoverable transport disconnect inside the
+  reconnect window. While a participant is `"suspended"`, its content state is
+  preserved, and a reconnect that reattaches the same participant keeps the
+  content state and `revision`, so peers do not flicker the share off and on;
+- on a reconnect that establishes a **new `sid`**, the persisted state stays
+  attributable to the new session, and any later `contentState` (latest wins)
+  naturally supersedes it; old-session state is removed when that old session
+  expires.
+
+A malformed `content_state` message (one missing the boolean `active` field)
+does **not** clear or overwrite the stored value.
+
+**Participant `capabilities` and `mediaPolicy`**
+
+Each participant entry may carry the allowlisted `capabilities` and
+`mediaPolicy` objects the participant advertised at `join` (see section 4.1).
+The server forwards stored values verbatim and omits the objects entirely for a
+participant that advertised nothing.
+
+- `capabilities.trickleIce` *(boolean, optional)*
+- `capabilities.maxParticipants` *(number, optional)*
+- `capabilities.independentContentVideo` *(boolean, optional)*: defaulted to
+  `false` by receivers when absent.
+- `mediaPolicy.videoMediaEnabled` *(boolean, optional)*: defaulted to `true` by
+  receivers when absent.
+
+Receivers use these to decide, **per peer**, whether to negotiate an independent
+content video m-line (both ends advertise `independentContentVideo=true`) and
+whether to offer any video at all (both ends `videoMediaEnabled=true`). The
+server never interprets them.
 
 **Client behavior**
 - Update UI for "waiting for someone to join" vs "in call".
@@ -312,6 +386,70 @@ Older servers may omit `contentState` entirely; SDKs should treat that as
 - On a peer transitioning from `"suspended"` back to active: do not renegotiate proactively; the returning peer is responsible for triggering an ICE restart if the path has decayed.
 - If a participant disappears entirely (absent from the participants list): treat as remote left and clean up the peer connection.
 - If the participant list shrinks to 1 during a call, treat as remote left.
+
+---
+
+### 4.3.1 `content_state` (client → server → clients)
+
+Lightweight presentation-state message announcing that a participant started or
+stopped sharing content (screen share). It is **not** negotiation traffic: the
+server relays it to other participants verbatim (adding `from`) and persists the
+latest value on the sender's participant record (see section 4.3 for the
+persisted form, the field meanings, and the reconnect-aware lifecycle).
+
+```json
+{
+  "v": 1,
+  "type": "content_state",
+  "rid": "AbC123",
+  "payload": {
+    "active": true,
+    "contentType": "screenShare",
+    "revision": 7
+  }
+}
+```
+
+**Payload fields**
+- `active` *(boolean, required)*: whether the sender is currently sharing.
+- `contentType` *(string, optional)*: present only when `active`; `"screenShare"`.
+- `revision` *(number, required when sending)*: the sender's monotonically
+  increasing counter. Every state change increments it, including a rollback to
+  `active:false`, which uses a strictly greater `revision` than the `active:true`
+  it supersedes. Receivers track it keyed by `cid` (see Receiver behavior below).
+
+**Server behavior**
+- Relays the message to other participants verbatim (the server adds `from` =
+  sender CID; `revision` passes through untouched).
+- Persists the latest value (including `revision`) on the sender's participant
+  record, scoped to the owning `sid`. The server does **not** compare or order
+  revisions — it stores latest-wins and lets receivers apply the ordering rules
+  below.
+
+**Receiver behavior (revision semantics)**
+
+The server relays `content_state` with `from = senderCID` and **no envelope
+`sid`** (see Server behavior above), so receivers track revisions **keyed by
+`cid`**, not by transport `sid`:
+
+- Within a given `cid`, the receiver keeps only the **highest** `revision` and
+  discards any `revision` ≤ the one it already tracks (handles out-of-order
+  delivery, e.g. a stale `active:false` arriving after a newer `active:true`).
+- The receiver resets its tracked revision for a `cid` when that participant
+  leaves (absent from the next `room_state`). A genuine rejoin yields a **new
+  `cid`** and therefore fresh tracking, so a rejoin that restarts at
+  `revision: 1` is accepted, not discarded as stale. A recoverable reconnect
+  keeps the same `cid` and does not reset the sender's counter, so its monotonic
+  ordering is preserved.
+
+This works because in this mesh + reconnect-token architecture `cid` is the
+stable per-call session identity: it is preserved across a recoverable transport
+reconnect (token recovery) and replaced on a genuine rejoin. The design's
+`(cid, sid)` framing collapses to `cid` for v1 because the transport `sid`
+resets on every reconnect and is never carried on a relayed `content_state`.
+
+`revision` orders presentation state only; it does not bind RTP media to a
+particular share.
 
 ---
 

@@ -3,6 +3,7 @@ import Combine
 import CoreGraphics
 import Foundation
 import Network
+import SerenadaBroadcastExtensionSupport
 import UIKit
 
 struct JoinRecoveryState: Equatable {
@@ -153,11 +154,17 @@ public final class SerenadaSession: ObservableObject {
     }
     /// Bundle ID for the broadcast upload extension used in screen sharing.
     public var screenShareExtensionBundleId: String? {
-        #if BROADCAST_EXTENSION
-        BroadcastShared.extensionBundleId
-        #else
-        nil
-        #endif
+        if case let .broadcast(ipcConfig) = config.screenShareMode {
+            return ipcConfig.extensionBundleId
+        }
+        return nil
+    }
+    /// Whether screen sharing is configured for this session. `false` when
+    /// `screenShareMode` is `.disabled`, so the UI hides the screen-share control
+    /// instead of offering a button that no-ops.
+    public var isScreenShareAvailable: Bool {
+        if case .disabled = config.screenShareMode { return false }
+        return true
     }
 
     /// Callback invoked when camera/microphone permissions are needed before joining.
@@ -230,6 +237,14 @@ public final class SerenadaSession: ObservableObject {
     private var hostCid: String?
     private var currentRoomState: RoomState?
     private var remoteMediaStates: [String: (audioEnabled: Bool?, videoEnabled: Bool?)] = [:]
+    /// Latest received content (screen-share) state per remote cid, with the
+    /// owning sid and tracked revision used to discard stale/out-of-order
+    /// updates. Cleared when the participant leaves or goes inactive.
+    private var remoteContentStates: [String: (sid: String?, content: ParticipantContent)] = [:]
+    /// Latest local content (screen-share) public state, mirrored into
+    /// `localParticipant.content` on every snapshot. Carries the revision of
+    /// the last broadcast `content_state`. `nil` when not sharing content.
+    private var localContent: ParticipantContent?
     private var peerSlots: [String: any PeerConnectionSlotProtocol] = [:]
     private var pendingMessages: [SignalingMessage] = []
     private var pendingJoinRoom: String?
@@ -241,6 +256,8 @@ public final class SerenadaSession: ObservableObject {
     private var hasJoinAcknowledgedCurrentAttempt = false
     private var userPreferredVideoEnabled = true
     private var cameraPermissionRequestInFlight = false
+    private var isScreenShareStartPending = false
+    private var screenShareStartRequestSerial: Int64 = 0
     private var isVideoPausedByProximity = false
     private var reconnectRecoveryPending = false
     // True between transport reconnect and the first authoritative room_state
@@ -275,6 +292,16 @@ public final class SerenadaSession: ObservableObject {
     // is disconnected (baseline samples preserved so the next post-
     // reconnect tick can detect flow).
     private var lastInboundBytesByCid: [String: Int64] = [:]
+    // Per-role inbound-video stall diagnostics (GAP 2). Sampled on the SAME
+    // media-liveness tick as `lastInboundBytesByCid`, but kept SEPARATE: the
+    // server-facing `media_liveness` signal sums all RTP (audio-inclusive),
+    // whereas these split VIDEO bytes by camera vs content role to drive the
+    // public `cameraReceiving` / `contentReceiving` per-participant flags. Both
+    // default false (conservative) until a peer has two successive samples; both
+    // cleared on peer-leave. Read synchronously while assembling participant
+    // state in `refreshRemoteParticipants`.
+    private var lastInboundRoleBytesByCid: [String: RoleInboundBytes] = [:]
+    private var roleLivenessByCid: [String: RoleLiveness] = [:]
     private var mediaLivenessTask: Task<Void, Never>?
     private var mediaLivenessEmitInFlight = false
     private var mediaLivenessEmitCount = 0
@@ -305,6 +332,7 @@ public final class SerenadaSession: ObservableObject {
                 defaultAudioEnabled: config.defaultAudioEnabled,
                 defaultVideoEnabled: config.defaultVideoEnabled,
                 videoMediaEnabled: config.videoMediaEnabled,
+                enableIndependentContentVideo: config.enableIndependentContentVideo,
                 cameraModes: config.cameraModes,
                 deferInitialAnswer: config.deferInitialAnswer,
                 transports: config.transports,
@@ -385,6 +413,8 @@ public final class SerenadaSession: ObservableObject {
             onZoomFactorChanged: { _ in }, onFeatureDegradation: { _ in },
             logger: logger, isHdVideoExperimentalEnabled: false,
             videoMediaEnabled: config.videoMediaEnabled,
+            enableIndependentContentVideo: config.enableIndependentContentVideo,
+            screenShareMode: config.screenShareMode,
             availableCameraModes: self.availableCameraModes
         )
 
@@ -513,9 +543,20 @@ public final class SerenadaSession: ObservableObject {
 
     /// Cycle to the next camera mode (selfie -> world -> composite).
     public func flipCamera() {
+        if config.enableIndependentContentVideo {
+            // Independent mode: the camera is a SEPARATE track, so flipping it
+            // during a screen share is valid and leaves the content track
+            // untouched (pitfall #6). The camera-framing content_state is owned
+            // by the screen share while sharing — onCameraModeChanged suppresses
+            // it — so do not broadcast it here.
+            webRtcEngine.flipCamera()
+            return
+        }
+        // Legacy mode: a single video track carries the share, so flip is blocked
+        // while sharing (it would clobber the display track).
         guard !diagnostics.isScreenSharing else { return }
         if state.localParticipant.cameraMode.isContentMode {
-            signalingMessageRouter?.broadcastContentState(active: false)
+            broadcastLocalContentState(active: false)
         }
         webRtcEngine.flipCamera()
     }
@@ -654,12 +695,30 @@ public final class SerenadaSession: ObservableObject {
     /// Start screen sharing via the broadcast upload extension.
     public func startScreenShare() {
         guard config.videoMediaEnabled else { return }
+        // `.disabled` is a clean no-op: no capture, pending start, or
+        // content_state signaling.
+        guard isScreenShareAvailable else { return }
         guard !diagnostics.isScreenSharing else { return }
+        guard !isScreenShareStartPending else { return }
+        if config.enableIndependentContentVideo {
+            startScreenShareIndependent()
+        } else {
+            startScreenShareLegacy()
+        }
+    }
+
+    /// Legacy single-video path (flag off): byte-identical to today. The screen
+    /// reuses the camera track, so the camera preference is forced on and
+    /// `cameraMode` becomes `.screenShare`; content_state is signaled after the
+    /// broadcast confirms.
+    private func startScreenShareLegacy() {
         let wasVideoPreferred = userPreferredVideoEnabled
         userPreferredVideoEnabled = true
+        let requestSerial = beginScreenShareStartRequest()
         let startedRequest = webRtcEngine.startScreenShare { [weak self] started in
             Task { @MainActor in
                 guard let self else { return }
+                guard self.completeScreenShareStartRequest(requestSerial) else { return }
                 guard started else {
                     self.userPreferredVideoEnabled = wasVideoPreferred
                     return
@@ -667,17 +726,85 @@ public final class SerenadaSession: ObservableObject {
                 self.commitSnapshot { s, d in
                     d.isScreenSharing = true; s.localParticipant.cameraMode = .screenShare; d.cameraZoomFactor = 1
                 }
-                self.signalingMessageRouter?.broadcastContentState(active: true, contentType: ContentTypeWire.screenShare)
+                self.broadcastLocalContentState(active: true, contentType: ContentTypeWire.screenShare)
                 self.applyLocalVideoPreference()
             }
         }
         if !startedRequest {
-            userPreferredVideoEnabled = wasVideoPreferred
+            if completeScreenShareStartRequest(requestSerial) {
+                userPreferredVideoEnabled = wasVideoPreferred
+            }
         }
     }
 
-    /// Stop screen sharing.
-    public func stopScreenShare() { _ = webRtcEngine.stopScreenShare() }
+    /// Independent content path (flag on): the screen rides a SEPARATE content
+    /// track, so the camera preference is NOT touched (pitfall #6) and
+    /// `cameraMode` is never set to `.screenShare`. The session publishes the
+    /// local sharing state only after the capture path confirms that the
+    /// ReplayKit stream started; pending/cancelled picker flows stay silent so
+    /// peers do not render a black content tile while the system dialog is up.
+    private func startScreenShareIndependent() {
+        let requestSerial = beginScreenShareStartRequest()
+        let startedRequest = webRtcEngine.startScreenShare { [weak self] started in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.completeScreenShareStartRequest(requestSerial) else { return }
+                guard started else { return }
+                self.commitSnapshot { _, d in d.isScreenSharing = true }
+                self.broadcastLocalContentState(active: true, contentType: ContentTypeWire.screenShare)
+            }
+        }
+        if !startedRequest {
+            _ = completeScreenShareStartRequest(requestSerial)
+        }
+    }
+
+    private func beginScreenShareStartRequest() -> Int64 {
+        screenShareStartRequestSerial += 1
+        isScreenShareStartPending = true
+        return screenShareStartRequestSerial
+    }
+
+    private func completeScreenShareStartRequest(_ serial: Int64) -> Bool {
+        guard isScreenShareStartPending, screenShareStartRequestSerial == serial else { return false }
+        isScreenShareStartPending = false
+        return true
+    }
+
+    private func cancelPendingScreenShareStartRequest() {
+        guard isScreenShareStartPending else { return }
+        screenShareStartRequestSerial += 1
+        isScreenShareStartPending = false
+    }
+
+    /// Stop screen sharing. The engine's stop fires the controller's
+    /// `onScreenShareStopped` callback (wired in `configureRuntimeBridges`),
+    /// which owns the session-side state + `content_state` broadcast for BOTH the
+    /// programmatic stop here and an external broadcast termination — so the
+    /// signaling happens exactly once per logical stop (pitfall #9).
+    public func stopScreenShare() {
+        cancelPendingScreenShareStartRequest()
+        _ = webRtcEngine.stopScreenShare()
+    }
+
+    /// Independent-stop only: re-emit the world/composite camera content hint
+    /// that was suppressed for the duration of the share. In independent mode the
+    /// camera stays in WORLD/COMPOSITE while a screen share runs, but the
+    /// camera-framing `content_state` is owned by the screen share for the share
+    /// duration. Clearing the screen-share content on stop leaves remote peers
+    /// with no content even though the camera is still in a content framing, so
+    /// re-broadcast the camera-mode hint. SELFIE re-emits nothing (the inactive
+    /// state already broadcast is correct).
+    private func restoreCameraContentHintAfterIndependentStop() {
+        switch state.localParticipant.cameraMode {
+        case .world:
+            broadcastLocalContentState(active: true, contentType: ContentTypeWire.worldCamera)
+        case .composite:
+            broadcastLocalContentState(active: true, contentType: ContentTypeWire.compositeCamera)
+        default:
+            break
+        }
+    }
 
     /// Capture the current video frame from the chosen stream as JPEG data
     /// at the source track's full intrinsic resolution.
@@ -788,6 +915,19 @@ public final class SerenadaSession: ObservableObject {
     public func detachRemoteRenderer(_ renderer: AnyObject) { peerSlots.values.forEach { $0.detachRemoteRenderer(renderer) } }
     public func attachRemoteRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.attachRemoteRenderer(renderer) }
     public func detachRemoteRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.detachRemoteRenderer(renderer) }
+
+    // MARK: - Content (screen share) renderer APIs
+    // Camera renderers stay on attachRemoteRenderer / attachLocalRenderer above.
+    // These render the independent CONTENT (screen share) stream separately.
+
+    /// Attach a renderer to a specific peer's remote CONTENT (screen share) track.
+    public func attachRemoteContentRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.attachRemoteContentRenderer(renderer) }
+    /// Detach a previously attached remote content renderer for a peer.
+    public func detachRemoteContentRenderer(_ renderer: AnyObject, forParticipant cid: String) { peerSlots[cid]?.detachRemoteContentRenderer(renderer) }
+    /// Attach a renderer to the LOCAL content (screen share) track for local preview.
+    public func attachLocalContentRenderer(_ renderer: AnyObject) { webRtcEngine.attachLocalContentRenderer(renderer) }
+    /// Detach a previously attached local content renderer.
+    public func detachLocalContentRenderer(_ renderer: AnyObject) { webRtcEngine.detachLocalContentRenderer(renderer) }
 
     // MARK: - Join Flow
 
@@ -969,7 +1109,9 @@ public final class SerenadaSession: ObservableObject {
                 reconnectPeerId: reconnectCid,
                 maxParticipants: 4,
                 displayName: self.displayName,
-                appPeerId: self.peerId
+                appPeerId: self.peerId,
+                independentContentVideo: config.enableIndependentContentVideo,
+                videoMediaEnabled: config.videoMediaEnabled
             )
         )
         joinFlowCoordinator?.scheduleJoinRecovery(for: roomId)
@@ -1032,12 +1174,110 @@ public final class SerenadaSession: ObservableObject {
         )
     }
 
+    /// Broadcast a local `content_state` and mirror the result into local
+    /// public state. The router stamps a strictly-increasing revision; we keep
+    /// the same value on `localParticipant.content` so observers and remote
+    /// peers agree on ordering. `active:false` clears local content.
+    private func broadcastLocalContentState(active: Bool, contentType: String? = nil) {
+        let revision = signalingMessageRouter?.broadcastContentState(active: active, contentType: contentType) ?? 0
+        if active {
+            localContent = ParticipantContent(
+                active: true,
+                type: contentType ?? ContentTypeWire.screenShare,
+                revision: revision
+            )
+        } else {
+            localContent = nil
+        }
+        commitSnapshot()
+    }
+
     private func handleContentState(_ payload: ContentStatePayload) {
         guard let fromCid = payload.fromCid, !fromCid.isEmpty else { return }
+
+        // Live `content_state`: reconcile into the cid-keyed cache with the
+        // sender's `sid`. A revisionless live update is always applied within a
+        // session (`isSnapshot: false`).
+        applyRemoteContentState(
+            cid: fromCid,
+            sid: payload.sid,
+            active: payload.active,
+            type: payload.contentType,
+            revision: payload.revision,
+            isSnapshot: false
+        )
+
+        // Legacy diagnostics mirror (kept separate from the reconciler; it is a
+        // distinct concern that tracks the single presented content participant).
         commitSnapshot { _, d in
-            d.remoteContentParticipantId = payload.active ? fromCid : nil
-            d.remoteContentType = payload.contentType
+            d.remoteContentParticipantId = payload.active ? fromCid : (d.remoteContentParticipantId == fromCid ? nil : d.remoteContentParticipantId)
+            if payload.active {
+                d.remoteContentType = payload.contentType
+            } else if d.remoteContentParticipantId == nil {
+                d.remoteContentType = nil
+            }
         }
+        refreshRemoteParticipants()
+    }
+
+    /// Reconcile a single remote content (screen share) state into
+    /// `remoteContentStates`, enforcing the wire-contract ordering rules shared
+    /// by the live `content_state` path and the `joined`/`room_state` snapshot
+    /// seed (mirrors web's `applyRemoteContentState`). Returns the now-tracked
+    /// content for `cid` (or the prior cache when the incoming state loses), so
+    /// the snapshot caller can surface it.
+    ///
+    /// Revision ordering, scoped to the sender's `(cid, sid)`:
+    ///   - a NEW sid for this cid supersedes by identity (reset tracked rev),
+    ///     so a rejoin restarting at revision:1 is accepted;
+    ///   - within the same `(cid, sid)` keep only the highest revision and
+    ///     discard any revision <= the tracked one (out-of-order / duplicate /
+    ///     a stale snapshot behind a newer live update).
+    ///
+    /// Revisionless edge case differs by caller and MUST stay identical to the
+    /// historical two-method behavior:
+    ///   - live (`isSnapshot: false`): a revisionless update is ALWAYS applied
+    ///     (legacy senders advance presentation state without revision gating);
+    ///   - snapshot (`isSnapshot: true`): a revisionless snapshot KEEPS the
+    ///     cache when one exists (a live message is the more authoritative
+    ///     recent source); with no cache it is adopted.
+    @discardableResult
+    private func applyRemoteContentState(
+        cid: String,
+        sid: String?,
+        active: Bool,
+        type: String?,
+        revision: Int64?,
+        isSnapshot: Bool
+    ) -> ParticipantContent? {
+        let existing = remoteContentStates[cid]
+
+        if let incomingRevision = revision, let existing {
+            let sameSession = sidsMatch(existing.sid, sid)
+            if sameSession, incomingRevision <= existing.content.revision {
+                return existing.content
+            }
+        } else if revision == nil, isSnapshot, let existing {
+            // Snapshot-only: a revisionless snapshot does not override the cache.
+            return existing.content
+        }
+
+        let resolvedContent = ParticipantContent(
+            active: active,
+            type: type ?? ContentTypeWire.screenShare,
+            revision: revision ?? 0
+        )
+        remoteContentStates[cid] = (sid: sid, content: resolvedContent)
+        return resolvedContent
+    }
+
+    /// Two sids belong to the same session when both are present and equal.
+    /// A nil on either side is treated as "unknown, not a new session" so a
+    /// transport that does not surface sid still benefits from revision
+    /// ordering within a single connection.
+    private func sidsMatch(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs, let rhs else { return true }
+        return lhs == rhs
     }
 
     private func handleError(_ error: CallError, serverCode: String? = nil) {
@@ -1125,6 +1365,7 @@ public final class SerenadaSession: ObservableObject {
 
     fileprivate func handleProviderPeerLeft(_ event: PeerEvent) {
         remoteMediaStates.removeValue(forKey: event.peerId)
+        remoteContentStates.removeValue(forKey: event.peerId)
         currentRoomState = removeParticipant(roomState: currentRoomState, peerId: event.peerId, localPeerId: clientId)
         if let roomState = currentRoomState {
             hostCid = roomState.hostCid
@@ -1206,6 +1447,35 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
+    /// Whether `cid` advertised independent content video at join
+    /// (`capabilities.independentContentVideo`). Defaults to false when absent.
+    /// Sourced from the typed `Participant` carried in `currentRoomState`.
+    internal func remoteSupportsIndependentContentVideo(_ cid: String) -> Bool {
+        currentRoomState?.participants.first(where: { $0.cid == cid })?
+            .capabilities?.independentContentVideo ?? false
+    }
+
+    /// Whether `cid` permits any video media (signaled `mediaPolicy`). Defaults
+    /// to true when absent, per the audio-only compatibility boundary.
+    internal func remoteVideoMediaEnabled(_ cid: String) -> Bool {
+        currentRoomState?.participants.first(where: { $0.cid == cid })?
+            .mediaPolicy?.videoMediaEnabled ?? true
+    }
+
+    /// Resolve the per-peer independent-content routing gate for a slot. A peer
+    /// is routed via the independent camera+content path only when ALL hold: the
+    /// local build flag is on, BOTH ends' `videoMediaEnabled` are true, and the
+    /// peer advertised `independentContentVideo`. When the flag is off this is
+    /// always false, so every peer uses the legacy single-video path
+    /// (byte-identical to today). Mirrors Android's
+    /// `resolvePeerIndependentContentCapability` / web's `isPeerIndependentCapable`.
+    private func resolvePeerIndependentContentSupported(_ cid: String) -> Bool {
+        config.enableIndependentContentVideo
+            && config.videoMediaEnabled
+            && remoteVideoMediaEnabled(cid)
+            && remoteSupportsIndependentContentVideo(cid)
+    }
+
     /// True only when at least one peer exists and every slot's last observed
     /// candidate pair is direct. `nil` cached values (no stats yet) count as
     /// "not confirmed direct" so the gate errs on the side of refreshing.
@@ -1230,17 +1500,58 @@ public final class SerenadaSession: ObservableObject {
             let slot = peerSlots[p.cid]
             let peerState = remoteMediaStates[p.cid]
             let audioEnabled = peerState?.audioEnabled ?? p.audioEnabled ?? true
+            let videoEnabled = peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false)
+            // Reconcile any server-persisted contentState from the snapshot
+            // (joined/room_state) against the cached live state with the same
+            // cid-keyed keep-highest rule used for live `content_state`. A
+            // reconnect snapshot carrying a strictly-higher revision supersedes
+            // the cached state (e.g. an `active:false` rollback we missed while
+            // disconnected clears a stale cached `active:true`); a lower-or-equal
+            // revision leaves the cached state untouched.
+            // No snapshot → keep whatever live state is cached for this cid.
+            // Otherwise reconcile the persisted snapshot through the shared
+            // cid-keyed keep-highest reconciler (snapshots carry no originator
+            // `sid`, so `sid: nil`; a revisionless snapshot keeps the cache).
+            let content: ParticipantContent?
+            if let snapshot = p.contentState {
+                content = applyRemoteContentState(
+                    cid: p.cid,
+                    sid: nil,
+                    active: snapshot.active,
+                    type: snapshot.contentType,
+                    revision: snapshot.revision,
+                    isSnapshot: true
+                )
+            } else {
+                content = remoteContentStates[p.cid]?.content
+            }
+            // Per-role inbound stall diagnostics (GAP 2). Both default false until
+            // a peer has two successive liveness samples. Flag off / legacy peers:
+            // the single inbound video routes to the camera role, so
+            // `contentReceiving` stays false (byte-identical, additive fields).
+            let liveness = roleLiveness(for: p.cid)
             return SerenadaRemoteParticipant(
                 cid: p.cid, displayName: p.displayName, peerId: p.peerId,
                 audioEnabled: audioEnabled,
-                videoEnabled: peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false),
+                videoEnabled: videoEnabled,
+                // cameraEnabled mirrors videoEnabled until the camera m-line is
+                // wired precisely; the camera/content split is per-peer routing.
+                cameraEnabled: videoEnabled,
+                cameraReceiving: liveness.camera,
+                contentReceiving: liveness.content,
                 connectionState: slot?.getConnectionState() ?? .new,
                 signalingStatus: p.signalingStatus,
                 presumedLost: p.signalingStatus == .suspended && presumedLostRemoteCids.contains(p.cid),
-                audioLevel: audioEnabled ? (previousLevels[p.cid] ?? 0) : 0
+                audioLevel: audioEnabled ? (previousLevels[p.cid] ?? 0) : 0,
+                content: (content?.active == true) ? content : nil,
+                supportsIndependentContentVideo: remoteSupportsIndependentContentVideo(p.cid)
             )
         }
         let activeCids = Set(participants.map(\.cid))
+        // Drop tracked content for participants no longer in the room.
+        for cid in remoteContentStates.keys where !activeCids.contains(cid) {
+            remoteContentStates.removeValue(forKey: cid)
+        }
         let clearContent = diagnostics.remoteContentParticipantId != nil && !activeCids.contains(diagnostics.remoteContentParticipantId!)
         commitSnapshot { s, d in
             s.remoteParticipants = participants
@@ -1476,7 +1787,7 @@ public final class SerenadaSession: ObservableObject {
         deactivateAudioCoordinator()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
-        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll()
+        pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll(); remoteContentStates.removeAll(); localContent = nil
 
         reconnectTask?.cancel(); reconnectTask = nil
         cancelPostReconnectResync()
@@ -1484,6 +1795,8 @@ public final class SerenadaSession: ObservableObject {
         stopMediaLivenessTimer()
         stopOutboundMediaWatchdog()
         lastInboundBytesByCid.removeAll()
+        lastInboundRoleBytesByCid.removeAll()
+        roleLivenessByCid.removeAll()
         mediaLivenessEmitInFlight = false
         localSuspendedSinceMs = nil
         joinFlowCoordinator?.clearAllTimers()
@@ -1716,6 +2029,11 @@ public final class SerenadaSession: ObservableObject {
                 try? await clock.sleep(nanoseconds: intervalNs)
                 if Task.isCancelled { return }
                 guard let self else { return }
+                // Per-role inbound stall diagnostics refresh on the SAME cadence
+                // as the server-facing emit, but independent of the connection
+                // gate inside `emitMediaLiveness` so `cameraReceiving` /
+                // `contentReceiving` stay current even while disconnected.
+                self.sampleInboundRoleLiveness()
                 self.emitMediaLiveness()
             }
         }
@@ -1779,6 +2097,64 @@ public final class SerenadaSession: ObservableObject {
         mediaLivenessEmitCount += 1
     }
 
+    /// Sample inbound VIDEO bytes per peer SPLIT by transceiver role, derive the
+    /// per-role liveness booleans (camera/content receiving) by diffing against
+    /// the previous sample, and re-render so `cameraReceiving` /
+    /// `contentReceiving` on remote participants stay current. The per-role
+    /// counterpart to `emitMediaLiveness`; the audio-inclusive `media_liveness`
+    /// emit is deliberately left untouched. Conservative first sample for a peer
+    /// (no baseline ⇒ both false). Cleans up baselines on peer-leave.
+    private func sampleInboundRoleLiveness() {
+        let slots = peerSlots
+        guard !slots.isEmpty else {
+            // No peers: drop any stale tracking and re-render if it changed.
+            if !lastInboundRoleBytesByCid.isEmpty || !roleLivenessByCid.isEmpty {
+                lastInboundRoleBytesByCid.removeAll()
+                roleLivenessByCid.removeAll()
+                refreshRemoteParticipants()
+            }
+            return
+        }
+        var samples: [String: RoleInboundBytes] = [:]
+        var remaining = slots.count
+        for (cid, slot) in slots {
+            slot.collectInboundRoleBytes { [weak self] sample in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    samples[cid] = sample
+                    remaining -= 1
+                    if remaining == 0 { self.finalizeInboundRoleLiveness(samples: samples) }
+                }
+            }
+        }
+    }
+
+    private func finalizeInboundRoleLiveness(samples: [String: RoleInboundBytes]) {
+        for (cid, sample) in samples {
+            let previous = lastInboundRoleBytesByCid[cid]
+            roleLivenessByCid[cid] = RoleLiveness(
+                camera: previous != nil && sample.cameraBytes > previous!.cameraBytes,
+                content: previous != nil && sample.contentBytes > previous!.contentBytes
+            )
+            lastInboundRoleBytesByCid[cid] = sample
+        }
+        // Drop tracking for peers that left.
+        for cid in Array(lastInboundRoleBytesByCid.keys) where peerSlots[cid] == nil {
+            lastInboundRoleBytesByCid.removeValue(forKey: cid)
+        }
+        for cid in Array(roleLivenessByCid.keys) where peerSlots[cid] == nil {
+            roleLivenessByCid.removeValue(forKey: cid)
+        }
+        // Surface the refreshed booleans on the public remote participants.
+        refreshRemoteParticipants()
+    }
+
+    /// Latest cached per-role inbound liveness for a peer, or both-false when no
+    /// sample has been taken yet. Read while assembling participant state.
+    private func roleLiveness(for cid: String) -> RoleLiveness {
+        roleLivenessByCid[cid] ?? .none
+    }
+
     // MARK: - Local signaling state
 
     private func computeSignalingState(connected: Bool) -> SignalingState {
@@ -1807,6 +2183,11 @@ public final class SerenadaSession: ObservableObject {
     ) {
         var nextState = state; var nextDiag = diagnostics
         mutate(&nextState, &nextDiag)
+        // Phase 1: local cameraEnabled mirrors videoEnabled (legacy meaning);
+        // local content reflects the last broadcast content_state. Enforced
+        // centrally so every mutation path keeps the invariants.
+        nextState.localParticipant.cameraEnabled = nextState.localParticipant.videoEnabled
+        nextState.localParticipant.content = localContent
         nextState.phase = currentRequiredPermissions != nil ? .awaitingPermissions : mapPhase(internalPhase)
         nextState.roomId = roomId; nextState.roomUrl = roomUrl
         nextState.error = currentError; nextState.requiredPermissions = currentRequiredPermissions
@@ -2003,15 +2384,18 @@ public final class SerenadaSession: ObservableObject {
                 }
             },
             removeSlotEntry: { [weak self] cid in self?.peerSlots.removeValue(forKey: cid) },
-            createSlotViaEngine: { [weak self] remoteCid, onLocalIce, onRemoteVideo, onConnState, onIceConnState, onSigState, onRenegotiation in
+            createSlotViaEngine: { [weak self] remoteCid, onLocalIce, onRemoteVideo, onConnState, onIceConnState, onSigState, onRenegotiation, supportsIndependentContentVideo, isOfferOwner in
                 self?.webRtcEngine.createSlot(
                     remoteCid: remoteCid, onLocalIceCandidate: onLocalIce,
                     onRemoteVideoTrack: onRemoteVideo, onConnectionStateChange: onConnState,
                     onIceConnectionStateChange: onIceConnState, onSignalingStateChange: onSigState,
-                    onRenegotiationNeeded: onRenegotiation
+                    onRenegotiationNeeded: onRenegotiation,
+                    supportsIndependentContentVideo: supportsIndependentContentVideo,
+                    isOfferOwner: isOfferOwner
                 )
             },
             engineRemoveSlot: { [weak self] slot in self?.webRtcEngine.removeSlot(slot) },
+            peerIndependentContentSupported: { [weak self] cid in self?.resolvePeerIndependentContentSupported(cid) ?? false },
             sendMessage: { [weak self] type, payload, to in self?.sendMessage(type: type, payload: payload, to: to) },
             onRemoteParticipantsChanged: { [weak self] in self?.refreshRemoteParticipants() },
             onAggregatePeerStateChanged: { [weak self] ice, conn, sig in
@@ -2037,11 +2421,19 @@ public final class SerenadaSession: ObservableObject {
                 guard let self else { return }
                 let prev = self.state.localParticipant.cameraMode
                 self.commitSnapshot { s, _ in s.localParticipant.cameraMode = mode }
+                // While an INDEPENDENT screen share is active the screen share
+                // owns `content_state`; the camera-framing hint is suppressed for
+                // the duration of the share and restored on stop
+                // (restoreCameraContentHintAfterIndependentStop). Legacy mode (or
+                // not sharing) emits the camera-framing hint as before.
+                if self.config.enableIndependentContentVideo, self.diagnostics.isScreenSharing {
+                    return
+                }
                 if mode.isContentMode {
                     let type = mode == .world ? ContentTypeWire.worldCamera : ContentTypeWire.compositeCamera
-                    self.signalingMessageRouter?.broadcastContentState(active: true, contentType: type)
+                    self.broadcastLocalContentState(active: true, contentType: type)
                 } else if prev.isContentMode {
-                    self.signalingMessageRouter?.broadcastContentState(active: false)
+                    self.broadcastLocalContentState(active: false)
                 }
             }
         }
@@ -2051,8 +2443,20 @@ public final class SerenadaSession: ObservableObject {
         webRtcEngine.setOnScreenShareStopped { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                self.cancelPendingScreenShareStartRequest()
+                // Independent stop never preempted the camera, so do NOT re-apply
+                // the camera preference (pitfall #6); the content track was
+                // separate and torn down by the engine. Restore the
+                // world/composite camera hint suppressed during the share.
+                if self.config.enableIndependentContentVideo {
+                    guard self.diagnostics.isScreenSharing else { return }
+                    self.commitSnapshot { _, d in d.isScreenSharing = false }
+                    self.broadcastLocalContentState(active: false)
+                    self.restoreCameraContentHintAfterIndependentStop()
+                    return
+                }
                 self.commitSnapshot { _, d in d.isScreenSharing = false; d.cameraZoomFactor = 1 }
-                self.signalingMessageRouter?.broadcastContentState(active: false)
+                self.broadcastLocalContentState(active: false)
                 self.applyLocalVideoPreference()
             }
         }

@@ -92,6 +92,17 @@ public enum ContentType: String, Codable {
     case screenShare
     case worldCamera
     case compositeCamera
+
+    /// Map a `content_state.contentType` wire string to a layout ``ContentType``.
+    /// Defaults to `.screenShare` for absent/unknown values (forward-compatible).
+    /// Mirrors Android's `ContentType.fromWire`.
+    public static func fromWire(_ wire: String?) -> ContentType {
+        switch wire {
+        case ContentTypeWire.worldCamera: return .worldCamera
+        case ContentTypeWire.compositeCamera: return .compositeCamera
+        default: return .screenShare
+        }
+    }
 }
 
 public struct UserLayoutPrefs: Decodable {

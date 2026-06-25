@@ -909,11 +909,15 @@ describe('MediaEngine', () => {
         expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: false });
         expect(engine.localStream?.getVideoTracks()).toHaveLength(0);
         expect(peer?.senders.map(sender => sender.track?.kind)).toEqual(['audio', undefined]);
+        // Outgoing content_state now carries a per-session incrementing
+        // revision (start=1, stop=2) per the screen-share wire contract.
         expect(sentMessages).toContainEqual({
             type: 'content_state',
-            payload: { active: false },
+            payload: { active: false, revision: 2 },
             to: undefined,
         });
+        const contentStates = sentMessages.filter((m) => m.type === 'content_state');
+        expect(contentStates.map((m) => m.payload?.revision)).toEqual([1, 2]);
     });
 
     it('restores camera after stopping screen share that started with camera video', async () => {

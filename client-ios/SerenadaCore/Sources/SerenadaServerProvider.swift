@@ -16,6 +16,12 @@ internal final class SerenadaServerProvider: SignalingProvider {
     @MainActor private var reconnectTokenRefreshTask: Task<Void, Never>?
     @MainActor private var currentRoomId: String?
     @MainActor private var currentMaxParticipants = 4
+    /// Mirrors `SerenadaConfig.enableIndependentContentVideo`; advertised in
+    /// `join.capabilities.independentContentVideo`. Phase 1: always false.
+    @MainActor private var currentIndependentContentVideo = false
+    /// Mirrors `SerenadaConfig.videoMediaEnabled`; advertised in
+    /// `join.mediaPolicy.videoMediaEnabled`.
+    @MainActor private var currentVideoMediaEnabled = true
     @MainActor private var currentReconnectPeerId: String?
     @MainActor private var currentDisplayName: String?
     @MainActor private var currentAppPeerId: String?
@@ -99,6 +105,8 @@ internal final class SerenadaServerProvider: SignalingProvider {
             pendingJoinRoomId = roomId
             joinAttemptSerial += 1
             currentMaxParticipants = options.maxParticipants ?? currentMaxParticipants
+            currentIndependentContentVideo = options.independentContentVideo
+            currentVideoMediaEnabled = options.videoMediaEnabled
             currentReconnectPeerId = options.reconnectPeerId
             if options.displayName != nil {
                 currentDisplayName = options.displayName
@@ -334,8 +342,15 @@ private extension SerenadaServerProvider {
                     active: $0.active,
                     contentType: $0.contentType,
                     updatedAtMs: $0.updatedAtMs,
-                    epoch: $0.epoch
+                    epoch: $0.epoch,
+                    revision: $0.revision
                 )
+            },
+            capabilities: p.capabilities.map {
+                SignalingProviderParticipantCapabilities(independentContentVideo: $0.independentContentVideo)
+            },
+            mediaPolicy: p.mediaPolicy.map {
+                SignalingProviderParticipantMediaPolicy(videoMediaEnabled: $0.videoMediaEnabled)
             }
         )
     }
@@ -367,7 +382,8 @@ private extension SerenadaServerProvider {
             PeerMessage(
                 from: from,
                 type: message.type,
-                payload: message.payload?.objectValue
+                payload: message.payload?.objectValue,
+                sid: message.sid?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             )
         )
     }
@@ -399,7 +415,11 @@ private extension SerenadaServerProvider {
             "device": .string("ios"),
             "capabilities": .object([
                 "trickleIce": .bool(true),
-                "maxParticipants": .number(Double(currentMaxParticipants))
+                "maxParticipants": .number(Double(currentMaxParticipants)),
+                "independentContentVideo": .bool(currentIndependentContentVideo)
+            ]),
+            "mediaPolicy": .object([
+                "videoMediaEnabled": .bool(currentVideoMediaEnabled)
             ]),
             "createMaxParticipants": .number(Double(currentMaxParticipants))
         ]

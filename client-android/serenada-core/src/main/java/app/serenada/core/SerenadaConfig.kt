@@ -30,6 +30,18 @@ data class SerenadaConfig(
      */
     val videoMediaEnabled: Boolean = true,
     /**
+     * Static build capability: whether this client can negotiate, send,
+     * receive, classify, expose, and render an independent content (screen
+     * share) video stream. Advertised at `join` as
+     * `capabilities.independentContentVideo`. Immutable per session.
+     *
+     * Defaults to false. Until the platform's media engine and UI/API surface
+     * fully consume content video, this must stay false so the client keeps the
+     * legacy single-video screen-share behavior. Phase 1 only signals the flag;
+     * it does not change any media behavior.
+     */
+    val enableIndependentContentVideo: Boolean = false,
+    /**
      * Camera modes available in the call UI, in preference order. The first
      * entry is the initial mode. When only one mode is listed the flip-camera
      * control is hidden; an empty list disables camera capture (the video

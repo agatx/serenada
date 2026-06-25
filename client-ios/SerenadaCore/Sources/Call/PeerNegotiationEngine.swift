@@ -31,9 +31,15 @@ final class PeerNegotiationEngine {
         _ onConnectionStateChange: @escaping (String, String) -> Void,
         _ onIceConnectionStateChange: @escaping (String, String) -> Void,
         _ onSignalingStateChange: @escaping (String, String) -> Void,
-        _ onRenegotiationNeeded: @escaping (String) -> Void
+        _ onRenegotiationNeeded: @escaping (String) -> Void,
+        _ supportsIndependentContentVideo: Bool,
+        _ isOfferOwner: @escaping () -> Bool
     ) -> (any PeerConnectionSlotProtocol)?
     private let engineRemoveSlot: (any PeerConnectionSlotProtocol) -> Void
+    /// Resolve the per-peer independent-content capability (local flag AND both
+    /// ends' videoMediaEnabled AND peer's independentContentVideo). Defaults to
+    /// `false` so flag-off / un-wired callers use the legacy single-video path.
+    private let peerIndependentContentSupported: (String) -> Bool
 
     // Callbacks to session
     private let sendMessage: (String, JSONValue?, String?) -> Void
@@ -82,9 +88,12 @@ final class PeerNegotiationEngine {
             _ onConnectionStateChange: @escaping (String, String) -> Void,
             _ onIceConnectionStateChange: @escaping (String, String) -> Void,
             _ onSignalingStateChange: @escaping (String, String) -> Void,
-            _ onRenegotiationNeeded: @escaping (String) -> Void
+            _ onRenegotiationNeeded: @escaping (String) -> Void,
+            _ supportsIndependentContentVideo: Bool,
+            _ isOfferOwner: @escaping () -> Bool
         ) -> (any PeerConnectionSlotProtocol)?,
         engineRemoveSlot: @escaping (any PeerConnectionSlotProtocol) -> Void,
+        peerIndependentContentSupported: @escaping (String) -> Bool = { _ in false },
         sendMessage: @escaping (String, JSONValue?, String?) -> Void,
         onRemoteParticipantsChanged: @escaping () -> Void,
         onAggregatePeerStateChanged: @escaping (IceConnectionState, PeerConnectionState, RtcSignalingState) -> Void,
@@ -106,6 +115,7 @@ final class PeerNegotiationEngine {
         self.removeSlotEntry = removeSlotEntry
         self.createSlotViaEngine = createSlotViaEngine
         self.engineRemoveSlot = engineRemoveSlot
+        self.peerIndependentContentSupported = peerIndependentContentSupported
         self.sendMessage = sendMessage
         self.onRemoteParticipantsChanged = onRemoteParticipantsChanged
         self.onAggregatePeerStateChanged = onAggregatePeerStateChanged
@@ -139,8 +149,25 @@ final class PeerNegotiationEngine {
                 let previousStatus = participantStatuses[participant.cid]
                 participantStatuses[participant.cid] = participant.signalingStatus
                 let becameActive = previousStatus == .suspended && participant.signalingStatus == .active
+                let existedBefore = getSlot(participant.cid) != nil
                 let slot = getOrCreateSlot(remoteCid: participant.cid)
                 _ = slot.ensurePeerConnection()
+                // Capability-transition slot handling (FIX 1, independent-content
+                // mode). A slot snapshots its independent-content capability at
+                // CREATION; a peer first announced before its caps arrive (an early
+                // offer / peer_joined with no capabilities) is built LEGACY, and a
+                // later cap-bearing room_state only updates the stored room caps —
+                // the existing connection stays immutably legacy, so a
+                // late-announced CAPABLE peer would never bind the content
+                // transceiver. Only reconcile a slot that EXISTED before this loop
+                // (a freshly created slot already snapshotted the current caps).
+                if existedBefore, reconcilePeerCapability(remoteCid: participant.cid) {
+                    // The slot was recreated with the correct camera/content m-line
+                    // layout; the recreate path already re-offers from the
+                    // deterministic offer owner, so skip the generic offer block for
+                    // this peer this pass.
+                    continue
+                }
                 if shouldIOffer(remoteCid: participant.cid, roomState: roomState) {
                     if becameActive {
                         scheduleIceRestart(remoteCid: participant.cid, reason: "peer-reattached", delayMs: 0)
@@ -358,7 +385,11 @@ final class PeerNegotiationEngine {
                 Task { @MainActor in
                     self?.handleRenegotiationNeeded(remoteCid: cid)
                 }
-            }
+            },
+            peerIndependentContentSupported(remoteCid),
+            // Lazily evaluated so the slot's owner pre-creation / answerer-bind
+            // choice tracks ownership the same way the negotiation path does.
+            { [weak self] in self?.shouldIOffer(remoteCid: remoteCid) ?? false }
         ) else {
             preconditionFailure("WebRTC peer slot factory is unavailable")
         }
@@ -903,6 +934,47 @@ final class PeerNegotiationEngine {
         logger?.log(.warning, tag: "PeerNegotiationEngine", "Recreating peer after \(reason) for \(remoteCid)")
         guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
         maybeSendOffer(slot: replacement)
+    }
+
+    /// FIX 1: detect when an EXISTING peer's computed independent-content
+    /// capability now differs from the capability its current slot was built with
+    /// and recreate the slot so it re-runs role binding from scratch with the
+    /// correct camera/content m-line layout. Returns true when a recreate was
+    /// performed (the caller skips its generic offer block for this peer).
+    ///
+    /// Flag-off byte-identical: `peerIndependentContentSupported` is always false
+    /// when the local flag is off, and every legacy slot is built with
+    /// `supportsIndependentContentVideo == false`, so the capability never flips
+    /// and this is inert (no recreate ever).
+    private func reconcilePeerCapability(remoteCid: String) -> Bool {
+        guard let slot = getSlot(remoteCid) else { return false }
+        let capableNow = peerIndependentContentSupported(remoteCid)
+        guard capableNow != slot.supportsIndependentContentVideo else { return false }
+        recreatePeerForCapabilityChange(remoteCid: remoteCid)
+        return true
+    }
+
+    /// Close and recreate a slot whose independent-content capability flipped.
+    /// Reuses `replacePeerSlotForMediaRecovery`'s close+recreate, but is NOT
+    /// `canOffer`/`shouldIOffer`-gated: BOTH ends saw the same capability change in
+    /// the shared room_state, so each side must rebuild its own slot.
+    /// `getOrCreateSlot` (inside the replace) re-snapshots the new capability and
+    /// re-creates the correct transceiver layout (owner pre-creates camera+content;
+    /// answerer pre-creates nothing). The deterministic offer owner re-offers here;
+    /// the answerer's fresh slot waits for that re-offer. An in-progress screen
+    /// share re-attaches automatically: `WebRtcEngine.createSlot` runs
+    /// `attachLocalTracksToSlot`, which fills a recreated capable peer's content
+    /// sender (via the pending-content mechanism) or a recreated legacy peer's
+    /// single sender (the legacy swap).
+    private func recreatePeerForCapabilityChange(remoteCid: String) {
+        guard isParticipantActive(remoteCid: remoteCid) else { return }
+        logger?.log(.debug, tag: "PeerNegotiationEngine", "Recreating peer after independent-content capability change for \(remoteCid)")
+        guard let replacement = replacePeerSlotForMediaRecovery(remoteCid: remoteCid) else { return }
+        // Re-offer only from the deterministic offer owner; the answerer's fresh
+        // slot waits for that re-offer (mirrors web's `recreatePeerForCapabilityChange`).
+        if shouldIOffer(remoteCid: remoteCid) {
+            maybeSendOffer(slot: replacement)
+        }
     }
 
     // MARK: - Offer Timeout

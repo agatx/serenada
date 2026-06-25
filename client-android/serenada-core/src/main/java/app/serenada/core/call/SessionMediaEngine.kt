@@ -33,12 +33,27 @@ internal interface SessionMediaEngine {
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
+        /**
+         * Per-peer independent-content gate (local flag AND peer capability AND
+         * both videoMediaEnabled). Defaults false ⇒ legacy single-video path.
+         */
+        supportsIndependentContentVideo: Boolean = false,
+        /** Whether the local participant is the deterministic offer owner. */
+        isOfferOwner: () -> Boolean = { false },
     ): PeerConnectionSlotProtocol
     fun removeSlot(slot: PeerConnectionSlotProtocol)
     fun attachLocalRenderer(renderer: SurfaceViewRenderer, rendererEvents: RendererCommon.RendererEvents?)
     fun detachLocalRenderer(renderer: SurfaceViewRenderer)
     fun attachLocalSink(sink: VideoSink)
     fun detachLocalSink(sink: VideoSink)
+
+    /**
+     * Attach a sink to the LOCAL content (screen share) track for local preview.
+     * No-op until a content track exists (independent mode, sharing). The camera
+     * preview continues to use [attachLocalSink].
+     */
+    fun attachLocalContentSink(sink: VideoSink) {}
+    fun detachLocalContentSink(sink: VideoSink) {}
     fun initRenderer(renderer: SurfaceViewRenderer, rendererEvents: RendererCommon.RendererEvents?)
     fun adjustWorldCameraZoom(scaleFactor: Float): Boolean
     fun toggleFlashlight(): Boolean

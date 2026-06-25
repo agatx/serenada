@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 import os.log
-#if !BROADCAST_EXTENSION && canImport(ReplayKit)
+#if canImport(ReplayKit)
 import ReplayKit
 #endif
 #if canImport(WebRTC)
@@ -9,13 +9,29 @@ import WebRTC
 #endif
 
 #if canImport(WebRTC)
+import SerenadaBroadcastExtensionSupport
 
-#if BROADCAST_EXTENSION
-final class BroadcastFrameReader: RTCVideoCapturer {
+/// Listening seam for the broadcast frame reader. The concrete
+/// `BroadcastFrameReader` reads frames off shared memory and only flips its
+/// `onBroadcastStarted`/`onBroadcastFinished` callbacks in response to real
+/// Darwin notifications from the broadcast upload extension (device-only). The
+/// protocol lets `ScreenShareController` be exercised with a fake reader that
+/// drives those callbacks directly in unit tests, so the pending-broadcast
+/// window (reader listening, `onBroadcastStarted` not yet fired) is reachable.
+protocol BroadcastFrameReading: AnyObject {
+    var onBroadcastStarted: (() -> Void)? { get set }
+    var onBroadcastFinished: (() -> Void)? { get set }
+    func startListening()
+    func stopListening()
+}
+
+final class BroadcastFrameReader: RTCVideoCapturer, BroadcastFrameReading {
     private static let log = OSLog(subsystem: "app.serenada.ios", category: "BroadcastFrameReader")
 
     var onBroadcastStarted: (() -> Void)?
     var onBroadcastFinished: (() -> Void)?
+
+    private let config: BroadcastIPCConfig
 
     private var mmapPtr: UnsafeMutableRawPointer?
     private var mmapSize: Int = 0
@@ -26,7 +42,26 @@ final class BroadcastFrameReader: RTCVideoCapturer {
     private var pollTimer: DispatchSourceTimer?
     private var isListening = false
 
+    // Session lifecycle (R-IPC1): a per-share generation plus an active-call /
+    // heartbeat marker in the sidecar lets the extension recognize a live reader
+    // and lets this reader reject frames stamped by a stale session.
+    private var sessionStore: BroadcastSessionStore?
+    private var sessionId = ""
+    private var currentGeneration: UInt32 = 0
+    private var heartbeatTimer: DispatchSourceTimer?
+    /// Serial queue for heartbeat writes so teardown can drain an in-flight beat
+    /// before clearing the session — without it a beat could rewrite the marker
+    /// after `clear()` and leave a stale "live" session.
+    private let heartbeatQueue = DispatchQueue(label: "app.serenada.ios.broadcast.heartbeat")
+    private static let heartbeatQueueKey = DispatchSpecificKey<Bool>()
+
     private static let darwinCenter = CFNotificationCenterGetDarwinNotifyCenter()
+
+    init(delegate: RTCVideoCapturerDelegate, config: BroadcastIPCConfig) {
+        self.config = config
+        super.init(delegate: delegate)
+        heartbeatQueue.setSpecific(key: Self.heartbeatQueueKey, value: true)
+    }
 
     deinit {
         stopListening()
@@ -40,6 +75,23 @@ final class BroadcastFrameReader: RTCVideoCapturer {
         isListening = true
         os_log("startListening: registered Darwin observers for broadcastStarted/Finished", log: Self.log, type: .info)
 
+        // Establish the session before the picker can launch the extension: bump
+        // the generation, then publish the active-call marker + first heartbeat so
+        // a broadcast that starts now is recognized as live (R-IPC1/R-IPC2).
+        let store = BroadcastSessionStore(config: config)
+        sessionStore = store
+        let gen = store.nextGeneration()
+        currentGeneration = gen
+        let sid = UUID().uuidString
+        sessionId = sid
+        store.write(BroadcastSessionSidecar(
+            sessionId: sid,
+            generation: gen,
+            activeCall: true,
+            heartbeatMs: BroadcastSessionStore.nowMs()
+        ))
+        startHeartbeat()
+
         let observer = Unmanaged.passUnretained(self).toOpaque()
 
         CFNotificationCenterAddObserver(
@@ -49,7 +101,7 @@ final class BroadcastFrameReader: RTCVideoCapturer {
                 let reader = Unmanaged<BroadcastFrameReader>.fromOpaque(observer).takeUnretainedValue()
                 DispatchQueue.main.async { reader.handleBroadcastStarted() }
             },
-            BroadcastShared.darwinNotifyStarted as CFString,
+            config.darwinNotifyStarted as CFString,
             nil, .deliverImmediately
         )
 
@@ -60,7 +112,7 @@ final class BroadcastFrameReader: RTCVideoCapturer {
                 let reader = Unmanaged<BroadcastFrameReader>.fromOpaque(observer).takeUnretainedValue()
                 DispatchQueue.main.async { reader.handleBroadcastFinished() }
             },
-            BroadcastShared.darwinNotifyFinished as CFString,
+            config.darwinNotifyFinished as CFString,
             nil, .deliverImmediately
         )
     }
@@ -69,11 +121,19 @@ final class BroadcastFrameReader: RTCVideoCapturer {
         guard isListening else { return }
         isListening = false
 
+        // Stop the heartbeat first, then clear the session so a later Control
+        // Center start cannot read a stale active marker as live (R-IPC1).
+        stopHeartbeat()
+
         // Request the extension to stop
         requestExtensionStop()
 
         stopPolling()
         closeSharedMemory()
+
+        sessionStore?.clear()
+        sessionStore = nil
+        currentGeneration = 0
 
         let observer = Unmanaged.passUnretained(self).toOpaque()
         CFNotificationCenterRemoveObserver(Self.darwinCenter, observer, nil, nil)
@@ -85,9 +145,43 @@ final class BroadcastFrameReader: RTCVideoCapturer {
     private func requestExtensionStop() {
         CFNotificationCenterPostNotification(
             Self.darwinCenter,
-            CFNotificationName(BroadcastShared.darwinNotifyRequestStop as CFString),
+            CFNotificationName(config.darwinNotifyRequestStop as CFString),
             nil, nil, true
         )
+    }
+
+    // MARK: - Heartbeat
+
+    private func startHeartbeat() {
+        stopHeartbeat()
+        let timer = DispatchSource.makeTimerSource(queue: heartbeatQueue)
+        timer.schedule(
+            deadline: .now() + .milliseconds(BroadcastShared.heartbeatIntervalMs),
+            repeating: .milliseconds(BroadcastShared.heartbeatIntervalMs)
+        )
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isListening, let store = self.sessionStore else { return }
+            store.write(BroadcastSessionSidecar(
+                sessionId: self.sessionId,
+                generation: self.currentGeneration,
+                activeCall: true,
+                heartbeatMs: BroadcastSessionStore.nowMs()
+            ))
+        }
+        heartbeatTimer = timer
+        timer.resume()
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+        // Drain any in-flight beat so a heartbeat cannot write the sidecar after
+        // the caller clears it. Skip the drain if we are already on the heartbeat
+        // queue (a sync onto the current queue would deadlock) — teardown normally
+        // runs on the main actor.
+        if DispatchQueue.getSpecific(key: Self.heartbeatQueueKey) != true {
+            heartbeatQueue.sync {}
+        }
     }
 
     // MARK: - Darwin Notification Handlers
@@ -139,11 +233,15 @@ final class BroadcastFrameReader: RTCVideoCapturer {
     private func pollFrame() {
         guard let ptr = mmapPtr else { return }
 
-        // Seqlock read: load seqNo, read header + data, re-check seqNo.
-        // If the writer changed seqNo mid-read, skip this frame to avoid torn data.
+        // Odd/even seqlock: an odd seqNo means a write is in progress, so skip it.
+        // After reading the frame we re-check seqNo to confirm it was stable across
+        // the read (matching the writer's odd→even publish).
         let seqNo = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+        guard seqNo & 1 == 0 else { return }
         guard seqNo != lastSeqNo else { return }
+        OSMemoryBarrier()
 
+        let generation = ptr.load(fromByteOffset: BroadcastHeaderOffset.generation, as: UInt32.self)
         let width = Int(ptr.load(fromByteOffset: BroadcastHeaderOffset.width, as: UInt32.self))
         let height = Int(ptr.load(fromByteOffset: BroadcastHeaderOffset.height, as: UInt32.self))
         let pixelFormat = ptr.load(fromByteOffset: BroadcastHeaderOffset.pixelFormat, as: UInt32.self)
@@ -237,10 +335,16 @@ final class BroadcastFrameReader: RTCVideoCapturer {
             CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
         }
 
-        // Seqlock validation: if the writer produced a new frame while we were reading,
-        // discard this frame to avoid delivering torn/mixed data.
+        // Seqlock validation: re-read seqNo after the data read. If it changed (or
+        // went odd) the writer raced us — discard this torn frame.
+        OSMemoryBarrier()
         let seqNoAfter = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
         guard seqNoAfter == seqNo else { return }
+
+        // Reject frames stamped by a stale session (a prior share, an app kill, or
+        // a start with no live call), and never accept generation 0 (a zeroed
+        // header). currentGeneration is set at startListening and is never 0.
+        guard generation != 0, generation == currentGeneration else { return }
 
         lastSeqNo = seqNo
         frameCount += 1
@@ -265,13 +369,13 @@ final class BroadcastFrameReader: RTCVideoCapturer {
             return true
         }
         guard let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: BroadcastShared.appGroupIdentifier
+            forSecurityApplicationGroupIdentifier: config.appGroupIdentifier
         ) else {
-            os_log("openSharedMemory: containerURL is nil for group %{public}@", log: Self.log, type: .error, BroadcastShared.appGroupIdentifier)
+            os_log("openSharedMemory: containerURL is nil for group %{public}@", log: Self.log, type: .error, config.appGroupIdentifier)
             return false
         }
 
-        let fileURL = containerURL.appendingPathComponent(BroadcastShared.sharedFileName)
+        let fileURL = containerURL.appendingPathComponent(config.sharedFileName)
         let path = fileURL.path
         os_log("openSharedMemory: path=%{public}@", log: Self.log, type: .info, path)
 
@@ -320,7 +424,7 @@ final class BroadcastFrameReader: RTCVideoCapturer {
         }
     }
 }
-#else
+#if canImport(ReplayKit)
 final class ReplayKitVideoCapturer: RTCVideoCapturer {
     private let recorder = RPScreenRecorder.shared()
     private var isRunning = false

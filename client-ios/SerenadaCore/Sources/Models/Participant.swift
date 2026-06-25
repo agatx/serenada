@@ -20,17 +20,52 @@ public struct ParticipantContentState: Codable, Equatable {
     public let contentType: String?
     public let updatedAtMs: Int64?
     public let epoch: Int64?
+    /// Per-`(cid, sid)` monotonically increasing generation marker for the
+    /// owning participant's content state. Used by receivers to keep the
+    /// highest revision and discard out-of-order/stale updates. `nil` when
+    /// the sender/server is too old to emit it.
+    public let revision: Int64?
 
     public init(
         active: Bool,
         contentType: String? = nil,
         updatedAtMs: Int64? = nil,
-        epoch: Int64? = nil
+        epoch: Int64? = nil,
+        revision: Int64? = nil
     ) {
         self.active = active
         self.contentType = contentType
         self.updatedAtMs = updatedAtMs
         self.epoch = epoch
+        self.revision = revision
+    }
+}
+
+/// Static build capabilities a participant advertised at `join`. Forwarded
+/// verbatim by the server in `joined`/`room_state`. Missing keys take their
+/// documented defaults when read through the typed accessors.
+public struct ParticipantCapabilities: Codable, Equatable {
+    /// Whether the participant's build can negotiate, send, receive, classify,
+    /// expose, and render an independent content (screen-share) video stream.
+    /// Absent on the wire → treated as `false`.
+    public let independentContentVideo: Bool?
+
+    public init(independentContentVideo: Bool? = nil) {
+        self.independentContentVideo = independentContentVideo
+    }
+}
+
+/// Per-session media policy a participant advertised at `join`. Immutable for
+/// the session lifetime. Forwarded verbatim by the server.
+public struct ParticipantMediaPolicy: Codable, Equatable {
+    /// Whether this participant accepts any video media (camera or content).
+    /// Absent on the wire → treated as `true` (audio-only compatibility
+    /// boundary: only strict audio-only clients omit video, and those are new
+    /// enough to always emit this field).
+    public let videoMediaEnabled: Bool?
+
+    public init(videoMediaEnabled: Bool? = nil) {
+        self.videoMediaEnabled = videoMediaEnabled
     }
 }
 
@@ -53,6 +88,10 @@ public struct Participant: Codable, Equatable {
     public let videoEnabled: Bool?
     public let signalingStatus: ParticipantSignalingStatus
     public let contentState: ParticipantContentState?
+    /// Static build capabilities advertised at `join`, forwarded by the server.
+    public let capabilities: ParticipantCapabilities?
+    /// Per-session media policy advertised at `join`, forwarded by the server.
+    public let mediaPolicy: ParticipantMediaPolicy?
 
     public init(
         cid: String,
@@ -62,7 +101,9 @@ public struct Participant: Codable, Equatable {
         audioEnabled: Bool? = nil,
         videoEnabled: Bool? = nil,
         signalingStatus: ParticipantSignalingStatus = .active,
-        contentState: ParticipantContentState? = nil
+        contentState: ParticipantContentState? = nil,
+        capabilities: ParticipantCapabilities? = nil,
+        mediaPolicy: ParticipantMediaPolicy? = nil
     ) {
         self.cid = cid
         self.joinedAt = joinedAt
@@ -72,5 +113,7 @@ public struct Participant: Codable, Equatable {
         self.videoEnabled = videoEnabled
         self.signalingStatus = signalingStatus
         self.contentState = contentState
+        self.capabilities = capabilities
+        self.mediaPolicy = mediaPolicy
     }
 }

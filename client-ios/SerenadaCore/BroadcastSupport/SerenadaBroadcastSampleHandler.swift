@@ -1,43 +1,120 @@
+#if os(iOS)
 import CoreMedia
 import Foundation
 import ReplayKit
 
-final class SampleHandler: RPBroadcastSampleHandler {
+/// Open base class for a Serenada screen-share Broadcast Upload Extension.
+///
+/// A host app ships a one-file `final` subclass as the extension's principal
+/// class. Naming a package/framework-module class directly as the principal
+/// class is brittle, because `NSExtensionPrincipalClass = $(PRODUCT_MODULE_NAME).X`
+/// resolves to the extension's *own* module — so the concrete class must live in
+/// the extension target, not here. This base carries all the behavior; the
+/// subclass is empty.
+///
+/// The base resolves its `BroadcastIPCConfig` entirely from the extension
+/// bundle: the App Group from the `SerenadaBroadcastAppGroupIdentifier`
+/// Info.plist key, the extension bundle ID from `Bundle.main.bundleIdentifier`
+/// (which, in the extension process, IS the extension's bundle ID). If the key
+/// is missing or the shared container does not resolve, the handler finishes the
+/// broadcast with an error and writes no frames.
+open class SerenadaBroadcastSampleHandler: RPBroadcastSampleHandler {
+    /// Info.plist key (in the extension bundle) naming the shared App Group.
+    public static let appGroupInfoPlistKey = "SerenadaBroadcastAppGroupIdentifier"
+
+    private static let errorDomain = "SerenadaBroadcast"
+
+    private var config: BroadcastIPCConfig?
     private var mmapPtr: UnsafeMutableRawPointer?
     private var mmapSize: Int = 0
     private var fileDescriptor: Int32 = -1
     private var isObservingStop = false
 
-    override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-        guard openSharedMemory() else {
-            finishBroadcastWithError(NSError(domain: "SerenadaBroadcast", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to open shared memory.",
-            ]))
+    private var sessionStore: BroadcastSessionStore?
+    /// Session generation + id adopted at broadcast start. The generation is
+    /// stamped into every frame so the reader can reject stale-session frames; the
+    /// periodic liveness check requires BOTH to still match the live sidecar, so a
+    /// writer left over from a superseded session self-stops.
+    private var generation: UInt32 = 0
+    private var sessionId = ""
+    /// Throttle for the periodic reader-liveness check on the sample-buffer thread.
+    private var lastHeartbeatCheckMs: Int64 = 0
+
+    public override init() {
+        super.init()
+    }
+
+    open override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
+        guard let config = Self.resolveConfig() else {
+            finishBroadcastWithError(Self.error(code: 2, "Screen-share extension is misconfigured."))
+            return
+        }
+        self.config = config
+
+        // R-IPC2: only write frames for a live in-call reader. A start from the
+        // system screen-recording UI with no active Serenada call (or a stale
+        // session left by an app kill) has no live marker — finish cleanly.
+        let store = BroadcastSessionStore(config: config)
+        self.sessionStore = store
+        guard let sidecar = store.read(),
+              sidecar.isLive(
+                  nowMs: BroadcastSessionStore.nowMs(),
+                  staleThresholdMs: BroadcastShared.heartbeatStaleThresholdMs
+              )
+        else {
+            finishBroadcastWithError(Self.error(code: 3, "Start screen sharing from within a Serenada call."))
+            return
+        }
+        self.generation = sidecar.generation
+        self.sessionId = sidecar.sessionId
+        self.lastHeartbeatCheckMs = BroadcastSessionStore.nowMs()
+
+        guard openSharedMemory(config: config) else {
+            finishBroadcastWithError(Self.error(code: 1, "Failed to open shared memory."))
             return
         }
 
-        registerStopObserver()
-        postDarwinNotification(BroadcastShared.darwinNotifyStarted)
+        registerStopObserver(config: config)
+        postDarwinNotification(config.darwinNotifyStarted)
     }
 
-    override func broadcastPaused() {
+    open override func broadcastPaused() {
         // No-op: iOS calls this when recording is paused (e.g., low memory).
     }
 
-    override func broadcastResumed() {
+    open override func broadcastResumed() {
         // No-op: recording resumed.
     }
 
-    override func broadcastFinished() {
-        postDarwinNotification(BroadcastShared.darwinNotifyFinished)
-        unregisterStopObserver()
+    open override func broadcastFinished() {
+        if let config { postDarwinNotification(config.darwinNotifyFinished) }
+        unregisterStopObserver(config: config)
         closeSharedMemory()
     }
 
-    override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
+    open override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with sampleBufferType: RPSampleBufferType) {
         guard sampleBufferType == .video else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         guard let ptr = mmapPtr else { return }
+
+        // R-IPC1 self-stop: if the reader's heartbeat has gone stale (call ended,
+        // app killed, or the share was torn down) stop writing. Throttled so the
+        // sidecar is not read on every frame.
+        let nowMs = BroadcastSessionStore.nowMs()
+        if nowMs - lastHeartbeatCheckMs >= Int64(BroadcastShared.heartbeatIntervalMs) {
+            lastHeartbeatCheckMs = nowMs
+            let sidecar = sessionStore?.read()
+            let liveForThisSession = sidecar?.isLive(
+                nowMs: nowMs,
+                staleThresholdMs: BroadcastShared.heartbeatStaleThresholdMs
+            ) == true
+                && sidecar?.generation == generation
+                && sidecar?.sessionId == sessionId
+            if !liveForThisSession {
+                finishBroadcastWithError(Self.error(code: 4, "Screen sharing stopped."))
+                return
+            }
+        }
 
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
@@ -72,7 +149,15 @@ final class SampleHandler: RPBroadcastSampleHandler {
         let requiredSize = BroadcastShared.headerSize + totalDataSize
         guard requiredSize <= mmapSize else { return }
 
-        // Write pixel data first (before updating header/seqNo)
+        // Odd/even seqlock: mark seqNo odd to signal a write in progress, write the
+        // frame, then mark it even to publish. A reader that observes an odd value
+        // — or a value that changes across its read — discards the frame as torn.
+        let beginSeq = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+        let writingSeq = beginSeq | 1
+        ptr.storeBytes(of: writingSeq, toByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+        OSMemoryBarrier()
+
+        // Write pixel data
         var dataOffset = BroadcastShared.headerSize
         if CVPixelBufferIsPlanar(pixelBuffer) {
             for plane in 0 ..< planeCount {
@@ -104,20 +189,37 @@ final class SampleHandler: RPBroadcastSampleHandler {
             byteOffset: BroadcastHeaderOffset.timestampNs
         )
         ptr.storeBytes(of: UInt32(rotation), toByteOffset: BroadcastHeaderOffset.rotation, as: UInt32.self)
+        ptr.storeBytes(of: generation, toByteOffset: BroadcastHeaderOffset.generation, as: UInt32.self)
 
-        // Increment seqNo last (acts as publish barrier on ARM64 for naturally-aligned stores)
-        let currentSeq = ptr.load(fromByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
-        ptr.storeBytes(of: currentSeq &+ 1, toByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+        // Publish: make seqNo even again. The barrier ensures the frame and header
+        // writes land before the publish store becomes visible to the reader.
+        OSMemoryBarrier()
+        ptr.storeBytes(of: writingSeq &+ 1, toByteOffset: BroadcastHeaderOffset.seqNo, as: UInt32.self)
+    }
+
+    // MARK: - Config
+
+    static func resolveConfig() -> BroadcastIPCConfig? {
+        guard let appGroup = Bundle.main.object(forInfoDictionaryKey: appGroupInfoPlistKey) as? String,
+              !appGroup.isEmpty,
+              let bundleId = Bundle.main.bundleIdentifier,
+              !bundleId.isEmpty
+        else { return nil }
+        return BroadcastIPCConfig(appGroupIdentifier: appGroup, extensionBundleId: bundleId)
+    }
+
+    private static func error(code: Int, _ message: String) -> NSError {
+        NSError(domain: errorDomain, code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     // MARK: - Shared Memory
 
-    private func openSharedMemory() -> Bool {
+    private func openSharedMemory(config: BroadcastIPCConfig) -> Bool {
         guard let containerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: BroadcastShared.appGroupIdentifier
+            forSecurityApplicationGroupIdentifier: config.appGroupIdentifier
         ) else { return false }
 
-        let fileURL = containerURL.appendingPathComponent(BroadcastShared.sharedFileName)
+        let fileURL = containerURL.appendingPathComponent(config.sharedFileName)
         let path = fileURL.path
 
         // Create file if needed
@@ -175,7 +277,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
         )
     }
 
-    private func registerStopObserver() {
+    private func registerStopObserver(config: BroadcastIPCConfig) {
         guard !isObservingStop else { return }
         isObservingStop = true
         CFNotificationCenterAddObserver(
@@ -183,24 +285,22 @@ final class SampleHandler: RPBroadcastSampleHandler {
             Unmanaged.passUnretained(self).toOpaque(),
             { _, observer, _, _, _ in
                 guard let observer else { return }
-                let handler = Unmanaged<SampleHandler>.fromOpaque(observer).takeUnretainedValue()
-                handler.finishBroadcastWithError(NSError(domain: "SerenadaBroadcast", code: 0, userInfo: [
-                    NSLocalizedDescriptionKey: "Screen sharing stopped by app.",
-                ]))
+                let handler = Unmanaged<SerenadaBroadcastSampleHandler>.fromOpaque(observer).takeUnretainedValue()
+                handler.finishBroadcastWithError(SerenadaBroadcastSampleHandler.error(code: 0, "Screen sharing stopped by app."))
             },
-            BroadcastShared.darwinNotifyRequestStop as CFString,
+            config.darwinNotifyRequestStop as CFString,
             nil,
             .deliverImmediately
         )
     }
 
-    private func unregisterStopObserver() {
+    private func unregisterStopObserver(config: BroadcastIPCConfig?) {
         guard isObservingStop else { return }
         isObservingStop = false
         CFNotificationCenterRemoveObserver(
             Self.darwinCenter,
             Unmanaged.passUnretained(self).toOpaque(),
-            CFNotificationName(BroadcastShared.darwinNotifyRequestStop as CFString),
+            config.map { CFNotificationName($0.darwinNotifyRequestStop as CFString) },
             nil
         )
     }
@@ -231,3 +331,4 @@ final class SampleHandler: RPBroadcastSampleHandler {
         }
     }
 }
+#endif

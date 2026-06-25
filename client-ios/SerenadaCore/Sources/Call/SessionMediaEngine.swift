@@ -26,11 +26,18 @@ protocol SessionMediaEngine: AnyObject {
         onConnectionStateChange: @escaping (String, String) -> Void,
         onIceConnectionStateChange: @escaping (String, String) -> Void,
         onSignalingStateChange: @escaping (String, String) -> Void,
-        onRenegotiationNeeded: @escaping (String) -> Void
+        onRenegotiationNeeded: @escaping (String) -> Void,
+        supportsIndependentContentVideo: Bool,
+        isOfferOwner: @escaping () -> Bool
     ) -> (any PeerConnectionSlotProtocol)?
     func removeSlot(_ slot: any PeerConnectionSlotProtocol)
     func attachLocalRenderer(_ renderer: AnyObject)
     func detachLocalRenderer(_ renderer: AnyObject)
+    /// Attach a renderer to the LOCAL content (screen share) track for local
+    /// preview. No-op until an independent share is active. Camera preview
+    /// continues to use ``attachLocalRenderer(_:)``.
+    func attachLocalContentRenderer(_ renderer: AnyObject)
+    func detachLocalContentRenderer(_ renderer: AnyObject)
     func setOnCameraFacingChanged(_ handler: @escaping (Bool) -> Void)
     func setOnCameraModeChanged(_ handler: @escaping (LocalCameraMode) -> Void)
     func setOnFlashlightStateChanged(_ handler: @escaping (Bool, Bool) -> Void)

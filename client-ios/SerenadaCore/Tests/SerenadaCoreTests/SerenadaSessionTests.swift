@@ -149,6 +149,7 @@ final class SerenadaSessionTests: XCTestCase {
             config: SerenadaConfig(
                 signalingProvider: provider,
                 videoMediaEnabled: false,
+                screenShareMode: .inAppOnly,
                 audioCoordinator: FakeAudioCoordinator()
             ),
             initialSignalingProvider: provider,
@@ -172,6 +173,7 @@ final class SerenadaSessionTests: XCTestCase {
             roomId: "provider-room",
             config: SerenadaConfig(
                 signalingProvider: provider,
+                screenShareMode: .inAppOnly,
                 cameraModes: [],
                 audioCoordinator: FakeAudioCoordinator()
             ),

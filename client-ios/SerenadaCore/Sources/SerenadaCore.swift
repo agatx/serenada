@@ -136,6 +136,7 @@ public final class SerenadaCore {
                 defaultAudioEnabled: config.defaultAudioEnabled,
                 defaultVideoEnabled: config.defaultVideoEnabled,
                 videoMediaEnabled: config.videoMediaEnabled,
+                enableIndependentContentVideo: config.enableIndependentContentVideo,
                 cameraModes: config.cameraModes,
                 deferInitialAnswer: config.deferInitialAnswer,
                 transports: config.transports,

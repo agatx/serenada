@@ -40,8 +40,15 @@ internal class PeerNegotiationEngine(
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
+        supportsIndependentContentVideo: Boolean,
+        isOfferOwner: () -> Boolean,
     ) -> PeerConnectionSlotProtocol,
     private val engineRemoveSlot: (PeerConnectionSlotProtocol) -> Unit,
+    // Per-peer independent-content gate (local flag AND peer capability AND both
+    // videoMediaEnabled, all folded into [supported]). Defaults to legacy
+    // (false) so callers that don't supply it keep today's single-video behavior.
+    private val peerIndependentContentCapability: (String) -> PeerIndependentContentCapability =
+        { PeerIndependentContentCapability(supported = false) },
     // Callbacks to session
     private val sendMessage: (String, JSONObject?, String?) -> Unit,
     private val onRemoteParticipantsChanged: () -> Unit,
@@ -69,6 +76,11 @@ internal class PeerNegotiationEngine(
             PeerConnection.SignalingState.HAVE_REMOTE_PRANSWER to 4, PeerConnection.SignalingState.STABLE to 5,
         )
     }
+
+    /** Resolved per-peer independent-content routing inputs at slot creation. */
+    internal data class PeerIndependentContentCapability(
+        val supported: Boolean,
+    )
 
     private data class OutboundMediaWatch(
         var lastSample: OutboundMediaSample? = null,
@@ -111,7 +123,24 @@ internal class PeerNegotiationEngine(
             participantStatuses[participant.cid] = participant.signalingStatus
             val becameActive = previousStatus == ParticipantSignalingStatus.SUSPENDED &&
                 participant.signalingStatus == ParticipantSignalingStatus.ACTIVE
-            val slot = getOrCreateSlot(participant.cid)
+            val existing = getSlot(participant.cid)
+            if (existing != null) {
+                // Capability-transition slot handling (FIX 1). The slot snapshots
+                // [supportsIndependentContentVideo] at creation. A peer announced
+                // before its caps arrive (early offer or a no-caps room_state) gets
+                // a LEGACY slot; the later cap-bearing room_state only updates the
+                // stored caps, leaving the slot immutably legacy — so a late
+                // CAPABLE peer would never bind the content transceiver. When the
+                // freshly computed capability now DIFFERS from what the slot was
+                // built with, recreate it so role binding re-runs with the correct
+                // m-line layout. Recreated here (not offerer-gated: BOTH ends flip);
+                // the recreate re-offers only if WE are the owner. Skip the generic
+                // offer block this pass — the recreate already re-offered.
+                if (reconcilePeerCapability(participant.cid)) {
+                    return@forEach
+                }
+            }
+            val slot = existing ?: getOrCreateSlot(participant.cid)
             slot.ensurePeerConnection()
             if (shouldIOffer(participant.cid, roomState)) {
                 if (becameActive) {
@@ -298,7 +327,11 @@ internal class PeerNegotiationEngine(
                 handler.post {
                     handleRenegotiationNeeded(cid)
                 }
-            }
+            },
+            peerIndependentContentCapability(remoteCid).supported,
+            // Lazily evaluated so the slot's owner pre-creation / answerer-bind
+            // choice tracks ownership the same way the negotiation path does.
+            { shouldIOffer(remoteCid, getCurrentRoomState()) },
         )
         callbackSlot = slot
         setSlot(remoteCid, slot)
@@ -803,6 +836,49 @@ internal class PeerNegotiationEngine(
         logger?.log(SerenadaLogLevel.WARNING, TAG, "Recreating peer after $reason for $remoteCid")
         val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return
         maybeSendOffer(replacement)
+    }
+
+    /**
+     * Capability-transition slot handling (FIX 1). Compares the per-peer
+     * independent-content capability computed NOW (from the just-applied room
+     * state, via [peerIndependentContentCapability]) against the capability the
+     * existing slot was BUILT with ([PeerConnectionSlotProtocol.supportsIndependentContentVideo]).
+     * When they differ — a peer created legacy from an early offer / no-caps
+     * room_state whose caps later arrive, or the reverse — recreate the slot so it
+     * re-runs role binding from scratch with the correct camera/content m-line
+     * layout. Returns true when a recreate was performed (the caller skips its
+     * generic offer block for this peer this pass; the recreate already re-offered
+     * if we own the offer).
+     *
+     * NOT offerer-gated for the recreate itself: BOTH ends observe the same flip
+     * in the shared room_state, so each rebuilds its own connection. Only the
+     * re-offer is offerer-gated ([maybeSendOffer] → [canOffer]); the answerer's
+     * fresh slot waits for the owner's re-offer. An in-progress screen share
+     * re-attaches for free via the existing pending-content mechanism: the engine
+     * re-runs [attachLocalTracksToSlot] on the recreated slot (owner content sender
+     * via the role-state-driven attach; legacy peer via the single-sender swap).
+     *
+     * Flag-off byte-identical: [peerIndependentContentCapability] is always
+     * `supported=false` when the flag is off, and every legacy slot is built with
+     * `supportsIndependentContentVideo=false`, so the capability never flips and
+     * this is inert (no recreate ever).
+     */
+    private fun reconcilePeerCapability(remoteCid: String): Boolean {
+        val slot = getSlot(remoteCid) ?: return false
+        val capableNow = peerIndependentContentCapability(remoteCid).supported
+        if (capableNow == slot.supportsIndependentContentVideo) return false
+        if (!isParticipantActive(remoteCid)) return false
+        logger?.log(
+            SerenadaLogLevel.DEBUG,
+            TAG,
+            "Recreating peer after independent-content capability change for $remoteCid",
+        )
+        val replacement = replacePeerSlotForMediaRecovery(remoteCid) ?: return true
+        // Re-offer only if we are the deterministic offer owner; the answerer's
+        // fresh slot waits for that re-offer. canOffer (inside maybeSendOffer)
+        // enforces ownership + readiness, so a non-owner is a no-op.
+        maybeSendOffer(replacement)
+        return true
     }
 
     // --- Timers ---

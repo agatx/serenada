@@ -196,5 +196,120 @@ final class SignalingPayloadsTests: XCTestCase {
         XCTAssertNil(parsed.fromCid)
         XCTAssertFalse(parsed.active)
         XCTAssertNil(parsed.contentType)
+        XCTAssertNil(parsed.revision)
+        XCTAssertNil(parsed.sid)
+    }
+
+    // MARK: - ContentStatePayload revision + sid (independent content video)
+
+    func testContentStatePayloadParsesRevision() {
+        let payload: JSONValue = .object([
+            "from": .string("C-peer"),
+            "active": .bool(true),
+            "contentType": .string("screenShare"),
+            "revision": .number(7),
+        ])
+        let parsed = ContentStatePayload(from: payload, sid: "S-1")
+        XCTAssertEqual(parsed.revision, 7)
+        XCTAssertEqual(parsed.sid, "S-1")
+    }
+
+    func testContentStatePayloadMissingRevisionIsNil() {
+        let payload: JSONValue = .object([
+            "from": .string("C-peer"),
+            "active": .bool(true),
+            "contentType": .string("screenShare"),
+        ])
+        let parsed = ContentStatePayload(from: payload)
+        XCTAssertNil(parsed.revision)
+    }
+
+    // MARK: - parseContentState revision
+
+    func testParseContentStateParsesRevision() {
+        let value: JSONValue = .object([
+            "active": .bool(true),
+            "contentType": .string("screenShare"),
+            "updatedAtMs": .number(1000),
+            "epoch": .number(2),
+            "revision": .number(5),
+        ])
+        let parsed = parseContentState(from: value)
+        XCTAssertEqual(parsed?.revision, 5)
+        XCTAssertEqual(parsed?.active, true)
+        XCTAssertEqual(parsed?.contentType, "screenShare")
+    }
+
+    func testParseContentStateMissingRevisionIsNil() {
+        let value: JSONValue = .object([
+            "active": .bool(true),
+            "contentType": .string("screenShare"),
+        ])
+        let parsed = parseContentState(from: value)
+        XCTAssertNil(parsed?.revision)
+    }
+
+    // MARK: - Participant capabilities / mediaPolicy parse + defaults
+
+    func testParseParticipantsParsesCapabilitiesAndMediaPolicy() {
+        let value: [JSONValue] = [
+            .object([
+                "cid": .string("C-1"),
+                "capabilities": .object(["independentContentVideo": .bool(true)]),
+                "mediaPolicy": .object(["videoMediaEnabled": .bool(false)]),
+            ]),
+        ]
+        let parsed = parseParticipants(from: value)
+        XCTAssertEqual(parsed?.first?.capabilities?.independentContentVideo, true)
+        XCTAssertEqual(parsed?.first?.mediaPolicy?.videoMediaEnabled, false)
+    }
+
+    func testParseParticipantsMissingCapabilitiesAndPolicyAreNil() {
+        // Absent objects parse to nil so callers apply documented defaults
+        // (independentContentVideo → false, videoMediaEnabled → true).
+        let value: [JSONValue] = [.object(["cid": .string("C-1")])]
+        let parsed = parseParticipants(from: value)
+        XCTAssertNil(parsed?.first?.capabilities)
+        XCTAssertNil(parsed?.first?.mediaPolicy)
+    }
+
+    func testParseParticipantsDropsUnknownCapabilityKeys() {
+        // Unknown keys inside the objects are ignored; only allowlisted keys read.
+        let value: [JSONValue] = [
+            .object([
+                "cid": .string("C-1"),
+                "capabilities": .object([
+                    "independentContentVideo": .bool(true),
+                    "futureUnknownCap": .bool(true),
+                ]),
+                "mediaPolicy": .object([
+                    "videoMediaEnabled": .bool(true),
+                    "futureUnknownPolicy": .string("x"),
+                ]),
+            ]),
+        ]
+        let parsed = parseParticipants(from: value)
+        XCTAssertEqual(parsed?.first?.capabilities?.independentContentVideo, true)
+        XCTAssertEqual(parsed?.first?.mediaPolicy?.videoMediaEnabled, true)
+    }
+
+    func testParseParticipantsParsesContentStateRevision() {
+        let value: [JSONValue] = [
+            .object([
+                "cid": .string("C-1"),
+                "contentState": .object([
+                    "active": .bool(true),
+                    "contentType": .string("screenShare"),
+                    "revision": .number(3),
+                ]),
+            ]),
+        ]
+        let parsed = parseParticipants(from: value)
+        XCTAssertEqual(parsed?.first?.contentState?.revision, 3)
+    }
+
+    func testParseCapabilitiesAbsentObjectReturnsNil() {
+        XCTAssertNil(parseCapabilities(from: nil))
+        XCTAssertNil(parseMediaPolicy(from: nil))
     }
 }

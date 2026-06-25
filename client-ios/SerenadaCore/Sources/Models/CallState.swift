@@ -18,6 +18,26 @@ public enum SerenadaCallPhase: String, Equatable, Sendable {
     case error
 }
 
+/// Public content (screen-share) state for a participant. Present (non-nil)
+/// when the participant has content state; absent when there is no content.
+/// Surfaced on both ``LocalParticipant`` and ``SerenadaRemoteParticipant``.
+public struct ParticipantContent: Equatable {
+    /// Whether the participant is currently sharing content.
+    public var active: Bool
+    /// Content kind, e.g. `"screenShare"`.
+    public var type: String
+    /// Per-`(cid, sid)` monotonic revision that ordered this state. Receivers
+    /// keep the highest revision for a `(cid, sid)`; a new `sid` supersedes by
+    /// identity. `0` for locally-originated state when no revision was tracked.
+    public var revision: Int64
+
+    public init(active: Bool, type: String, revision: Int64) {
+        self.active = active
+        self.type = type
+        self.revision = revision
+    }
+}
+
 /// The local participant in a call.
 public struct LocalParticipant: Equatable {
     /// Client identifier assigned by the server.
@@ -31,6 +51,10 @@ public struct LocalParticipant: Equatable {
     public var audioEnabled: Bool = true
     /// Whether local video is enabled.
     public var videoEnabled: Bool = true
+    /// Whether the local camera (specifically) is enabled. Distinct from
+    /// ``videoEnabled``, which retains its legacy "video active" meaning while
+    /// the independent-content flag is off. Phase 1 mirrors ``videoEnabled``.
+    public var cameraEnabled: Bool = true
     /// Current camera mode (selfie, world, or composite).
     public var cameraMode: LocalCameraMode = .selfie
     /// Camera modes the user can cycle through, in preference order.
@@ -44,6 +68,8 @@ public struct LocalParticipant: Equatable {
     /// Updated at ~10 Hz while the call is active; intended to drive UI
     /// activity indicators. Always 0 when ``audioEnabled`` is false.
     public var audioLevel: Float = 0
+    /// Local content (screen-share) state, or `nil` when not sharing.
+    public var content: ParticipantContent?
 
     public init() {}
 
@@ -53,20 +79,24 @@ public struct LocalParticipant: Equatable {
         peerId: String? = nil,
         audioEnabled: Bool = true,
         videoEnabled: Bool = true,
+        cameraEnabled: Bool = true,
         cameraMode: LocalCameraMode = .selfie,
         availableCameraModes: [LocalCameraMode] = defaultCameraModes,
         isHost: Bool = false,
-        audioLevel: Float = 0
+        audioLevel: Float = 0,
+        content: ParticipantContent? = nil
     ) {
         self.cid = cid
         self.displayName = displayName
         self.peerId = peerId
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
+        self.cameraEnabled = cameraEnabled
         self.cameraMode = cameraMode
         self.availableCameraModes = availableCameraModes
         self.isHost = isHost
         self.audioLevel = audioLevel
+        self.content = content
     }
 }
 
@@ -85,6 +115,27 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     public var audioEnabled: Bool
     /// Whether remote video is enabled.
     public var videoEnabled: Bool
+    /// Whether the remote camera (specifically) is enabled. Distinct from
+    /// ``videoEnabled`` (legacy "video active"). Phase 1 mirrors ``videoEnabled``.
+    public var cameraEnabled: Bool
+    /// `true` while this peer's CAMERA-role inbound video bytes are advancing
+    /// (the camera video is flowing). Mirrors web's `cameraReceiving`. Only
+    /// meaningful when the camera is expected/active — a consumer reads a camera
+    /// stall as `cameraEnabled && !cameraReceiving`. Defaults to `false` before
+    /// the first liveness sample.
+    ///
+    /// Flag off / legacy peers: the single inbound video routes to the camera
+    /// role, so this tracks that one video and ``contentReceiving`` stays
+    /// `false`.
+    public var cameraReceiving: Bool
+    /// `true` while this peer's CONTENT-role (screen share) inbound video bytes
+    /// are advancing. Mirrors web's `contentReceiving`. Only meaningful when
+    /// content is expected/active — a consumer reads a content stall (screen
+    /// share frozen while camera/audio are healthy) as
+    /// `content?.active == true && !contentReceiving`. Defaults to `false`
+    /// before the first liveness sample and stays `false` for legacy/flag-off
+    /// peers (their single inbound video is attributed to the camera role).
+    public var contentReceiving: Bool
     /// WebRTC peer connection state for this participant.
     public var connectionState: SerenadaPeerConnectionState
     /// Signaling transport status as reported by the server. `.suspended`
@@ -105,6 +156,19 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     /// Updated at ~10 Hz while the call is active; intended to drive UI
     /// activity indicators. Always 0 when ``audioEnabled`` is false.
     public var audioLevel: Float = 0
+    /// Remote content (screen-share) state, or `nil` when this peer has no
+    /// content. Populated from received `content_state`.
+    public var content: ParticipantContent?
+    /// Whether this peer advertised independent content video at join
+    /// (`capabilities.independentContentVideo`). Defaults to false when absent.
+    ///
+    /// Call UIs gate INDEPENDENT content rendering on this PER PEER: a peer's
+    /// ``content`` is rendered as a dedicated content stream only when the local
+    /// build negotiates independent content AND the peer advertised the
+    /// capability. A legacy peer (capability false) routes its share through the
+    /// single-video path, so its ``content`` is presented via the peer's normal
+    /// video sink, not a separate content sink that never exists.
+    public var supportsIndependentContentVideo: Bool
 
     public var id: String { cid }
 
@@ -114,20 +178,30 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         peerId: String? = nil,
         audioEnabled: Bool = true,
         videoEnabled: Bool = true,
+        cameraEnabled: Bool = true,
+        cameraReceiving: Bool = false,
+        contentReceiving: Bool = false,
         connectionState: SerenadaPeerConnectionState = .new,
         signalingStatus: ParticipantSignalingStatus = .active,
         presumedLost: Bool = false,
-        audioLevel: Float = 0
+        audioLevel: Float = 0,
+        content: ParticipantContent? = nil,
+        supportsIndependentContentVideo: Bool = false
     ) {
         self.cid = cid
         self.displayName = displayName
         self.peerId = peerId
         self.audioEnabled = audioEnabled
         self.videoEnabled = videoEnabled
+        self.cameraEnabled = cameraEnabled
+        self.cameraReceiving = cameraReceiving
+        self.contentReceiving = contentReceiving
         self.connectionState = connectionState
         self.signalingStatus = signalingStatus
         self.presumedLost = presumedLost
         self.audioLevel = audioLevel
+        self.content = content
+        self.supportsIndependentContentVideo = supportsIndependentContentVideo
     }
 }
 

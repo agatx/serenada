@@ -79,6 +79,10 @@ internal class SerenadaServerProvider(
     private var pendingJoinRoomId: String? = null
     private var currentDisplayName: String? = null
     private var currentAppPeerId: String? = null
+    // Static capability + per-session media policy advertised at `join`. Set
+    // from JoinOptions and re-sent verbatim on every (re)join.
+    private var currentIndependentContentVideo: Boolean = false
+    private var currentVideoMediaEnabled: Boolean = true
 
     override fun connect() {
         closedByClient = false
@@ -107,6 +111,8 @@ internal class SerenadaServerProvider(
         if (options.appPeerId != null) {
             currentAppPeerId = options.appPeerId
         }
+        currentIndependentContentVideo = options.independentContentVideo
+        currentVideoMediaEnabled = options.videoMediaEnabled
         if (signaling.isConnected()) {
             pendingJoinRoomId = null
             sendJoin(roomId)
@@ -369,6 +375,17 @@ internal class SerenadaServerProvider(
                     contentType = it.contentType,
                     updatedAtMs = it.updatedAtMs,
                     epoch = it.epoch,
+                    revision = it.revision,
+                )
+            },
+            capabilities = capabilities?.let {
+                SignalingProviderParticipantCapabilities(
+                    independentContentVideo = it.independentContentVideo,
+                )
+            },
+            mediaPolicy = mediaPolicy?.let {
+                SignalingProviderParticipantMediaPolicy(
+                    videoMediaEnabled = it.videoMediaEnabled,
                 )
             },
         )
@@ -408,6 +425,13 @@ internal class SerenadaServerProvider(
                 JSONObject().apply {
                     put("trickleIce", true)
                     put("maxParticipants", currentMaxParticipants)
+                    put("independentContentVideo", currentIndependentContentVideo)
+                }
+            )
+            put(
+                "mediaPolicy",
+                JSONObject().apply {
+                    put("videoMediaEnabled", currentVideoMediaEnabled)
                 }
             )
             put("createMaxParticipants", currentMaxParticipants)

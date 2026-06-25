@@ -8,10 +8,43 @@ internal struct OutboundMediaSample: Equatable {
     let videoFramesSent: Int64
 }
 
+/// Cumulative inbound VIDEO `bytesReceived` for a peer, split by the bound
+/// transceiver role (camera vs content). The per-role counterpart to
+/// ``PeerConnectionSlotProtocol/collectInboundBytes(onComplete:)`` (which sums
+/// ALL inbound RTP, audio-inclusive, for the server eviction-deferral signal).
+///
+/// Role attribution matches each `inbound-rtp` video stat's `trackIdentifier`
+/// against the slot's bound CONTENT receiver track id; anything not positively
+/// attributable to content (the camera role, a legacy single video track, or an
+/// unattributable stat) is counted as camera. Legacy / flag-off peers therefore
+/// route their one inbound video to `cameraBytes` and `contentBytes` stays 0.
+/// Audio is excluded here.
+internal struct RoleInboundBytes: Equatable {
+    var cameraBytes: Int64
+    var contentBytes: Int64
+}
+
+/// Per-peer, per-role inbound liveness derived by the session from successive
+/// ``RoleInboundBytes`` samples: `true` for a role when its inbound video bytes
+/// advanced since the previous sample (that role's video is flowing). Surfaced
+/// as `cameraReceiving` / `contentReceiving` on the public remote participant.
+/// Both `false` before the first sample (conservative) and for legacy/flag-off
+/// peers' `content` role.
+internal struct RoleLiveness: Equatable {
+    var camera: Bool
+    var content: Bool
+
+    static let none = RoleLiveness(camera: false, content: false)
+}
+
 @MainActor
 internal protocol PeerConnectionSlotProtocol: AnyObject {
     // Identity
     var remoteCid: String { get }
+
+    /// Per-peer independent-content gate. `false` ⇒ legacy single-video path,
+    /// byte-identical to today. See ``attachLocalTracks(audioTrack:cameraTrack:contentTrack:supportsIndependentContentVideo:)``.
+    var supportsIndependentContentVideo: Bool { get }
 
     // Offer state
     var sentOffer: Bool { get }
@@ -42,7 +75,31 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     // WebRTC operations
     func setIceServers(_ servers: [IceServerConfig])
     @discardableResult func ensurePeerConnection() -> Bool
-    func attachLocalTracks(audioTrack: AnyObject?, videoTrack: AnyObject?)
+    /// Route the current local tracks to this peer per its per-peer capability.
+    ///
+    /// - Legacy peers (``supportsIndependentContentVideo`` false): a SINGLE
+    ///   video track on the single video transceiver — exactly today's path.
+    ///   The engine passes the camera track normally, or the content (display)
+    ///   track on the same `cameraTrack` parameter while a share is active so
+    ///   the legacy single sender carries content with precedence over camera.
+    /// - Independent-capable peers (``supportsIndependentContentVideo`` true):
+    ///   the camera track rides the bound camera transceiver and the content
+    ///   track rides the bound content transceiver (camera + screen share at
+    ///   once). `contentTrack == nil` detaches the content sender.
+    ///
+    /// `legacyVideoCarriesContent` (FIX 2) is meaningful only on the legacy path:
+    /// when true the single video track is the screen-share (display) track during
+    /// an independent share, so the single sender gets the conservative content
+    /// encoding profile instead of the camera default; restored to camera params
+    /// when false. Ignored for capable peers (the content transceiver always gets
+    /// the content profile).
+    func attachLocalTracks(
+        audioTrack: AnyObject?,
+        cameraTrack: AnyObject?,
+        contentTrack: AnyObject?,
+        supportsIndependentContentVideo: Bool,
+        legacyVideoCarriesContent: Bool
+    )
     func closePeerConnection()
     @discardableResult func createOffer(iceRestart: Bool, onSdp: @escaping (String) -> Void, onComplete: ((Bool) -> Void)?) -> Bool
     func createAnswer(onSdp: @escaping (String) -> Void, onComplete: ((Bool) -> Void)?)
@@ -69,6 +126,13 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func attachRemoteRenderer(_ renderer: AnyObject)
     func detachRemoteRenderer(_ renderer: AnyObject)
 
+    /// Attach a renderer to this peer's CONTENT (screen share) video track
+    /// specifically. For independent-capable peers this is the content-role
+    /// track bound by m-line order. Camera renderers continue to use
+    /// ``attachRemoteRenderer(_:)``.
+    func attachRemoteContentRenderer(_ renderer: AnyObject)
+    func detachRemoteContentRenderer(_ renderer: AnyObject)
+
     // Stats
     func collectRealtimeCallStats(onComplete: @escaping (RealtimeCallStats) -> Void)
     func collectRealtimeCallStatsAndSummary(onComplete: @escaping (RealtimeCallStats, String) -> Void)
@@ -80,6 +144,14 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     /// the peer connection is not yet established.
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void)
 
+    /// Asynchronously samples cumulative inbound VIDEO `bytesReceived` SPLIT by
+    /// the bound transceiver role (camera vs content) — see ``RoleInboundBytes``.
+    /// The per-role counterpart to ``collectInboundBytes(onComplete:)``; the
+    /// session diffs successive samples to derive the per-role
+    /// `cameraReceiving` / `contentReceiving` stall diagnostics. Reports zeros
+    /// when the peer connection is not yet established. Audio is excluded.
+    func collectInboundRoleBytes(onComplete: @escaping (RoleInboundBytes) -> Void)
+
     /// Asynchronously samples cumulative outbound media counters and whether
     /// local enabled tracks are expected to be flowing on this peer.
     func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void)
@@ -89,4 +161,10 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     /// `media-source.audioLevel` (the locally captured mic). Either may be
     /// `nil` if stats haven't populated yet. Callback fires on the main actor.
     func collectAudioLevels(onComplete: @escaping (_ inboundLevel: Float?, _ mediaSourceLevel: Float?) -> Void)
+}
+
+extension PeerConnectionSlotProtocol {
+    /// Default: legacy single-video path (byte-identical to today). Real slots
+    /// override; fakes that don't care about independent routing inherit `false`.
+    var supportsIndependentContentVideo: Bool { false }
 }

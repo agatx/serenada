@@ -38,6 +38,8 @@ internal data class ContentStatePayload(
     val fromCid: String,
     val active: Boolean,
     val contentType: String?,
+    /** Per-`(cid, sid)` monotonic revision; absent on older senders. */
+    val revision: Long? = null,
 )
 
 internal data class MediaStatePayload(
@@ -138,6 +140,7 @@ internal fun JSONObject?.toContentStatePayload(): ContentStatePayload? {
         fromCid = fromCid,
         active = active,
         contentType = contentType,
+        revision = if (has("revision")) optLong("revision") else null,
     )
 }
 
@@ -177,6 +180,8 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
                 videoEnabled = if (p.has("videoEnabled")) p.optBoolean("videoEnabled") else null,
                 signalingStatus = status,
                 contentState = contentState,
+                capabilities = p.optJSONObject("capabilities")?.toParticipantCapabilities(),
+                mediaPolicy = p.optJSONObject("mediaPolicy")?.toParticipantMediaPolicy(),
             ))
         }
     }
@@ -192,5 +197,24 @@ private fun JSONObject.toParticipantContentState(): ParticipantContentState? {
         contentType = if (active) rawType else null,
         updatedAtMs = if (has("updatedAtMs")) optLong("updatedAtMs", -1).takeIf { it >= 0 } else null,
         epoch = if (has("epoch")) optLong("epoch", -1).takeIf { it >= 0 } else null,
+        revision = if (has("revision")) optLong("revision") else null,
     )
 }
+
+/**
+ * Parses the allowlisted `capabilities` object. Unknown keys are ignored;
+ * missing known keys fall back to their documented defaults.
+ */
+private fun JSONObject.toParticipantCapabilities(): ParticipantCapabilities =
+    ParticipantCapabilities(
+        independentContentVideo = optBoolean("independentContentVideo", false),
+    )
+
+/**
+ * Parses the allowlisted `mediaPolicy` object. A missing `videoMediaEnabled`
+ * defaults to true (no deployed audio-only client predates this signal).
+ */
+private fun JSONObject.toParticipantMediaPolicy(): ParticipantMediaPolicy =
+    ParticipantMediaPolicy(
+        videoMediaEnabled = optBoolean("videoMediaEnabled", true),
+    )

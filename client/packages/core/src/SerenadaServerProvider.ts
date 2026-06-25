@@ -25,6 +25,10 @@ export interface SerenadaServerProviderConfig {
     serverHost: string;
     transports?: TransportKind[];
     logger?: SerenadaLogger;
+    /** Per-session media policy advertised at join. Defaults to `true`. */
+    videoMediaEnabled?: boolean;
+    /** Static content-stream capability advertised at join. Defaults to `false`. */
+    enableIndependentContentVideo?: boolean;
 }
 
 export class SerenadaServerProvider extends SignalingProviderEmitter {
@@ -52,6 +56,8 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             httpBaseUrl: urls.httpBaseUrl,
             transports: config.transports,
             logger: config.logger,
+            videoMediaEnabled: config.videoMediaEnabled,
+            enableIndependentContentVideo: config.enableIndependentContentVideo,
         });
         this.unsubscribeStateChange = this.signaling.onStateChange(() => {
             this.handleStateChange();
@@ -310,6 +316,7 @@ export class SerenadaServerProvider extends SignalingProviderEmitter {
             from,
             type: message.type,
             payload: payload ?? {},
+            sid: typeof message.sid === 'string' && message.sid !== '' ? message.sid : undefined,
         });
     }
 
@@ -358,6 +365,12 @@ function mapParticipant(participant: RoomParticipant): SignalingProviderParticip
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
         connectionStatus: participant.connectionStatus,
+        capabilities: participant.capabilities,
+        mediaPolicy: participant.mediaPolicy,
+        // Carry the persisted snapshot content state so the session can surface
+        // a share that was already active on join/reconnect (reconciled via the
+        // same keep-highest revision rule as live `content_state`).
+        contentState: participant.contentState,
     };
 }
 

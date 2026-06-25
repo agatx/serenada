@@ -16,9 +16,40 @@ internal data class OutboundMediaSample(
     val videoFramesSent: Long,
 )
 
+/**
+ * Cumulative inbound video `bytesReceived` for a peer, split by the bound
+ * transceiver role: [contentBytes] is the inbound-rtp video matched to the
+ * peer's bound CONTENT receiver track; [cameraBytes] is everything else (the
+ * camera role, the single legacy video, and any video not positively
+ * attributable to content). The session diffs these against the previous sample
+ * to derive per-role liveness booleans (camera/content receiving). Audio is
+ * excluded (audio liveness stays in [collectInboundBytes]).
+ */
+internal data class InboundRoleBytes(
+    val cameraBytes: Long,
+    val contentBytes: Long,
+)
+
+/**
+ * Per-role inbound liveness derived from successive [InboundRoleBytes] samples:
+ * a role is `true` when its inbound video bytes advanced since the previous
+ * sample. Surfaced to the public remote participant as
+ * `cameraReceiving` / `contentReceiving`. Both `false` before the first sample
+ * (conservative) and for a peer with no baseline yet.
+ */
+internal data class RoleLiveness(
+    val camera: Boolean = false,
+    val content: Boolean = false,
+)
+
 internal interface PeerConnectionSlotProtocol {
     // Properties
     val remoteCid: String
+    /**
+     * Per-peer independent-content routing flag. True ⇒ this peer carries camera
+     * and screen share on separate transceivers; false ⇒ legacy single-video.
+     */
+    val supportsIndependentContentVideo: Boolean get() = false
     val sentOffer: Boolean
     val isMakingOffer: Boolean
     val pendingIceRestart: Boolean
@@ -45,8 +76,38 @@ internal interface PeerConnectionSlotProtocol {
     // WebRTC operations
     fun setIceServers(servers: List<PeerConnection.IceServer>)
     fun ensurePeerConnection(): Boolean
-    fun attachLocalTracks(audioTrack: AudioTrack?, videoTrack: VideoTrack?)
+
+    /**
+     * Role-aware local-track attach.
+     *
+     * - Legacy peers ([supportsIndependentContentVideo] false): exactly today's
+     *   single-video behavior. [contentTrack] is ignored unless the engine has
+     *   routed the active screen share onto [cameraTrack] for the legacy swap;
+     *   a single video transceiver carries whichever video track is supplied.
+     * - Independent-capable peers ([supportsIndependentContentVideo] true): the
+     *   offer owner pre-creates camera then content video transceivers
+     *   (send-capable up front); the answerer binds roles once by m-line order
+     *   from the applied remote offer. [cameraTrack] attaches to the bound camera
+     *   sender, [contentTrack] to the bound content sender (or stays pending until
+     *   the content transceiver binds).
+     */
+    fun attachLocalTracks(
+        audioTrack: AudioTrack?,
+        cameraTrack: VideoTrack?,
+        contentTrack: VideoTrack? = null,
+        supportsIndependentContentVideo: Boolean = false,
+    )
     fun setAudioTrack(track: AudioTrack?)
+
+    /**
+     * Attach a renderer/sink to this peer's CONTENT (screen share) video track
+     * specifically. For legacy peers this is the single video track when the
+     * peer is presenting content; for independent-capable peers it is the
+     * content-role track bound by m-line order. Camera renderers continue to use
+     * [attachRemoteRenderer]/[attachRemoteSink].
+     */
+    fun attachRemoteContentSink(sink: VideoSink)
+    fun detachRemoteContentSink(sink: VideoSink)
     fun closePeerConnection(deferDispose: Boolean = false)
     fun createOffer(
         iceRestart: Boolean = false,
@@ -85,6 +146,20 @@ internal interface PeerConnectionSlotProtocol {
      * connection is not yet established.
      */
     fun collectInboundBytes(onComplete: (Long) -> Unit)
+
+    /**
+     * Asynchronously samples inbound video `bytesReceived` for this peer, SPLIT
+     * by the bound transceiver role (camera vs content), for the per-role stall
+     * diagnostics (see SerenadaSession role-liveness sampling). Each inbound-rtp
+     * video stat is matched to the bound CONTENT receiver track by
+     * `trackIdentifier`; everything else (camera role, legacy single video, any
+     * video not positively attributable to content) is counted as camera. Audio
+     * is excluded. Reports zeroes when the peer connection is not established.
+     * The per-role counterpart to [collectInboundBytes] (which stays an all-RTP
+     * audio-inclusive sum for the server `media_liveness` eviction-deferral
+     * signal, deliberately unchanged).
+     */
+    fun collectInboundRoleBytes(onComplete: (InboundRoleBytes) -> Unit)
 
     /**
      * Asynchronously samples cumulative outbound media counters and whether

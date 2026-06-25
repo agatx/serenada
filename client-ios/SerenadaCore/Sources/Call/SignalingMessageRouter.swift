@@ -73,7 +73,7 @@ final class SignalingMessageRouter {
         case "offer", "answer", "ice", "media_restart_request":
             onSignalingPayload(message)
         case "content_state":
-            let payload = ContentStatePayload(from: message.payload)
+            let payload = ContentStatePayload(from: message.payload, sid: message.sid)
             onContentState(payload)
         case "error":
             let payload = ErrorPayload(from: message.payload)
@@ -155,8 +155,15 @@ final class SignalingMessageRouter {
                     active: $0.active,
                     contentType: $0.contentType,
                     updatedAtMs: $0.updatedAtMs,
-                    epoch: $0.epoch
+                    epoch: $0.epoch,
+                    revision: $0.revision
                 )
+            },
+            capabilities: p.capabilities.map {
+                ParticipantCapabilities(independentContentVideo: $0.independentContentVideo)
+            },
+            mediaPolicy: p.mediaPolicy.map {
+                ParticipantMediaPolicy(videoMediaEnabled: $0.videoMediaEnabled)
             }
         )
     }
@@ -167,7 +174,8 @@ final class SignalingMessageRouter {
             let fromCid = message.payload?["from"]?.stringValue ?? message.from
             let active = message.payload?["active"]?.boolValue == true
             let contentType = active ? message.payload?["contentType"]?.stringValue : nil
-            onContentState(ContentStatePayload(fromCid: fromCid, active: active, contentType: contentType))
+            let revision = message.payload?["revision"]?.intValue.map(Int64.init)
+            onContentState(ContentStatePayload(fromCid: fromCid, sid: message.sid, active: active, contentType: contentType, revision: revision))
         case "participant_media_state":
             let payload = MediaStatePayload(from: message.payload.map { .object($0) })
             onParticipantMediaState(payload)
@@ -194,12 +202,28 @@ final class SignalingMessageRouter {
 
     // MARK: - Outbound Helpers
 
-    func broadcastContentState(active: Bool, contentType: String? = nil) {
-        var payload: [String: JSONValue] = ["active": .bool(active)]
+    /// Monotonic per-`(cid, sid)` revision for outgoing `content_state`. The
+    /// local sid is fixed for the lifetime of this router, so a single counter
+    /// scopes correctly. Every send (including a rollback `active:false`) uses
+    /// a strictly-greater revision than the message it supersedes.
+    private var outgoingContentRevision: Int64 = 0
+
+    /// Broadcast the local content state with a freshly incremented revision.
+    /// Returns the revision used so the caller can mirror it into local public
+    /// state. Every send (including a rollback `active:false`) gets a strictly
+    /// greater revision than the message it supersedes.
+    @discardableResult
+    func broadcastContentState(active: Bool, contentType: String? = nil) -> Int64 {
+        outgoingContentRevision += 1
+        var payload: [String: JSONValue] = [
+            "active": .bool(active),
+            "revision": .number(Double(outgoingContentRevision)),
+        ]
         if active, let contentType {
             payload["contentType"] = .string(contentType)
         }
         sendMessage("content_state", .object(payload), nil)
+        return outgoingContentRevision
     }
 
     func broadcastMediaState(audioEnabled: Bool, videoEnabled: Bool) {

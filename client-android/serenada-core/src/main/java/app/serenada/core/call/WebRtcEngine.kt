@@ -41,6 +41,11 @@ internal class WebRtcEngine(
     private var isHdVideoExperimentalEnabled: Boolean = false,
     private var isRemoteBlackFrameAnalysisEnabled: Boolean = true,
     private val videoMediaEnabled: Boolean = true,
+    // Local build capability gate. When false (default), every peer uses the
+    // legacy single-video screen-share path and behavior is byte-identical to
+    // today. When true, screen share rides a SEPARATE content track/transceiver
+    // for peers that also advertise the capability (per-peer routing).
+    private val enableIndependentContentVideo: Boolean = false,
     availableCameraModes: List<LocalCameraMode> = app.serenada.core.DEFAULT_CAMERA_MODES,
     private val logger: SerenadaLogger? = null,
 ) : SessionMediaEngine {
@@ -59,12 +64,22 @@ internal class WebRtcEngine(
     private val cameraManager = appContext.getSystemService(CameraManager::class.java)
     private var released = false
 
+    // Camera video: `videoSource`/`localVideoTrack` are the camera path (legacy
+    // names retained). CameraCaptureController writes the camera source.
     private var localVideoTrack: VideoTrack? = null
     private var localAudioTrack: AudioTrack? = null
     private var videoSource: org.webrtc.VideoSource? = null
     private var audioSource: AudioSource? = null
 
+    // Independent-content path (flag ON only): a SEPARATE source/track carries
+    // the screen share. ScreenShareController writes the content source. The
+    // content track is also the "pending" track attached to capable peers as
+    // their content transceiver binds. Never touched on the legacy path.
+    private var localContentVideoSource: org.webrtc.VideoSource? = null
+    private var localContentVideoTrack: VideoTrack? = null
+
     private val localSinks = LinkedHashSet<VideoSink>()
+    private val localContentSinks = LinkedHashSet<VideoSink>()
     private val peerSlots = LinkedHashSet<PeerConnectionSlot>()
     private val peerConnectionDisposeQueue = PeerConnectionDisposeQueue()
 
@@ -96,10 +111,25 @@ internal class WebRtcEngine(
         onScreenShareStopped = onScreenShareStopped,
         onStateChanged = { isSharing ->
             applyVideoSenderParameters()
-            if (isSharing) {
+            // Legacy share repurposes the single camera sender, so it flips the
+            // facing indicator. Independent share leaves the camera untouched, so
+            // the facing state must NOT change (pitfall #6).
+            if (isSharing && !enableIndependentContentVideo) {
                 onCameraFacingChanged(false)
             }
+            // Independent stop (programmatic OR external MediaProjection onStop):
+            // the controller has stopped capture, so tear down the content track
+            // and detach it from every peer here. This is the single engine-side
+            // content teardown point, so the external-stop path detaches peers
+            // too (the session's onScreenShareStopped only handles signaling).
+            // Idempotent: dispose null-checks and the per-peer attach with
+            // content=null is a no-op when already detached.
+            if (!isSharing && enableIndependentContentVideo) {
+                tearDownContentAndDetach()
+            }
         },
+        independentContentEnabled = enableIndependentContentVideo,
+        contentCapturerObserverProvider = { localContentVideoSource?.capturerObserver },
         logger = logger,
     )
 
@@ -213,9 +243,7 @@ internal class WebRtcEngine(
         localAudioTrack?.let { audioPipelinePrimer.start(it) }
 
         if (!videoMediaEnabled || cameraController.availableCameraModes.isEmpty()) {
-            peerSlots.forEach { slot ->
-                slot.attachLocalTracks(localAudioTrack, null)
-            }
+            peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
             return
         }
 
@@ -230,9 +258,70 @@ internal class WebRtcEngine(
             }
         }
         ensureLocalVideoTrack(enabled = startedVideo)
-        peerSlots.forEach { slot ->
-            slot.attachLocalTracks(localAudioTrack, localVideoTrack)
+        peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+    }
+
+    /**
+     * Route the current local tracks to a slot per its per-peer capability.
+     *
+     * - Capable peer: camera track → camera role, content track → content role
+     *   (camera and screen share simultaneously).
+     * - Legacy peer: a SINGLE video track. While an independent share is active
+     *   the screen takes priority over camera on that connection (matches
+     *   today's legacy precedence), otherwise the camera track is used. This is
+     *   the only place the legacy single-sender precedence is decided, so camera
+     *   ops never clobber a legacy peer's content sender during a share
+     *   (pitfall #7).
+     */
+    private fun attachLocalTracksToSlot(slot: PeerConnectionSlot) {
+        if (slot.supportsIndependentContentVideo) {
+            slot.attachLocalTracks(
+                audioTrack = localAudioTrack,
+                cameraTrack = localVideoTrack,
+                contentTrack = localContentVideoTrack,
+                supportsIndependentContentVideo = true,
+            )
+        } else {
+            val legacyVideoTrack =
+                if (screenShareController.isScreenSharing && localContentVideoTrack != null) {
+                    localContentVideoTrack
+                } else {
+                    localVideoTrack
+                }
+            slot.attachLocalTracks(
+                audioTrack = localAudioTrack,
+                cameraTrack = legacyVideoTrack,
+                contentTrack = null,
+                supportsIndependentContentVideo = false,
+            )
         }
+    }
+
+    private fun ensureContentVideoSource(): org.webrtc.VideoSource {
+        return localContentVideoSource
+            ?: peerConnectionFactory.createVideoSource(true).also { localContentVideoSource = it }
+    }
+
+    private fun ensureLocalContentVideoTrack(): VideoTrack {
+        localContentVideoTrack?.let { track ->
+            track.setEnabled(true)
+            return track
+        }
+        return peerConnectionFactory.createVideoTrack("ARDAMScontent0", ensureContentVideoSource()).also { track ->
+            track.setEnabled(true)
+            localContentSinks.forEach { sink -> track.addSink(sink) }
+            localContentVideoTrack = track
+        }
+    }
+
+    private fun disposeLocalContentVideoTrack() {
+        localContentVideoTrack?.let { track ->
+            localContentSinks.forEach { sink -> track.removeSink(sink) }
+            track.dispose()
+        }
+        localContentVideoTrack = null
+        localContentVideoSource?.dispose()
+        localContentVideoSource = null
     }
 
     private fun ensureVideoSource(): org.webrtc.VideoSource {
@@ -268,6 +357,7 @@ internal class WebRtcEngine(
         localAudioTrack?.setEnabled(false)
         cameraController.disposeVideoCapturer()
         disposeLocalVideoTrack()
+        disposeLocalContentVideoTrack()
         // Tear down the primer before disposing its audio track — closing the
         // PC first releases the sender's reference to the track.
         audioPipelinePrimer.stop()
@@ -286,6 +376,7 @@ internal class WebRtcEngine(
         peerSlots.clear()
         stopLocalMedia()
         localSinks.clear()
+        localContentSinks.clear()
         peerConnectionDisposeQueue.flush(shutdownAfterDrain = true) {
             runCatching { peerConnectionFactory.dispose() }
             runCatching { audioDeviceModule.release() }
@@ -318,25 +409,34 @@ internal class WebRtcEngine(
         localAudioTrack?.setEnabled(enabled)
     }
 
+    /**
+     * True only while a LEGACY single-video screen share is active (the display
+     * track has repurposed the single camera sender). In INDEPENDENT mode this is
+     * always false, so camera ops (toggle/flip/restart) keep working during a
+     * share — the screen rides a separate content track (pitfall #6).
+     */
+    private val isLegacyScreenSharing: Boolean
+        get() = screenShareController.isScreenSharing && !enableIndependentContentVideo
+
     override fun toggleVideo(enabled: Boolean): Boolean {
         if (!videoMediaEnabled) {
             localVideoTrack?.setEnabled(false)
             return false
         }
-        if (enabled && cameraController.availableCameraModes.isEmpty() && !screenShareController.isScreenSharing) {
+        if (enabled && cameraController.availableCameraModes.isEmpty() && !isLegacyScreenSharing) {
             localVideoTrack?.setEnabled(false)
             return false
         }
-        if (enabled && !screenShareController.isScreenSharing && cameraController.videoCapturer == null) {
+        if (enabled && !isLegacyScreenSharing && cameraController.videoCapturer == null) {
             if (!restartVideoCapturerWithFallback(cameraController.currentCameraSource)) {
                 localVideoTrack?.setEnabled(false)
                 return false
             }
         }
-        if (!enabled && !screenShareController.isScreenSharing) {
+        if (!enabled && !isLegacyScreenSharing) {
             cameraController.disposeVideoCapturer()
         }
-        val effectiveEnabled = enabled && (cameraController.videoCapturer != null || screenShareController.isScreenSharing)
+        val effectiveEnabled = enabled && (cameraController.videoCapturer != null || isLegacyScreenSharing)
         localVideoTrack?.setEnabled(effectiveEnabled)
         return effectiveEnabled
     }
@@ -386,6 +486,16 @@ internal class WebRtcEngine(
 
     override fun startScreenShare(intent: Intent): Boolean {
         if (!videoMediaEnabled) return false
+        return if (enableIndependentContentVideo) {
+            startScreenShareIndependent(intent)
+        } else {
+            startScreenShareLegacy(intent)
+        }
+    }
+
+    // --- Legacy single-video screen share (flag OFF): byte-identical to today ---
+
+    private fun startScreenShareLegacy(intent: Intent): Boolean {
         val createdVideoTrack = localVideoTrack == null
         ensureLocalVideoTrack(enabled = false)
         val started = screenShareController.startScreenShare(intent)
@@ -396,21 +506,74 @@ internal class WebRtcEngine(
             return false
         }
         localVideoTrack?.setEnabled(true)
-        peerSlots.forEach { slot ->
-            slot.attachLocalTracks(localAudioTrack, localVideoTrack)
-        }
+        peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
         return true
     }
 
-    override fun stopScreenShare(): Boolean {
+    private fun stopScreenShareLegacy(): Boolean {
         val stopped = screenShareController.stopScreenShare()
         if (stopped && !cameraController.canCaptureVideo) {
             localVideoTrack?.setEnabled(false)
-            peerSlots.forEach { slot ->
-                slot.attachLocalTracks(localAudioTrack, null)
-            }
+            peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
         }
         return stopped
+    }
+
+    // --- Independent content screen share (flag ON): separate content track ---
+
+    private fun startScreenShareIndependent(intent: Intent): Boolean {
+        // Create the content source/track first (also the pending track), then
+        // hand the content source's observer to the controller. The camera path
+        // is untouched.
+        val createdContentTrack = localContentVideoTrack == null
+        ensureLocalContentVideoTrack()
+        val started = screenShareController.startScreenShare(intent)
+        if (!started) {
+            if (createdContentTrack) disposeLocalContentVideoTrack()
+            return false
+        }
+        // Per-peer attach: capable peers get the content track on their content
+        // sender (or pending until bound); legacy peers get it swapped onto the
+        // single video sender. Camera tracks to capable peers are NOT touched.
+        peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+        return true
+    }
+
+    private fun stopScreenShareIndependent(): Boolean {
+        // Shared idempotent stop path. The controller's stop releases the
+        // capturer and fires onStateChanged(false), which runs
+        // tearDownContentAndDetach() (detach peers + dispose the content track).
+        // A second entry via MediaProjection onStop is a no-op (controller latch).
+        return screenShareController.stopScreenShare()
+    }
+
+    /**
+     * Engine-side content teardown: detach the content track from every peer
+     * (capable: content sender → null; legacy: restore camera on the single
+     * sender) and release the content source/track. Idempotent — runs once per
+     * logical stop via the controller's onStateChanged(false), covering both the
+     * programmatic stop and the external MediaProjection onStop.
+     */
+    private fun tearDownContentAndDetach() {
+        if (localContentVideoTrack == null && localContentVideoSource == null) return
+        localContentVideoTrack?.setEnabled(false)
+        disposeLocalContentVideoTrack()
+        peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+        // Restore camera sender params on any legacy slot that carried content
+        // during the share (FIX 2 restore leg). With the content track now gone,
+        // videoSenderPolicyForSlot reverts to the camera profile; re-apply
+        // unconditionally so a legacy sender restores even when the camera is off
+        // (the conditional re-apply inside attachLocalTracks only fires when a
+        // camera track is present). Mirrors web's restoreLegacySenderCameraEncoding.
+        applyVideoSenderParameters()
+    }
+
+    override fun stopScreenShare(): Boolean {
+        return if (enableIndependentContentVideo) {
+            stopScreenShareIndependent()
+        } else {
+            stopScreenShareLegacy()
+        }
     }
 
     fun setRemoteBlackFrameAnalysisEnabled(enabled: Boolean) {
@@ -425,7 +588,17 @@ internal class WebRtcEngine(
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
+        supportsIndependentContentVideo: Boolean,
+        isOfferOwner: () -> Boolean,
     ): PeerConnectionSlotProtocol {
+        // Defense in depth: a slot is only independent-routed when the local
+        // build flag is on too (the session already ANDs these, but keep the
+        // engine authoritative so flag-off is byte-identical).
+        val independentRouted = enableIndependentContentVideo && supportsIndependentContentVideo
+        // Captured lazily so the slot's own video sender policy tracks whether
+        // THIS (legacy) slot is currently carrying the content track during an
+        // independent share (FIX 2). Initialized right after construction.
+        var policySlot: PeerConnectionSlot? = null
         val slot = PeerConnectionSlot(
             remoteCid = remoteCid,
             factory = peerConnectionFactory,
@@ -440,14 +613,24 @@ internal class WebRtcEngine(
             onSignalingStateChange = onSignalingStateChange,
             onRenegotiationNeeded = onRenegotiationNeeded,
             applyAudioSenderParameters = ::applyAudioSenderParameters,
-            currentVideoSenderPolicy = ::activeVideoSenderPolicy,
+            currentVideoSenderPolicy = { policySlot?.let { videoSenderPolicyForSlot(it) } ?: activeVideoSenderPolicy() },
             isRemoteBlackFrameAnalysisEnabled = { isRemoteBlackFrameAnalysisEnabled },
             peerConnectionDisposeQueue = peerConnectionDisposeQueue,
+            supportsIndependentContentVideo = independentRouted,
+            isOfferOwner = isOfferOwner,
+            contentSenderPolicy = ::contentVideoSenderPolicy,
             logger = logger,
         )
+        policySlot = slot
         peerSlots.add(slot)
         if (!iceServers.isNullOrEmpty()) {
             slot.ensurePeerConnection()
+        }
+        // A peer created mid-share must pick up the active content: capable peers
+        // via the content sender / pending-track mechanism, legacy peers via the
+        // single-sender swap (pitfall #5). attachLocalTracksToSlot routes both.
+        if (localAudioTrack != null || localVideoTrack != null || localContentVideoTrack != null) {
+            attachLocalTracksToSlot(slot)
         }
         return slot
     }
@@ -476,6 +659,16 @@ internal class WebRtcEngine(
     override fun detachLocalSink(sink: VideoSink) {
         localVideoTrack?.removeSink(sink)
         localSinks.remove(sink)
+    }
+
+    override fun attachLocalContentSink(sink: VideoSink) {
+        if (!localContentSinks.add(sink)) return
+        localContentVideoTrack?.addSink(sink)
+    }
+
+    override fun detachLocalContentSink(sink: VideoSink) {
+        localContentVideoTrack?.removeSink(sink)
+        localContentSinks.remove(sink)
     }
 
     override fun initRenderer(
@@ -519,20 +712,49 @@ internal class WebRtcEngine(
     }
 
     private fun applyVideoSenderParameters() {
-        val policy = activeVideoSenderPolicy()
         peerSlots.forEach { slot ->
-            slot.applyVideoSenderParameters(policy)
+            slot.applyVideoSenderParameters(videoSenderPolicyForSlot(slot))
         }
     }
 
+    /**
+     * Per-slot video sender policy (FIX 2). A LEGACY slot's SINGLE video sender
+     * carries the content (display) track during an independent share
+     * (attachLocalTracksToSlot legacy precedence). Because [isLegacyScreenSharing]
+     * is false in independent mode, [activeVideoSenderPolicy] would hand it the
+     * CAMERA profile. Give that sender the conservative screen-content profile
+     * instead (mirrors web's applyLegacyContentSenderEncoding); on share stop the
+     * camera track returns to the sender and it reverts to the camera profile
+     * (mirrors restoreLegacySenderCameraEncoding). Capable slots keep
+     * [activeVideoSenderPolicy]: the slot internally applies the camera policy to
+     * the camera sender and its own content profile to the content sender.
+     *
+     * Keyed on what the sender is carrying (legacy slot + active independent
+     * share) rather than [isLegacyScreenSharing], which is false in independent
+     * mode. Flag-off inert: never reached for a legacy share (that branch goes
+     * through [isLegacyScreenSharing] in [activeVideoSenderPolicy]).
+     */
+    private fun videoSenderPolicyForSlot(slot: PeerConnectionSlot): VideoSenderPolicy {
+        if (
+            enableIndependentContentVideo &&
+            !slot.supportsIndependentContentVideo &&
+            screenShareController.isScreenSharing &&
+            localContentVideoTrack != null
+        ) {
+            return contentVideoSenderPolicy()
+        }
+        return activeVideoSenderPolicy()
+    }
+
+    /**
+     * Camera-sender policy. In LEGACY screen share the single sender carries the
+     * display track, so it gets the screen-share profile. In INDEPENDENT mode the
+     * camera sender keeps its camera profile (the content sender carries its own
+     * profile via [contentVideoSenderPolicy]).
+     */
     private fun activeVideoSenderPolicy(): VideoSenderPolicy {
-        if (screenShareController.isScreenSharing) {
-            return VideoSenderPolicy(
-                maxBitrateBps = SCREEN_SHARE_MAX_BITRATE_BPS,
-                minBitrateBps = SCREEN_SHARE_MIN_BITRATE_BPS,
-                maxFramerate = ScreenShareController.SCREEN_SHARE_TARGET_FPS,
-                degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
-            )
+        if (isLegacyScreenSharing) {
+            return screenShareSenderPolicy()
         }
         if (!isHdVideoExperimentalEnabled) {
             return VideoSenderPolicy(
@@ -558,6 +780,25 @@ internal class WebRtcEngine(
             )
         }
     }
+
+    private fun screenShareSenderPolicy(): VideoSenderPolicy = VideoSenderPolicy(
+        maxBitrateBps = SCREEN_SHARE_MAX_BITRATE_BPS,
+        minBitrateBps = SCREEN_SHARE_MIN_BITRATE_BPS,
+        maxFramerate = ScreenShareController.SCREEN_SHARE_TARGET_FPS,
+        degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+    )
+
+    /**
+     * Conservative content (screen share) sender profile for the independent
+     * content transceiver: legibility of mostly-static content over motion
+     * (~1080p / ~5 fps / modest bitrate, design "Content encoding profile").
+     */
+    private fun contentVideoSenderPolicy(): VideoSenderPolicy = VideoSenderPolicy(
+        maxBitrateBps = ScreenShareController.CONTENT_MAX_BITRATE_BPS,
+        minBitrateBps = ScreenShareController.CONTENT_MIN_BITRATE_BPS,
+        maxFramerate = ScreenShareController.CONTENT_TARGET_FPS,
+        degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+    )
 
     private companion object {
         val WEBRTC_LOGGING_ENABLED = AtomicBoolean(false)

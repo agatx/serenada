@@ -31,6 +31,7 @@ export type {
     PeerConnectionState,
     Participant,
     LocalParticipant,
+    ParticipantContent,
     CallError,
     CallErrorCode,
     CallState,

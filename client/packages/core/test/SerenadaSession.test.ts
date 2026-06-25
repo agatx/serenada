@@ -1306,13 +1306,20 @@ describe('SerenadaSession', () => {
             expect(broadcasts[0].payload).toEqual({ cids: ['peer-1'] });
         });
 
-        it('skips broadcast when no peer is currently flowing', async () => {
+        it('still emits an empty media_liveness heartbeat when nothing is flowing, so the server can reap ghosts', async () => {
             await joinWithRemotes(['peer-1']);
             harness.media.inboundFlowingCids = [];
 
-            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS * 3);
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS + 50);
 
-            expect(livenessBroadcasts()).toHaveLength(0);
+            // A lone survivor whose peers all dropped at once has no inbound
+            // flow, but must keep reporting as a fresh reporter so the server's
+            // suspended-ghost sweep can evict the departed peers (and the
+            // survivor can converge out of the "Reconnecting" / N-person view).
+            // The heartbeat carries an empty cid list — it sees media from no one.
+            const broadcasts = livenessBroadcasts();
+            expect(broadcasts.length).toBeGreaterThanOrEqual(1);
+            expect(broadcasts[0].payload).toEqual({ cids: [] });
             expect(harness.media.getInboundFlowingCidsCalls).toBeGreaterThan(0);
         });
 
@@ -1347,6 +1354,31 @@ describe('SerenadaSession', () => {
             await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS * 3);
 
             expect(livenessBroadcasts().length).toBe(baseline);
+        });
+
+        // GAP 2: per-role stall diagnostics surface on the public remote
+        // participant. The session samples per-role liveness on the same cadence
+        // and exposes `cameraReceiving` / `contentReceiving`; a consumer derives
+        // "content stalled" = content.active && !contentReceiving.
+        it('surfaces per-role cameraReceiving/contentReceiving on remote participants from the liveness sample', async () => {
+            await joinWithRemotes(['peer-1']);
+            // Camera flowing, content stalled.
+            harness.media.roleLiveness.set('peer-1', { camera: true, content: false });
+
+            // Before the first tick the fields default to false.
+            const before = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
+            expect(before?.cameraReceiving).toBe(false);
+            expect(before?.contentReceiving).toBe(false);
+
+            await vi.advanceTimersByTimeAsync(MEDIA_LIVENESS_INTERVAL_MS + 50);
+
+            expect(harness.media.sampleInboundRoleLivenessCalls).toBeGreaterThan(0);
+            const after = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
+            expect(after?.cameraReceiving).toBe(true);
+            expect(after?.contentReceiving).toBe(false);
+            // "content stalled" derivation given an active content state.
+            const contentActive = true;
+            expect(contentActive && !after!.contentReceiving).toBe(true);
         });
     });
 

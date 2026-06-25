@@ -1,6 +1,7 @@
 package app.serenada.core.fakes
 
 import android.content.Intent
+import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.SessionMediaEngine
 import org.webrtc.EglBase
@@ -29,9 +30,37 @@ internal class FakeMediaEngine : SessionMediaEngine {
 
     private var _iceServers: List<PeerConnection.IceServer>? = null
 
+    // Camera capture starts (true = video capture requested). Tracked SEPARATELY
+    // from content (screen share) starts so tests can assert camera vs content
+    // lifecycle independently in independent mode.
     val startVideoCaptureCalls = mutableListOf<Boolean>()
+    // Content (screen share) start/stop counts. In independent mode these are the
+    // CONTENT track lifecycle; they never increment camera counts.
     var startScreenShareCalls = 0
         private set
+    var stopScreenShareCalls = 0
+        private set
+    /** Alias for content-start count, to read clearly in independent-mode tests. */
+    val contentShareStartCalls: Int get() = startScreenShareCalls
+    /** Alias for content-stop count. */
+    val contentShareStopCalls: Int get() = stopScreenShareCalls
+    // Per-peer capability params seen at slot creation (cid → supported / policy).
+    val createdSlotSupportsIndependent = mutableMapOf<String, Boolean>()
+    val createdSlotOfferOwner = mutableMapOf<String, Boolean>()
+    // Result the fake reports for screen-share start/stop. Defaults to success
+    // so session-level content_state/revision flow can be exercised.
+    var startScreenShareResult = true
+    var stopScreenShareResult = true
+    // When true, startScreenShare / stopScreenShare drive the per-peer content
+    // attach loop on the modeled fake slots (capable peers only), mirroring the
+    // real WebRtcEngine's `peerSlots.forEach { attachLocalTracksToSlot }`. Lets
+    // session-level tests observe per-peer attach-failure ISOLATION (a failing
+    // peer renegotiates while a healthy peer carries the share) without a real
+    // VideoTrack. Off by default so existing tests are unaffected.
+    var modelIndependentContentAttach = false
+
+    val attachLocalContentSinkCalls = mutableListOf<VideoSink>()
+    val detachLocalContentSinkCalls = mutableListOf<VideoSink>()
 
     override fun startLocalMedia(startVideoCapture: Boolean) {
         startLocalMediaCalls++
@@ -44,11 +73,37 @@ internal class FakeMediaEngine : SessionMediaEngine {
         return enabled
     }
     override fun flipCamera() {}
+
+    /**
+     * Engine-side active camera mode. Tests set this to simulate the camera being
+     * in WORLD/COMPOSITE while an independent screen share runs, so the session's
+     * post-stop camera-hint restore can be asserted. Null mirrors a no-camera
+     * engine (the session then falls back to its own [LocalCameraMode] copy).
+     */
+    var activeCameraMode: LocalCameraMode? = null
+    override fun activeCameraMode(): LocalCameraMode? = activeCameraMode
     override fun startScreenShare(intent: Intent): Boolean {
         startScreenShareCalls++
-        return false
+        if (startScreenShareResult && modelIndependentContentAttach) {
+            // Per-peer attach: only capable slots get the content track on their
+            // content sender (mirrors attachLocalTracksToSlot's capable branch).
+            // A per-slot failNextContentAttach turns that peer's attach into a
+            // reject + renegotiation; other peers are unaffected (isolation).
+            fakeSlots.values
+                .filter { it.supportsIndependentContentVideo }
+                .forEach { it.simulateContentAttach(attach = true) }
+        }
+        return startScreenShareResult
     }
-    override fun stopScreenShare(): Boolean = false
+    override fun stopScreenShare(): Boolean {
+        stopScreenShareCalls++
+        if (stopScreenShareResult && modelIndependentContentAttach) {
+            fakeSlots.values
+                .filter { it.supportsIndependentContentVideo }
+                .forEach { it.simulateContentAttach(attach = false) }
+        }
+        return stopScreenShareResult
+    }
 
     override fun setIceServers(servers: List<PeerConnection.IceServer>) {
         _iceServers = servers
@@ -66,8 +121,12 @@ internal class FakeMediaEngine : SessionMediaEngine {
         onIceConnectionStateChange: (String, PeerConnection.IceConnectionState) -> Unit,
         onSignalingStateChange: (String, PeerConnection.SignalingState) -> Unit,
         onRenegotiationNeeded: (String) -> Unit,
+        supportsIndependentContentVideo: Boolean,
+        isOfferOwner: () -> Boolean,
     ): PeerConnectionSlotProtocol {
         createdSlotCids.add(remoteCid)
+        createdSlotSupportsIndependent[remoteCid] = supportsIndependentContentVideo
+        createdSlotOfferOwner[remoteCid] = isOfferOwner()
         val slot = FakePeerConnectionSlot(
             remoteCid = remoteCid,
             onLocalIceCandidate = onLocalIceCandidate,
@@ -75,6 +134,7 @@ internal class FakeMediaEngine : SessionMediaEngine {
             onIceConnectionStateChange = onIceConnectionStateChange,
             onSignalingStateChange = onSignalingStateChange,
             onRenegotiationNeeded = onRenegotiationNeeded,
+            supportsIndependentContentVideo = supportsIndependentContentVideo,
         )
         if (failNextCreatedSlotRemoteOffer) {
             slot.failNextRemoteOffer = true
@@ -107,6 +167,12 @@ internal class FakeMediaEngine : SessionMediaEngine {
     }
     override fun detachLocalSink(sink: VideoSink) {
         detachLocalSinkCalls += sink
+    }
+    override fun attachLocalContentSink(sink: VideoSink) {
+        attachLocalContentSinkCalls += sink
+    }
+    override fun detachLocalContentSink(sink: VideoSink) {
+        detachLocalContentSinkCalls += sink
     }
     override fun initRenderer(renderer: SurfaceViewRenderer, rendererEvents: RendererCommon.RendererEvents?) {}
     override fun adjustWorldCameraZoom(scaleFactor: Float): Boolean = false

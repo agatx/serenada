@@ -1,4 +1,4 @@
-import type { ParticipantConnectionStatus } from './signaling/types.js';
+import type { ParticipantCapabilities, ParticipantConnectionStatus, ParticipantContentState, ParticipantMediaPolicy } from './signaling/types.js';
 
 export interface ProviderCapabilities {
     handlesReconnection?: boolean;
@@ -30,6 +30,17 @@ export interface SignalingProviderParticipant {
     videoEnabled?: boolean;
     // Wire-reported signaling transport status. Absent = active.
     connectionStatus?: ParticipantConnectionStatus;
+    /** Capabilities the participant advertised at join (allowlisted server-side). */
+    capabilities?: ParticipantCapabilities;
+    /** Per-session media policy the participant advertised at join. */
+    mediaPolicy?: ParticipantMediaPolicy;
+    /**
+     * Latest persisted content (screen share) presentation state from the room
+     * snapshot in `joined`/`room_state`. Lets a joining/reconnecting peer
+     * surface a share that started before it had a transport, reconciled via the
+     * same keep-highest revision rule as live `content_state`.
+     */
+    contentState?: ParticipantContentState;
 }
 
 export interface JoinedEvent {
@@ -57,6 +68,13 @@ export interface PeerMessage {
     from: string;
     type: string;
     payload: unknown;
+    /**
+     * Sender's signaling session id from the wire envelope, when the provider
+     * surfaces it. Used to scope per-`(cid, sid)` ordering of `content_state`
+     * revisions so a rejoin restarting at `revision:1` is accepted by identity.
+     * Absent when the provider does not carry a session id.
+     */
+    sid?: string;
 }
 
 export interface RoomEndedEvent {

@@ -119,6 +119,8 @@ export class TestSessionHarness {
                 peerId: participant.cid,
                 joinedAt: participant.joinedAt,
                 connectionStatus: participant.connectionStatus,
+                capabilities: participant.capabilities,
+                mediaPolicy: participant.mediaPolicy,
             })),
             maxParticipants: roomState.maxParticipants,
         });

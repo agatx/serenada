@@ -542,4 +542,101 @@ final class SerenadaServerProviderTests: XCTestCase {
         XCTAssertNil(signaling.sentMessages.last?.to)
         XCTAssertEqual(signaling.sentMessages.last?.payload?.objectValue?["active"]?.boolValue, true)
     }
+
+    // MARK: - Independent content video: join advertisement
+
+    func testJoinDefaultsAdvertiseIndependentContentVideoFalseAndVideoPolicyTrue() throws {
+        // Phase 1: the flag is off by default → independentContentVideo=false,
+        // and the session-media policy defaults to videoMediaEnabled=true.
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        signaling.simulateOpen()
+
+        let joinMessage = try XCTUnwrap(signaling.sentMessages.last)
+        let capabilities = try XCTUnwrap(joinMessage.payload?.objectValue?["capabilities"]?.objectValue)
+        XCTAssertEqual(capabilities["independentContentVideo"]?.boolValue, false)
+        XCTAssertEqual(capabilities["trickleIce"]?.boolValue, true)
+        XCTAssertEqual(capabilities["maxParticipants"]?.intValue, 4)
+
+        let mediaPolicy = try XCTUnwrap(joinMessage.payload?.objectValue?["mediaPolicy"]?.objectValue)
+        XCTAssertEqual(mediaPolicy["videoMediaEnabled"]?.boolValue, true)
+    }
+
+    func testJoinThreadsCapabilityAndPolicyFromOptions() throws {
+        provider.joinRoom(
+            "room-1",
+            options: JoinOptions(maxParticipants: 4, independentContentVideo: true, videoMediaEnabled: false)
+        )
+        signaling.simulateOpen()
+
+        let joinMessage = try XCTUnwrap(signaling.sentMessages.last)
+        XCTAssertEqual(
+            joinMessage.payload?.objectValue?["capabilities"]?.objectValue?["independentContentVideo"]?.boolValue,
+            true
+        )
+        XCTAssertEqual(
+            joinMessage.payload?.objectValue?["mediaPolicy"]?.objectValue?["videoMediaEnabled"]?.boolValue,
+            false
+        )
+    }
+
+    // MARK: - Independent content video: inbound sid threading
+
+    func testRelayedContentStateSurfacesSenderSidOnPeerMessage() throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        signaling.simulateOpen()
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "content_state",
+                rid: "room-1",
+                sid: "S-sender-9",
+                cid: "peer-a",
+                payload: .object([
+                    "from": .string("peer-a"),
+                    "active": .bool(true),
+                    "contentType": .string("screenShare"),
+                    "revision": .number(4),
+                ])
+            )
+        )
+
+        let peerMessage = try XCTUnwrap(delegate.peerMessages.last)
+        XCTAssertEqual(peerMessage.type, "content_state")
+        XCTAssertEqual(peerMessage.from, "peer-a")
+        XCTAssertEqual(peerMessage.sid, "S-sender-9", "sender sid must reach the session for (cid, sid) revision tracking")
+        XCTAssertEqual(peerMessage.payload?["revision"]?.intValue, 4)
+    }
+
+    func testInboundParticipantCapabilitiesAndPolicyReachJoinedEvent() throws {
+        provider.joinRoom("room-1", options: JoinOptions(maxParticipants: 4))
+        signaling.simulateOpen()
+
+        signaling.simulateMessage(
+            SignalingMessage(
+                type: "joined",
+                rid: "room-1",
+                cid: "local-cid",
+                payload: .object([
+                    "hostCid": .string("local-cid"),
+                    "participants": .array([
+                        .object([
+                            "cid": .string("local-cid"),
+                            "joinedAt": .number(1),
+                        ]),
+                        .object([
+                            "cid": .string("peer-a"),
+                            "joinedAt": .number(2),
+                            "capabilities": .object(["independentContentVideo": .bool(true)]),
+                            "mediaPolicy": .object(["videoMediaEnabled": .bool(false)]),
+                        ]),
+                    ]),
+                ])
+            )
+        )
+
+        let joined = try XCTUnwrap(delegate.joinedEvents.last)
+        let peer = try XCTUnwrap(joined.participants.first(where: { $0.peerId == "peer-a" }))
+        XCTAssertEqual(peer.capabilities?.independentContentVideo, true)
+        XCTAssertEqual(peer.mediaPolicy?.videoMediaEnabled, false)
+    }
 }

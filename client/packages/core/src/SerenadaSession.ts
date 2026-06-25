@@ -10,6 +10,7 @@ import type {
     ConnectionStatus,
     DropoutTrigger,
     MediaCapability,
+    ParticipantContent,
     SerenadaConfig,
     SerenadaSessionHandle,
     SignalingState,
@@ -52,7 +53,31 @@ import {
     SUSPEND_HARD_EVICTION_TIMEOUT_MS,
 } from './constants.js';
 import { formatError } from './formatError.js';
-import type { RoomParticipant, RoomState, SignalingMessage } from './signaling/types.js';
+import type {
+    ParticipantCapabilities,
+    ParticipantMediaPolicy,
+    RoomParticipant,
+    RoomState,
+    SignalingMessage,
+} from './signaling/types.js';
+
+/**
+ * Internal per-remote content tracking record. `content` is the public-facing
+ * presentation state; `sid` and `revision` scope the ordering of incoming
+ * `content_state` messages per the wire contract.
+ */
+interface TrackedRemoteContent {
+    content: ParticipantContent;
+    /**
+     * Owning session id of the tracked state, when the provider surfaced one. A
+     * `content_state` carrying a different `sid` supersedes by identity; an
+     * `undefined` sid is treated as the same logical session for comparison
+     * (web peer-relay may not carry the sid envelope field).
+     */
+    sid: string | undefined;
+    /** Highest accepted revision within the tracked `sid`. */
+    revision: number;
+}
 
 interface SessionDependencies {
     media?: MediaEngine;
@@ -114,6 +139,12 @@ function toRoomParticipant(participant: SignalingProviderParticipant): RoomParti
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
         connectionStatus: participant.connectionStatus,
+        capabilities: participant.capabilities,
+        mediaPolicy: participant.mediaPolicy,
+        // Carried through verbatim so the snapshot content state (a peer already
+        // sharing on join/reconnect) survives the provider boundary; the session
+        // reconciles it via the live keep-highest revision rule.
+        contentState: participant.contentState,
     };
 }
 
@@ -293,6 +324,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
     private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean }>();
+    // Remote capabilities/mediaPolicy advertised at join, keyed by CID. Stored
+    // verbatim (allowlisted upstream); consumers apply defaults for missing
+    // keys. Phase 1: stored only — no media behavior keys off these yet.
+    private readonly remoteCapabilities = new Map<string, ParticipantCapabilities>();
+    private readonly remoteMediaPolicies = new Map<string, ParticipantMediaPolicy>();
+    // Latest accepted content (screen share) presentation state per remote CID,
+    // with the (cid, sid) + revision used to order incoming `content_state`.
+    // A new sid supersedes by identity; within a sid the highest revision wins.
+    private readonly remoteContentStates = new Map<string, TrackedRemoteContent>();
     private readonly availableCameraModes: ConfigurableCameraMode[];
     private userPreferredVideoEnabled: boolean;
 
@@ -360,6 +400,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 initialVideoEnabled: this.userPreferredVideoEnabled,
                 videoCaptureSupported: this.availableCameraModes.length > 0,
                 videoMediaEnabled,
+                enableIndependentContentVideo: config.enableIndependentContentVideo === true,
                 deferInitialAnswer: config.deferInitialAnswer === true,
             },
             (type, payload, to) => {
@@ -400,6 +441,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
     get localStream(): MediaStream | null { return this.media.localStream; }
     /** Map of remote participant CID to their media stream. */
     get remoteStreams(): Map<string, MediaStream> { return this.media.remoteStreams; }
+    /** Remote camera stream for a participant (independent mode), else legacy. */
+    getRemoteCameraStream(cid: string): MediaStream | undefined { return this.media.getRemoteCameraStream(cid); }
+    /** Remote content (screen share) stream for a participant, if negotiated. */
+    getRemoteContentStream(cid: string): MediaStream | undefined { return this.media.getRemoteContentStream(cid); }
+    /** Legacy camera stream accessor (same as remoteStreams.get(cid)). */
+    getRemoteStream(cid: string): MediaStream | undefined { return this.media.getRemoteStream(cid); }
+    /** Local content (screen share) stream for optional local preview. */
+    getLocalContentStream(): MediaStream | null { return this.media.getLocalContentStream(); }
     /** Current WebRTC call statistics, or `null` if not yet collecting. */
     get callStats(): CallStats | null { return this.statsCollector.stats; }
     /**
@@ -488,6 +537,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.statsCollector.stop();
         this.roomState = null;
         this.remoteMediaStates.clear();
+        this.clearRemoteContentTracking();
         this._state = { ...this._state, phase: 'idle' };
         this.notifyListeners();
         this.destroy();
@@ -735,6 +785,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.remoteMediaStates.delete(event.peerId);
+        this.remoteCapabilities.delete(event.peerId);
+        this.remoteMediaPolicies.delete(event.peerId);
+        this.remoteContentStates.delete(event.peerId);
         this.roomState = removeParticipant(this.roomState, event.peerId, this.clientId);
         this.media.updateRoomState(this.roomState, this.clientId);
         this.rebuildState();
@@ -749,6 +802,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         if (message.type === 'participant_media_state') {
             this.handleRemoteMediaState(message);
+        }
+        if (message.type === 'content_state') {
+            this.handleRemoteContentState(message);
         }
         for (const listener of this.peerMessageListeners) {
             try {
@@ -990,6 +1046,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.roomState = null;
         this.clientId = null;
         this.remoteMediaStates.clear();
+        this.clearRemoteContentTracking();
 
         this.media.updateRoomState(null, null);
         this.media.updateSignalingConnected(false);
@@ -1107,6 +1164,164 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.rebuildState();
     }
 
+    /**
+     * Parse a live `content_state` peer message and delegate ordering to
+     * {@link applyRemoteContentState} (which documents the revision rules).
+     */
+    private handleRemoteContentState(message: PeerMessage): void {
+        const payload = message.payload as Record<string, unknown> | null;
+        if (!payload || typeof payload.active !== 'boolean') return;
+
+        const revision = typeof payload.revision === 'number' ? payload.revision : undefined;
+        const contentType = typeof payload.contentType === 'string' && payload.contentType !== ''
+            ? payload.contentType
+            : undefined;
+
+        if (this.applyRemoteContentState(message.from, message.sid, payload.active, contentType, revision)) {
+            this.rebuildState();
+        }
+    }
+
+    /**
+     * Reconcile a single remote content (screen share) state into
+     * `remoteContentStates`, enforcing the wire-contract ordering rules shared by
+     * the live `content_state` path and the `joined`/`room_state` snapshot seed:
+     * - a new `sid` for the CID supersedes prior state by identity (tracked
+     *   revision is reset to the incoming value);
+     * - within the same `(cid, sid)`, only a strictly-greater `revision` is
+     *   accepted; a `revision` ≤ the tracked one is discarded (out-of-order /
+     *   duplicate / a stale snapshot behind a newer live update);
+     * - a missing `revision` is always accepted (legacy senders) and advances
+     *   presentation state without revision gating.
+     * Returns `true` when the tracked state changed (caller rebuilds state).
+     */
+    private applyRemoteContentState(
+        cid: string,
+        sid: string | undefined,
+        active: boolean,
+        contentType: string | undefined,
+        revision: number | undefined,
+    ): boolean {
+        const existing = this.remoteContentStates.get(cid);
+        if (existing && revision !== undefined) {
+            const sameSession = existing.sid === sid;
+            // Same (cid, sid): keep highest, discard ≤ tracked. A new sid
+            // supersedes by identity regardless of revision (falls through).
+            if (sameSession && revision <= existing.revision) {
+                return false;
+            }
+        }
+
+        this.remoteContentStates.set(cid, {
+            content: {
+                active,
+                type: contentType ?? 'screenShare',
+                revision: revision ?? 0,
+            },
+            sid,
+            // Published `content.revision` above is `revision ?? 0`, but the
+            // tracked gating revision keeps the prior same-session high-water
+            // mark on a revisionless update, so a legacy revisionless message
+            // can't lower the gate and re-admit a later stale revisioned one.
+            revision: revision ?? (existing && existing.sid === sid ? existing.revision : 0),
+        });
+        return true;
+    }
+
+    /**
+     * Build the local participant's public content state from local
+     * screen-share state. Absent when not sharing AND no prior content was sent
+     * (revision still 0). When sharing, `active=true`; after a stop the last
+     * revision still reflects the most recent send.
+     */
+    private buildLocalContent(): ParticipantContent | undefined {
+        const revision = this.media.lastContentRevision;
+        if (!this.media.isScreenSharing && revision === 0) {
+            return undefined;
+        }
+        return {
+            active: this.media.isScreenSharing,
+            type: 'screenShare',
+            revision,
+        };
+    }
+
+    /**
+     * Store remote `capabilities`/`mediaPolicy` from the authoritative
+     * participant list and drop entries for CIDs no longer present (other than
+     * the local one). Phase 1: stored only — no media keys off these yet.
+     */
+    private reconcileRemoteCapabilityStorage(
+        participants: RoomParticipant[],
+        clientId: string | null,
+    ): void {
+        const remoteCids = new Set<string>();
+        for (const participant of participants) {
+            if (participant.cid === clientId) {
+                continue;
+            }
+            remoteCids.add(participant.cid);
+            // Each authoritative snapshot is the source of truth: when it omits
+            // capabilities/mediaPolicy for a still-present CID (the server resets
+            // these to defaults on an omitting rejoin), clear the stored entry so
+            // accessors fall back to contract defaults instead of stale values.
+            if (participant.capabilities) {
+                this.remoteCapabilities.set(participant.cid, participant.capabilities);
+            } else {
+                this.remoteCapabilities.delete(participant.cid);
+            }
+            if (participant.mediaPolicy) {
+                this.remoteMediaPolicies.set(participant.cid, participant.mediaPolicy);
+            } else {
+                this.remoteMediaPolicies.delete(participant.cid);
+            }
+            // Seed presentation state for a peer already sharing when we
+            // joined/reconnected. The snapshot carries no originator `sid` (it is
+            // not relayed in the envelope), matching the live web peer-relay path
+            // (`sid` undefined), so the same keep-highest revision rule applies:
+            // a stale snapshot never overwrites a higher tracked live revision,
+            // and a higher-revision snapshot (incl. active:false) supersedes a
+            // stale cached active:true.
+            const snapshot = participant.contentState;
+            if (snapshot) {
+                this.applyRemoteContentState(
+                    participant.cid,
+                    undefined,
+                    snapshot.active,
+                    snapshot.contentType,
+                    snapshot.revision,
+                );
+            }
+        }
+        for (const cid of this.remoteCapabilities.keys()) {
+            if (!remoteCids.has(cid)) this.remoteCapabilities.delete(cid);
+        }
+        for (const cid of this.remoteMediaPolicies.keys()) {
+            if (!remoteCids.has(cid)) this.remoteMediaPolicies.delete(cid);
+        }
+        for (const cid of this.remoteContentStates.keys()) {
+            if (!remoteCids.has(cid)) this.remoteContentStates.delete(cid);
+        }
+    }
+
+    /**
+     * Read a remote participant's effective capabilities with contract defaults
+     * applied (missing `independentContentVideo` → `false`). Phase 1 helper for
+     * later-phase media routing; not yet consumed by media.
+     */
+    getRemoteIndependentContentVideo(cid: string): boolean {
+        return this.remoteCapabilities.get(cid)?.independentContentVideo === true;
+    }
+
+    /**
+     * Read a remote participant's effective `videoMediaEnabled` with contract
+     * defaults applied (missing → `true`). Phase 1 helper; not yet consumed by
+     * media.
+     */
+    getRemoteVideoMediaEnabled(cid: string): boolean {
+        return this.remoteMediaPolicies.get(cid)?.videoMediaEnabled !== false;
+    }
+
     private rebuildState(): void {
         if (this.isInactive) return;
         const signalingState = this.roomState;
@@ -1139,37 +1354,64 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const audioTrack = stream?.getAudioTracks()[0];
         const videoTrack = stream?.getVideoTracks()[0];
 
+        // Mirror broadcast: derive from real track presence/state so the
+        // local UI matches what peers see. Pre-media-start (no stream),
+        // fall back to the user's preference.
+        const localVideoEnabled = stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled;
+        const independentMode = this.config.enableIndependentContentVideo === true;
+        // Independent mode: `localStream` carries audio + camera only (content is
+        // a separate track), so the camera track presence is the precise camera
+        // signal and `cameraMode` is never `screenShare`. Legacy mode keeps the
+        // single-video convention where the display track IS the video track and
+        // `cameraMode=screenShare` while sharing.
+        const cameraMode: CameraMode = (!independentMode && this.media.isScreenSharing)
+            ? 'screenShare'
+            : this.media.facingMode === 'user' ? 'selfie' : 'world';
         const localParticipant = clientId ? {
             cid: clientId,
             displayName: this.displayName,
             peerId: this.appPeerId,
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
-            // Mirror broadcast: derive from real track presence/state so the
-            // local UI matches what peers see. Pre-media-start (no stream),
-            // fall back to the user's preference.
-            videoEnabled: stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled,
-            cameraMode: (this.media.isScreenSharing
-                ? 'screenShare'
-                : this.media.facingMode === 'user'
-                    ? 'selfie'
-                    : 'world') as CameraMode,
+            // `cameraEnabled` is camera-specific and `videoEnabled` mirrors it.
+            // Both equal `localVideoEnabled` here because, in both independent and
+            // legacy modes, the camera track presence/state IS the local video
+            // signal (the display track is a separate track in independent mode,
+            // and `cameraMode` carries the screen-share distinction in legacy mode).
+            cameraEnabled: localVideoEnabled,
+            videoEnabled: localVideoEnabled,
+            content: this.buildLocalContent(),
+            cameraMode,
             availableCameraModes: this.availableCameraModes,
             isHost: signalingState?.hostCid === clientId,
         } : null;
 
         this.reconcileRemoteSuspensionTimers(signalingState?.participants ?? []);
 
+        this.reconcileRemoteCapabilityStorage(signalingState?.participants ?? [], clientId);
+
         const remoteParticipants = (signalingState?.participants ?? [])
             .filter((participant) => participant.cid !== clientId)
             .map((participant) => {
                 const peerState = this.remoteMediaStates.get(participant.cid);
                 const status = participant.connectionStatus ?? 'active';
+                const videoEnabled = peerState?.videoEnabled ?? participant.videoEnabled ?? true;
+                // Per-role inbound liveness for stall diagnostics. Both default
+                // to false until the first liveness sample. Flag off / legacy
+                // peers: the single inbound video routes to `camera`, so
+                // `contentReceiving` stays false (byte-identical, additive).
+                const roleLiveness = this.media.getRoleLiveness(participant.cid);
                 return {
                     cid: participant.cid,
                     displayName: participant.displayName,
                     peerId: participant.peerId,
                     audioEnabled: peerState?.audioEnabled ?? participant.audioEnabled ?? true,
-                    videoEnabled: peerState?.videoEnabled ?? participant.videoEnabled ?? true,
+                    // Phase 1 (independent-content flag off): cameraEnabled
+                    // mirrors the legacy videoEnabled.
+                    cameraEnabled: videoEnabled,
+                    videoEnabled,
+                    content: this.remoteContentStates.get(participant.cid)?.content,
+                    cameraReceiving: roleLiveness.camera,
+                    contentReceiving: roleLiveness.content,
                     connectionState: this.media.connectionState,
                     signalingStatus: status,
                     presumedLost: status === 'suspended' && this.presumedLostRemoteCids.has(participant.cid),
@@ -1334,6 +1576,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.presumedLostRemoteCids.clear();
     }
 
+    /** Drop all per-remote capability/policy/content tracking. */
+    private clearRemoteContentTracking(): void {
+        this.remoteCapabilities.clear();
+        this.remoteMediaPolicies.clear();
+        this.remoteContentStates.clear();
+    }
+
     /**
      * Periodic `media_liveness{cids}` emission for #3. Started once we have
      * remote peers (i.e. the call reaches `inCall`); runs across reconnects
@@ -1362,8 +1611,22 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (!this.isConnected || this.roomState === null) return;
         this.mediaLivenessEmitInFlight = true;
         try {
+            // Refresh per-role inbound liveness on the same cadence and re-render
+            // so `cameraReceiving`/`contentReceiving` on remote participants stay
+            // current for stall diagnostics. Independent of the server-facing
+            // `media_liveness` emit below (which is gated on connection state).
+            await this.media.sampleInboundRoleLiveness();
+            if (this.isInactive) return;
+            this.rebuildState();
             const flowing = await this.media.getInboundFlowingCids();
-            if (this.isInactive || flowing.length === 0) return;
+            if (this.isInactive) return;
+            // Emit even when `flowing` is empty. The empty heartbeat keeps this
+            // client a "fresh reporter" on the server, which is what lets the
+            // server fast-evict suspended ghosts (a suspended CID that no active
+            // reporter sees media from). Without it, a lone survivor whose peers
+            // all dropped at once has no inbound flow, stops reporting entirely,
+            // and the ghosts — plus the survivor's "Reconnecting" UI — linger
+            // until the 10-minute hard-eviction timer instead of the 30s sweep.
             this.signaling.broadcast('media_liveness', { cids: flowing });
         } catch (error) {
             this.config.logger?.log(
