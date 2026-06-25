@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -1702,13 +1703,16 @@ func applyContentStateUpdate(room *Room, senderCID string, payload map[string]in
 		UpdatedAtMs: time.Now().UnixMilli(),
 	}
 	// revision is the sender's per-(cid,sid) monotonic counter. The server keeps
-	// it verbatim (latest-wins, like the rest of content_state) so a reconnecting
-	// peer learns the sender's current revision via room_state. The server does
-	// NOT compare or order revisions itself — that comparison is a receiver-side
-	// rule (a stale active:false that should not override a newer active:true is
-	// the receiver's responsibility to discard). JSON numbers decode as float64.
+	// valid safe integer revisions verbatim (latest-wins, like the rest of
+	// content_state) so a reconnecting peer learns the sender's current revision
+	// via room_state. The server does NOT compare or order revisions itself —
+	// that comparison is a receiver-side rule. JSON numbers decode as float64, so
+	// malformed, fractional, negative, or unsafe values are ignored.
 	if revision, ok := payload["revision"].(float64); ok {
-		state.Revision = int64(revision)
+		const maxSafeInteger = 9007199254740991 // Number.MAX_SAFE_INTEGER
+		if revision >= 0 && revision <= maxSafeInteger && math.Trunc(revision) == revision {
+			state.Revision = int64(revision)
+		}
 	}
 	// contentType is meaningful only while a share is active. `active=false`
 	// collapses to a cleared state so suspended peers don't see a stale

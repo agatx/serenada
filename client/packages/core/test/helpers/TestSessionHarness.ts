@@ -1,5 +1,5 @@
 import type { CallState, CallStats, ConnectionEvent, SerenadaConfig } from '../../src/types.js';
-import type { RoomState } from '../../src/signaling/types.js';
+import type { RoomParticipant, RoomState } from '../../src/signaling/types.js';
 import type { MediaEngine } from '../../src/media/MediaEngine.js';
 import type { CallStatsCollector } from '../../src/media/callStats.js';
 import { SerenadaSession } from '../../src/SerenadaSession.js';
@@ -93,7 +93,7 @@ export class TestSessionHarness {
 
     simulateJoined(opts: {
         clientId?: string;
-        participants?: { cid: string; joinedAt?: number; displayName?: string }[];
+        participants?: Array<Pick<RoomParticipant, 'cid' | 'joinedAt' | 'displayName' | 'contentState' | 'capabilities' | 'mediaPolicy'>>;
         hostCid?: string | null;
     } = {}): void {
         const clientId = opts.clientId ?? 'my-cid';
@@ -107,6 +107,9 @@ export class TestSessionHarness {
                 peerId: participant.cid,
                 joinedAt: participant.joinedAt,
                 displayName: participant.displayName,
+                contentState: participant.contentState,
+                capabilities: participant.capabilities,
+                mediaPolicy: participant.mediaPolicy,
             })),
             hostPeerId: hostCid ?? undefined,
         });
@@ -119,6 +122,7 @@ export class TestSessionHarness {
                 peerId: participant.cid,
                 joinedAt: participant.joinedAt,
                 connectionStatus: participant.connectionStatus,
+                contentState: participant.contentState,
                 capabilities: participant.capabilities,
                 mediaPolicy: participant.mediaPolicy,
             })),

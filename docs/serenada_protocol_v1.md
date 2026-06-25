@@ -162,9 +162,9 @@ Join a room.
 - Any other key under `capabilities` or `mediaPolicy` is **dropped** (not stored,
   not forwarded). Opaque pass-through of arbitrary future keys is intentionally
   not supported in this protocol version.
-- Allowlisted values are stored per participant and re-applied on every join,
-  including reconnect; a reconnect that omits the objects keeps the previously
-  stored values.
+- Allowlisted values are stored per participant from the latest successful join.
+  If a later join/reconnect omits `capabilities` or `mediaPolicy`, the server
+  clears the omitted object and receivers apply the protocol defaults.
 
 **Server behavior**
 - Validate `rid` as a signed 27-character room token (generated via `/api/room-id`).

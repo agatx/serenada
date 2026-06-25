@@ -314,6 +314,53 @@ func TestContentStateRevisionRelayedVerbatim(t *testing.T) {
 	}
 }
 
+func TestContentStateRevisionPersistsOnlySafeIntegers(t *testing.T) {
+	t.Setenv("TURN_SECRET", "test-reconnect-secret")
+
+	tests := []struct {
+		name     string
+		revision interface{}
+		want     int64
+	}{
+		{name: "integer", revision: 8, want: 8},
+		{name: "fractional", revision: 2.9, want: 0},
+		{name: "negative", revision: -1, want: 0},
+		{name: "unsafe", revision: float64(9007199254740992), want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rid := mustTestRoomID(t)
+			hub := newHub(4)
+
+			a := fakeClient(hub)
+			hub.registerClient(a)
+			hub.handleMessage(a, joinPayload(rid, 4, 4))
+			captureJoined(t, a)
+
+			csPayload, _ := json.Marshal(map[string]interface{}{
+				"active":      true,
+				"contentType": "screenShare",
+				"revision":    tt.revision,
+			})
+			hub.handleMessage(a, mustMarshal(Message{V: 1, Type: "content_state", RID: rid, Payload: csPayload}))
+
+			hub.mu.RLock()
+			room := hub.rooms[rid]
+			hub.mu.RUnlock()
+			room.mu.Lock()
+			pa := room.participantByCID(a.cid)
+			room.mu.Unlock()
+			if pa == nil || pa.ContentState == nil {
+				t.Fatal("expected persisted content state on A")
+			}
+			if pa.ContentState.Revision != tt.want {
+				t.Fatalf("expected persisted revision=%d, got %d", tt.want, pa.ContentState.Revision)
+			}
+		})
+	}
+}
+
 func TestContentStateRevisionPersistsForReconnectingPeer(t *testing.T) {
 	t.Setenv("TURN_SECRET", "test-reconnect-secret")
 	rid := mustTestRoomID(t)

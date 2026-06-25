@@ -27,7 +27,8 @@ public struct JoinOptions: Equatable, Sendable {
     /// own user identity (avatar lookup, telemetry).
     public var appPeerId: String?
     /// Static build capability advertised in `join.capabilities`. Mirrors
-    /// `SerenadaConfig.enableIndependentContentVideo`. Phase 1: always `false`.
+    /// `SerenadaConfig.enableIndependentContentVideo`; defaults to `false` and
+    /// can be enabled by host apps that opt into independent content media.
     public var independentContentVideo: Bool
     /// Per-session media policy advertised in `join.mediaPolicy`. Mirrors
     /// `SerenadaConfig.videoMediaEnabled`.

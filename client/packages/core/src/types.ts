@@ -261,7 +261,8 @@ export interface SerenadaConfig {
      * When `true`, this build can negotiate a dedicated content video stream
      * separate from the camera. Advertised to peers at join via
      * `capabilities.independentContentVideo`. Immutable per session. Defaults to
-     * `false`. Phase 1: advertisement only; not yet consumed by media.
+     * `false`. When enabled, capable peers use the independent content media path;
+     * legacy peers continue to use the single-video fallback.
      */
     enableIndependentContentVideo?: boolean;
     /**

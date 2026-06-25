@@ -343,6 +343,37 @@ describe('SerenadaSession — independent screen share (Phase 1)', () => {
             });
         });
 
+        it('seeds local content revision from recovered snapshots', () => {
+            harness.simulateJoined({
+                clientId: 'me',
+                participants: [
+                    {
+                        cid: 'me',
+                        contentState: { active: false, contentType: 'screenShare', revision: 7 },
+                    },
+                    { cid: 'peer-1' },
+                ],
+                hostCid: 'me',
+            });
+
+            expect(harness.media.lastContentRevision).toBe(7);
+            expect(harness.state.localParticipant?.content).toEqual({
+                active: false,
+                type: 'screenShare',
+                revision: 7,
+            });
+
+            harness.signaling.emitRoomStateUpdated({
+                hostPeerId: 'me',
+                participants: [
+                    { peerId: 'me', contentState: { active: false, contentType: 'screenShare', revision: 9 } },
+                    { peerId: 'peer-1' },
+                ],
+            });
+
+            expect(harness.media.lastContentRevision).toBe(9);
+        });
+
         it('keeps cameraMode=screenShare while sharing (legacy behavior, flag off)', () => {
             joinInCall(['peer-1']);
             harness.media.emit({ isScreenSharing: true, lastContentRevision: 1 });

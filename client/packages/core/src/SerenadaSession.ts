@@ -749,6 +749,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.error = null;
         this.clientId = event.peerId;
         this.roomState = buildRoomState(event, null, event.peerId);
+        this.seedLocalContentRevisionFromSnapshot();
         this.media.updateRoomState(this.roomState, this.clientId);
         this.maybeStartMediaLivenessTimer();
         this.rebuildState();
@@ -762,6 +763,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         }
         this.error = null;
         this.roomState = buildRoomState(event, this.roomState?.hostCid ?? null, this.clientId);
+        this.seedLocalContentRevisionFromSnapshot();
         this.media.updateRoomState(this.roomState, this.clientId);
         this.maybeStartMediaLivenessTimer();
         this.flushPostReconnectResync('snapshot');
@@ -1246,10 +1248,19 @@ export class SerenadaSession implements SerenadaSessionHandle {
         };
     }
 
+    private seedLocalContentRevisionFromSnapshot(): void {
+        if (!this.clientId || !this.roomState) {
+            return;
+        }
+        const localSnapshot = this.roomState.participants.find((participant) => participant.cid === this.clientId);
+        this.media.seedContentRevision(localSnapshot?.contentState?.revision);
+    }
+
     /**
      * Store remote `capabilities`/`mediaPolicy` from the authoritative
      * participant list and drop entries for CIDs no longer present (other than
-     * the local one). Phase 1: stored only — no media keys off these yet.
+     * the local one). The media engine consumes these through the authoritative
+     * room state; the accessors below expose the same effective defaults.
      */
     private reconcileRemoteCapabilityStorage(
         participants: RoomParticipant[],
@@ -1306,8 +1317,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /**
      * Read a remote participant's effective capabilities with contract defaults
-     * applied (missing `independentContentVideo` → `false`). Phase 1 helper for
-     * later-phase media routing; not yet consumed by media.
+     * applied (missing `independentContentVideo` → `false`).
      */
     getRemoteIndependentContentVideo(cid: string): boolean {
         return this.remoteCapabilities.get(cid)?.independentContentVideo === true;
@@ -1315,8 +1325,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
 
     /**
      * Read a remote participant's effective `videoMediaEnabled` with contract
-     * defaults applied (missing → `true`). Phase 1 helper; not yet consumed by
-     * media.
+     * defaults applied (missing → `true`).
      */
     getRemoteVideoMediaEnabled(cid: string): boolean {
         return this.remoteMediaPolicies.get(cid)?.videoMediaEnabled !== false;

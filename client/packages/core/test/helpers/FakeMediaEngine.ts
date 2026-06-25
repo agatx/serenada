@@ -58,6 +58,13 @@ export class FakeMediaEngine {
         this.onChange = cb;
     }
 
+    seedContentRevision(revision: number | undefined): void {
+        if (revision === undefined || !Number.isSafeInteger(revision) || revision < 0) {
+            return;
+        }
+        this.lastContentRevision = Math.max(this.lastContentRevision, revision);
+    }
+
     async startLocalMedia(): Promise<MediaStream | null> {
         this.startLocalMediaCalls++;
         this.localStream = this.startLocalMediaResult;

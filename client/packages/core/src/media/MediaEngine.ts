@@ -128,6 +128,8 @@ export interface MediaEngineConfig {
      * legacy single-video screen-share path and behavior is identical to today.
      */
     enableIndependentContentVideo?: boolean;
+    /** Initial outgoing content revision restored from a recovered room snapshot. */
+    initialContentRevision?: number;
     /** Defer initial offer timeout/ICE restart while awaiting the first answer. */
     deferInitialAnswer?: boolean;
 }
@@ -221,7 +223,8 @@ export class MediaEngine {
     // Per-session monotonic generation marker for outgoing `content_state`.
     // Incremented on every send (start/stop) so receivers can order
     // presentation-state changes within this (cid, sid). Starts at 0; the first
-    // send carries `revision: 1`.
+    // send carries `revision: 1`. A recovered session can seed this from its
+    // persisted local participant content revision before sending again.
     private contentRevision = 0;
 
     // Injected dependencies
@@ -244,11 +247,25 @@ export class MediaEngine {
         this.enableIndependentContentVideo = this.videoMediaEnabled && config.enableIndependentContentVideo === true;
         this.videoCaptureSupported = this.videoMediaEnabled && config.videoCaptureSupported !== false;
         this.canScreenShare = this.videoMediaEnabled && !!navigator.mediaDevices?.getDisplayMedia;
+        this.seedContentRevision(config.initialContentRevision);
         this.sendSignalingMessage = sendMessage;
         this.setupEventListeners();
     }
 
     setOnChange(cb: () => void): void { this.onChange = cb; }
+
+    /**
+     * Preserve outgoing `content_state` ordering after session recovery. The
+     * server persists the last local content revision in `joined`/`room_state`;
+     * when this tab resumes with the same CID/SID, the next send must advance
+     * beyond that snapshot instead of restarting from 1.
+     */
+    seedContentRevision(revision: number | undefined): void {
+        if (revision === undefined || !Number.isSafeInteger(revision) || revision < 0) {
+            return;
+        }
+        this.contentRevision = Math.max(this.contentRevision, revision);
+    }
 
     updateRoomState(state: RoomState | null, clientId: string | null): void {
         this.roomState = state;

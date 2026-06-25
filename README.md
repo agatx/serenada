@@ -228,9 +228,9 @@ On web, provider-delivered peer messages are exposed through `session.onPeerMess
 
 ### Independent Content Video (Screen Share)
 
-Screen share is moving from the single camera-video path to its own independent **content** stream, so a capable peer can send camera and screen share at the same time. The SDK surface for this is in place and stable, but the media path is gated behind a config flag that is **off by default and not yet enabled** on any platform — flipping it is held until each platform's media + UI are ready and the legacy-receiver interop gate passes. With the flag off, behavior is exactly today's: screen share reuses the camera video path and replaces the camera track while sharing.
+Screen share is moving from the single camera-video path to its own independent **content** stream, so a capable peer can send camera and screen share at the same time. The SDK surface and media path are gated behind a config flag that is **off by default** in the headless SDK and can be enabled by host apps that are ready to ship the independent media + UI experience. With the flag off, behavior is exactly today's: screen share reuses the camera video path and replaces the camera track while sharing.
 
-- **Config flag** `enableIndependentContentVideo` (`SerenadaConfig`, default `false`). It gates one thing only: advertising `capabilities.independentContentVideo=true` at join. It does not change media behavior until the per-platform media engine, UI, and interop gate are all ready.
+- **Config flag** `enableIndependentContentVideo` (`SerenadaConfig`, default `false`). It advertises `capabilities.independentContentVideo=true` at join and enables the independent content media path for capable peers. Legacy peers fall back to the single-video screen-share path for that connection.
 - **Session media policy** `videoMediaEnabled` (`SerenadaConfig`, default `true`) is now also signaled at join as `mediaPolicy.videoMediaEnabled`. It is immutable for the session and controls whether *any* video (camera or content) is negotiated. Strict audio-only (`videoMediaEnabled=false`) negotiates no video at all.
 - **New participant state** (remote `Participant` and `LocalParticipant`):
   - `cameraEnabled` — camera video specifically. With the flag on this is the precise camera signal; with the flag off it mirrors `videoEnabled`.

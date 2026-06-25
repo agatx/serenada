@@ -61,6 +61,8 @@ targets:
         product: FirebaseMessaging
       - package: SerenadaCore
         product: SerenadaCore
+      - package: SerenadaCore
+        product: SerenadaBroadcastExtensionSupport
       - package: SerenadaCallUI
         product: SerenadaCallUI
       - target: SerenadaNotificationService
@@ -71,7 +73,6 @@ targets:
       base:
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Resources/SerenadaiOS.entitlements
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) BROADCAST_EXTENSION
   SerenadaNotificationService:
     type: app-extension
     platform: iOS
@@ -101,22 +102,26 @@ targets:
       - path: BroadcastUpload
         excludes:
           - Info.plist
-      - path: SerenadaCore/Sources/BroadcastShared.swift
+    dependencies:
+      - package: SerenadaCore
+        product: SerenadaBroadcastExtensionSupport
     info:
       path: BroadcastUpload/Info.plist
       properties:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: Serenada Broadcast
+        SerenadaBroadcastAppGroupIdentifier: group.app.serenada.ios
         NSExtension:
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
-          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).SampleHandler"
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ScreenShareSampleHandler"
           RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.serenada.ios.broadcast
         INFOPLIST_FILE: BroadcastUpload/Info.plist
         CODE_SIGN_ENTITLEMENTS: BroadcastUpload/BroadcastUpload.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
   SerenadaiOSTests:
     type: bundle.unit-test
     platform: iOS
