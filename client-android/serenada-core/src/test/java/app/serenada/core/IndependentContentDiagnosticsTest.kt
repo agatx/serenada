@@ -112,6 +112,9 @@ class IndependentContentDiagnosticsTest {
             InboundRoleBytes(cameraBytes = 1_000, contentBytes = 2_000)
         tick()
 
+        val slot = factory.fakeMedia.fakeSlots["remote"]
+        assertTrue("combined liveness sampler ran", (slot?.collectInboundLivenessCalls ?: 0) > 0)
+        assertEquals("timer should not run a second role-only stats pass", 0, slot?.collectInboundRoleBytesCalls ?: 0)
         val remote = remoteParticipant("remote")!!
         assertFalse("no baseline yet → conservative false", remote.cameraReceiving)
         assertFalse(remote.contentReceiving)

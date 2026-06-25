@@ -1,6 +1,7 @@
 package app.serenada.core.fakes
 
 import app.serenada.core.call.InboundRoleBytes
+import app.serenada.core.call.InboundLivenessSample
 import app.serenada.core.call.OutboundMediaSample
 import app.serenada.core.call.PeerConnectionSlotProtocol
 import app.serenada.core.call.RealtimeCallStats
@@ -288,6 +289,15 @@ internal class FakePeerConnectionSlot(
     }
     /** Cumulative inbound bytes returned from the next `collectInboundBytes()` call. */
     var inboundBytesSample: Long = 0L
+    var collectInboundLivenessCalls = 0
+    override fun collectInboundLiveness(onComplete: (InboundLivenessSample) -> Unit) {
+        collectInboundLivenessCalls += 1
+        onComplete(InboundLivenessSample(
+            inboundBytes = inboundBytesSample,
+            roleBytes = inboundRoleBytesSample,
+        ))
+    }
+
     var collectInboundBytesCalls = 0
     override fun collectInboundBytes(onComplete: (Long) -> Unit) {
         collectInboundBytesCalls += 1

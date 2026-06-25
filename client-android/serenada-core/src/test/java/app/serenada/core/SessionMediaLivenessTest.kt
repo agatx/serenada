@@ -76,10 +76,13 @@ class SessionMediaLivenessTest {
         val broadcasts = livenessBroadcasts()
         assertTrue(broadcasts.isNotEmpty())
         assertEquals(0, broadcasts.last().payload?.optJSONArray("cids")?.length() ?: -1)
+        val slot = factory.fakeMedia.fakeSlots["remote"]
         assertTrue(
             "Slot should have been polled at least once",
-            (factory.fakeMedia.fakeSlots["remote"]?.collectInboundBytesCalls ?: 0) > 0,
+            (slot?.collectInboundLivenessCalls ?: 0) > 0,
         )
+        assertEquals("timer should not run a second bytes-only stats pass", 0, slot?.collectInboundBytesCalls ?: 0)
+        assertEquals("timer should not run a second role-only stats pass", 0, slot?.collectInboundRoleBytesCalls ?: 0)
     }
 
     @Test

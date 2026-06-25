@@ -86,7 +86,10 @@ final class SessionMediaLivenessTests: XCTestCase {
         } else {
             XCTFail("Expected `cids` array in payload")
         }
-        XCTAssertGreaterThan(harness.fakeMedia.fakeSlots["remote"]?.collectInboundBytesCalls ?? 0, 0)
+        let slot = harness.fakeMedia.fakeSlots["remote"]
+        XCTAssertGreaterThan(slot?.collectInboundLivenessCalls ?? 0, 0)
+        XCTAssertEqual(slot?.collectInboundBytesCalls ?? 0, 0, "timer should not run a second bytes-only stats pass")
+        XCTAssertEqual(slot?.collectInboundRoleBytesCalls ?? 0, 0, "timer should not run a second role-only stats pass")
     }
 
     func testPausesWhileTransportDisconnectedAndResumesAfterReconnect() async {

@@ -873,34 +873,20 @@ internal class PeerConnectionSlot(
         }
     }
 
-    override fun collectInboundBytes(onComplete: (Long) -> Unit) {
+    override fun collectInboundLiveness(onComplete: (InboundLivenessSample) -> Unit) {
         if (isClosing) {
-            onComplete(0L)
+            onComplete(InboundLivenessSample(
+                inboundBytes = 0L,
+                roleBytes = InboundRoleBytes(cameraBytes = 0L, contentBytes = 0L),
+            ))
             return
         }
         val pc = peerConnection
         if (pc == null) {
-            onComplete(0L)
-            return
-        }
-        pc.getStats { report ->
-            var bytes = 0L
-            for (stat in report.statsMap.values) {
-                if (stat.type != "inbound-rtp") continue
-                bytes += memberLong(stat, "bytesReceived") ?: 0L
-            }
-            onComplete(bytes)
-        }
-    }
-
-    override fun collectInboundRoleBytes(onComplete: (InboundRoleBytes) -> Unit) {
-        if (isClosing) {
-            onComplete(InboundRoleBytes(cameraBytes = 0L, contentBytes = 0L))
-            return
-        }
-        val pc = peerConnection
-        if (pc == null) {
-            onComplete(InboundRoleBytes(cameraBytes = 0L, contentBytes = 0L))
+            onComplete(InboundLivenessSample(
+                inboundBytes = 0L,
+                roleBytes = InboundRoleBytes(cameraBytes = 0L, contentBytes = 0L),
+            ))
             return
         }
         // Receiver track id bound to the content role, if any. Captured before
@@ -910,22 +896,37 @@ internal class PeerConnectionSlot(
         val contentTrackId = contentTransceiver?.receiver?.track()?.id()
             ?.takeIf { it.isNotEmpty() }
         pc.getStats { report ->
+            var bytes = 0L
             var cameraBytes = 0L
             var contentBytes = 0L
             for (stat in report.statsMap.values) {
                 if (stat.type != "inbound-rtp") continue
+                val statBytes = memberLong(stat, "bytesReceived") ?: 0L
+                bytes += statBytes
                 if (getMediaKind(stat) != "video") continue
-                val bytes = memberLong(stat, "bytesReceived") ?: 0L
                 val trackId = memberString(stat, "trackIdentifier")
                 if (contentTrackId != null && trackId == contentTrackId) {
-                    contentBytes += bytes
+                    contentBytes += statBytes
                 } else {
-                    // Camera role, legacy single video, or any video stat we
-                    // cannot positively attribute to content → count as camera.
-                    cameraBytes += bytes
+                    cameraBytes += statBytes
                 }
             }
-            onComplete(InboundRoleBytes(cameraBytes = cameraBytes, contentBytes = contentBytes))
+            onComplete(InboundLivenessSample(
+                inboundBytes = bytes,
+                roleBytes = InboundRoleBytes(cameraBytes = cameraBytes, contentBytes = contentBytes),
+            ))
+        }
+    }
+
+    override fun collectInboundBytes(onComplete: (Long) -> Unit) {
+        collectInboundLiveness { sample ->
+            onComplete(sample.inboundBytes)
+        }
+    }
+
+    override fun collectInboundRoleBytes(onComplete: (InboundRoleBytes) -> Unit) {
+        collectInboundLiveness { sample ->
+            onComplete(sample.roleBytes)
         }
     }
 

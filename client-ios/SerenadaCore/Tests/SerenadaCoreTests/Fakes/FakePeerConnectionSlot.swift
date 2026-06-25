@@ -275,6 +275,15 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
 
     /// Cumulative inbound bytes returned from the next `collectInboundBytes()` call.
     var inboundBytesSample: Int64 = 0
+    var collectInboundLivenessCalls = 0
+    func collectInboundLiveness(onComplete: @escaping (InboundLivenessSample) -> Void) {
+        collectInboundLivenessCalls += 1
+        onComplete(InboundLivenessSample(
+            inboundBytes: inboundBytesSample,
+            roleBytes: roleInboundBytesSample
+        ))
+    }
+
     var collectInboundBytesCalls = 0
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
         collectInboundBytesCalls += 1

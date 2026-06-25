@@ -608,7 +608,8 @@ final class IndependentContentMediaTests: XCTestCase {
         await tickRoleLiveness(harness)
         XCTAssertEqual(remote(harness)?.cameraReceiving, false, "first sample is conservative (no baseline)")
         XCTAssertEqual(remote(harness)?.contentReceiving, false)
-        XCTAssertGreaterThan(slot?.collectInboundRoleBytesCalls ?? 0, 0, "the role-split sampler ran")
+        XCTAssertGreaterThan(slot?.collectInboundLivenessCalls ?? 0, 0, "the combined liveness sampler ran")
+        XCTAssertEqual(slot?.collectInboundRoleBytesCalls ?? 0, 0, "timer should not run a second role-only stats pass")
         harness.tearDown()
     }
 

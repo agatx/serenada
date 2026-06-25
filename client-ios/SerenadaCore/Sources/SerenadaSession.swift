@@ -288,9 +288,9 @@ public final class SerenadaSession: ObservableObject {
 
     // #3 — periodic `media_liveness` emission. Active across the in-call
     // window so the server can defer hard-eviction of suspended peers
-    // whose media is still flowing locally. Ticks no-op while transport
-    // is disconnected (baseline samples preserved so the next post-
-    // reconnect tick can detect flow).
+    // whose media is still flowing locally. The broadcast no-ops while
+    // transport is disconnected, preserving media-liveness baselines so the
+    // next post-reconnect tick can detect flow.
     private var lastInboundBytesByCid: [String: Int64] = [:]
     // Per-role inbound-video stall diagnostics (GAP 2). Sampled on the SAME
     // media-liveness tick as `lastInboundBytesByCid`, but kept SEPARATE: the
@@ -2045,12 +2045,10 @@ public final class SerenadaSession: ObservableObject {
                 try? await clock.sleep(nanoseconds: intervalNs)
                 if Task.isCancelled { return }
                 guard let self else { return }
-                // Per-role inbound stall diagnostics refresh on the SAME cadence
-                // as the server-facing emit, but independent of the connection
-                // gate inside `emitMediaLiveness` so `cameraReceiving` /
-                // `contentReceiving` stay current even while disconnected.
-                self.sampleInboundRoleLiveness()
-                self.emitMediaLiveness()
+                // Total inbound flow and per-role stall diagnostics refresh from
+                // one stats sample per peer. Broadcast remains gated by signaling
+                // connection, while role diagnostics stay current through blips.
+                self.sampleInboundLiveness()
             }
         }
     }
@@ -2073,59 +2071,10 @@ public final class SerenadaSession: ObservableObject {
         outboundMediaWatchdogCancellable = nil
     }
 
-    private func emitMediaLiveness() {
+    private func sampleInboundLiveness() {
         if mediaLivenessEmitInFlight { return }
-        guard diagnostics.isSignalingConnected, currentRoomState != nil else { return }
-        let slots = peerSlots
-        if slots.isEmpty { return }
-
-        mediaLivenessEmitInFlight = true
-        var newSamples: [String: Int64] = [:]
-        var remaining = slots.count
-        for (cid, slot) in slots {
-            slot.collectInboundBytes { [weak self] bytes in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    newSamples[cid] = bytes
-                    remaining -= 1
-                    if remaining == 0 { self.finalizeMediaLivenessEmit(newSamples: newSamples) }
-                }
-            }
-        }
-    }
-
-    private func finalizeMediaLivenessEmit(newSamples: [String: Int64]) {
-        mediaLivenessEmitInFlight = false
-        var flowing: [String] = []
-        for (cid, bytes) in newSamples {
-            if let previous = lastInboundBytesByCid[cid], bytes > previous {
-                flowing.append(cid)
-            }
-            lastInboundBytesByCid[cid] = bytes
-        }
-        // Drop tracking for peers that left.
-        for cid in Array(lastInboundBytesByCid.keys) where peerSlots[cid] == nil {
-            lastInboundBytesByCid.removeValue(forKey: cid)
-        }
-        guard diagnostics.isSignalingConnected else { return }
-        // Emit even when `flowing` is empty so the server knows this client is
-        // still a fresh reporter that sees no media from suspended peers.
-        let cidsArray = JSONValue.array(flowing.map(JSONValue.string))
-        signalingProvider.broadcast(type: "media_liveness", payload: ["cids": cidsArray])
-        mediaLivenessEmitCount += 1
-    }
-
-    /// Sample inbound VIDEO bytes per peer SPLIT by transceiver role, derive the
-    /// per-role liveness booleans (camera/content receiving) by diffing against
-    /// the previous sample, and re-render so `cameraReceiving` /
-    /// `contentReceiving` on remote participants stay current. The per-role
-    /// counterpart to `emitMediaLiveness`; the audio-inclusive `media_liveness`
-    /// emit is deliberately left untouched. Conservative first sample for a peer
-    /// (no baseline ⇒ both false). Cleans up baselines on peer-leave.
-    private func sampleInboundRoleLiveness() {
         let slots = peerSlots
         guard !slots.isEmpty else {
-            // No peers: drop any stale tracking and re-render if it changed.
             if !lastInboundRoleBytesByCid.isEmpty || !roleLivenessByCid.isEmpty {
                 lastInboundRoleBytesByCid.removeAll()
                 roleLivenessByCid.removeAll()
@@ -2133,30 +2082,46 @@ public final class SerenadaSession: ObservableObject {
             }
             return
         }
-        var samples: [String: RoleInboundBytes] = [:]
+        mediaLivenessEmitInFlight = true
+        var samples: [String: InboundLivenessSample] = [:]
         var remaining = slots.count
         for (cid, slot) in slots {
-            slot.collectInboundRoleBytes { [weak self] sample in
+            slot.collectInboundLiveness { [weak self] sample in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     samples[cid] = sample
                     remaining -= 1
-                    if remaining == 0 { self.finalizeInboundRoleLiveness(samples: samples) }
+                    if remaining == 0 { self.finalizeInboundLiveness(samples: samples) }
                 }
             }
         }
     }
 
-    private func finalizeInboundRoleLiveness(samples: [String: RoleInboundBytes]) {
+    private func finalizeInboundLiveness(samples: [String: InboundLivenessSample]) {
+        mediaLivenessEmitInFlight = false
+        var flowing: [String] = []
+        let canBroadcast = diagnostics.isSignalingConnected && currentRoomState != nil
         for (cid, sample) in samples {
+            if canBroadcast {
+                if let previous = lastInboundBytesByCid[cid], sample.inboundBytes > previous {
+                    flowing.append(cid)
+                }
+                lastInboundBytesByCid[cid] = sample.inboundBytes
+            }
+
+            let roleBytes = sample.roleBytes
             let previous = lastInboundRoleBytesByCid[cid]
             roleLivenessByCid[cid] = RoleLiveness(
-                camera: previous != nil && sample.cameraBytes > previous!.cameraBytes,
-                content: previous != nil && sample.contentBytes > previous!.contentBytes
+                camera: previous != nil && roleBytes.cameraBytes > previous!.cameraBytes,
+                content: previous != nil && roleBytes.contentBytes > previous!.contentBytes
             )
-            lastInboundRoleBytesByCid[cid] = sample
+            lastInboundRoleBytesByCid[cid] = roleBytes
         }
-        // Drop tracking for peers that left.
+        if canBroadcast {
+            for cid in Array(lastInboundBytesByCid.keys) where peerSlots[cid] == nil {
+                lastInboundBytesByCid.removeValue(forKey: cid)
+            }
+        }
         for cid in Array(lastInboundRoleBytesByCid.keys) where peerSlots[cid] == nil {
             lastInboundRoleBytesByCid.removeValue(forKey: cid)
         }
@@ -2165,6 +2130,13 @@ public final class SerenadaSession: ObservableObject {
         }
         // Surface the refreshed booleans on the public remote participants.
         refreshRemoteParticipants()
+
+        guard canBroadcast else { return }
+        // Emit even when `flowing` is empty so the server knows this client is
+        // still a fresh reporter that sees no media from suspended peers.
+        let cidsArray = JSONValue.array(flowing.map(JSONValue.string))
+        signalingProvider.broadcast(type: "media_liveness", payload: ["cids": cidsArray])
+        mediaLivenessEmitCount += 1
     }
 
     /// Latest cached per-role inbound liveness for a peer, or both-false when no

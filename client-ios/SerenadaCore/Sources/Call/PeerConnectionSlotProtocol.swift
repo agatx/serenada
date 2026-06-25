@@ -24,6 +24,12 @@ internal struct RoleInboundBytes: Equatable {
     var contentBytes: Int64
 }
 
+/// Combined inbound liveness sample from one WebRTC stats report.
+internal struct InboundLivenessSample: Equatable {
+    var inboundBytes: Int64
+    var roleBytes: RoleInboundBytes
+}
+
 /// Per-peer, per-role inbound liveness derived by the session from successive
 /// ``RoleInboundBytes`` samples: `true` for a role when its inbound video bytes
 /// advanced since the previous sample (that role's video is flowing). Surfaced
@@ -137,19 +143,22 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func collectRealtimeCallStats(onComplete: @escaping (RealtimeCallStats) -> Void)
     func collectRealtimeCallStatsAndSummary(onComplete: @escaping (RealtimeCallStats, String) -> Void)
 
+    /// Asynchronously samples cumulative inbound liveness from one stats report:
+    /// all inbound RTP bytes for server `media_liveness` plus role-split
+    /// inbound video bytes for camera/content stall diagnostics.
+    func collectInboundLiveness(onComplete: @escaping (InboundLivenessSample) -> Void)
+
     /// Asynchronously samples cumulative inbound `bytesReceived` across all
-    /// inbound-rtp stats for this peer. Used by the media-liveness emitter
-    /// (see SerenadaSession.startMediaLivenessTimer); a CID is "flowing"
-    /// when its sample advances over the previous one. Reports `0` when
-    /// the peer connection is not yet established.
+    /// inbound-rtp stats for this peer. Kept for focused callers; the session
+    /// uses ``collectInboundLiveness(onComplete:)`` to avoid duplicate stats
+    /// collection on each media-liveness tick.
     func collectInboundBytes(onComplete: @escaping (Int64) -> Void)
 
     /// Asynchronously samples cumulative inbound VIDEO `bytesReceived` SPLIT by
     /// the bound transceiver role (camera vs content) — see ``RoleInboundBytes``.
-    /// The per-role counterpart to ``collectInboundBytes(onComplete:)``; the
-    /// session diffs successive samples to derive the per-role
-    /// `cameraReceiving` / `contentReceiving` stall diagnostics. Reports zeros
-    /// when the peer connection is not yet established. Audio is excluded.
+    /// Kept for focused callers; the session uses
+    /// ``collectInboundLiveness(onComplete:)`` to avoid duplicate stats
+    /// collection on each media-liveness tick. Audio is excluded.
     func collectInboundRoleBytes(onComplete: @escaping (RoleInboundBytes) -> Void)
 
     /// Asynchronously samples cumulative outbound media counters and whether

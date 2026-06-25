@@ -30,6 +30,12 @@ internal data class InboundRoleBytes(
     val contentBytes: Long,
 )
 
+/** Combined inbound liveness sample from one WebRTC stats report. */
+internal data class InboundLivenessSample(
+    val inboundBytes: Long,
+    val roleBytes: InboundRoleBytes,
+)
+
 /**
  * Per-role inbound liveness derived from successive [InboundRoleBytes] samples:
  * a role is `true` when its inbound video bytes advanced since the previous
@@ -139,11 +145,17 @@ internal interface PeerConnectionSlotProtocol {
     fun detachRemoteSink(sink: VideoSink)
     fun collectWebRtcStats(onComplete: (String, RealtimeCallStats?) -> Unit)
     /**
+     * Asynchronously samples cumulative inbound liveness from one stats report:
+     * all inbound RTP bytes for server `media_liveness` plus role-split
+     * inbound video bytes for camera/content stall diagnostics.
+     */
+    fun collectInboundLiveness(onComplete: (InboundLivenessSample) -> Unit)
+
+    /**
      * Asynchronously samples the cumulative inbound `bytesReceived` across all
-     * inbound-rtp stats for this peer. Used by the media-liveness emitter
-     * (see SerenadaSession.startMediaLivenessTimer); a CID is "flowing" when
-     * its sample advances over the previous one. Reports `0` when the peer
-     * connection is not yet established.
+     * inbound-rtp stats for this peer. Kept for focused callers; the session
+     * uses [collectInboundLiveness] to avoid duplicate stats collection on each
+     * media-liveness tick.
      */
     fun collectInboundBytes(onComplete: (Long) -> Unit)
 
@@ -154,10 +166,9 @@ internal interface PeerConnectionSlotProtocol {
      * video stat is matched to the bound CONTENT receiver track by
      * `trackIdentifier`; everything else (camera role, legacy single video, any
      * video not positively attributable to content) is counted as camera. Audio
-     * is excluded. Reports zeroes when the peer connection is not established.
-     * The per-role counterpart to [collectInboundBytes] (which stays an all-RTP
-     * audio-inclusive sum for the server `media_liveness` eviction-deferral
-     * signal, deliberately unchanged).
+     * is excluded. Kept for focused callers; the session uses
+     * [collectInboundLiveness] to avoid duplicate stats collection on each
+     * media-liveness tick.
      */
     fun collectInboundRoleBytes(onComplete: (InboundRoleBytes) -> Unit)
 

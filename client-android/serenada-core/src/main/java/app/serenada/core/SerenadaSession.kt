@@ -28,6 +28,7 @@ import app.serenada.core.call.CallQualityTracker
 import app.serenada.core.call.ReconnectReason
 import app.serenada.core.call.ConnectionStatusTracker
 import app.serenada.core.call.FrameSnapshotCapture
+import app.serenada.core.call.InboundLivenessSample
 import app.serenada.core.call.InboundRoleBytes
 import app.serenada.core.call.JoinFlowCoordinator
 import app.serenada.core.call.LiveSessionClock
@@ -485,9 +486,9 @@ class SerenadaSession internal constructor(
 
     // #3 — periodic `media_liveness` emission. Active across the in-call
     // window so the server can defer hard-eviction of suspended peers whose
-    // media is still flowing locally. Ticks no-op while transport is
-    // disconnected (baseline samples preserved so the next post-reconnect
-    // tick can detect flow).
+    // media is still flowing locally. The broadcast no-ops while transport is
+    // disconnected, preserving media-liveness baselines so the next
+    // post-reconnect tick can detect flow.
     private val lastInboundBytesByCid = mutableMapOf<String, Long>()
     // Per-remote-cid, per-role tally of cumulative inbound VIDEO bytesReceived,
     // split by the BOUND transceiver role (camera vs content) so a stalled
@@ -501,7 +502,6 @@ class SerenadaSession internal constructor(
     private val roleLivenessByCid = mutableMapOf<String, RoleLiveness>()
     private var mediaLivenessTickRunnable: Runnable? = null
     private var mediaLivenessEmitInFlight = false
-    private var roleLivenessSampleInFlight = false
     private var mediaLivenessEmitCount = 0
     private var outboundMediaWatchdogRunnable: Runnable? = null
     private var iceFetchGeneration = 0
@@ -2042,12 +2042,10 @@ class SerenadaSession internal constructor(
         if (mediaLivenessTickRunnable != null) return
         val runnable = object : Runnable {
             override fun run() {
-                // Per-role inbound stall diagnostics refresh on the same cadence
-                // as (but independently of) the server-facing media_liveness
-                // broadcast, so cameraReceiving/contentReceiving stay current even
-                // while the broadcast is gated (e.g. transport blip).
-                sampleInboundRoleLiveness()
-                emitMediaLiveness()
+                // Total inbound flow and per-role stall diagnostics refresh from
+                // one stats sample per peer. Broadcast remains gated by signaling
+                // connection, while role diagnostics stay current through blips.
+                sampleInboundLiveness()
                 handler.postDelayed(this, WebRtcResilienceConstants.MEDIA_LIVENESS_INTERVAL_MS)
             }
         }
@@ -2077,65 +2075,11 @@ class SerenadaSession internal constructor(
         outboundMediaWatchdogRunnable = null
     }
 
-    private fun emitMediaLiveness() {
+    private fun sampleInboundLiveness() {
         if (_state.value.phase == CallPhase.Idle || _state.value.phase == CallPhase.Ending) return
         if (mediaLivenessEmitInFlight) return
-        if (!_diagnostics.value.isSignalingConnected) return
-        if (currentRoomState == null) return
-        val slots = peerSlots.toMap()
-        if (slots.isEmpty()) return
-
-        mediaLivenessEmitInFlight = true
-        val newSamples = mutableMapOf<String, Long>()
-        var remaining = slots.size
-        for ((cid, slot) in slots) {
-            slot.collectInboundBytes { bytes ->
-                handler.post {
-                    newSamples[cid] = bytes
-                    remaining -= 1
-                    if (remaining == 0) finalizeMediaLivenessEmit(newSamples)
-                }
-            }
-        }
-    }
-
-    private fun finalizeMediaLivenessEmit(newSamples: Map<String, Long>) {
-        mediaLivenessEmitInFlight = false
-        val flowing = mutableListOf<String>()
-        for ((cid, bytes) in newSamples) {
-            val previous = lastInboundBytesByCid[cid]
-            if (previous != null && bytes > previous) flowing.add(cid)
-            lastInboundBytesByCid[cid] = bytes
-        }
-        // Drop tracking for peers that left the room.
-        val activeCids = peerSlots.keys
-        val stale = lastInboundBytesByCid.keys.filterNot { activeCids.contains(it) }
-        for (cid in stale) lastInboundBytesByCid.remove(cid)
-
-        if (!_diagnostics.value.isSignalingConnected) return
-        // Emit even when `flowing` is empty so the server knows this client is
-        // still a fresh reporter that sees no media from suspended peers.
-        val payload = JSONObject().apply { put("cids", JSONArray(flowing)) }
-        signalingProvider.broadcast("media_liveness", payload)
-        mediaLivenessEmitCount += 1
-    }
-
-    /**
-     * Per-role counterpart to [emitMediaLiveness]: sample each peer's inbound
-     * video bytes split by bound role (camera vs content), diff against the
-     * previous sample, and refresh the cached [roleLivenessByCid] booleans that
-     * surface as `cameraReceiving`/`contentReceiving` on each remote participant.
-     * Conservative on the first sample for a peer (no baseline → both false).
-     * Independent of the server-facing broadcast gate (it only needs slots), so
-     * stall diagnostics stay current through a transport blip. Cleans up tracking
-     * for peers that have left.
-     */
-    private fun sampleInboundRoleLiveness() {
-        if (_state.value.phase == CallPhase.Idle || _state.value.phase == CallPhase.Ending) return
-        if (roleLivenessSampleInFlight) return
         val slots = peerSlots.toMap()
         if (slots.isEmpty()) {
-            // No peers: drop any stale tracking and clear booleans if needed.
             if (lastInboundRoleBytesByCid.isNotEmpty() || roleLivenessByCid.isNotEmpty()) {
                 lastInboundRoleBytesByCid.clear()
                 roleLivenessByCid.clear()
@@ -2143,37 +2087,55 @@ class SerenadaSession internal constructor(
             }
             return
         }
-        roleLivenessSampleInFlight = true
-        val newSamples = mutableMapOf<String, InboundRoleBytes>()
+        mediaLivenessEmitInFlight = true
+        val newSamples = mutableMapOf<String, InboundLivenessSample>()
         var remaining = slots.size
         for ((cid, slot) in slots) {
-            slot.collectInboundRoleBytes { sample ->
+            slot.collectInboundLiveness { sample ->
                 handler.post {
                     newSamples[cid] = sample
                     remaining -= 1
-                    if (remaining == 0) finalizeRoleLivenessSample(newSamples)
+                    if (remaining == 0) finalizeInboundLivenessSample(newSamples)
                 }
             }
         }
     }
 
-    private fun finalizeRoleLivenessSample(newSamples: Map<String, InboundRoleBytes>) {
-        roleLivenessSampleInFlight = false
+    private fun finalizeInboundLivenessSample(newSamples: Map<String, InboundLivenessSample>) {
+        mediaLivenessEmitInFlight = false
+        val flowing = mutableListOf<String>()
+        val canBroadcast = _diagnostics.value.isSignalingConnected && currentRoomState != null
         for ((cid, sample) in newSamples) {
+            if (canBroadcast) {
+                val previousBytes = lastInboundBytesByCid[cid]
+                if (previousBytes != null && sample.inboundBytes > previousBytes) flowing.add(cid)
+                lastInboundBytesByCid[cid] = sample.inboundBytes
+            }
+            val roleBytes = sample.roleBytes
             val previous = lastInboundRoleBytesByCid[cid]
             roleLivenessByCid[cid] = RoleLiveness(
-                camera = previous != null && sample.cameraBytes > previous.cameraBytes,
-                content = previous != null && sample.contentBytes > previous.contentBytes,
+                camera = previous != null && roleBytes.cameraBytes > previous.cameraBytes,
+                content = previous != null && roleBytes.contentBytes > previous.contentBytes,
             )
-            lastInboundRoleBytesByCid[cid] = sample
+            lastInboundRoleBytesByCid[cid] = roleBytes
         }
-        // Drop tracking for peers that left the room.
         val activeCids = peerSlots.keys
+        if (canBroadcast) {
+            val stale = lastInboundBytesByCid.keys.filterNot { activeCids.contains(it) }
+            for (cid in stale) lastInboundBytesByCid.remove(cid)
+        }
         val staleBytes = lastInboundRoleBytesByCid.keys.filterNot { activeCids.contains(it) }
         for (cid in staleBytes) lastInboundRoleBytesByCid.remove(cid)
         val staleLiveness = roleLivenessByCid.keys.filterNot { activeCids.contains(it) }
         for (cid in staleLiveness) roleLivenessByCid.remove(cid)
         refreshRemoteParticipants()
+
+        if (!canBroadcast) return
+        // Emit even when `flowing` is empty so the server knows this client is
+        // still a fresh reporter that sees no media from suspended peers.
+        val payload = JSONObject().apply { put("cids", JSONArray(flowing)) }
+        signalingProvider.broadcast("media_liveness", payload)
+        mediaLivenessEmitCount += 1
     }
 
     /**
@@ -2316,7 +2278,6 @@ class SerenadaSession internal constructor(
         lastInboundRoleBytesByCid.clear()
         roleLivenessByCid.clear()
         mediaLivenessEmitInFlight = false
-        roleLivenessSampleInFlight = false
         localSuspendedSinceMs = null
         sessionStartTs = null
         sessionActivated = false

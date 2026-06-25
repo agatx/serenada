@@ -951,28 +951,13 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
 #endif
     }
 
-    public func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
+    public func collectInboundLiveness(onComplete: @escaping (InboundLivenessSample) -> Void) {
 #if canImport(WebRTC)
         guard let peerConnection else {
-            onComplete(0)
-            return
-        }
-        peerConnection.statistics { report in
-            var bytes: Int64 = 0
-            for stat in report.statistics.values where stat.type == "inbound-rtp" {
-                bytes += memberInt64(stat, key: "bytesReceived") ?? 0
-            }
-            Task { @MainActor in onComplete(bytes) }
-        }
-#else
-        onComplete(0)
-#endif
-    }
-
-    public func collectInboundRoleBytes(onComplete: @escaping (RoleInboundBytes) -> Void) {
-#if canImport(WebRTC)
-        guard let peerConnection else {
-            onComplete(RoleInboundBytes(cameraBytes: 0, contentBytes: 0))
+            onComplete(InboundLivenessSample(
+                inboundBytes: 0,
+                roleBytes: RoleInboundBytes(cameraBytes: 0, contentBytes: 0)
+            ))
             return
         }
         // Capture the bound CONTENT receiver's track id and m-line id on the
@@ -988,26 +973,47 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             return (mid?.isEmpty == false) ? mid : nil
         }()
         peerConnection.statistics { report in
+            var bytes: Int64 = 0
             var cameraBytes: Int64 = 0
             var contentBytes: Int64 = 0
             for stat in report.statistics.values where stat.type == "inbound-rtp" {
+                let statBytes = memberInt64(stat, key: "bytesReceived") ?? 0
+                bytes += statBytes
                 guard mediaKind(for: stat) == "video" else { continue }
-                let bytes = memberInt64(stat, key: "bytesReceived") ?? 0
                 let trackId = memberString(stat, key: "trackIdentifier")
                 let mid = memberString(stat, key: "mid")
                 let matchesContentTrack = contentTrackId != nil && trackId == contentTrackId
                 let matchesContentMid = trackId == nil && contentMid != nil && mid == contentMid
                 if matchesContentTrack || matchesContentMid {
-                    contentBytes += bytes
+                    contentBytes += statBytes
                 } else {
-                    cameraBytes += bytes
+                    cameraBytes += statBytes
                 }
             }
-            Task { @MainActor in onComplete(RoleInboundBytes(cameraBytes: cameraBytes, contentBytes: contentBytes)) }
+            let sample = InboundLivenessSample(
+                inboundBytes: bytes,
+                roleBytes: RoleInboundBytes(cameraBytes: cameraBytes, contentBytes: contentBytes)
+            )
+            Task { @MainActor in onComplete(sample) }
         }
 #else
-        onComplete(RoleInboundBytes(cameraBytes: 0, contentBytes: 0))
+        onComplete(InboundLivenessSample(
+            inboundBytes: 0,
+            roleBytes: RoleInboundBytes(cameraBytes: 0, contentBytes: 0)
+        ))
 #endif
+    }
+
+    public func collectInboundBytes(onComplete: @escaping (Int64) -> Void) {
+        collectInboundLiveness { sample in
+            onComplete(sample.inboundBytes)
+        }
+    }
+
+    public func collectInboundRoleBytes(onComplete: @escaping (RoleInboundBytes) -> Void) {
+        collectInboundLiveness { sample in
+            onComplete(sample.roleBytes)
+        }
     }
 
     public func collectOutboundMediaSample(onComplete: @escaping (OutboundMediaSample?) -> Void) {
