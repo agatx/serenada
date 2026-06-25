@@ -643,15 +643,32 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
             logger?.log(.debug, tag: "PeerConnection", "[\(remoteCid)] Ignoring unbound remote video track (mid=\(incomingMid))")
             return
         }
-        // No transceiver. A nil track here is a legacy didRemove:stream delivery;
-        // clear the camera binding so capable peers do not leave a stale frozen
-        // frame behind. Non-nil legacy didAdd:stream delivery stays ignored:
-        // transceiver-carrying callbacks are authoritative for capable peers.
-        if track == nil {
-            attachRemoteCameraTrack(nil)
+        // No transceiver. A nil track here is a legacy didRemove:stream delivery.
+        // For capable peers it is not role-aware and can arrive after valid
+        // Unified-Plan callbacks; ignore it so it cannot clear a bound camera.
+        guard let track else {
             return
         }
-        logger?.log(.debug, tag: "PeerConnection", "[\(remoteCid)] Ignoring nil-transceiver remote video delivery (capable peer)")
+
+        // iOS libwebrtc may deliver the only remote camera callback through the
+        // legacy didAdd:stream path, which has no transceiver. First try to
+        // recover the role by comparing track IDs with the bound receivers, then
+        // fall back to camera only if no camera track has been classified yet.
+        // Once a camera is bound, nil-transceiver duplicates stay ignored so they
+        // cannot clobber the authoritative camera/content routing.
+        let incomingTrackId = track.trackId
+        if !incomingTrackId.isEmpty, incomingTrackId == contentTransceiver?.receiver.track?.trackId {
+            attachRemoteContentTrack(track)
+            return
+        }
+        if !incomingTrackId.isEmpty, incomingTrackId == cameraTransceiver?.receiver.track?.trackId {
+            attachRemoteCameraTrack(track)
+            return
+        }
+        guard remoteVideoTrack == nil else {
+            return
+        }
+        attachRemoteCameraTrack(track)
     }
 
     /// Bind/replace the remote CAMERA track and rewire camera renderers.
@@ -1536,7 +1553,8 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
     private let onRenegotiationNeeded: () -> Void
     // Carries the originating transceiver (when known) so the slot can classify
     // the track by its PERSISTED role binding (camera vs content) for capable
-    // peers. `nil` transceiver ⇒ legacy single-video routing (camera).
+    // peers. `nil` transceiver ⇒ legacy stream delivery; the slot may use it as
+    // a camera fallback when no role-aware callback arrives first.
     private let onRemoteVideoTrack: (RTCVideoTrack?, RTCRtpTransceiver?) -> Void
     private let onRemoteAudioTrack: (RTCAudioTrack) -> Void
 
@@ -1575,9 +1593,9 @@ private final class SlotPeerConnectionObserverProxy: NSObject, RTCPeerConnection
         if let track = stream.audioTracks.first {
             onRemoteAudioTrack(track)
         }
-        // Plan-B style stream callback carries no transceiver; treat as camera
-        // (legacy routing). The Unified-Plan didAdd:rtpReceiver path below is the
-        // role-aware one for capable peers.
+        // Plan-B style stream callback carries no transceiver. The
+        // Unified-Plan didAdd:rtpReceiver path below is the role-aware one for
+        // capable peers, but some iOS builds still deliver video only here.
         onRemoteVideoTrack(stream.videoTracks.first, nil)
     }
 

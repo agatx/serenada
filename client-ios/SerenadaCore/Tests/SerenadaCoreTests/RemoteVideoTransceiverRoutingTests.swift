@@ -167,6 +167,50 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
         slot.closePeerConnection()
     }
 
+    /// iOS may deliver the only remote camera video callback through the legacy
+    /// didAdd:stream path, which has no transceiver. If no camera has been bound
+    /// yet, the nil-transceiver video must attach as a camera fallback instead of
+    /// being dropped.
+    func testNilTransceiverFirstDeliveryRoutesToCameraFallback() throws {
+        let peer = try makeNegotiatedPeer()
+        var cameraCallbackTrack: RTCVideoTrack?
+        var cameraCallbackFired = false
+        let slot = makeBoundSlot(peer) { track in
+            cameraCallbackFired = true
+            cameraCallbackTrack = track
+        }
+
+        let inboundCamera = peer.makeVideoTrack("legacy-stream-camera")
+        slot._test_routeRemoteVideoTrack(inboundCamera, transceiver: nil)
+
+        XCTAssertTrue(cameraCallbackFired, "nil-transceiver first delivery must surface a camera fallback")
+        XCTAssertTrue(cameraCallbackTrack === inboundCamera, "fallback camera callback should carry the inbound track")
+        XCTAssertTrue(slot._test_remoteCameraTrack === inboundCamera, "slot should bind the fallback as remote camera")
+        XCTAssertNil(slot._test_remoteContentTrack, "camera fallback must not bind content")
+        slot.closePeerConnection()
+    }
+
+    /// A later transceiver-classified camera callback is authoritative and should
+    /// replace the provisional nil-transceiver fallback.
+    func testTransceiverCameraReplacesNilTransceiverFallback() throws {
+        let peer = try makeNegotiatedPeer()
+        var callbackTracks: [RTCVideoTrack?] = []
+        let slot = makeBoundSlot(peer) { track in callbackTracks.append(track) }
+
+        let fallback = peer.makeVideoTrack("legacy-stream-camera")
+        slot._test_routeRemoteVideoTrack(fallback, transceiver: nil)
+        XCTAssertTrue(slot._test_remoteCameraTrack === fallback, "precondition: fallback camera bound")
+
+        let inboundCamera = peer.makeVideoTrack("inbound-camera")
+        slot._test_routeRemoteVideoTrack(inboundCamera, transceiver: peer.cameraWrapper)
+
+        XCTAssertEqual(callbackTracks.count, 2, "camera callback should fire for fallback and authoritative replacement")
+        XCTAssertTrue(callbackTracks.last! === inboundCamera, "authoritative callback should carry the transceiver-classified camera")
+        XCTAssertTrue(slot._test_remoteCameraTrack === inboundCamera, "authoritative camera should replace fallback")
+        XCTAssertNil(slot._test_remoteContentTrack, "camera replacement must not bind content")
+        slot.closePeerConnection()
+    }
+
     /// A legacy `didAdd:stream` delivery arrives with NO transceiver. For a
     /// capable peer this path cannot distinguish camera from content, and because
     /// native libwebrtc hands each callback a DISTINCT `RTCVideoTrack` wrapper for
@@ -174,8 +218,9 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
     /// (clobbered) the already-classified remote camera with a churned/content
     /// wrapper on every stream callback — the last one winning — which blanked
     /// remote video on iOS (Android's `onAddStream` is a no-op, so it never bit
-    /// there). The fix ignores nil-transceiver deliveries for capable peers; the
-    /// transceiver-carrying receive paths are authoritative.
+    /// there). The fix ignores nil-transceiver deliveries only after a camera has
+    /// already been classified; the transceiver-carrying receive paths are
+    /// authoritative.
     func testNilTransceiverDeliveryDoesNotClobberBoundCamera() throws {
         let peer = try makeNegotiatedPeer()
         let slot = makeBoundSlot(peer) { _ in }
@@ -199,6 +244,26 @@ final class RemoteVideoTransceiverRoutingTests: XCTestCase {
             slot._test_remoteCameraTrack === strayTrack,
             "the stray legacy-stream track must not become the camera"
         )
+        slot.closePeerConnection()
+    }
+
+    /// iOS can emit a legacy `didRemove:stream` callback with no transceiver
+    /// after the Unified-Plan camera callback has already bound the valid remote
+    /// camera. For capable peers that nil/no-transceiver removal is not
+    /// role-aware and must not clear the classified camera track.
+    func testNilTransceiverRemovalDoesNotClearBoundCamera() throws {
+        let peer = try makeNegotiatedPeer()
+        var callbackTracks: [RTCVideoTrack?] = []
+        let slot = makeBoundSlot(peer) { track in callbackTracks.append(track) }
+
+        let inboundCamera = peer.makeVideoTrack("inbound-camera")
+        slot._test_routeRemoteVideoTrack(inboundCamera, transceiver: peer.cameraWrapper)
+        XCTAssertTrue(slot._test_remoteCameraTrack === inboundCamera, "precondition: camera routed before removal")
+
+        slot._test_routeRemoteVideoTrack(nil, transceiver: nil)
+
+        XCTAssertTrue(slot._test_remoteCameraTrack === inboundCamera, "nil-transceiver removal must not clear the camera")
+        XCTAssertEqual(callbackTracks.count, 1, "ignoring legacy removal must not fire a nil camera callback")
         slot.closePeerConnection()
     }
 }

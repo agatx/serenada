@@ -433,6 +433,46 @@ final class IndependentContentMediaTests: XCTestCase {
         harness.tearDown()
     }
 
+    /// iOS SwiftUI video views attach their RTC renderer once in `makeUIView`.
+    /// A capability flip recreates the peer slot after that attach, so the session
+    /// must replay renderer registrations onto the replacement slot; otherwise
+    /// remote media can arrive but the surface remains blank.
+    func testCapabilityFlipReplaysRemoteRendererRegistrations() async {
+        let harness = SessionTestHarness(config: independentConfig())
+        await harness.advanceToInCallWithCapabilities(
+            remoteIndependentContentVideo: false, remoteVideoMediaEnabled: true
+        )
+        guard let oldSlot = harness.fakeMedia.fakeSlots["remote-cid-1"] else {
+            XCTFail("expected initial slot")
+            return
+        }
+
+        let defaultCameraRenderer = NSObject()
+        let participantCameraRenderer = NSObject()
+        let contentRenderer = NSObject()
+        harness.session.attachRemoteRenderer(defaultCameraRenderer)
+        harness.session.attachRemoteRenderer(participantCameraRenderer, forParticipant: "remote-cid-1")
+        harness.session.attachRemoteContentRenderer(contentRenderer, forParticipant: "remote-cid-1")
+
+        XCTAssertEqual(oldSlot.attachRemoteRendererCalls.count, 2)
+        XCTAssertTrue(oldSlot.attachRemoteRendererCalls.contains { $0 === defaultCameraRenderer })
+        XCTAssertTrue(oldSlot.attachRemoteRendererCalls.contains { $0 === participantCameraRenderer })
+        XCTAssertEqual(oldSlot.attachRemoteContentRendererCalls.count, 1)
+        XCTAssertTrue(oldSlot.attachRemoteContentRendererCalls.contains { $0 === contentRenderer })
+
+        await sendRoomStateWithRemoteCapability(harness, remoteIndependentContentVideo: true)
+
+        guard let newSlot = harness.fakeMedia.fakeSlots["remote-cid-1"] else {
+            XCTFail("expected replacement slot")
+            return
+        }
+        XCTAssertFalse(newSlot === oldSlot)
+        XCTAssertTrue(newSlot.attachRemoteRendererCalls.contains { $0 === defaultCameraRenderer })
+        XCTAssertTrue(newSlot.attachRemoteRendererCalls.contains { $0 === participantCameraRenderer })
+        XCTAssertTrue(newSlot.attachRemoteContentRendererCalls.contains { $0 === contentRenderer })
+        harness.tearDown()
+    }
+
     /// The reverse flip: a peer that was capable and later drops the capability
     /// (e.g. its mediaPolicy disables video) must be recreated LEGACY.
     func testCapabilityFlipToLegacyRecreatesSlot() async {
