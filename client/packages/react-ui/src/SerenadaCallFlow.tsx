@@ -331,6 +331,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
     const [internalSession, setInternalSession] = useState<SerenadaSessionHandle | null>(null);
     const usesInternalSession = !externalSession;
     const videoEnabledConfig = config?.videoEnabled !== false;
+    const videoMediaEnabledConfig = config?.videoMediaEnabled !== false;
 
     useEffect(() => {
         if (externalSession || !url) return;
@@ -342,11 +343,11 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             return;
         }
 
-        const core = new SerenadaCore(
-            videoEnabledConfig
-                ? { serverHost: host }
-                : { serverHost: host, cameraModes: [] },
-        );
+        const core = new SerenadaCore({
+            serverHost: host,
+            videoMediaEnabled: videoMediaEnabledConfig,
+            cameraModes: videoEnabledConfig ? undefined : [],
+        });
         const sess = core.join(url);
         internalSessionRef.current = sess;
         // eslint-disable-next-line react-hooks/set-state-in-effect -- internal SDK session is initialized from the URL-first effect
@@ -357,10 +358,10 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             internalSessionRef.current = null;
             setInternalSession(null);
         };
-        // videoEnabledConfig is intentionally omitted: it's read once at session
-        // creation. Toggling it mid-call would destroy and rejoin the session,
-        // dropping the call. Host apps that need to change videoEnabled at
-        // runtime should remount this component.
+        // videoEnabledConfig/videoMediaEnabledConfig are intentionally omitted:
+        // they are read once at session creation. Toggling either mid-call would
+        // destroy and rejoin the session, dropping the call. Host apps that need
+        // to change them at runtime should remount this component.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [externalSession, serverHost, url]);
 
@@ -923,7 +924,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
             },
             // Audio-only receivers (videoMediaEnabled=false) never negotiated
             // content receive and must suppress all content UI.
-            localVideoMediaEnabled: videoEnabledConfig,
+            localVideoMediaEnabled: videoMediaEnabledConfig,
             remoteContentOrder,
         })
     ), [
@@ -934,7 +935,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
         remoteContentState,
         remoteStreams,
         session,
-        videoEnabledConfig,
+        videoMediaEnabledConfig,
     ]);
 
     // The content-role input to the layout. Multi-party surfaces content for the
@@ -1477,6 +1478,12 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                             stageTileKeyEquals(prev, key) ? null : key
                                         ));
                                         const isPinned = stageTileKeyEquals(pinnedTile, key);
+                                        const handlePinKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+                                            if (event.key !== 'Enter' && event.key !== ' ') return;
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            togglePin();
+                                        };
 
                                         // Content active but its media has not arrived yet
                                         // (receiver-side hold): a connecting tile, not a stale frame.
@@ -1490,6 +1497,7 @@ export const SerenadaCallFlow: React.FC<CallFlowProps> = ({
                                                     role="button"
                                                     tabIndex={0}
                                                     onPointerUp={(event) => { event.stopPropagation(); togglePin(); }}
+                                                    onKeyDown={handlePinKeyDown}
                                                 >
                                                     <div className="video-stage-placeholder">
                                                         <div style={spinnerStyle} />

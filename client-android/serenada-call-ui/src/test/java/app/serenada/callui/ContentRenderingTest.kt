@@ -1,5 +1,6 @@
 package app.serenada.callui
 
+import app.serenada.core.SnapshotSource
 import app.serenada.core.call.ContentTypeWire
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.ParticipantContent
@@ -807,6 +808,42 @@ class ContentRenderingTest {
         assertFalse(stageTileKeyEquals(StageTileKey("a", StageTileKind.CAMERA), StageTileKey("b", StageTileKind.CAMERA)))
         assertFalse(stageTileKeyEquals(null, StageTileKey("a", StageTileKind.CAMERA)))
         assertFalse(stageTileKeyEquals(StageTileKey("a", StageTileKind.CAMERA), null))
+    }
+
+    @Test
+    fun streamKeyedSnapshot_usesPinnedCameraTile() {
+        val source = resolveStreamKeyedSnapshotSource(
+            pinnedTile = StageTileKey("peer", StageTileKind.CAMERA),
+            localCid = "me",
+            localVideoEnabled = true,
+            remotes = listOf(SnapshotVideoParticipant(cid = "peer", videoEnabled = true)),
+        )
+
+        assertEquals(SnapshotSource.Remote("peer"), source)
+    }
+
+    @Test
+    fun streamKeyedSnapshot_ignoresPinnedContentTile() {
+        val source = resolveStreamKeyedSnapshotSource(
+            pinnedTile = StageTileKey("peer", StageTileKind.CONTENT),
+            localCid = "me",
+            localVideoEnabled = true,
+            remotes = listOf(SnapshotVideoParticipant(cid = "peer", videoEnabled = true)),
+        )
+
+        assertNull(source)
+    }
+
+    @Test
+    fun streamKeyedSnapshot_hidesVideoOffCameraTile() {
+        val source = resolveStreamKeyedSnapshotSource(
+            pinnedTile = StageTileKey("peer", StageTileKind.CAMERA),
+            localCid = "me",
+            localVideoEnabled = true,
+            remotes = listOf(SnapshotVideoParticipant(cid = "peer", videoEnabled = false)),
+        )
+
+        assertNull(source)
     }
 
     // ---- deriveStageTiles ------------------------------------------------------

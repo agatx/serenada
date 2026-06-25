@@ -120,12 +120,9 @@ struct RootView: View {
                             callManager.dismissActiveCall()
                         },
                         onDismiss: { callManager.dismissActiveCall() },
-                        // The session is built with enableIndependentContentVideo=true
-                        // (CallManager), so the prebuilt UI must echo the flag or it
-                        // resolves every share as LEGACY and never renders the remote
-                        // screen-share content tile (the SDK still negotiates + receives
-                        // the content track; only the UI presentation was gated off).
-                        independentContentVideo: true
+                        // Keep the prebuilt UI in lockstep with the bundled app's
+                        // session opt-in from CallManager.
+                        independentContentVideo: CallManager.independentContentVideoEnabled
                     )
                     .onSnapshotCaptured { result in
                         SnapshotSaver.save(jpegData: result.jpegData) { outcome in

@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import app.serenada.core.SnapshotSource
 import app.serenada.core.layout.CallScene
 import app.serenada.core.layout.ContentSource
 import app.serenada.core.layout.ContentType
@@ -797,23 +798,31 @@ internal fun CallScreen(
         // tracks the pinned tile, since the stage layout treats that
         // participant as the dominant preview. Without a pin there is no
         // clear "current large preview", so the shutter stays hidden.
-        val snapshotSource: app.serenada.core.SnapshotSource? = when {
+        val snapshotSource: SnapshotSource? = when {
             !config.snapshotEnabled || onSnapshotRequested == null -> null
             uiState.phase != CallPhase.InCall && uiState.phase != CallPhase.Waiting -> null
+            streamKeyedStageActive -> resolveStreamKeyedSnapshotSource(
+                pinnedTile = pinnedStageTile,
+                localCid = uiState.localCid,
+                localVideoEnabled = uiState.localVideoEnabled,
+                remotes = uiState.remoteParticipants.map {
+                    SnapshotVideoParticipant(cid = it.cid, videoEnabled = it.videoEnabled)
+                },
+            )
             isMultiParty -> {
                 val pinned = pinnedParticipantId
                 when {
                     pinned == null -> null
                     pinned == uiState.localCid && uiState.localVideoEnabled ->
-                        app.serenada.core.SnapshotSource.Local
+                        SnapshotSource.Local
                     else -> uiState.remoteParticipants
                         .firstOrNull { it.cid == pinned && it.videoEnabled }
-                        ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+                        ?.let { SnapshotSource.Remote(it.cid) }
                 }
             }
-            isLocalLarge && uiState.localVideoEnabled -> app.serenada.core.SnapshotSource.Local
+            isLocalLarge && uiState.localVideoEnabled -> SnapshotSource.Local
             else -> uiState.remoteParticipants.firstOrNull { it.videoEnabled }
-                ?.let { app.serenada.core.SnapshotSource.Remote(it.cid) }
+                ?.let { SnapshotSource.Remote(it.cid) }
         }
         val snapshotHandler = onSnapshotRequested
         val showSnapshotButton =

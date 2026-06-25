@@ -45,6 +45,13 @@ export interface SerenadaCallFlowConfig {
      * `SerenadaConfig` used to build the session.
      */
     videoEnabled?: boolean;
+    /**
+     * Whether the underlying session negotiates any video media at all. This
+     * mirrors `SerenadaConfig.videoMediaEnabled` and is distinct from
+     * `videoEnabled`: camera controls can be hidden while still receiving remote
+     * camera/content video. Defaults to `true`.
+     */
+    videoMediaEnabled?: boolean;
     inviteControlsEnabled?: boolean;
     debugOverlayEnabled?: boolean;
     /**

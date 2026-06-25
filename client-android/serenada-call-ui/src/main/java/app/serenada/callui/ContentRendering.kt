@@ -1,5 +1,6 @@
 package app.serenada.callui
 
+import app.serenada.core.SnapshotSource
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.ParticipantContent
 import app.serenada.core.layout.ContentType
@@ -629,6 +630,26 @@ fun parseStageTileId(id: String): StageTileKey? {
 fun stageTileKeyEquals(a: StageTileKey?, b: StageTileKey?): Boolean {
     if (a == null || b == null) return false
     return a.cid == b.cid && a.kind == b.kind
+}
+
+data class SnapshotVideoParticipant(
+    val cid: String,
+    val videoEnabled: Boolean,
+)
+
+fun resolveStreamKeyedSnapshotSource(
+    pinnedTile: StageTileKey?,
+    localCid: String?,
+    localVideoEnabled: Boolean,
+    remotes: List<SnapshotVideoParticipant>,
+): SnapshotSource? {
+    if (pinnedTile?.kind != StageTileKind.CAMERA) return null
+    if (pinnedTile.cid == localCid) {
+        return if (localVideoEnabled) SnapshotSource.Local else null
+    }
+    return remotes
+        .firstOrNull { it.cid == pinnedTile.cid && it.videoEnabled }
+        ?.let { SnapshotSource.Remote(it.cid) }
 }
 
 /** A participant whose camera state the stage needs (local or remote). */

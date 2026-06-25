@@ -28,6 +28,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import app.serenada.android.R
 import app.serenada.android.call.CallManager
+import app.serenada.android.call.INDEPENDENT_CONTENT_VIDEO_ENABLED
 import app.serenada.android.call.SnapshotSaver
 import app.serenada.android.i18n.buildSerenadaCallStrings
 import app.serenada.callui.SerenadaCallFlow
@@ -349,10 +350,9 @@ fun SerenadaAppRoot(
                         SerenadaCallFlow(
                             session = session,
                             initialRemoteVideoFitCover = callManager.isRemoteVideoFitCover,
-                            // Session is built with enableIndependentContentVideo=true
-                            // (CallManager); echo it so the UI renders the remote
-                            // screen-share content tile instead of the legacy path.
-                            independentContentEnabled = true,
+                            // Keep the prebuilt UI in lockstep with the bundled
+                            // app's session opt-in from CallManager.
+                            independentContentEnabled = INDEPENDENT_CONTENT_VIDEO_ENABLED,
                             config = SerenadaCallFlowConfig(
                                 uiVariant = callUiVariant,
                                 screenSharingEnabled = true,

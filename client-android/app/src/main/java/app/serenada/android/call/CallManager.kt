@@ -41,6 +41,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 
+internal const val INDEPENDENT_CONTENT_VIDEO_ENABLED = true
+
 class CallManager(context: Context) : RoomWatcherDelegate {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -150,10 +152,10 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 isHdVideoExperimentalEnabled = settingsStore.isHdVideoExperimentalEnabled,
                 transports = transports,
                 proximityMonitoringEnabled = true,
-                // TEST ENABLE: independent screen-share content stream, for manual
-                // validation. SDK library default is false; revert or gate behind the
-                // legacy-receiver interop gate before production rollout.
-                enableIndependentContentVideo = true,
+                // Bundled Android app opt-in: the SDK default remains false for
+                // external integrators, but this app intentionally ships the
+                // independent screen-share media path.
+                enableIndependentContentVideo = INDEPENDENT_CONTENT_VIDEO_ENABLED,
             ),
             context = appContext,
         )
