@@ -106,6 +106,12 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
         supportsIndependentContentVideo: Bool,
         legacyVideoCarriesContent: Bool
     )
+    /// Promote this slot's audio + legacy-video transceivers to SEND-capable
+    /// (`.sendRecv`) WITHOUT attaching a track (multi-call held join, contract
+    /// §5 / Core Invariant 3). Idempotent: an already send-capable or stopped
+    /// transceiver is left untouched. Used when the engine enters held-senders
+    /// mode for a slot whose peer connection already exists.
+    func ensureSendCapableTransceiversForHold()
     func closePeerConnection()
     @discardableResult func createOffer(iceRestart: Bool, onSdp: @escaping (String) -> Void, onComplete: ((Bool) -> Void)?) -> Bool
     func createAnswer(onSdp: @escaping (String) -> Void, onComplete: ((Bool) -> Void)?)
@@ -183,4 +189,8 @@ extension PeerConnectionSlotProtocol {
     /// Default: legacy single-video path (byte-identical to today). Real slots
     /// override; fakes that don't care about independent routing inherit `false`.
     var supportsIndependentContentVideo: Bool { false }
+
+    /// Default no-op: fakes that don't model transceivers inherit this; the real
+    /// slot promotes its senders to send-capable.
+    func ensureSendCapableTransceiversForHold() {}
 }

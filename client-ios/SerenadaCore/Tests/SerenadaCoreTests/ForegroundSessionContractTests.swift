@@ -82,6 +82,47 @@ final class ForegroundSessionContractTests: XCTestCase {
         harness.tearDown()
     }
 
+    /// Q4: a held-initial slot must carry SEND-capable (`.sendRecv`) audio +
+    /// legacy-video senders with NIL tracks (contract §5 / Core Invariant 3), so
+    /// resume attaches fresh tracks via `replaceTrack` with NO renegotiation.
+    /// At the fake level: the engine entered held-senders mode and the slot
+    /// created during negotiation is `sendCapableForHold`, while NO local capture
+    /// was ever acquired.
+    func testHeldInitialSlotHasSendCapableSendersAndResumeAttachesWithoutRenegotiation() async {
+        let harness = SessionTestHarness(initialMediaRole: .held, isCapabilityGranted: { _ in true })
+        await harness.advanceToInCallHeld(localCid: "local", remoteCid: "remote")
+
+        // The held join entered held-senders mode (createSendersForHold) BEFORE
+        // negotiation, so the slot's senders are send-capable without capture.
+        XCTAssertEqual(harness.fakeMedia.createSendersForHoldCalls, 1,
+                       "A held join must enter held-senders mode before negotiation")
+        XCTAssertTrue(harness.fakeMedia.heldSendersMode,
+                      "A held session stays in held-senders mode until foregrounded")
+        let slot = harness.fakeMedia.fakeSlots["remote"]
+        XCTAssertNotNil(slot, "A peer slot must be created for the held session")
+        XCTAssertTrue(slot?.sendCapableForHold == true,
+                      "A held-initial slot's audio+video senders must be SEND-capable (.sendRecv)")
+        // No capture: the send-capable senders carry NIL tracks.
+        XCTAssertTrue(harness.fakeMedia.startLocalMediaCalls.isEmpty)
+        XCTAssertFalse(harness.fakeMedia.hasLocalAudioTrack)
+        XCTAssertFalse(harness.fakeMedia.hasLocalVideoTrack)
+
+        // Resume: tracks attach to the EXISTING send-capable senders via the
+        // resume path (replaceTrack), with NO call to startLocalMedia (which would
+        // be a fresh-negotiation capture path). The single resume call proves the
+        // attach rode the existing senders.
+        let token = try! harness.arbiter.acquireForeground(ownerId: "test-room-id")
+        let gen = harness.arbiter.nextOperationGeneration()
+        try! harness.session.activateForeground(token, generation: gen)
+        await waitUntil { harness.session.mediaRole == .foreground }
+
+        XCTAssertEqual(harness.fakeMedia.resumeLocalMediaFromHoldCalls.count, 1,
+                       "Resume must attach via resumeLocalMediaFromHold (replaceTrack), not renegotiate")
+        XCTAssertTrue(harness.fakeMedia.startLocalMediaCalls.isEmpty,
+                      "Resume must NOT go through startLocalMedia (no fresh-negotiation capture)")
+        harness.tearDown()
+    }
+
     func testHeldInitialJoinDoesNotWriteRecoveryUntilForegrounded() async {
         // A held join connects signaling but owns no foreground media; it must not
         // publish actual* state.
@@ -306,6 +347,65 @@ final class ForegroundSessionContractTests: XCTestCase {
         XCTAssertFalse(harness.session.actualAudioPublished)
         XCTAssertNotEqual(lastBroadcastMediaState(harness)?.held, false,
                           "The superseded activation must not broadcast held:false")
+        harness.tearDown()
+    }
+
+    /// Q5: the late-activation fence must check the ARBITER's live owner, not the
+    /// session's local `foregroundOwnerToken` field. Here the arbiter's owner is
+    /// ROTATED to a different token while the activation is in flight, WITHOUT
+    /// bumping the operation generation and WITHOUT clearing the session's local
+    /// token field (the field still equals the original token). A local-field-only
+    /// fence would WRONGLY commit foreground; the arbiter-owner fence drops it.
+    func testLateActivationDroppedWhenArbiterOwnerRotatedEvenIfLocalTokenMatches() async {
+        let gated = GatedAudioCoordinator()
+        let arbiter = ForegroundMediaArbiter()
+        let config = SerenadaConfig(signalingProvider: FakeSignalingProvider(), audioCoordinator: gated)
+        let harness = SessionTestHarness(
+            config: config,
+            initialMediaRole: .held,
+            isCapabilityGranted: { _ in true },
+            arbiter: arbiter
+        )
+        await harness.advanceToInCallHeld(localCid: "local", remoteCid: "remote")
+
+        // Begin a token-gated activation under token A that BLOCKS in the
+        // coordinator. The session stores A in its local foregroundOwnerToken.
+        let tokenA = try! arbiter.acquireForeground(ownerId: "test-room-id")
+        let gen = arbiter.nextOperationGeneration()
+        gated.blockNextActivation = true
+        try! harness.session.activateForeground(tokenA, generation: gen)
+        await waitUntil { gated.activationInFlight }
+        XCTAssertEqual(harness.session.mediaActivationState, .activating)
+
+        // Rotate the ARBITER's owner WITHOUT bumping the operation generation and
+        // WITHOUT touching the session's local token field: release A and acquire a
+        // fresh token B. The session still locally believes it owns A (its field is
+        // unchanged), but the arbiter now reports B as the current owner.
+        arbiter.releaseLease(tokenA)
+        let tokenB = try! arbiter.acquireForeground(ownerId: "other-room")
+        XCTAssertEqual(arbiter.currentOwnerToken, tokenB)
+        XCTAssertNotEqual(tokenA, tokenB)
+
+        // Release the blocked activation. Generation still matches and the
+        // session's local field still equals A, but the arbiter's owner is B, so
+        // the arbiter-owner fence must drop this completion: foreground is never
+        // committed and no media is reacquired. (A bare fence-drop leaves the
+        // activation state where it was; the registry's rollback/abort, not this
+        // unit, drives it back to inactive — that path is covered elsewhere.)
+        gated.releaseActivation()
+        await yieldToMainActor()
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.session.mediaRole, .held,
+                       "A completion whose arbiter owner rotated must NOT commit foreground")
+        XCTAssertFalse(harness.session.actualAudioPublished)
+        XCTAssertTrue(harness.fakeMedia.resumeLocalMediaFromHoldCalls.isEmpty,
+                      "The fenced-out completion must NOT reacquire local media")
+        XCTAssertNotEqual(lastBroadcastMediaState(harness)?.held, false,
+                          "The fenced-out activation must not broadcast held:false")
+
+        // Clean up the dedicated arbiter's lease so teardown is tidy.
+        arbiter.releaseLease(tokenB)
         harness.tearDown()
     }
 }

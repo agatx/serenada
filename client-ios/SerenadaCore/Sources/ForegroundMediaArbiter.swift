@@ -63,12 +63,17 @@ public final class ForegroundMediaArbiter {
     /// The live lease's token, or `nil` when no lease is held. A token is also
     /// retained here while a release is pending/failed (see ``releasePending``).
     private var currentToken: ForegroundOwnerToken?
+    /// The most recently released token, retained so an idempotent re-release of
+    /// the SAME token (after it was already released, nothing new granted) is a
+    /// safe no-op rather than a mismatch error (matches web/android).
+    private var lastReleasedToken: ForegroundOwnerToken?
     /// True between handing a token to a caller and that caller confirming the
-    /// lease is released. While true, a new acquire fails (Core Invariant 2).
-    /// In v1 the iOS release path is synchronous from the arbiter's point of
-    /// view (the registry calls `releaseLease` only after the session confirms
-    /// fully-held), so this is reset inside `releaseLease`; it exists as the
-    /// explicit guard the contract requires.
+    /// lease is released. While true (or after a failed release), NO new lease is
+    /// granted — this is what makes an old-release failure safe (never two owners;
+    /// Core Invariant 2). The Phase 2 single-call path releases synchronously on
+    /// teardown and does not set this; the Phase 3 registry switch uses
+    /// ``markReleasePending()``. Cleared only by a successful current-owner
+    /// ``releaseLease(_:)``.
     private var releasePending = false
     /// Monotonic id source for tokens (never reused, distinct from generation).
     private var nextTokenId = 1
@@ -96,11 +101,31 @@ public final class ForegroundMediaArbiter {
     /// `ForegroundLeaseUnavailable(.modeConflict)`. Idempotent for an already
     /// registered ref in the same mode.
     func claimMode(_ mode: ForegroundOwningMode, ownerRef: AnyObject) throws {
+        try assertModeCompatible(mode)
+        owningMode = mode
+        liveOwnerRefs.insert(ObjectIdentifier(ownerRef))
+    }
+
+    /// Throw `ForegroundLeaseUnavailable(.modeConflict)` when `mode` differs from
+    /// the mode currently owning the process and that mode still has live owners.
+    /// Folded into `acquireForeground`/`claimMode` so the check has no side effects
+    /// of its own (a cross-mode acquire fails before any state mutates).
+    private func assertModeCompatible(_ mode: ForegroundOwningMode) throws {
         if let owningMode, owningMode != mode, !liveOwnerRefs.isEmpty {
             throw ForegroundLeaseUnavailable(reason: .modeConflict)
         }
-        owningMode = mode
-        liveOwnerRefs.insert(ObjectIdentifier(ownerRef))
+    }
+
+    /// Stable per-ownerId mode-ref when `acquireForeground` is not handed an
+    /// explicit owner object, so a single owner that acquires twice does not leave
+    /// a dangling distinct ref behind (mirrors android `modeRefFor`).
+    private var modeRefs: [String: AnyObject] = [:]
+
+    private func modeRef(for ownerId: String) -> AnyObject {
+        if let existing = modeRefs[ownerId] { return existing }
+        let ref = NSObject()
+        modeRefs[ownerId] = ref
+        return ref
     }
 
     /// Release `ownerRef`'s mode registration. When the owning side has no live
@@ -115,16 +140,32 @@ public final class ForegroundMediaArbiter {
     // MARK: - Foreground lease
 
     /// Grant the single foreground lease to `ownerId`, returning a unique owner
-    /// token. Throws `ForegroundLeaseUnavailable` if a lease is already live, a
-    /// prior release is still pending/failed, or the caller is in a conflicting
-    /// owning mode (Core Invariants 1, 2, 6).
+    /// token. The optional `mode` claims/asserts the owning mode in the SAME
+    /// atomic step (the common path: a direct join acquires `direct`, the Phase 3
+    /// registry's foreground activation acquires `registry`), so cross-mode
+    /// enforcement and the lease grant cannot interleave. Throws
+    /// `ForegroundLeaseUnavailable` if a lease is already live, a prior release is
+    /// still pending/failed, or the requested mode conflicts with the owning mode
+    /// (Core Invariants 1, 2, 6).
     @discardableResult
-    func acquireForeground(ownerId: String) throws -> ForegroundOwnerToken {
-        if releasePending {
-            throw ForegroundLeaseUnavailable(reason: .releasePending)
+    func acquireForeground(
+        ownerId: String,
+        mode: ForegroundOwningMode? = nil,
+        ownerRef: AnyObject? = nil
+    ) throws -> ForegroundOwnerToken {
+        // Assert mode compatibility BEFORE granting so a cross-mode acquire fails
+        // without side effects.
+        if let mode {
+            try assertModeCompatible(mode)
         }
         if currentToken != nil {
             throw ForegroundLeaseUnavailable(reason: .leaseLive)
+        }
+        if releasePending {
+            throw ForegroundLeaseUnavailable(reason: .releasePending)
+        }
+        if let mode {
+            try claimMode(mode, ownerRef: ownerRef ?? modeRef(for: ownerId))
         }
         let token = ForegroundOwnerToken(id: nextTokenId, ownerId: ownerId)
         nextTokenId += 1
@@ -133,17 +174,30 @@ public final class ForegroundMediaArbiter {
     }
 
     /// Release the lease held under `token`. Only the current owner's token is
-    /// accepted; a mismatched token is a programming error. Releasing the same
-    /// token twice is idempotent (a no-op after the first release).
+    /// accepted; releasing a mismatched (non-current) token is a programming error
+    /// (`preconditionFailure`) — EXCEPT the idempotent case where `token` is the
+    /// most recently released token and nothing new has been granted, which is a
+    /// safe no-op (matches web/android). Lease release is registry-owned (the
+    /// session never calls this on the registry path); the Phase 2 single-call
+    /// path's own teardown calls it.
     func releaseLease(_ token: ForegroundOwnerToken) {
-        guard let current = currentToken else {
-            // Idempotent: already released. Tolerate a duplicate release of the
-            // last-known token; reject an unrelated token.
+        if currentToken == token {
+            currentToken = nil
+            releasePending = false
+            lastReleasedToken = token
             return
         }
-        precondition(current == token, "releaseLease called with a non-owner token")
-        currentToken = nil
-        releasePending = false
+        // Idempotent re-release of the same token after it was already released.
+        if lastReleasedToken == token, currentToken == nil { return }
+        preconditionFailure("releaseLease called with a token that is not the current owner (\(token.ownerId))")
+    }
+
+    /// Mark that an owner's release has begun but not yet confirmed. Set by the
+    /// Phase 3 registry switch before it drains the old session; cleared by
+    /// `releaseLease` on success. While set, a new acquire fails fast so two
+    /// owners can never exist (Core Invariant 2).
+    func markReleasePending() {
+        releasePending = true
     }
 
     /// Vend the next monotonic operation generation. Bumped for every activation
@@ -160,6 +214,15 @@ public final class ForegroundMediaArbiter {
     /// the operation generation).
     var currentOwnerToken: ForegroundOwnerToken? { currentToken }
 
+    /// Whether `token` is the live lease owner. Used by the session's late-callback
+    /// fence: a resume completion is honored only if the arbiter STILL owns the
+    /// lease under the expected token (parity with web `isCurrentOwner` / android),
+    /// since after a rollback the session's own field can equal a stale token.
+    func isCurrentOwner(_ token: ForegroundOwnerToken?) -> Bool {
+        guard let token else { return false }
+        return currentToken == token
+    }
+
     // MARK: - Test support
 
     /// Reset all arbiter state. **Test-only** — the process singleton would
@@ -167,10 +230,12 @@ public final class ForegroundMediaArbiter {
     /// `acquireForeground` fail. Call from test setUp/tearDown.
     func resetForTests() {
         currentToken = nil
+        lastReleasedToken = nil
         releasePending = false
         nextTokenId = 1
         operationGeneration = 0
         owningMode = nil
         liveOwnerRefs.removeAll()
+        modeRefs.removeAll()
     }
 }

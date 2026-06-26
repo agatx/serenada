@@ -147,6 +147,12 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private let onSignalingStateChange: (String, String) -> Void
     private let onRenegotiationNeeded: (String) -> Void
     private let videoReceiveEnabled: Bool
+    /// Held-senders mode predicate (multi-call held join, contract §5 / Core
+    /// Invariant 3). When it returns true at negotiation time the audio +
+    /// legacy-video transceivers are created `.sendRecv` (send-capable) with NIL
+    /// tracks so a later resume attaches via `replaceTrack` without renegotiation;
+    /// otherwise they default to `.recvOnly` exactly as today.
+    private let heldSendersMode: () -> Bool
     private let logger: SerenadaLogger?
     private let rendererAttachmentQueue: DispatchQueue
     /// Whether the local participant is the deterministic offer owner for this
@@ -207,6 +213,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         localVideoTrack: RTCVideoTrack?,
         videoReceiveEnabled: Bool = true,
         supportsIndependentContentVideo: Bool = false,
+        heldSendersMode: @escaping () -> Bool = { false },
         isOfferOwner: @escaping () -> Bool = { false },
         onLocalIceCandidate: @escaping (String, IceCandidatePayload) -> Void,
         onRemoteVideoTrack: @escaping (String, RTCVideoTrack?) -> Void,
@@ -223,6 +230,7 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
         self.localVideoTrack = localVideoTrack
         self.videoReceiveEnabled = videoReceiveEnabled
         self.supportsIndependentContentVideo = supportsIndependentContentVideo
+        self.heldSendersMode = heldSendersMode
         self.isOfferOwner = isOfferOwner
         self.onLocalIceCandidate = onLocalIceCandidate
         self.onRemoteVideoTrack = onRemoteVideoTrack
@@ -532,6 +540,20 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     private func ensureRoleSendCapable(_ transceiver: RTCRtpTransceiver) {
         if transceiver.direction != .sendRecv && !transceiver.isStopped {
             transceiver.setDirection(.sendRecv, error: nil)
+        }
+    }
+
+    /// Promote this slot's audio + legacy-video transceivers to `.sendRecv`
+    /// without attaching a track (multi-call held join, contract §5 / Core
+    /// Invariant 3). Idempotent: an already send-capable or stopped transceiver is
+    /// left untouched. Used when the engine enters held-senders mode for a slot
+    /// whose peer connection already exists (the common held-join path creates
+    /// slots lazily already in `.sendRecv` via `ensureReceiveTransceivers`).
+    public func ensureSendCapableTransceiversForHold() {
+        guard let peerConnection else { return }
+        for transceiver in peerConnection.transceivers
+        where (transceiver.mediaType == .audio || transceiver.mediaType == .video) && !transceiver.isStopped {
+            ensureRoleSendCapable(transceiver)
         }
     }
 
@@ -1202,9 +1224,16 @@ private extension PeerConnectionSlot {
     }
 
     private func ensureReceiveTransceivers(on peerConnection: RTCPeerConnection) {
+        // Held-senders mode (multi-call held join): create SEND-capable
+        // (`.sendRecv`) transceivers so the senders are send-capable up front for a
+        // renegotiation-free resume (contract §5 / Core Invariant 3). Otherwise
+        // create `.recvOnly` receive transceivers exactly as today (single-call
+        // path unchanged). Either way the transceiver carries NO track here — a
+        // held session owns no capture.
+        let direction: RTCRtpTransceiverDirection = heldSendersMode() ? .sendRecv : .recvOnly
         if peerConnection.transceivers.contains(where: { $0.mediaType == .audio }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
-            transceiverInit.direction = .recvOnly
+            transceiverInit.direction = direction
             _ = peerConnection.addTransceiver(of: .audio, init: transceiverInit)
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
@@ -1214,7 +1243,7 @@ private extension PeerConnectionSlot {
         if supportsIndependentContentVideo { return }
         if videoReceiveEnabled && peerConnection.transceivers.contains(where: { $0.mediaType == .video }) == false {
             let transceiverInit = RTCRtpTransceiverInit()
-            transceiverInit.direction = .recvOnly
+            transceiverInit.direction = direction
             _ = peerConnection.addTransceiver(of: .video, init: transceiverInit)
         }
     }

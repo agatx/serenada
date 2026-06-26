@@ -43,8 +43,24 @@ final class FakeMediaEngine: SessionMediaEngine {
     /// `toggleVideo(true)` must recreate it. Counts as no recreation itself.
     func dropLocalVideoTrackForTesting() { hasLocalVideoTrack = false }
 
+    /// Held-senders mode, mirroring the real engine: while true, a slot created
+    /// during negotiation materializes SEND-capable transceivers (modeled on the
+    /// fake slot as `sendCapableForHold`). Cleared by `startLocalMedia`.
+    private(set) var heldSendersMode = false
+    private(set) var createSendersForHoldCalls = 0
+    func createSendersForHold() {
+        createSendersForHoldCalls += 1
+        heldSendersMode = true
+        // Promote any slots that already exist (kept idempotent, mirrors the real
+        // engine; the common held-join path creates slots lazily).
+        fakeSlots.values.forEach { $0.ensureSendCapableTransceiversForHold() }
+    }
+
     func startLocalMedia(preferVideo: Bool) {
         startLocalMediaCalls.append(preferVideo)
+        // Foreground capture is starting; leave held-senders mode (mirrors the
+        // real engine) so new slots return to the normal track-driven path.
+        heldSendersMode = false
         // Initial acquire: mic always, camera when preferVideo (mirrors the real
         // engine's startLocalMedia).
         hasLocalAudioTrack = true
@@ -209,6 +225,12 @@ final class FakeMediaEngine: SessionMediaEngine {
             failNextCreatedSlotRemoteOffer = false
         }
         fakeSlots[remoteCid] = slot
+        // Held-senders mode: a slot created while the session is held materializes
+        // SEND-capable transceivers (mirrors WebRtcEngine threading heldSendersMode
+        // into the slot's `ensureReceiveTransceivers`).
+        if heldSendersMode {
+            slot.markCreatedInHeldSendersMode()
+        }
         // Sticky deafen: a slot created while the session is held inherits the
         // disabled remote playback (mirrors WebRtcEngine.createSlot).
         if !remotePlaybackEnabled {

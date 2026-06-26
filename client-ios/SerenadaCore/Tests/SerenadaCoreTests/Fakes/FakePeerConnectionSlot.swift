@@ -151,6 +151,21 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
         }
     }
 
+    /// Models held-senders mode (contract §5 / Core Invariant 3): `true` once the
+    /// slot has SEND-capable (`.sendRecv`) audio + legacy-video transceivers ready
+    /// for a renegotiation-free resume — whether materialized at creation (slot
+    /// built while the engine was in held-senders mode) or promoted afterward via
+    /// `ensureSendCapableTransceiversForHold()`. The real slot expresses this as
+    /// `.sendRecv` transceiver directions; the fake exposes the boolean so a test
+    /// can assert the held session's senders are send-capable.
+    private(set) var sendCapableForHold = false
+    private(set) var ensureSendCapableTransceiversForHoldCalls = 0
+    func markCreatedInHeldSendersMode() { sendCapableForHold = true }
+    func ensureSendCapableTransceiversForHold() {
+        ensureSendCapableTransceiversForHoldCalls += 1
+        sendCapableForHold = true
+    }
+
     func closePeerConnection() {
         closePeerConnectionCalled = true
         cancelOfferTimeout()

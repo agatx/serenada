@@ -399,10 +399,25 @@ export class SerenadaSession implements SerenadaSessionHandle {
      * `activateForeground` is honored only if BOTH the current generation AND this
      * token still match (contract §3 fencing). `null` for a normally-joined single
      * call until it routes through the arbiter; set by {@link activateForeground}
-     * and the held/foreground initial-role join, cleared by
+     * (registry-issued) and the direct-lease join, cleared by
      * {@link releaseForeground}/{@link abortForegroundActivation}.
+     *
+     * This is a FENCE token only — holding it does NOT make the session the lease
+     * owner of record. A registry-issued token (from {@link activateForeground})
+     * is owned by the registry, which releases it. Only the {@link directLeaseToken}
+     * below (a self-owned direct lease) is self-released on teardown.
      */
     private foregroundOwnerToken: ForegroundOwnerToken | null = null;
+    /**
+     * The lease token for a lease this session acquired ITSELF via a public direct
+     * {@link SerenadaCore.join} (mode `'direct'`), else `null`. Distinct from
+     * {@link foregroundOwnerToken} (the fence token, which a registry-managed call
+     * also sets): teardown self-releases ONLY this token. A registry-issued
+     * activation/fence token is registry-owned and never self-released, so a
+     * session activated by the registry can never self-release the registry's lease
+     * on teardown (parity with iOS's separate `directLeaseToken`).
+     */
+    private directLeaseToken: ForegroundOwnerToken | null = null;
 
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
@@ -523,9 +538,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
             // Public single-call `SerenadaCore.join()` routes through the arbiter:
             // acquire the foreground lease (mode `direct`) BEFORE activating media.
             // A second concurrent direct join while one is live throws
-            // ForegroundLeaseUnavailable (propagated to the join caller). The lease
-            // is released on leave()/end()/destroy().
-            this.foregroundOwnerToken = foregroundArbiter.acquireForeground(this.roomId, 'direct', this);
+            // ForegroundLeaseUnavailable (propagated to the join caller). This is a
+            // SELF-owned lease: record it as `directLeaseToken` so teardown
+            // self-releases it (the registry path never sets this). Also seed the
+            // fence token from the same lease.
+            const token = foregroundArbiter.acquireForeground(this.roomId, 'direct', this);
+            this.directLeaseToken = token;
+            this.foregroundOwnerToken = token;
         }
 
         if (deps.autoStart !== false) {
@@ -534,22 +553,35 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     /**
-     * Release this session's foreground lease + owning-mode claim back to the
-     * process arbiter, if it holds one. Idempotent. Called on every teardown
-     * path (`leave`/`end`/`destroy`) so a process-singleton lease never leaks and
-     * a subsequent direct join can acquire it. The Phase-3 registry owns lease
-     * release for managed calls; for a public single-call session the session
-     * itself is the owner, so it releases here.
+     * Release this session's SELF-OWNED direct lease + owning-mode claim back to
+     * the process arbiter, if it acquired one. Idempotent (releases at most once;
+     * a second call no-ops because the token is cleared). Called on every teardown
+     * path (`leave`/`end`/`destroy`) and on the common terminal reset
+     * ({@link resetSessionResources}) so a process-singleton lease never leaks and
+     * a subsequent direct join can acquire it.
+     *
+     * Releases ONLY {@link directLeaseToken}. A registry-issued activation/fence
+     * token ({@link foregroundOwnerToken} set by {@link activateForeground}) is
+     * registry-owned: the session must NEVER self-release it (the Phase-3 registry
+     * owns lease + mode release for managed calls). Only a direct-lease session
+     * claimed `direct` mode with `this`, so the mode claim is released only here.
      */
     private releaseForegroundLeaseToArbiter(): void {
-        const token = this.foregroundOwnerToken;
-        if (token !== null) {
+        const token = this.directLeaseToken;
+        if (token === null) {
+            // No self-owned direct lease (held-initial or registry-managed
+            // session): nothing to release, and the mode claim is not ours.
+            return;
+        }
+        this.directLeaseToken = null;
+        // Clear the fence token too if it still points at the released lease.
+        if (this.foregroundOwnerToken === token) {
             this.foregroundOwnerToken = null;
-            try {
-                foregroundArbiter.releaseLease(token);
-            } catch (err) {
-                this.config.logger?.log('warning', 'Session', `Foreground lease release failed: ${formatError(err)}`);
-            }
+        }
+        try {
+            foregroundArbiter.releaseLease(token);
+        } catch (err) {
+            this.config.logger?.log('warning', 'Session', `Foreground lease release failed: ${formatError(err)}`);
         }
         foregroundArbiter.releaseMode(this);
     }
@@ -1194,6 +1226,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private resetSessionResources(): void {
+        // Release the self-owned direct lease on the COMMON terminal reset path
+        // (remote-end, signaling error, join timeout, ICE-server fetch failure)
+        // BEFORE media/signaling teardown, so a terminal error never leaves the
+        // process-singleton lease held and wedges all future direct joins with
+        // ForegroundLeaseUnavailable. Idempotent: the leave()/end()/destroy()
+        // paths call this too and it releases at most once (parity with iOS/
+        // Android releasing in their common reset path).
+        this.releaseForegroundLeaseToArbiter();
         this.clearReconnectTimer();
         this.clearJoinTimeout();
         this.clearEndingTimer();

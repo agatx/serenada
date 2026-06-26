@@ -4,6 +4,14 @@ import Foundation
 @MainActor
 protocol SessionMediaEngine: AnyObject {
     func startLocalMedia(preferVideo: Bool)
+    /// Enter held-senders mode (multi-call held join, contract §5 / Core
+    /// Invariant 3): mark the engine so any peer slot created during negotiation
+    /// materializes SEND-capable (`.sendRecv`) audio + legacy-video transceivers
+    /// carrying NIL tracks, and promote any already-existing slots' senders to
+    /// send-capable. No capture is acquired (the OS never reports a held session
+    /// capturing), so a later `resumeLocalMediaFromHold` attaches fresh tracks to
+    /// these stable senders with NO SDP renegotiation. Cleared by `startLocalMedia`.
+    func createSendersForHold()
     func release()
     /// Suspend local foreground media for a HELD role: stop screen share, stop
     /// the camera capturer, and RELEASE mic capture by replacing the audio

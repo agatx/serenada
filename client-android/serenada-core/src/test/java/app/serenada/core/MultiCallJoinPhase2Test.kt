@@ -8,6 +8,9 @@ import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.MediaActivationState
 import app.serenada.core.call.SerenadaAudioCoordinator
 import app.serenada.core.fakes.TestSessionFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -36,6 +39,10 @@ import org.robolectric.shadows.ShadowLooper
 class MultiCallJoinPhase2Test {
 
     private val factories = mutableListOf<TestSessionFactory>()
+
+    // Same Robolectric main looper the session's providerScope uses, for driving
+    // the suspend token-gated activateForeground.
+    private val mainScope = CoroutineScope(Dispatchers.Main.immediate)
 
     @Before
     fun setUp() {
@@ -216,6 +223,94 @@ class MultiCallJoinPhase2Test {
             modeOwnerRef = Any(),
         )
         assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+    }
+
+    // --- Direct-lease vs registry-issued fence token on teardown (Q6) ---
+
+    @Test
+    fun `a registry-activated session does not release the lease on teardown`() {
+        // A held-initial session that the (Phase 3) registry activates under a
+        // lease the REGISTRY acquired and owns. The session's foregroundOwnerToken
+        // is the registry-issued FENCE token, not a self-owned direct lease, so
+        // teardown must NOT release it (parity with iOS directLeaseToken split).
+        val coordinator = CountingCoordinator()
+        val factory = track(
+            TestSessionFactory(
+                defaultVideoEnabled = false,
+                audioCoordinator = coordinator,
+                initialMediaRole = CallMediaRole.HELD,
+            )
+        )
+        factory.advanceToHeldInCall()
+        ShadowLooper.idleMainLooper()
+        assertEquals(CallMediaRole.HELD, factory.session.mediaRoleForTest())
+
+        // The registry acquires the lease (mode REGISTRY) and activates the held
+        // session under that registry-owned token.
+        val registryRef = Any()
+        val registryToken = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "managed-call",
+            mode = ForegroundArbiterMode.REGISTRY,
+            modeOwnerRef = registryRef,
+        )
+        val gen = ForegroundMediaArbiter.nextOperationGeneration()
+        val activateJob = mainScope.launch {
+            runCatching { factory.session.activateForeground(registryToken, gen) }
+        }
+        ShadowLooper.idleMainLooper()
+        assertTrue("activation should settle", activateJob.isCompleted)
+        assertEquals(CallMediaRole.FOREGROUND, factory.session.mediaRoleForTest())
+        assertTrue(
+            "precondition: registry token is the live lease owner",
+            ForegroundMediaArbiter.isCurrentOwner(registryToken),
+        )
+
+        // Tear the session down. Because the session never self-acquired a direct
+        // lease, teardown must NOT release the registry-owned lease.
+        factory.session.close()
+        ShadowLooper.idleMainLooper()
+
+        assertTrue(
+            "teardown of a registry-activated session must NOT release the registry-owned lease",
+            ForegroundMediaArbiter.isCurrentOwner(registryToken),
+        )
+
+        // The registry — the true owner — releases it.
+        ForegroundMediaArbiter.releaseLease(registryToken)
+        ForegroundMediaArbiter.releaseMode(registryRef)
+        assertFalse(ForegroundMediaArbiter.isCurrentOwner(registryToken))
+    }
+
+    @Test
+    fun `a direct-lease session self-releases its lease on teardown`() {
+        // The mirror of the registry case: a direct single-call join holds its OWN
+        // lease (directLeaseToken) and MUST self-release it on teardown.
+        val factory = track(
+            TestSessionFactory(
+                defaultVideoEnabled = false,
+                acquireForegroundLease = true,
+            )
+        )
+        factory.advanceToInCallWithTurn()
+        ShadowLooper.idleMainLooper()
+        assertEquals(ForegroundArbiterMode.DIRECT, ForegroundMediaArbiter.currentMode)
+        assertEquals(CallMediaRole.FOREGROUND, factory.session.mediaRoleForTest())
+
+        factory.session.close()
+        ShadowLooper.idleMainLooper()
+
+        // The direct lease + mode were self-released: the process is free again.
+        assertEquals(
+            "teardown of a direct-lease session releases its mode",
+            null,
+            ForegroundMediaArbiter.currentMode,
+        )
+        val token = ForegroundMediaArbiter.acquireForeground("after-direct")
+        assertTrue(
+            "the direct lease was released, so a fresh acquire succeeds",
+            ForegroundMediaArbiter.isCurrentOwner(token),
+        )
+        ForegroundMediaArbiter.releaseLease(token)
     }
 
     // --- preflightForeground (pure) ---

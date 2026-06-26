@@ -171,6 +171,13 @@ internal final class WebRtcEngine: SessionMediaEngine {
     // its remote audio is deafened too — otherwise the deafen leaks. Mirrors how
     // the session re-applies the volume duck to newly created slots.
     private var remotePlaybackEnabled = true
+    // Held-senders mode (multi-call held join, contract §5 / Core Invariant 3).
+    // While true, a slot created during negotiation materializes SEND-capable
+    // (`.sendRecv`) audio + legacy-video transceivers with NIL tracks so a later
+    // resume attaches fresh tracks via `replaceTrack` with no renegotiation.
+    // Set by `createSendersForHold`; cleared by `startLocalMedia` (foreground
+    // capture is starting, so new slots return to the normal track-driven path).
+    private var heldSendersMode = false
 
     private var localRenderers: [WeakAnyBox] = []
     private var localContentRenderers: [WeakAnyBox] = []
@@ -303,10 +310,27 @@ internal final class WebRtcEngine: SessionMediaEngine {
     public func setOnDebugTrace(_ handler: ((String) -> Void)?) {
     }
 
+    public func createSendersForHold() {
+#if canImport(WebRTC)
+        // Mark held-senders mode so any slot built while held creates send-capable
+        // (`.sendRecv`) transceivers despite carrying no track. Resume later
+        // attaches fresh tracks to these senders via `replaceTrack` (no
+        // renegotiation). No capture is acquired here; the OS never reports a held
+        // session as capturing.
+        heldSendersMode = true
+        // Promote any slots that already exist (none on the common held-join path,
+        // where slots are created lazily as peers arrive, but kept idempotent).
+        peerSlots.forEach { $0.ensureSendCapableTransceiversForHold() }
+#endif
+    }
+
     public func startLocalMedia(preferVideo: Bool = true) {
 #if canImport(WebRTC)
         guard let factory = peerConnectionFactory else { return }
         guard localAudioTrack == nil && localVideoTrack == nil else { return }
+        // Foreground capture is starting; leave held-senders mode so new slots
+        // follow the normal (track-driven) transceiver path again.
+        heldSendersMode = false
 
         let audioSession = RTCAudioSession.sharedInstance()
         do {
@@ -656,6 +680,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
             localVideoTrack: localVideoTrack,
             videoReceiveEnabled: videoMediaEnabled,
             supportsIndependentContentVideo: independentRouted,
+            heldSendersMode: { [weak self] in self?.heldSendersMode ?? false },
             isOfferOwner: isOfferOwner,
             onLocalIceCandidate: onLocalIceCandidate,
             onRemoteVideoTrack: { remoteCid, track in

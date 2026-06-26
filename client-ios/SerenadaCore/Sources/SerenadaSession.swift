@@ -1292,6 +1292,13 @@ public final class SerenadaSession: ObservableObject {
         guard state.phase == .joining || internalPhase == .joining else { return }
 
         startCoordinatorTasks()
+        // Enter held-senders mode BEFORE negotiation so each peer slot created as
+        // peers arrive materializes SEND-capable (`.sendRecv`) audio + legacy-video
+        // transceivers carrying nil tracks. Resume then attaches fresh tracks to
+        // those stable senders with NO renegotiation (contract §5 / Invariant 3).
+        // No capture is acquired here — the OS never reports a held session
+        // capturing.
+        webRtcEngine.createSendersForHold()
         // `localMediaReadyForNegotiation` gates whether negotiation may proceed.
         // A held session has no local tracks but still negotiates so its stable
         // senders bind — the senders carry nil tracks (Invariant 3), not capture.
@@ -1343,10 +1350,17 @@ public final class SerenadaSession: ObservableObject {
         // invariant (contract §2). The lease is released in `resetResources`.
         if directLeaseToken == nil {
             do {
-                try foregroundArbiter.claimMode(.direct, ownerRef: self)
-                directLeaseToken = try foregroundArbiter.acquireForeground(ownerId: roomId)
+                // Atomic claim: `acquireForeground` asserts mode compatibility AND
+                // claims `direct` mode in the SAME step as granting the lease, so
+                // cross-mode enforcement and the grant cannot interleave. On any
+                // throw NOTHING was claimed (mode is claimed only just before the
+                // token mints), so there is no mode registration to unwind here.
+                directLeaseToken = try foregroundArbiter.acquireForeground(
+                    ownerId: roomId,
+                    mode: .direct,
+                    ownerRef: self
+                )
             } catch {
-                foregroundArbiter.releaseMode(ownerRef: self)
                 logger?.log(.error, tag: "Audio", "Foreground media lease unavailable: \(error)")
                 handleError(.unknown("Foreground media unavailable: another call owns it"))
                 return
@@ -1673,7 +1687,13 @@ public final class SerenadaSession: ObservableObject {
     /// is the independent second fence. A Phase-1 caller passes `fenceToken == nil`
     /// (no lease in play) and only the generation fences.
     private func completeForegroundActivation(generation: Int, fenceToken: ForegroundOwnerToken? = nil) {
-        let tokenStillCurrent = fenceToken == nil || fenceToken == foregroundOwnerToken
+        // Fence the owner token against the ARBITER's live owner, not the session's
+        // local field. The arbiter is the source of truth for who currently holds
+        // the lease: after a rollback the local `foregroundOwnerToken` can still
+        // equal a stale token, so a stuck callback from the superseded activation
+        // would wrongly pass a local-field-only check. A Phase-1 caller passes
+        // `fenceToken == nil` (no lease in play) and only the generation fences.
+        let tokenStillCurrent = fenceToken == nil || foregroundArbiter.isCurrentOwner(fenceToken)
         guard mediaOpGeneration == generation, mediaActivationState == .activating, tokenStillCurrent else {
             // Superseded mid-activation (generation bumped) OR the lease owner
             // token changed (a later acquire/release rotated it). The superseding

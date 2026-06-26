@@ -710,7 +710,13 @@ export class MediaEngine {
      * public {@link reacquireVideoTrack}).
      */
     async reacquireLocalAudioCapture(): Promise<void> {
-        if (!this.localStream) return;
+        // Held-initial resume (Core Invariant 3 / contract §5): a session joined
+        // directly into `held` never ran `startLocalMedia`, so `localStream` is
+        // null here. Create an empty stream so the freshly acquired mic can be
+        // added and attached to the existing held audio senders via
+        // `replaceTrack`. For a normally-joined call `localStream` already
+        // exists, so this is a no-op (single-call behavior unchanged).
+        if (!this.localStream) this.localStream = new MediaStream();
         if (this.localStream.getAudioTracks()[0]) return;
         if (this.audioRecoveryInFlight || this.requestingMedia) return;
         this.audioRecoveryInFlight = true;
@@ -1695,7 +1701,14 @@ export class MediaEngine {
             }
             void this.applyAudioSenderParameters(pc);
         } else if (!this.findTransceiver(pc, 'audio') && !pc.getSenders().some(sender => sender.track?.kind === 'audio')) {
-            peer.mediaRoles.audio = pc.addTransceiver('audio', { direction: 'recvonly' });
+            // Held-without-capture: reserve the audio transceiver as `sendrecv`
+            // (null track sends nothing) so resume can `replaceTrack` a fresh mic
+            // onto a SEND-capable sender WITHOUT renegotiation (Core Invariant 3 /
+            // contract §5; parity with Android's SEND_RECV+null-track held join). A
+            // normal recvonly reservation would force renegotiation on resume.
+            peer.mediaRoles.audio = pc.addTransceiver('audio', {
+                direction: this.heldNoCapture ? 'sendrecv' : 'recvonly',
+            });
         }
 
         this.ensureOwnerVideoTransceivers(peer);
@@ -2496,8 +2509,16 @@ export class MediaEngine {
 
     private async swapLocalVideoTrack(nextTrack: MediaStreamTrack | null, previousTrack: MediaStreamTrack | null): Promise<void> {
         if (!this.localStream) {
-            if (previousTrack && previousTrack !== nextTrack) previousTrack.stop();
-            return;
+            // Nothing to attach (a release/clear): keep the prior behavior.
+            if (!nextTrack) {
+                if (previousTrack && previousTrack !== nextTrack) previousTrack.stop();
+                return;
+            }
+            // Held-initial resume (Core Invariant 3 / contract §5): a held-joined
+            // session never ran `startLocalMedia`, so `localStream` is null but a
+            // fresh camera track must still land on the existing held video
+            // senders via `replaceTrack`. Create an empty stream and fall through.
+            this.localStream = new MediaStream();
         }
         const nextStream = new MediaStream();
         let replacedVideo = false;
@@ -2664,11 +2685,18 @@ export class MediaEngine {
     }
 
     private ensureMediaTransceivers(pc: RTCPeerConnection): void {
+        // Held-without-capture: reserve audio (and legacy video) as `sendrecv`
+        // with a null track so resume can `replaceTrack` onto a SEND-capable
+        // sender WITHOUT renegotiation (Core Invariant 3 / contract §5; parity
+        // with Android's SEND_RECV+null-track held join). Outside hold, audio
+        // stays `recvonly` until a live track is attached (unchanged behavior).
         if (!this.findTransceiver(pc, 'audio') && !pc.getSenders().some(sender => sender.track?.kind === 'audio')) {
-            pc.addTransceiver('audio', { direction: 'recvonly' });
+            pc.addTransceiver('audio', { direction: this.heldNoCapture ? 'sendrecv' : 'recvonly' });
         }
         if (this.videoMediaEnabled && !this.findTransceiver(pc, 'video') && !pc.getSenders().some(sender => sender.track?.kind === 'video')) {
-            pc.addTransceiver('video', { direction: this.videoCaptureSupported ? 'sendrecv' : 'recvonly' });
+            pc.addTransceiver('video', {
+                direction: (this.heldNoCapture || this.videoCaptureSupported) ? 'sendrecv' : 'recvonly',
+            });
         }
     }
 
@@ -2791,6 +2819,21 @@ export class MediaEngine {
     private needsLocalTrackNegotiation(transceiver: RTCRtpTransceiver): boolean {
         const track = transceiver.sender.track;
         if (!track || track.readyState !== 'live' || !track.enabled) {
+            return false;
+        }
+        // A transceiver reserved send-capable but NEVER negotiated needs no
+        // renegotiation to start sending: its m-line is (or is being negotiated
+        // as) send-capable, so `replaceTrack` is enough. This is the structural
+        // guarantee behind held-initial resume (Core Invariant 3 / contract §5):
+        // held senders are reserved `sendrecv` at join, so a resume that lands a
+        // fresh track on them emits NO offer even while the join offer/answer is
+        // still in flight (negotiated `currentDirection` not yet observed). A
+        // transceiver already negotiated `recvonly`/`inactive` (e.g. an answerer
+        // that locally flips to `sendrecv`) still needs a renegotiation, so this
+        // only short-circuits the never-negotiated (`currentDirection == null`)
+        // reserved-send case.
+        if (transceiver.currentDirection === null
+            && (transceiver.direction === 'sendrecv' || transceiver.direction === 'sendonly')) {
             return false;
         }
         return transceiver.currentDirection !== 'sendrecv' && transceiver.currentDirection !== 'sendonly';

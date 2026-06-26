@@ -175,14 +175,17 @@ class HoldResumeRaceTest {
     }
 
     /**
-     * Phase 2 double-fence (contract §3): a token-gated activation whose lease
-     * owner token is superseded WHILE it awaits the coordinator must be dropped
-     * EVEN IF the generation still matches. Generation alone is insufficient: a
-     * rollback re-activates the old call under the same generation, and a stuck
-     * callback from the failed new activation could otherwise still match.
+     * Phase 2 double-fence, fence against the ARBITER (contract §3 / Q5): a
+     * token-gated activation whose lease owner changed AT THE ARBITER while it
+     * awaited the coordinator must be dropped — EVEN THOUGH the session's LOCAL
+     * `foregroundOwnerToken` field still equals the activation's token. The arbiter
+     * is the source of truth for who currently owns the lease; after a rollback the
+     * local field can still hold a stale token, so fencing on the local field alone
+     * (the bug) would wrongly honor a superseded activation. Web does this right via
+     * `foregroundArbiter.isCurrentOwner(token)`; this asserts Android matches.
      */
     @Test
-    fun `token-gated activation with a stale owner token is dropped even when the generation matches`() {
+    fun `token-gated activation is dropped when the arbiter owner changed even though the local token field still matches`() {
         val coordinator = GatedAudioCoordinator()
         factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
         factory.advanceToInCallWithTurn()
@@ -193,10 +196,9 @@ class HoldResumeRaceTest {
         ShadowLooper.idleMainLooper()
         assertTrue(firstHold.isCompleted)
 
-        // Mint two DISTINCT lease tokens (only identity matters for the fence).
-        // tokenB is minted then released so tokenA can be the live owner.
-        val tokenB = ForegroundMediaArbiter.acquireForeground("call-b")
-        ForegroundMediaArbiter.releaseLease(tokenB)
+        // Acquire tokenA as the live arbiter owner and start a token-gated
+        // activation under it. activateForeground sets the session's LOCAL
+        // foregroundOwnerToken = tokenA before awaiting the coordinator.
         val tokenA = ForegroundMediaArbiter.acquireForeground("call-a")
         val gen = ForegroundMediaArbiter.nextOperationGeneration()
 
@@ -207,11 +209,25 @@ class HoldResumeRaceTest {
         }
         ShadowLooper.idleMainLooper()
         assertFalse("activation must be awaiting the coordinator", activateJob.isCompleted)
+        assertTrue(
+            "precondition: arbiter still reports tokenA as the owner",
+            ForegroundMediaArbiter.isCurrentOwner(tokenA),
+        )
 
-        // While suspended, a superseding op swaps in a DIFFERENT owner token under
-        // the SAME generation (models a rollback re-activation). The generation is
-        // unchanged, so only the token fence can catch this.
-        factory.session.setForegroundOwnerTokenForTest(tokenB)
+        // While suspended, the lease moves on AT THE ARBITER (release tokenA,
+        // acquire tokenC) — models a switch/rollback that re-leased the process to
+        // another owner. The session's LOCAL foregroundOwnerToken field is NOT
+        // touched (it still equals tokenA), so ONLY the arbiter fence can catch it.
+        ForegroundMediaArbiter.releaseLease(tokenA)
+        val tokenC = ForegroundMediaArbiter.acquireForeground("call-c")
+        assertFalse(
+            "precondition: tokenA is no longer the arbiter owner",
+            ForegroundMediaArbiter.isCurrentOwner(tokenA),
+        )
+        assertTrue(
+            "precondition: session's local token field still equals tokenA",
+            factory.session.foregroundOwnerTokenForTest() === tokenA,
+        )
 
         // Release the coordinator activation so the (now stale) activation reaches
         // its post-await fence.
@@ -221,17 +237,21 @@ class HoldResumeRaceTest {
         ShadowLooper.idleMainLooper()
 
         assertTrue("stale activation should settle", activateJob.isCompleted)
-        // The stale-token activation rolled back to held; it did NOT commit foreground.
+        // The stale activation rolled back to held; it did NOT commit foreground,
+        // because the arbiter no longer reports tokenA as the owner.
         assertEquals(
-            "a stale-token activation must not commit FOREGROUND",
+            "an activation superseded at the arbiter must not commit FOREGROUND",
             CallMediaRole.HELD,
             factory.session.mediaRoleForTest(),
         )
         assertEquals(
-            "a stale-token activation must end INACTIVE",
+            "an activation superseded at the arbiter must end INACTIVE",
             MediaActivationState.INACTIVE,
             factory.session.mediaActivationStateForTest(),
         )
+
+        // Cleanup: release tokenC so the arbiter is clean for the next test.
+        ForegroundMediaArbiter.releaseLease(tokenC)
     }
 }
 

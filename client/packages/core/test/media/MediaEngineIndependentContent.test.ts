@@ -115,6 +115,7 @@ class FakePeerConnection {
     }
     getSenders(): RTCRtpSender[] { return this.senders as unknown as RTCRtpSender[]; }
     getTransceivers(): RTCRtpTransceiver[] { return this.transceivers as unknown as RTCRtpTransceiver[]; }
+    getReceivers(): RTCRtpReceiver[] { return this.transceivers.map(t => t.receiver); }
     /**
      * Injectable stats report. Tests push `inbound-rtp` entries (keyed by the
      * receiver track identity) to drive per-role liveness sampling. Defaults to
@@ -1570,6 +1571,101 @@ describe('MediaEngine independent content', () => {
             await flush();
             await h.engine.sampleInboundRoleLiveness();
             expect(h.engine.getRoleLiveness('zeta')).toEqual({ camera: false, content: false });
+        });
+    });
+
+    // --- Q4: held-without-capture reserves SEND-capable audio (+ legacy video)
+    // transceivers so resume attaches via replaceTrack with no renegotiation
+    // (Core Invariant 3 / contract §5; parity with Android SEND_RECV+null-track).
+    describe('held-without-capture reserves send-capable senders (Q4)', () => {
+        function audioTransceiver(peer: FakePeerConnection): FakeTransceiver | undefined {
+            return peer.transceivers.find(t => t.kind === 'audio');
+        }
+
+        it('independent offer-owner reserves the held audio transceiver sendrecv with a null track', async () => {
+            // local 'alpha' < 'zeta' → alpha is the offer owner (independent path).
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: true });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            // No startLocalMedia: a held-initial session owns no capture.
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [
+                    { cid: 'alpha' },
+                    { cid: 'zeta', capabilities: { independentContentVideo: true }, mediaPolicy: { videoMediaEnabled: true } },
+                ],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            const audio = audioTransceiver(peer);
+            expect(audio).toBeDefined();
+            // SEND-capable (not recvonly) with no capture attached yet.
+            expect(audio?.direction).toBe('sendrecv');
+            expect(audio?.sender.track).toBeNull();
+        });
+
+        it('legacy peer reserves held audio (and video) transceivers sendrecv with null tracks', async () => {
+            // Non-capable peer → ensureMediaTransceivers legacy path.
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: true });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            const audio = audioTransceiver(peer);
+            expect(audio?.direction).toBe('sendrecv');
+            expect(audio?.sender.track).toBeNull();
+            const video = peer.transceivers.find(t => t.kind === 'video');
+            expect(video?.direction).toBe('sendrecv');
+            expect(video?.sender.track).toBeNull();
+        });
+
+        it('legacy held audio (videoCaptureSupported=false) is still sendrecv so resume needs no renegotiation', async () => {
+            // Even with video capture unsupported, held audio is reserved sendrecv:
+            // the held-no-capture branch overrides the normal recvonly reservation.
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: false });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            expect(audioTransceiver(peer)?.direction).toBe('sendrecv');
+        });
+
+        it('resume attaches a fresh mic via replaceTrack with no direction flip and no offer (no renegotiation)', async () => {
+            const h = makeEngine({ enableIndependentContentVideo: true, videoMediaEnabled: true, videoCaptureSupported: true });
+            h.engine.initializeHeldWithoutCapture();
+            h.engine.updateSignalingConnected(true);
+            h.engine.updateRoomState({
+                hostCid: 'alpha',
+                participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+            }, 'alpha');
+            await flush();
+            const peer = h.engine.getPeerConnectionsMap().get('zeta') as unknown as FakePeerConnection;
+            const audio = audioTransceiver(peer);
+            // Reserved sendrecv before resume.
+            expect(audio?.direction).toBe('sendrecv');
+            const offersBefore = h.sent.filter(m => m.type === 'offer').length;
+
+            // Resume audio-only (camera off): reacquires the mic and attaches it.
+            await h.engine.resumeLocalMediaFromHold(true, 'off');
+            await flush();
+
+            // The fresh mic landed on the EXISTING sender via replaceTrack...
+            expect(audio?.sender.replaceTrackCalls.length).toBeGreaterThan(0);
+            expect(audio?.sender.track).not.toBeNull();
+            expect(audio?.sender.track?.kind).toBe('audio');
+            // ...and the direction was already send-capable, so it was never flipped
+            // (the recvonly→sendrecv flip is what would force renegotiation) and no
+            // new offer was emitted: resume attached with NO renegotiation.
+            expect(audio?.direction).toBe('sendrecv');
+            expect(h.sent.filter(m => m.type === 'offer').length).toBe(offersBefore);
         });
     });
 });

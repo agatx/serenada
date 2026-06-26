@@ -578,6 +578,18 @@ class SerenadaSession internal constructor(
      */
     private var foregroundOwnerToken: ForegroundOwnerToken? = null
 
+    /**
+     * The lease token this session acquired for ITS OWN account via a direct
+     * single-call [SerenadaCore.join] (mode DIRECT), or null. DISTINCT from
+     * [foregroundOwnerToken] (the registry-issued fence token): this is the only
+     * lease the session self-releases, and it does so in [resetResources] /
+     * [close]. A registry-activated session never sets this, so teardown never
+     * frees a registry-owned lease (parity with iOS `directLeaseToken`). Without
+     * the split, teardown of a registry-activated session would call
+     * [ForegroundMediaArbiter.releaseLease] on a lease the registry owns.
+     */
+    private var directLeaseToken: ForegroundOwnerToken? = null
+
     // True only during the media-apply phase of a resume (FIX M3). While set,
     // broadcastLocalMediaState() is suppressed so the intermediate updates from
     // updateEffectiveMicState()/applyLocalVideoPreference() do not emit redundant
@@ -1498,10 +1510,13 @@ class SerenadaSession internal constructor(
         // join fails fast with ForegroundLeaseUnavailable and only one call ever
         // owns capture/audio (contract §2; Core Invariant 1). Held-initial joins
         // and the registry leave acquireForegroundLease false (the registry owns
-        // the lease itself in Phase 3). The lease is released in resetResources.
-        if (acquireForegroundLease && foregroundOwnerToken == null) {
+        // the lease itself in Phase 3). This is the session's OWN lease, stored in
+        // directLeaseToken (NOT foregroundOwnerToken, which is the registry-issued
+        // fence token); it is the only lease the session self-releases, in
+        // resetResources.
+        if (acquireForegroundLease && directLeaseToken == null) {
             try {
-                foregroundOwnerToken = ForegroundMediaArbiter.acquireForeground(
+                directLeaseToken = ForegroundMediaArbiter.acquireForeground(
                     ownerId = roomId,
                     mode = ForegroundArbiterMode.DIRECT,
                     modeOwnerRef = this,
@@ -1747,7 +1762,11 @@ class SerenadaSession internal constructor(
         // generation alone is insufficient because a rollback re-activates the old
         // call under a fresh generation while a stuck callback could match it.
         val supersededByGeneration = gen != mediaOpGeneration
-        val supersededByToken = expectedToken != null && foregroundOwnerToken !== expectedToken
+        // The arbiter is the source of truth for who currently owns the lease, not
+        // the session's local field: after a rollback the local field can still
+        // equal a stale token, so fence against the arbiter's live owner (parity
+        // with web `foregroundArbiter.isCurrentOwner(token)`).
+        val supersededByToken = expectedToken != null && !ForegroundMediaArbiter.isCurrentOwner(expectedToken)
         if (supersededByGeneration || supersededByToken) {
             mediaRole = CallMediaRole.HELD
             mediaActivationState = MediaActivationState.INACTIVE
@@ -1947,17 +1966,25 @@ class SerenadaSession internal constructor(
     }
 
     /**
-     * Release the arbiter lease + DIRECT mode claim this session held (single-call
-     * teardown). Idempotent. The session is the lease owner only on the direct
-     * [SerenadaCore.join] path; the (Phase 3) registry owns release on its path
-     * (the session's foregroundOwnerToken is the registry's there, and the
-     * registry calls releaseLease itself).
+     * Release the DIRECT single-call arbiter lease + mode claim this session held
+     * (single-call teardown). Idempotent. The session owns a lease ONLY on the
+     * direct [SerenadaCore.join] path (stored in [directLeaseToken]); a
+     * registry-activated session's [foregroundOwnerToken] is a registry-issued
+     * fence token, never released here (the registry owns and releases its own
+     * lease). Releasing only [directLeaseToken] prevents teardown from
+     * self-releasing a registry-owned lease (parity with iOS).
+     *
+     * Release only when this session is STILL the arbiter's current owner: guards
+     * the (test-only) case where the singleton was reset out from under a live
+     * session, so a stale release never touches another owner's lease.
      */
     private fun releaseForegroundLeaseAndMode() {
-        val token = foregroundOwnerToken
+        val token = directLeaseToken
         if (token != null) {
-            runCatching { ForegroundMediaArbiter.releaseLease(token) }
-            foregroundOwnerToken = null
+            if (ForegroundMediaArbiter.isCurrentOwner(token)) {
+                runCatching { ForegroundMediaArbiter.releaseLease(token) }
+            }
+            directLeaseToken = null
         }
         // Drop the DIRECT mode claim keyed by this session (no-op if never claimed
         // or already released). This clears process mode when the last direct
