@@ -398,6 +398,92 @@ describe('SerenadaSession hold/resume primitives', () => {
         expect(mediaBroadcasts.some((c) => (c.payload as Record<string, unknown>).held === true)).toBe(false);
     });
 
+    // FIX P5: a call resumed while MUTED owns no mic track (correct — we do not
+    // reacquire a muted mic on resume). A LATER foreground unmute must actually
+    // REACQUIRE the mic before publishing `audioEnabled:true` — otherwise peers
+    // see live audio with silence (a missing track's `enabled` flip is a no-op).
+    it('resume-while-muted then unmute reacquires the mic before publishing audioEnabled:true', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        const stream = harness.media.installLocalStream({ audio: true, video: true });
+        // Mute, hold, resume: the resumed foreground call has NO audio track.
+        harness.session.setAudioEnabled(false);
+        await harness.session.suspendForHold();
+        await harness.session.resumeForeground();
+        expect(stream.getAudioTracks()).toHaveLength(0);
+        expect(harness.session.currentMediaRole).toBe('foreground');
+        const reacquireBefore = harness.media.reacquireLocalAudioCaptureCalls;
+        harness.signaling.broadcastCalls.length = 0;
+
+        // Foreground unmute must REACQUIRE capture (not just flip a missing track).
+        harness.session.setAudioEnabled(true);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // A fresh mic was captured and the stream now has a live audio track.
+        expect(harness.media.reacquireLocalAudioCaptureCalls).toBe(reacquireBefore + 1);
+        expect(stream.getAudioTracks()).toHaveLength(1);
+        // Only AFTER reacquire do we publish audioEnabled:true.
+        const payload = lastMediaStateBroadcast(harness);
+        expect(payload?.audioEnabled).toBe(true);
+        expect(payload?.held).toBe(false);
+        expect(harness.session.currentActualAudioPublished).toBe(true);
+        expect(harness.session.currentDesiredAudioEnabled).toBe(true);
+    });
+
+    // FIX P5 mirror: a call resumed with the camera OFF owns no video track. A
+    // later foreground enable-video must reacquire the camera track before
+    // publishing `videoEnabled:true`.
+    it('resume-while-camera-off then enable video reacquires the camera before publishing', async () => {
+        harness = new TestSessionHarness({ config: { defaultVideoEnabled: false } });
+        await joinAndSettle();
+        const stream = harness.media.installLocalStream({ audio: true, video: false });
+        // Camera-off held then resumed: the foreground call has NO video track.
+        await harness.session.suspendForHold();
+        await harness.session.resumeForeground();
+        expect(stream.getVideoTracks()).toHaveLength(0);
+        expect(harness.session.currentMediaRole).toBe('foreground');
+        const reacquireBefore = harness.media.reacquireVideoTrackCalls;
+        harness.signaling.broadcastCalls.length = 0;
+
+        // Foreground enable-video must REACQUIRE the camera.
+        harness.session.setVideoEnabled(true);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(harness.media.reacquireVideoTrackCalls).toBe(reacquireBefore + 1);
+        expect(stream.getVideoTracks()).toHaveLength(1);
+        const payload = lastMediaStateBroadcast(harness);
+        expect(payload?.videoEnabled).toBe(true);
+        expect(payload?.held).toBe(false);
+        expect(harness.session.currentActualVideoPublished).toBe(true);
+    });
+
+    // FIX P5 regression: a NORMALLY-joined muted single call has a live (muted)
+    // audio track. Unmuting it must NOT trigger a fresh getUserMedia — it just
+    // flips `track.enabled`. Single-call behavior is unchanged.
+    it('normally-joined muted call unmuting does NOT reacquire the mic (flips enabled only)', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        const stream = harness.media.installLocalStream({ audio: true, video: true });
+        const audioTrack = stream.getAudioTracks()[0] as FakeMediaStreamTrack;
+
+        // Mute the foreground single call: the track stays live, only enabled flips.
+        harness.session.setAudioEnabled(false);
+        expect(stream.getAudioTracks()).toHaveLength(1);
+        expect(audioTrack.enabled).toBe(false);
+        const reacquireBefore = harness.media.reacquireLocalAudioCaptureCalls;
+
+        // Unmute: still no reacquire, the same track's `enabled` flips back on.
+        harness.session.setAudioEnabled(true);
+
+        expect(harness.media.reacquireLocalAudioCaptureCalls).toBe(reacquireBefore);
+        expect(stream.getAudioTracks()).toHaveLength(1);
+        expect(stream.getAudioTracks()[0]).toBe(audioTrack);
+        expect(audioTrack.enabled).toBe(true);
+        const payload = lastMediaStateBroadcast(harness);
+        expect(payload?.audioEnabled).toBe(true);
+        expect(harness.session.currentActualAudioPublished).toBe(true);
+    });
+
     // FIX N2: a suspendForHold() that races an in-flight resumeForeground() must
     // win — the session stays HELD (resume's partial activation is rolled back),
     // remote playback ends disabled, and resume never broadcasts held:false.

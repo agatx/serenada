@@ -12,7 +12,17 @@ import org.webrtc.VideoTrack
 internal interface SessionMediaEngine {
     fun startLocalMedia(startVideoCapture: Boolean)
     fun release()
-    fun toggleAudio(enabled: Boolean)
+
+    /**
+     * Enable or disable local mic publishing and return the EFFECTIVE state.
+     * When enabling with no live mic capture track (e.g. after a muted hold was
+     * resumed muted, leaving the mic released), the engine (re)acquires and
+     * attaches the mic track before publishing — so the session never broadcasts
+     * a live audio state backed by a null track. When the track already exists
+     * this only flips `setEnabled` (normal foreground mute/unmute), preserving
+     * single-call behavior.
+     */
+    fun toggleAudio(enabled: Boolean): Boolean
     fun toggleVideo(enabled: Boolean): Boolean
     fun flipCamera()
 

@@ -686,11 +686,14 @@ export class MediaEngine {
     }
 
     /**
-     * Re-acquire the local microphone after a hold and re-attach it to every
-     * peer's audio sender via `replaceTrack` (no renegotiation on the common
-     * path). No-op when a live audio track is already present.
+     * Re-acquire the local microphone and re-attach it to every peer's audio
+     * sender via `replaceTrack` (no renegotiation on the common path). No-op
+     * when a live audio track is already present. Used both by
+     * {@link resumeLocalMediaFromHold} and by the foreground audio-enable path
+     * when a resumed-while-muted call has no live mic track yet (mirrors the
+     * public {@link reacquireVideoTrack}).
      */
-    private async reacquireLocalAudioCapture(): Promise<void> {
+    async reacquireLocalAudioCapture(): Promise<void> {
         if (!this.localStream) return;
         if (this.localStream.getAudioTracks()[0]) return;
         if (this.audioRecoveryInFlight || this.requestingMedia) return;

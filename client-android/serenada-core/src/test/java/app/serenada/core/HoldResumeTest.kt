@@ -546,6 +546,141 @@ class HoldResumeTest {
     }
 
     @Test
+    fun `muted-resume then foreground unmute recreates and attaches the mic before publishing`() {
+        // FIX P5: a held MUTED call resumes MUTED with the mic released (FIX A1).
+        // A later FOREGROUND unmute (setMicMuted(false) -> updateEffectiveMicState
+        // -> toggleAudio(true)) must (re)create + attach the mic BEFORE publishing
+        // audio enabled. The pre-fix toggleAudio(true) was a nil-track no-op yet
+        // actualAudioPublished/localAudioEnabled flipped true — peers saw live
+        // audio with silence.
+        startInCall()
+        factory.session.setMicMuted(true)
+        ShadowLooper.idleMainLooper()
+        hold()
+        resume()
+        // Resume left the muted call with NO live mic capture (FIX A1).
+        assertFalse(
+            "muted resume must leave the mic released",
+            factory.fakeMedia.micCaptureTrackPresent,
+        )
+        assertFalse(
+            "a muted-then-resumed call must not publish audio",
+            factory.session.actualAudioPublishedForTest(),
+        )
+        val recreatesBefore = factory.fakeMedia.micCaptureRecreateCount
+        val broadcastsBefore = mediaStateBroadcasts().size
+
+        // Foreground unmute.
+        factory.session.setMicMuted(false)
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(
+            "foreground unmute with no live track must (re)create the mic capture",
+            recreatesBefore + 1,
+            factory.fakeMedia.micCaptureRecreateCount,
+        )
+        assertTrue(
+            "the mic capture must be live after the unmute",
+            factory.fakeMedia.micCaptureTrackPresent,
+        )
+        assertTrue(
+            "actualAudioPublished must reflect the now-live track",
+            factory.session.actualAudioPublishedForTest(),
+        )
+        val broadcasts = mediaStateBroadcasts()
+        assertTrue("unmute must broadcast media state", broadcasts.size > broadcastsBefore)
+        assertTrue(
+            "the unmute broadcast must carry audioEnabled=true (backed by a real track)",
+            broadcasts.last().payload!!.getBoolean("audioEnabled"),
+        )
+    }
+
+    @Test
+    fun `camera-off-resume then foreground video-on recreates and attaches the video track before publishing`() {
+        // FIX P5: a held call whose camera was OFF resumes camera-off with the
+        // video track released. A later FOREGROUND video-on (toggleVideo ->
+        // applyLocalVideoPreference -> toggleVideo(true)) must (re)create + attach
+        // the camera track BEFORE returning/publishing true. The pre-fix
+        // toggleVideo(true) could return true with a null localVideoTrack — a wrong
+        // live-state broadcast.
+        startInCall()
+        // Turn the camera OFF in foreground, then hold so resume is camera-off.
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+        assertNull("video intent should be off", factory.session.desiredVideoModeForTest())
+        hold()
+        resume()
+        assertFalse(
+            "camera-off resume must leave the camera track released",
+            factory.fakeMedia.cameraCaptureTrackPresent,
+        )
+        assertFalse(
+            "a camera-off-resumed call must not publish video",
+            factory.session.actualVideoPublishedForTest(),
+        )
+        val recreatesBefore = factory.fakeMedia.cameraCaptureRecreateCount
+        val broadcastsBefore = mediaStateBroadcasts().size
+
+        // Foreground video-on.
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(
+            "foreground video-on with no live track must (re)create the camera capture",
+            recreatesBefore + 1,
+            factory.fakeMedia.cameraCaptureRecreateCount,
+        )
+        assertTrue(
+            "the camera capture must be live after video-on",
+            factory.fakeMedia.cameraCaptureTrackPresent,
+        )
+        assertTrue(
+            "actualVideoPublished must reflect the now-live track",
+            factory.session.actualVideoPublishedForTest(),
+        )
+        val broadcasts = mediaStateBroadcasts()
+        assertTrue("video-on must broadcast media state", broadcasts.size > broadcastsBefore)
+        assertTrue(
+            "the video-on broadcast must carry videoEnabled=true (backed by a real track)",
+            broadcasts.last().payload!!.getBoolean("videoEnabled"),
+        )
+    }
+
+    @Test
+    fun `normal foreground unmute with an existing track just flips setEnabled - no recreate`() {
+        // Regression (single-call path unchanged): a normal foreground mute/unmute
+        // keeps a live mic capture and only flips setEnabled. Muting must NOT
+        // release the track and unmuting must NOT (re)create it.
+        startInCall()
+        assertTrue(
+            "a foreground call starts with a live mic capture",
+            factory.fakeMedia.micCaptureTrackPresent,
+        )
+        val recreatesAtStart = factory.fakeMedia.micCaptureRecreateCount
+
+        // Mute (foreground): track stays live (capture not released on mute).
+        factory.session.setMicMuted(true)
+        ShadowLooper.idleMainLooper()
+        assertTrue(
+            "a foreground mute must keep the mic capture live (setEnabled only)",
+            factory.fakeMedia.micCaptureTrackPresent,
+        )
+
+        // Unmute (foreground): track already exists -> no recreate.
+        factory.session.setMicMuted(false)
+        ShadowLooper.idleMainLooper()
+        assertEquals(
+            "a normal foreground unmute with a live track must NOT recreate the mic",
+            recreatesAtStart,
+            factory.fakeMedia.micCaptureRecreateCount,
+        )
+        assertTrue(
+            "actualAudioPublished must be true after a normal foreground unmute",
+            factory.session.actualAudioPublishedForTest(),
+        )
+    }
+
+    @Test
     fun `default single-call broadcast carries held false`() {
         startInCall()
         // The join handshake broadcasts media state with held=false for a normal

@@ -26,11 +26,36 @@ final class FakeMediaEngine: SessionMediaEngine {
     private var onZoomFactorChanged: ((Double) -> Void)?
     private var onFeatureDegradation: ((FeatureDegradationState) -> Void)?
 
+    /// Faithful model of local capture-track presence, mirroring WebRtcEngine's
+    /// `localAudioTrack`/`localVideoTrack`. Hold releases them; resume reacquires
+    /// per desired intent (so a muted/camera-off resume leaves them nil); the
+    /// enabling toggles recreate them when missing (the P5 ensure-track fix).
+    private(set) var hasLocalAudioTrack = false
+    private(set) var hasLocalVideoTrack = false
+    /// Count of toggle-driven track RECREATIONS (the resume-then-enable repair),
+    /// distinct from the initial acquire / resume acquire. Lets a regression test
+    /// assert that a normal unmute with an existing track recreates NOTHING.
+    private(set) var toggleAudioTrackRecreations = 0
+    private(set) var toggleVideoTrackRecreations = 0
+
+    /// Test seam: simulate a foreground call that has lost its video track (e.g. a
+    /// camera-off resume followed by a desired-video-on toggle), so a subsequent
+    /// `toggleVideo(true)` must recreate it. Counts as no recreation itself.
+    func dropLocalVideoTrackForTesting() { hasLocalVideoTrack = false }
+
     func startLocalMedia(preferVideo: Bool) {
         startLocalMediaCalls.append(preferVideo)
+        // Initial acquire: mic always, camera when preferVideo (mirrors the real
+        // engine's startLocalMedia).
+        hasLocalAudioTrack = true
+        hasLocalVideoTrack = preferVideo
     }
 
-    func release() { releaseCalls += 1 }
+    func release() {
+        releaseCalls += 1
+        hasLocalAudioTrack = false
+        hasLocalVideoTrack = false
+    }
 
     private(set) var suspendLocalMediaForHoldCalls = 0
     private(set) var resumeLocalMediaFromHoldCalls: [(audioEnabled: Bool, videoMode: LocalCameraMode?)] = []
@@ -39,6 +64,9 @@ final class FakeMediaEngine: SessionMediaEngine {
 
     func suspendLocalMediaForHold() {
         suspendLocalMediaForHoldCalls += 1
+        // Mirror the real engine: hold RELEASES the mic + camera tracks.
+        hasLocalAudioTrack = false
+        hasLocalVideoTrack = false
         // Mirror the real engine: hold deafens remote playout. This also sets the
         // sticky flag so slots created later inherit the deafen.
         setRemotePlaybackEnabled(false)
@@ -46,6 +74,11 @@ final class FakeMediaEngine: SessionMediaEngine {
 
     func resumeLocalMediaFromHold(audioEnabled: Bool, videoMode: LocalCameraMode?) {
         resumeLocalMediaFromHoldCalls.append((audioEnabled: audioEnabled, videoMode: videoMode))
+        // Mirror the real engine: resume reacquires per DESIRED intent only — a
+        // muted resume leaves the audio track nil; a camera-off resume leaves the
+        // video track nil. This is exactly the state the P5 toggle fix repairs.
+        if audioEnabled { hasLocalAudioTrack = true }
+        if videoMode != nil { hasLocalVideoTrack = true }
         // Mirror the real engine: resume re-enables remote playout.
         setRemotePlaybackEnabled(true)
     }
@@ -63,8 +96,18 @@ final class FakeMediaEngine: SessionMediaEngine {
         detachRenderersForHoldCalls += 1
     }
 
-    func toggleAudio(_ enabled: Bool) {
+    @discardableResult
+    func toggleAudio(_ enabled: Bool) -> Bool {
         toggleAudioCalls.append(enabled)
+        // P5 ensure-track: enabling with no audio track recreates it (resume-then-
+        // unmute repair). When a track already exists this recreates NOTHING — the
+        // single-call mute/unmute regression case. Returns the effective,
+        // track-backed state.
+        if enabled, !hasLocalAudioTrack {
+            hasLocalAudioTrack = true
+            toggleAudioTrackRecreations += 1
+        }
+        return enabled && hasLocalAudioTrack
     }
 
     func restartAudioUnit() {
@@ -74,7 +117,13 @@ final class FakeMediaEngine: SessionMediaEngine {
     @discardableResult
     func toggleVideo(_ enabled: Bool) -> Bool {
         toggleVideoCalls.append(enabled)
-        return enabled
+        // P5 ensure-track: enabling with no video track recreates it (resume-then-
+        // video-on repair). When a track already exists this recreates NOTHING.
+        if enabled, !hasLocalVideoTrack {
+            hasLocalVideoTrack = true
+            toggleVideoTrackRecreations += 1
+        }
+        return enabled && hasLocalVideoTrack
     }
 
     func flipCamera() {}

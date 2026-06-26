@@ -24,7 +24,12 @@ protocol SessionMediaEngine: AnyObject {
     /// Detach/pause the registered local renderers for a hold so a held call's
     /// preview surfaces stop receiving frames.
     func detachRenderersForHold()
-    func toggleAudio(_ enabled: Bool)
+    /// Toggle mic publication. When ENABLING with no live audio track (a held
+    /// call resumed muted owns none), the engine recreates + attaches the mic
+    /// track before reporting enabled. Returns the EFFECTIVE, track-backed state
+    /// (true only when a track exists and is enabled); the session publishes
+    /// exactly this. When a track already exists this only flips `isEnabled`.
+    @discardableResult func toggleAudio(_ enabled: Bool) -> Bool
     /// Restart the audio unit after the host re-activated the audio session that a same-app owner
     /// (no interruption notification) held and released. See ``AudioCoordinatorEvent/audioSessionRestarted``.
     func restartAudioUnit()

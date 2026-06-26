@@ -717,9 +717,20 @@ public final class SerenadaSession: ObservableObject {
             updateDesiredAudioWhileHeld()
             return
         }
-        let effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
+        let desiredEffective = !userMuted && !externalAudioMuted && routeInputAvailable
+        // Publish only the EFFECTIVE state the engine reports. When enabling with
+        // no audio track (held call resumed muted, then unmuted) the engine
+        // recreates + attaches the mic track and returns true; when disabling, or
+        // when no track can be acquired, it returns false. This closes the
+        // resume-then-enable gap where the session published audioEnabled:true
+        // over a nil track. When a track already exists the engine just flips
+        // `isEnabled`, so the returned value equals `desiredEffective` (single-call
+        // mute/unmute behavior unchanged).
+        let effectiveEnabled: Bool
         if sessionActivated {
-            webRtcEngine.toggleAudio(effectiveEnabled)
+            effectiveEnabled = webRtcEngine.toggleAudio(desiredEffective)
+        } else {
+            effectiveEnabled = desiredEffective
         }
         actualAudioPublished = sessionActivated && mediaRole == .foreground && effectiveEnabled
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = effectiveEnabled }

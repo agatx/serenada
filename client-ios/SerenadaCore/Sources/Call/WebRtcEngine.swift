@@ -692,11 +692,59 @@ internal final class WebRtcEngine: SessionMediaEngine {
 #endif
     }
 
-    public func toggleAudio(_ enabled: Bool) {
+    @discardableResult
+    public func toggleAudio(_ enabled: Bool) -> Bool {
 #if canImport(WebRTC)
+        // ENABLE with no live mic track: a held call resumed MUTED owns no audio
+        // track (resumeLocalMediaFromHold deferred the acquire). A later
+        // foreground unmute must recreate + attach the track before reporting
+        // enabled, otherwise peers see "audio on" with silence. Mirror
+        // resumeLocalMediaFromHold's audio acquire. CRITICAL: when the track
+        // already exists this path is NOT taken — a normal foreground
+        // mute/unmute just flips `isEnabled` (single-call behavior unchanged).
+        if enabled, localAudioTrack == nil {
+            ensureLocalAudioTrack()
+        }
         localAudioTrack?.isEnabled = enabled
+        // Effective state is track-backed: true only when a track exists AND is
+        // enabled. The session publishes exactly what this returns.
+        return localAudioTrack?.isEnabled ?? false
+#else
+        return false
 #endif
     }
+
+#if canImport(WebRTC)
+    /// Recreate + attach the local mic capture track when none exists, mirroring
+    /// `resumeLocalMediaFromHold`'s audio acquire. Used by `toggleAudio(true)` to
+    /// repair the "resumed-muted then unmuted" case where the foreground call has
+    /// no audio track. No-op when a track already exists.
+    private func ensureLocalAudioTrack() {
+        guard localAudioTrack == nil, let factory = peerConnectionFactory else { return }
+        localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+        localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
+        if let localAudioTrack {
+            audioPipelinePrimer?.start(localAudioTrack: localAudioTrack)
+        }
+        // Swap the fresh track onto the existing senders (no renegotiation).
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+    }
+
+    /// Recreate + attach the local camera track (and source) when none exists,
+    /// mirroring `resumeLocalMediaFromHold`'s video acquire. Used by
+    /// `toggleVideo(true)` to repair the "resumed camera-off then video-on" case
+    /// where the foreground call has no video track. Gated on `videoMediaEnabled`;
+    /// no-op when a track already exists. The capturer restart + renderer
+    /// attachment that follow in `toggleVideo` make the track actually flow.
+    private func ensureLocalVideoTrack() {
+        guard videoMediaEnabled, localVideoTrack == nil, let factory = peerConnectionFactory else { return }
+        localVideoSource = factory.videoSource()
+        localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
+        cameraController.updateLocalVideoSource(localVideoSource)
+        attachTrackToRegisteredRenderers()
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+    }
+#endif
 
     /// Restarts the audio unit by bouncing `RTCAudioSession.isAudioEnabled`, mirroring the
     /// media-services-reset recovery in `DefaultAudioCoordinator`. Needed after a same-app audio
@@ -731,6 +779,16 @@ internal final class WebRtcEngine: SessionMediaEngine {
         if enabled && cameraController.availableCameraModes.isEmpty && !isLegacyScreenSharing {
             localVideoTrack?.isEnabled = false
             return false
+        }
+        // ENABLE with no live camera track: a held call resumed CAMERA-OFF owns no
+        // video track (resumeLocalMediaFromHold deferred the acquire). A later
+        // foreground video-on must recreate + attach the track before reporting
+        // enabled, otherwise we'd restart the capturer and publish "video on" with
+        // no track for peers. Mirror resumeLocalMediaFromHold's video acquire.
+        // CRITICAL: when the track already exists this is a no-op — normal
+        // foreground video toggling is unchanged (single-call behavior preserved).
+        if enabled && !isLegacyScreenSharing {
+            ensureLocalVideoTrack()
         }
         if enabled && !cameraController.hasActiveCapturer() && !isLegacyScreenSharing {
             let started = cameraController.restartVideoCapturerFromAvailableModes()

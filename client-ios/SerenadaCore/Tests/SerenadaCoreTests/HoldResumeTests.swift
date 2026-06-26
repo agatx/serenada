@@ -1,3 +1,4 @@
+import AVFoundation
 @testable import SerenadaCore
 import XCTest
 
@@ -733,6 +734,165 @@ final class HoldResumeTests: XCTestCase {
                        "Hold must broadcast content_state active:false so peers clear stale content")
         XCTAssertFalse(harness.session.diagnostics.isScreenSharing,
                        "Hold must clear the screen-sharing diagnostic")
+        harness.tearDown()
+    }
+
+    // MARK: - FIX P5: resume-then-enable must acquire the missing track
+
+    /// A held call resumed MUTED owns no audio track (resume defers the mic
+    /// acquire). A LATER foreground unmute must RECREATE + attach the mic track
+    /// BEFORE publishing audio enabled — otherwise peers see audio-on with silence.
+    /// The fix lives in the engine: `toggleAudio(true)` ensures the track exists and
+    /// returns the effective state; the session publishes exactly that.
+    func testMutedResumeThenForegroundUnmuteRecreatesMicTrackBeforePublishing() async {
+        let harness = await makeInCallHarness()
+
+        // Mute, hold, resume MUTED: resume reacquires no mic, so the foreground
+        // call has no audio track (the bug's precondition).
+        harness.session.setMicMuted(true)
+        await yieldToMainActor()
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        await yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 50)
+        await yieldToMainActor()
+
+        XCTAssertFalse(harness.fakeMedia.hasLocalAudioTrack,
+                       "Precondition: a muted resume leaves the foreground call with NO audio track")
+        XCTAssertFalse(harness.session.actualAudioPublished,
+                       "Precondition: a muted resumed call publishes audio off")
+        let recreationsBefore = harness.fakeMedia.toggleAudioTrackRecreations
+
+        // Foreground unmute: the engine must recreate + attach the mic track, then
+        // the session publishes the EFFECTIVE (track-backed) enabled state.
+        harness.session.setMicMuted(false)
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeMedia.toggleAudioTrackRecreations, recreationsBefore + 1,
+                       "Foreground unmute with no audio track must recreate + attach the mic track")
+        XCTAssertTrue(harness.fakeMedia.hasLocalAudioTrack,
+                      "After unmute the foreground call must own a live audio track")
+        XCTAssertTrue(harness.session.actualAudioPublished,
+                      "Audio enabled must be published only AFTER the track is recreated + attached")
+        XCTAssertTrue(harness.session.state.localParticipant.audioEnabled,
+                      "Local audio state must reflect the now-live track")
+        XCTAssertEqual(lastBroadcastMediaState(harness)?.audioEnabled, true,
+                       "Peers must see audioEnabled:true backed by a real track")
+        harness.tearDown()
+    }
+
+    /// A held call resumed CAMERA-OFF owns no video track (resume defers the camera
+    /// acquire). A LATER foreground video-on must RECREATE + attach the video track
+    /// BEFORE publishing video enabled. Same engine-side ensure-track fix via
+    /// `toggleVideo(true)`.
+    func testCameraOffResumeThenForegroundVideoOnRecreatesVideoTrackBeforePublishing() async {
+        let harness = await makeInCallHarness()
+        // The fix is exercised by a foreground video-ON. That public action is
+        // camera-permission gated (and `setVideoEnabled(true)` early-returns when no
+        // camera mode exists), so skip cleanly when the test environment cannot
+        // actually enable the camera. Where it can (camera available + authorized),
+        // this runs the real end-to-end resume-then-video-on path.
+        guard !harness.session.state.localParticipant.availableCameraModes.isEmpty,
+              AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            harness.tearDown()
+            return
+        }
+
+        // Turn video OFF, hold, resume CAMERA-OFF: resume reacquires no camera, so
+        // the foreground call has no video track (the bug's precondition).
+        harness.session.setVideoEnabled(false)
+        await yieldToMainActor()
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        await yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 50)
+        await yieldToMainActor()
+
+        XCTAssertFalse(harness.fakeMedia.hasLocalVideoTrack,
+                       "Precondition: a camera-off resume leaves the foreground call with NO video track")
+        XCTAssertFalse(harness.session.actualVideoPublished,
+                       "Precondition: a camera-off resumed call publishes video off")
+        let recreationsBefore = harness.fakeMedia.toggleVideoTrackRecreations
+
+        // Foreground video-on: the engine must recreate + attach the video track
+        // before the session publishes video enabled.
+        harness.session.setVideoEnabled(true)
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeMedia.toggleVideoTrackRecreations, recreationsBefore + 1,
+                       "Foreground video-on with no video track must recreate + attach the video track")
+        XCTAssertTrue(harness.fakeMedia.hasLocalVideoTrack,
+                      "After video-on the foreground call must own a live video track")
+        XCTAssertTrue(harness.session.actualVideoPublished,
+                      "Video enabled must be published only AFTER the track is recreated + attached")
+        harness.tearDown()
+    }
+
+    /// Engine-sink coverage for the video ensure-track fix that does NOT depend on
+    /// camera permission: the session's video SINK (`applyLocalVideoPreference`)
+    /// drives `toggleVideo(true)`, whose enable-with-no-track branch must recreate
+    /// the video track. This pins the fix deterministically (the permission-gated
+    /// end-to-end test above only runs where the simulator camera is authorized).
+    /// Models the exact resume-then-video-on foreground state: desired video ON
+    /// (the join default with a camera) but no video track present.
+    func testForegroundVideoSinkRecreatesMissingVideoTrack() async {
+        let harness = await makeInCallHarness()
+        // Needs desired-video-on at join (camera available). Skip otherwise.
+        guard harness.session.state.localParticipant.videoEnabled else {
+            harness.tearDown()
+            return
+        }
+
+        // Drop the modeled video track to reproduce the resume-then-enable gap: a
+        // foreground call whose desired video is ON but which owns no video track
+        // (as after a camera-off resume followed by a desired-video-on toggle).
+        harness.fakeMedia.dropLocalVideoTrackForTesting()
+        XCTAssertFalse(harness.fakeMedia.hasLocalVideoTrack,
+                       "Precondition: foreground call with desired-video-on but no track")
+        let recreationsBefore = harness.fakeMedia.toggleVideoTrackRecreations
+
+        // The video sink (reached on resume / proximity / route change) must recreate
+        // the missing track before publishing video enabled.
+        harness.session.applyLocalVideoPreference()
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeMedia.toggleVideoTrackRecreations, recreationsBefore + 1,
+                       "The video sink with desired-video-on and no track must recreate + attach it")
+        XCTAssertTrue(harness.fakeMedia.hasLocalVideoTrack,
+                      "After the sink runs the foreground call must own a live video track")
+        XCTAssertTrue(harness.session.actualVideoPublished,
+                      "Video enabled must be published only AFTER the track is recreated")
+        harness.tearDown()
+    }
+
+    /// Regression: a NORMAL foreground mute/unmute on a call that already owns an
+    /// audio track must just flip `isEnabled` — it must NOT recreate the track. This
+    /// pins the single-call behavior the fix must not disturb.
+    func testForegroundUnmuteWithExistingTrackDoesNotRecreate() async {
+        let harness = await makeInCallHarness()
+        await yieldToMainActor()
+
+        // A freshly joined foreground call already owns a live mic track.
+        XCTAssertTrue(harness.fakeMedia.hasLocalAudioTrack,
+                      "Precondition: a foreground call owns a live audio track")
+        let recreationsBefore = harness.fakeMedia.toggleAudioTrackRecreations
+
+        // Mute then unmute, both foreground, both with the track present.
+        harness.session.setMicMuted(true)
+        await yieldToMainActor()
+        harness.session.setMicMuted(false)
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeMedia.toggleAudioTrackRecreations, recreationsBefore,
+                       "Normal foreground unmute with an existing track must NOT recreate it (just flip isEnabled)")
+        XCTAssertTrue(harness.fakeMedia.hasLocalAudioTrack,
+                      "The existing audio track must be preserved across mute/unmute")
+        XCTAssertTrue(harness.session.actualAudioPublished,
+                      "Unmute must publish audio enabled over the existing track")
         harness.tearDown()
     }
 }

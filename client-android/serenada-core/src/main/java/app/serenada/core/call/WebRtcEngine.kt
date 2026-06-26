@@ -403,13 +403,7 @@ internal class WebRtcEngine(
         // re-attach to the existing senders via setTrack (no renegotiation).
         if (audioEnabled) {
             if (localAudioTrack == null) {
-                val audioConstraints = MediaConstraints()
-                audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
-                localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
-                applyAudioTrackHints()
-                localAudioTrack?.let { audioPipelinePrimer.start(it) }
-                localAudioTrack?.setEnabled(true)
-                peerSlots.forEach { slot -> slot.setAudioTrack(localAudioTrack) }
+                acquireLocalAudioTrack()
             } else {
                 localAudioTrack?.setEnabled(true)
             }
@@ -435,6 +429,21 @@ internal class WebRtcEngine(
         // both branches to keep audio-only sender wiring consistent with
         // startLocalMedia's no-video branch.
         peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+    }
+
+    /**
+     * (Re)acquire the mic capture and attach it to every slot's audio sender,
+     * enabled. Mirrors [startLocalMedia] / [resumeLocalMediaFromHold]'s audio
+     * acquire (no renegotiation). Caller must ensure [localAudioTrack] is null.
+     */
+    private fun acquireLocalAudioTrack() {
+        val audioConstraints = MediaConstraints()
+        audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+        localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
+        applyAudioTrackHints()
+        localAudioTrack?.let { audioPipelinePrimer.start(it) }
+        localAudioTrack?.setEnabled(true)
+        peerSlots.forEach { slot -> slot.setAudioTrack(localAudioTrack) }
     }
 
     override fun setRemotePlaybackEnabled(enabled: Boolean) {
@@ -489,8 +498,19 @@ internal class WebRtcEngine(
         return cameraController.adjustWorldCameraZoom(scaleFactor)
     }
 
-    override fun toggleAudio(enabled: Boolean) {
+    override fun toggleAudio(enabled: Boolean): Boolean {
+        if (released) return false
+        // FOREGROUND-path enable with no live mic track (e.g. a muted hold was
+        // resumed muted, leaving the mic released): (re)acquire + attach the mic
+        // before publishing, so the session never broadcasts a live audio state
+        // backed by a null track. When the track already exists this only flips
+        // setEnabled — normal foreground mute/unmute, single-call behavior intact.
+        if (enabled && localAudioTrack == null) {
+            acquireLocalAudioTrack()
+            return localAudioTrack != null
+        }
         localAudioTrack?.setEnabled(enabled)
+        return enabled && localAudioTrack != null
     }
 
     /**
@@ -512,6 +532,9 @@ internal class WebRtcEngine(
             return false
         }
         if (enabled && !isLegacyScreenSharing && cameraController.videoCapturer == null) {
+            // ensure the video source exists before restarting capture — a prior
+            // video-off (or a resumed-camera-off hold) disposed it.
+            ensureVideoSource()
             if (!restartVideoCapturerWithFallback(cameraController.currentCameraSource)) {
                 localVideoTrack?.setEnabled(false)
                 return false
@@ -521,7 +544,18 @@ internal class WebRtcEngine(
             cameraController.disposeVideoCapturer()
         }
         val effectiveEnabled = enabled && (cameraController.videoCapturer != null || isLegacyScreenSharing)
-        localVideoTrack?.setEnabled(effectiveEnabled)
+        // FOREGROUND-path enable with no live video track (e.g. a camera-off hold
+        // was resumed camera-off, leaving the track disposed): (re)create + attach
+        // the camera track before returning true, so the session never broadcasts a
+        // live video state backed by a null track. `setEnabled` alone is a nil-track
+        // no-op. When the track already exists this just flips setEnabled — normal
+        // foreground video on/off, single-call behavior intact.
+        if (effectiveEnabled && localVideoTrack == null) {
+            ensureLocalVideoTrack(enabled = true)
+            peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+        } else {
+            localVideoTrack?.setEnabled(effectiveEnabled)
+        }
         return effectiveEnabled
     }
 

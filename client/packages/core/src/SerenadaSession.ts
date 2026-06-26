@@ -1243,11 +1243,35 @@ export class SerenadaSession implements SerenadaSessionHandle {
         } else {
             const track = stream.getAudioTracks()[0];
             const newEnabled = enabled ?? !(track?.enabled ?? this.desiredAudioEnabled);
-            if (track) track.enabled = newEnabled;
             this.desiredAudioEnabled = newEnabled;
-            this.actualAudioPublished = newEnabled;
-            this.broadcastLocalMediaState();
-            this.rebuildState();
+            if (track) {
+                // Track already live (normally-joined call, incl. a muted single
+                // call): just flip `enabled` and publish. Single-call behavior
+                // is unchanged — no fresh getUserMedia.
+                track.enabled = newEnabled;
+                this.actualAudioPublished = newEnabled;
+                this.broadcastLocalMediaState();
+                this.rebuildState();
+            } else if (newEnabled) {
+                // No live mic track (a call resumed while muted released the
+                // mic). Unmuting must actually REACQUIRE capture before we
+                // publish/broadcast `audioEnabled:true` — otherwise peers see
+                // live audio with silence. Mirrors the video reacquire below.
+                const swap = this.media.reacquireLocalAudioCapture();
+                void swap.then(() => {
+                    if (this.isInactive) return;
+                    const reacquired = this.media.localStream?.getAudioTracks()[0];
+                    this.actualAudioPublished = !!reacquired && reacquired.enabled;
+                    this.broadcastLocalMediaState();
+                    this.rebuildState();
+                });
+                this.rebuildState();
+            } else {
+                // No track and disabling: nothing captured, nothing to publish.
+                this.actualAudioPublished = false;
+                this.broadcastLocalMediaState();
+                this.rebuildState();
+            }
         }
     }
 

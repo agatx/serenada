@@ -2848,12 +2848,18 @@ class SerenadaSession internal constructor(
             return
         }
         val effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
-        if (sessionActivated) {
+        // The engine ENSURES a mic track exists when enabling (e.g. unmuting after
+        // a muted hold was resumed muted, which left the mic released) and reports
+        // the EFFECTIVE publish state — a live track backing the broadcast. Publish
+        // only that, never a live audio state backed by a null track (FIX P5).
+        val enginePublishedAudio = if (sessionActivated) {
             webRtcEngine.toggleAudio(effectiveEnabled)
+        } else {
+            false
         }
         // Foreground actual reflects the effective publish state (FIX A-4: keep
         // actual* in sync on foreground toggles, not only at start/resume/hold).
-        actualAudioPublished = sessionActivated && effectiveEnabled
+        actualAudioPublished = enginePublishedAudio
         updateState(_state.value.copy(localAudioEnabled = effectiveEnabled))
         _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
         _isMicMutedByExternalAudio.value = externalAudioMuted

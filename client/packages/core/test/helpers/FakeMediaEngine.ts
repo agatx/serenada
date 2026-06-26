@@ -149,6 +149,17 @@ export class FakeMediaEngine {
         stream.addTrack(new FakeMediaStreamTrack('video'));
     }
 
+    // Counts foreground mic reacquires so the resume-then-unmute test can assert
+    // capture actually happens (vs only flipping a missing track's `enabled`).
+    reacquireLocalAudioCaptureCalls = 0;
+
+    async reacquireLocalAudioCapture(): Promise<void> {
+        this.reacquireLocalAudioCaptureCalls += 1;
+        const stream = this.localStream as unknown as FakeMediaStream | null;
+        if (!stream || stream.getAudioTracks().length > 0) return;
+        stream.addTrack(new FakeMediaStreamTrack('audio'));
+    }
+
     // --- Multi-call hold/resume primitives ---
     suspendLocalMediaForHoldCalls = 0;
     resumeLocalMediaFromHoldCalls: Array<{ desiredAudio: boolean; desiredVideoMode: VideoMode }> = [];

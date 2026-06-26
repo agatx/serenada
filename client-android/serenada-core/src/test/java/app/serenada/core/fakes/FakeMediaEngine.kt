@@ -82,16 +82,28 @@ internal class FakeMediaEngine : SessionMediaEngine {
     var micCaptureRecreateCount = 0
         private set
 
+    // FIX P5 model: whether the engine currently holds a live camera CAPTURE
+    // track. Mirrors the real WebRtcEngine: startLocalMedia/resume(camera) create
+    // it, suspend + resume-camera-off release it. A FOREGROUND enable with no
+    // track (toggleVideo(true)) must (re)create + attach it before publishing
+    // true. Counts recreations so a test can assert the (re)create on enable.
+    var cameraCaptureTrackPresent = false
+        private set
+    var cameraCaptureRecreateCount = 0
+        private set
+
     override fun startLocalMedia(startVideoCapture: Boolean) {
         startLocalMediaCalls++
         startVideoCaptureCalls.add(startVideoCapture)
         micCaptureTrackPresent = true
+        cameraCaptureTrackPresent = startVideoCapture
     }
     override fun release() { releaseCalls++ }
 
     override fun suspendLocalMediaForHold() {
         suspendLocalMediaForHoldCalls++
         micCaptureTrackPresent = false
+        cameraCaptureTrackPresent = false
     }
     override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
         resumeLocalMediaFromHoldCalls.add(audioEnabled to videoMode)
@@ -101,6 +113,13 @@ internal class FakeMediaEngine : SessionMediaEngine {
             micCaptureTrackPresent = true
             micCaptureRecreateCount++
         }
+        // Recreate the camera capture ONLY when a camera mode is desired. A
+        // camera-off resume keeps it released (FIX P5: a later video-on toggle
+        // must (re)create it via toggleVideo).
+        if (videoMode != null && videoMode != LocalCameraMode.SCREEN_SHARE && !cameraCaptureTrackPresent) {
+            cameraCaptureTrackPresent = true
+            cameraCaptureRecreateCount++
+        }
     }
     override fun setRemotePlaybackEnabled(enabled: Boolean) {
         setRemotePlaybackEnabledCalls.add(enabled)
@@ -108,10 +127,30 @@ internal class FakeMediaEngine : SessionMediaEngine {
     override fun detachRenderersForHold() {
         detachRenderersForHoldCalls++
     }
-    override fun toggleAudio(enabled: Boolean) { toggleAudioCalls.add(enabled) }
+    override fun toggleAudio(enabled: Boolean): Boolean {
+        toggleAudioCalls.add(enabled)
+        // FIX P5: a FOREGROUND enable with no live mic track (re)creates + attaches
+        // it before publishing — mirrors the real engine ensuring the track exists.
+        // When the track already exists this is a plain setEnabled (no recreate),
+        // preserving single-call mute/unmute behavior. Returns the EFFECTIVE state.
+        if (enabled && !micCaptureTrackPresent) {
+            micCaptureTrackPresent = true
+            micCaptureRecreateCount++
+        }
+        return enabled && micCaptureTrackPresent
+    }
     override fun toggleVideo(enabled: Boolean): Boolean {
         toggleVideoCalls.add(enabled)
-        return enabled
+        // FIX P5: a FOREGROUND enable with no live camera track (re)creates +
+        // attaches it before returning true. When the track already exists this is
+        // a plain setEnabled (no recreate). Returns the EFFECTIVE state.
+        if (enabled && !cameraCaptureTrackPresent) {
+            cameraCaptureTrackPresent = true
+            cameraCaptureRecreateCount++
+        } else if (!enabled) {
+            cameraCaptureTrackPresent = false
+        }
+        return enabled && cameraCaptureTrackPresent
     }
     var flipCameraCalls = 0
         private set
