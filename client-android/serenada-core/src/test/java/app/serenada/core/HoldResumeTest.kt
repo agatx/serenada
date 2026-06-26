@@ -310,6 +310,68 @@ class HoldResumeTest {
     }
 
     @Test
+    fun `startScreenShare while held is a no-op - no projection start and no broadcast`() {
+        // FIX M1 (Core Invariant 2): a held session owns no screen share. A
+        // startScreenShare while held must NOT start MediaProjection capture and
+        // must NOT broadcast content / participant_media_state.
+        startInCall()
+        hold()
+        val startsBefore = factory.fakeMedia.startScreenShareCalls
+        val broadcastsBefore = mediaStateBroadcasts().size
+        val contentBefore = factory.fakeProvider.sentMessages("content_state").size
+
+        factory.session.startScreenShare(android.content.Intent())
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(
+            "held startScreenShare must not start MediaProjection capture",
+            startsBefore,
+            factory.fakeMedia.startScreenShareCalls,
+        )
+        assertEquals(
+            "held startScreenShare must not broadcast media state",
+            broadcastsBefore,
+            mediaStateBroadcasts().size,
+        )
+        assertEquals(
+            "held startScreenShare must not broadcast content state",
+            contentBefore,
+            factory.fakeProvider.sentMessages("content_state").size,
+        )
+        assertFalse(
+            "held startScreenShare must not flip the screen-sharing diagnostic",
+            factory.session.diagnostics.value.isScreenSharing,
+        )
+        assertEquals(CallMediaRole.HELD, factory.session.mediaRoleForTest())
+    }
+
+    @Test
+    fun `resume emits a single held false with no intermediate held true`() {
+        // FIX M3: resume must commit FOREGROUND before the media-applying
+        // broadcasts (and suppress the intermediate ones), so peers see exactly
+        // one held=false after capture is reacquired and never a redundant
+        // held=true emitted while media is mid-resume.
+        startInCall()
+        hold()
+        val broadcastsBeforeResume = mediaStateBroadcasts().size
+
+        resume()
+
+        val resumeBroadcasts = mediaStateBroadcasts().drop(broadcastsBeforeResume)
+        assertEquals(
+            "resume must emit exactly one participant_media_state broadcast",
+            1,
+            resumeBroadcasts.size,
+        )
+        val only = resumeBroadcasts.single().payload!!
+        assertFalse("resume broadcast must be held=false", only.getBoolean("held"))
+        assertTrue(
+            "resume must emit no held=true after capture is reacquired",
+            resumeBroadcasts.none { it.payload?.optBoolean("held") == true },
+        )
+    }
+
+    @Test
     fun `default single-call broadcast carries held false`() {
         startInCall()
         // The join handshake broadcasts media state with held=false for a normal

@@ -654,6 +654,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
     /** Start sharing the screen, replacing the camera video track. */
     async startScreenShare(): Promise<void> {
         if (this.config.videoMediaEnabled === false) return;
+        // Core Invariant 2: held media owns no screen share. Refuse while held —
+        // no getDisplayMedia capture, no content/participant_media_state
+        // broadcast. Screen share is foreground-only and is NOT auto-restored on
+        // resume, so there is no pending intent to record; just decline.
+        if (this.mediaRole === 'held') {
+            this.config.logger?.log('debug', 'Session', 'startScreenShare ignored while held (Core Invariant 2)');
+            return;
+        }
         const wasScreenSharing = this.media.isScreenSharing;
         await this.media.startScreenShare();
         if (!this.isInactive && !wasScreenSharing && this.media.isScreenSharing) {
@@ -1318,6 +1326,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.mediaOpGeneration += 1;
         const gen = this.mediaOpGeneration;
         this.resumeInFlight = true;
+        // Surface activation progress (contract §4; parity with iOS/Android):
+        // `activating` while reacquiring media, `active` on success, `inactive`
+        // on a superseded/failed resume (the rollback path).
+        this.mediaActivationState = 'activating';
+        this.rebuildState();
         try {
             await this.media.resumeLocalMediaFromHold(this.desiredAudioEnabled, this.desiredVideoMode);
             if (this.isInactive) return;
@@ -1338,6 +1351,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
             // Broadcast AFTER tracks are attached (attach-then-broadcast).
             this.broadcastLocalMediaState();
             this.rebuildState();
+        } catch (err) {
+            // Reacquire threw: leave the call held (no foreground, no
+            // held:false) and surface the rollback activation state. This is the
+            // failed-resume arm of the §4 `inactive` contract.
+            this.config.logger?.log('warning', 'Session', `resumeForeground failed: ${formatError(err)}`);
+            if (!this.isInactive) {
+                await this.rollbackSupersededResume();
+            }
         } finally {
             this.resumeInFlight = false;
         }

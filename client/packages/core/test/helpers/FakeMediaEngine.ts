@@ -114,7 +114,14 @@ export class FakeMediaEngine {
         this.localStream = null;
     }
 
-    async startScreenShare(): Promise<void> { /* no-op */ }
+    // Counts getDisplayMedia-equivalent screen-share starts so the held-guard
+    // test can assert a held call never starts capture. Sets isScreenSharing so
+    // the session's broadcast branch is exercised on the foreground path.
+    startScreenShareCalls = 0;
+    async startScreenShare(): Promise<void> {
+        this.startScreenShareCalls += 1;
+        this.isScreenSharing = true;
+    }
     async stopScreenShare(): Promise<void> { this.isScreenSharing = false; }
     async flipCamera(): Promise<void> {
         this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';

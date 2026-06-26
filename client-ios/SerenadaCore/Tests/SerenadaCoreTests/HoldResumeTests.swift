@@ -514,6 +514,123 @@ final class HoldResumeTests: XCTestCase {
             "No spurious held:false broadcast from the superseded resume")
         harness.tearDown()
     }
+
+    // MARK: - FIX M1: screen share refused while held (Core Invariant 2)
+
+    /// A held call owns NO screen share. `startScreenShare()` while held must be a
+    /// pure no-op: no ReplayKit/engine start, no `content_state`, and no
+    /// `participant_media_state` broadcast. Screen share is foreground-only and is
+    /// not auto-restored on resume.
+    func testStartScreenShareWhileHeldIsNoOp() async {
+        // Independent-content mode keeps the camera preference untouched, so the
+        // assertion is camera-availability independent.
+        let config = SerenadaConfig(
+            signalingProvider: FakeSignalingProvider(),
+            enableIndependentContentVideo: true
+        )
+        let harness = SessionTestHarness(config: config)
+        await harness.advanceToInCallWithTurn(
+            localCid: "local",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        let startCallsBefore = harness.fakeMedia.startScreenShareCalls
+        let broadcastsBefore = harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").count
+        let contentBroadcastsBefore = harness.fakeProvider.broadcastMessages(ofType: "content_state").count
+
+        harness.session.startScreenShare()
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeMedia.startScreenShareCalls, startCallsBefore,
+                       "startScreenShare while held must NOT start ReplayKit capture")
+        XCTAssertFalse(harness.session.diagnostics.isScreenSharing,
+                       "startScreenShare while held must NOT flip the screen-sharing flag")
+        XCTAssertEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").count,
+            broadcastsBefore,
+            "startScreenShare while held must NOT broadcast participant_media_state")
+        XCTAssertEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "content_state").count,
+            contentBroadcastsBefore,
+            "startScreenShare while held must NOT broadcast content_state")
+        XCTAssertEqual(harness.session.mediaRole, .held,
+                       "startScreenShare while held must leave the role held")
+        harness.tearDown()
+    }
+
+    // MARK: - FIX M2: toggleVideo is desired-relative while held
+
+    /// `toggleVideo()` while held must derive its target from DESIRED intent, not
+    /// from `localParticipant.videoEnabled` (forced false while held). A held call
+    /// whose desired video is ON must toggle desired video OFF — not redundantly
+    /// turn it back on. Matches Web/Android.
+    func testToggleVideoWhileHeldWithDesiredVideoOnFlipsDesiredOff() async {
+        let harness = await makeInCallHarness()
+        // This fix only matters when the call's desired video is ON before hold.
+        // The join default is video-on when a camera is available; if the test
+        // environment has no camera (desired video off), the desired-relative
+        // toggle is not exercised, so skip cleanly.
+        guard harness.session.state.localParticipant.videoEnabled else {
+            harness.tearDown()
+            return
+        }
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        let toggleVideoEngineBefore = harness.fakeMedia.toggleVideoCalls.count
+
+        // Toggle while held: desired video should flip OFF.
+        harness.session.toggleVideo()
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeMedia.toggleVideoCalls.count, toggleVideoEngineBefore,
+                       "toggleVideo while held must NOT touch the capturer")
+        XCTAssertEqual(harness.session.mediaRole, .held,
+                       "toggleVideo while held must not leave the held role")
+
+        // Resume: the desired-off intent must be honored (camera not reacquired).
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+
+        let resume = harness.fakeMedia.resumeLocalMediaFromHoldCalls.first
+        XCTAssertNil(resume?.videoMode ?? nil,
+                     "toggleVideo while held (desired-on) must flip desired video OFF, so resume reacquires no camera")
+        harness.tearDown()
+    }
+
+    // MARK: - FIX M3: resume emits a single held:false (no intermediate held:true)
+
+    /// Resume must emit exactly ONE `participant_media_state` broadcast, with
+    /// `held:false`, AFTER media has resumed and the role is committed
+    /// `.foreground`. No intermediate `held:true` may be broadcast after capture
+    /// is reacquired.
+    func testResumeEmitsSingleHeldFalseWithNoIntermediateHeldTrue() async {
+        let harness = await makeInCallHarness()
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        let broadcastsBeforeResume = harness.fakeProvider
+            .broadcastMessages(ofType: "participant_media_state").count
+
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        await yieldToMainActor()
+        await harness.fakeClock.advance(byMs: 50)
+        await yieldToMainActor()
+
+        let all = harness.fakeProvider.broadcastMessages(ofType: "participant_media_state")
+        let resumeBroadcasts = Array(all.suffix(from: broadcastsBeforeResume))
+        let heldValues = resumeBroadcasts.map { $0.payload?["held"]?.boolValue }
+
+        XCTAssertEqual(resumeBroadcasts.count, 1,
+                       "Resume must emit exactly one media-state broadcast, got held sequence \(heldValues)")
+        XCTAssertEqual(heldValues, [false],
+                       "Resume's single broadcast must be held:false (no intermediate held:true after capture reacquired)")
+        harness.tearDown()
+    }
 }
 
 /// Test audio coordinator whose `activateCallSession` can be PAUSED so a test can

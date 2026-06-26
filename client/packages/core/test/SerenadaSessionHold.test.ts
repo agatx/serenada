@@ -295,6 +295,109 @@ describe('SerenadaSession hold/resume primitives', () => {
         expect(payload).toEqual({ audioEnabled: false, videoEnabled: false, held: false });
     });
 
+    // FIX M1: a held call owns NO screen share (Core Invariant 2).
+    // startScreenShare() while held is a NO-OP — no getDisplayMedia capture and
+    // no content / participant_media_state broadcast. Screen share is
+    // foreground-only and is NOT auto-restored on resume.
+    it('startScreenShare while held is a no-op (no getDisplayMedia, no broadcast)', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: true });
+        harness.media.canScreenShare = true;
+
+        await harness.session.suspendForHold();
+        harness.signaling.broadcastCalls.length = 0;
+        const startCallsBefore = harness.media.startScreenShareCalls;
+
+        await harness.session.startScreenShare();
+
+        // No capture started and the session is still not screen sharing.
+        expect(harness.media.startScreenShareCalls).toBe(startCallsBefore);
+        expect(harness.media.isScreenSharing).toBe(false);
+        // No content / media-state broadcast while held.
+        expect(harness.signaling.broadcastCalls).toHaveLength(0);
+        // Role unchanged.
+        expect(harness.session.currentMediaRole).toBe('held');
+    });
+
+    // Sanity counterpart: a FOREGROUND call's startScreenShare DOES start
+    // capture and broadcast (guards on held only, no behavior regression).
+    it('startScreenShare while foreground starts capture and broadcasts', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: true });
+        harness.media.canScreenShare = true;
+        harness.signaling.broadcastCalls.length = 0;
+
+        await harness.session.startScreenShare();
+
+        expect(harness.media.startScreenShareCalls).toBe(1);
+        expect(harness.media.isScreenSharing).toBe(true);
+        expect(harness.signaling.broadcastCalls.filter((c) => c.type === 'participant_media_state')).toHaveLength(1);
+    });
+
+    // FIX M4: resume drives mediaActivationState inactive -> activating -> active
+    // (parity with iOS/Android, contract §4).
+    it('resume transitions mediaActivationState inactive -> activating -> active', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: true });
+
+        await harness.session.suspendForHold();
+        // Held sits at inactive.
+        expect(harness.session.currentMediaActivationState).toBe('inactive');
+
+        // Observe the intermediate `activating` while the resume awaits media
+        // reacquire (the resume sets it synchronously before the first await).
+        const resumePromise = harness.session.resumeForeground();
+        expect(harness.session.currentMediaActivationState).toBe('activating');
+
+        await resumePromise;
+        expect(harness.session.currentMediaActivationState).toBe('active');
+        expect(harness.session.currentMediaRole).toBe('foreground');
+    });
+
+    // FIX M4: a superseded resume rolls back to inactive (stays held), never
+    // landing on `active`.
+    it('a superseded resume leaves mediaActivationState inactive', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: true });
+
+        await harness.session.suspendForHold();
+
+        const resumePromise = harness.session.resumeForeground();
+        expect(harness.session.currentMediaActivationState).toBe('activating');
+        // A hold supersedes the in-flight resume.
+        await harness.session.suspendForHold();
+        await resumePromise;
+
+        expect(harness.session.currentMediaActivationState).toBe('inactive');
+        expect(harness.session.currentMediaRole).toBe('held');
+    });
+
+    // VERIFY M3: resume must emit exactly one held:false AFTER media is flowing,
+    // and NEVER a held:true after reacquire. (Web reacquires media first, then
+    // broadcasts a single held:false; there is no post-reacquire held:true.)
+    it('resume emits a single held:false and no held:true after reacquire', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: true });
+
+        await harness.session.suspendForHold();
+        harness.signaling.broadcastCalls.length = 0;
+
+        await harness.session.resumeForeground();
+
+        const mediaBroadcasts = harness.signaling.broadcastCalls
+            .filter((c) => c.type === 'participant_media_state');
+        // Exactly one media-state broadcast on resume, and it is held:false.
+        expect(mediaBroadcasts).toHaveLength(1);
+        expect((mediaBroadcasts[0].payload as Record<string, unknown>).held).toBe(false);
+        // No held:true emitted after capture is reacquired.
+        expect(mediaBroadcasts.some((c) => (c.payload as Record<string, unknown>).held === true)).toBe(false);
+    });
+
     // FIX N2: a suspendForHold() that races an in-flight resumeForeground() must
     // win — the session stays HELD (resume's partial activation is rolled back),
     // remote playback ends disabled, and resume never broadcasts held:false.

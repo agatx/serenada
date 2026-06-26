@@ -541,6 +541,13 @@ class SerenadaSession internal constructor(
     // Phase 2 will feed this from the arbiter operation generation.
     private var mediaOpGeneration: Long = 0
 
+    // True only during the media-apply phase of a resume (FIX M3). While set,
+    // broadcastLocalMediaState() is suppressed so the intermediate updates from
+    // updateEffectiveMicState()/applyLocalVideoPreference() do not emit redundant
+    // participant_media_state messages. Resume commits FOREGROUND first, applies
+    // media silently, then emits exactly one final held=false.
+    private var suppressMediaStateBroadcast: Boolean = false
+
     /**
      * True while this session owns no foreground media (Core Invariant 2: a held
      * call owns NO capture). User media toggles consult this to update `desired*`
@@ -1034,6 +1041,14 @@ class SerenadaSession internal constructor(
     /** Start screen sharing using the given media projection intent. */
     fun startScreenShare(intent: Intent) {
         assertMainThread()
+        // Held media owns no screen share (Core Invariant 2): refuse while held so
+        // a held session never starts MediaProjection capture or broadcasts a
+        // content/participant_media_state. Screen share is foreground-only and is
+        // NOT auto-restored on resume — the user must restart it.
+        if (isHeld) {
+            logger?.log(SerenadaLogLevel.INFO, "Session", "Ignoring startScreenShare while held")
+            return
+        }
         if (!videoMediaEnabled) return
         if (_diagnostics.value.isScreenSharing) return
         if (config.enableIndependentContentVideo) {
@@ -1564,20 +1579,30 @@ class SerenadaSession internal constructor(
         // 4. Restart foreground-only pollers.
         runCatching { startRemoteVideoStatePolling() }
 
-        // 5. Restore intent into the live foreground state. userMuted /
-        //    userPreferredVideoEnabled drive the engine; desired* are the source.
+        // 5. Commit the FOREGROUND role BEFORE applying media (FIX M3). Restoring
+        //    intent calls updateEffectiveMicState()/applyLocalVideoPreference(),
+        //    which broadcast on change; were the role still HELD they would emit
+        //    redundant held=true messages before the final held=false. Commit the
+        //    role first AND suppress the intermediate broadcasts so exactly one
+        //    held=false is sent once media is flowing.
+        mediaRole = CallMediaRole.FOREGROUND
+        mediaActivationState = MediaActivationState.ACTIVE
         sessionActivated = true
         userMuted = !desiredAudioEnabled
         userPreferredVideoEnabled = desiredVideoMode != null
-        updateEffectiveMicState()
-        applyLocalVideoPreference()
+        suppressMediaStateBroadcast = true
+        try {
+            updateEffectiveMicState()
+            applyLocalVideoPreference()
+        } finally {
+            suppressMediaStateBroadcast = false
+        }
 
-        mediaRole = CallMediaRole.FOREGROUND
-        mediaActivationState = MediaActivationState.ACTIVE
         actualAudioPublished = _state.value.localAudioEnabled
         actualVideoPublished = _state.value.localVideoEnabled
 
-        // 6. Broadcast held=false AFTER media is flowing (attach-then-broadcast).
+        // 6. Broadcast exactly one held=false AFTER media is flowing
+        //    (attach-then-broadcast).
         runCatching { broadcastLocalMediaState(held = false) }
     }
 
@@ -2060,6 +2085,9 @@ class SerenadaSession internal constructor(
     }
 
     private fun broadcastLocalMediaState(held: Boolean = mediaRole == CallMediaRole.HELD) {
+        // During a resume's media-apply phase, suppress intermediate broadcasts so
+        // exactly one held=false is emitted once media is flowing (FIX M3).
+        if (suppressMediaStateBroadcast) return
         // A held call owns no capture (Core Invariant 2): peers must always see
         // audio=false/video=false while held, regardless of the (possibly stale)
         // local state snapshot. Resume broadcasts held=false with live values.

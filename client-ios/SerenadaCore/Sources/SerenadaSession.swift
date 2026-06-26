@@ -584,6 +584,15 @@ public final class SerenadaSession: ObservableObject {
     /// Toggle local video on or off.
     public func toggleVideo() {
         guard !availableCameraModes.isEmpty else { return }
+        // Core Invariant 2: a held call owns NO capture, so
+        // `localParticipant.videoEnabled` is forced false while held. Toggling
+        // off that would always turn DESIRED video on. Derive the target from the
+        // DESIRED intent instead (`desiredVideoMode != nil`), matching Web/Android,
+        // so a held call with desired-video-on can toggle desired-video off.
+        if mediaRole == .held {
+            setVideoEnabled(desiredVideoMode == nil, broadcastMediaState: true)
+            return
+        }
         setVideoEnabled(!state.localParticipant.videoEnabled, broadcastMediaState: true)
     }
 
@@ -795,6 +804,14 @@ public final class SerenadaSession: ObservableObject {
     /// Start screen sharing via the broadcast upload extension.
     public func startScreenShare() {
         guard config.videoMediaEnabled else { return }
+        // Core Invariant 2: held media owns NO screen share. Refuse while held —
+        // no ReplayKit start, no content/`participant_media_state` broadcast.
+        // Screen share is foreground-only and is NOT auto-restored on resume, so
+        // there is no pending intent to record; just decline.
+        guard mediaRole != .held else {
+            logger?.log(.debug, tag: "Session", "startScreenShare ignored while held (Core Invariant 2)")
+            return
+        }
         // `.disabled` is a clean no-op: no capture, pending start, or
         // content_state signaling.
         guard isScreenShareAvailable else { return }
