@@ -1504,41 +1504,36 @@ class SerenadaSession internal constructor(
         runCatching { broadcastLocalMediaState(held = false) }
     }
 
-    /**
-     * Deactivate the audio coordinator under the same mutex + timeout pattern as
-     * [resetResources], but awaited (hold must confirm before completing).
-     */
+    /** Deactivate the audio coordinator for hold (awaited; mirrors [resetResources]). */
     private suspend fun deactivateAudioCoordinatorForHold() {
-        try {
-            withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
-                audioCoordinatorMutex.withLock {
-                    audioCoordinator.deactivateCallSession()
-                }
-            }
-        } catch (e: TimeoutCancellationException) {
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: audio coordinator deactivation timed out")
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: failed to deactivate audio coordinator: ${e.message}")
+        runAudioCoordinatorOp("Hold: audio coordinator deactivation") {
+            audioCoordinator.deactivateCallSession()
+        }
+    }
+
+    /** Activate the audio coordinator for resume (mirrors [startJoinInternal]). */
+    private suspend fun activateAudioCoordinatorForResume() {
+        runAudioCoordinatorOp("Resume: audio coordinator activation") {
+            audioCoordinator.activateCallSession(config.audioIntent)
         }
     }
 
     /**
-     * Activate the audio coordinator under the same mutex + timeout pattern as
-     * [startJoinInternal].
+     * Run a hold/resume audio-coordinator op under the same mutex + timeout pattern
+     * as [startJoinInternal] / [resetResources]. Unlike join, a timeout/failure here
+     * is logged at WARNING and swallowed: hold must not throw after partial release,
+     * and resume best-effort restores the route.
      */
-    private suspend fun activateAudioCoordinatorForResume() {
+    private suspend fun runAudioCoordinatorOp(opLabel: String, block: suspend () -> Unit) {
         try {
             withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
-                audioCoordinatorMutex.withLock {
-                    audioCoordinator.activateCallSession(config.audioIntent)
-                }
+                audioCoordinatorMutex.withLock { block() }
             }
         } catch (e: TimeoutCancellationException) {
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: audio coordinator activation timed out")
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "$opLabel timed out")
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: failed to activate audio coordinator: ${e.message}")
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "$opLabel failed: ${e.message}")
         }
     }
 

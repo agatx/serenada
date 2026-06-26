@@ -615,8 +615,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
         // Keep desired camera mode in sync with the new facing so resume
         // restores the camera the user last chose.
         if (this.desiredVideoMode !== 'off') {
-            this.desiredVideoMode = this.media.facingMode === 'environment' ? 'world' : 'selfie';
+            this.desiredVideoMode = this.cameraFacingAsVideoMode();
         }
+    }
+
+    /** Current camera facing expressed as a {@link VideoMode} (never `'off'`). */
+    private cameraFacingAsVideoMode(): ConfigurableCameraMode {
+        return this.media.facingMode === 'environment' ? 'world' : 'selfie';
     }
 
     /** Start sharing the screen, replacing the camera video track. */
@@ -1172,9 +1177,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const newEnabled = enabled ?? !(videoTrack?.enabled ?? this.userPreferredVideoEnabled);
             this.userPreferredVideoEnabled = newEnabled;
             // Update desired intent so a later hold/resume restores it correctly.
-            this.desiredVideoMode = newEnabled
-                ? (this.media.facingMode === 'environment' ? 'world' : 'selfie')
-                : 'off';
+            this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
             this.actualVideoPublished = newEnabled;
             const swap = newEnabled ? this.media.reacquireVideoTrack() : this.media.releaseVideoTrack();
             void swap.then(() => {
@@ -1200,30 +1203,18 @@ export class SerenadaSession implements SerenadaSessionHandle {
      * `'foreground'` for a normally-joined single call. Read by the Phase 3
      * registry to derive `activeCallId` and publish `ManagedCallState`.
      */
-    get currentMediaRole(): CallMediaRole {
-        return this.mediaRole;
-    }
+    get currentMediaRole(): CallMediaRole { return this.mediaRole; }
 
     /** Foreground-activation progress; `'active'` for a normal single call. */
-    get currentMediaActivationState(): MediaActivationState {
-        return this.mediaActivationState;
-    }
+    get currentMediaActivationState(): MediaActivationState { return this.mediaActivationState; }
 
     /** User intent for audio/video (survives hold). Read by the registry. */
-    get currentDesiredAudioEnabled(): boolean {
-        return this.desiredAudioEnabled;
-    }
-    get currentDesiredVideoMode(): VideoMode {
-        return this.desiredVideoMode;
-    }
+    get currentDesiredAudioEnabled(): boolean { return this.desiredAudioEnabled; }
+    get currentDesiredVideoMode(): VideoMode { return this.desiredVideoMode; }
 
     /** What peers observe now; always false while held. Read by the registry. */
-    get currentActualAudioPublished(): boolean {
-        return this.actualAudioPublished;
-    }
-    get currentActualVideoPublished(): boolean {
-        return this.actualVideoPublished;
-    }
+    get currentActualAudioPublished(): boolean { return this.actualAudioPublished; }
+    get currentActualVideoPublished(): boolean { return this.actualVideoPublished; }
 
     /**
      * Session-internal hold primitive (Phase 1; Phase 2 wraps this as the
@@ -1295,27 +1286,29 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const stream = this.media.localStream;
         const audioTrack = stream?.getAudioTracks()[0];
         const videoTrack = stream?.getVideoTracks()[0];
-        // Audio: drive off DESIRED intent gated by route/track availability —
-        // never off bare track presence or `config.defaultAudioEnabled`. A held
-        // call that was MUTED must resume MUTED: with `desiredAudioEnabled ===
-        // false` the mic is never reacquired (no audio track), and a
-        // track-presence fallback to `defaultAudioEnabled` would otherwise
-        // wrongly advertise audioEnabled:true (privacy bug). "Route available"
-        // on web = a live audio track present once media has started; the normal
-        // mute path keeps the track but flips desired to false, so
-        // `desired && route` still yields false. Pre-media-start (no stream) we
-        // fall back to desired intent.
-        //
+        // Audio: see `publishedAudioEnabled` (desired intent gated by track).
         // Video: derive from track presence. A held call with camera off does
         // not reacquire the camera, so there is no video track and this yields
         // false. Track-presence (not `desiredVideoMode`) is intentional: in
         // legacy screen-share-from-audio-only the camera mode is off yet a video
         // (display) track IS flowing and peers must see videoEnabled:true.
         this.signaling.broadcast('participant_media_state', {
-            audioEnabled: stream ? (this.desiredAudioEnabled && !!audioTrack) : this.desiredAudioEnabled,
+            audioEnabled: this.publishedAudioEnabled(stream, audioTrack),
             videoEnabled: stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled,
             held: false,
         });
+    }
+
+    /**
+     * Audio-published value shared by the broadcast and the local-participant
+     * snapshot: DESIRED intent gated by an actually-present audio track once
+     * media has started, falling back to bare desired intent pre-media-start.
+     * Never keyed off `config.defaultAudioEnabled` — a muted-resumed call has no
+     * reacquired audio track, so this yields false (privacy: never advertise
+     * audioEnabled:true while muted). See {@link broadcastLocalMediaState}.
+     */
+    private publishedAudioEnabled(stream: MediaStream | null, audioTrack: MediaStreamTrack | undefined): boolean {
+        return stream ? (this.desiredAudioEnabled && !!audioTrack) : this.desiredAudioEnabled;
     }
 
     private handleRemoteMediaState(message: PeerMessage): void {
@@ -1555,10 +1548,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
             cid: clientId,
             displayName: this.displayName,
             peerId: this.appPeerId,
-            // Mirror the broadcast: desired intent gated by route availability,
-            // never `config.defaultAudioEnabled` — so a muted-resumed call (no
-            // reacquired audio track) shows muted locally too.
-            audioEnabled: stream ? (this.desiredAudioEnabled && !!audioTrack) : this.desiredAudioEnabled,
+            // Mirror the broadcast so the local UI matches what peers see.
+            audioEnabled: this.publishedAudioEnabled(stream, audioTrack),
             // `cameraEnabled` is camera-specific and `videoEnabled` mirrors it.
             // Both equal `localVideoEnabled` here because, in both independent and
             // legacy modes, the camera track presence/state IS the local video
