@@ -106,6 +106,15 @@ internal interface PeerConnectionSlotProtocol {
     fun setAudioTrack(track: AudioTrack?)
 
     /**
+     * Null this peer's local video SENDER tracks (`setTrack(null, false)`) on
+     * hold, mirroring [setAudioTrack]`(null)` for audio. Clears the camera sender
+     * (legacy single-video) and, for independent-capable peers, both the bound
+     * camera and content senders, so a held call preserves its senders/
+     * transceivers without carrying a stale capture track. No renegotiation.
+     */
+    fun clearLocalVideoTracks() {}
+
+    /**
      * Attach a renderer/sink to this peer's CONTENT (screen share) video track
      * specifically. For legacy peers this is the single video track when the
      * peer is presenting content; for independent-capable peers it is the

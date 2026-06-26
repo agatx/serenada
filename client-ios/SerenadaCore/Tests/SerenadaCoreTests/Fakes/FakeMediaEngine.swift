@@ -39,14 +39,24 @@ final class FakeMediaEngine: SessionMediaEngine {
 
     func suspendLocalMediaForHold() {
         suspendLocalMediaForHoldCalls += 1
+        // Mirror the real engine: hold deafens remote playout. This also sets the
+        // sticky flag so slots created later inherit the deafen.
+        setRemotePlaybackEnabled(false)
     }
 
     func resumeLocalMediaFromHold(audioEnabled: Bool, videoMode: LocalCameraMode?) {
         resumeLocalMediaFromHoldCalls.append((audioEnabled: audioEnabled, videoMode: videoMode))
+        // Mirror the real engine: resume re-enables remote playout.
+        setRemotePlaybackEnabled(true)
     }
 
+    /// Sticky deafen state, mirroring the real engine: held sessions set this
+    /// `false` and a slot created AFTER hold must inherit it. Defaults enabled.
+    private(set) var remotePlaybackEnabled = true
     func setRemotePlaybackEnabled(_ enabled: Bool) {
+        remotePlaybackEnabled = enabled
         setRemotePlaybackEnabledCalls.append(enabled)
+        fakeSlots.values.forEach { $0.setRemotePlaybackEnabled(enabled) }
     }
 
     func detachRenderersForHold() {
@@ -150,6 +160,11 @@ final class FakeMediaEngine: SessionMediaEngine {
             failNextCreatedSlotRemoteOffer = false
         }
         fakeSlots[remoteCid] = slot
+        // Sticky deafen: a slot created while the session is held inherits the
+        // disabled remote playback (mirrors WebRtcEngine.createSlot).
+        if !remotePlaybackEnabled {
+            slot.setRemotePlaybackEnabled(false)
+        }
         if let iceServers = _iceServers {
             slot.setIceServers(iceServers)
         }

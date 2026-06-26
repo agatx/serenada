@@ -84,6 +84,10 @@ internal class WebRtcEngine(
     private val peerConnectionDisposeQueue = PeerConnectionDisposeQueue()
 
     private var iceServers: List<PeerConnection.IceServer>? = null
+    // Sticky remote-deafen state shared across slots (multi-call hold). Held while
+    // false so a peer that joins/renegotiates during hold inherits the deafen at
+    // slot creation (FIX A3). Resume sets it back to true.
+    private var remotePlaybackEnabled = true
     private val initializedRenderers =
         Collections.newSetFromMap(WeakHashMap<SurfaceViewRenderer, Boolean>())
 
@@ -369,7 +373,11 @@ internal class WebRtcEngine(
 
     override fun suspendLocalMediaForHold() {
         if (released) return
-        // Camera: stop the capturer and dispose the video track/source so the OS
+        // Camera/content: null the video SENDER tracks on every slot first
+        // (setTrack(null, false)) so no sender keeps a reference to a track we are
+        // about to dispose (FIX A2 — mirrors the audio sender nulling below).
+        peerSlots.forEach { slot -> slot.clearLocalVideoTracks() }
+        // Then stop the capturer and dispose the video track/source so the OS
         // camera indicator clears. Mirrors video-off, plus a track dispose.
         cameraController.disposeVideoCapturer()
         disposeLocalVideoTrack()
@@ -388,20 +396,27 @@ internal class WebRtcEngine(
 
     override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
         if (released) return
-        // Microphone: recreate capture and re-attach to the existing senders via
-        // setTrack (no renegotiation). Mute intent is applied by the session via
-        // toggleAudio after this; create the track enabled so the sender carries
-        // a live track again.
-        if (localAudioTrack == null) {
-            val audioConstraints = MediaConstraints()
-            audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
-            localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
-            applyAudioTrackHints()
-            localAudioTrack?.let { audioPipelinePrimer.start(it) }
-            localAudioTrack?.setEnabled(audioEnabled)
-            peerSlots.forEach { slot -> slot.setAudioTrack(localAudioTrack) }
-        } else {
-            localAudioTrack?.setEnabled(audioEnabled)
+        // Microphone: recreate capture ONLY when audio is desired. A held call
+        // that was MUTED must resume muted with NO mic recreate (FIX A1): leaving
+        // the audio source/track null keeps the OS mic indicator off and the
+        // sender carries a null track. When audio IS desired, recreate capture and
+        // re-attach to the existing senders via setTrack (no renegotiation).
+        if (audioEnabled) {
+            if (localAudioTrack == null) {
+                val audioConstraints = MediaConstraints()
+                audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+                localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
+                applyAudioTrackHints()
+                localAudioTrack?.let { audioPipelinePrimer.start(it) }
+                localAudioTrack?.setEnabled(true)
+                peerSlots.forEach { slot -> slot.setAudioTrack(localAudioTrack) }
+            } else {
+                localAudioTrack?.setEnabled(true)
+            }
+        } else if (localAudioTrack != null) {
+            // Defensive: if a track somehow survived hold, mute it without keeping
+            // capture live (suspend already disposed it on the normal path).
+            localAudioTrack?.setEnabled(false)
         }
 
         // Camera: reacquire only when a camera mode is desired (off = leave
@@ -424,6 +439,7 @@ internal class WebRtcEngine(
 
     override fun setRemotePlaybackEnabled(enabled: Boolean) {
         if (released) return
+        remotePlaybackEnabled = enabled
         peerSlots.forEach { slot -> slot.setRemotePlaybackEnabled(enabled) }
     }
 
@@ -691,6 +707,12 @@ internal class WebRtcEngine(
         )
         policySlot = slot
         peerSlots.add(slot)
+        // Sticky deafen (FIX A3): a slot created while the session is held must
+        // start deafened so its remote audio tracks come up silent. Seed BEFORE
+        // ensurePeerConnection so the slot's onTrack applies the current state.
+        if (!remotePlaybackEnabled) {
+            slot.setRemotePlaybackEnabled(false)
+        }
         if (!iceServers.isNullOrEmpty()) {
             slot.ensurePeerConnection()
         }

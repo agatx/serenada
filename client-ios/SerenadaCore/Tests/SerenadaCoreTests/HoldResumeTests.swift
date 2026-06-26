@@ -179,6 +179,35 @@ final class HoldResumeTests: XCTestCase {
         harness.tearDown()
     }
 
+    /// FIX I1: a MUTED held call must resume MUTED. The resume must NOT request
+    /// the engine to reacquire the mic (audioEnabled:false, so the engine keeps
+    /// the audio sender track nil and the OS mic indicator stays off), and the
+    /// resumed `participant_media_state` broadcast must report `audioEnabled:false`
+    /// (derived from desired intent + route, not from track presence).
+    func testMutedHeldCallResumesMutedWithoutReacquiringMic() async {
+        let harness = await makeInCallHarness()
+        harness.session.setMicMuted(true)
+        await yieldToMainActor()
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        await yieldToMainActor()
+
+        // The engine is told NOT to reacquire the mic on resume.
+        let resume = harness.fakeMedia.resumeLocalMediaFromHoldCalls.first
+        XCTAssertEqual(resume?.audioEnabled, false,
+                       "A muted held call must resume with audio NOT reacquired")
+        // And the resumed broadcast reports audio off, not a stale live state.
+        let last = lastBroadcastMediaState(harness)
+        XCTAssertEqual(last?.audioEnabled, false,
+                       "Resumed broadcast must report audioEnabled:false for a muted call")
+        XCTAssertEqual(last?.held, false, "Resume must broadcast held:false")
+        harness.tearDown()
+    }
+
     // MARK: - Remote deafen primitive (slot level)
 
     func testRemoteDeafenTogglesIndependentlyOfDuck() {
@@ -192,6 +221,95 @@ final class HoldResumeTests: XCTestCase {
         slot.setRemotePlaybackEnabled(true)
         XCTAssertTrue(slot.remotePlaybackEnabled, "Re-enable restores remote playback")
         XCTAssertEqual(slot.setRemotePlaybackEnabledCalls, [false, true])
+    }
+
+    /// FIX I3: the remote-playout deafen must be STICKY across slots created AFTER
+    /// hold. A peer that joins (or renegotiates) while this session is held must
+    /// get a deafened slot, not a default-enabled one — otherwise the deafen leaks
+    /// the moment a new peer arrives.
+    func testDeafenIsStickyForSlotsCreatedWhileHeld() async {
+        let harness = await makeInCallHarness()
+        // Slot for the original peer exists and is enabled before hold.
+        let original = harness.fakeMedia.fakeSlots["remote"]
+        XCTAssertEqual(original?.remotePlaybackEnabled, true)
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        // Hold deafened the existing slot.
+        XCTAssertEqual(original?.remotePlaybackEnabled, false,
+                       "Hold must deafen the existing peer's slot")
+
+        // A new peer joins while held: a fresh slot is created via the negotiation
+        // engine (room_state -> getOrCreateSlot -> engine.createSlot).
+        harness.simulateRoomState(
+            participants: [
+                (cid: "local", joinedAt: 1),
+                (cid: "remote", joinedAt: 2),
+                (cid: "remote2", joinedAt: 3)
+            ],
+            hostCid: "local"
+        )
+        await yieldToMainActor()
+        await waitUntil { harness.fakeMedia.fakeSlots["remote2"] != nil }
+
+        let lateSlot = harness.fakeMedia.fakeSlots["remote2"]
+        XCTAssertNotNil(lateSlot, "A new peer joining while held must get a slot")
+        XCTAssertEqual(lateSlot?.remotePlaybackEnabled, false,
+                       "A slot created while held must inherit the deafen (sticky)")
+        harness.tearDown()
+    }
+
+    // MARK: - Post-reconnect resync re-broadcast (FIX I2)
+
+    /// FIX I2: a transport that reconnects WITHOUT a fresh `joined` runs the
+    /// post-reconnect resync (`flushPostReconnectResync`), not `handleJoined`. The
+    /// resync must re-broadcast the current media state INCLUDING `held` so a peer
+    /// that missed the original `held:true` broadcast converges. Mirrors Web/Android.
+    func testPostReconnectResyncReBroadcastsHeldState() async {
+        let harness = SessionTestHarness(handlesReconnection: true)
+        await harness.advanceToInCallWithTurn(
+            localCid: "local",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        // Hold the call (broadcasts held:true once, locally).
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        let broadcastsAfterHold = harness.fakeProvider
+            .broadcastMessages(ofType: "participant_media_state").count
+
+        // Transport drops then reconnects without a fresh `joined` (the provider
+        // handles reconnection). This arms the post-reconnect resync gate.
+        harness.fakeProvider.simulateDisconnected(reason: "test-drop")
+        await yieldToMainActor()
+        harness.fakeProvider.simulateConnected()
+        await yieldToMainActor()
+        XCTAssertTrue(harness.session.isPostReconnectResyncPending,
+                      "Reconnect without a fresh joined must arm the resync gate")
+
+        // The room_state snapshot flushes the resync.
+        harness.simulateRoomState(
+            participants: [
+                (cid: "local", joinedAt: 1),
+                (cid: "remote", joinedAt: 2)
+            ],
+            hostCid: "local"
+        )
+        await yieldToMainActor()
+        await waitUntil { !harness.session.isPostReconnectResyncPending }
+
+        let broadcasts = harness.fakeProvider.broadcastMessages(ofType: "participant_media_state")
+        XCTAssertGreaterThan(broadcasts.count, broadcastsAfterHold,
+                             "Post-reconnect resync must re-broadcast media state")
+        let last = lastBroadcastMediaState(harness)
+        XCTAssertEqual(last?.held, true,
+                       "The resync re-broadcast must carry the current held:true")
+        XCTAssertEqual(last?.audioEnabled, false, "Held re-broadcast reports audio off")
+        XCTAssertEqual(last?.videoEnabled, false, "Held re-broadcast reports video off")
+        harness.tearDown()
     }
 
     // MARK: - Inbound participant_media_state with held

@@ -170,6 +170,12 @@ export class MediaEngine {
     connectionStatus: ConnectionStatus = 'connected';
 
     private peers = new Map<string, PeerState>();
+    // Current remote-audio playout gate (multi-call hold). `false` while the call
+    // is held so inbound remote audio is silenced. Stored so the deafen is STICKY:
+    // a peer that joins / renegotiates / produces a new audio receiver WHILE held
+    // is silenced too (applied in `ontrack` and on fresh peer creation), not just
+    // the receivers that existed at hold time. Resume sets it back to `true`.
+    private remotePlaybackEnabled = true;
     private readonly initialVideoEnabled: boolean;
     // Per-remote-CID tally of cumulative `inbound-rtp.bytesReceived`. Sampled
     // by `sampleInboundLiveness()`; a CID is "flowing" when its
@@ -592,12 +598,28 @@ export class MediaEngine {
      * streams still gets silence.
      */
     setRemotePlaybackEnabled(enabled: boolean): void {
+        // Remember the gate so it is applied to receivers/tracks that appear
+        // AFTER hold (new peers, renegotiation, late `ontrack`) — see
+        // `applyRemotePlaybackToPeer` callers. Otherwise a peer that joins or
+        // renegotiates while held would become audible.
+        this.remotePlaybackEnabled = enabled;
         for (const peer of this.peers.values()) {
-            for (const receiver of peer.pc.getReceivers()) {
-                const track = receiver.track;
-                if (track?.kind === 'audio') {
-                    track.enabled = enabled;
-                }
+            this.applyRemotePlaybackToPeer(peer);
+        }
+    }
+
+    /**
+     * Apply the current {@link remotePlaybackEnabled} gate to one peer's inbound
+     * AUDIO receivers. Called from {@link setRemotePlaybackEnabled} (all peers),
+     * from {@link getOrCreatePeer} (a peer created while held), and from
+     * `ontrack` (a fresh receiver track surfaced while held) so the deafen is
+     * sticky across peers/receivers that appear after hold.
+     */
+    private applyRemotePlaybackToPeer(peer: PeerState): void {
+        for (const receiver of peer.pc.getReceivers()) {
+            const track = receiver.track;
+            if (track?.kind === 'audio') {
+                track.enabled = this.remotePlaybackEnabled;
             }
         }
     }
@@ -1400,6 +1422,12 @@ export class MediaEngine {
                 return;
             }
             this.logger?.log('debug', 'WebRTC', `[${remoteCid}] Remote track received`);
+            // Sticky deafen: a remote audio track surfaced while the call is held
+            // (peer joined/renegotiated after hold) must inherit the current
+            // playout gate, otherwise it would be audible despite the hold.
+            if (event.track.kind === 'audio') {
+                event.track.enabled = this.remotePlaybackEnabled;
+            }
             let remoteStream: MediaStream;
             if (event.streams?.[0]) {
                 remoteStream = event.streams[0];
@@ -1490,6 +1518,12 @@ export class MediaEngine {
         };
 
         this.peers.set(remoteCid, peerState);
+        // Sticky deafen: if this peer is created while the call is held, apply
+        // the current playout gate to any receivers it already has. (New audio
+        // tracks that arrive later are gated in `ontrack` above.)
+        if (!this.remotePlaybackEnabled) {
+            this.applyRemotePlaybackToPeer(peerState);
+        }
         return peerState;
     }
 

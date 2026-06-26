@@ -163,6 +163,79 @@ describe('SerenadaSession hold/resume primitives', () => {
         expect(stream.getAudioTracks()).toHaveLength(0);
     });
 
+    // FIX W1: a muted held call must resume MUTED. The broadcast `audioEnabled`
+    // and the mic reacquire are driven by `desiredAudioEnabled`, never by track
+    // presence or `config.defaultAudioEnabled`. Before the fix, a missing audio
+    // track (no reacquire) fell back to `defaultAudioEnabled` and wrongly
+    // broadcast `audioEnabled:true` for a muted call (privacy bug).
+    it('muted held call resumes muted: no mic reacquire AND broadcasts audioEnabled:false', async () => {
+        // Default config (defaultAudioEnabled !== false) is the dangerous case:
+        // the old fallback would have advertised audioEnabled:true.
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        const stream = harness.media.installLocalStream({ audio: true, video: true });
+        harness.session.setAudioEnabled(false);
+
+        await harness.session.suspendForHold();
+        await harness.session.resumeForeground();
+
+        // Mic was NOT reacquired (desired audio is off).
+        expect(harness.media.resumeLocalMediaFromHoldCalls.at(-1)?.desiredAudio).toBe(false);
+        expect(stream.getAudioTracks()).toHaveLength(0);
+
+        // Broadcast reflects the muted intent, not defaultAudioEnabled.
+        const payload = lastMediaStateBroadcast(harness);
+        expect(payload?.audioEnabled).toBe(false);
+        expect(payload?.held).toBe(false);
+        // Video intent (default on) survived the hold and resumed.
+        expect(payload?.videoEnabled).toBe(true);
+
+        // Local participant mirror also reflects muted (matches what peers see).
+        const me = harness.state.localParticipant;
+        expect(me?.audioEnabled).toBe(false);
+    });
+
+    // FIX W1 mirror: a camera-off-but-mic-on held call resumes audio-only — the
+    // broadcast must advertise audioEnabled:true, videoEnabled:false.
+    it('camera-off held call resumes audio-only: broadcasts audio on, video off', async () => {
+        harness = new TestSessionHarness({ config: { defaultVideoEnabled: false } });
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: false });
+
+        await harness.session.suspendForHold();
+        await harness.session.resumeForeground();
+
+        const payload = lastMediaStateBroadcast(harness);
+        expect(payload?.audioEnabled).toBe(true);
+        expect(payload?.videoEnabled).toBe(false);
+        expect(payload?.held).toBe(false);
+    });
+
+    // §8 / W3 follow-up: the post-reconnect resync re-broadcast must carry the
+    // current `held` flag so peers that missed the original hold message during
+    // the outage converge to "on hold", not a stale "live" state.
+    it('post-reconnect resync re-broadcast includes held:true while held', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: true });
+
+        await harness.session.suspendForHold();
+
+        // Outage, then transport reconnect (arms the post-reconnect resync
+        // because roomState was present), then the authoritative snapshot
+        // (flushes the resync re-broadcast).
+        harness.simulateDisconnect();
+        harness.signaling.emitConnected('ws');
+        harness.signaling.broadcastCalls.length = 0;
+        harness.signaling.emitRoomStateUpdated({
+            hostPeerId: 'me',
+            participants: [{ peerId: 'me' }, { peerId: 'peer-1' }],
+        });
+
+        const payload = lastMediaStateBroadcast(harness);
+        expect(payload).toEqual({ audioEnabled: false, videoEnabled: false, held: true });
+    });
+
     it('held is re-broadcast to a peer that joins while held', async () => {
         harness = new TestSessionHarness();
         await joinAndSettle();

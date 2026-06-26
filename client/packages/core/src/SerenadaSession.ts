@@ -1295,13 +1295,24 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const stream = this.media.localStream;
         const audioTrack = stream?.getAudioTracks()[0];
         const videoTrack = stream?.getVideoTracks()[0];
-        // Audio: track is always present once media starts; we toggle the
-        // `enabled` flag in place. Video: track may be absent (released to free
-        // the camera) — derive from track presence so we never advertise
-        // camera-on while reacquire is pending or has failed. Pre-media-start
-        // (no stream) we fall back to the user's stated preference.
+        // Audio: drive off DESIRED intent gated by route/track availability —
+        // never off bare track presence or `config.defaultAudioEnabled`. A held
+        // call that was MUTED must resume MUTED: with `desiredAudioEnabled ===
+        // false` the mic is never reacquired (no audio track), and a
+        // track-presence fallback to `defaultAudioEnabled` would otherwise
+        // wrongly advertise audioEnabled:true (privacy bug). "Route available"
+        // on web = a live audio track present once media has started; the normal
+        // mute path keeps the track but flips desired to false, so
+        // `desired && route` still yields false. Pre-media-start (no stream) we
+        // fall back to desired intent.
+        //
+        // Video: derive from track presence. A held call with camera off does
+        // not reacquire the camera, so there is no video track and this yields
+        // false. Track-presence (not `desiredVideoMode`) is intentional: in
+        // legacy screen-share-from-audio-only the camera mode is off yet a video
+        // (display) track IS flowing and peers must see videoEnabled:true.
         this.signaling.broadcast('participant_media_state', {
-            audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
+            audioEnabled: stream ? (this.desiredAudioEnabled && !!audioTrack) : this.desiredAudioEnabled,
             videoEnabled: stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled,
             held: false,
         });
@@ -1544,7 +1555,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
             cid: clientId,
             displayName: this.displayName,
             peerId: this.appPeerId,
-            audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
+            // Mirror the broadcast: desired intent gated by route availability,
+            // never `config.defaultAudioEnabled` — so a muted-resumed call (no
+            // reacquired audio track) shows muted locally too.
+            audioEnabled: stream ? (this.desiredAudioEnabled && !!audioTrack) : this.desiredAudioEnabled,
             // `cameraEnabled` is camera-specific and `videoEnabled` mirrors it.
             // Both equal `localVideoEnabled` here because, in both independent and
             // legacy modes, the camera track presence/state IS the local video

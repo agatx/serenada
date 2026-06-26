@@ -34,6 +34,25 @@ internal class FakeVideoTrack(val tag: String = "video") : VideoTrack(0L) {
     override fun dispose() { /* no native */ }
 }
 
+/**
+ * A fake audio [MediaStreamTrack] that records `setEnabled` / `setVolume`
+ * instead of crossing into native libwebrtc. Lets a test observe the sticky
+ * remote-deafen path (`setEnabled(false)` on a remote audio track delivered to
+ * `onTrack` while held) and the duck (`setVolume`), and confirm they compose.
+ */
+internal class FakeAudioTrack(val tag: String = "audio") : AudioTrack(0L) {
+    val enabledHistory = mutableListOf<Boolean>()
+    val volumeHistory = mutableListOf<Double>()
+    override fun id(): String = tag
+    override fun kind(): String = AUDIO_TRACK_KIND
+    override fun setEnabled(enable: Boolean): Boolean {
+        enabledHistory += enable
+        return true
+    }
+    override fun setVolume(volume: Double) { volumeHistory += volume }
+    override fun dispose() { /* no native */ }
+}
+
 /** A fake receiver that just hands back a fixed track. */
 internal class FakeRtpReceiver(private val fakeTrack: MediaStreamTrack?) : RtpReceiver(0L) {
     override fun track(): MediaStreamTrack? = fakeTrack

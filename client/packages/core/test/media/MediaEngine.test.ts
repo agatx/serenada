@@ -61,6 +61,9 @@ class FakeRtcPeerConnection {
         this.signalingState = 'closed';
     }
     getSenders(): RTCRtpSender[] { return this.senders as unknown as RTCRtpSender[]; }
+    getReceivers(): RTCRtpReceiver[] {
+        return this.transceivers.map(t => t.receiver);
+    }
     getTransceivers(): RTCRtpTransceiver[] { return this.transceivers as unknown as RTCRtpTransceiver[]; }
     async getStats(): Promise<RTCStatsReport> {
         this.getStatsCalls += 1;
@@ -2107,5 +2110,88 @@ describe('MediaEngine', () => {
         }
 
         expect(handled).toEqual(new Set(readSharedNegotiationScenarios().map(scenario => scenario.id)));
+    });
+
+    // FIX W2: remote-playout deafen must be STICKY. A held call stores the gate
+    // and applies it to receivers/tracks that appear AFTER hold (new peers,
+    // renegotiation, late `ontrack`), not just the receivers present at hold time.
+    describe('sticky remote-playout deafen (multi-call hold)', () => {
+        function audioReceiverTracks(pc: FakeRtcPeerConnection): MediaStreamTrack[] {
+            return pc.getReceivers().map(r => r.track).filter((t): t is MediaStreamTrack => !!t && t.kind === 'audio');
+        }
+
+        it('deafens existing receivers and is reversed on resume', () => {
+            const engine = new MediaEngine({}, () => {});
+            engine.updateRoomState({
+                hostCid: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            }, 'me');
+            const peer1 = engine.getPeerConnectionsMap().get('peer-1') as unknown as FakeRtcPeerConnection;
+
+            engine.setRemotePlaybackEnabled(false);
+            expect(audioReceiverTracks(peer1).every(t => t.enabled === false)).toBe(true);
+
+            engine.setRemotePlaybackEnabled(true);
+            expect(audioReceiverTracks(peer1).every(t => t.enabled === true)).toBe(true);
+
+            engine.destroy();
+        });
+
+        it('silences a peer that JOINS while the call is held', () => {
+            const engine = new MediaEngine({}, () => {});
+            engine.updateRoomState({
+                hostCid: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            }, 'me');
+
+            // Hold: deafen current receivers.
+            engine.setRemotePlaybackEnabled(false);
+
+            // A second peer joins WHILE held (renegotiation/new participant). Its
+            // receivers must inherit the gate, not become audible.
+            engine.updateRoomState({
+                hostCid: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }, { cid: 'peer-2' }],
+            }, 'me');
+            const peer2 = engine.getPeerConnectionsMap().get('peer-2') as unknown as FakeRtcPeerConnection;
+
+            expect(audioReceiverTracks(peer2).length).toBeGreaterThan(0);
+            expect(audioReceiverTracks(peer2).every(t => t.enabled === false)).toBe(true);
+
+            engine.destroy();
+        });
+
+        it('silences a fresh audio track surfaced via ontrack while held', () => {
+            const engine = new MediaEngine({}, () => {});
+            engine.updateRoomState({
+                hostCid: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            }, 'me');
+            const peer1 = engine.getPeerConnectionsMap().get('peer-1') as unknown as FakeRtcPeerConnection;
+
+            engine.setRemotePlaybackEnabled(false);
+
+            // A new remote audio track arrives (e.g. peer reacquired its mic /
+            // renegotiated) AFTER hold. The late `ontrack` must deafen it.
+            const lateTrack = createMediaTrack('audio');
+            expect(lateTrack.enabled).toBe(true);
+            peer1.ontrack?.({
+                track: lateTrack,
+                streams: [createMediaStream({ audio: true })],
+            } as unknown as RTCTrackEvent);
+
+            expect(lateTrack.enabled).toBe(false);
+
+            // After resume, a subsequent ontrack track is audible again.
+            engine.setRemotePlaybackEnabled(true);
+            const liveTrack = createMediaTrack('audio');
+            peer1.ontrack?.({
+                track: liveTrack,
+                streams: [createMediaStream({ audio: true })],
+            } as unknown as RTCTrackEvent);
+            expect(liveTrack.enabled).toBe(true);
+
+            engine.destroy();
+        });
     });
 });

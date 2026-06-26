@@ -40,10 +40,22 @@ class HoldResumeTest {
     private lateinit var coordinator: CountingAudioCoordinator
     private lateinit var factory: TestSessionFactory
 
-    private fun startInCall(): TestSessionFactory {
+    private fun startInCall(handlesReconnection: Boolean = false): TestSessionFactory {
         coordinator = CountingAudioCoordinator()
-        factory = TestSessionFactory(audioCoordinator = coordinator)
-        factory.advanceToInCallWithTurn()
+        factory = TestSessionFactory(
+            handlesReconnection = handlesReconnection,
+            audioCoordinator = coordinator,
+        )
+        if (handlesReconnection) {
+            factory.advanceToInCallWithTurn(
+                localCid = "alpha",
+                remoteCid = "remote",
+                localJoinedAt = 1,
+                remoteJoinedAt = 2,
+            )
+        } else {
+            factory.advanceToInCallWithTurn()
+        }
         ShadowLooper.idleMainLooper()
         return factory
     }
@@ -195,6 +207,88 @@ class HoldResumeTest {
             factory.session.desiredAudioEnabledForTest(),
         )
         assertEquals(false, factory.fakeMedia.resumeLocalMediaFromHoldCalls.last().first)
+    }
+
+    @Test
+    fun `muted held call resumes muted without recreating the mic and broadcasts audioEnabled false`() {
+        startInCall()
+        // User mutes, then holds. The held call had a live mic capture before mute
+        // toggling; after suspend the engine releases it.
+        factory.session.setMicMuted(true)
+        ShadowLooper.idleMainLooper()
+        hold()
+        assertFalse(
+            "mic capture must be released while held",
+            factory.fakeMedia.micCaptureTrackPresent,
+        )
+        val recreatesBefore = factory.fakeMedia.micCaptureRecreateCount
+
+        resume()
+
+        // FIX A1: a muted resume must NOT recreate the mic capture (OS mic
+        // indicator stays off) and the sender track stays released.
+        assertEquals(
+            "muted resume must not recreate the mic capture",
+            recreatesBefore,
+            factory.fakeMedia.micCaptureRecreateCount,
+        )
+        assertFalse(
+            "mic capture must stay released after a muted resume",
+            factory.fakeMedia.micCaptureTrackPresent,
+        )
+        // The resume broadcast must derive audioEnabled from desired intent + route
+        // (false here), not from track presence.
+        val last = mediaStateBroadcasts().last().payload!!
+        assertFalse("held must be false after resume", last.getBoolean("held"))
+        assertFalse(
+            "resumed broadcast audioEnabled must be false for a muted call",
+            last.getBoolean("audioEnabled"),
+        )
+    }
+
+    @Test
+    fun `unmuted held call recreates the mic on resume`() {
+        startInCall()
+        // Control case: an unmuted call resumes with the mic recreated.
+        hold()
+        assertFalse(factory.fakeMedia.micCaptureTrackPresent)
+        val recreatesBefore = factory.fakeMedia.micCaptureRecreateCount
+        resume()
+        assertEquals(
+            "unmuted resume must recreate the mic capture",
+            recreatesBefore + 1,
+            factory.fakeMedia.micCaptureRecreateCount,
+        )
+        assertTrue(factory.fakeMedia.micCaptureTrackPresent)
+    }
+
+    @Test
+    fun `post-reconnect resync re-broadcasts held while held`() {
+        startInCall(handlesReconnection = true)
+        hold()
+        val broadcastsBefore = mediaStateBroadcasts().size
+
+        // Reconnect: disconnect, reconnect, then the authoritative room_state
+        // snapshot flushes the post-reconnect resync gate.
+        factory.fakeProvider.simulateDisconnected()
+        ShadowLooper.idleMainLooper()
+        factory.fakeProvider.simulateConnected("ws")
+        ShadowLooper.idleMainLooper()
+        factory.simulateRoomState(
+            participants = listOf("alpha" to 1L, "remote" to 2L),
+            hostCid = "alpha",
+        )
+
+        val broadcasts = mediaStateBroadcasts()
+        assertTrue(
+            "resync must re-broadcast media state while held",
+            broadcasts.size > broadcastsBefore,
+        )
+        val last = broadcasts.last().payload!!
+        assertTrue(
+            "post-reconnect resync re-broadcast must include held=true",
+            last.getBoolean("held"),
+        )
     }
 
     @Test

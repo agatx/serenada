@@ -72,17 +72,35 @@ internal class FakeMediaEngine : SessionMediaEngine {
     var detachRenderersForHoldCalls = 0
         private set
 
+    // FIX A1 model: whether the engine currently holds a live mic CAPTURE track.
+    // Mirrors the real WebRtcEngine: startLocalMedia creates it, suspend releases
+    // it, and resume recreates it ONLY when audio is desired (a muted resume must
+    // leave it released so the OS mic indicator stays off). Counts recreations so
+    // a test can assert a muted resume does NOT recreate the mic.
+    var micCaptureTrackPresent = false
+        private set
+    var micCaptureRecreateCount = 0
+        private set
+
     override fun startLocalMedia(startVideoCapture: Boolean) {
         startLocalMediaCalls++
         startVideoCaptureCalls.add(startVideoCapture)
+        micCaptureTrackPresent = true
     }
     override fun release() { releaseCalls++ }
 
     override fun suspendLocalMediaForHold() {
         suspendLocalMediaForHoldCalls++
+        micCaptureTrackPresent = false
     }
     override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
         resumeLocalMediaFromHoldCalls.add(audioEnabled to videoMode)
+        // Recreate the mic capture ONLY when audio is desired (FIX A1). A muted
+        // resume keeps capture released — no recreate, sender track stays null.
+        if (audioEnabled && !micCaptureTrackPresent) {
+            micCaptureTrackPresent = true
+            micCaptureRecreateCount++
+        }
     }
     override fun setRemotePlaybackEnabled(enabled: Boolean) {
         setRemotePlaybackEnabledCalls.add(enabled)

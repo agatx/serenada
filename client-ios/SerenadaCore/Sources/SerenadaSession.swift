@@ -2233,6 +2233,12 @@ public final class SerenadaSession: ObservableObject {
                 "Post-reconnect snapshot timeout after \(WebRtcResilience.epochResyncTimeoutMs)ms; firing ICE restart against last-known peer map"
             )
         }
+        // Re-broadcast the current media state (incl. `held`) on the post-reconnect
+        // resync. A transport that reconnects without a fresh `joined` does NOT run
+        // `handleJoined`, so without this a peer that missed the `held:true`
+        // broadcast (e.g. it joined while we were disconnected) never converges.
+        // Mirrors Web/Android, which both re-broadcast from their resync path.
+        broadcastLocalMediaState()
         iceRestartCallsFromGate += 1
         peerNegotiationEngine?.handleSignalingReconnect()
     }

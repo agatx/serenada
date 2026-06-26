@@ -166,6 +166,11 @@ internal final class WebRtcEngine: SessionMediaEngine {
     private var localContentVideoSource: RTCVideoSource?
     private var localContentVideoTrack: RTCVideoTrack?
     private var previousUseManualAudio: Bool?
+    // Sticky remote-playout deafen state. Held sessions set this `false`; a slot
+    // created AFTER hold (peer joins / renegotiates while held) must inherit it so
+    // its remote audio is deafened too — otherwise the deafen leaks. Mirrors how
+    // the session re-applies the volume duck to newly created slots.
+    private var remotePlaybackEnabled = true
 
     private var localRenderers: [WeakAnyBox] = []
     private var localContentRenderers: [WeakAnyBox] = []
@@ -547,12 +552,17 @@ internal final class WebRtcEngine: SessionMediaEngine {
             audioSession.isAudioEnabled = true
         }
 
-        // Reacquire the mic track and attach it to the existing audio sender.
-        if localAudioTrack == nil {
-            localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
-            localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
+        // Reacquire the mic track ONLY when audio is desired. A muted held call
+        // must resume muted: recreating the source would put the OS mic indicator
+        // back on even though the user is muted. When audio is not desired we keep
+        // the audio sender track nil (the held state) so no capture starts.
+        if audioEnabled {
+            if localAudioTrack == nil {
+                localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+                localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
+            }
+            localAudioTrack?.isEnabled = true
         }
-        localAudioTrack?.isEnabled = audioEnabled
 
         // Reacquire the camera track when video is desired.
         let wantsVideo = videoMode != nil
@@ -591,6 +601,7 @@ internal final class WebRtcEngine: SessionMediaEngine {
     /// 0.15 volume duck used during external audio (`duckPlayback`).
     public func setRemotePlaybackEnabled(_ enabled: Bool) {
 #if canImport(WebRTC)
+        remotePlaybackEnabled = enabled
         peerSlots.forEach { $0.setRemotePlaybackEnabled(enabled) }
 #endif
     }
@@ -657,6 +668,12 @@ internal final class WebRtcEngine: SessionMediaEngine {
             logger: logger
         )
         peerSlots.append(slot)
+        // Sticky deafen: a peer that joins/renegotiates while this session is held
+        // must inherit the deafen so its remote audio is silenced too. The slot
+        // defaults to enabled, so only push the disabled state down.
+        if !remotePlaybackEnabled {
+            slot.setRemotePlaybackEnabled(false)
+        }
         // A peer created mid-share must pick up the active content: capable peers
         // via the content sender / pending-track mechanism, legacy peers via the
         // single-sender swap (pitfall #5). attachLocalTracksToSlot routes both.

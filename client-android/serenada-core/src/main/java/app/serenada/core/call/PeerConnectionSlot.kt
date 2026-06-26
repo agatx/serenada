@@ -171,6 +171,12 @@ internal class PeerConnectionSlot(
     // content by the session based on content_state, not by a separate track.
     @Volatile private var remoteContentVideoTrack: VideoTrack? = null
     @Volatile private var playbackDucked = false
+    // Sticky remote-deafen state (multi-call hold). Held calls set this false; it
+    // must apply to remote AudioTracks created AFTER hold (a peer that joins or
+    // renegotiates while held), so it is re-applied in [onTrack]. Orthogonal to
+    // [playbackDucked] (volume duck) — both compose; resume re-enables without
+    // clobbering an active duck.
+    @Volatile private var remotePlaybackEnabled = true
     private var remoteDescriptionSet = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
     private val remoteSinks = LinkedHashSet<VideoSink>()
@@ -243,6 +249,10 @@ internal class PeerConnectionSlot(
                     // Audio routing is independent of camera/content video
                     // classification (pitfall #4): never disturb the audio sink.
                     track.setVolume(if (playbackDucked) 0.15 else 1.0)
+                    // Sticky deafen: a track created while held must inherit the
+                    // current deafen state, else a peer that joins/renegotiates
+                    // during hold becomes audible. Composes with the duck above.
+                    track.setEnabled(remotePlaybackEnabled)
                 }
                 if (track is VideoTrack) {
                     if (!videoReceiveEnabled) {
@@ -552,6 +562,29 @@ internal class PeerConnectionSlot(
                 audioSender = sender
                 if (track != null) applyAudioSenderParameters(pc)
             }
+        )
+    }
+
+    override fun clearLocalVideoTracks() {
+        if (isClosing) return
+        localVideoTrack = null
+        localContentTrack = null
+        val pc = peerConnection ?: return
+        if (supportsIndependentContentVideo) {
+            // Null the bound camera + content senders directly (no renegotiation).
+            // Reconcile-by-track-field is handled by [attachBoundVideoTracks]; null
+            // both fields above first so a re-entry stays a no-op.
+            runCatching { cameraTransceiver?.sender?.setTrack(null, false) }
+            runCatching { contentTransceiver?.sender?.setTrack(null, false) }
+            return
+        }
+        // Legacy single video transceiver: drop its track and flip to recv-only,
+        // matching [attachTrackToTransceiver]'s null-track handling.
+        attachTrackToTransceiver(
+            pc = pc,
+            track = null,
+            mediaType = MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
+            onAttached = { },
         )
     }
 
@@ -1044,6 +1077,10 @@ internal class PeerConnectionSlot(
     }
 
     override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        // Remember the state so receivers/tracks created AFTER this (a peer that
+        // joins or renegotiates while held) inherit it in [onTrack] (sticky
+        // deafen). Resume re-enables; the duck volume is untouched (orthogonal).
+        remotePlaybackEnabled = enabled
         val pc = peerConnection ?: return
         for (receiver in pc.receivers) {
             val track = receiver.track()
