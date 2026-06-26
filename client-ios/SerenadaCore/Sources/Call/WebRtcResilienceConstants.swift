@@ -83,6 +83,27 @@ public enum WebRtcResilience {
     /// server's 30s freshness window (`mediaLivenessFreshnessWindow`) for
     /// missed emissions.
     public static let mediaLivenessIntervalMs = 10_000
+
+    // MARK: - Multi-call registry foreground transitions (Phase 3)
+
+    /// Bounds how long the registry waits for the OUTGOING (old) foreground
+    /// call to drain its session-local foreground resources during a switch.
+    /// On timeout the old call keeps the lease and the switch aborts (Core
+    /// Invariant 1: never grant the next lease while the old may still own it).
+    /// Normalizes to `FOREGROUND_RELEASE_TIMEOUT_MS` for cross-platform parity.
+    public static let foregroundReleaseTimeoutMs = 5_000
+
+    /// Bounds how long the registry waits for the INCOMING (next) foreground
+    /// call's activation (audio coordinator + media reacquire) to settle. On
+    /// timeout the registry rolls back to the old call. Kept ABOVE
+    /// `audioCoordinatorTimeoutMs` (10000) so the inner audio-coordinator
+    /// timeout fires first. Normalizes to `FOREGROUND_ACTIVATE_TIMEOUT_MS`.
+    public static let foregroundActivateTimeoutMs = 12_000
+
+    /// Bounds a held room join performed OUTSIDE the registry's serialized
+    /// operation queue (so a stuck join cannot freeze urgent ops). Mirrors
+    /// `joinHardTimeoutMs`. Normalizes to `HELD_JOIN_TIMEOUT_MS`.
+    public static let heldJoinTimeoutMs = 15_000
 }
 
 // MARK: - Nanosecond convenience accessors
@@ -100,4 +121,7 @@ extension WebRtcResilience {
     public static var iceRestartCooldownNs: UInt64 { UInt64(iceRestartCooldownMs) * 1_000_000 }
     public static var turnFetchTimeoutNs: UInt64 { UInt64(turnFetchTimeoutMs) * 1_000_000 }
     public static var snapshotPrepareTimeoutNs: UInt64 { UInt64(snapshotPrepareTimeoutMs) * 1_000_000 }
+    public static var foregroundReleaseTimeoutNs: UInt64 { UInt64(foregroundReleaseTimeoutMs) * 1_000_000 }
+    public static var foregroundActivateTimeoutNs: UInt64 { UInt64(foregroundActivateTimeoutMs) * 1_000_000 }
+    public static var heldJoinTimeoutNs: UInt64 { UInt64(heldJoinTimeoutMs) * 1_000_000 }
 }

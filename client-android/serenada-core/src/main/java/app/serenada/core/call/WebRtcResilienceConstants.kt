@@ -20,6 +20,16 @@ object WebRtcResilienceConstants {
     const val JOIN_RECOVERY_MS = 4_000L
     const val JOIN_HARD_TIMEOUT_MS = 15_000L
 
+    // ── Multi-call foreground transition (registry, Phase 3) ─────────
+    // Bound each foreground media transition and the held room join so a stuck
+    // session cannot freeze the serialized registry operation queue forever.
+    // FOREGROUND_ACTIVATE_TIMEOUT_MS > AUDIO_COORDINATOR_TIMEOUT_MS (10000) so the
+    // inner audio-coordinator timeout fires first. HELD_JOIN_TIMEOUT_MS mirrors
+    // JOIN_HARD_TIMEOUT_MS. Checked by scripts/check-resilience-constants.mjs.
+    const val FOREGROUND_RELEASE_TIMEOUT_MS = 5_000L
+    const val FOREGROUND_ACTIVATE_TIMEOUT_MS = 12_000L
+    const val HELD_JOIN_TIMEOUT_MS = 15_000L
+
     // ── Peer Connection ──────────────────────────────────────────────
     const val OFFER_TIMEOUT_MS = 8_000L
     const val ICE_RESTART_COOLDOWN_MS = 10_000L

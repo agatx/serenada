@@ -220,6 +220,14 @@ public final class SerenadaSession: ObservableObject {
     private(set) var actualAudioPublished = false
     /// Camera state actually published to peers right now (false while held).
     private(set) var actualVideoPublished = false
+
+    /// Registry-facing read of the user-intended mic enablement (preserved across
+    /// hold). `desiredAudioEnabled` itself is private; the registry needs it only
+    /// to assemble the published `ManagedCallState`, never to mutate intent.
+    var desiredAudioEnabledForRegistry: Bool { desiredAudioEnabled }
+    /// Registry-facing read of the user-intended camera mode (or `nil` for
+    /// video-off), preserved across hold. Read-only; see above.
+    var desiredVideoModeForRegistry: LocalCameraMode? { desiredVideoMode }
     /// Monotonic counter bumped on EVERY media role operation (foreground activate
     /// or hold). A foreground activation captures it before awaiting the audio
     /// coordinator and re-checks afterwards: if a hold (or a later activate)
@@ -371,6 +379,11 @@ public final class SerenadaSession: ObservableObject {
 
     /// Test-only count of remote CIDs currently flagged as `presumedLost`.
     internal var presumedLostRemoteCount: Int { presumedLostRemoteCids.count }
+
+    /// Test-only read of the registry-issued foreground fence token, used by
+    /// registry tests to assert a session never acquired a lease on a failed
+    /// switch.
+    internal var foregroundOwnerTokenForTest: ForegroundOwnerToken? { foregroundOwnerToken }
 
     // #3 — periodic `media_liveness` emission. Active across the in-call
     // window so the server can defer hard-eviction of suspended peers
@@ -1793,6 +1806,15 @@ public final class SerenadaSession: ObservableObject {
     /// - `.needsPermission` when a required grant is missing.
     /// - `.failed` for non-permission preconditions (none on iOS today).
     func preflightForeground() -> ForegroundPreflight {
+        return missingDesiredForegroundPermissions().isEmpty ? .ok : .needsPermission
+    }
+
+    /// The mic/camera capabilities the DESIRED foreground media needs that are NOT
+    /// currently granted. Empty when foreground would prompt nothing (the `.ok`
+    /// preflight case). The registry surfaces this on
+    /// `CallActivationError.needsPermission` so the host knows what to prompt for.
+    /// Pure — inspects authorization status only, never prompts.
+    func missingDesiredForegroundPermissions() -> [MediaCapability] {
         var missing: [MediaCapability] = []
         if desiredAudioEnabled, !isCapabilityGranted(.microphone) {
             missing.append(.microphone)
@@ -1800,7 +1822,7 @@ public final class SerenadaSession: ObservableObject {
         if desiredVideoMode != nil, !isCapabilityGranted(.camera) {
             missing.append(.camera)
         }
-        return missing.isEmpty ? .ok : .needsPermission
+        return missing
     }
 
     /// Drive this session to FOREGROUND under the registry-issued `token` and
@@ -1827,6 +1849,19 @@ public final class SerenadaSession: ObservableObject {
         // resume the registry is now superseding) fails the owner-token fence.
         foregroundOwnerToken = nil
         applyHeldRoleInternal()
+    }
+
+    /// Await the in-flight audio-coordinator lifecycle task (the deactivation
+    /// kicked off by `releaseForeground`/`applyHeldRoleInternal`), so the registry
+    /// can confirm the OLD session's audio is FULLY torn down before activating the
+    /// next call (contract §6: "release old fully before acquiring new"). The
+    /// `mediaRole`/`mediaActivationState` flip is synchronous, but the actual
+    /// coordinator `deactivateCallSession` runs in a fire-and-forget task; this
+    /// bridges that gap for the cross-session switch ordering. Never throws (a
+    /// timeout/cancel inside the lifecycle task is the coordinator's concern).
+    func awaitForegroundReleaseSettled() async {
+        guard let task = audioCoordinatorLifecycleTask else { return }
+        _ = try? await task.value
     }
 
     /// Undo a partial/failed `activateForeground` (capture/audio may have begun),

@@ -1911,6 +1911,17 @@ class SerenadaSession internal constructor(
     private fun isInactiveForForeground(): Boolean = closed || _state.value.phase == CallPhase.Idle
 
     /**
+     * Registry-owned (contract §7) setter for the activation state on the paths
+     * that change it WITHOUT a media transition: a refused switch marks the target
+     * NEEDS_PERMISSION; an old-release timeout marks the old call FAILED (its media
+     * may be partial but it keeps the lease). Not a public single-call API.
+     */
+    internal fun setMediaActivationState(state: MediaActivationState) {
+        assertMainThread()
+        mediaActivationState = state
+    }
+
+    /**
      * Token-gated foreground activation (contract §3; wraps the Phase-1
      * [applyForegroundRoleInternal]). The registry passes the arbiter-minted owner
      * token it just acquired plus the arbiter operation generation. The awaited
@@ -1924,6 +1935,15 @@ class SerenadaSession internal constructor(
      */
     suspend fun activateForeground(ownerToken: ForegroundOwnerToken, generation: Long) {
         assertMainThread()
+        // Test-only injection (see [failNextForegroundActivationForTest]): model an
+        // activation that fails so the registry rollback path can be exercised
+        // deterministically without a real media/coordinator failure.
+        if (failNextForegroundActivationForTest) {
+            failNextForegroundActivationForTest = false
+            foregroundOwnerToken = ownerToken
+            mediaActivationState = MediaActivationState.FAILED
+            throw IllegalStateException("test-injected activation failure")
+        }
         // Seed the lease token + generation BEFORE awaiting so the post-await
         // fences inside applyForegroundRoleInternal see them. The session keeps
         // mediaOpGeneration wired to the passed generation (the arbiter's
@@ -1937,6 +1957,23 @@ class SerenadaSession internal constructor(
     }
 
     /**
+     * Test-only: when true, the NEXT [activateForeground] throws instead of
+     * activating (and clears itself). Lets a registry test drive the
+     * switch-failure rollback path deterministically (the new call's activation
+     * fails; the registry must restore the old call to foreground). NOT a public
+     * API.
+     */
+    internal var failNextForegroundActivationForTest: Boolean = false
+
+    /**
+     * Test-only: when true, [releaseForeground] suspends forever so the registry's
+     * `withTimeout(FOREGROUND_RELEASE_TIMEOUT_MS)` drain fires (Core Invariant 1:
+     * the old call keeps its lease, the next lease is never acquired). NOT a public
+     * API.
+     */
+    internal var hangNextForegroundReleaseForTest: Boolean = false
+
+    /**
      * Token-gated release (contract §3; wraps the Phase-1
      * [applyHeldRoleInternal]). Idempotent and MUST NOT throw after a partial
      * release. Uses the token ONLY to fence (it proves the caller is draining the
@@ -1945,6 +1982,11 @@ class SerenadaSession internal constructor(
      */
     suspend fun releaseForeground(ownerToken: ForegroundOwnerToken) {
         assertMainThread()
+        // Test-only injection (see [hangNextForegroundReleaseForTest]): suspend
+        // forever so the registry's bounded drain times out (Invariant 1 path).
+        if (hangNextForegroundReleaseForTest) {
+            kotlinx.coroutines.awaitCancellation()
+        }
         // A release for a token that is not ours is a no-op (already drained / the
         // lease moved on); never throw.
         if (foregroundOwnerToken != null && foregroundOwnerToken !== ownerToken) return

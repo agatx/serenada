@@ -34,6 +34,7 @@
 		46722D2E3EFC8D06D8B51355 /* DiagnosticsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AD1035F89AEDD9E3B0F38C /* DiagnosticsScreen.swift */; };
 		467581ED7FB87064203AA780 /* FakeSignalingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB6EC0967F80C7CB8EB7E9E0 /* FakeSignalingProvider.swift */; };
 		4A18E5E799BA54FF55141F92 /* SerenadaCallUI in Frameworks */ = {isa = PBXBuildFile; productRef = 7502F7E9518E36BE37DEBD99 /* SerenadaCallUI */; };
+		4C4EFB69613FF7B7B4576D4E /* SerenadaCallRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A068CCC72BB10865B24904 /* SerenadaCallRegistryTests.swift */; };
 		5153383FD16DC779F8EBA4B3 /* JoinFlowCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23CA15C6609960E60FFBCD90 /* JoinFlowCoordinatorTests.swift */; };
 		51F5648F7D5B4883A8B13A8D /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DAE63BC3FBF66FBF7A4015AC /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5B73BDA93B3B03BE10F8F3DC /* DeepLinkParticipantCountUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE1FC71083746A8D257448 /* DeepLinkParticipantCountUITests.swift */; };
@@ -99,6 +100,7 @@
 		D950928F5053A8E8369858B9 /* CallQualityTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C653D2F58E227F02843983 /* CallQualityTrackerTests.swift */; };
 		DABDC3CE432EA96C10798200 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A48285CB0CBEE51504B0674B /* CallManager.swift */; };
 		E023D6932A1411B953694012 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
+		E5D3C35F512982AC50658E99 /* RegistryTestHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 368C1A9A3A6FC8BBEA73B018 /* RegistryTestHarness.swift */; };
 		E63D8928F846DF0065D3BD02 /* StatsCounterMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA079DE639FF5E6D908BEE8A /* StatsCounterMergeTests.swift */; };
 		EC4EFE918B3966B82C58E62C /* BroadcastIPCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B247320AC4D8D9CF1BB560F /* BroadcastIPCTests.swift */; };
 		EE8328B7F79EEA681164E7ED /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 018403014C9AEDF89B039618 /* SettingsScreen.swift */; };
@@ -177,6 +179,7 @@
 		09DDC60F805A4A4624F90F9B /* SessionOrchestrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOrchestrationTests.swift; sourceTree = "<group>"; };
 		0B4BD6CCDC47CDAFB5AC1854 /* SerenadaSessionTelemetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaSessionTelemetryTests.swift; sourceTree = "<group>"; };
 		0FC78E56ECCCC36978DAE4FE /* AppLaunchOverrides.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLaunchOverrides.swift; sourceTree = "<group>"; };
+		15A068CCC72BB10865B24904 /* SerenadaCallRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaCallRegistryTests.swift; sourceTree = "<group>"; };
 		18568C3FC4A75A087A876FB4 /* SerenadaiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SerenadaiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A7CC3F22BEA1500363B20A6 /* EndpointHostParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointHostParserTests.swift; sourceTree = "<group>"; };
 		1B3764EC96FDD478F4ADD4C4 /* BroadcastUpload.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BroadcastUpload.entitlements; sourceTree = "<group>"; };
@@ -194,6 +197,7 @@
 		3529A15EA2C43DB2F91F46FC /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		35C653D2F58E227F02843983 /* CallQualityTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallQualityTrackerTests.swift; sourceTree = "<group>"; };
 		367DCC8F4EDC812C9FBA3F02 /* LiveRoomOverride.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveRoomOverride.swift; sourceTree = "<group>"; };
+		368C1A9A3A6FC8BBEA73B018 /* RegistryTestHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegistryTestHarness.swift; sourceTree = "<group>"; };
 		3F0D033C8F77DC9925D9668A /* RoomStatusesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomStatusesTests.swift; sourceTree = "<group>"; };
 		3FB457A612C7F7FCB2736B1F /* SessionMediaLivenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionMediaLivenessTests.swift; sourceTree = "<group>"; };
 		4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaDiagnosticsTests.swift; sourceTree = "<group>"; };
@@ -446,6 +450,7 @@
 		9E464FDC4DB6B63C2181B47E /* Helpers */ = {
 			isa = PBXGroup;
 			children = (
+				368C1A9A3A6FC8BBEA73B018 /* RegistryTestHarness.swift */,
 				41E34F50FDC1E2F064028B68 /* SessionTestHarness.swift */,
 			);
 			path = Helpers;
@@ -479,6 +484,7 @@
 				E9DEA9027FC936DD853C1EC1 /* RemoteVideoTransceiverRoutingTests.swift */,
 				79D3BC3109B79353E8157F76 /* RoomWatcherTests.swift */,
 				BD19F38800C0F72BAC3F775C /* ScreenShareControllerPendingStopTests.swift */,
+				15A068CCC72BB10865B24904 /* SerenadaCallRegistryTests.swift */,
 				ECF59DDD3EB32D08B6F0B913 /* SerenadaCoreProviderModeTests.swift */,
 				4138C434295A490147BCF1F9 /* SerenadaDiagnosticsTests.swift */,
 				2A15CC6B14E97F4E2C37C573 /* SerenadaServerProviderTests.swift */,
@@ -912,12 +918,14 @@
 				C5EB06A2D9075772AE396FDD /* RecentCallStoreTests.swift in Sources */,
 				8E139ED2ACA346DCB12AB5C9 /* ReconnectReasonTests.swift in Sources */,
 				2A96BF63C126AFE8CE2976D4 /* RecoveryStorageTests.swift in Sources */,
+				E5D3C35F512982AC50658E99 /* RegistryTestHarness.swift in Sources */,
 				CBE2ACD50B2EB29F15A93FC7 /* RemoteVideoTransceiverRoutingTests.swift in Sources */,
 				71320D322F59D2244B5A2027 /* RoomStatusesTests.swift in Sources */,
 				9C333A1799F89B5A4A9080BB /* RoomWatcherTests.swift in Sources */,
 				3153C0E407E8DD601B43B97E /* RootViewRoutingTests.swift in Sources */,
 				F237C6E7ED0C17810C58C49F /* SavedRoomStoreTests.swift in Sources */,
 				8516001F351C92AB4AEA30AD /* ScreenShareControllerPendingStopTests.swift in Sources */,
+				4C4EFB69613FF7B7B4576D4E /* SerenadaCallRegistryTests.swift in Sources */,
 				D05E6EDD64E9A169FF7DAD21 /* SerenadaCoreProviderModeTests.swift in Sources */,
 				6D7CC8795CCE4899285777B4 /* SerenadaDiagnosticsTests.swift in Sources */,
 				838D89A84D60CC6245CB2EFC /* SerenadaServerProviderTests.swift in Sources */,

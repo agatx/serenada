@@ -2,6 +2,7 @@ import type { CallMediaRole, SerenadaConfig, CallState, ConnectionEvent, CreateR
 import { SerenadaSession } from './SerenadaSession.js';
 import { createRoomId } from './api/roomApi.js';
 import { buildRoomUrl } from './serverUrls.js';
+import { canonicalizeRoomId } from './roomIdentity.js';
 import type { ResolvedSerenadaConfig } from './configValidation.js';
 import { requireServerHost, resolveSerenadaConfig } from './configValidation.js';
 import { SerenadaServerProvider } from './SerenadaServerProvider.js';
@@ -205,17 +206,6 @@ export class SerenadaCore {
     }
 
     private parseRoomIdFromUrl(url: string): string {
-        try {
-            const parsed = new URL(url);
-            const parts = parsed.pathname.split('/');
-            const callIndex = parts.indexOf('call');
-            if (callIndex !== -1 && parts[callIndex + 1]) {
-                return parts[callIndex + 1];
-            }
-            // Fallback: last path segment
-            return parts[parts.length - 1] || url;
-        } catch {
-            return url;
-        }
+        return canonicalizeRoomId(url);
     }
 }

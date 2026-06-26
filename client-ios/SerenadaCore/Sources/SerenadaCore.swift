@@ -188,6 +188,65 @@ public final class SerenadaCore {
         return session
     }
 
+    /// Build a registry-managed session for a room URL, with an explicit initial
+    /// media role and WITHOUT self-acquiring the foreground lease (the
+    /// ``SerenadaCallRegistry`` owns the lease + owning-mode for every session it
+    /// creates — contract §3 / design "Join With Initial Media Role").
+    ///
+    /// This is the single registry-internal join seam: there is NO public
+    /// `join(initialMediaRole:)`. The two registry entry points (`joinHeld` /
+    /// `joinAndSwitch`) are composites over this. Mirrors the provider/config
+    /// wiring of `join(url:)` so a registry-created session signals identically to
+    /// a direct one; only the role and lease ownership differ.
+    func makeManagedSession(
+        url: URL,
+        initialMediaRole: CallMediaRole,
+        displayName: String? = nil,
+        peerId: String? = nil,
+        arbiter: ForegroundMediaArbiter
+    ) -> SerenadaSession {
+        let roomId = DeepLinkParser.extractRoomId(from: url) ?? url.lastPathComponent
+        let target = DeepLinkParser.parseTarget(from: url)
+        let serverHost = target?.host
+            ?? DeepLinkParser.normalizeHostValue(authorityHost(from: url))
+            ?? resolvedConfig.serverHost
+        let sessionConfig: SerenadaConfig
+        if resolvedConfig.serverHost != nil {
+            sessionConfig = SerenadaConfig(
+                serverHost: serverHost,
+                signalingProvider: nil,
+                defaultAudioEnabled: config.defaultAudioEnabled,
+                defaultVideoEnabled: config.defaultVideoEnabled,
+                videoMediaEnabled: config.videoMediaEnabled,
+                enableIndependentContentVideo: config.enableIndependentContentVideo,
+                cameraModes: config.cameraModes,
+                deferInitialAnswer: config.deferInitialAnswer,
+                transports: config.transports,
+                proximityMonitoringEnabled: config.proximityMonitoringEnabled,
+                audioCoordinator: config.audioCoordinator,
+                audioIntent: config.audioIntent
+            )
+        } else {
+            sessionConfig = config
+        }
+        return SerenadaSession(
+            roomId: roomId,
+            roomUrl: url,
+            config: sessionConfig,
+            delegateProvider: { [weak self] in self?.delegate },
+            logger: logger,
+            initialSignalingProvider: createSignalingProvider(for: sessionConfig),
+            displayName: displayName,
+            peerId: peerId,
+            recoveryStorage: recoveryStorage,
+            initialMediaRole: initialMediaRole,
+            // The registry owns the lease + owning-mode for managed sessions, so a
+            // managed session NEVER self-acquires/self-releases the direct lease.
+            acquireForegroundLease: false,
+            foregroundArbiter: arbiter
+        )
+    }
+
     /// Create a new room. Returns the room URL and ID. Call ``join(url:displayName:peerId:)`` or ``join(roomId:displayName:peerId:)`` to start the call.
     public func createRoom() async throws -> CreateRoomResult {
         let apiClient = CoreAPIClient()
@@ -204,6 +263,15 @@ public final class SerenadaCore {
     public func createRoomId() async throws -> String {
         let apiClient = CoreAPIClient()
         return try await apiClient.createRoomId(host: requireServerHost(config))
+    }
+
+    /// Build a room URL from a bare room id using the configured server host.
+    /// Registry-internal: the default ``SerenadaCallRegistry`` session factory
+    /// uses this when a `RoomRef` carries only a roomId. Returns `nil` when this
+    /// core has no server host (custom-signaling-only config).
+    func roomURL(forRoomId roomId: String) -> URL? {
+        guard let serverHost = resolvedConfig.serverHost else { return nil }
+        return buildRoomURL(host: serverHost, roomId: roomId)
     }
 
     private func buildRoomURL(host: String, roomId: String) -> URL? {

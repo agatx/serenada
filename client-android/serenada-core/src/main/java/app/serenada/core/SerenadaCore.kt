@@ -3,6 +3,7 @@ package app.serenada.core
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import app.serenada.core.call.CallMediaRole
 import app.serenada.core.network.CoreApiClient
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -120,6 +121,61 @@ class SerenadaCore(
             peerId = peerId,
             // Public single-call join always foregrounds via the arbiter (DIRECT).
             acquireForegroundLease = true,
+        )
+        session.start()
+        return session
+    }
+
+    /**
+     * Registry-internal join with an explicit initial media role (multi-call
+     * session, Phase 2/3). The public [join] overloads always foreground and
+     * route through the arbiter in DIRECT mode; this is the seam the (Phase 3)
+     * [SerenadaCallRegistry] uses to create a HELD call that owns no capture and
+     * holds NO arbiter lease (`acquireForegroundLease = false` — the registry owns
+     * the lease itself). NOT part of the public single-call surface.
+     *
+     * @param room how the host named the room (URL or bare id).
+     * @param initialMediaRole HELD for a registry-created held call.
+     * @param displayName/peerId forwarded to the session as on [join].
+     */
+    internal fun joinInternal(
+        room: RoomRef,
+        initialMediaRole: CallMediaRole,
+        displayName: String? = null,
+        peerId: String? = null,
+    ): SerenadaSession {
+        assertMainThread()
+        val resolvedRoomId: String
+        val resolvedRoomUrl: String?
+        val serverHostForConfig: String?
+        when (room) {
+            is RoomRef.Url -> {
+                val resolved = resolveRoomUrl(room.url)
+                resolvedRoomId = resolved?.roomId ?: room.url
+                resolvedRoomUrl = resolved?.roomUrl ?: room.url
+                serverHostForConfig = resolved?.serverHost
+            }
+            is RoomRef.Id -> {
+                resolvedRoomId = room.roomId
+                serverHostForConfig = room.serverHost ?: resolvedConfig.serverHost
+                resolvedRoomUrl = serverHostForConfig?.let { buildRoomUrl(room.serverHost ?: it, room.roomId) }
+            }
+        }
+        val sessionConfig = sessionConfigFor(serverHostForConfig)
+        val session = SerenadaSession(
+            roomId = resolvedRoomId,
+            roomUrl = resolvedRoomUrl,
+            config = sessionConfig,
+            context = context,
+            delegate = { delegate },
+            okHttpClient = okHttpClient,
+            initialSignalingProvider = createSignalingProvider(sessionConfig),
+            logger = logger,
+            displayName = displayName,
+            peerId = peerId,
+            initialMediaRole = initialMediaRole,
+            // The registry owns the foreground lease; the session never self-acquires.
+            acquireForegroundLease = false,
         )
         session.start()
         return session

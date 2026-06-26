@@ -95,6 +95,30 @@ export { ForegroundLeaseUnavailable } from './types.js';
 /** @internal Process-wide foreground media arbiter (one per JS context) */
 export { foregroundArbiter, __resetForegroundArbiterForTests } from './foregroundArbiter.js';
 
+/** Multi-call session registry (Phase 3) */
+export { SerenadaCallRegistry } from './SerenadaCallRegistry.js';
+export type {
+    SerenadaCallRegistryOptions,
+    RegistrySessionFactory,
+} from './SerenadaCallRegistry.js';
+export type {
+    CallId,
+    RoomRef,
+    CallActivationError,
+    ManagedCallState,
+    CallRegistryState,
+    JoinResult,
+    SwitchResult,
+    JoinAndSwitchResult,
+} from './types.js';
+/** Canonical room-token extraction shared with the registry's call identity */
+export { canonicalizeRoomId } from './roomIdentity.js';
+export {
+    FOREGROUND_RELEASE_TIMEOUT_MS,
+    FOREGROUND_ACTIVATE_TIMEOUT_MS,
+    HELD_JOIN_TIMEOUT_MS,
+} from './constants.js';
+
 // Public utilities
 export {
     computeLayout, computeStageLayout, clampStageTileAspectRatio,

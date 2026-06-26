@@ -79,6 +79,117 @@ export class ForegroundLeaseUnavailable extends Error {
     }
 }
 
+// --- Multi-call session registry (Phase 3, contract §7 / §11) ---
+
+/** Registry-generated stable identifier for a managed call (one per call). */
+export type CallId = string;
+
+/**
+ * A room a host wants the registry to join: either a full room URL or a bare
+ * room id. The registry canonicalizes both to one `roomId` (the `/call/<token>`
+ * segment) before dedup, so `serenada.app` and `serenada-app.ru` URLs for the
+ * same token collapse to one live call.
+ */
+export type RoomRef = { url: string } | { roomId: string };
+
+/**
+ * Why a managed call's foreground activation could not complete, surfaced per
+ * call (contract §11) so a host with multiple calls knows which one is degraded
+ * — the registry-level {@link CallRegistryState.lastError} is not enough once
+ * several calls exist.
+ *
+ * - `'needsPermission'`: preflight found the target's desired media needs a
+ *   device grant the host has not yet obtained. The host prompts, then retries.
+ * - `'activationFailed'`: foreground activation threw or timed out.
+ * - `'releaseFailed'`: draining the old foreground call timed out, so the switch
+ *   aborted and the old call kept the lease (Core Invariant 1).
+ * - `'joinFailed'`: the held room join failed or timed out.
+ */
+export interface CallActivationError {
+    kind: 'needsPermission' | 'activationFailed' | 'releaseFailed' | 'joinFailed';
+    message: string;
+}
+
+/**
+ * Published, value-type view of one managed call (contract §11). Plain data so
+ * it can be compared/snapshotted; the live {@link SerenadaSession} is exposed
+ * separately via {@link SerenadaCallRegistry.activeCall} so a host can render it
+ * (`<SerenadaCallFlow session={registry.activeCall?.session} />`) — the registry
+ * does NOT hide the underlying session.
+ */
+export interface ManagedCallState {
+    id: CallId;
+    /** Canonical room token (the dedup key). */
+    roomId: string;
+    /** Original room URL the call was joined with, when one was supplied. */
+    roomUrl: string | null;
+    membershipPhase: CallPhase;
+    mediaRole: CallMediaRole;
+    mediaActivationState: MediaActivationState;
+    /** User audio intent; survives hold (only explicit user action changes it). */
+    desiredAudioEnabled: boolean;
+    /** User camera intent; survives hold. */
+    desiredVideoMode: VideoMode;
+    /** What peers observe now; always false while held. */
+    actualAudioPublished: boolean;
+    actualVideoPublished: boolean;
+    participantCount: number;
+    /** Local per-call CID once joined, else `null`. */
+    localCid: string | null;
+    /** Convenience flag: `mediaRole === 'held'`. */
+    held: boolean;
+    displayName: string | null;
+    /** Per-call activation/release/join error or needed permission, else `null`. */
+    activationError: CallActivationError | null;
+    /** Finalized call-quality summary, available after the call ends. */
+    qualitySummary: CallQualitySummary | null;
+}
+
+/**
+ * Aggregate observable state published by {@link SerenadaCallRegistry}
+ * (contract §11). Subscribe to it the same way as {@link CallState}
+ * (useSyncExternalStore-compatible: stable snapshot + change callback).
+ */
+export interface CallRegistryState {
+    calls: ManagedCallState[];
+    /** The single foreground call's id, or `null` when none is foregrounded. */
+    activeCallId: CallId | null;
+    /** True while a queued registry operation is mutating the lease/call map. */
+    registryOperationInProgress: boolean;
+    /** Most recent registry-level failure (per-call detail lives on the call). */
+    lastError: CallActivationError | null;
+}
+
+/**
+ * Result of a registry-internal background join ({@link
+ * SerenadaCallRegistry.joinHeld}). On `'joined'` the call exists and is held; on
+ * `'failed'` the room join failed/timed out (a `callId` is present when the call
+ * was registered before the join failed).
+ */
+export type JoinResult =
+    | { kind: 'joined'; callId: CallId }
+    | { kind: 'failed'; callId?: CallId; error: CallActivationError };
+
+/**
+ * Result of {@link SerenadaCallRegistry.switchTo}. `'needsPermission'` leaves
+ * the previous foreground call fully active (preflight runs before the old call
+ * is touched; Core Invariant 4).
+ */
+export type SwitchResult =
+    | { kind: 'active' }
+    | { kind: 'needsPermission' }
+    | { kind: 'failed'; error: CallActivationError };
+
+/**
+ * Result of {@link SerenadaCallRegistry.joinAndSwitch}. `'needsPermission'`
+ * carries the `callId` of the now-held call so the host can prompt and then
+ * retry `switchTo(callId)` (contract §7).
+ */
+export type JoinAndSwitchResult =
+    | { kind: 'active'; callId: CallId }
+    | { kind: 'needsPermission'; callId: CallId }
+    | { kind: 'failed'; callId?: CallId; error: CallActivationError };
+
 /** Default preference order for camera modes when {@link SerenadaConfig.cameraModes} is unset. */
 export const DEFAULT_CAMERA_MODES: readonly ConfigurableCameraMode[] = ['selfie', 'world', 'composite'];
 
