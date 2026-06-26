@@ -558,4 +558,125 @@ final class SerenadaCallRegistryTests: XCTestCase {
         direct.tearDown()
         await h.teardown()
     }
+
+    // MARK: - Session-driven terminal: lease leak (Phase 3 round 2)
+
+    /// A session that reaches a terminal phase ON ITS OWN — `room_ended` /
+    /// `cleanupCall`, WITHOUT a registry `leaveCall`/`endCall` — must make the
+    /// registry release its OWN foreground lease, clear `activeCallId` (NO
+    /// auto-promote), mark the call ended, and release the registry owning-mode so a
+    /// subsequent DIRECT join succeeds. Before the fix the registry kept
+    /// `activeCallId` + leaked the lease forever (the session's reset releases only
+    /// its DIRECT token, which a registry-created session never holds — contract §7).
+    func testSessionDrivenTerminalReleasesLeaseAndClearsActiveAndFreesMode() async {
+        let arbiter = ForegroundMediaArbiter()
+        let h = RegistryTestHarness(arbiter: arbiter)
+
+        // A real registry-created call becomes foreground via joinAndSwitch.
+        let rA = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        guard case let .active(idA) = rA else { return XCTFail("A: \(rA)") }
+        XCTAssertEqual(h.registry.activeCallId, idA)
+        XCTAssertNotNil(arbiter.currentOwnerToken, "Active call holds the lease")
+        XCTAssertEqual(arbiter.owningMode, .registry)
+
+        // The server ends the room: the session runs cleanupCall on its own
+        // (NO registry leave/end). Drive it on the real session's provider.
+        h.provider(for: idA)?.simulateRoomEnded()
+
+        // Async-settle: the session flips to a terminal phase and the registry's
+        // serialized terminal op runs.
+        await waitUntil { h.registry.activeCallId == nil && arbiter.currentOwnerToken == nil }
+
+        // The registry observed the session-driven terminal and cleaned up.
+        XCTAssertNil(arbiter.currentOwnerToken, "The leaked registry lease must be released")
+        XCTAssertNil(h.registry.activeCallId, "activeCallId cleared (NO auto-promote)")
+        XCTAssertEqual(h.registry.calls.first { $0.id == idA }?.held, true,
+                       "An ended call publishes .held (no foreground token)")
+        await waitUntil { arbiter.owningMode == nil }
+        XCTAssertNil(arbiter.owningMode,
+                     "No live call remains, so the registry owning-mode is released")
+
+        // A subsequent DIRECT join on the SAME arbiter now succeeds (mode freed).
+        let direct = SessionTestHarness(roomId: "direct-room", arbiter: arbiter)
+        await direct.advanceToInCallWithTurn(localCid: "d-local", remoteCid: "d-remote")
+        XCTAssertEqual(direct.session.state.phase, .inCall,
+                       "A direct join must succeed once the session-driven terminal freed the mode")
+        XCTAssertEqual(arbiter.owningMode, .direct)
+        XCTAssertNotNil(arbiter.currentOwnerToken, "The direct join holds the lease")
+
+        direct.tearDown()
+        await h.teardown()
+    }
+
+    /// A remote-ended HELD call (active call still foreground) marks the held call
+    /// ended; if it was the LAST live call the registry owning-mode is released.
+    /// Uses a `TerminalDrivableSession` stub so the terminal transition can be
+    /// driven deterministically without a foreground activation.
+    func testRemoteEndedHeldCallMarksEndedAndFreesModeWhenLastLive() async {
+        let arbiter = ForegroundMediaArbiter()
+        let h = RegistryTestHarness(arbiter: arbiter)
+
+        // A single HELD call (never foregrounded): the registry owns `registry` mode
+        // with NO lease (Invariant 6).
+        let heldStub = TerminalDrivableSession(roomId: "aaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        let r = await h.registry.joinHeld(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa", stub: heldStub))
+        guard case let .joined(id) = r else { return XCTFail("held join: \(r)") }
+        XCTAssertNil(h.registry.activeCallId, "A held call is not active")
+        XCTAssertNil(arbiter.currentOwnerToken, "A held call holds no lease")
+        XCTAssertEqual(arbiter.owningMode, .registry)
+
+        // The remote ends the room: the held session reaches terminal on its own.
+        heldStub.driveTerminal(.ending)
+
+        await waitUntil { (h.registry.calls.first { $0.id == id }?.held ?? false)
+            && arbiter.owningMode == nil }
+
+        // The held call is marked ended (the bug left it live forever) and, being
+        // the last live call, the registry mode is released.
+        XCTAssertTrue(h.registry.calls.first { $0.id == id }?.held ?? false,
+                      "Ended held call publishes .held")
+        XCTAssertNil(h.registry.activeCallId, "Still no active call")
+        XCTAssertNil(arbiter.owningMode,
+                     "Last live call ended -> registry owning-mode released")
+        // Dismissable now (the host can clear the dead chip).
+        await h.registry.dismissEndedCall(id: id)
+        XCTAssertTrue(h.registry.calls.isEmpty, "Ended call is dismissable")
+
+        await h.teardown()
+    }
+
+    /// When a registry-initiated `endCall()` drove termination, the session's
+    /// later terminal-phase emission must be a NO-OP — the lease was already
+    /// released and the call already marked ended. Guards against a double-release.
+    func testRegistryEndCallThenSessionTerminalDoesNotDoubleRelease() async {
+        let arbiter = ForegroundMediaArbiter()
+        let h = RegistryTestHarness(arbiter: arbiter)
+
+        let activeStub = TerminalDrivableSession(roomId: "aaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        let rA = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa", stub: activeStub))
+        guard case let .active(idA) = rA else { return XCTFail("A: \(rA)") }
+        XCTAssertNotNil(arbiter.currentOwnerToken)
+
+        // Registry-initiated end: releases the lease, marks ended, frees the mode.
+        await h.registry.endCall(id: idA)
+        XCTAssertNil(arbiter.currentOwnerToken, "endCall released the lease")
+        XCTAssertNil(h.registry.activeCallId)
+        XCTAssertEqual(activeStub.registryEndCalls, 1, "Session end ran exactly once")
+        XCTAssertNil(arbiter.owningMode, "Mode freed by endCall (last live call)")
+
+        // The session NOW emits its terminal phase (cleanupCall runs after end).
+        // The registry's observer must treat this as a no-op (already ended): no
+        // double lease release, no resurrection of activeCallId.
+        activeStub.driveTerminal(.ending)
+        // Give the serialized terminal op a chance to run (and be a no-op).
+        for _ in 0..<10 { await yieldToMainActor() }
+
+        XCTAssertNil(arbiter.currentOwnerToken, "No double-release / no new lease")
+        XCTAssertNil(h.registry.activeCallId, "activeCallId stays nil")
+        XCTAssertNil(arbiter.owningMode, "Mode stays released")
+        XCTAssertEqual(activeStub.registryEndCalls, 1,
+                       "The session end was NOT invoked a second time")
+
+        await h.teardown()
+    }
 }

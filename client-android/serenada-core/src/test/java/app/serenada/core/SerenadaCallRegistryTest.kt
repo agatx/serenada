@@ -605,4 +605,97 @@ class SerenadaCallRegistryTest {
         assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
         ForegroundMediaArbiter.releaseLease(token)
     }
+
+    // --- Round-2 [P1]: a session reaching terminal ON ITS OWN releases the
+    //     registry lease + clears active + marks ended (the collector terminal op) ---
+
+    @Test
+    fun `active call ended on its own releases the lease clears active and frees the process`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+        assertEquals(ForegroundArbiterMode.REGISTRY, ForegroundMediaArbiter.currentMode)
+        val aToken = h.created["a"]!!.session.foregroundOwnerTokenForTest()
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(aToken))
+
+        // The session reaches a terminal phase on its OWN (room_ended / remote end),
+        // NOT via a registry leave/end. The session reset releases only a DIRECT
+        // lease (registry sessions have none); the registry's collector terminal op
+        // must release the registry-owned lease + active slot + REGISTRY mode.
+        h.simulateRoomEnded("a")
+
+        // Active slot cleared; NO auto-promote (only call anyway).
+        assertNull(h.registry.state.value.activeCallId)
+        // The call is marked ended (dismissable; excluded from live counts).
+        val aState = h.registry.state.value.calls.single { it.callId == a }
+        assertEquals(CallMediaRole.HELD, aState.mediaRole)
+        // REGISTRY mode released (no live call remains) so a subsequent DIRECT join
+        // succeeds — without the collector terminal op the lease + mode leak forever.
+        assertNull("registry mode released after the only call ended on its own", ForegroundMediaArbiter.currentMode)
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "direct",
+            mode = ForegroundArbiterMode.DIRECT,
+            modeOwnerRef = Any(),
+        )
+        assertEquals(ForegroundArbiterMode.DIRECT, ForegroundMediaArbiter.currentMode)
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    @Test
+    fun `remote-ended held call marks ended and releases mode when it was the last live call`() {
+        val h = harness()
+        val a = (h.joinHeld(room("a")) as JoinResult.Joined).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(ForegroundArbiterMode.REGISTRY, ForegroundMediaArbiter.currentMode)
+        // A held call holds no foreground lease.
+        assertNull(h.created["a"]!!.session.foregroundOwnerTokenForTest())
+        assertNull(h.registry.state.value.activeCallId)
+
+        // The held call is remote-ended on its own.
+        h.simulateRoomEnded("a")
+
+        // It is marked ended; still no active call; REGISTRY mode released since it
+        // was the last live call (so a direct join can proceed).
+        val aState = h.registry.state.value.calls.single { it.callId == a }
+        assertEquals(CallMediaRole.HELD, aState.mediaRole)
+        assertNull(h.registry.state.value.activeCallId)
+        assertNull("mode released after last live call remote-ended", ForegroundMediaArbiter.currentMode)
+        // Dismiss removes the lingering ended call.
+        h.dismissCall(a)
+        ShadowLooper.idleMainLooper()
+        assertFalse(h.registry.state.value.calls.any { it.callId == a })
+    }
+
+    @Test
+    fun `no double-release when registry endCall drove termination`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Registry-initiated end: drains + releases the lease, marks ended, and the
+        // session's own teardown emits terminal phases (Ending/Idle). The collector
+        // terminal op must be a queue-safe no-op (call already ended, lease already
+        // released) — NOT a double-release that would throw inside the arbiter.
+        h.endCall(a)
+        ShadowLooper.idleMainLooper()
+
+        assertNull(h.registry.state.value.activeCallId)
+        // The session was asked to end the room for all participants.
+        assertEquals(1, h.created["a"]!!.fakeProvider.endCalls)
+        // No lease leaked and no double-release wedged the arbiter: a fresh acquire
+        // succeeds cleanly (would throw if the collector double-released).
+        assertNull("mode released after registry end", ForegroundMediaArbiter.currentMode)
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "probe",
+            mode = ForegroundArbiterMode.REGISTRY,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+        // The ended call lingers until dismissed.
+        assertTrue(h.registry.state.value.calls.any { it.callId == a })
+    }
 }

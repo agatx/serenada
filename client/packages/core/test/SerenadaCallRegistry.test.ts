@@ -596,4 +596,102 @@ describe('SerenadaCallRegistry', () => {
             (globalThis as Record<string, unknown>).RTCPeerConnection = restoreRtc;
         }
     });
+
+    // --- Terminal session state is a serialized registry op (lease-leak fix) ---
+
+    it('remote-ended ACTIVE call releases the lease + clears activeCallId; a later direct join succeeds', async () => {
+        const restoreRtc = (globalThis as Record<string, unknown>).RTCPeerConnection;
+        (globalThis as Record<string, unknown>).RTCPeerConnection = class {};
+        try {
+            const { registry, rigs } = makeRegistry({ signalingProvider: new FakeSignalingProvider() });
+
+            // Call A: join + switch -> active foreground (holds the lease).
+            const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+            settleNextOnJoin(rigs);
+            const ra = await pa;
+            expect(ra.kind).toBe('active');
+            const callId = (ra as { callId: CallId }).callId;
+            const rig = rigs[0];
+            expect(registry.state.activeCallId).toBe(callId);
+            expect(foregroundArbiter.currentMode).toBe('registry');
+
+            // The session reaches a terminal state ON ITS OWN (remote end /
+            // room_ended) — NOT via registry.leave/end. This drives the session
+            // through `ending` (then `idle`). The registry must reconcile it.
+            rig.signaling.emitRoomEnded();
+            // Let the queued terminal-state op run.
+            await Promise.resolve();
+            await Promise.resolve();
+
+            // Lease released, active cleared, call marked ended/non-live.
+            expect(registry.state.activeCallId).toBeNull();
+            const ended = registry.state.calls.find((c) => c.id === callId);
+            // (retention 0 by default removes it; either gone or held/non-foreground.)
+            expect(ended?.mediaRole ?? 'held').toBe('held');
+            // No live call remains -> registry mode released.
+            expect(foregroundArbiter.currentMode).toBeNull();
+
+            // The lease is free: a subsequent direct SerenadaCore.join() succeeds
+            // (the foreground lease was NOT leaked through the ending screen).
+            const core = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
+            expect(() => core.join({ roomId: 'OTHER' })).not.toThrow();
+        } finally {
+            (globalThis as Record<string, unknown>).RTCPeerConnection = restoreRtc;
+        }
+    });
+
+    it('remote-ended HELD call marks ended and releases registry mode when it was the last live call', async () => {
+        const restoreRtc = (globalThis as Record<string, unknown>).RTCPeerConnection;
+        (globalThis as Record<string, unknown>).RTCPeerConnection = class {};
+        try {
+            const { registry, rigs } = makeRegistry({ signalingProvider: new FakeSignalingProvider() });
+
+            // A single HELD call (never foregrounded, holds no lease).
+            const p = registry.joinHeld({ roomId: 'room-A' });
+            settleNextOnJoin(rigs);
+            await p;
+            const rig = rigs[0];
+            expect(registry.state.activeCallId).toBeNull();
+            expect(foregroundArbiter.currentMode).toBe('registry');
+
+            // The held call's session reaches a terminal state on its own (fatal
+            // error). Previously this just published and never released mode,
+            // wedging the registry in `registry` mode forever.
+            rig.signaling.emitError('CONNECTION_FAILED', 'boom');
+            await Promise.resolve();
+            await Promise.resolve();
+
+            // Last live call gone -> registry mode released; a direct join works.
+            expect(foregroundArbiter.currentMode).toBeNull();
+            const core = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
+            expect(() => core.join({ roomId: 'OTHER' })).not.toThrow();
+        } finally {
+            (globalThis as Record<string, unknown>).RTCPeerConnection = restoreRtc;
+        }
+    });
+
+    it('no double-release when registry.end() drove the termination', async () => {
+        const { registry, rigs } = makeRegistry();
+
+        const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+        settleNextOnJoin(rigs);
+        const ra = await pa;
+        const callId = (ra as { callId: CallId }).callId;
+        const rig = rigs[0];
+
+        // Count arbiter lease releases: a clean registry.end() must release the
+        // lease exactly once. The session-driven terminal handler must NOT
+        // re-release it (the idempotency `terminated` guard makes it a no-op).
+        const releaseSpy = vi.spyOn(foregroundArbiter, 'releaseLease');
+
+        await registry.end(callId);
+        // Drain any queued session-driven terminal callback fired by end().
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(registry.state.activeCallId).toBeNull();
+        // Exactly one lease release for this call's token (no double-release).
+        expect(releaseSpy).toHaveBeenCalledTimes(1);
+        expect(rig.signaling.endRoomCalls).toBe(1);
+    });
 });

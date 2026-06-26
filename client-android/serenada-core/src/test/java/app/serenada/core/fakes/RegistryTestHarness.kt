@@ -180,6 +180,16 @@ internal class RegistryTestHarness(
     }
 
     /**
+     * Drive [roomKey]'s session to a TERMINAL phase on its OWN (room_ended / remote
+     * end) — NOT via a registry leave/end. Idles the main looper so the session's
+     * cleanup AND the registry's collector terminal op both run.
+     */
+    fun simulateRoomEnded(roomKey: String) {
+        created[roomKey]!!.fakeProvider.simulateRoomEnded()
+        ShadowLooper.idleMainLooper()
+    }
+
+    /**
      * Run an arbitrary suspend [block] on the same main-immediate scope the
      * registry/sessions use, draining the looper to completion. Lets a test poke a
      * session's internal hold/resume primitive (e.g.

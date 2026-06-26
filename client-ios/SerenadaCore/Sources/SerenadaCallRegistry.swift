@@ -195,6 +195,15 @@ protocol RegistryManagedSession: AnyObject {
     var registryActualVideoPublished: Bool { get }
     var registryQualitySummary: CallQualitySummary? { get }
 
+    /// The session's membership-phase stream, so the registry can observe
+    /// session-DRIVEN terminal state (`room_ended` / remote end / fatal error →
+    /// `cleanupCall`) and release its own lease + clear `activeCallId` even though
+    /// the session's reset releases only its DIRECT token (registry-created
+    /// sessions hold none — contract §7). The concrete session maps its published
+    /// `$state.phase`; stubs publish through a subject so a test can drive a
+    /// terminal phase deterministically. Emits the current phase on subscribe.
+    var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> { get }
+
     func preflightForeground() -> ForegroundPreflight
     func missingDesiredForegroundPermissions() -> [MediaCapability]
     func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws
@@ -217,6 +226,12 @@ extension SerenadaSession: RegistryManagedSession {
     var registryActualAudioPublished: Bool { actualAudioPublished }
     var registryActualVideoPublished: Bool { actualVideoPublished }
     var registryQualitySummary: CallQualitySummary? { qualitySummary }
+    var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> {
+        // `$state` emits the CURRENT value on subscribe and on every change, so the
+        // registry observer sees both the present phase and the eventual terminal
+        // transition (`.ending`/`.idle`/`.error`) driven by `cleanupCall`.
+        $state.map(\.phase).eraseToAnyPublisher()
+    }
     func registryLeave() { leave() }
     func registryEnd() { end() }
 }
@@ -254,6 +269,10 @@ public final class ManagedCall {
     fileprivate var ended = false
     /// Quality summary captured at end.
     fileprivate var endedQualitySummary: CallQualitySummary?
+    /// Subscription to the session's membership-phase stream. Drives the registry's
+    /// session-DRIVEN terminal handling (contract §7); cancelled when the call is
+    /// removed (`dismissEndedCall`) or replaced.
+    fileprivate var phaseObserver: AnyCancellable?
 
     fileprivate init(
         id: CallId,
@@ -513,6 +532,9 @@ public final class SerenadaCallRegistry: ObservableObject {
     public func dismissEndedCall(id: CallId) async {
         await runQueued {
             guard let call = self.managed.first(where: { $0.id == id }), call.ended else { return }
+            // Stop observing the session's phase; the call is leaving the registry.
+            call.phaseObserver?.cancel()
+            call.phaseObserver = nil
             self.managed.removeAll { $0.id == id }
         }
         await publish()
@@ -567,7 +589,32 @@ public final class SerenadaCallRegistry: ObservableObject {
             displayName: room.displayName
         )
         managed.append(call)
+        observeTerminalPhase(call)
         return .created(id)
+    }
+
+    /// Subscribe to a managed call's membership-phase stream so the registry
+    /// observes session-DRIVEN terminal state (contract §7). When `room_ended` /
+    /// remote end / a fatal error drives the session's `cleanupCall` to `.ending`
+    /// (treated as terminal for lease purposes — released promptly), `.idle`, or
+    /// `.error`, the registry enqueues a SERIALIZED terminal op so it releases its
+    /// OWN foreground lease (which the session's reset never touches for a
+    /// registry-created call) and clears `activeCallId` (NO auto-promote —
+    /// Invariant 5). The op is idempotent + queue-safe: a registry-initiated
+    /// `leaveCall`/`endCall` that already released the lease and marked the call
+    /// ended makes this a no-op. The subscription holds a STRONG reference to the
+    /// registry only for the closure's lifetime; it is cancelled when the call is
+    /// removed (`dismissEndedCall`).
+    private func observeTerminalPhase(_ call: ManagedCall) {
+        let id = call.id
+        call.phaseObserver = call.managedSession.registryPhasePublisher
+            .sink { [weak self] phase in
+                guard let self else { return }
+                guard phase == .ending || phase == .idle || phase == .error else { return }
+                Task { @MainActor in
+                    await self.runQueued { await self.terminalBody(id: id) }
+                }
+            }
     }
 
     /// Record a failed/timed-out held join and mark the call ENDED (dismissable),
@@ -806,6 +853,52 @@ public final class SerenadaCallRegistry: ObservableObject {
 
         // Release the registry owning mode when no non-ended call remains, so the
         // process frees up for a direct join (Core Invariant 6).
+        if !managed.contains(where: { !$0.ended }) {
+            arbiter.releaseMode(ownerRef: self)
+        }
+        await publish()
+    }
+
+    /// Session-DRIVEN terminal handler (contract §7). Runs inside the serial queue,
+    /// triggered when a managed call's session reaches a terminal phase ON ITS OWN
+    /// (`room_ended` / remote end / fatal error → `cleanupCall`), NOT via a
+    /// registry `leaveCall`/`endCall`. Without this the registry never observes the
+    /// session's terminal state: the session's reset releases only its DIRECT token
+    /// (registry-created sessions hold none), so the registry would keep
+    /// `activeCallId` and leak its `foregroundToken` lease forever.
+    ///
+    /// IDEMPOTENT + queue-safe. A registry-initiated teardown already cleared the
+    /// lease and set `ended` BEFORE the session's terminal phase fires, so this
+    /// guards on `!ended` and is a no-op then (no double-release). For a genuinely
+    /// session-driven terminal it: releases the still-held registry lease (if any),
+    /// clears `activeCallId` when this was the active call (NO auto-promote —
+    /// Invariant 5), marks the call ended/non-live (dismissable, out of "live"
+    /// counts), releases the registry owning-mode when no live call remains, and
+    /// publishes.
+    private func terminalBody(id: CallId) async {
+        // No-op if the call is gone or already terminal (registry teardown won the
+        // race, or this terminal op already ran). Prevents double-release.
+        guard let call = managed.first(where: { $0.id == id }), !call.ended else { return }
+
+        // Release the registry-owned foreground lease this call still holds, if any.
+        // `releaseLease` is idempotent/no-throw for a stale token, so a partially
+        // raced teardown cannot crash here.
+        if let token = call.foregroundToken {
+            try? arbiter.releaseLease(token)
+            call.foregroundToken = nil
+        }
+        // Clear active if this was the foreground call. NO auto-promote (Invariant 5).
+        if activeCallId == id {
+            activeCallId = nil
+        }
+
+        // Mark ended/non-live and capture the quality summary the session finalized
+        // on its own teardown.
+        call.ended = true
+        call.endedQualitySummary = call.managedSession.registryQualitySummary
+
+        // Release the registry owning mode when no live call remains, so the process
+        // frees up for a direct join (Core Invariant 6).
         if !managed.contains(where: { !$0.ended }) {
             arbiter.releaseMode(ownerRef: self)
         }

@@ -79,6 +79,16 @@ interface ManagedCall {
     activationError: CallActivationError | null;
     /** Set once the call's room join has terminally failed. */
     joinFailed: boolean;
+    /**
+     * Set once the registry has reconciled this call's own terminal session state
+     * (remote-end / fatal error / leave / end): the lease is released, the call
+     * is excluded from "live" counts, and it is dismissable. Distinct from the
+     * retention timer (which only controls when an already-terminal call is
+     * removed from the published list). The terminal-state handler guards on this
+     * so it is idempotent and queue-safe — a registry-initiated leave/end that
+     * already reconciled leaves a later session-driven terminal callback a no-op.
+     */
+    terminated: boolean;
     displayName: string | null;
     /** Removes the session's state subscription on teardown. */
     unsubscribe: () => void;
@@ -343,6 +353,7 @@ export class SerenadaCallRegistry {
             foregroundToken: null,
             activationError: null,
             joinFailed: false,
+            terminated: false,
             displayName: room.displayName ?? null,
             unsubscribe: () => {},
             retentionTimer: null,
@@ -595,6 +606,10 @@ export class SerenadaCallRegistry {
             call.foregroundToken = null;
             this.activeCallId = null;   // no auto-promote
         }
+        // Mark reconciled BEFORE driving the session terminal so the resulting
+        // session-state callback (phase -> idle/error) finds nothing left to do
+        // (idempotency: lease already released, activeCallId already cleared).
+        call.terminated = true;
         try {
             if (kind === 'end') call.session.end();
             else call.session.leave();
@@ -602,32 +617,72 @@ export class SerenadaCallRegistry {
             this.log('warning', `${kind} teardown failed: ${formatError(err)}`);
         }
         this.scheduleEndedRemoval(call);
+        this.releaseModeIfIdle();
         this.publish();
     }
 
     // --- Session -> registry state forwarding ---
 
     private onSessionStateChange(call: ManagedCall): void {
-        // A remote-ended / disconnected active call drops the lease (no
-        // auto-promote). Routed through the queue so it cannot interleave a switch.
-        const phase = call.session.state.phase;
-        if ((phase === 'error' || phase === 'idle') && call.id === this.activeCallId && call.foregroundToken) {
-            void this.enqueue(() => this.handleActiveCallLost(call));
+        // When a managed call's OWN session reaches a terminal state (remote end /
+        // `room_ended` / fatal error) rather than via registry leave()/end(), the
+        // registry must reconcile it: drop the lease, clear activeCallId, mark it
+        // non-live, and release the owning mode if no live call remains. This must
+        // hold for ANY managed call — active OR held — not just the active one:
+        // a held call that ends on its own would otherwise wedge registry mode
+        // forever, and an active call that ends would keep the lease through the
+        // ~3s ending screen. `'ending'` is treated as terminal for lease purposes
+        // (release promptly — don't wait through the ending screen). Routed
+        // through the SAME operation queue so it cannot interleave a switch.
+        if (this.isSessionTerminal(call) && !call.terminated) {
+            void this.enqueue(() => this.handleCallTerminated(call));
         }
         this.publish();
     }
 
-    private async handleActiveCallLost(call: ManagedCall): Promise<void> {
-        if (call.id !== this.activeCallId || !call.foregroundToken) return;
-        const token = call.foregroundToken;
-        try {
-            this.arbiter.releaseLease(token);
-        } catch (err) {
-            this.log('warning', `releaseLease for lost active call failed: ${formatError(err)}`);
+    /**
+     * Whether the call's underlying session has reached a terminal lifecycle
+     * state. `'ending'` counts (the call is going away and the lease must be
+     * released promptly rather than held through the ending screen); `'error'`
+     * and `'idle'` are the fully-settled terminal phases.
+     */
+    private isSessionTerminal(call: ManagedCall): boolean {
+        const phase = call.session.state.phase;
+        return phase === 'ending' || phase === 'error' || phase === 'idle';
+    }
+
+    /**
+     * Serialized terminal-state reconciliation for a call that ended on its own.
+     * Idempotent and queue-safe: a second invocation (or one racing a registry
+     * leave/end that already set `terminated`) is a no-op. Never auto-promotes a
+     * held call (Core Invariant 5).
+     */
+    private async handleCallTerminated(call: ManagedCall): Promise<void> {
+        // Idempotency guard: already reconciled (by a prior terminal callback or a
+        // registry-initiated leave/end). Re-check the phase too, in case the state
+        // recovered between enqueue and run.
+        if (call.terminated || !this.isSessionTerminal(call)) return;
+        call.terminated = true;
+        // Release the lease if this call still holds it (active call lost on its
+        // own). A held call carries no token, so this is skipped for it.
+        if (call.foregroundToken) {
+            const token = call.foregroundToken;
+            call.foregroundToken = null;
+            try {
+                this.arbiter.releaseLease(token);
+            } catch (err) {
+                this.log('warning', `releaseLease for terminated call failed: ${formatError(err)}`);
+            }
         }
-        call.foregroundToken = null;
-        this.activeCallId = null;
+        // Clear activeCallId without auto-promote (Core Invariant 5).
+        if (this.activeCallId === call.id) {
+            this.activeCallId = null;
+        }
         this.scheduleEndedRemoval(call);
+        // Release the `'registry'` owning mode if this was the last live call, so
+        // a remote-ended/error HELD call (or the last active call ending) does not
+        // wedge the process in registry mode forever.
+        this.releaseModeIfIdle();
         this.publish();
     }
 
@@ -688,14 +743,19 @@ export class SerenadaCallRegistry {
     }
 
     /**
-     * Whether a managed call has terminally ended. A call left/ended via the
-     * session lands at phase `'idle'`; a failed join/room error lands at
-     * `'error'` (or sets {@link ManagedCall.joinFailed}). Either way it is no
-     * longer a live, switchable call.
+     * Whether a managed call has terminally ended (no longer live/switchable).
+     * A call left/ended via the session lands at phase `'idle'`; a remote-ended
+     * call passes through `'ending'` before `'idle'`; a failed join/room error
+     * lands at `'error'` (or sets {@link ManagedCall.joinFailed}). The
+     * {@link ManagedCall.terminated} flag covers the window where the registry has
+     * reconciled a terminal call but its session phase has not fully settled yet
+     * (e.g. `'ending'`), so live counts exclude it the moment the lease is
+     * dropped — independent of the ended-call retention timer.
      */
     private isEnded(call: ManagedCall): boolean {
+        if (call.terminated || call.joinFailed) return true;
         const phase = this.toMembershipPhase(call);
-        return phase === 'idle' || phase === 'error' || call.joinFailed;
+        return phase === 'ending' || phase === 'idle' || phase === 'error';
     }
 
     private applyCallError(call: ManagedCall, error: CallActivationError): void {

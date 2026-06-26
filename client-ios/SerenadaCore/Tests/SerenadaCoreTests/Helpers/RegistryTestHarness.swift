@@ -177,6 +177,14 @@ final class AutoJoinSignalingProvider: SignalingProvider, @unchecked Sendable {
     func sendToPeer(_ peerId: String, type: String, payload: SignalingPayload?) {}
     func broadcast(type: String, payload: SignalingPayload?) {}
     func getIceServers() async throws -> [IceServerConfig] { [] }
+
+    /// Drive a server-initiated `room_ended` so a real registry-created session
+    /// runs its own `cleanupCall(reason: .remoteEnded)` (the session-driven
+    /// terminal path the registry must observe — contract §7).
+    @MainActor
+    func simulateRoomEnded(by: String? = nil, reason: String = "room ended") {
+        delegate?.signalingProviderDidEndRoom(RoomEndedEvent(by: by, reason: reason))
+    }
 }
 
 // MARK: - Stall-release session stub
@@ -202,6 +210,10 @@ final class StallReleaseSession: RegistryManagedSession {
     var registryActualAudioPublished: Bool { mediaRole == .foreground }
     var registryActualVideoPublished: Bool { false }
     var registryQualitySummary: CallQualitySummary? { nil }
+    private let phaseSubject = CurrentValueSubject<SerenadaCallPhase, Never>(.inCall)
+    var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> {
+        phaseSubject.eraseToAnyPublisher()
+    }
 
     /// When true, `releaseForeground` does NOT drive the session to fully-held, so
     /// the registry's drain-settle never confirms and its release timeout trips.
@@ -278,6 +290,10 @@ final class LyingRoleSession: RegistryManagedSession {
     var registryActualAudioPublished: Bool { false }
     var registryActualVideoPublished: Bool { false }
     var registryQualitySummary: CallQualitySummary? { nil }
+    private let phaseSubject = CurrentValueSubject<SerenadaCallPhase, Never>(.inCall)
+    var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> {
+        phaseSubject.eraseToAnyPublisher()
+    }
 
     init(roomId: String, roomUrl: URL? = nil) {
         self.roomId = roomId
@@ -300,6 +316,87 @@ final class LyingRoleSession: RegistryManagedSession {
     }
     func registryLeave() { registryMembershipPhase = .idle }
     func registryEnd() { registryLeave() }
+}
+
+// MARK: - Terminal-drivable session stub (session-driven terminal / lease leak)
+
+/// A `RegistryManagedSession` stub that can be driven to a TERMINAL phase ON ITS
+/// OWN (modelling `room_ended` / remote end / fatal error → `cleanupCall`),
+/// WITHOUT a registry `leaveCall`/`endCall`. It models the bug's root cause: a
+/// registry-created session whose reset releases only its DIRECT token (which it
+/// never holds), so it NEVER releases the registry's foreground lease — the
+/// registry must observe the terminal phase and release the lease itself
+/// (contract §7). Foreground-capable (activates to `.active`, holds to
+/// `.held`/`.inactive`); `driveTerminal(_:)` flips the membership phase and emits
+/// it on the phase publisher, exactly as `cleanupCall` would.
+@MainActor
+final class TerminalDrivableSession: RegistryManagedSession {
+    let roomId: String
+    let roomUrl: URL?
+    private(set) var mediaRole: CallMediaRole = .held
+    private(set) var mediaActivationState: MediaActivationState = .inactive
+    private(set) var registryMembershipPhase: SerenadaCallPhase = .inCall
+    var registryErrorDescription: String? { nil }
+    var registryLocalCid: String? { "stub-local" }
+    var registryParticipantCount: Int { 2 }
+    var registryDesiredAudioEnabled: Bool = true
+    var registryDesiredVideoMode: LocalCameraMode? = nil
+    var registryActualAudioPublished: Bool { mediaRole == .foreground }
+    var registryActualVideoPublished: Bool { false }
+    var registryQualitySummary: CallQualitySummary? { nil }
+
+    private let phaseSubject: CurrentValueSubject<SerenadaCallPhase, Never>
+    var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> {
+        phaseSubject.eraseToAnyPublisher()
+    }
+
+    /// Counts registry-side lease releases the session would NEVER make on its own
+    /// (a registry session holds no direct token). The test asserts the registry
+    /// releases exactly once.
+    private(set) var registryLeaveCalls = 0
+    private(set) var registryEndCalls = 0
+
+    init(roomId: String, roomUrl: URL? = nil) {
+        self.roomId = roomId
+        self.roomUrl = roomUrl
+        self.phaseSubject = CurrentValueSubject(.inCall)
+    }
+
+    func preflightForeground() -> ForegroundPreflight { .ok }
+    func missingDesiredForegroundPermissions() -> [MediaCapability] { [] }
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws {
+        mediaRole = .foreground
+        mediaActivationState = .active
+    }
+    func releaseForeground(_ token: ForegroundOwnerToken) {
+        mediaRole = .held
+        mediaActivationState = .inactive
+    }
+    func awaitForegroundReleaseSettled() async {}
+    func abortForegroundActivation(_ token: ForegroundOwnerToken) {
+        mediaRole = .held
+        mediaActivationState = .inactive
+    }
+    func registryLeave() {
+        registryLeaveCalls += 1
+        registryMembershipPhase = .idle
+    }
+    func registryEnd() {
+        registryEndCalls += 1
+        registryMembershipPhase = .idle
+    }
+
+    /// Drive a session-DRIVEN terminal transition (e.g. `room_ended`). Mirrors
+    /// `cleanupCall`: it tears down session-local media (role → held, activation →
+    /// inactive) but DELIBERATELY does NOT touch the registry's lease (a registry
+    /// session holds no direct token), then emits the terminal phase so the
+    /// registry's observer fires.
+    func driveTerminal(_ phase: SerenadaCallPhase) {
+        mediaRole = .held
+        mediaActivationState = .inactive
+        registryMembershipPhase = phase
+        phaseSubject.send(phase)
+    }
 }
 
 // MARK: - Registry harness
@@ -334,6 +431,9 @@ final class RegistryTestHarness {
     private var sessionsByRoom: [String: SerenadaSession] = [:]
     /// The coordinator created per canonical roomId.
     private var coordinatorsByRoom: [String: SerenadaAudioCoordinator] = [:]
+    /// The signaling provider created per canonical roomId (so a test can drive a
+    /// server-initiated `room_ended` on a real registry-created session).
+    private var providersByRoom: [String: AutoJoinSignalingProvider] = [:]
 
     init(arbiter: ForegroundMediaArbiter? = nil) {
         // A caller-supplied dedicated arbiter is used as-is; otherwise mint a fresh
@@ -386,6 +486,11 @@ final class RegistryTestHarness {
         return coordinatorsByRoom[roomId] as? RecordingAudioCoordinator
     }
 
+    func provider(for id: CallId) -> AutoJoinSignalingProvider? {
+        guard let roomId = registry.call(id: id)?.roomId else { return nil }
+        return providersByRoom[roomId]
+    }
+
     private func makeSession(
         room: RoomRef,
         role: CallMediaRole,
@@ -400,6 +505,7 @@ final class RegistryTestHarness {
         let localCid = "local-\(roomId.prefix(4))"
         let remoteCid = opts.autoJoin ? "remote-\(roomId.prefix(4))" : nil
         let provider = AutoJoinSignalingProvider(localCid: localCid, remoteCid: remoteCid, autoJoin: opts.autoJoin)
+        providersByRoom[roomId] = provider
         let coordinator = opts.coordinator ?? RecordingAudioCoordinator(tag: roomId, log: eventLog)
         coordinatorsByRoom[roomId] = coordinator
 

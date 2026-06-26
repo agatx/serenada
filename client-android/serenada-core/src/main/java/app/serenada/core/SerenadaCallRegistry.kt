@@ -317,8 +317,23 @@ class SerenadaCallRegistry internal constructor(
         managedCalls[callId] = call
         call.stateJob = scope.launch {
             // Refresh published state whenever the session's state changes (phase,
-            // participant count, local cid, etc.).
-            session.state.collect { publish() }
+            // participant count, local cid, etc.). A session that reaches a TERMINAL
+            // phase on its OWN (room_ended / remote end / fatal error — distinct from
+            // a registry-initiated leave/end) must also run the serialized terminal
+            // op so the registry releases its foreground lease + mode and clears
+            // active; the session reset only releases a DIRECT lease (registry
+            // sessions have none), so without this the lease + active slot leak.
+            session.state.collect { state ->
+                if (isTerminalPhase(state.phase)) {
+                    // SERIALIZED through the same op mutex as every other mutation.
+                    // Idempotent: a registry leave/end that already tore the call
+                    // down makes this a no-op (guarded inside). Once the call is
+                    // removed the collector has nothing left to do.
+                    runTerminalCleanup(call)
+                    return@collect
+                }
+                publish()
+            }
         }
         publish()
         return RegisterOutcome.Created(call)
@@ -572,6 +587,50 @@ class SerenadaCallRegistry internal constructor(
 
     private fun markCallFailed(call: ManagedCall, error: CallRegistryError) {
         call.activationError = error
+    }
+
+    /**
+     * Terminal session phases for lease purposes. `Ending` is treated as terminal
+     * (release promptly rather than wait for the trailing `Idle`); `Idle` and
+     * `Error` cover a session that settled or failed on its own. Live phases
+     * (Joining/Waiting/InCall) and the transient setup phases are NOT terminal.
+     */
+    private fun isTerminalPhase(phase: CallPhase): Boolean =
+        phase == CallPhase.Ending || phase == CallPhase.Idle || phase == CallPhase.Error
+
+    /**
+     * Serialized terminal cleanup for a call that reached a terminal phase on its
+     * OWN (room_ended / remote end / fatal session error), NOT via a
+     * registry-initiated [leaveCall]/[endCall]. Runs through the op mutex so it
+     * cannot interleave a switch/hold/leave. The session's own reset already drove
+     * it to fully-held + released any DIRECT lease, but a registry-created session
+     * holds NO direct lease; the registry owns the [ManagedCall.foregroundToken]
+     * lease and the active slot, which would otherwise leak forever.
+     *
+     * IDEMPOTENT + queue-safe (the #1 concern): a registry leave/end that already
+     * released the lease and marked the call ended makes this a no-op. The guards
+     * are (a) `call.ended` (leave/end teardown ran) and (b) a missing
+     * `foregroundToken` is fine — releasing the lease/active is conditional on the
+     * token still being set, so we never double-release.
+     */
+    private suspend fun runTerminalCleanup(call: ManagedCall) {
+        withOp {
+            // Already torn down by a registry-initiated leave/end (which released the
+            // lease + marked ended): nothing to do. Without this guard a racing
+            // collector emission would double-handle teardown.
+            if (call.ended) return@withOp
+            // If the call still holds the registry-owned foreground lease, release it
+            // (the session reset never touched it) and drop the active slot. NO
+            // auto-promote (Core Invariant 5). A held call has no token: skip both.
+            call.foregroundToken?.let { token ->
+                runCatching { ForegroundMediaArbiter.releaseLease(token) }
+                call.foregroundToken = null
+            }
+            // Mark ended/non-live: excluded from "live" counts, dismissable, role view
+            // collapses to held. teardownCall also stops the collector and releases
+            // REGISTRY mode when no live call remains, then publishes.
+            teardownCall(call)
+        }
     }
 
     /**
