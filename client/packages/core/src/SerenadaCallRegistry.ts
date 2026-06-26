@@ -378,7 +378,10 @@ export class SerenadaCallRegistry {
         // Already established / failed (synchronous fakes settle immediately).
         const settled = this.joinSettlement(session.state.phase);
         if (settled === 'joined') return null;
-        if (settled === 'failed') return this.markJoinFailed(call, 'Room join failed');
+        if (settled === 'failed') {
+            const error = this.makeError('joinFailed', session.state.error?.message ?? 'Room join failed');
+            return this.recordJoinFailure(call, error);
+        }
 
         const error = await new Promise<CallActivationError | null>((resolve) => {
             let done = false;
@@ -399,18 +402,8 @@ export class SerenadaCallRegistry {
             });
         });
 
-        if (error) {
-            this.applyCallError(call, error);
-            call.joinFailed = true;
-            // FIX F: a failed held join makes this call non-live. If it was the
-            // only call, the registry must release its `'registry'` owning-mode
-            // claim — otherwise a single failed join wedges the process in
-            // registry mode forever and every later direct `SerenadaCore.join()`
-            // fails with ForegroundLeaseUnavailable.
-            this.releaseModeIfIdle();
-            this.publish();
-        }
-        return error;
+        if (!error) return null;
+        return this.recordJoinFailure(call, error);
     }
 
     private joinSettlement(phase: CallPhase): 'joined' | 'failed' | 'pending' {
@@ -419,12 +412,17 @@ export class SerenadaCallRegistry {
         return 'pending';
     }
 
-    private markJoinFailed(call: ManagedCall, message: string): CallActivationError {
-        const error = this.makeError('joinFailed', call.session.state.error?.message ?? message);
+    /**
+     * Record a terminal held-join failure: surface the error per-call, mark the
+     * call non-live, and publish. FIX F: a failed held join makes this call
+     * non-live, so if it was the only call the registry must release its
+     * `'registry'` owning-mode claim — otherwise a single failed join wedges the
+     * process in registry mode forever and every later direct
+     * `SerenadaCore.join()` fails with ForegroundLeaseUnavailable.
+     */
+    private recordJoinFailure(call: ManagedCall, error: CallActivationError): CallActivationError {
         this.applyCallError(call, error);
         call.joinFailed = true;
-        // FIX F: see awaitHeldJoin — release the owning mode if this was the last
-        // live call so a failed join does not wedge the process in registry mode.
         this.releaseModeIfIdle();
         this.publish();
         return error;
@@ -519,19 +517,16 @@ export class SerenadaCallRegistry {
             // 3. roll back to old by default, under a FRESH generation.
             if (old) {
                 const rollbackError = await this.rollbackToOld(old);
-                if (!rollbackError) {
-                    this.setLastError(activationError);   // recoverable: surfaced on next
-                    this.publish();
-                    return { kind: 'failed', error: activationError };
+                if (rollbackError) {
+                    // Rollback also failed: no foreground owner; surface both.
+                    this.activeCallId = null;
+                    old.activationError = rollbackError;
                 }
-                // Rollback also failed: no foreground owner; surface both.
+                // else: rollback re-foregrounded old (activeCallId = old.id, set by
+                // rollbackToOld); the failure is recoverable, surfaced on next.
+            } else {
                 this.activeCallId = null;
-                old.activationError = rollbackError;
-                this.setLastError(activationError);
-                this.publish();
-                return { kind: 'failed', error: activationError };
             }
-            this.activeCallId = null;
             this.setLastError(activationError);
             this.publish();
             return { kind: 'failed', error: activationError };

@@ -657,7 +657,7 @@ public final class SerenadaCallRegistry: ObservableObject {
         // 0. PREFLIGHT inside the queued op, BEFORE touching the old call
         //    (Core Invariant 4). needsPermission → return, old untouched.
         if next.managedSession.preflightForeground() == .needsPermission {
-            let missing = missingDesiredPermissions(next.managedSession)
+            let missing = next.managedSession.missingDesiredForegroundPermissions()
             next.activationError = .needsPermission(missing)
             await publish()
             return .needsPermission
@@ -731,20 +731,13 @@ public final class SerenadaCallRegistry: ObservableObject {
                 next.foregroundToken = nil
             }
             next.activationError = activationError
+            lastError = .callFailed(next.id, activationError)
             // 3. Roll back to OLD under a FRESH generation (switch-failure rolls back).
+            //    On success `rollbackToOld` restores `activeCallId = old.id`; if it
+            //    fails (or there was no old call) there is no foreground owner, so
+            //    `activeCallId` stays nil (set at the start of the activation step).
             if let old {
-                let rollbackOk = await rollbackToOld(old)
-                if rollbackOk {
-                    lastError = .callFailed(next.id, activationError)
-                    await publish()
-                    return .failed(activationError)
-                }
-                // Rollback also failed: no foreground owner; surface both.
-                activeCallId = nil
-                lastError = .callFailed(next.id, activationError)
-            } else {
-                activeCallId = nil
-                lastError = .callFailed(next.id, activationError)
+                _ = await rollbackToOld(old)
             }
             await publish()
             return .failed(activationError)
@@ -1023,15 +1016,6 @@ public final class SerenadaCallRegistry: ObservableObject {
             if condition() { return true }
         }
         return condition()
-    }
-
-    // MARK: - Permission helpers
-
-    /// The mic/camera capabilities the session's DESIRED media needs that are not
-    /// granted, for the `CallActivationError.needsPermission` payload. Mirrors
-    /// `preflightForeground`'s decision.
-    private func missingDesiredPermissions(_ session: RegistryManagedSession) -> [MediaCapability] {
-        session.missingDesiredForegroundPermissions()
     }
 
     // MARK: - Publishing

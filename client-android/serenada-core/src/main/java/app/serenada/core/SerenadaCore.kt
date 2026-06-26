@@ -158,7 +158,7 @@ class SerenadaCore(
             is RoomRef.Id -> {
                 resolvedRoomId = room.roomId
                 serverHostForConfig = room.serverHost ?: resolvedConfig.serverHost
-                resolvedRoomUrl = serverHostForConfig?.let { buildRoomUrl(room.serverHost ?: it, room.roomId) }
+                resolvedRoomUrl = serverHostForConfig?.let { host -> buildRoomUrl(host, room.roomId) }
             }
         }
         val sessionConfig = sessionConfigFor(serverHostForConfig)
