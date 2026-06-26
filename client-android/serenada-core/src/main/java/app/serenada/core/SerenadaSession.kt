@@ -2860,7 +2860,7 @@ class SerenadaSession internal constructor(
         // Foreground actual reflects the effective publish state (FIX A-4: keep
         // actual* in sync on foreground toggles, not only at start/resume/hold).
         actualAudioPublished = enginePublishedAudio
-        updateState(_state.value.copy(localAudioEnabled = effectiveEnabled))
+        updateState(_state.value.copy(localAudioEnabled = enginePublishedAudio))
         _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
         _isMicMutedByExternalAudio.value = externalAudioMuted
         if (sessionActivated) {

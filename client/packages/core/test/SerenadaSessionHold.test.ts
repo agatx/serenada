@@ -447,6 +447,12 @@ describe('SerenadaSession hold/resume primitives', () => {
 
         // Foreground enable-video must REACQUIRE the camera.
         harness.session.setVideoEnabled(true);
+
+        // P2 transient fix: `actualVideoPublished` must NOT report published video
+        // before the reacquire resolves and a track is flowing. Synchronously after
+        // the call (swap still pending) it stays false.
+        expect(harness.session.currentActualVideoPublished).toBe(false);
+
         await vi.advanceTimersByTimeAsync(0);
 
         expect(harness.media.reacquireVideoTrackCalls).toBe(reacquireBefore + 1);
@@ -454,6 +460,8 @@ describe('SerenadaSession hold/resume primitives', () => {
         const payload = lastMediaStateBroadcast(harness);
         expect(payload?.videoEnabled).toBe(true);
         expect(payload?.held).toBe(false);
+        // Once the swap resolved and the track is flowing, it derives true from the
+        // actually-reacquired track.
         expect(harness.session.currentActualVideoPublished).toBe(true);
     });
 

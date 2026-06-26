@@ -1231,13 +1231,23 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.userPreferredVideoEnabled = newEnabled;
             // Update desired intent so a later hold/resume restores it correctly.
             this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
-            this.actualVideoPublished = newEnabled;
+            // Enabling reacquires a track asynchronously: keep `actualVideoPublished`
+            // false until the swap resolves so the field never reports published
+            // video before a track is flowing. The eventual wire broadcast below is
+            // already track-backed. Disabling can settle synchronously. Mirrors the
+            // audio reacquire path's `actualAudioPublished` derivation.
+            if (!newEnabled) {
+                this.actualVideoPublished = false;
+            }
             const swap = newEnabled ? this.media.reacquireVideoTrack() : this.media.releaseVideoTrack();
             void swap.then(() => {
-                if (!this.isInactive) {
-                    this.broadcastLocalMediaState();
-                    this.rebuildState();
+                if (this.isInactive) return;
+                if (newEnabled) {
+                    const reacquired = this.media.localStream?.getVideoTracks()[0];
+                    this.actualVideoPublished = !!reacquired && reacquired.enabled;
                 }
+                this.broadcastLocalMediaState();
+                this.rebuildState();
             });
             this.rebuildState();
         } else {

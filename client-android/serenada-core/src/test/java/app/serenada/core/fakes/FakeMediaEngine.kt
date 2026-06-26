@@ -82,6 +82,13 @@ internal class FakeMediaEngine : SessionMediaEngine {
     var micCaptureRecreateCount = 0
         private set
 
+    // Simulates a failed mic ACQUIRE: when true, an enabling toggleAudio(true)
+    // cannot (re)create the capture track and reports the effective state as
+    // false (no live track). Mirrors the real engine returning false when the OS
+    // denies/loses the mic. Lets a test assert the broadcast/published audio
+    // state never reports live audio that isn't actually captured (FIX P5).
+    var failMicAcquire = false
+
     // FIX P5 model: whether the engine currently holds a live camera CAPTURE
     // track. Mirrors the real WebRtcEngine: startLocalMedia/resume(camera) create
     // it, suspend + resume-camera-off release it. A FOREGROUND enable with no
@@ -129,6 +136,12 @@ internal class FakeMediaEngine : SessionMediaEngine {
     }
     override fun toggleAudio(enabled: Boolean): Boolean {
         toggleAudioCalls.add(enabled)
+        // Simulated acquire failure: an enable cannot obtain a live mic track, so
+        // the effective state is false (no recreate, no live track).
+        if (enabled && failMicAcquire) {
+            micCaptureTrackPresent = false
+            return false
+        }
         // FIX P5: a FOREGROUND enable with no live mic track (re)creates + attaches
         // it before publishing — mirrors the real engine ensuring the track exists.
         // When the track already exists this is a plain setEnabled (no recreate),

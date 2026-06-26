@@ -596,6 +596,48 @@ class HoldResumeTest {
     }
 
     @Test
+    fun `foreground unmute that fails to acquire the mic publishes audio false not true`() {
+        // FIX P5 (broadcast leg): updateEffectiveMicState must publish the
+        // ENGINE-effective audio state (a live track), never the merely-desired
+        // effective state. When toggleAudio(true) fails to acquire the mic (OS
+        // denies/loses it, returns false), the local state — which feeds
+        // broadcastLocalMediaState — must report audioEnabled=false, so peers and
+        // the UI never see live audio over a null track.
+        startInCall()
+        // Start muted so the unmute is the acquiring toggle, then arm the failure.
+        factory.session.setMicMuted(true)
+        ShadowLooper.idleMainLooper()
+        factory.fakeMedia.failMicAcquire = true
+        val broadcastsBefore = mediaStateBroadcasts().size
+
+        // Foreground unmute: toggleAudio(true) returns false (acquire failed).
+        factory.session.setMicMuted(false)
+        ShadowLooper.idleMainLooper()
+
+        // Engine reports the track is not live.
+        assertFalse(
+            "a failed acquire must leave the mic capture released",
+            factory.fakeMedia.micCaptureTrackPresent,
+        )
+        // Published local audio must reflect the engine state, not the intent.
+        assertFalse(
+            "localAudioEnabled must be false when the mic acquire fails",
+            factory.session.state.value.localAudioEnabled,
+        )
+        assertFalse(
+            "actualAudioPublished must be false when the mic acquire fails",
+            factory.session.actualAudioPublishedForTest(),
+        )
+        // The broadcast (sourced from localAudioEnabled) must carry audioEnabled=false.
+        val broadcasts = mediaStateBroadcasts()
+        assertTrue("the unmute attempt must broadcast media state", broadcasts.size > broadcastsBefore)
+        assertFalse(
+            "the broadcast must not report live audio over a null track",
+            broadcasts.last().payload!!.getBoolean("audioEnabled"),
+        )
+    }
+
+    @Test
     fun `camera-off-resume then foreground video-on recreates and attaches the video track before publishing`() {
         // FIX P5: a held call whose camera was OFF resumes camera-off with the
         // video track released. A later FOREGROUND video-on (toggleVideo ->
