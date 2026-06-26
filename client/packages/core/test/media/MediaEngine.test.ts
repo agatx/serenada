@@ -214,6 +214,10 @@ class FakeMediaStream {
         this.tracks.push(track);
     }
 
+    removeTrack(track: MediaStreamTrack): void {
+        this.tracks = this.tracks.filter(t => t !== track);
+    }
+
     getAudioTracks(): MediaStreamTrack[] {
         return this.tracks.filter(track => track.kind === 'audio');
     }
@@ -2190,6 +2194,107 @@ describe('MediaEngine', () => {
                 streams: [createMediaStream({ audio: true })],
             } as unknown as RTCTrackEvent);
             expect(liveTrack.enabled).toBe(true);
+
+            engine.destroy();
+        });
+
+        // Core Invariant 2: a held call owns NO capture via ANY path. A
+        // devicechange (preferred-route change) would normally reacquire the mic
+        // via `refreshLocalAudioTrack`. After hold, the local stream is empty (but
+        // non-null), so without the held guard the route refresh would call
+        // `getUserMedia` and restart capture on a held call. This is the Web
+        // analog of the Android non-toggle reacquire gap.
+        it('does NOT reacquire the mic on a device change while held', async () => {
+            const initialStream = createMediaStream({ audioSettings: { deviceId: 'built-in-mic', groupId: 'built-in' } });
+            const refreshedStream = createMediaStream({ audioSettings: { deviceId: 'bt-mic', groupId: 'bluetooth' } });
+            const getUserMedia = vi.fn()
+                .mockResolvedValueOnce(initialStream)
+                .mockResolvedValueOnce(refreshedStream);
+            // A route change that WOULD trigger a refresh if not held: the default
+            // output flips to the bluetooth group so the preferred input changes.
+            let route: 'built-in' | 'bluetooth-output' = 'built-in';
+            const enumerateDevices = vi.fn().mockImplementation(async () => {
+                const outputGroup = route === 'bluetooth-output' ? 'bluetooth' : 'built-in';
+                return [
+                    createMediaDevice('audioinput', 'default', 'built-in', 'Default - MacBook Pro Microphone'),
+                    createMediaDevice('audioinput', 'built-in-mic', 'built-in', 'MacBook Pro Microphone'),
+                    createMediaDevice('audioinput', 'bt-mic', 'bluetooth', 'Headset Microphone'),
+                    createMediaDevice('audiooutput', 'default', outputGroup, 'Default - Output'),
+                    createMediaDevice('audiooutput', 'built-in-speakers', 'built-in', 'MacBook Pro Speakers'),
+                    createMediaDevice('audiooutput', 'bt-speakers', 'bluetooth', 'Headset'),
+                ];
+            });
+            let deviceChangeHandler: (() => void) | undefined;
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        enumerateDevices,
+                        addEventListener: vi.fn((event: string, handler: () => void) => {
+                            if (event === 'devicechange') {
+                                deviceChangeHandler = handler;
+                            }
+                        }),
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+            const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+            engine.updateRoomState({
+                hostCid: 'me',
+                participants: [{ cid: 'me' }, { cid: 'peer-1' }],
+            }, 'me');
+            await engine.startLocalMedia();
+            expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+            // Hold: release capture. The stream is now empty (non-null).
+            await engine.suspendLocalMediaForHold();
+            expect(engine.localStream?.getAudioTracks()[0]).toBeUndefined();
+
+            // A device-change fires while held. It must NOT reacquire the mic.
+            route = 'bluetooth-output';
+            deviceChangeHandler?.();
+            await flushPromises();
+            expect(getUserMedia).toHaveBeenCalledTimes(1);
+            expect(engine.localStream?.getAudioTracks()[0]).toBeUndefined();
+
+            // Resume reacquires the mic per desired intent (sink unblocked).
+            await engine.resumeLocalMediaFromHold(true, 'off');
+            expect(getUserMedia).toHaveBeenCalledTimes(2);
+            expect(engine.localStream?.getAudioTracks().length).toBe(1);
+
+            engine.destroy();
+        });
+
+        // Defense in depth for the offer-driven reacquire: `applyRemoteOffer`
+        // calls `startLocalMedia` when `localStream` is null. A held call must not
+        // restart `getUserMedia` from that path.
+        it('startLocalMedia is a no-op while held (offer-driven reacquire guard)', async () => {
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream());
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        enumerateDevices: vi.fn().mockResolvedValue([]),
+                        addEventListener() {},
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+            const engine = new MediaEngine({ initialVideoEnabled: false }, () => {});
+            await engine.startLocalMedia();
+            expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+            await engine.suspendLocalMediaForHold();
+            // Force the null-stream branch the offer path can hit while held.
+            engine.stopLocalMedia();
+            expect(engine.localStream).toBeNull();
+
+            const result = await engine.startLocalMedia();
+            expect(result).toBeNull();
+            expect(getUserMedia).toHaveBeenCalledTimes(1);
 
             engine.destroy();
         });

@@ -697,11 +697,26 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
-    private func updateEffectiveMicState() {
+    // `internal` (not `private`) so hold/resume tests can drive this media SINK
+    // directly while held — the audio-environment callbacks that normally reach it
+    // are `sessionActivated`-gated, so a faithful held-guard test invokes the sink.
+    internal func updateEffectiveMicState() {
         // `userMuted` is the user's intent; record it so a hold/resume can
         // restore it. (Route loss or external audio gate the *effective* state
         // below without changing intent.)
         desiredAudioEnabled = !userMuted
+        // Core Invariant 2: a held call owns NO capture. This is the mic SINK —
+        // reached not only from the user toggle (`setMicMuted`, already guarded)
+        // but also from audio-environment callbacks (route change, external-audio
+        // start/end, audio-session restart). Those must NOT re-enable mic capture
+        // on a held call. Mirror the held branch of `applyLocalVideoPreference`:
+        // record desired intent + public mute flags ONLY; touch no engine track,
+        // keep `actual*`/local audioEnabled false, and broadcast nothing. Resume
+        // (`completeForegroundActivation`) re-derives `actual*`/broadcast.
+        guard mediaRole != .held else {
+            updateDesiredAudioWhileHeld()
+            return
+        }
         let effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
         if sessionActivated {
             webRtcEngine.toggleAudio(effectiveEnabled)
@@ -2242,7 +2257,9 @@ public final class SerenadaSession: ObservableObject {
 
     // MARK: - Video & Audio
 
-    private func applyLocalVideoPreference() {
+    // `internal` (not `private`) so hold/resume tests can drive this media SINK
+    // directly while held (parity with the mic sink + Android test hooks).
+    internal func applyLocalVideoPreference() {
         // Record desired video intent (mode when on, nil when off) so resume can
         // restore it. Proximity pause is transient and does not change intent.
         desiredVideoMode = userPreferredVideoEnabled ? state.localParticipant.cameraMode : nil

@@ -573,6 +573,21 @@ class SerenadaSession internal constructor(
 
     /** Test-only accessor: actual published video (false while held). */
     internal fun actualVideoPublishedForTest(): Boolean = actualVideoPublished
+
+    /**
+     * Test-only: invoke the video sink the audio-environment callbacks (proximity
+     * / route change) reach. Lets a test assert the held SINK guard refuses to
+     * restart camera capture via the indirect path (FIX A-2), independent of how
+     * the real coordinator fires the callback.
+     */
+    internal fun applyLocalVideoPreferenceForTest() = applyLocalVideoPreference()
+
+    /**
+     * Test-only: invoke the mic sink the audio-environment callbacks reach. Lets a
+     * test assert a held call cannot re-enable mic capture via an audio-environment
+     * callback (FIX A-2 audit).
+     */
+    internal fun updateEffectiveMicStateForTest() = updateEffectiveMicState()
     private val isMediaEngineInjected = mediaEngine != null
     // Owned at the session level so that engine recreation (or release on call end) does not
     // invalidate the EglBase.Context handed to Compose AndroidView factories. Releasing the
@@ -966,6 +981,21 @@ class SerenadaSession internal constructor(
         // While held, `localVideoEnabled` is false (no capture); toggle relative to
         // the desired intent so a held toggle flips the intent applied on resume.
         val requestedEnabled = if (isHeld) desiredVideoMode == null else !_state.value.localVideoEnabled
+        // While held this session owns no capture (Core Invariant 2): handle held
+        // FIRST — record the desired intent ONLY, with NO permission prompt, NO
+        // camera restart, NO broadcast. Resume applies the latest intent (and
+        // prompts for camera permission then if still needed). Requesting
+        // permission here would surface a prompt for a call that owns no media and
+        // could return before recording the user's intent (FIX A-1).
+        if (isHeld) {
+            userPreferredVideoEnabled = requestedEnabled
+            desiredVideoMode = if (requestedEnabled) {
+                webRtcEngine.activeCameraMode() ?: _state.value.localCameraMode
+            } else {
+                null
+            }
+            return
+        }
         if (requestedEnabled && !hasCameraPermission() && !_diagnostics.value.isScreenSharing) {
             requestPermissions(listOf(MediaCapability.CAMERA))
             return
@@ -978,9 +1008,6 @@ class SerenadaSession internal constructor(
         } else {
             null
         }
-        // While held this session owns no capture (Core Invariant 2): record the
-        // desired intent ONLY — no camera restart, no broadcast. Resume applies it.
-        if (isHeld) return
         applyLocalVideoPreference()
         broadcastLocalMediaState()
     }
@@ -1510,10 +1537,14 @@ class SerenadaSession internal constructor(
      */
     private suspend fun suspendForegroundMediaResources() {
         // 1. Stop screen share first (foreground-only; not restored on resume).
+        //    Broadcast content_state:false after the engine stop succeeds so peers
+        //    don't retain stale active content while we go held — the normal
+        //    stopScreenShare() path does the same (FIX A-3).
         runCatching {
             if (_diagnostics.value.isScreenSharing) {
                 webRtcEngine.stopScreenShare()
                 updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
+                broadcastLocalContentState(false)
             }
         }
         // 2. Release local capture (mic + camera) — capture actually stops.
@@ -2655,10 +2686,27 @@ class SerenadaSession internal constructor(
     }
 
     private fun applyLocalVideoPreference() {
+        // Core Invariant 2: a held call owns NO capture via ANY path. This sink is
+        // reachable from the audio-environment callbacks (proximity / route
+        // changes) which fire independently of the user-toggle guards, so guard
+        // HERE (the media-applying sink), not only at the toggle entry points. Keep
+        // the desired intent (set by the toggles), force local/actual video false,
+        // and return WITHOUT calling the engine or broadcasting. Resume
+        // (applyForegroundRoleInternal) reacquires per the desired mode (FIX A-2).
+        if (isHeld) {
+            actualVideoPublished = false
+            if (_state.value.localVideoEnabled || _state.value.localCameraEnabled) {
+                updateState(_state.value.copy(localVideoEnabled = false, localCameraEnabled = false))
+            }
+            return
+        }
         val shouldPause = callAudioSessionController.shouldPauseVideoForProximity(_diagnostics.value.isScreenSharing)
         isVideoPausedByProximity = shouldPause
         val requestedEnabled = userPreferredVideoEnabled && !shouldPause
         val effectiveEnabled = webRtcEngine.toggleVideo(requestedEnabled)
+        // Foreground actual reflects the effective capture state (FIX A-4: keep
+        // actual* in sync on foreground toggles, not only at start/resume/hold).
+        actualVideoPublished = effectiveEnabled
         if (_state.value.localVideoEnabled != effectiveEnabled) {
             // `localVideoEnabled` remains the camera-specific public signal in
             // independent mode; `localContent` carries screen-share state.
@@ -2786,10 +2834,26 @@ class SerenadaSession internal constructor(
     }
 
     private fun updateEffectiveMicState() {
+        // Core Invariant 2: a held call owns NO mic capture via ANY path. This sink
+        // is reachable from the audio-environment callbacks (route loss / external
+        // audio), so guard HERE — a held call's `sessionActivated` is already false
+        // (capture stays released, no broadcast), and this explicit branch also
+        // forces `actualAudioPublished` false and keeps the public mute flags in
+        // sync without ever re-enabling capture (FIX A-2 audit). Resume re-derives
+        // the effective state once foreground.
+        if (isHeld) {
+            actualAudioPublished = false
+            _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
+            _isMicMutedByExternalAudio.value = externalAudioMuted
+            return
+        }
         val effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
         if (sessionActivated) {
             webRtcEngine.toggleAudio(effectiveEnabled)
         }
+        // Foreground actual reflects the effective publish state (FIX A-4: keep
+        // actual* in sync on foreground toggles, not only at start/resume/hold).
+        actualAudioPublished = sessionActivated && effectiveEnabled
         updateState(_state.value.copy(localAudioEnabled = effectiveEnabled))
         _isMicMuted.value = userMuted || externalAudioMuted || !routeInputAvailable
         _isMicMutedByExternalAudio.value = externalAudioMuted

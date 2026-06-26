@@ -211,6 +211,16 @@ export class MediaEngine {
     private destroyed = false;
     private cameraRecoveryInFlight = false;
     private audioRecoveryInFlight = false;
+    // True while the call is HELD (Core Invariant 2: a held call owns NO
+    // capture). Set by `suspendLocalMediaForHold`, cleared by
+    // `resumeLocalMediaFromHold` BEFORE it reacquires. While set, every
+    // non-resume capture sink (device-change audio refresh, video stall
+    // recovery, the offer-driven `startLocalMedia` reacquire) is a no-op, so a
+    // delayed devicechange/visibility/offer callback cannot restart `getUserMedia`
+    // on a held call. The user-toggle and resume sinks are guarded in the session
+    // (see `setTrackEnabled` / `resumeForeground`); this is the engine-level
+    // backstop for paths the session can't gate.
+    private heldNoCapture = false;
     private localMediaStartPromise: Promise<MediaStream | null> | null = null;
     private mediaRequestId = 0;
     private retryingTimer: number | null = null;
@@ -392,6 +402,11 @@ export class MediaEngine {
 
     async startLocalMedia(): Promise<MediaStream | null> {
         if (this.localStream) return this.localStream;
+        // Core Invariant 2: a held call owns NO capture. The offer-driven
+        // reacquire (`applyRemoteOffer`, which calls this when `localStream` is
+        // null) must not start `getUserMedia` while held. Resume reacquires via
+        // the dedicated `resumeLocalMediaFromHold` sinks, not this path.
+        if (this.heldNoCapture) return null;
         if (this.localMediaStartPromise) return this.localMediaStartPromise;
         const startPromise = this.startLocalMediaInternal();
         this.localMediaStartPromise = startPromise;
@@ -561,6 +576,10 @@ export class MediaEngine {
      * left intact so resume can re-attach fresh tracks with no renegotiation.
      */
     async suspendLocalMediaForHold(): Promise<void> {
+        // Latch held FIRST so any non-resume capture sink that fires during/after
+        // the release (a devicechange settle timer, visibility resume, or an
+        // inbound offer) is a no-op rather than reacquiring `getUserMedia`.
+        this.heldNoCapture = true;
         if (this.isScreenSharing) {
             await this.stopScreenShare();
         }
@@ -580,6 +599,10 @@ export class MediaEngine {
      * the common path).
      */
     async resumeLocalMediaFromHold(desiredAudio: boolean, desiredVideoMode: VideoMode): Promise<void> {
+        // Clear the held latch BEFORE reacquiring so resume's own capture sinks
+        // are not blocked. The session fences a superseded/failed resume and
+        // re-suspends (re-latching held) via `suspendLocalMediaForHold`.
+        this.heldNoCapture = false;
         if (desiredAudio) {
             await this.reacquireLocalAudioCapture();
         }
@@ -2553,6 +2576,13 @@ export class MediaEngine {
     }
 
     private async refreshLocalAudioTrack(reason: string, devices?: MediaDeviceInfo[] | null, updatePeers = true): Promise<boolean> {
+        // Core Invariant 2: a held call owns NO capture. A devicechange (or its
+        // settle timer) must not reacquire the mic — after hold the stream is
+        // empty (non-null), so without this guard a default-route change would
+        // call `getUserMedia` and restart capture on a held call.
+        if (this.heldNoCapture) {
+            return false;
+        }
         const currentAudioTrack = this.localStream?.getAudioTracks()[0] ?? null;
         if (!this.localStream) {
             return false;
@@ -2748,6 +2778,13 @@ export class MediaEngine {
     }
 
     private async refreshLocalVideoTrack(reason: string, forceRefresh = false): Promise<boolean> {
+        // Core Invariant 2: a held call owns NO capture. A visibility/pageshow/
+        // sleep-resume must not reacquire the camera while held. (After hold there
+        // is normally no video track, which `shouldRecoverLocalVideo` already
+        // declines; this is the explicit backstop for the held state.)
+        if (this.heldNoCapture) {
+            return false;
+        }
         const currentVideoTrack = this.localStream?.getVideoTracks()[0] ?? null;
         const shouldRecover = shouldRecoverLocalVideo({
             hasVideoTrack: !!currentVideoTrack,

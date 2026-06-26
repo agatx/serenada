@@ -631,6 +631,110 @@ final class HoldResumeTests: XCTestCase {
                        "Resume's single broadcast must be held:false (no intermediate held:true after capture reacquired)")
         harness.tearDown()
     }
+
+    // MARK: - FIX N4: media-SINK held guard (non-toggle reacquire while held)
+
+    /// Core Invariant 2: a held call owns NO capture via ANY path. The user
+    /// toggles (`setMicMuted`/`setVideoEnabled`) are guarded, but the engine SINKS
+    /// (`updateEffectiveMicState` → `toggleAudio`, `applyLocalVideoPreference` →
+    /// `toggleVideo`) are ALSO reached from audio-environment callbacks (proximity
+    /// / route change / external-audio start-end / audio-session restart) that fire
+    /// OUTSIDE the toggle guards. Those must NOT re-enable mic capture or restart
+    /// camera capture on a held call. The video sink already guards at the sink;
+    /// this asserts the mic sink does too (the iOS equivalent of the Android gap).
+    /// Drives both sinks directly, mirroring the Android `audio-environment callback
+    /// while held` test (the natural callback path is `sessionActivated`-gated, so a
+    /// faithful held-guard test invokes the media-applying sink itself).
+    func testMediaSinksDoNotReacquireCaptureWhileHeld() async {
+        let harness = await makeInCallHarness()
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        // Snapshot engine + broadcast counters AFTER hold settled.
+        let toggleAudioBefore = harness.fakeMedia.toggleAudioCalls.count
+        let toggleVideoBefore = harness.fakeMedia.toggleVideoCalls.count
+        let broadcastsBefore = harness.fakeProvider
+            .broadcastMessages(ofType: "participant_media_state").count
+
+        // Simulate an audio-environment callback reaching BOTH media sinks while
+        // held. An unguarded mic sink would call toggleAudio(true) (desired audio
+        // is on by join default) and reacquire mic capture on the held call.
+        harness.session.applyLocalVideoPreference()
+        harness.session.updateEffectiveMicState()
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.fakeMedia.toggleAudioCalls.count, toggleAudioBefore,
+                       "A media-sink invocation while held must NOT touch the mic track (no capture reacquire)")
+        XCTAssertEqual(harness.fakeMedia.toggleVideoCalls.count, toggleVideoBefore,
+                       "A media-sink invocation while held must NOT restart camera capture")
+        XCTAssertEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").count,
+            broadcastsBefore,
+            "A media-sink invocation while held must NOT broadcast participant_media_state")
+        XCTAssertFalse(harness.session.actualAudioPublished,
+                       "A held call must keep actualAudioPublished false through a sink invocation")
+        XCTAssertFalse(harness.session.actualVideoPublished,
+                       "A held call must keep actualVideoPublished false through a sink invocation")
+        XCTAssertFalse(harness.session.state.localParticipant.audioEnabled,
+                       "A held call must keep local audioEnabled false through a sink invocation")
+        XCTAssertEqual(harness.session.mediaRole, .held,
+                       "A media-sink invocation while held must not leave the held role")
+
+        // Desired intent survives: resume reacquires the mic per the preserved
+        // desired-audio-on intent (the sink did not clobber desiredAudioEnabled).
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        let resume = harness.fakeMedia.resumeLocalMediaFromHoldCalls.first
+        XCTAssertEqual(resume?.audioEnabled, true,
+                       "Resume must reacquire mic per the preserved desired-audio-on intent")
+        harness.tearDown()
+    }
+
+    // MARK: - FIX N5: hold of a screen-sharing call broadcasts content_state:false
+
+    /// Hold stops an active screen share. Stopping must route through the normal
+    /// stop-screenshare path so peers receive `content_state` active:false and
+    /// clear the stale active content (the Android-flagged gap; iOS already routes
+    /// hold's stop through `stopScreenShare()` — this locks that in).
+    func testHoldOfScreenSharingCallBroadcastsContentStateFalse() async {
+        let config = SerenadaConfig(
+            signalingProvider: FakeSignalingProvider(),
+            screenShareMode: .inAppOnly
+        )
+        let harness = SessionTestHarness(config: config)
+        await harness.advanceToInCallWithTurn(
+            localCid: "local",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        // The fake confirms the share start (flips `isScreenSharing` true and emits
+        // content_state active:true), modeling a real in-progress screen share.
+        harness.fakeMedia.startScreenShareResult = true
+        harness.session.startScreenShare()
+        await waitUntil { harness.session.diagnostics.isScreenSharing }
+        XCTAssertTrue(harness.session.diagnostics.isScreenSharing,
+                      "Screen share must be active before hold")
+        let contentBefore = harness.fakeProvider.broadcastMessages(ofType: "content_state").count
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        // Hold's `stopScreenShare()` fires the engine's `onScreenShareStopped`
+        // callback on a `@MainActor` Task, which clears `isScreenSharing` and emits
+        // the content_state:false broadcast — wait for that async stop to land.
+        await waitUntil { !harness.session.diagnostics.isScreenSharing }
+
+        let contentStates = harness.fakeProvider.broadcastMessages(ofType: "content_state")
+        XCTAssertGreaterThan(contentStates.count, contentBefore,
+                             "Hold of a screen-sharing call must broadcast content_state")
+        XCTAssertEqual(contentStates.last?.payload?["active"]?.boolValue, false,
+                       "Hold must broadcast content_state active:false so peers clear stale content")
+        XCTAssertFalse(harness.session.diagnostics.isScreenSharing,
+                       "Hold must clear the screen-sharing diagnostic")
+        harness.tearDown()
+    }
 }
 
 /// Test audio coordinator whose `activateCallSession` can be PAUSED so a test can

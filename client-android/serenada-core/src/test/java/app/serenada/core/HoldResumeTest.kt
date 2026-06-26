@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -368,6 +369,179 @@ class HoldResumeTest {
         assertTrue(
             "resume must emit no held=true after capture is reacquired",
             resumeBroadcasts.none { it.payload?.optBoolean("held") == true },
+        )
+    }
+
+    @Test
+    fun `toggleVideo on while held does not request permission and records desired only`() {
+        // FIX A-1: while held this session owns no capture (Core Invariant 2).
+        // Toggling video ON must handle held FIRST — record the desired intent
+        // ONLY, with NO permission prompt, NO camera restart, NO broadcast. The
+        // previous order checked/requested camera permission BEFORE the held guard,
+        // which could surface a prompt and return before recording intent.
+        startInCall()
+        // Force video OFF intent first so the toggle requests ON.
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+        assertNull("video intent should be off before re-enabling", factory.session.desiredVideoModeForTest())
+
+        hold()
+
+        // Revoke camera permission so the PRE-FIX order (permission check before
+        // the held guard) would have surfaced a prompt here. The held-first guard
+        // must skip it entirely.
+        org.robolectric.Shadows.shadowOf(org.robolectric.RuntimeEnvironment.getApplication())
+            .denyPermissions(android.Manifest.permission.CAMERA)
+
+        val toggleVideoBefore = factory.fakeMedia.toggleVideoCalls.size
+        val broadcastsBefore = mediaStateBroadcasts().size
+        var permissionsRequested = false
+        factory.session.onPermissionsRequired = { permissionsRequested = true }
+
+        // Toggle video ON while held.
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+
+        assertFalse(
+            "toggleVideo while held must NOT request camera permission",
+            permissionsRequested,
+        )
+        assertEquals(
+            "toggleVideo while held must NOT restart camera capture",
+            toggleVideoBefore,
+            factory.fakeMedia.toggleVideoCalls.size,
+        )
+        assertEquals(
+            "toggleVideo while held must NOT broadcast media state",
+            broadcastsBefore,
+            mediaStateBroadcasts().size,
+        )
+        // Desired intent IS recorded (resume will apply it).
+        assertNotNull(
+            "toggleVideo while held must record the desired video intent",
+            factory.session.desiredVideoModeForTest(),
+        )
+        assertEquals(CallMediaRole.HELD, factory.session.mediaRoleForTest())
+    }
+
+    @Test
+    fun `audio-environment callback while held does not restart camera or re-enable mic`() {
+        // FIX A-2: the media-applying sinks (applyLocalVideoPreference /
+        // updateEffectiveMicState) are reachable from audio-environment callbacks
+        // (proximity / route change) that fire OUTSIDE the user-toggle guards. A
+        // held call must own NO capture via ANY path — the sink itself must refuse
+        // to restart camera capture or re-enable mic capture while held.
+        startInCall()
+        hold()
+
+        val toggleVideoBefore = factory.fakeMedia.toggleVideoCalls.size
+        val toggleAudioBefore = factory.fakeMedia.toggleAudioCalls.size
+        val broadcastsBefore = mediaStateBroadcasts().size
+
+        // Simulate an audio-environment callback reaching both sinks while held.
+        factory.session.applyLocalVideoPreferenceForTest()
+        factory.session.updateEffectiveMicStateForTest()
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(
+            "held audio-environment callback must NOT restart camera capture",
+            toggleVideoBefore,
+            factory.fakeMedia.toggleVideoCalls.size,
+        )
+        assertEquals(
+            "held audio-environment callback must NOT re-enable mic capture",
+            toggleAudioBefore,
+            factory.fakeMedia.toggleAudioCalls.size,
+        )
+        assertEquals(
+            "held audio-environment callback must NOT broadcast media state",
+            broadcastsBefore,
+            mediaStateBroadcasts().size,
+        )
+        assertFalse(
+            "actual published video must stay false while held",
+            factory.session.actualVideoPublishedForTest(),
+        )
+        assertFalse(
+            "actual published audio must stay false while held",
+            factory.session.actualAudioPublishedForTest(),
+        )
+    }
+
+    @Test
+    fun `hold of a screen-sharing call emits content_state false to peers`() {
+        // FIX A-3: hold stops an active screen share but previously never broadcast
+        // content_state:false, so peers retained stale active content. Hold must
+        // emit content_state:false (the normal stopScreenShare path) during hold.
+        startInCall()
+        factory.session.startScreenShare(android.content.Intent())
+        ShadowLooper.idleMainLooper()
+        assertTrue(
+            "screen share should be active before hold",
+            factory.session.diagnostics.value.isScreenSharing,
+        )
+        val contentBefore = factory.fakeProvider.sentMessages("content_state").size
+
+        hold()
+
+        val contentStates = factory.fakeProvider.sentMessages("content_state")
+        assertTrue(
+            "hold of a screen-sharing call must broadcast content_state",
+            contentStates.size > contentBefore,
+        )
+        assertEquals(
+            "hold must broadcast content_state active:false",
+            false,
+            contentStates.last().payload?.optBoolean("active"),
+        )
+        assertFalse(
+            "hold must clear the screen-sharing diagnostic",
+            factory.session.diagnostics.value.isScreenSharing,
+        )
+    }
+
+    @Test
+    fun `actual published reflects effective foreground state after a toggle`() {
+        // FIX A-4: actual* were only updated at start/resume/hold. A foreground
+        // mic/video toggle must keep actual* in sync with the effective state.
+        startInCall()
+        // Foreground, video on: actualVideoPublished tracks the camera. (Audio's
+        // effective state depends on the route, so assert actual* == effective
+        // local state rather than a fixed value.)
+        assertTrue(factory.session.actualVideoPublishedForTest())
+        assertEquals(
+            "foreground actualAudioPublished must equal the effective local audio state",
+            factory.session.state.value.localAudioEnabled,
+            factory.session.actualAudioPublishedForTest(),
+        )
+
+        // Toggle the mic: actualAudioPublished stays in sync with effective state.
+        factory.session.setMicMuted(true)
+        ShadowLooper.idleMainLooper()
+        assertEquals(
+            "muting must keep actualAudioPublished in sync with the effective state",
+            factory.session.state.value.localAudioEnabled,
+            factory.session.actualAudioPublishedForTest(),
+        )
+        assertFalse(
+            "a muted foreground mic must not publish audio",
+            factory.session.actualAudioPublishedForTest(),
+        )
+
+        // Turn video off: actualVideoPublished follows to false.
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+        assertFalse(
+            "video off must drop actualVideoPublished",
+            factory.session.actualVideoPublishedForTest(),
+        )
+
+        // Turn video back on: actualVideoPublished follows to true.
+        factory.session.toggleVideo()
+        ShadowLooper.idleMainLooper()
+        assertTrue(
+            "video on must raise actualVideoPublished",
+            factory.session.actualVideoPublishedForTest(),
         )
     }
 
