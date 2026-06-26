@@ -533,6 +533,22 @@ class SerenadaSession internal constructor(
     private var actualAudioPublished: Boolean = false
     private var actualVideoPublished: Boolean = false
 
+    // Monotonic generation bumped for every hold/resume role transition (FIX N2).
+    // A resume captures the generation at its start; if a concurrent hold runs
+    // while resume awaits the (async) audio coordinator, the hold bumps this
+    // counter so the resume re-check detects it was superseded and rolls back to
+    // held instead of committing foreground (stale-activation race fence).
+    // Phase 2 will feed this from the arbiter operation generation.
+    private var mediaOpGeneration: Long = 0
+
+    /**
+     * True while this session owns no foreground media (Core Invariant 2: a held
+     * call owns NO capture). User media toggles consult this to update `desired*`
+     * intent ONLY — no capture, no camera restart, no broadcast — while held.
+     */
+    private val isHeld: Boolean
+        get() = mediaRole == CallMediaRole.HELD
+
     /** Test-only accessor: current media role. */
     internal fun mediaRoleForTest(): CallMediaRole = mediaRole
 
@@ -930,14 +946,19 @@ class SerenadaSession internal constructor(
     /** Toggle local audio on or off. */
     fun toggleAudio() {
         assertMainThread()
-        setMicMuted(!userMuted)
+        // While held, `userMuted` is frozen (no capture); toggle relative to the
+        // desired intent so a held toggle flips the intent applied on resume.
+        val currentlyEnabled = if (isHeld) desiredAudioEnabled else !userMuted
+        setMicMuted(currentlyEnabled)
     }
 
     /** Toggle local video on or off. */
     fun toggleVideo() {
         assertMainThread()
         if (!videoCaptureSupported) return
-        val requestedEnabled = !_state.value.localVideoEnabled
+        // While held, `localVideoEnabled` is false (no capture); toggle relative to
+        // the desired intent so a held toggle flips the intent applied on resume.
+        val requestedEnabled = if (isHeld) desiredVideoMode == null else !_state.value.localVideoEnabled
         if (requestedEnabled && !hasCameraPermission() && !_diagnostics.value.isScreenSharing) {
             requestPermissions(listOf(MediaCapability.CAMERA))
             return
@@ -950,6 +971,9 @@ class SerenadaSession internal constructor(
         } else {
             null
         }
+        // While held this session owns no capture (Core Invariant 2): record the
+        // desired intent ONLY — no camera restart, no broadcast. Resume applies it.
+        if (isHeld) return
         applyLocalVideoPreference()
         broadcastLocalMediaState()
     }
@@ -958,6 +982,16 @@ class SerenadaSession internal constructor(
     fun flipCamera() {
         assertMainThread()
         if (availableCameraModes.size <= 1) return
+        // While held this session owns no camera (Core Invariant 2): advance the
+        // desired camera mode ONLY (no capture, no broadcast) so resume restores
+        // the framing. A held flip with video off is a no-op.
+        if (isHeld) {
+            val current = desiredVideoMode ?: return
+            val idx = availableCameraModes.indexOf(current)
+            if (idx < 0) return
+            desiredVideoMode = availableCameraModes[(idx + 1) % availableCameraModes.size]
+            return
+        }
         val sharing = _diagnostics.value.isScreenSharing
         if (config.enableIndependentContentVideo) {
             // Independent mode: the camera is a separate track, so flipping it
@@ -980,6 +1014,13 @@ class SerenadaSession internal constructor(
     fun setCameraMode(mode: LocalCameraMode) {
         assertMainThread()
         if (mode !in availableCameraModes) return
+        // While held this session owns no camera (Core Invariant 2): record the
+        // desired camera mode ONLY (no capture, no broadcast) so resume restores
+        // it. A held setCameraMode with video off is a no-op (intent stays off).
+        if (isHeld) {
+            if (desiredVideoMode != null) desiredVideoMode = mode
+            return
+        }
         // The session's state copy of the camera mode is posted asynchronously,
         // so flipping in a loop must read the engine-side mode, which flipCamera
         // updates synchronously.
@@ -1428,10 +1469,31 @@ class SerenadaSession internal constructor(
      */
     internal suspend fun applyHeldRoleInternal() {
         assertMainThread()
-        if (mediaRole == CallMediaRole.HELD) return
+        // Bump the op generation FIRST so an in-flight resume that awaits the
+        // async audio coordinator detects supersession on its post-await fence
+        // and rolls back instead of committing foreground (FIX N2).
+        mediaOpGeneration += 1
+        // Idempotent no-op only when fully held AND no resume is mid-flight. While
+        // a resume is ACTIVATING the role is still HELD but foreground resources
+        // are (being) re-acquired, so we must still drive them back down.
+        if (mediaRole == CallMediaRole.HELD && mediaActivationState != MediaActivationState.ACTIVATING) return
         mediaRole = CallMediaRole.HELD
         mediaActivationState = MediaActivationState.INACTIVE
+        suspendForegroundMediaResources()
+        // Broadcast held AFTER capture has stopped (local-stop-then-broadcast).
+        runCatching { broadcastLocalMediaState(held = true) }
+    }
 
+    /**
+     * Tear down all foreground media resources to the fully-held state: stop
+     * screen share, release local capture, deafen remote audio, detach renderers,
+     * deactivate the audio controller + coordinator, release wake locks, pause
+     * pollers, and reflect held in published local state. Does NOT broadcast — the
+     * caller controls broadcast ordering (hold broadcasts held=true; a resume
+     * rollback stays silent). Each step is best-effort (must not throw after a
+     * partial release).
+     */
+    private suspend fun suspendForegroundMediaResources() {
         // 1. Stop screen share first (foreground-only; not restored on resume).
         runCatching {
             if (_diagnostics.value.isScreenSharing) {
@@ -1446,9 +1508,10 @@ class SerenadaSession internal constructor(
         // 4. Detach/pause visible renderers.
         runCatching { webRtcEngine.detachRenderersForHold() }
         // 5. Deactivate the audio controller, then the coordinator (mirror the
-        //    teardown ordering used in resetResources).
+        //    teardown ordering used in resetResources). The coordinator op is the
+        //    awaited async boundary; a cancellation here MUST propagate (FIX N3).
         runCatching { callAudioSessionController.deactivate() }
-        runCatching { deactivateAudioCoordinatorForHold() }
+        runIgnoringNonCancellation { deactivateAudioCoordinatorForHold() }
         // 6. Release foreground-media wake locks.
         runCatching { releasePerformanceLocks() }
         // 7. Pause foreground-only pollers.
@@ -1459,9 +1522,6 @@ class SerenadaSession internal constructor(
         actualVideoPublished = false
         // Reflect held in published local state so peers and UI converge.
         updateState(_state.value.copy(localAudioEnabled = false, localVideoEnabled = false, localCameraEnabled = false))
-
-        // 8. Broadcast held AFTER capture has stopped (local-stop-then-broadcast).
-        runCatching { broadcastLocalMediaState(held = true) }
     }
 
     /**
@@ -1475,10 +1535,27 @@ class SerenadaSession internal constructor(
     internal suspend fun applyForegroundRoleInternal() {
         assertMainThread()
         if (mediaRole == CallMediaRole.FOREGROUND) return
+        // Capture the op generation for this resume. A concurrent hold that lands
+        // while we await the async audio coordinator bumps the generation; the
+        // post-await fence below detects it and rolls back to held instead of
+        // committing foreground (FIX N2). Phase 2 feeds this from the arbiter.
+        mediaOpGeneration += 1
+        val gen = mediaOpGeneration
         mediaActivationState = MediaActivationState.ACTIVATING
 
         // 1. Activate the coordinator, then the controller (mirror start order).
-        runCatching { activateAudioCoordinatorForResume() }
+        //    The coordinator activation is the awaited async boundary; a cancellation
+        //    here MUST propagate (FIX N3: do not swallow CancellationException).
+        runIgnoringNonCancellation { activateAudioCoordinatorForResume() }
+        // FENCE: if a hold superseded this resume while we awaited the coordinator,
+        // roll back to fully-held and bail — do NOT commit foreground or broadcast
+        // held=false. The hold that superseded us already broadcast held=true.
+        if (gen != mediaOpGeneration) {
+            mediaRole = CallMediaRole.HELD
+            mediaActivationState = MediaActivationState.INACTIVE
+            suspendForegroundMediaResources()
+            return
+        }
         runCatching { callAudioSessionController.activate() }
         // 2. Resume local capture per desired intent (no renegotiation).
         runCatching { webRtcEngine.resumeLocalMediaFromHold(desiredAudioEnabled, desiredVideoMode) }
@@ -1502,6 +1579,22 @@ class SerenadaSession internal constructor(
 
         // 6. Broadcast held=false AFTER media is flowing (attach-then-broadcast).
         runCatching { broadcastLocalMediaState(held = false) }
+    }
+
+    /**
+     * Like [runCatching] but NEVER swallows [CancellationException] (FIX N3):
+     * structured-concurrency cancellation must propagate so an aborted hold/resume
+     * does not silently continue to (de)activate media. All other failures are
+     * absorbed (hold/resume steps are best-effort).
+     */
+    private suspend fun runIgnoringNonCancellation(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold/resume step failed: ${e.message}")
+        }
     }
 
     /** Deactivate the audio coordinator for hold (awaited; mirrors [resetResources]). */
@@ -1967,9 +2060,12 @@ class SerenadaSession internal constructor(
     }
 
     private fun broadcastLocalMediaState(held: Boolean = mediaRole == CallMediaRole.HELD) {
+        // A held call owns no capture (Core Invariant 2): peers must always see
+        // audio=false/video=false while held, regardless of the (possibly stale)
+        // local state snapshot. Resume broadcasts held=false with live values.
         signalingMessageRouter.broadcastMediaState(
-            audioEnabled = _state.value.localAudioEnabled,
-            videoEnabled = _state.value.localVideoEnabled,
+            audioEnabled = !held && _state.value.localAudioEnabled,
+            videoEnabled = !held && _state.value.localVideoEnabled,
             held = held,
         )
     }
@@ -2641,9 +2737,13 @@ class SerenadaSession internal constructor(
      */
     fun setMicMuted(muted: Boolean) {
         assertMainThread()
-        userMuted = muted
         // Track user intent so a hold/resume cycle restores it (Phase 1).
         desiredAudioEnabled = !muted
+        // While held this session owns no capture (Core Invariant 2): record the
+        // desired intent ONLY — no capture, no coordinator call, no broadcast.
+        // Resume (applyForegroundRoleInternal) applies the latest desired intent.
+        if (isHeld) return
+        userMuted = muted
         updateEffectiveMicState()
         providerScope.launch {
             runCatching {

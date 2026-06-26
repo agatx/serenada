@@ -358,6 +358,22 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private desiredVideoMode: VideoMode;
     private actualAudioPublished: boolean;
     private actualVideoPublished: boolean;
+    /**
+     * Monotonic generation bumped at the start of every suspend/resume media
+     * operation. `resumeForeground` captures its generation before awaiting media
+     * reacquire and re-checks after each `await`; if a concurrent
+     * `suspendForHold` superseded it, resume rolls back its partial activation
+     * and bails WITHOUT setting foreground or broadcasting `held:false`. Phase 2
+     * feeds this from the process arbiter; for now it is session-internal.
+     */
+    private mediaOpGeneration = 0;
+    /**
+     * True while {@link resumeForeground} is awaiting media reacquire. A
+     * concurrent {@link suspendForHold} uses this to know it must still drive the
+     * suspend (rather than no-op on the still-`held` role) so it can supersede
+     * the resume and complete the hold.
+     */
+    private resumeInFlight = false;
 
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
@@ -601,6 +617,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         if (this.desiredVideoMode !== 'off') {
             this.desiredVideoMode = mode;
         }
+        // Core Invariant 2: a held call owns no capture. Record the desired
+        // facing only; do not touch the camera (resume applies it).
+        if (this.mediaRole === 'held') return;
         if (mode === 'world' && this.media.facingMode === 'user') {
             void this.media.flipCamera();
         } else if (mode === 'selfie' && this.media.facingMode === 'environment') {
@@ -611,6 +630,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
     /** Cycle to the next camera mode in the configured order. */
     async flipCamera(): Promise<void> {
         if (this.availableCameraModes.length <= 1) return;
+        // Core Invariant 2: a held call owns no capture. Flip the desired facing
+        // without touching the camera; resume applies it.
+        if (this.mediaRole === 'held') {
+            if (this.desiredVideoMode !== 'off') {
+                this.desiredVideoMode = this.desiredVideoMode === 'selfie' ? 'world' : 'selfie';
+            }
+            return;
+        }
         await this.media.flipCamera();
         // Keep desired camera mode in sync with the new facing so resume
         // restores the camera the user last chose.
@@ -1169,6 +1196,24 @@ export class SerenadaSession implements SerenadaSessionHandle {
     }
 
     private setTrackEnabled(kind: 'audio' | 'video', enabled?: boolean): void {
+        // Core Invariant 2: a held call owns NO capture. While held, a user
+        // toggle updates `desired*` intent ONLY — no getUserMedia, no track
+        // reacquire/release, and no `participant_media_state` broadcast (peers
+        // already see held:true / audio+video false). `actual*` stays false. The
+        // latest `desired*` is applied on the next resumeForeground().
+        if (this.mediaRole === 'held') {
+            if (kind === 'video') {
+                if (this.availableCameraModes.length === 0) return;
+                const newEnabled = enabled ?? this.desiredVideoMode === 'off';
+                this.userPreferredVideoEnabled = newEnabled;
+                this.desiredVideoMode = newEnabled ? this.cameraFacingAsVideoMode() : 'off';
+            } else {
+                const newEnabled = enabled ?? !this.desiredAudioEnabled;
+                this.desiredAudioEnabled = newEnabled;
+            }
+            this.rebuildState();
+            return;
+        }
         const stream = this.media.localStream;
         if (!stream) return;
         if (kind === 'video') {
@@ -1227,7 +1272,15 @@ export class SerenadaSession implements SerenadaSessionHandle {
      */
     async suspendForHold(): Promise<void> {
         if (this.isInactive) return;
-        if (this.mediaRole === 'held') return;
+        // Always bump the generation so a concurrent in-flight `resumeForeground`
+        // sees itself superseded and bails (the stale-activation race fence).
+        // This MUST run before the already-held short-circuit: while a resume is
+        // in flight the role is still `held`, so without this bump the resume
+        // would finish and wrongly set foreground, silently losing the hold.
+        this.mediaOpGeneration += 1;
+        // Already fully held with no resume in flight: a re-entrant call is a
+        // safe no-op (capture already released, held already broadcast).
+        if (this.mediaRole === 'held' && !this.resumeInFlight) return;
         // Flip role first so a re-entrant call short-circuits and so `actual*`
         // never reports a held call as publishing media.
         this.mediaRole = 'held';
@@ -1257,17 +1310,56 @@ export class SerenadaSession implements SerenadaSessionHandle {
     async resumeForeground(): Promise<void> {
         if (this.isInactive) return;
         if (this.mediaRole === 'foreground') return;
-        await this.media.resumeLocalMediaFromHold(this.desiredAudioEnabled, this.desiredVideoMode);
+        // Capture this activation's generation, then bump so any LATER op is
+        // distinct. After each await we re-check: if a concurrent
+        // `suspendForHold` bumped the generation, this resume is superseded and
+        // must roll back its partial activation and bail WITHOUT setting
+        // foreground or broadcasting `held:false` (the stale-activation fence).
+        this.mediaOpGeneration += 1;
+        const gen = this.mediaOpGeneration;
+        this.resumeInFlight = true;
+        try {
+            await this.media.resumeLocalMediaFromHold(this.desiredAudioEnabled, this.desiredVideoMode);
+            if (this.isInactive) return;
+            if (this.mediaOpGeneration !== gen) {
+                // Superseded by a hold that ran during reacquire. Roll back the
+                // partial activation: re-suspend capture + remote playout and
+                // keep the role held. Do NOT broadcast held:false / foreground.
+                await this.rollbackSupersededResume();
+                return;
+            }
+            const stream = this.media.localStream;
+            const audioTrack = stream?.getAudioTracks()[0];
+            const videoTrack = stream?.getVideoTracks()[0];
+            this.mediaRole = 'foreground';
+            this.mediaActivationState = 'active';
+            this.actualAudioPublished = !!audioTrack && audioTrack.enabled;
+            this.actualVideoPublished = !!videoTrack && videoTrack.enabled;
+            // Broadcast AFTER tracks are attached (attach-then-broadcast).
+            this.broadcastLocalMediaState();
+            this.rebuildState();
+        } finally {
+            this.resumeInFlight = false;
+        }
+    }
+
+    /**
+     * Undo a partial foreground activation that was superseded by a concurrent
+     * hold: release any capture reacquired during resume and disable remote
+     * playout, leaving the session held. Idempotent / no-throw (a winning
+     * suspend may already have suspended media). Never broadcasts.
+     */
+    private async rollbackSupersededResume(): Promise<void> {
+        this.mediaRole = 'held';
+        this.mediaActivationState = 'inactive';
+        this.actualAudioPublished = false;
+        this.actualVideoPublished = false;
+        try {
+            await this.media.suspendLocalMediaForHold();
+        } catch (err) {
+            this.config.logger?.log('warning', 'Session', `resumeForeground rollback partial release: ${formatError(err)}`);
+        }
         if (this.isInactive) return;
-        const stream = this.media.localStream;
-        const audioTrack = stream?.getAudioTracks()[0];
-        const videoTrack = stream?.getVideoTracks()[0];
-        this.mediaRole = 'foreground';
-        this.mediaActivationState = 'active';
-        this.actualAudioPublished = !!audioTrack && audioTrack.enabled;
-        this.actualVideoPublished = !!videoTrack && videoTrack.enabled;
-        // Broadcast AFTER tracks are attached (attach-then-broadcast).
-        this.broadcastLocalMediaState();
         this.rebuildState();
     }
 

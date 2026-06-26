@@ -220,6 +220,14 @@ public final class SerenadaSession: ObservableObject {
     private(set) var actualAudioPublished = false
     /// Camera state actually published to peers right now (false while held).
     private(set) var actualVideoPublished = false
+    /// Monotonic counter bumped on EVERY media role operation (foreground activate
+    /// or hold). A foreground activation captures it before awaiting the audio
+    /// coordinator and re-checks afterwards: if a hold (or a later activate)
+    /// superseded it, the stale completion rolls back instead of committing
+    /// foreground. This is the second fence beyond `mediaActivationState` — a hold
+    /// during `.activating` bumps the generation so the in-flight resume bails.
+    /// Phase 2 feeds this from the arbiter operation generation.
+    private var mediaOpGeneration: Int = 0
     // Latched true once the call's media has connected at least once. The network monitor
     // below only restarts ICE for an established call: NWPathMonitor delivers the current
     // path once at start(), and treating that initial callback as a network change would
@@ -581,6 +589,14 @@ public final class SerenadaSession: ObservableObject {
 
     /// Cycle to the next camera mode (selfie -> world -> composite).
     public func flipCamera() {
+        // Core Invariant 2: a held call owns NO capture. Advance the desired
+        // camera mode in local state ONLY — no engine flip (there is no
+        // capturer), no content_state broadcast. Resume reacquires per the new
+        // `desiredVideoMode` (derived from `cameraMode` while video-preferred).
+        guard mediaRole != .held else {
+            flipDesiredCameraModeWhileHeld()
+            return
+        }
         if config.enableIndependentContentVideo {
             // Independent mode: the camera is a SEPARATE track, so flipping it
             // during a screen share is valid and leaves the content track
@@ -604,6 +620,21 @@ public final class SerenadaSession: ObservableObject {
         guard mode != state.localParticipant.cameraMode else { return }
         guard availableCameraModes.contains(mode) else { return }
         for _ in 0..<availableCameraModes.count where state.localParticipant.cameraMode != mode { flipCamera() }
+    }
+
+    /// Advance the desired camera mode for a held call without engaging the
+    /// engine (no capturer exists while held). Updating `localParticipant.cameraMode`
+    /// re-derives `desiredVideoMode` on the next resume so the camera reacquires
+    /// in the chosen mode. `setCameraMode`'s flip loop relies on this updating
+    /// `cameraMode` so it converges while held too.
+    private func flipDesiredCameraModeWhileHeld() {
+        guard let next = nextCameraMode(
+            modes: availableCameraModes,
+            current: state.localParticipant.cameraMode,
+            compositeAvailable: CameraCaptureController.isCompositeCameraModeAvailable()
+        ) else { return }
+        commitSnapshot { s, _ in s.localParticipant.cameraMode = next }
+        if userPreferredVideoEnabled { desiredVideoMode = next }
     }
 
     /// Set local audio enabled state.
@@ -634,6 +665,14 @@ public final class SerenadaSession: ObservableObject {
     /// The effective mute state may still be true when external audio is active or no input route is available.
     public func setMicMuted(_ muted: Bool) {
         self.userMuted = muted
+        // Core Invariant 2: a held call owns NO capture. While held, a mute
+        // toggle records desired intent ONLY — no mic capture, no coordinator
+        // mute call, no `participant_media_state` broadcast. `actual*` stays
+        // false; `applyForegroundRoleInternal` (resume) replays this intent.
+        guard mediaRole != .held else {
+            updateDesiredAudioWhileHeld()
+            return
+        }
         self.updateEffectiveMicState()
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -665,6 +704,16 @@ public final class SerenadaSession: ObservableObject {
         if sessionActivated {
             broadcastLocalMediaState()
         }
+    }
+
+    /// Record a mute toggle made while held: update `desiredAudioEnabled` and the
+    /// public mute flags so the UI reflects the user's intent, but touch no
+    /// capture and broadcast nothing (a held call publishes `actual* == false`).
+    /// `updateEffectiveMicState` re-derives `actual*`/broadcast on resume.
+    private func updateDesiredAudioWhileHeld() {
+        desiredAudioEnabled = !userMuted
+        isMicMuted = userMuted || externalAudioMuted || !routeInputAvailable
+        isMicMutedByExternalAudio = externalAudioMuted
     }
 
     private func handleCoordinatorEvent(_ event: AudioCoordinatorEvent) {
@@ -725,6 +774,14 @@ public final class SerenadaSession: ObservableObject {
 
     private func setVideoEnabled(_ enabled: Bool, broadcastMediaState: Bool) {
         if enabled && availableCameraModes.isEmpty { return }
+        // Core Invariant 2: a held call owns NO capture. Record desired intent
+        // ONLY — no permission prompt, no capturer restart, no broadcast. The
+        // prompt/capture happen at resume when this call returns to foreground.
+        guard mediaRole != .held else {
+            userPreferredVideoEnabled = enabled
+            applyLocalVideoPreference()
+            return
+        }
         if enabled && !ensureCameraPermissionForVideoEnable(broadcastMediaStateOnGrant: broadcastMediaState) {
             return
         }
@@ -1344,7 +1401,13 @@ public final class SerenadaSession: ObservableObject {
     ///
     /// Phase 2 wraps this as the token-gated `releaseForeground(token)`.
     func applyHeldRoleInternal() {
-        guard mediaRole != .held else { return }
+        // Bump the operation generation FIRST so an in-flight foreground
+        // activation (mid-await on the audio coordinator) sees a superseding op
+        // and rolls back instead of committing foreground (the stale-activation
+        // race fence). Must run even while `.activating` (role is still `.held`
+        // then), so the guard below only short-circuits a settled held call.
+        mediaOpGeneration &+= 1
+        guard !(mediaRole == .held && mediaActivationState == .inactive) else { return }
 
         // 1. Stop screen share first (foreground-only). The engine's suspend also
         //    stops it, but stopping here keeps the session-side content_state in
@@ -1387,6 +1450,12 @@ public final class SerenadaSession: ObservableObject {
     /// Phase 2 wraps this as the token-gated `activateForeground(token, gen)`.
     func applyForegroundRoleInternal() {
         guard mediaRole != .foreground else { return }
+        // Capture the operation generation BEFORE the await. A hold (or a newer
+        // activate) that lands while the coordinator is activating bumps the
+        // generation; `completeForegroundActivation` then sees the mismatch and
+        // rolls back rather than committing foreground over a requested hold.
+        mediaOpGeneration &+= 1
+        let activationGeneration = mediaOpGeneration
         mediaActivationState = .activating
 
         // 1. Re-activate audio ownership (coordinator then controller), mirroring
@@ -1399,16 +1468,28 @@ public final class SerenadaSession: ObservableObject {
             } catch {
                 self.logger?.log(.error, tag: "Audio", "Failed to re-activate audio coordinator on resume: \(error)")
             }
-            self.completeForegroundActivation()
+            self.completeForegroundActivation(generation: activationGeneration)
         }
     }
 
     /// Second half of `applyForegroundRoleInternal`, run after the audio
     /// coordinator has re-activated. Restarts local media per desired intent and
     /// publishes the resumed state.
-    private func completeForegroundActivation() {
-        // Guard against a hold racing in before the coordinator finished.
-        guard mediaActivationState == .activating else { return }
+    ///
+    /// `generation` is the value captured at activate start. If a hold (or a newer
+    /// activation) superseded this op while the coordinator was activating,
+    /// `mediaOpGeneration` no longer matches: bail without committing foreground or
+    /// broadcasting `held:false`, leaving the session held.
+    private func completeForegroundActivation(generation: Int) {
+        guard mediaOpGeneration == generation, mediaActivationState == .activating else {
+            // Superseded mid-activation. The superseding op owns the coordinator
+            // now: a hold requested during `.activating` already ran
+            // `deactivateAudioCoordinator()` (chained AFTER this activate, so the
+            // coordinator ends deactivated), and a newer activate drives its own
+            // bring-up. Re-deactivating here would either double-tear-down or
+            // clobber the newer op, so this stale completion only bails.
+            return
+        }
 
         callAudioSessionController.activate()
         sessionActivated = true
@@ -2148,6 +2229,15 @@ public final class SerenadaSession: ObservableObject {
         // Record desired video intent (mode when on, nil when off) so resume can
         // restore it. Proximity pause is transient and does not change intent.
         desiredVideoMode = userPreferredVideoEnabled ? state.localParticipant.cameraMode : nil
+        // Core Invariant 2: a held call owns NO capture. Record desired intent
+        // (above) but do not restart/stop the capturer; `actualVideoPublished`
+        // stays false and local video reads off. `completeForegroundActivation`
+        // (resume) reacquires per this desired mode.
+        guard mediaRole != .held else {
+            actualVideoPublished = false
+            commitSnapshot { s, _ in s.localParticipant.videoEnabled = false }
+            return
+        }
         let shouldPause = callAudioSessionController.shouldPauseVideoForProximity(isScreenSharing: diagnostics.isScreenSharing)
         if shouldPause != isVideoPausedByProximity { isVideoPausedByProximity = shouldPause }
         let effectiveEnabled = webRtcEngine.toggleVideo(userPreferredVideoEnabled && !shouldPause)

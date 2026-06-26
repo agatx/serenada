@@ -363,4 +363,194 @@ final class HoldResumeTests: XCTestCase {
         XCTAssertEqual(decoded.videoEnabled, true)
         XCTAssertNil(decoded.held, "Absent held must decode as nil (no change), not a crash")
     }
+
+    // MARK: - FIX N1: held-toggle guard (Core Invariant 2: a held call owns NO capture)
+
+    /// While held, mic/video toggles must update desired intent ONLY — no capturer
+    /// restart (`toggleVideo`/`toggleAudio` on the engine), no
+    /// `participant_media_state` broadcast — and the intent must be applied on
+    /// resume. This is the iOS round-2 fix for the missing held guard.
+    func testTogglingAudioAndVideoWhileHeldUpdatesDesiredOnlyAndAppliesOnResume() async {
+        let harness = await makeInCallHarness()
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        // Snapshot the engine + broadcast counters AFTER hold settled.
+        let toggleVideoBefore = harness.fakeMedia.toggleVideoCalls.count
+        let toggleAudioBefore = harness.fakeMedia.toggleAudioCalls.count
+        let micMutedCoordinatorBefore = harness.fakeAudioCoordinator.micMutedValues.count
+        let broadcastsBefore = harness.fakeProvider
+            .broadcastMessages(ofType: "participant_media_state").count
+
+        // User toggles while held: mute the mic, and turn video OFF (off needs no
+        // permission, so the assertion is camera-availability independent).
+        harness.session.setMicMuted(true)
+        harness.session.setVideoEnabled(false)
+        await yieldToMainActor()
+
+        // No capturer was touched and nothing was broadcast.
+        XCTAssertEqual(harness.fakeMedia.toggleVideoCalls.count, toggleVideoBefore,
+                       "A video toggle while held must NOT restart/stop the capturer")
+        XCTAssertEqual(harness.fakeMedia.toggleAudioCalls.count, toggleAudioBefore,
+                       "A mute toggle while held must NOT touch the audio track")
+        XCTAssertEqual(harness.fakeAudioCoordinator.micMutedValues.count, micMutedCoordinatorBefore,
+                       "A mute toggle while held must NOT call the coordinator")
+        XCTAssertEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").count,
+            broadcastsBefore,
+            "Toggles while held must NOT broadcast participant_media_state")
+
+        // actual* stays false while held regardless of desired intent.
+        XCTAssertFalse(harness.session.actualAudioPublished)
+        XCTAssertFalse(harness.session.actualVideoPublished)
+        XCTAssertEqual(harness.session.mediaRole, .held,
+                       "Toggles while held must not leave the held role")
+
+        // The desired intent is applied on resume: mic stays muted, video stays off.
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+
+        let resume = harness.fakeMedia.resumeLocalMediaFromHoldCalls.first
+        XCTAssertEqual(resume?.audioEnabled, false,
+                       "Resume must honor the mute requested while held")
+        XCTAssertNil(resume?.videoMode ?? nil,
+                     "Resume must honor video-off requested while held")
+        harness.tearDown()
+    }
+
+    /// A camera-mode flip while held must advance the DESIRED mode (so resume
+    /// reacquires in the chosen mode) without engaging the capturer.
+    func testFlipCameraWhileHeldUpdatesDesiredModeWithoutCapture() async {
+        let harness = await makeInCallHarness()
+        // This call needs at least two camera modes to cycle; skip cleanly if the
+        // test environment exposes a single mode.
+        let modes = harness.session.state.localParticipant.availableCameraModes
+        guard modes.count >= 2 else {
+            harness.tearDown()
+            return
+        }
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        let toggleVideoBefore = harness.fakeMedia.toggleVideoCalls.count
+        let modeBefore = harness.session.state.localParticipant.cameraMode
+
+        harness.session.flipCamera()
+        await yieldToMainActor()
+
+        XCTAssertNotEqual(harness.session.state.localParticipant.cameraMode, modeBefore,
+                          "Flip while held must advance the desired camera mode in state")
+        XCTAssertEqual(harness.fakeMedia.toggleVideoCalls.count, toggleVideoBefore,
+                       "Flip while held must not restart the capturer")
+        harness.tearDown()
+    }
+
+    // MARK: - FIX N2: stale-activation race fence
+
+    /// A hold requested while a resume is in flight (the audio coordinator is
+    /// activating) must win: the session ends `.held`, foreground is never
+    /// committed, and no `held:false` broadcast is sent. The stale activation
+    /// completion must bail (generation mismatch), not clobber the requested hold.
+    func testHoldDuringInFlightResumeStaysHeldAndDoesNotBroadcastHeldFalse() async {
+        let gated = GatedAudioCoordinator()
+        let config = SerenadaConfig(
+            signalingProvider: FakeSignalingProvider(),
+            audioCoordinator: gated
+        )
+        let harness = SessionTestHarness(config: config)
+        await harness.advanceToInCallWithTurn(
+            localCid: "local",
+            remoteCid: "remote",
+            localJoinedAt: 1,
+            remoteJoinedAt: 2
+        )
+
+        // Hold first (settles to held; the initial-join activation already passed
+        // through the gate ungated).
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+
+        let broadcastsAfterHold = harness.fakeProvider
+            .broadcastMessages(ofType: "participant_media_state").count
+
+        // Arm the gate so the NEXT activation blocks, then start a resume. The
+        // resume sets `.activating` and awaits the coordinator inside the gate.
+        gated.blockNextActivation = true
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { gated.activationInFlight }
+        XCTAssertEqual(harness.session.mediaActivationState, .activating,
+                       "Resume must be mid-activation before the hold races in")
+        XCTAssertEqual(harness.session.mediaRole, .held,
+                       "Role stays held until activation commits foreground")
+
+        // A hold lands DURING activation. It bumps the op generation and drives to
+        // held; the in-flight resume must then bail when the gate releases.
+        harness.session.applyHeldRoleInternal()
+        await yieldToMainActor()
+
+        // Release the blocked activation; the stale completion should bail.
+        gated.releaseActivation()
+        await yieldToMainActor()
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.session.mediaRole, .held,
+                       "A hold during an in-flight resume must leave the session held")
+        XCTAssertEqual(harness.session.mediaActivationState, .inactive,
+                       "Superseded activation must not leave the call .active/.activating")
+        XCTAssertFalse(harness.session.actualAudioPublished)
+        XCTAssertFalse(harness.session.actualVideoPublished)
+
+        // No `held:false` broadcast: the last media-state broadcast must be held:true.
+        let last = lastBroadcastMediaState(harness)
+        XCTAssertEqual(last?.held, true,
+                       "Superseded resume must NOT broadcast held:false")
+        // The resume must not have reacquired local media (it bailed pre-commit).
+        XCTAssertTrue(harness.fakeMedia.resumeLocalMediaFromHoldCalls.isEmpty,
+                      "Superseded resume must not reacquire local media")
+        XCTAssertGreaterThanOrEqual(
+            harness.fakeProvider.broadcastMessages(ofType: "participant_media_state").count,
+            broadcastsAfterHold,
+            "No spurious held:false broadcast from the superseded resume")
+        harness.tearDown()
+    }
+}
+
+/// Test audio coordinator whose `activateCallSession` can be PAUSED so a test can
+/// interpose a hold while a resume is mid-activation (FIX N2 race fence). The
+/// initial join activation runs ungated; set `blockNextActivation` before the
+/// resume to pause exactly that one, then `releaseActivation()` to let it finish.
+@MainActor
+final class GatedAudioCoordinator: SerenadaAudioCoordinator, @unchecked Sendable {
+    var blockNextActivation = false
+    private(set) var activationInFlight = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var activateCalls = 0
+    private(set) var deactivateCalls = 0
+
+    func activateCallSession(intent: AudioIntent) async throws {
+        activateCalls += 1
+        guard blockNextActivation else { return }
+        blockNextActivation = false
+        activationInFlight = true
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            self.continuation = c
+        }
+        activationInFlight = false
+    }
+
+    func releaseActivation() {
+        let c = continuation
+        continuation = nil
+        c?.resume()
+    }
+
+    func deactivateCallSession() async { deactivateCalls += 1 }
+    func applyRouting(_ device: AudioDevice) async throws {}
+    func setMicMuted(_ muted: Bool) async throws {}
+
+    var availableDevices: AsyncStream<[AudioDevice]> { AsyncStream { _ in } }
+    var effectiveInputDevice: AsyncStream<AudioDevice?> { AsyncStream { _ in } }
+    var effectiveOutputDevice: AsyncStream<AudioDevice?> { AsyncStream { _ in } }
+    var events: AsyncStream<AudioCoordinatorEvent> { AsyncStream { _ in } }
 }

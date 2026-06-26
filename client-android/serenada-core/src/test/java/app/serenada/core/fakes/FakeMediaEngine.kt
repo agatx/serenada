@@ -113,7 +113,9 @@ internal class FakeMediaEngine : SessionMediaEngine {
         toggleVideoCalls.add(enabled)
         return enabled
     }
-    override fun flipCamera() {}
+    var flipCameraCalls = 0
+        private set
+    override fun flipCamera() { flipCameraCalls++ }
 
     /**
      * Engine-side active camera mode. Tests set this to simulate the camera being

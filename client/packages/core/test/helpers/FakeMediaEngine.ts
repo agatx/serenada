@@ -120,7 +120,13 @@ export class FakeMediaEngine {
         this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
     }
 
+    // Capture-touch counters so hold tests can assert the foreground toggle path
+    // (camera reacquire/release) is NOT taken while held.
+    releaseVideoTrackCalls = 0;
+    reacquireVideoTrackCalls = 0;
+
     async releaseVideoTrack(): Promise<void> {
+        this.releaseVideoTrackCalls += 1;
         const stream = this.localStream as unknown as FakeMediaStream | null;
         if (!stream) return;
         for (const track of stream.getVideoTracks()) {
@@ -130,6 +136,7 @@ export class FakeMediaEngine {
     }
 
     async reacquireVideoTrack(): Promise<void> {
+        this.reacquireVideoTrackCalls += 1;
         const stream = this.localStream as unknown as FakeMediaStream | null;
         if (!stream || stream.getVideoTracks().length > 0) return;
         stream.addTrack(new FakeMediaStreamTrack('video'));

@@ -249,6 +249,85 @@ describe('SerenadaSession hold/resume primitives', () => {
         const payload = lastMediaStateBroadcast(harness);
         expect(payload).toEqual({ audioEnabled: false, videoEnabled: false, held: true });
     });
+
+    // FIX N1: a held call owns NO capture (Core Invariant 2). User media toggles
+    // while held update `desired*` intent ONLY — no getUserMedia / track
+    // reacquire-release, and no participant_media_state broadcast (peers already
+    // see held:true). The new desired is applied on the next resume.
+    it('toggling audio/video while held updates desired only (no capture, no broadcast) and applies on resume', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        const stream = harness.media.installLocalStream({ audio: true, video: true });
+
+        await harness.session.suspendForHold();
+        // Baseline counters after the hold itself.
+        const reacquireBefore = harness.media.reacquireVideoTrackCalls;
+        const releaseBefore = harness.media.releaseVideoTrackCalls;
+        harness.signaling.broadcastCalls.length = 0;
+
+        // User mutes audio and turns the camera off while held.
+        harness.session.setAudioEnabled(false);
+        harness.session.setVideoEnabled(false);
+
+        // No capture was touched: no camera reacquire/release, no new mic/cam
+        // grab, and the held call still owns no tracks.
+        expect(harness.media.reacquireVideoTrackCalls).toBe(reacquireBefore);
+        expect(harness.media.releaseVideoTrackCalls).toBe(releaseBefore);
+        expect(stream.getAudioTracks()).toHaveLength(0);
+        expect(stream.getVideoTracks()).toHaveLength(0);
+        // No broadcast while held.
+        expect(harness.signaling.broadcastCalls.filter((c) => c.type === 'participant_media_state')).toHaveLength(0);
+        // actual* stay false (still held); role unchanged.
+        expect(harness.session.currentActualAudioPublished).toBe(false);
+        expect(harness.session.currentActualVideoPublished).toBe(false);
+        expect(harness.session.currentMediaRole).toBe('held');
+        // desired* captured the toggles.
+        expect(harness.session.currentDesiredAudioEnabled).toBe(false);
+        expect(harness.session.currentDesiredVideoMode).toBe('off');
+
+        // Resume applies the latest desired (muted, camera off).
+        await harness.session.resumeForeground();
+        const resumeCall = harness.media.resumeLocalMediaFromHoldCalls.at(-1);
+        expect(resumeCall).toEqual({ desiredAudio: false, desiredVideoMode: 'off' });
+        expect(stream.getAudioTracks()).toHaveLength(0);
+        expect(stream.getVideoTracks()).toHaveLength(0);
+        const payload = lastMediaStateBroadcast(harness);
+        expect(payload).toEqual({ audioEnabled: false, videoEnabled: false, held: false });
+    });
+
+    // FIX N2: a suspendForHold() that races an in-flight resumeForeground() must
+    // win — the session stays HELD (resume's partial activation is rolled back),
+    // remote playback ends disabled, and resume never broadcasts held:false.
+    it('suspendForHold racing resumeForeground leaves the session held (no foreground, no held:false)', async () => {
+        harness = new TestSessionHarness();
+        await joinAndSettle();
+        harness.media.installLocalStream({ audio: true, video: true });
+
+        await harness.session.suspendForHold();
+        harness.media.setRemotePlaybackEnabledCalls.length = 0;
+        harness.signaling.broadcastCalls.length = 0;
+
+        // Start the resume but do NOT await it yet (it suspends at the media
+        // reacquire await), then run a hold that supersedes it.
+        const resumePromise = harness.session.resumeForeground();
+        await harness.session.suspendForHold();
+        await resumePromise;
+
+        // The hold won: session is held, not foreground.
+        expect(harness.session.currentMediaRole).toBe('held');
+        expect(harness.session.currentActualAudioPublished).toBe(false);
+        expect(harness.session.currentActualVideoPublished).toBe(false);
+
+        // Remote playback ends DISABLED (resume re-enabled it, hold + rollback
+        // disabled it; last write must be false).
+        expect(harness.media.setRemotePlaybackEnabledCalls.at(-1)).toBe(false);
+
+        // Resume never broadcast held:false. The only media-state broadcast is
+        // the hold's held:true.
+        const mediaBroadcasts = harness.signaling.broadcastCalls.filter((c) => c.type === 'participant_media_state');
+        expect(mediaBroadcasts.every((c) => (c.payload as Record<string, unknown>).held === true)).toBe(true);
+        expect(mediaBroadcasts.some((c) => (c.payload as Record<string, unknown>).held === false)).toBe(false);
+    });
 });
 
 describe('participant_media_state held decode (unknown-field tolerance)', () => {
