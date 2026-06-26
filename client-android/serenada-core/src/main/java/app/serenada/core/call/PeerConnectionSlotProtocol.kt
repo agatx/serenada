@@ -138,6 +138,15 @@ internal interface PeerConnectionSlotProtocol {
     fun isRemoteVideoTrackEnabled(): Boolean
     fun duckPlayback(ducked: Boolean)
 
+    /**
+     * Hard-deafen this peer's remote audio receivers by toggling
+     * `AudioTrack.setEnabled`. Distinct from [duckPlayback] (volume duck): a
+     * held call sets `enabled=false` so its remote audio produces no output at
+     * all, then `enabled=true` on resume. Independent of, and does not clobber,
+     * the duck volume.
+     */
+    fun setRemotePlaybackEnabled(enabled: Boolean) {}
+
     // Renderer/stats
     fun attachRemoteRenderer(renderer: SurfaceViewRenderer)
     fun detachRemoteRenderer(renderer: SurfaceViewRenderer)

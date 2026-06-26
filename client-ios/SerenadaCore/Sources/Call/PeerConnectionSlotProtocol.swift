@@ -122,6 +122,13 @@ internal protocol PeerConnectionSlotProtocol: AnyObject {
     func isRemoteVideoTrackEnabled() -> Bool
     func duckPlayback(ducked: Bool)
 
+    /// Enable or disable audible remote playout by toggling the remote
+    /// `RTCAudioTrack.isEnabled` on this peer's receivers. A real deafen path
+    /// for held sessions, distinct from ``duckPlayback(ducked:)`` (which only
+    /// lowers `source.volume`). `false` silences inbound audio entirely; `true`
+    /// restores it.
+    func setRemotePlaybackEnabled(_ enabled: Bool)
+
     /// Last observed path type for the selected ICE candidate pair: `true`
     /// for direct (host/srflx/prflx), `false` for relayed through TURN,
     /// `nil` if no stats sample has been collected yet. Used by the TURN

@@ -62,11 +62,34 @@ internal class FakeMediaEngine : SessionMediaEngine {
     val attachLocalContentSinkCalls = mutableListOf<VideoSink>()
     val detachLocalContentSinkCalls = mutableListOf<VideoSink>()
 
+    // Hold/resume observation.
+    var suspendLocalMediaForHoldCalls = 0
+        private set
+    /** Recorded (audioEnabled, videoMode) pairs passed to resume. */
+    val resumeLocalMediaFromHoldCalls = mutableListOf<Pair<Boolean, LocalCameraMode?>>()
+    /** Recorded enabled values passed to setRemotePlaybackEnabled. */
+    val setRemotePlaybackEnabledCalls = mutableListOf<Boolean>()
+    var detachRenderersForHoldCalls = 0
+        private set
+
     override fun startLocalMedia(startVideoCapture: Boolean) {
         startLocalMediaCalls++
         startVideoCaptureCalls.add(startVideoCapture)
     }
     override fun release() { releaseCalls++ }
+
+    override fun suspendLocalMediaForHold() {
+        suspendLocalMediaForHoldCalls++
+    }
+    override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
+        resumeLocalMediaFromHoldCalls.add(audioEnabled to videoMode)
+    }
+    override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        setRemotePlaybackEnabledCalls.add(enabled)
+    }
+    override fun detachRenderersForHold() {
+        detachRenderersForHoldCalls++
+    }
     override fun toggleAudio(enabled: Boolean) { toggleAudioCalls.add(enabled) }
     override fun toggleVideo(enabled: Boolean): Boolean {
         toggleVideoCalls.add(enabled)

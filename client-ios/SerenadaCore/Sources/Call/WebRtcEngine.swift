@@ -477,6 +477,132 @@ internal final class WebRtcEngine: SessionMediaEngine {
         peerSlots.removeAll()
     }
 
+    /// Suspend local foreground media for a HELD role. Stops screen share and
+    /// the camera capturer, RELEASES the mic capture, and replaces the audio +
+    /// camera sender tracks with `nil` so the OS stops reporting capture, while
+    /// keeping the peer connections and their stable senders intact for resume.
+    /// Also deafens remote audio playout (`RTCAudioTrack.isEnabled = false`).
+    /// Idempotent: a second call with media already released is a no-op.
+    public func suspendLocalMediaForHold() {
+#if canImport(WebRTC)
+        // Screen share is foreground-only — stop it first (independent stop
+        // also tears down + detaches the content track via onStateChanged).
+        screenShareController.stopAllCapturers()
+        cameraController.stopAllCapturers()
+        detachTracksFromRegisteredRenderers()
+
+        localVideoTrack?.isEnabled = false
+        localContentVideoTrack?.isEnabled = false
+        localAudioTrack?.isEnabled = false
+
+        // Tear down the primer before releasing its audio track reference so the
+        // OS no longer sees a live capture pipeline.
+        audioPipelinePrimer?.stop()
+
+        // RELEASE the mic + camera capture tracks. Unlike a mute (isEnabled =
+        // false), dropping the source/track makes the OS stop reporting capture.
+        localVideoTrack = nil
+        localVideoSource = nil
+        disposeLocalContentVideoTrack()
+        cameraController.updateLocalVideoSource(nil)
+        localAudioTrack = nil
+        localAudioSource = nil
+
+        // Replace the now-nil tracks onto the EXISTING senders (no
+        // renegotiation): sender.track = nil. Identity/transceivers preserved.
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+
+        // Deafen audible remote playout (distinct from the volume duck).
+        setRemotePlaybackEnabled(false)
+
+        let audioSession = RTCAudioSession.sharedInstance()
+        do {
+            audioSession.lockForConfiguration()
+            defer { audioSession.unlockForConfiguration() }
+            audioSession.isAudioEnabled = false
+            if let previousUseManualAudio {
+                audioSession.useManualAudio = previousUseManualAudio
+                self.previousUseManualAudio = nil
+            }
+        }
+#endif
+    }
+
+    /// Resume local foreground media after a hold. Reacquires mic capture (when
+    /// `audioEnabled`) and the camera (when `videoMode != nil`), attaches the
+    /// fresh tracks to the existing senders, and re-enables remote playout.
+    /// Idempotent: when tracks already exist this updates enablement only.
+    public func resumeLocalMediaFromHold(audioEnabled: Bool, videoMode: LocalCameraMode?) {
+#if canImport(WebRTC)
+        guard let factory = peerConnectionFactory else { return }
+
+        let audioSession = RTCAudioSession.sharedInstance()
+        do {
+            audioSession.lockForConfiguration()
+            defer { audioSession.unlockForConfiguration() }
+            if previousUseManualAudio == nil {
+                previousUseManualAudio = audioSession.useManualAudio
+            }
+            audioSession.useManualAudio = true
+            audioSession.isAudioEnabled = true
+        }
+
+        // Reacquire the mic track and attach it to the existing audio sender.
+        if localAudioTrack == nil {
+            localAudioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
+            localAudioTrack = factory.audioTrack(with: localAudioSource!, trackId: "ARDAMSa0")
+        }
+        localAudioTrack?.isEnabled = audioEnabled
+
+        // Reacquire the camera track when video is desired.
+        let wantsVideo = videoMode != nil
+        if videoMediaEnabled, wantsVideo {
+            if localVideoTrack == nil {
+                localVideoSource = factory.videoSource()
+                localVideoTrack = factory.videoTrack(with: localVideoSource!, trackId: "ARDAMSv0")
+                cameraController.updateLocalVideoSource(localVideoSource)
+            }
+            let videoCaptureSupported = !cameraController.availableCameraModes.isEmpty
+            if videoCaptureSupported {
+                let started = cameraController.restartVideoCapturerFromAvailableModes()
+                localVideoTrack?.isEnabled = started
+            } else {
+                localVideoTrack?.isEnabled = false
+            }
+            attachTrackToRegisteredRenderers()
+        } else {
+            cameraController.notifyCameraModeAndFlash()
+        }
+
+        if let localAudioTrack {
+            audioPipelinePrimer?.start(localAudioTrack: localAudioTrack)
+        }
+
+        // Attach the fresh tracks to the existing senders (no renegotiation).
+        peerSlots.forEach { attachLocalTracksToSlot($0) }
+
+        // Re-enable audible remote playout.
+        setRemotePlaybackEnabled(true)
+#endif
+    }
+
+    /// Gate audible remote playout on every peer by toggling the remote
+    /// `RTCAudioTrack.isEnabled`. This is a real deafen path, distinct from the
+    /// 0.15 volume duck used during external audio (`duckPlayback`).
+    public func setRemotePlaybackEnabled(_ enabled: Bool) {
+#if canImport(WebRTC)
+        peerSlots.forEach { $0.setRemotePlaybackEnabled(enabled) }
+#endif
+    }
+
+    /// Detach the registered local renderers for a hold so held-call preview
+    /// surfaces stop receiving frames.
+    public func detachRenderersForHold() {
+#if canImport(WebRTC)
+        detachTracksFromRegisteredRenderers()
+#endif
+    }
+
     public func collectLocalAudioLevel(_ onComplete: @escaping @Sendable (Float?) -> Void) {
         guard let audioPipelinePrimer else {
             onComplete(nil)

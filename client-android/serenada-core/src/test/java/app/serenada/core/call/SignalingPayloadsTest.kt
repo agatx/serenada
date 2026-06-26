@@ -209,6 +209,55 @@ class SignalingPayloadsTest {
     }
 
     // ---------------------------------------------------------------
+    // toMediaStatePayload
+    // ---------------------------------------------------------------
+
+    @Test
+    fun toMediaStatePayload_parsesAudioVideoAndHeld() {
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("audioEnabled", false)
+            put("videoEnabled", true)
+            put("held", true)
+        }
+        val payload = json.toMediaStatePayload()
+        assertNotNull(payload)
+        assertEquals("C-peer", payload!!.fromCid)
+        assertEquals(false, payload.audioEnabled)
+        assertEquals(true, payload.videoEnabled)
+        assertEquals(true, payload.held)
+    }
+
+    @Test
+    fun toMediaStatePayload_missingHeldIsNull() {
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("audioEnabled", true)
+            put("videoEnabled", false)
+        }
+        val payload = json.toMediaStatePayload()
+        assertNull(payload!!.held)
+    }
+
+    @Test
+    fun toMediaStatePayload_ignoresUnknownFields() {
+        // Mirrors the trickleIce unknown-field tolerance test: an inbound
+        // participant_media_state carrying held alongside an unknown key must
+        // decode without error (the "ignore unknown fields" contract).
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("audioEnabled", false)
+            put("videoEnabled", false)
+            put("held", true)
+            put("someFutureField", "ignored") // unknown-to-model key tolerated
+        }
+        val payload = json.toMediaStatePayload()
+        assertNotNull(payload)
+        assertEquals(true, payload!!.held)
+        assertEquals(false, payload.audioEnabled)
+    }
+
+    // ---------------------------------------------------------------
     // toParticipantList
     // ---------------------------------------------------------------
 

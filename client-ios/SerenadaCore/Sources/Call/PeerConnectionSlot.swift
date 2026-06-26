@@ -18,6 +18,10 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public private(set) var offerTimeoutTask: Task<Void, Never>?
     public private(set) var iceRestartTask: Task<Void, Never>?
     private var playbackDucked = false
+    // When false, this peer's inbound audio is fully deafened (held session).
+    // Composes with `playbackDucked`: a deafened track stays silent regardless
+    // of the duck volume.
+    private var remotePlaybackEnabled = true
 
     // MARK: - Offer Lifecycle
 
@@ -1165,19 +1169,35 @@ internal final class PeerConnectionSlot: PeerConnectionSlotProtocol {
     public func duckPlayback(ducked: Bool) {
         playbackDucked = ducked
 #if canImport(WebRTC)
-        guard let peerConnection = peerConnection else { return }
-        for receiver in peerConnection.receivers {
-            if let audioTrack = receiver.track as? RTCAudioTrack {
-                applyPlaybackDuck(to: audioTrack)
-            }
-        }
+        applyRemoteAudioPlayback()
+#endif
+    }
+
+    public func setRemotePlaybackEnabled(_ enabled: Bool) {
+        remotePlaybackEnabled = enabled
+#if canImport(WebRTC)
+        applyRemoteAudioPlayback()
 #endif
     }
 }
 
 #if canImport(WebRTC)
 private extension PeerConnectionSlot {
+    /// Re-derive remote audio enablement + volume from the current deafen
+    /// (`remotePlaybackEnabled`) and duck (`playbackDucked`) state and apply it
+    /// to every remote audio receiver. The deafen wins: a disabled track is
+    /// silent regardless of the duck volume.
+    private func applyRemoteAudioPlayback() {
+        guard let peerConnection = peerConnection else { return }
+        for receiver in peerConnection.receivers {
+            if let audioTrack = receiver.track as? RTCAudioTrack {
+                applyPlaybackDuck(to: audioTrack)
+            }
+        }
+    }
+
     private func applyPlaybackDuck(to track: RTCAudioTrack) {
+        track.isEnabled = remotePlaybackEnabled
         track.source.volume = playbackDucked ? 0.15 : 1.0
     }
 

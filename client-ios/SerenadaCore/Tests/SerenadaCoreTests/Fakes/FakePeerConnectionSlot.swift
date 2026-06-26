@@ -236,6 +236,12 @@ final class FakePeerConnectionSlot: PeerConnectionSlotProtocol {
     func duckPlayback(ducked: Bool) {
         duckedPlayback = ducked
     }
+    private(set) var remotePlaybackEnabled = true
+    private(set) var setRemotePlaybackEnabledCalls: [Bool] = []
+    func setRemotePlaybackEnabled(_ enabled: Bool) {
+        remotePlaybackEnabled = enabled
+        setRemotePlaybackEnabledCalls.append(enabled)
+    }
 
     // MARK: - Renderer Management
 

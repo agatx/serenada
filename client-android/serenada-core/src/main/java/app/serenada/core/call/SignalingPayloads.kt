@@ -48,6 +48,8 @@ internal data class MediaStatePayload(
     val fromCid: String,
     val audioEnabled: Boolean?,
     val videoEnabled: Boolean?,
+    /** Hold state (multi-call). Null on older senders that omit the field. */
+    val held: Boolean? = null,
 )
 
 internal data class RelayFailedPayload(
@@ -153,6 +155,7 @@ internal fun JSONObject?.toMediaStatePayload(): MediaStatePayload? {
         fromCid = fromCid,
         audioEnabled = if (has("audioEnabled")) optBoolean("audioEnabled") else null,
         videoEnabled = if (has("videoEnabled")) optBoolean("videoEnabled") else null,
+        held = if (has("held")) optBoolean("held") else null,
     )
 }
 

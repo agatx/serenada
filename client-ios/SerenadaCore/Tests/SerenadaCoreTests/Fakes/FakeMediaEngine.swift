@@ -32,6 +32,27 @@ final class FakeMediaEngine: SessionMediaEngine {
 
     func release() { releaseCalls += 1 }
 
+    private(set) var suspendLocalMediaForHoldCalls = 0
+    private(set) var resumeLocalMediaFromHoldCalls: [(audioEnabled: Bool, videoMode: LocalCameraMode?)] = []
+    private(set) var setRemotePlaybackEnabledCalls: [Bool] = []
+    private(set) var detachRenderersForHoldCalls = 0
+
+    func suspendLocalMediaForHold() {
+        suspendLocalMediaForHoldCalls += 1
+    }
+
+    func resumeLocalMediaFromHold(audioEnabled: Bool, videoMode: LocalCameraMode?) {
+        resumeLocalMediaFromHoldCalls.append((audioEnabled: audioEnabled, videoMode: videoMode))
+    }
+
+    func setRemotePlaybackEnabled(_ enabled: Bool) {
+        setRemotePlaybackEnabledCalls.append(enabled)
+    }
+
+    func detachRenderersForHold() {
+        detachRenderersForHoldCalls += 1
+    }
+
     func toggleAudio(_ enabled: Bool) {
         toggleAudioCalls.append(enabled)
     }

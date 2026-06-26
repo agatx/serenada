@@ -277,13 +277,21 @@ struct MediaStatePayload {
     let fromCid: String?
     let audioEnabled: Bool?
     let videoEnabled: Bool?
+    /// Whether the remote participant has put this call on hold (multi-call
+    /// session). Optional and read leniently: an absent `held` means "no change"
+    /// (held state unknown / older peer), and any unknown extra fields are
+    /// ignored. A held participant also sends `audioEnabled:false`/
+    /// `videoEnabled:false`, so an older peer that ignores `held` still degrades
+    /// to muted/camera-off rather than a wrong "live" state.
+    let held: Bool?
 
     init(from payload: JSONValue?) {
         guard let obj = payload?.objectValue else {
-            fromCid = nil; audioEnabled = nil; videoEnabled = nil; return
+            fromCid = nil; audioEnabled = nil; videoEnabled = nil; held = nil; return
         }
         fromCid = obj["from"]?.stringValue
         audioEnabled = obj["audioEnabled"]?.boolValue
         videoEnabled = obj["videoEnabled"]?.boolValue
+        held = obj["held"]?.boolValue
     }
 }

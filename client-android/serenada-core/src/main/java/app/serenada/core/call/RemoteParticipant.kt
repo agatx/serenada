@@ -91,4 +91,11 @@ data class RemoteParticipant(
      * activity indicators. Always 0 when [audioEnabled] is false.
      */
     val audioLevel: Float = 0f,
+    /**
+     * Whether this peer's call is on hold (multi-call). Sourced from the peer's
+     * `participant_media_state.held`. When held, the peer also broadcasts
+     * audio/video disabled, so older clients degrade to muted/camera-off; new
+     * clients can render an "on hold" state distinctly. Defaults to false.
+     */
+    val held: Boolean = false,
 )

@@ -1501,6 +1501,7 @@ describe('SerenadaSession', () => {
                 payload: {
                     audioEnabled: true,
                     videoEnabled: true,
+                    held: false,
                 },
             });
             expect(harness.state.localParticipant?.videoEnabled).toBe(true);

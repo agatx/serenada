@@ -173,6 +173,13 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
     /// video sink, not a separate content sink that never exists.
     public var supportsIndependentContentVideo: Bool
 
+    /// `true` when this peer has put the call on hold (multi-call session):
+    /// their `participant_media_state` carried `held: true`. A held peer also
+    /// reports `audioEnabled`/`videoEnabled` as false, so call UIs can render an
+    /// "on hold" presentation distinctly from a normal mute/camera-off. Defaults
+    /// to `false` (older peers never send `held`).
+    public var held: Bool
+
     public var id: String { cid }
 
     public init(
@@ -189,7 +196,8 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         presumedLost: Bool = false,
         audioLevel: Float = 0,
         content: ParticipantContent? = nil,
-        supportsIndependentContentVideo: Bool = false
+        supportsIndependentContentVideo: Bool = false,
+        held: Bool = false
     ) {
         self.cid = cid
         self.displayName = displayName
@@ -205,6 +213,7 @@ public struct SerenadaRemoteParticipant: Identifiable, Equatable {
         self.audioLevel = audioLevel
         self.content = content
         self.supportsIndependentContentVideo = supportsIndependentContentVideo
+        self.held = held
     }
 }
 

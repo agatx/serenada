@@ -18,6 +18,11 @@ import org.json.JSONObject
 internal data class RemoteMediaState(
     val audioEnabled: Boolean? = null,
     val videoEnabled: Boolean? = null,
+    /**
+     * Whether the peer's call is on hold (multi-call). Null on older senders
+     * that do not stamp the field; treat null as not-held for rendering.
+     */
+    val held: Boolean? = null,
 )
 
 internal class SignalingMessageRouter(
@@ -33,7 +38,7 @@ internal class SignalingMessageRouter(
     private val onError: (callError: CallError, serverCode: String?) -> Unit,
     private val onRoomEnded: () -> Unit,
     private val onContentStateReceived: (fromCid: String, active: Boolean, contentType: String?, revision: Long?) -> Unit,
-    private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean?, videoEnabled: Boolean?) -> Unit,
+    private val onMediaStateReceived: (fromCid: String, audioEnabled: Boolean?, videoEnabled: Boolean?, held: Boolean?) -> Unit,
     private val onTurnRefreshed: (SignalingMessage) -> Unit,
     private val onSignalingPayload: (SignalingMessage) -> Unit,
     private val onPong: () -> Unit,
@@ -70,10 +75,11 @@ internal class SignalingMessageRouter(
         sendMessage("content_state", payload, null)
     }
 
-    fun broadcastMediaState(audioEnabled: Boolean, videoEnabled: Boolean) {
+    fun broadcastMediaState(audioEnabled: Boolean, videoEnabled: Boolean, held: Boolean = false) {
         val payload = JSONObject().apply {
             put("audioEnabled", audioEnabled)
             put("videoEnabled", videoEnabled)
+            put("held", held)
         }
         sendMessage("participant_media_state", payload, null)
     }
@@ -125,7 +131,7 @@ internal class SignalingMessageRouter(
             }
             "participant_media_state" -> {
                 val parsed = message.payload.toMediaStatePayload() ?: return
-                onMediaStateReceived(parsed.fromCid, parsed.audioEnabled, parsed.videoEnabled)
+                onMediaStateReceived(parsed.fromCid, parsed.audioEnabled, parsed.videoEnabled, parsed.held)
             }
             "offer", "answer", "ice", "media_restart_request" -> {
                 val base = message.payload ?: JSONObject()

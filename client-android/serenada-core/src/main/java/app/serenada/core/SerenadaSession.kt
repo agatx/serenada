@@ -40,9 +40,11 @@ import app.serenada.core.call.SignalingMessageRouter
 import app.serenada.core.call.AudioLevelPoller
 import app.serenada.core.call.StatsPoller
 import app.serenada.core.call.DefaultAudioCoordinator
+import app.serenada.core.call.CallMediaRole
 import app.serenada.core.call.CallPhase
 import app.serenada.core.call.ConnectionStatus
 import app.serenada.core.call.ContentTypeWire
+import app.serenada.core.call.MediaActivationState
 import app.serenada.core.call.LocalCameraMode
 import app.serenada.core.call.LocalFrameSnapshotCapture
 import app.serenada.core.call.ParticipantCapabilities
@@ -387,11 +389,12 @@ class SerenadaSession internal constructor(
         onContentStateReceived = { fromCid, active, contentType, revision ->
             handleRemoteContentState(fromCid, active, contentType, revision)
         },
-        onMediaStateReceived = { fromCid, audioEnabled, videoEnabled ->
+        onMediaStateReceived = { fromCid, audioEnabled, videoEnabled, held ->
             val existing = remoteMediaStates[fromCid]
             remoteMediaStates[fromCid] = RemoteMediaState(
                 audioEnabled = audioEnabled ?: existing?.audioEnabled,
                 videoEnabled = videoEnabled ?: existing?.videoEnabled,
+                held = held ?: existing?.held,
             )
             refreshRemoteParticipants()
         },
@@ -511,6 +514,42 @@ class SerenadaSession internal constructor(
     private val videoCaptureSupported: Boolean = videoMediaEnabled && availableCameraModes.isNotEmpty()
     private var userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
     private var isVideoPausedByProximity = false
+
+    // --- Multi-call session primitives (Phase 1) ---
+    // mediaRole + mediaActivationState are two of the three orthogonal axes
+    // (membership phase is the existing CallPhase). A single-call session is
+    // FOREGROUND/ACTIVE for its whole life; hold/resume toggle these. desired*
+    // are the single source of user intent and survive hold; actual* reflect
+    // what peers observe now (a held call always publishes false/false).
+    private var mediaRole: CallMediaRole = CallMediaRole.FOREGROUND
+    private var mediaActivationState: MediaActivationState = MediaActivationState.ACTIVE
+    private var desiredAudioEnabled: Boolean = config.defaultAudioEnabled
+    private var desiredVideoMode: LocalCameraMode? =
+        if (videoCaptureSupported && config.defaultVideoEnabled) {
+            availableCameraModes.firstOrNull()
+        } else {
+            null
+        }
+    private var actualAudioPublished: Boolean = false
+    private var actualVideoPublished: Boolean = false
+
+    /** Test-only accessor: current media role. */
+    internal fun mediaRoleForTest(): CallMediaRole = mediaRole
+
+    /** Test-only accessor: current media activation state. */
+    internal fun mediaActivationStateForTest(): MediaActivationState = mediaActivationState
+
+    /** Test-only accessor: desired audio intent (survives hold). */
+    internal fun desiredAudioEnabledForTest(): Boolean = desiredAudioEnabled
+
+    /** Test-only accessor: desired video mode (null = off). */
+    internal fun desiredVideoModeForTest(): LocalCameraMode? = desiredVideoMode
+
+    /** Test-only accessor: actual published audio (false while held). */
+    internal fun actualAudioPublishedForTest(): Boolean = actualAudioPublished
+
+    /** Test-only accessor: actual published video (false while held). */
+    internal fun actualVideoPublishedForTest(): Boolean = actualVideoPublished
     private val isMediaEngineInjected = mediaEngine != null
     // Owned at the session level so that engine recreation (or release on call end) does not
     // invalidate the EglBase.Context handed to Compose AndroidView factories. Releasing the
@@ -904,6 +943,13 @@ class SerenadaSession internal constructor(
             return
         }
         userPreferredVideoEnabled = requestedEnabled
+        // Track user intent for hold/resume (Phase 1): off when disabled, else
+        // the active camera mode.
+        desiredVideoMode = if (requestedEnabled) {
+            webRtcEngine.activeCameraMode() ?: _state.value.localCameraMode
+        } else {
+            null
+        }
         applyLocalVideoPreference()
         broadcastLocalMediaState()
     }
@@ -1329,8 +1375,15 @@ class SerenadaSession internal constructor(
                 localMediaReadyForNegotiation = true
                 userMuted = !config.defaultAudioEnabled
                 sessionActivated = true
+                // Single-call start: this session owns foreground media and is
+                // fully active (Phase 1). actual* track updateEffectiveMicState /
+                // applyLocalVideoPreference below.
+                mediaRole = CallMediaRole.FOREGROUND
+                mediaActivationState = MediaActivationState.ACTIVE
                 updateEffectiveMicState()
                 applyLocalVideoPreference()
+                actualAudioPublished = _state.value.localAudioEnabled
+                actualVideoPublished = _state.value.localVideoEnabled
                 startRemoteVideoStatePolling()
                 peerNegotiationEngine.onLocalMediaReady()
                 joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
@@ -1357,6 +1410,138 @@ class SerenadaSession internal constructor(
         requestPermissions(permissions)
     }
 
+    // --- Internal: Multi-call hold / resume (Phase 1) ---
+    //
+    // These are the session-internal mechanics behind the eventual token-gated
+    // releaseForeground / activateForeground (Phase 2). They take no token this
+    // phase. Both run on the main thread. They preserve signaling, reconnect
+    // identity, and peer-connection identity; only foreground media ownership is
+    // suspended/restored. desired* are preserved.
+
+    /**
+     * Drive this session to a fully-held media state: stop screen share, release
+     * local capture (mic + camera), deafen remote audio, deactivate the audio
+     * controller + coordinator, release foreground-media wake locks, and
+     * broadcast `held=true` AFTER capture has stopped.
+     *
+     * Idempotent: a second call is a no-op. Must not throw after partial release.
+     */
+    internal suspend fun applyHeldRoleInternal() {
+        assertMainThread()
+        if (mediaRole == CallMediaRole.HELD) return
+        mediaRole = CallMediaRole.HELD
+        mediaActivationState = MediaActivationState.INACTIVE
+
+        // 1. Stop screen share first (foreground-only; not restored on resume).
+        runCatching {
+            if (_diagnostics.value.isScreenSharing) {
+                webRtcEngine.stopScreenShare()
+                updateDiagnostics(_diagnostics.value.copy(isScreenSharing = false))
+            }
+        }
+        // 2. Release local capture (mic + camera) — capture actually stops.
+        runCatching { webRtcEngine.suspendLocalMediaForHold() }
+        // 3. Deafen remote audio playout.
+        runCatching { webRtcEngine.setRemotePlaybackEnabled(false) }
+        // 4. Detach/pause visible renderers.
+        runCatching { webRtcEngine.detachRenderersForHold() }
+        // 5. Deactivate the audio controller, then the coordinator (mirror the
+        //    teardown ordering used in resetResources).
+        runCatching { callAudioSessionController.deactivate() }
+        runCatching { deactivateAudioCoordinatorForHold() }
+        // 6. Release foreground-media wake locks.
+        runCatching { releasePerformanceLocks() }
+        // 7. Pause foreground-only pollers.
+        runCatching { stopRemoteVideoStatePolling() }
+
+        sessionActivated = false
+        actualAudioPublished = false
+        actualVideoPublished = false
+        // Reflect held in published local state so peers and UI converge.
+        updateState(_state.value.copy(localAudioEnabled = false, localVideoEnabled = false, localCameraEnabled = false))
+
+        // 8. Broadcast held AFTER capture has stopped (local-stop-then-broadcast).
+        runCatching { broadcastLocalMediaState(held = true) }
+    }
+
+    /**
+     * Drive this session back to foreground: activate the audio coordinator +
+     * controller, resume local capture per desired intent, re-enable remote
+     * playout, restart foreground pollers, and broadcast `held=false` AFTER
+     * media is flowing.
+     *
+     * Idempotent: a second call while already foreground is a no-op.
+     */
+    internal suspend fun applyForegroundRoleInternal() {
+        assertMainThread()
+        if (mediaRole == CallMediaRole.FOREGROUND) return
+        mediaActivationState = MediaActivationState.ACTIVATING
+
+        // 1. Activate the coordinator, then the controller (mirror start order).
+        runCatching { activateAudioCoordinatorForResume() }
+        runCatching { callAudioSessionController.activate() }
+        // 2. Resume local capture per desired intent (no renegotiation).
+        runCatching { webRtcEngine.resumeLocalMediaFromHold(desiredAudioEnabled, desiredVideoMode) }
+        // 3. Re-enable remote playout.
+        runCatching { webRtcEngine.setRemotePlaybackEnabled(true) }
+        // 4. Restart foreground-only pollers.
+        runCatching { startRemoteVideoStatePolling() }
+
+        // 5. Restore intent into the live foreground state. userMuted /
+        //    userPreferredVideoEnabled drive the engine; desired* are the source.
+        sessionActivated = true
+        userMuted = !desiredAudioEnabled
+        userPreferredVideoEnabled = desiredVideoMode != null
+        updateEffectiveMicState()
+        applyLocalVideoPreference()
+
+        mediaRole = CallMediaRole.FOREGROUND
+        mediaActivationState = MediaActivationState.ACTIVE
+        actualAudioPublished = _state.value.localAudioEnabled
+        actualVideoPublished = _state.value.localVideoEnabled
+
+        // 6. Broadcast held=false AFTER media is flowing (attach-then-broadcast).
+        runCatching { broadcastLocalMediaState(held = false) }
+    }
+
+    /**
+     * Deactivate the audio coordinator under the same mutex + timeout pattern as
+     * [resetResources], but awaited (hold must confirm before completing).
+     */
+    private suspend fun deactivateAudioCoordinatorForHold() {
+        try {
+            withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                audioCoordinatorMutex.withLock {
+                    audioCoordinator.deactivateCallSession()
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: audio coordinator deactivation timed out")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: failed to deactivate audio coordinator: ${e.message}")
+        }
+    }
+
+    /**
+     * Activate the audio coordinator under the same mutex + timeout pattern as
+     * [startJoinInternal].
+     */
+    private suspend fun activateAudioCoordinatorForResume() {
+        try {
+            withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                audioCoordinatorMutex.withLock {
+                    audioCoordinator.activateCallSession(config.audioIntent)
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: audio coordinator activation timed out")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: failed to activate audio coordinator: ${e.message}")
+        }
+    }
+
     // --- Internal: WebRTC Engine ---
 
     private fun buildWebRtcEngine(): WebRtcEngine {
@@ -1375,6 +1560,12 @@ class SerenadaSession internal constructor(
                 handler.post {
                     val previousMode = _state.value.localCameraMode
                     updateState(_state.value.copy(localCameraMode = mode))
+                    // Keep desired video mode in sync with the active camera mode
+                    // while video is on, so a hold/resume cycle restores framing
+                    // (Phase 1). Screen-share mode is not a camera intent.
+                    if (userPreferredVideoEnabled && mode != LocalCameraMode.SCREEN_SHARE) {
+                        desiredVideoMode = mode
+                    }
                     if (config.enableIndependentContentVideo) {
                         // Independent mode: the camera mode never represents screen
                         // share (isScreenSharing is owned by start/stopScreenShare,
@@ -1673,6 +1864,7 @@ class SerenadaSession internal constructor(
                 signalingStatus = signalingStatus,
                 presumedLost = signalingStatus == ParticipantSignalingStatus.SUSPENDED && cid in presumedLostRemoteCids,
                 audioLevel = if (audioEnabled) previousLevels[cid] ?: 0f else 0f,
+                held = peerState?.held ?: false,
             )
         }
         val currentState = _state.value
@@ -1779,10 +1971,11 @@ class SerenadaSession internal constructor(
         )
     }
 
-    private fun broadcastLocalMediaState() {
+    private fun broadcastLocalMediaState(held: Boolean = mediaRole == CallMediaRole.HELD) {
         signalingMessageRouter.broadcastMediaState(
             audioEnabled = _state.value.localAudioEnabled,
             videoEnabled = _state.value.localVideoEnabled,
+            held = held,
         )
     }
 
@@ -2186,6 +2379,9 @@ class SerenadaSession internal constructor(
         }
         iceRestartCallsFromGate += 1
         peerNegotiationEngine.handleSignalingReconnect()
+        // Re-broadcast current media state (incl. held) so peers that missed the
+        // original message converge after a reconnect (multi-call Phase 1).
+        if (sessionActivated || mediaRole == CallMediaRole.HELD) broadcastLocalMediaState()
     }
 
     private fun cancelPostReconnectResync() {
@@ -2280,6 +2476,12 @@ class SerenadaSession internal constructor(
         sessionStartTs = null
         sessionActivated = false
         localMediaReadyForNegotiation = false
+        // Reset multi-call role/activation/actual to defaults for a fresh start
+        // (desired* survive into the next start as user intent defaults).
+        mediaRole = CallMediaRole.FOREGROUND
+        mediaActivationState = MediaActivationState.ACTIVE
+        actualAudioPublished = false
+        actualVideoPublished = false
         playbackDuckingActive = false
         externalAudioMuted = false
         routeInputAvailable = true
@@ -2445,6 +2647,8 @@ class SerenadaSession internal constructor(
     fun setMicMuted(muted: Boolean) {
         assertMainThread()
         userMuted = muted
+        // Track user intent so a hold/resume cycle restores it (Phase 1).
+        desiredAudioEnabled = !muted
         updateEffectiveMicState()
         providerScope.launch {
             runCatching {

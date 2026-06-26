@@ -1043,6 +1043,16 @@ internal class PeerConnectionSlot(
         }
     }
 
+    override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        val pc = peerConnection ?: return
+        for (receiver in pc.receivers) {
+            val track = receiver.track()
+            if (track is AudioTrack) {
+                track.setEnabled(enabled)
+            }
+        }
+    }
+
     override fun applyVideoSenderParameters(policy: WebRtcEngine.VideoSenderPolicy) {
         if (isClosing) return
         val pc = peerConnection ?: return

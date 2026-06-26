@@ -1,5 +1,43 @@
 import type { RoomState, SignalingMessage } from '../../src/signaling/types.js';
-import type { ConnectionStatus } from '../../src/types.js';
+import type { ConnectionStatus, VideoMode } from '../../src/types.js';
+
+/**
+ * Minimal fake MediaStreamTrack that records `stop()` so hold tests can assert
+ * capture was actually released (vs only `enabled=false`). `enabled` is a plain
+ * field so tests can also assert the mute distinction.
+ */
+export class FakeMediaStreamTrack {
+    kind: 'audio' | 'video';
+    enabled = true;
+    readyState: 'live' | 'ended' = 'live';
+    stopCalls = 0;
+    constructor(kind: 'audio' | 'video') {
+        this.kind = kind;
+    }
+    stop(): void {
+        this.stopCalls += 1;
+        this.readyState = 'ended';
+    }
+}
+
+/**
+ * Minimal fake MediaStream backed by {@link FakeMediaStreamTrack}s so the
+ * session's `getAudioTracks()[0].enabled` toggles and the hold capture-release
+ * path are both observable.
+ */
+export class FakeMediaStream {
+    private tracks: FakeMediaStreamTrack[];
+    constructor(tracks: FakeMediaStreamTrack[] = []) {
+        this.tracks = tracks;
+    }
+    getTracks(): FakeMediaStreamTrack[] { return [...this.tracks]; }
+    getAudioTracks(): FakeMediaStreamTrack[] { return this.tracks.filter(t => t.kind === 'audio'); }
+    getVideoTracks(): FakeMediaStreamTrack[] { return this.tracks.filter(t => t.kind === 'video'); }
+    addTrack(track: FakeMediaStreamTrack): void { this.tracks.push(track); }
+    removeTrack(track: FakeMediaStreamTrack): void {
+        this.tracks = this.tracks.filter(t => t !== track);
+    }
+}
 
 /**
  * Fake MediaEngine for testing SerenadaSession.
@@ -77,8 +115,80 @@ export class FakeMediaEngine {
     }
 
     async startScreenShare(): Promise<void> { /* no-op */ }
-    async stopScreenShare(): Promise<void> { /* no-op */ }
-    async flipCamera(): Promise<void> { /* no-op */ }
+    async stopScreenShare(): Promise<void> { this.isScreenSharing = false; }
+    async flipCamera(): Promise<void> {
+        this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+    }
+
+    async releaseVideoTrack(): Promise<void> {
+        const stream = this.localStream as unknown as FakeMediaStream | null;
+        if (!stream) return;
+        for (const track of stream.getVideoTracks()) {
+            track.stop();
+            stream.removeTrack(track);
+        }
+    }
+
+    async reacquireVideoTrack(): Promise<void> {
+        const stream = this.localStream as unknown as FakeMediaStream | null;
+        if (!stream || stream.getVideoTracks().length > 0) return;
+        stream.addTrack(new FakeMediaStreamTrack('video'));
+    }
+
+    // --- Multi-call hold/resume primitives ---
+    suspendLocalMediaForHoldCalls = 0;
+    resumeLocalMediaFromHoldCalls: Array<{ desiredAudio: boolean; desiredVideoMode: VideoMode }> = [];
+    setRemotePlaybackEnabledCalls: boolean[] = [];
+    detachOrPauseRenderersForHoldCalls = 0;
+    /** Tracks stopped during the most recent hold (capture-release assertions). */
+    lastSuspendedAudioTracks: FakeMediaStreamTrack[] = [];
+    lastSuspendedVideoTracks: FakeMediaStreamTrack[] = [];
+
+    async suspendLocalMediaForHold(): Promise<void> {
+        this.suspendLocalMediaForHoldCalls += 1;
+        if (this.isScreenSharing) {
+            await this.stopScreenShare();
+        }
+        const stream = this.localStream as unknown as FakeMediaStream | null;
+        this.lastSuspendedAudioTracks = [];
+        this.lastSuspendedVideoTracks = [];
+        if (stream) {
+            for (const track of stream.getAudioTracks()) {
+                track.stop();
+                this.lastSuspendedAudioTracks.push(track);
+                stream.removeTrack(track);
+            }
+            for (const track of stream.getVideoTracks()) {
+                track.stop();
+                this.lastSuspendedVideoTracks.push(track);
+                stream.removeTrack(track);
+            }
+        }
+        this.setRemotePlaybackEnabled(false);
+        this.detachOrPauseRenderersForHold();
+    }
+
+    async resumeLocalMediaFromHold(desiredAudio: boolean, desiredVideoMode: VideoMode): Promise<void> {
+        this.resumeLocalMediaFromHoldCalls.push({ desiredAudio, desiredVideoMode });
+        const stream = this.localStream as unknown as FakeMediaStream | null;
+        if (stream) {
+            if (desiredAudio && stream.getAudioTracks().length === 0) {
+                stream.addTrack(new FakeMediaStreamTrack('audio'));
+            }
+            if (desiredVideoMode !== 'off' && stream.getVideoTracks().length === 0) {
+                stream.addTrack(new FakeMediaStreamTrack('video'));
+            }
+        }
+        this.setRemotePlaybackEnabled(true);
+    }
+
+    setRemotePlaybackEnabled(enabled: boolean): void {
+        this.setRemotePlaybackEnabledCalls.push(enabled);
+    }
+
+    detachOrPauseRenderersForHold(): void {
+        this.detachOrPauseRenderersForHoldCalls += 1;
+    }
 
     // Independent-content stream accessors (Phase 2). Tests can override the maps.
     remoteCameraStreams = new Map<string, MediaStream>();
@@ -192,6 +302,20 @@ export class FakeMediaEngine {
     }
 
     // --- Test helpers ---
+
+    /**
+     * Install a live local stream with audio and (optionally) camera tracks so
+     * hold/resume tests can observe capture release. Returns the stream so a
+     * test can hold references to the underlying tracks.
+     */
+    installLocalStream(opts: { audio?: boolean; video?: boolean } = {}): FakeMediaStream {
+        const tracks: FakeMediaStreamTrack[] = [];
+        if (opts.audio !== false) tracks.push(new FakeMediaStreamTrack('audio'));
+        if (opts.video) tracks.push(new FakeMediaStreamTrack('video'));
+        const stream = new FakeMediaStream(tracks);
+        this.localStream = stream as unknown as MediaStream;
+        return stream;
+    }
 
     /** Apply a partial state update and trigger onChange (which triggers rebuildState). */
     emit(partial: Partial<Pick<FakeMediaEngine, 'localStream' | 'remoteStreams' | 'isScreenSharing' | 'lastContentRevision' | 'canScreenShare' | 'facingMode' | 'hasMultipleCameras' | 'iceConnectionState' | 'connectionState' | 'signalingState' | 'connectionStatus'>>): void {

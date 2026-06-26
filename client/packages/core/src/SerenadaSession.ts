@@ -3,12 +3,14 @@ import type {
     CallErrorCode,
     CallQualitySummary,
     CallState,
+    CallMediaRole,
     CallStats,
     CameraMode,
     ConfigurableCameraMode,
     ConnectionEvent,
     ConnectionStatus,
     DropoutTrigger,
+    MediaActivationState,
     MediaCapability,
     ParticipantContent,
     SerenadaConfig,
@@ -16,6 +18,7 @@ import type {
     SignalingState,
     SnapshotResult,
     SnapshotSource,
+    VideoMode,
 } from './types.js';
 import { CallQualityTracker } from './media/CallQualityTracker.js';
 import { reconnectFailedReasonForCode } from './media/reconnectReason.js';
@@ -324,7 +327,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private clientId: string | null = null;
     private roomState: RoomState | null = null;
     private error: SignalingErrorEvent | null = null;
-    private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean }>();
+    private readonly remoteMediaStates = new Map<string, { audioEnabled?: boolean; videoEnabled?: boolean; held?: boolean }>();
     // Remote capabilities/mediaPolicy advertised at join, keyed by CID. Stored
     // verbatim (allowlisted upstream); consumers apply defaults for missing
     // keys. Media routing and UI use these for per-peer independent content
@@ -337,6 +340,24 @@ export class SerenadaSession implements SerenadaSessionHandle {
     private readonly remoteContentStates = new Map<string, TrackedRemoteContent>();
     private readonly availableCameraModes: ConfigurableCameraMode[];
     private userPreferredVideoEnabled: boolean;
+
+    // --- Multi-call session media-role state (Phase 1). For a normally-joined
+    // single call these stay at foreground/active so behavior is unchanged. The
+    // owner-token gating that wraps the suspend/resume methods is added in
+    // Phase 2; for now they are session-internal primitives. ---
+    /** Which foreground-media lease this call holds. Defaults to `foreground`. */
+    private mediaRole: CallMediaRole = 'foreground';
+    /** Foreground-activation progress; only meaningful while foregrounding. */
+    private mediaActivationState: MediaActivationState = 'active';
+    /**
+     * User intent (survives hold). The single source of truth for what the user
+     * wants published; toggles update these. `actual*` reflect what peers
+     * observe right now (always false while held).
+     */
+    private desiredAudioEnabled: boolean;
+    private desiredVideoMode: VideoMode;
+    private actualAudioPublished: boolean;
+    private actualVideoPublished: boolean;
 
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
@@ -379,6 +400,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
         const videoMediaEnabled = config.videoMediaEnabled !== false;
         this.availableCameraModes = Object.freeze(videoMediaEnabled ? resolveCameraModes(config.cameraModes) : []) as ConfigurableCameraMode[];
         this.userPreferredVideoEnabled = this.availableCameraModes.length > 0 && config.defaultVideoEnabled !== false;
+
+        // Desired/actual media intent seeds from config defaults. `desired*` is
+        // the single source of user intent (toggles update it); `actual*`
+        // mirrors what peers observe and matches desired for a foreground call.
+        this.desiredAudioEnabled = config.defaultAudioEnabled !== false;
+        this.desiredVideoMode = this.userPreferredVideoEnabled ? this.availableCameraModes[0] : 'off';
+        this.actualAudioPublished = this.desiredAudioEnabled;
+        this.actualVideoPublished = this.userPreferredVideoEnabled;
 
         this._state = {
             phase: 'joining',
@@ -568,6 +597,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
     setCameraMode(mode: CameraMode): void {
         if (mode !== 'selfie' && mode !== 'world') return;
         if (!this.availableCameraModes.includes(mode)) return;
+        // Track desired camera mode so a later resume restores the right facing.
+        if (this.desiredVideoMode !== 'off') {
+            this.desiredVideoMode = mode;
+        }
         if (mode === 'world' && this.media.facingMode === 'user') {
             void this.media.flipCamera();
         } else if (mode === 'selfie' && this.media.facingMode === 'environment') {
@@ -579,6 +612,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
     async flipCamera(): Promise<void> {
         if (this.availableCameraModes.length <= 1) return;
         await this.media.flipCamera();
+        // Keep desired camera mode in sync with the new facing so resume
+        // restores the camera the user last chose.
+        if (this.desiredVideoMode !== 'off') {
+            this.desiredVideoMode = this.media.facingMode === 'environment' ? 'world' : 'selfie';
+        }
     }
 
     /** Start sharing the screen, replacing the camera video track. */
@@ -783,7 +821,8 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.media.updateRoomState(this.roomState, this.clientId);
         this.maybeStartMediaLivenessTimer();
         this.rebuildState();
-        this.broadcastLocalMediaState();
+        // Include `held` so a newly joined peer sees this call's hold state.
+        this.broadcastLocalMediaState(this.mediaRole === 'held');
     };
 
     private readonly handlePeerLeft = (event: PeerEvent): void => {
@@ -1002,6 +1041,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 `Post-reconnect snapshot timeout after ${EPOCH_RESYNC_TIMEOUT_MS}ms; firing ICE restart against last-known peer map`,
             );
         }
+        // Re-broadcast current media state (including `held`) so peers that
+        // missed the original message during the outage converge. Carries the
+        // current role's held flag (held:true while suspended).
+        this.broadcastLocalMediaState(this.mediaRole === 'held');
         this.media.handleSignalingReconnect();
     }
 
@@ -1128,6 +1171,11 @@ export class SerenadaSession implements SerenadaSessionHandle {
             const videoTrack = stream.getVideoTracks()[0];
             const newEnabled = enabled ?? !(videoTrack?.enabled ?? this.userPreferredVideoEnabled);
             this.userPreferredVideoEnabled = newEnabled;
+            // Update desired intent so a later hold/resume restores it correctly.
+            this.desiredVideoMode = newEnabled
+                ? (this.media.facingMode === 'environment' ? 'world' : 'selfie')
+                : 'off';
+            this.actualVideoPublished = newEnabled;
             const swap = newEnabled ? this.media.reacquireVideoTrack() : this.media.releaseVideoTrack();
             void swap.then(() => {
                 if (!this.isInactive) {
@@ -1138,13 +1186,112 @@ export class SerenadaSession implements SerenadaSessionHandle {
             this.rebuildState();
         } else {
             const track = stream.getAudioTracks()[0];
-            if (track) track.enabled = enabled ?? !track.enabled;
+            const newEnabled = enabled ?? !(track?.enabled ?? this.desiredAudioEnabled);
+            if (track) track.enabled = newEnabled;
+            this.desiredAudioEnabled = newEnabled;
+            this.actualAudioPublished = newEnabled;
             this.broadcastLocalMediaState();
             this.rebuildState();
         }
     }
 
-    private broadcastLocalMediaState(): void {
+    /**
+     * Current media role for this call (multi-call session model).
+     * `'foreground'` for a normally-joined single call. Read by the Phase 3
+     * registry to derive `activeCallId` and publish `ManagedCallState`.
+     */
+    get currentMediaRole(): CallMediaRole {
+        return this.mediaRole;
+    }
+
+    /** Foreground-activation progress; `'active'` for a normal single call. */
+    get currentMediaActivationState(): MediaActivationState {
+        return this.mediaActivationState;
+    }
+
+    /** User intent for audio/video (survives hold). Read by the registry. */
+    get currentDesiredAudioEnabled(): boolean {
+        return this.desiredAudioEnabled;
+    }
+    get currentDesiredVideoMode(): VideoMode {
+        return this.desiredVideoMode;
+    }
+
+    /** What peers observe now; always false while held. Read by the registry. */
+    get currentActualAudioPublished(): boolean {
+        return this.actualAudioPublished;
+    }
+    get currentActualVideoPublished(): boolean {
+        return this.actualVideoPublished;
+    }
+
+    /**
+     * Session-internal hold primitive (Phase 1; Phase 2 wraps this as the
+     * token-gated `releaseForeground`). Drives the session to a fully-held
+     * state: stop screen share, release mic + camera CAPTURE and null the
+     * senders, silence remote playout, then broadcast `held:true` AFTER capture
+     * is stopped (local-stop-then-broadcast ordering). Idempotent and must not
+     * throw after a partial release — calling it again is a safe no-op once
+     * already held.
+     */
+    async suspendForHold(): Promise<void> {
+        if (this.isInactive) return;
+        if (this.mediaRole === 'held') return;
+        // Flip role first so a re-entrant call short-circuits and so `actual*`
+        // never reports a held call as publishing media.
+        this.mediaRole = 'held';
+        this.mediaActivationState = 'inactive';
+        this.actualAudioPublished = false;
+        this.actualVideoPublished = false;
+        try {
+            await this.media.suspendLocalMediaForHold();
+        } catch (err) {
+            // Idempotent / no-throw contract: a partial release still leaves the
+            // session held. Log and proceed to broadcast the held state.
+            this.config.logger?.log('warning', 'Session', `suspendForHold partial release: ${formatError(err)}`);
+        }
+        if (this.isInactive) return;
+        // Broadcast AFTER local capture has stopped (local-stop-then-broadcast).
+        this.broadcastLocalMediaState(true);
+        this.rebuildState();
+    }
+
+    /**
+     * Session-internal resume primitive (Phase 1; Phase 2 wraps this as the
+     * token-gated `activateForeground`). Re-acquires local media per the call's
+     * desired intent, re-enables remote playout, sets role/actual, then
+     * broadcasts `held:false` with audio/video derived from desired AFTER the
+     * tracks are attached (attach-then-broadcast ordering).
+     */
+    async resumeForeground(): Promise<void> {
+        if (this.isInactive) return;
+        if (this.mediaRole === 'foreground') return;
+        await this.media.resumeLocalMediaFromHold(this.desiredAudioEnabled, this.desiredVideoMode);
+        if (this.isInactive) return;
+        const stream = this.media.localStream;
+        const audioTrack = stream?.getAudioTracks()[0];
+        const videoTrack = stream?.getVideoTracks()[0];
+        this.mediaRole = 'foreground';
+        this.mediaActivationState = 'active';
+        this.actualAudioPublished = !!audioTrack && audioTrack.enabled;
+        this.actualVideoPublished = !!videoTrack && videoTrack.enabled;
+        // Broadcast AFTER tracks are attached (attach-then-broadcast).
+        this.broadcastLocalMediaState();
+        this.rebuildState();
+    }
+
+    private broadcastLocalMediaState(held = false): void {
+        if (held) {
+            // Held: own no capture. Send audio/video disabled + held:true so an
+            // old peer that ignores `held` still degrades to muted/camera-off,
+            // never a wrong "live" state.
+            this.signaling.broadcast('participant_media_state', {
+                audioEnabled: false,
+                videoEnabled: false,
+                held: true,
+            });
+            return;
+        }
         const stream = this.media.localStream;
         const audioTrack = stream?.getAudioTracks()[0];
         const videoTrack = stream?.getVideoTracks()[0];
@@ -1156,6 +1303,7 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.signaling.broadcast('participant_media_state', {
             audioEnabled: audioTrack?.enabled ?? (this.config.defaultAudioEnabled !== false),
             videoEnabled: stream ? !!videoTrack && videoTrack.enabled : this.userPreferredVideoEnabled,
+            held: false,
         });
     }
 
@@ -1166,6 +1314,9 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.remoteMediaStates.set(message.from, {
             audioEnabled: typeof payload.audioEnabled === 'boolean' ? payload.audioEnabled : existing?.audioEnabled,
             videoEnabled: typeof payload.videoEnabled === 'boolean' ? payload.videoEnabled : existing?.videoEnabled,
+            // `held` is additive and lenient (like audio/video): an older peer
+            // that omits it leaves the cached value unchanged.
+            held: typeof payload.held === 'boolean' ? payload.held : existing?.held,
         });
         this.rebuildState();
     }
@@ -1432,6 +1583,10 @@ export class SerenadaSession implements SerenadaSessionHandle {
                     // signal; independent screen-share state is exposed via content.
                     cameraEnabled: videoEnabled,
                     videoEnabled,
+                    // `held` surfaces the peer's hold state so call UIs can show
+                    // "on hold" distinctly. Absent for peers we've never heard a
+                    // `held` field from (older clients / never held).
+                    held: peerState?.held,
                     content: trackedContent?.active === true ? trackedContent : undefined,
                     cameraReceiving: roleLiveness.camera,
                     contentReceiving: roleLiveness.content,

@@ -367,6 +367,74 @@ internal class WebRtcEngine(
         localAudioTrack = null
     }
 
+    override fun suspendLocalMediaForHold() {
+        if (released) return
+        // Camera: stop the capturer and dispose the video track/source so the OS
+        // camera indicator clears. Mirrors video-off, plus a track dispose.
+        cameraController.disposeVideoCapturer()
+        disposeLocalVideoTrack()
+        disposeLocalContentVideoTrack()
+        // Microphone: RELEASE capture (do not just flip enabled). Null the audio
+        // sender on every slot first so the sender drops its track reference,
+        // then tear down the primer and dispose the track/source. After this the
+        // OS no longer reports this session as capturing audio.
+        peerSlots.forEach { slot -> slot.setAudioTrack(null) }
+        audioPipelinePrimer.stop()
+        localAudioTrack?.dispose()
+        audioSource?.dispose()
+        audioSource = null
+        localAudioTrack = null
+    }
+
+    override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
+        if (released) return
+        // Microphone: recreate capture and re-attach to the existing senders via
+        // setTrack (no renegotiation). Mute intent is applied by the session via
+        // toggleAudio after this; create the track enabled so the sender carries
+        // a live track again.
+        if (localAudioTrack == null) {
+            val audioConstraints = MediaConstraints()
+            audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
+            localAudioTrack = peerConnectionFactory.createAudioTrack("ARDAMSa0", audioSource)
+            applyAudioTrackHints()
+            localAudioTrack?.let { audioPipelinePrimer.start(it) }
+            localAudioTrack?.setEnabled(audioEnabled)
+            peerSlots.forEach { slot -> slot.setAudioTrack(localAudioTrack) }
+        } else {
+            localAudioTrack?.setEnabled(audioEnabled)
+        }
+
+        // Camera: reacquire only when a camera mode is desired (off = leave
+        // camera released). Re-attach the camera track to existing senders.
+        val cameraMode = videoMode?.takeIf {
+            it != LocalCameraMode.SCREEN_SHARE &&
+                videoMediaEnabled &&
+                cameraController.availableCameraModes.isNotEmpty()
+        }
+        if (cameraMode != null) {
+            ensureVideoSource()
+            val startedVideo = restartVideoCapturerWithFallback(cameraSourceFromMode(cameraMode))
+            ensureLocalVideoTrack(enabled = startedVideo)
+        }
+        // Re-attach local tracks to existing senders (no renegotiation). Runs in
+        // both branches to keep audio-only sender wiring consistent with
+        // startLocalMedia's no-video branch.
+        peerSlots.forEach { slot -> attachLocalTracksToSlot(slot) }
+    }
+
+    override fun setRemotePlaybackEnabled(enabled: Boolean) {
+        if (released) return
+        peerSlots.forEach { slot -> slot.setRemotePlaybackEnabled(enabled) }
+    }
+
+    override fun detachRenderersForHold() {
+        // Renderers are owned/registered by the host via attach/detach calls; the
+        // session re-registers them on resume. No engine-held renderer state to
+        // pause for a held call beyond the camera track teardown already done in
+        // [suspendLocalMediaForHold]. Kept as an explicit seam for parity with the
+        // contract's `detachOrPauseRenderersForHold`.
+    }
+
     override fun release() {
         if (released) return
         released = true

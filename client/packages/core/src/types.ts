@@ -17,6 +17,30 @@ export type CameraMode = 'selfie' | 'world' | 'composite' | 'screenShare';
 /** Subset of {@link CameraMode} that can be configured via {@link SerenadaConfig.cameraModes}. */
 export type ConfigurableCameraMode = Exclude<CameraMode, 'screenShare'>;
 
+/**
+ * Desired camera intent for a managed call, used by the multi-call session
+ * primitives (hold/resume). `'off'` means no camera capture; the other values
+ * reuse {@link ConfigurableCameraMode}. Distinct from {@link CameraMode} (which
+ * also carries the transient `'screenShare'` presentation state). The session's
+ * `desiredVideoMode` survives a hold so resume can restore the user's intent.
+ */
+export type VideoMode = 'off' | ConfigurableCameraMode;
+
+/**
+ * Which foreground-media lease a call holds (multi-call session model).
+ * `'foreground'` calls own local capture, screen share, and audible remote
+ * playout; `'held'` calls stay signaled but own none of those. A normally-joined
+ * single call is always `'foreground'`, preserving existing behavior.
+ */
+export type CallMediaRole = 'foreground' | 'held';
+
+/**
+ * Progress of foreground-media activation for the call being foregrounded. Only
+ * meaningful for the call holding (or attempting) the foreground lease; held
+ * calls sit at `'inactive'`. A normally-joined single call is `'active'`.
+ */
+export type MediaActivationState = 'inactive' | 'activating' | 'active' | 'needsPermission' | 'failed';
+
 /** Default preference order for camera modes when {@link SerenadaConfig.cameraModes} is unset. */
 export const DEFAULT_CAMERA_MODES: readonly ConfigurableCameraMode[] = ['selfie', 'world', 'composite'];
 
@@ -75,6 +99,16 @@ export interface Participant {
      */
     cameraEnabled: boolean;
     videoEnabled: boolean;
+    /**
+     * `true` when this participant has put this call on hold (multi-call
+     * session model): their local capture is released and they own no audible
+     * playout, so a held participant always also reports `audioEnabled:false`
+     * and `videoEnabled:false`. Absent/`false` for participants that are not
+     * held or that run an older client (which never sends the `held` field).
+     * Surfaced so call UIs can render an "on hold" state distinct from a plain
+     * muted/camera-off participant.
+     */
+    held?: boolean;
     /**
      * Active content (screen share) presentation state, or absent when the
      * participant is not currently sharing content. Driven by received

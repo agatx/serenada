@@ -1,5 +1,5 @@
 import type { RoomState, SignalingMessage } from '../signaling/types.js';
-import type { ConnectionStatus, SerenadaLogger } from '../types.js';
+import type { ConnectionStatus, SerenadaLogger, VideoMode } from '../types.js';
 import { parseOfferPayload, parseAnswerPayload, parseIceCandidatePayload } from '../signaling/payloads.js';
 import { MEDIA_RESTART_REASON_LOCAL_TRACK_NEGOTIATION } from '../signaling/protocolConstants.js';
 import { formatError } from '../formatError.js';
@@ -538,6 +538,132 @@ export class MediaEngine {
             this.logger?.log('error', 'Camera', `Failed to reacquire camera: ${formatError(err)}`);
         } finally {
             this.cameraRecoveryInFlight = false;
+        }
+    }
+
+    // --- Multi-call hold/resume primitives (design "Add Local Media
+    // Suspension Primitives"). These release foreground media so a held call
+    // owns no mic, camera, screen share, or audible remote playout, while
+    // preserving peer connections, transceivers/senders, and signaling. ---
+
+    /**
+     * Release all foreground LOCAL media for a held call: stop screen share,
+     * release the microphone CAPTURE (not just `track.enabled=false` — the
+     * browser keeps capture live otherwise) and null the audio sender track,
+     * release the camera (reusing {@link releaseVideoTrack}), and silence remote
+     * audio playout. Peer connections, transceivers/senders, and signaling are
+     * left intact so resume can re-attach fresh tracks with no renegotiation.
+     */
+    async suspendLocalMediaForHold(): Promise<void> {
+        if (this.isScreenSharing) {
+            await this.stopScreenShare();
+        }
+        await this.releaseLocalAudioCapture();
+        await this.releaseVideoTrack();
+        this.setRemotePlaybackEnabled(false);
+        this.detachOrPauseRenderersForHold();
+        this.notifyChange();
+    }
+
+    /**
+     * Re-acquire foreground LOCAL media for a resumed call per the call's
+     * desired intent: reacquire the microphone (and re-attach to the audio
+     * senders) when `desiredAudio`, reacquire the camera when `desiredVideoMode`
+     * is not `'off'`, and re-enable audible remote playout. Attaches fresh
+     * tracks to the existing senders via `replaceTrack` (no SDP renegotiation on
+     * the common path).
+     */
+    async resumeLocalMediaFromHold(desiredAudio: boolean, desiredVideoMode: VideoMode): Promise<void> {
+        if (desiredAudio) {
+            await this.reacquireLocalAudioCapture();
+        }
+        if (desiredVideoMode !== 'off') {
+            await this.reacquireVideoTrack();
+        }
+        this.setRemotePlaybackEnabled(true);
+        this.notifyChange();
+    }
+
+    /**
+     * Gate audible remote playout for every peer by toggling
+     * `receiver.track.enabled` on inbound AUDIO receivers. Defense in depth: the
+     * call UI also mounts audible elements only for the active session, but a
+     * held session must silence its own receivers so a host that hand-mounts
+     * streams still gets silence.
+     */
+    setRemotePlaybackEnabled(enabled: boolean): void {
+        for (const peer of this.peers.values()) {
+            for (const receiver of peer.pc.getReceivers()) {
+                const track = receiver.track;
+                if (track?.kind === 'audio') {
+                    track.enabled = enabled;
+                }
+            }
+        }
+    }
+
+    /**
+     * No-op on web. The web core does not own renderers — the UI layer mounts
+     * the audible `<audio>`/`<video>` elements and only does so for the active
+     * call. Audible suppression for held calls is the combination of
+     * {@link setRemotePlaybackEnabled}(false) (receiver-track disable, done in
+     * core) and the UI un-mounting active-only elements. This method exists for
+     * cross-platform contract parity with iOS/Android, where renderers are
+     * detached/paused in the SDK.
+     */
+    detachOrPauseRenderersForHold(): void {
+        /* web: renderers are UI-owned; see method doc. */
+    }
+
+    /**
+     * Stop the local microphone CAPTURE and detach it from every peer's audio
+     * sender. Stopping the track (not just `enabled=false`) is what makes the OS
+     * stop reporting this session as capturing while held. The audio sender is
+     * preserved (its track is replaced with `null`) so resume can re-attach a
+     * fresh track without renegotiation.
+     */
+    private async releaseLocalAudioCapture(): Promise<void> {
+        const audioTrack = this.localStream?.getAudioTracks()[0] ?? null;
+        await Promise.all(Array.from(this.peers.values()).map(async (peer) => {
+            for (const sender of peer.pc.getSenders()) {
+                if (sender.track?.kind !== 'audio') continue;
+                try {
+                    await sender.replaceTrack(null);
+                } catch (err) {
+                    this.logger?.log('warning', 'WebRTC', `Failed to detach audio sender for hold: ${formatError(err)}`);
+                }
+            }
+        }));
+        if (audioTrack && this.localStream) {
+            try { audioTrack.stop(); } catch { /* ignore */ }
+            this.localStream.removeTrack(audioTrack);
+        }
+    }
+
+    /**
+     * Re-acquire the local microphone after a hold and re-attach it to every
+     * peer's audio sender via `replaceTrack` (no renegotiation on the common
+     * path). No-op when a live audio track is already present.
+     */
+    private async reacquireLocalAudioCapture(): Promise<void> {
+        if (!this.localStream) return;
+        if (this.localStream.getAudioTracks()[0]) return;
+        if (this.audioRecoveryInFlight || this.requestingMedia) return;
+        this.audioRecoveryInFlight = true;
+        try {
+            const devices = await this.enumerateMediaDevices();
+            const preferredInput = this.selectPreferredAudioInput(devices, null);
+            const track = await this.acquireAudioTrack(true, preferredInput.device?.deviceId);
+            if (this.destroyed || !this.localStream) {
+                track.stop();
+                return;
+            }
+            this.localStream.addTrack(track);
+            await this.replaceAudioTrackOnAllPeers(track, this.localStream);
+        } catch (err) {
+            this.logger?.log('error', 'WebRTC', `Failed to reacquire microphone from hold: ${formatError(err)}`);
+        } finally {
+            this.audioRecoveryInFlight = false;
         }
     }
 

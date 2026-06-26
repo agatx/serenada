@@ -193,6 +193,33 @@ public final class SerenadaSession: ObservableObject {
     private var routeInputAvailable = true
     private var sessionActivated = false
     private var localMediaReadyForNegotiation = false
+
+    // MARK: - Multi-call media role (Phase 1: session-internal hold/resume)
+    //
+    // `mediaRole` / `mediaActivationState` are two of the three orthogonal
+    // call-state axes (the third, membership, is `state.phase`). They never
+    // collapse: a call can be connected + held + inactive. A single-call session
+    // is always `.foreground` / `.active`, so existing behavior is unchanged.
+    //
+    // `desired*` are the single source of user intent; the toggles update them
+    // and they survive a hold. `actual*` mirror what peers observe now: a held
+    // call always publishes false. `desiredVideoMode == nil` means video-off
+    // (reusing `LocalCameraMode` rather than duplicating an `off` case).
+
+    /// Which foreground-media role this session holds. Defaults to `.foreground`
+    /// — a joined single call owns foreground media.
+    private(set) var mediaRole: CallMediaRole = .foreground
+    /// Foreground-activation progress. `.active` for a joined foreground call;
+    /// a held call sits at `.inactive`.
+    private(set) var mediaActivationState: MediaActivationState = .active
+    /// User-intended mic enablement, preserved across hold.
+    private var desiredAudioEnabled = true
+    /// User-intended camera mode, or `nil` for video-off. Preserved across hold.
+    private var desiredVideoMode: LocalCameraMode?
+    /// Mic state actually published to peers right now (false while held).
+    private(set) var actualAudioPublished = false
+    /// Camera state actually published to peers right now (false while held).
+    private(set) var actualVideoPublished = false
     // Latched true once the call's media has connected at least once. The network monitor
     // below only restarts ICE for an established call: NWPathMonitor delivers the current
     // path once at start(), and treating that initial callback as a network change would
@@ -244,7 +271,7 @@ public final class SerenadaSession: ObservableObject {
     private var clientId: String?
     private var hostCid: String?
     private var currentRoomState: RoomState?
-    private var remoteMediaStates: [String: (audioEnabled: Bool?, videoEnabled: Bool?)] = [:]
+    private var remoteMediaStates: [String: (audioEnabled: Bool?, videoEnabled: Bool?, held: Bool?)] = [:]
     /// Latest received content (screen-share) state per remote cid, with the
     /// owning sid and tracked revision used to discard stale/out-of-order
     /// updates. Cleared when the participant leaves or goes inactive.
@@ -623,10 +650,15 @@ public final class SerenadaSession: ObservableObject {
     }
 
     private func updateEffectiveMicState() {
+        // `userMuted` is the user's intent; record it so a hold/resume can
+        // restore it. (Route loss or external audio gate the *effective* state
+        // below without changing intent.)
+        desiredAudioEnabled = !userMuted
         let effectiveEnabled = !userMuted && !externalAudioMuted && routeInputAvailable
         if sessionActivated {
             webRtcEngine.toggleAudio(effectiveEnabled)
         }
+        actualAudioPublished = sessionActivated && mediaRole == .foreground && effectiveEnabled
         commitSnapshot { s, _ in s.localParticipant.audioEnabled = effectiveEnabled }
         self.isMicMuted = self.userMuted || self.externalAudioMuted || !self.routeInputAvailable
         self.isMicMutedByExternalAudio = self.externalAudioMuted
@@ -1118,6 +1150,12 @@ public final class SerenadaSession: ObservableObject {
         localMediaReadyForNegotiation = true
         self.userMuted = !shouldEnableAudio
         self.sessionActivated = true
+        // Seed desired media intent from the join defaults; resume restores this.
+        self.desiredAudioEnabled = shouldEnableAudio
+        self.desiredVideoMode = shouldEnableVideo ? state.localParticipant.cameraMode : nil
+        // A freshly joined call owns foreground media.
+        self.mediaRole = .foreground
+        self.mediaActivationState = .active
         self.updateEffectiveMicState()
 
         userPreferredVideoEnabled = shouldEnableVideo
@@ -1274,16 +1312,140 @@ public final class SerenadaSession: ObservableObject {
         let existing = remoteMediaStates[fromCid]
         remoteMediaStates[fromCid] = (
             audioEnabled: payload.audioEnabled ?? existing?.audioEnabled,
-            videoEnabled: payload.videoEnabled ?? existing?.videoEnabled
+            videoEnabled: payload.videoEnabled ?? existing?.videoEnabled,
+            held: payload.held ?? existing?.held
         )
         refreshRemoteParticipants()
     }
 
     private func broadcastLocalMediaState() {
+        // A held call always publishes audio/video as false regardless of
+        // desired intent (held media owns no capture). The `held` flag lets new
+        // peers render "on hold" distinctly; older peers ignore it and degrade
+        // to muted/camera-off. Peer-joined and post-reconnect resync both route
+        // through here, so the re-broadcast carries the current `held` value.
+        let isHeld = mediaRole == .held
         signalingMessageRouter?.broadcastMediaState(
-            audioEnabled: state.localParticipant.audioEnabled,
-            videoEnabled: state.localParticipant.videoEnabled
+            audioEnabled: isHeld ? false : state.localParticipant.audioEnabled,
+            videoEnabled: isHeld ? false : state.localParticipant.videoEnabled,
+            held: isHeld
         )
+    }
+
+    // MARK: - Multi-call media role (Phase 1: session-internal hold/resume)
+
+    /// Drive this session into the HELD role: release all local foreground media
+    /// (screen share, mic, camera), deafen remote playout, and deactivate the
+    /// audio controller + coordinator — while keeping signaling connected, the
+    /// reconnect token and peer-connection identity preserved, and `desired*`
+    /// intent untouched. Idempotent and must not throw after a partial release.
+    /// The `held: true` broadcast goes out AFTER capture stops (local
+    /// stop-then-broadcast ordering, per the contract).
+    ///
+    /// Phase 2 wraps this as the token-gated `releaseForeground(token)`.
+    func applyHeldRoleInternal() {
+        guard mediaRole != .held else { return }
+
+        // 1. Stop screen share first (foreground-only). The engine's suspend also
+        //    stops it, but stopping here keeps the session-side content_state in
+        //    sync (clears the local sharing flag and notifies peers).
+        if diagnostics.isScreenSharing {
+            stopScreenShare()
+        }
+
+        // 2. Release local capture and replace sender tracks with nil (the engine
+        //    also deafens remote playout). detachRenderers pauses held preview.
+        webRtcEngine.suspendLocalMediaForHold()
+        webRtcEngine.detachRenderersForHold()
+
+        // 3. Tear down foreground audio ownership. Order: controller then
+        //    coordinator (reverse of the foreground activate order), matching
+        //    `resetResources`.
+        sessionActivated = false
+        callAudioSessionController.deactivate()
+        deactivateAudioCoordinator()
+
+        // 4. Flip role/activation + actual published state. desired* preserved.
+        mediaRole = .held
+        mediaActivationState = .inactive
+        actualAudioPublished = false
+        actualVideoPublished = false
+        commitSnapshot { s, _ in
+            s.localParticipant.audioEnabled = false
+            s.localParticipant.videoEnabled = false
+        }
+
+        // 5. Broadcast held AFTER capture has stopped (local ordering guarantee).
+        broadcastLocalMediaState()
+    }
+
+    /// Drive this session into the FOREGROUND role: re-activate audio ownership,
+    /// reacquire local media per `desired*`, re-enable remote playout, replay
+    /// renderer registrations, and broadcast `held: false` AFTER media flows.
+    /// Idempotent.
+    ///
+    /// Phase 2 wraps this as the token-gated `activateForeground(token, gen)`.
+    func applyForegroundRoleInternal() {
+        guard mediaRole != .foreground else { return }
+        mediaActivationState = .activating
+
+        // 1. Re-activate audio ownership (coordinator then controller), mirroring
+        //    the join order in `prepareMediaAndConnect`.
+        startCoordinatorTasks()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.activateAudioCoordinator()
+            } catch {
+                self.logger?.log(.error, tag: "Audio", "Failed to re-activate audio coordinator on resume: \(error)")
+            }
+            self.completeForegroundActivation()
+        }
+    }
+
+    /// Second half of `applyForegroundRoleInternal`, run after the audio
+    /// coordinator has re-activated. Restarts local media per desired intent and
+    /// publishes the resumed state.
+    private func completeForegroundActivation() {
+        // Guard against a hold racing in before the coordinator finished.
+        guard mediaActivationState == .activating else { return }
+
+        callAudioSessionController.activate()
+        sessionActivated = true
+
+        // 2. Restart local media from desired intent (mic on iff desiredAudio,
+        //    camera on iff desiredVideoMode != off). The engine re-enables remote
+        //    playout as part of resume.
+        webRtcEngine.resumeLocalMediaFromHold(
+            audioEnabled: desiredAudioEnabled,
+            videoMode: desiredVideoMode
+        )
+
+        // 3. Restore the user-intent toggles + replay renderer registrations so
+        //    public state and capture converge on desired intent.
+        userMuted = !desiredAudioEnabled
+        userPreferredVideoEnabled = desiredVideoMode != nil
+        replayAllRendererRegistrations()
+
+        // 4. Flip role to foreground BEFORE recomputing effective state so the
+        //    actual* / broadcast paths treat this as a foreground call.
+        mediaRole = .foreground
+        mediaActivationState = .active
+
+        // 5. Recompute effective mic/video and broadcast `held: false` AFTER
+        //    media is flowing. updateEffectiveMicState broadcasts once; the video
+        //    path updates local state without a redundant second broadcast.
+        applyLocalVideoPreference()
+        updateEffectiveMicState()
+    }
+
+    /// Re-attach remote renderer registrations to freshly reacquired tracks
+    /// after a resume, reusing the existing per-slot replay path. Local renderers
+    /// re-bind inside the engine via `resumeLocalMediaFromHold`.
+    private func replayAllRendererRegistrations() {
+        for (cid, slot) in peerSlots {
+            replayRendererRegistrations(to: slot, cid: cid)
+        }
     }
 
     private func seedLocalContentRevision(from roomState: RoomState) {
@@ -1620,6 +1782,7 @@ public final class SerenadaSession: ObservableObject {
             let peerState = remoteMediaStates[p.cid]
             let audioEnabled = peerState?.audioEnabled ?? p.audioEnabled ?? true
             let videoEnabled = peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false)
+            let held = peerState?.held ?? false
             // Reconcile any server-persisted contentState from the snapshot
             // (joined/room_state) against the cached live state with the same
             // cid-keyed keep-highest rule used for live `content_state`. A
@@ -1663,7 +1826,8 @@ public final class SerenadaSession: ObservableObject {
                 presumedLost: p.signalingStatus == .suspended && presumedLostRemoteCids.contains(p.cid),
                 audioLevel: audioEnabled ? (previousLevels[p.cid] ?? 0) : 0,
                 content: (content?.active == true) ? content : nil,
-                supportsIndependentContentVideo: remoteSupportsIndependentContentVideo(p.cid)
+                supportsIndependentContentVideo: remoteSupportsIndependentContentVideo(p.cid),
+                held: held
             )
         }
         let activeCids = Set(participants.map(\.cid))
@@ -1981,9 +2145,13 @@ public final class SerenadaSession: ObservableObject {
     // MARK: - Video & Audio
 
     private func applyLocalVideoPreference() {
+        // Record desired video intent (mode when on, nil when off) so resume can
+        // restore it. Proximity pause is transient and does not change intent.
+        desiredVideoMode = userPreferredVideoEnabled ? state.localParticipant.cameraMode : nil
         let shouldPause = callAudioSessionController.shouldPauseVideoForProximity(isScreenSharing: diagnostics.isScreenSharing)
         if shouldPause != isVideoPausedByProximity { isVideoPausedByProximity = shouldPause }
         let effectiveEnabled = webRtcEngine.toggleVideo(userPreferredVideoEnabled && !shouldPause)
+        actualVideoPublished = mediaRole == .foreground && effectiveEnabled
         commitSnapshot { s, _ in s.localParticipant.videoEnabled = effectiveEnabled }
     }
 

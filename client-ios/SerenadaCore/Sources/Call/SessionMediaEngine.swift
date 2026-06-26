@@ -5,6 +5,25 @@ import Foundation
 protocol SessionMediaEngine: AnyObject {
     func startLocalMedia(preferVideo: Bool)
     func release()
+    /// Suspend local foreground media for a HELD role: stop screen share, stop
+    /// the camera capturer, and RELEASE mic capture by replacing the audio
+    /// sender track with `nil` (not merely `isEnabled = false`, so the OS stops
+    /// reporting capture). Also deafens remote audio playout. Peer-connection
+    /// identity and the stable senders are preserved so a later resume can
+    /// reattach fresh tracks without renegotiation. Idempotent.
+    func suspendLocalMediaForHold()
+    /// Resume local foreground media after a hold: reacquire mic capture if
+    /// `audioEnabled`, restart the camera if `videoMode != nil` (off), attach the
+    /// fresh tracks to the existing senders, and re-enable remote audio playout.
+    /// `videoMode == nil` means video stays off. Idempotent.
+    func resumeLocalMediaFromHold(audioEnabled: Bool, videoMode: LocalCameraMode?)
+    /// Gate audible remote playout independently of the volume duck. Held
+    /// sessions set this `false` (a real `RTCAudioTrack.isEnabled = false`
+    /// deafen on remote receivers); resume sets it `true`.
+    func setRemotePlaybackEnabled(_ enabled: Bool)
+    /// Detach/pause the registered local renderers for a hold so a held call's
+    /// preview surfaces stop receiving frames.
+    func detachRenderersForHold()
     func toggleAudio(_ enabled: Bool)
     /// Restart the audio unit after the host re-activated the audio session that a same-app owner
     /// (no interruption notification) held and released. See ``AudioCoordinatorEvent/audioSessionRestarted``.

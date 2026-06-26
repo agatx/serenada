@@ -15,6 +15,35 @@ internal interface SessionMediaEngine {
     fun toggleAudio(enabled: Boolean)
     fun toggleVideo(enabled: Boolean): Boolean
     fun flipCamera()
+
+    /**
+     * Suspend local media for a hold transition. Stops the camera capturer and
+     * RELEASES the microphone capture (disposes the mic track/source and nulls
+     * the audio sender via `setTrack(null, false)`), so the OS stops reporting
+     * this session as capturing. Distinct from [toggleAudio]/[toggleVideo],
+     * which only flip `track.enabled` and leave capture live. Peer connections,
+     * transceivers, and senders are preserved for a renegotiation-free resume.
+     * Screen share is stopped by the session before this is called.
+     */
+    fun suspendLocalMediaForHold() {}
+
+    /**
+     * Resume local media after a hold. Reacquires capture per [audioEnabled] /
+     * [videoMode] (off = camera disabled) and attaches fresh tracks to the
+     * existing senders. Resume must not renegotiate on the common path.
+     */
+    fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {}
+
+    /**
+     * Gate audible remote playback. When false, the remote receiver
+     * `AudioTrack`s are disabled (`setEnabled(false)`), a hard deafen distinct
+     * from the external-audio volume duck (`setVolume(0.15)`). Held calls set
+     * this false so their remote audio is silent.
+     */
+    fun setRemotePlaybackEnabled(enabled: Boolean) {}
+
+    /** Detach/pause visible renderers for a held call. */
+    fun detachRenderersForHold() {}
     /**
      * Engine-side camera mode, updated synchronously by [flipCamera]. The
      * session's state copy is posted asynchronously, so callers that flip in
