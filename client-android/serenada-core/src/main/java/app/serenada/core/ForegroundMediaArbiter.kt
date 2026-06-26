@@ -1,6 +1,8 @@
 package app.serenada.core
 
 import android.os.Looper
+import java.util.Collections
+import java.util.IdentityHashMap
 
 /**
  * Owning mode of the process-wide foreground media arbiter (Core Invariant 6).
@@ -83,7 +85,7 @@ object ForegroundMediaArbiter {
      * clears only when the last claimant releases. A `DIRECT` join claims with
      * its own session ref; the registry claims once with itself. Identity-keyed.
      */
-    private val modeOwners = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
+    private val modeOwners = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
 
     /**
      * Acquire the single foreground media lease for [ownerId]. The optional

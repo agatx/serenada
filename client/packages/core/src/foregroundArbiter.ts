@@ -25,6 +25,8 @@ import {
 class ForegroundMediaArbiter {
     /** The live lease token, or `null` when no call owns foreground media. */
     private currentToken: ForegroundOwnerToken | null = null;
+    /** The most recently released token; backs the idempotent re-release no-op. */
+    private lastReleasedToken: ForegroundOwnerToken | null = null;
     /**
      * True between starting an owner's release and confirming it fully drained.
      * While set (or after a failed release), NO new lease is granted — this is
@@ -103,7 +105,6 @@ class ForegroundMediaArbiter {
             `releaseLease called with a token that is not the current owner (${token.ownerId})`,
         );
     }
-    private lastReleasedToken: ForegroundOwnerToken | null = null;
 
     /**
      * Mark that an owner's release has begun but not yet confirmed. Set by the
