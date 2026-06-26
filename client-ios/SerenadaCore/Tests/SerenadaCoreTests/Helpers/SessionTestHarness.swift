@@ -23,6 +23,11 @@ final class SessionTestHarness {
         config: SerenadaConfig? = nil,
         delegate: SerenadaCoreDelegate? = nil,
         initialMediaRole: CallMediaRole = .foreground,
+        // Default mirrors the public single-call `SerenadaCore.join()` path: a
+        // FOREGROUND harness session self-acquires the direct lease, a HELD one
+        // never does. A test that wants a registry-style FOREGROUND session (one
+        // that does NOT self-acquire/self-release the lease) passes `false`.
+        acquireForegroundLease: Bool? = nil,
         isCapabilityGranted: ((MediaCapability) -> Bool)? = nil,
         arbiter: ForegroundMediaArbiter? = nil
     ) {
@@ -48,6 +53,9 @@ final class SessionTestHarness {
             resolvedConfig.audioCoordinator = fakeAudioCoordinator
         }
 
+        // A FOREGROUND session self-acquires the direct lease (single-call default)
+        // unless the test overrides; a HELD session never self-acquires.
+        let resolvedAcquireLease = acquireForegroundLease ?? (initialMediaRole == .foreground)
         self.session = SerenadaSession(
             roomId: roomId,
             config: resolvedConfig,
@@ -58,6 +66,7 @@ final class SessionTestHarness {
             mediaEngine: fakeMedia,
             clock: fakeClock,
             initialMediaRole: initialMediaRole,
+            acquireForegroundLease: resolvedAcquireLease,
             isCapabilityGranted: isCapabilityGranted,
             foregroundArbiter: resolvedArbiter
         )

@@ -243,6 +243,14 @@ public final class SerenadaSession: ObservableObject {
     /// controller activation and local capture but still creates stable senders
     /// and connects signaling. The public `join()` always uses `.foreground`.
     private let initialMediaRole: CallMediaRole
+    /// When `true`, this session self-acquires the process-wide foreground lease
+    /// (mode `direct`) before activating media AND self-releases it on teardown —
+    /// the route for a public single-call `SerenadaCore.join()`. A registry-created
+    /// FOREGROUND session (Phase 3) leaves this `false`: the registry owns the
+    /// lease + mode for that session, so the session must never self-acquire or
+    /// self-release the direct lease. Held-initial joins never take the lease at
+    /// all regardless of this flag. Defaults to `false` (registry/test-managed).
+    private let acquireForegroundLease: Bool
     /// The owner token of the in-flight or live foreground activation. Set by
     /// `activateForeground`, cleared on hold/abort. The fence for late callbacks.
     private var foregroundOwnerToken: ForegroundOwnerToken?
@@ -457,11 +465,13 @@ public final class SerenadaSession: ObservableObject {
         peerId: String? = nil,
         recoveryStorage: RecoveryStorage = RecoveryStorage(),
         initialMediaRole: CallMediaRole = .foreground,
+        acquireForegroundLease: Bool = false,
         isCapabilityGranted: ((MediaCapability) -> Bool)? = nil,
         foregroundArbiter: ForegroundMediaArbiter = .shared
     ) {
         self.recoveryStorage = recoveryStorage
         self.initialMediaRole = initialMediaRole
+        self.acquireForegroundLease = acquireForegroundLease
         self.isCapabilityGranted = isCapabilityGranted ?? SerenadaSession.liveCapabilityGranted
         self.foregroundArbiter = foregroundArbiter
         self.roomId = roomId
@@ -616,6 +626,21 @@ public final class SerenadaSession: ObservableObject {
         coordinatorTasks.forEach { $0.cancel() }
         if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
+        // Release the direct foreground lease + mode so dropping a joined session
+        // WITHOUT leave()/cancelJoin() does not leak the process-singleton lease
+        // and wedge future direct joins (I3). `deinit` is nonisolated and the
+        // arbiter is @MainActor, so hop to the main actor — capturing ONLY value
+        // types (the lease token + this session's pre-computed ObjectIdentifier +
+        // the arbiter reference), NEVER `self`, so a deallocating object is not
+        // resurrected into an escaping closure.
+        if let token = directLeaseToken {
+            let arbiter = foregroundArbiter
+            let ownerIdentity = ObjectIdentifier(self)
+            directLeaseToken = nil
+            Task { @MainActor in
+                arbiter.releaseDirectLeaseFromDeinit(token: token, ownerIdentity: ownerIdentity)
+            }
+        }
     }
 
     // MARK: - Public API
@@ -1348,7 +1373,13 @@ public final class SerenadaSession: ObservableObject {
         // direct join — or a direct join while a registry owns the process — fails
         // fast with `ForegroundLeaseUnavailable`, preserving the single-foreground
         // invariant (contract §2). The lease is released in `resetResources`.
-        if directLeaseToken == nil {
+        //
+        // ONLY the direct public `SerenadaCore.join()` path self-acquires (it sets
+        // `acquireForegroundLease == true`). A registry-created FOREGROUND session
+        // (Phase 3) leaves the flag `false`: the registry owns and releases that
+        // session's lease + mode, so the session must NOT self-acquire here (and
+        // must NOT self-release in teardown) — parity with web/android.
+        if acquireForegroundLease, directLeaseToken == nil {
             do {
                 // Atomic claim: `acquireForeground` asserts mode compatibility AND
                 // claims `direct` mode in the SAME step as granting the lease, so
@@ -1786,6 +1817,12 @@ public final class SerenadaSession: ObservableObject {
     /// and MUST NOT throw after a partial release (contract §3). Uses `token` only
     /// to fence; does NOT call `arbiter.releaseLease` — the registry owns that.
     func releaseForeground(_ token: ForegroundOwnerToken) {
+        // A release for a token that is NOT the current owner is a no-op: never
+        // drain a live foreground call the caller does not own (a stale/foreign
+        // token must not wedge the active call). A nil current token means the
+        // session is already drained/never owned the lease — also a no-op, NOT
+        // permission to drain (parity with web/android).
+        guard foregroundOwnerToken == token else { return }
         // Clear the fence token first so any in-flight activation completion (a
         // resume the registry is now superseding) fails the owner-token fence.
         foregroundOwnerToken = nil
@@ -1793,8 +1830,11 @@ public final class SerenadaSession: ObservableObject {
     }
 
     /// Undo a partial/failed `activateForeground` (capture/audio may have begun),
-    /// leaving the session fully HELD. Idempotent; never throws.
+    /// leaving the session fully HELD. Idempotent; never throws. Token-gated like
+    /// `releaseForeground`: a foreign/stale token (or a nil current owner) is a
+    /// no-op so it cannot abort an activation the caller does not own.
     func abortForegroundActivation(_ token: ForegroundOwnerToken) {
+        guard foregroundOwnerToken == token else { return }
         foregroundOwnerToken = nil
         applyHeldRoleInternal()
     }
@@ -2421,6 +2461,31 @@ public final class SerenadaSession: ObservableObject {
         }
     }
 
+    /// Release this session's DIRECT single-call foreground lease + owning-mode
+    /// claim back to the process arbiter, if it acquired one. Idempotent (releases
+    /// at most once; the token is cleared after). Called from `resetResources` (the
+    /// common terminal reset on `leave`/`end`/recovery) AND from `deinit`, so a
+    /// session dropped without `leave()`/`cancelJoin()` does not wedge future
+    /// direct joins by leaking the process-singleton lease.
+    ///
+    /// Only the direct path holds `directLeaseToken`; registry-created sessions
+    /// never do (the registry owns and releases their lease), so this is a no-op
+    /// for them — the registry-issued fence token (`foregroundOwnerToken`) is never
+    /// released here. Releases the lease only when this session is STILL the
+    /// arbiter's current owner, guarding the (test-only) case where the singleton
+    /// was reset out from under a live session; `releaseLease` is also wrapped so a
+    /// foreign-token throw (now recoverable, see `ForegroundMediaArbiter`) can never
+    /// crash teardown.
+    private func releaseDirectLeaseAndMode() {
+        if let token = directLeaseToken {
+            if foregroundArbiter.currentOwnerToken == token {
+                try? foregroundArbiter.releaseLease(token)
+            }
+            foregroundArbiter.releaseMode(ownerRef: self)
+            directLeaseToken = nil
+        }
+    }
+
     private func resetResources(clearRecovery: Bool = false) {
         joinLifecycleTask?.cancel()
         joinLifecycleTask = nil
@@ -2435,20 +2500,8 @@ public final class SerenadaSession: ObservableObject {
         deactivateAudioCoordinator()
 
         // Release the DIRECT single-call foreground lease + mode so a subsequent
-        // direct join (or a registry) can claim the process. Idempotent: only the
-        // direct path holds `directLeaseToken`; registry-created sessions never do
-        // (the registry owns and releases their lease). Registry-issued fence
-        // tokens are NOT released here (the session never owns those leases).
-        // Only release when this session is STILL the arbiter's current owner —
-        // guards the (test-only) case where the singleton was reset out from under
-        // a live session, so a stale release never touches another owner's lease.
-        if let token = directLeaseToken {
-            if foregroundArbiter.currentOwnerToken == token {
-                foregroundArbiter.releaseLease(token)
-            }
-            foregroundArbiter.releaseMode(ownerRef: self)
-            directLeaseToken = nil
-        }
+        // direct join (or a registry) can claim the process.
+        releaseDirectLeaseAndMode()
 
         currentRoomState = nil; clientId = nil; hostCid = nil
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll(); remoteContentStates.removeAll(); localContent = nil

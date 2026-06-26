@@ -28,6 +28,9 @@ public struct ForegroundLeaseUnavailable: Error, Equatable, Sendable {
         case releasePending
         /// The other owning mode (registry vs direct) has live owners.
         case modeConflict
+        /// `releaseLease` was called with a token that is neither the current owner
+        /// nor the last-released token (a genuine foreign/stale release).
+        case foreignToken
     }
 
     public let reason: Reason
@@ -131,10 +134,31 @@ public final class ForegroundMediaArbiter {
     /// Release `ownerRef`'s mode registration. When the owning side has no live
     /// owners left, the mode clears and the other mode may claim it.
     func releaseMode(ownerRef: AnyObject) {
-        liveOwnerRefs.remove(ObjectIdentifier(ownerRef))
+        releaseMode(ownerIdentity: ObjectIdentifier(ownerRef))
+    }
+
+    /// Identity-keyed `releaseMode` variant. Used from a session's `deinit`, which
+    /// (being nonisolated and operating on a deallocating object) must NOT pass the
+    /// object itself into the main-actor hop; it passes the pre-computed
+    /// `ObjectIdentifier` value instead.
+    func releaseMode(ownerIdentity: ObjectIdentifier) {
+        liveOwnerRefs.remove(ownerIdentity)
         if liveOwnerRefs.isEmpty {
             owningMode = nil
         }
+    }
+
+    /// Release a direct lease + mode claim from a session's `deinit`. The session
+    /// is being deallocated, so it cannot capture `self` in the main-actor hop;
+    /// instead it passes the lease `token` and the pre-computed owner
+    /// `ObjectIdentifier`. Releases the lease only when this session is STILL the
+    /// current owner, and tolerates a foreign-token throw (recoverable). The mode
+    /// claim is always dropped (no-op if never claimed).
+    func releaseDirectLeaseFromDeinit(token: ForegroundOwnerToken, ownerIdentity: ObjectIdentifier) {
+        if currentToken == token {
+            try? releaseLease(token)
+        }
+        releaseMode(ownerIdentity: ownerIdentity)
     }
 
     // MARK: - Foreground lease
@@ -174,13 +198,15 @@ public final class ForegroundMediaArbiter {
     }
 
     /// Release the lease held under `token`. Only the current owner's token is
-    /// accepted; releasing a mismatched (non-current) token is a programming error
-    /// (`preconditionFailure`) — EXCEPT the idempotent case where `token` is the
-    /// most recently released token and nothing new has been granted, which is a
-    /// safe no-op (matches web/android). Lease release is registry-owned (the
-    /// session never calls this on the registry path); the Phase 2 single-call
-    /// path's own teardown calls it.
-    func releaseLease(_ token: ForegroundOwnerToken) {
+    /// accepted; releasing a genuine FOREIGN token (one that is neither the current
+    /// owner nor the last-released token) throws `ForegroundLeaseUnavailable` —
+    /// a recoverable, catchable failure rather than a crash, so a stale/foreign
+    /// release on a teardown path can be ignored instead of bringing the process
+    /// down (parity with web/android, which throw). The idempotent case where
+    /// `token` is the most recently released token and nothing new has been granted
+    /// is a safe no-op. Lease release is registry-owned (the session never calls
+    /// this on the registry path); the Phase 2 single-call path's own teardown calls it.
+    func releaseLease(_ token: ForegroundOwnerToken) throws {
         if currentToken == token {
             currentToken = nil
             releasePending = false
@@ -189,7 +215,7 @@ public final class ForegroundMediaArbiter {
         }
         // Idempotent re-release of the same token after it was already released.
         if lastReleasedToken == token, currentToken == nil { return }
-        preconditionFailure("releaseLease called with a token that is not the current owner (\(token.ownerId))")
+        throw ForegroundLeaseUnavailable(reason: .foreignToken)
     }
 
     /// Mark that an owner's release has begun but not yet confirmed. Set by the

@@ -156,7 +156,9 @@ public final class SerenadaCore {
             initialSignalingProvider: createSignalingProvider(for: sessionConfig),
             displayName: displayName,
             peerId: peerId,
-            recoveryStorage: recoveryStorage
+            recoveryStorage: recoveryStorage,
+            // Public single-call join owns its own direct foreground lease.
+            acquireForegroundLease: true
         )
         return session
     }
@@ -179,7 +181,9 @@ public final class SerenadaCore {
             initialSignalingProvider: createSignalingProvider(for: config),
             displayName: displayName,
             peerId: peerId,
-            recoveryStorage: recoveryStorage
+            recoveryStorage: recoveryStorage,
+            // Public single-call join owns its own direct foreground lease.
+            acquireForegroundLease: true
         )
         return session
     }

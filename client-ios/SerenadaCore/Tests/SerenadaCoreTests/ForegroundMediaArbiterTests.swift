@@ -20,7 +20,7 @@ final class ForegroundMediaArbiterTests: XCTestCase {
     func testReleaseThenReacquireSucceeds() throws {
         let arbiter = ForegroundMediaArbiter()
         let first = try arbiter.acquireForeground(ownerId: "call-a")
-        arbiter.releaseLease(first)
+        try arbiter.releaseLease(first)
         // Re-acquire succeeds and mints a DISTINCT token (ids never reused).
         let second = try arbiter.acquireForeground(ownerId: "call-b")
         XCTAssertNotEqual(first, second, "Re-acquire must mint a fresh token")
@@ -29,9 +29,9 @@ final class ForegroundMediaArbiterTests: XCTestCase {
     func testReleaseSameTokenTwiceIsIdempotent() throws {
         let arbiter = ForegroundMediaArbiter()
         let token = try arbiter.acquireForeground(ownerId: "call-a")
-        arbiter.releaseLease(token)
-        // A second release of the same token is a no-op (does not crash).
-        arbiter.releaseLease(token)
+        try arbiter.releaseLease(token)
+        // A second release of the same token is a no-op (does not throw / crash).
+        XCTAssertNoThrow(try arbiter.releaseLease(token))
         // The lease is free, so a new owner can acquire.
         XCTAssertNoThrow(try arbiter.acquireForeground(ownerId: "call-b"))
     }
@@ -111,7 +111,7 @@ final class ForegroundMediaArbiterTests: XCTestCase {
         }
 
         // Confirming the current owner's release clears pending and frees the lease.
-        arbiter.releaseLease(first)
+        try arbiter.releaseLease(first)
         XCTAssertNoThrow(try arbiter.acquireForeground(ownerId: "call-b"),
                          "Once the pending release confirms, a new owner may acquire")
     }
@@ -124,7 +124,7 @@ final class ForegroundMediaArbiterTests: XCTestCase {
         let arbiter = ForegroundMediaArbiter()
         let first = try arbiter.acquireForeground(ownerId: "call-a")
         // Drain the lease (clears currentToken AND pending) ...
-        arbiter.releaseLease(first)
+        try arbiter.releaseLease(first)
         // ... then a NEW release-pending window opens without a live lease (models
         // a switch that marked pending after the old owner was already cleared).
         arbiter.markReleasePending()
@@ -139,17 +139,14 @@ final class ForegroundMediaArbiterTests: XCTestCase {
     /// Q3: `releaseLease` is idempotent for the LAST-released token (re-releasing
     /// the same token after it was already released, with nothing new granted, is a
     /// safe no-op) and does not perturb a freshly-acquired different owner.
-    /// (Releasing a FOREIGN token while a different owner is live is a programming
-    /// error — `preconditionFailure` — and is intentionally not exercised here, the
-    /// same crash-on-misuse contract the base `precondition` had.)
     func testReleaseLeaseIsIdempotentForLastReleasedToken() throws {
         let arbiter = ForegroundMediaArbiter()
         let owner = try arbiter.acquireForeground(ownerId: "call-a")
-        arbiter.releaseLease(owner)
+        try arbiter.releaseLease(owner)
         XCTAssertNil(arbiter.currentOwnerToken)
         // Re-releasing the same (last-released) token while NOTHING new is granted
-        // is a safe no-op (does not crash, lease stays free).
-        arbiter.releaseLease(owner)
+        // is a safe no-op (does not throw, lease stays free).
+        XCTAssertNoThrow(try arbiter.releaseLease(owner))
         XCTAssertNil(arbiter.currentOwnerToken)
 
         // A new owner can still acquire after the idempotent re-release, and
@@ -157,9 +154,37 @@ final class ForegroundMediaArbiterTests: XCTestCase {
         let newOwner = try arbiter.acquireForeground(ownerId: "call-b")
         XCTAssertEqual(arbiter.currentOwnerToken, newOwner)
         // The new owner releases idempotently too.
-        arbiter.releaseLease(newOwner)
-        arbiter.releaseLease(newOwner)
+        try arbiter.releaseLease(newOwner)
+        XCTAssertNoThrow(try arbiter.releaseLease(newOwner))
         XCTAssertNil(arbiter.currentOwnerToken)
+    }
+
+    /// Q3 (I4): releasing a genuine FOREIGN token — one that is neither the current
+    /// owner nor the last-released token — while a DIFFERENT owner holds the lease
+    /// THROWS `ForegroundLeaseUnavailable(.foreignToken)` (a recoverable, catchable
+    /// failure) rather than crashing via `preconditionFailure`. The live owner's
+    /// lease is left untouched. Parity with web/android.
+    func testReleaseLeaseForeignTokenThrowsAndLeavesCurrentOwner() throws {
+        let arbiter = ForegroundMediaArbiter()
+        // Mint a token, then drain it so it is no longer the last-released token
+        // once a second token is released — making it a genuine foreign token.
+        let foreign = try arbiter.acquireForeground(ownerId: "foreign")
+        try arbiter.releaseLease(foreign)
+        // A live owner now holds the lease.
+        let live = try arbiter.acquireForeground(ownerId: "live")
+        XCTAssertEqual(arbiter.currentOwnerToken, live)
+
+        // Releasing the foreign token (not current, and `live` is now the
+        // last-acquired) must throw, not crash.
+        XCTAssertThrowsError(try arbiter.releaseLease(foreign)) { error in
+            XCTAssertEqual((error as? ForegroundLeaseUnavailable)?.reason, .foreignToken,
+                           "Releasing a foreign token must throw .foreignToken")
+        }
+        // The live owner's lease is untouched.
+        XCTAssertEqual(arbiter.currentOwnerToken, live,
+                       "A foreign-token release must not drain the live owner's lease")
+
+        try arbiter.releaseLease(live)
     }
 
     // MARK: - Q1: cross-mode acquire fails atomically inside acquireForeground
@@ -196,7 +221,7 @@ final class ForegroundMediaArbiterTests: XCTestCase {
         XCTAssertFalse(arbiter.isCurrentOwner(nil))
         let token = try arbiter.acquireForeground(ownerId: "call-a")
         XCTAssertTrue(arbiter.isCurrentOwner(token))
-        arbiter.releaseLease(token)
+        try arbiter.releaseLease(token)
         XCTAssertFalse(arbiter.isCurrentOwner(token),
                        "A released token is no longer the current owner")
     }

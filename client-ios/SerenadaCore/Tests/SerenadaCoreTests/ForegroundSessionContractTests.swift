@@ -196,6 +196,165 @@ final class ForegroundSessionContractTests: XCTestCase {
         second.tearDown()
     }
 
+    // MARK: - I1: registry-style foreground session does NOT self-acquire the lease
+
+    /// I1: a FOREGROUND session created with `acquireForegroundLease == false`
+    /// (the registry-created foreground session, Phase 3 — the registry owns its
+    /// lease) must NOT self-acquire the direct lease, and a concurrent PUBLIC
+    /// direct join (which DOES self-acquire) must still succeed — i.e. the internal
+    /// session is not silently holding the single process lease.
+    func testInternalForegroundSessionWithoutLeaseFlagDoesNotAcquireOrBlockDirectJoin() async {
+        let arbiter = ForegroundMediaArbiter()
+
+        // Registry-style foreground session: foreground role, but the registry owns
+        // the lease, so it does NOT self-acquire.
+        let internalSession = SessionTestHarness(
+            roomId: "internal-room",
+            acquireForegroundLease: false,
+            arbiter: arbiter
+        )
+        await internalSession.advanceToInCallWithTurn(localCid: "i-local", remoteCid: "i-remote")
+
+        // It reached foreground media WITHOUT taking the process lease or claiming
+        // direct mode (the registry would do that for it).
+        XCTAssertEqual(internalSession.session.mediaRole, .foreground)
+        XCTAssertNil(arbiter.currentOwnerToken,
+                     "An acquireForegroundLease=false foreground session must NOT self-acquire the lease")
+        XCTAssertNil(arbiter.owningMode,
+                     "An internal foreground session must NOT claim direct owning mode")
+
+        // A concurrent PUBLIC direct join (acquireForegroundLease=true) is not
+        // blocked by the internal session and successfully takes the lease.
+        let directSession = SessionTestHarness(
+            roomId: "direct-room",
+            acquireForegroundLease: true,
+            arbiter: arbiter
+        )
+        await directSession.advanceToInCallWithTurn(localCid: "d-local", remoteCid: "d-remote")
+        XCTAssertNotNil(arbiter.currentOwnerToken,
+                        "A public direct join must acquire the lease (not blocked by the internal session)")
+        XCTAssertEqual(arbiter.owningMode, .direct)
+
+        internalSession.tearDown()
+        directSession.tearDown()
+    }
+
+    /// I1 (teardown half): an `acquireForegroundLease=false` foreground session must
+    /// NOT self-release a lease on teardown either — leaving alone must not perturb
+    /// a different owner's live lease.
+    func testInternalForegroundSessionLeaveDoesNotReleaseAnotherOwnersLease() async {
+        let arbiter = ForegroundMediaArbiter()
+
+        // A direct session holds the real lease.
+        let directSession = SessionTestHarness(
+            roomId: "direct-room",
+            acquireForegroundLease: true,
+            arbiter: arbiter
+        )
+        await directSession.advanceToInCallWithTurn(localCid: "d-local", remoteCid: "d-remote")
+        let directToken = arbiter.currentOwnerToken
+        XCTAssertNotNil(directToken)
+
+        // An internal (registry-style) foreground session that never took the lease.
+        let internalSession = SessionTestHarness(
+            roomId: "internal-room",
+            acquireForegroundLease: false,
+            arbiter: arbiter
+        )
+        await internalSession.advanceToInCallWithTurn(localCid: "i-local", remoteCid: "i-remote")
+
+        // Leaving the internal session must NOT touch the direct session's lease.
+        internalSession.session.leave()
+        await yieldToMainActor()
+        XCTAssertEqual(arbiter.currentOwnerToken, directToken,
+                       "An internal session's leave() must not release another owner's lease")
+        XCTAssertEqual(arbiter.owningMode, .direct)
+
+        directSession.tearDown()
+        internalSession.tearDown()
+    }
+
+    // MARK: - I2: releaseForeground with a foreign token does not drain the call
+
+    /// I2: `releaseForeground(foreignToken)` on a LIVE foreground call is a no-op —
+    /// it must NOT drain the call. Only the call's own owner token may drain it
+    /// (parity with web/android). A stale/foreign token cannot wedge the active
+    /// call.
+    func testReleaseForegroundWithForeignTokenDoesNotDrainLiveCall() async {
+        let arbiter = ForegroundMediaArbiter()
+        let harness = SessionTestHarness(initialMediaRole: .held, isCapabilityGranted: { _ in true }, arbiter: arbiter)
+        await harness.advanceToInCallHeld(localCid: "local", remoteCid: "remote")
+
+        // Foreground the held call under its real token.
+        let ownerToken = try! arbiter.acquireForeground(ownerId: "test-room-id")
+        let gen = arbiter.nextOperationGeneration()
+        try! harness.session.activateForeground(ownerToken, generation: gen)
+        await waitUntil { harness.session.mediaRole == .foreground }
+        XCTAssertEqual(harness.session.mediaRole, .foreground)
+
+        // A FOREIGN token (minted by a DIFFERENT arbiter, so its identity differs
+        // from the call's owner token) must NOT drain the live foreground call.
+        let foreignToken = try! ForegroundMediaArbiter().acquireForeground(ownerId: "foreign-owner")
+        XCTAssertNotEqual(foreignToken, ownerToken)
+        harness.session.releaseForeground(foreignToken)
+        await yieldToMainActor()
+
+        XCTAssertEqual(harness.session.mediaRole, .foreground,
+                       "releaseForeground with a foreign token must NOT drain the live call")
+        XCTAssertEqual(harness.session.mediaActivationState, .active)
+
+        // The real owner token still drains it (the call was never wedged).
+        harness.session.releaseForeground(ownerToken)
+        await waitUntil { harness.session.mediaRole == .held }
+        XCTAssertEqual(harness.session.mediaRole, .held)
+
+        harness.tearDown()
+    }
+
+    // MARK: - I3: deinit releases the direct lease (dropped without leave())
+
+    /// I3: dropping a joined DIRECT session WITHOUT calling `leave()`/`cancelJoin()`
+    /// must still release the direct lease (via `deinit`), so a subsequent direct
+    /// join can acquire the single process lease (no wedge).
+    func testDroppingSessionViaDeinitReleasesDirectLease() async {
+        let arbiter = ForegroundMediaArbiter()
+
+        // Build a direct session, drive it to foreground (it self-acquires the
+        // lease), then drop the ONLY strong reference WITHOUT leave()/cancelJoin().
+        do {
+            let dropped = SessionTestHarness(
+                roomId: "dropped-room",
+                acquireForegroundLease: true,
+                arbiter: arbiter
+            )
+            await dropped.advanceToInCallWithTurn(localCid: "x-local", remoteCid: "x-remote")
+            XCTAssertNotNil(arbiter.currentOwnerToken, "The dropped session held the lease")
+            // No leave()/cancelJoin()/tearDown(): let `dropped` (and its session) go
+            // out of scope so the session deinits.
+        }
+
+        // Give deinit + the main actor a chance to run, then assert the lease was
+        // released by deinit (not by leave()).
+        await waitUntil { arbiter.currentOwnerToken == nil }
+        XCTAssertNil(arbiter.currentOwnerToken,
+                     "Dropping a session via deinit must release the direct lease")
+        XCTAssertNil(arbiter.owningMode,
+                     "Dropping a session via deinit must clear the direct owning mode")
+
+        // A fresh direct join now succeeds (the lease was not wedged).
+        let next = SessionTestHarness(
+            roomId: "next-room",
+            acquireForegroundLease: true,
+            arbiter: arbiter
+        )
+        await next.advanceToInCallWithTurn(localCid: "n-local", remoteCid: "n-remote")
+        XCTAssertNotNil(arbiter.currentOwnerToken,
+                        "A direct join after a deinit-dropped session must reacquire the lease")
+        XCTAssertEqual(next.session.mediaRole, .foreground)
+
+        next.tearDown()
+    }
+
     // MARK: - preflightForeground (pure)
 
     func testPreflightOkForMutedCameraOffDesired() async {
@@ -381,7 +540,7 @@ final class ForegroundSessionContractTests: XCTestCase {
         // WITHOUT touching the session's local token field: release A and acquire a
         // fresh token B. The session still locally believes it owns A (its field is
         // unchanged), but the arbiter now reports B as the current owner.
-        arbiter.releaseLease(tokenA)
+        try! arbiter.releaseLease(tokenA)
         let tokenB = try! arbiter.acquireForeground(ownerId: "other-room")
         XCTAssertEqual(arbiter.currentOwnerToken, tokenB)
         XCTAssertNotEqual(tokenA, tokenB)
@@ -405,7 +564,7 @@ final class ForegroundSessionContractTests: XCTestCase {
                           "The fenced-out activation must not broadcast held:false")
 
         // Clean up the dedicated arbiter's lease so teardown is tidy.
-        arbiter.releaseLease(tokenB)
+        try! arbiter.releaseLease(tokenB)
         harness.tearDown()
     }
 }
