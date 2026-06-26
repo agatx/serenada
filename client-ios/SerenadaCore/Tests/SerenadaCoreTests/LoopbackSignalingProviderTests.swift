@@ -149,7 +149,11 @@ final class LoopbackSignalingProviderTests: XCTestCase {
             initialSignalingProvider: provider,
             audioController: FakeAudioController(),
             mediaEngine: media,
-            clock: FakeSessionClock()
+            clock: FakeSessionClock(),
+            // Each loopback session is an INDEPENDENT foreground owner in this
+            // process; give each its own arbiter so the process-singleton
+            // single-lease rule does not block the 2..4 parallel test sessions.
+            foregroundArbiter: ForegroundMediaArbiter()
         )
         return (session, media)
     }

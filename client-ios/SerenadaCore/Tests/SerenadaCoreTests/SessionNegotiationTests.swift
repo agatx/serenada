@@ -833,7 +833,11 @@ final class SessionNegotiationTests: XCTestCase {
 
     func testFourPartyReattachRestartsOnlyDeterministicOfferOwners() async throws {
         let peerIds = ["alpha", "bravo", "charlie", "delta"]
-        let harnesses = Dictionary(uniqueKeysWithValues: peerIds.map { ($0, SessionTestHarness(handlesReconnection: true)) })
+        // Four INDEPENDENT foreground owners in one process: each needs its own
+        // arbiter so the single-lease rule does not block the parallel sessions.
+        let harnesses = Dictionary(uniqueKeysWithValues: peerIds.map {
+            ($0, SessionTestHarness(handlesReconnection: true, arbiter: ForegroundMediaArbiter()))
+        })
         var cursors = Dictionary(uniqueKeysWithValues: peerIds.map { ($0, 0) })
 
         func participants(charlieStatus: ParticipantSignalingStatus = .active) -> [SignalingProviderParticipant] {

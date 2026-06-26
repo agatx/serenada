@@ -83,6 +83,18 @@ export type {
 
 export { ConsoleSerenadaLogger } from './ConsoleLogger.js';
 
+/** @internal Multi-call session: media-role + foreground arbiter types/singleton */
+export type {
+    CallMediaRole,
+    MediaActivationState,
+    VideoMode,
+    ForegroundArbiterMode,
+    ForegroundOwnerToken,
+} from './types.js';
+export { ForegroundLeaseUnavailable } from './types.js';
+/** @internal Process-wide foreground media arbiter (one per JS context) */
+export { foregroundArbiter, __resetForegroundArbiterForTests } from './foregroundArbiter.js';
+
 // Public utilities
 export {
     computeLayout, computeStageLayout, clampStageTileAspectRatio,

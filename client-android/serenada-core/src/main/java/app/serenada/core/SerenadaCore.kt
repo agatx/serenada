@@ -84,6 +84,10 @@ class SerenadaCore(
             logger = logger,
             displayName = displayName,
             peerId = peerId,
+            // Public single-call join always foregrounds and routes through the
+            // process-wide arbiter (mode DIRECT). A second concurrent direct join
+            // fails fast with ForegroundLeaseUnavailable (contract §2).
+            acquireForegroundLease = true,
         )
         session.start()
         return session
@@ -114,6 +118,8 @@ class SerenadaCore(
             logger = logger,
             displayName = displayName,
             peerId = peerId,
+            // Public single-call join always foregrounds via the arbiter (DIRECT).
+            acquireForegroundLease = true,
         )
         session.start()
         return session

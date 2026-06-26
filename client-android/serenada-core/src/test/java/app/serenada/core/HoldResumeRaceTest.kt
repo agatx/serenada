@@ -1,5 +1,7 @@
 package app.serenada.core
 
+import app.serenada.core.ForegroundMediaArbiter
+import app.serenada.core.ForegroundOwnerToken
 import app.serenada.core.call.AudioCoordinatorEvent
 import app.serenada.core.call.AudioDevice
 import app.serenada.core.call.AudioIntent
@@ -169,6 +171,66 @@ class HoldResumeRaceTest {
             "cancelled resume must not commit FOREGROUND",
             CallMediaRole.HELD,
             factory.session.mediaRoleForTest(),
+        )
+    }
+
+    /**
+     * Phase 2 double-fence (contract §3): a token-gated activation whose lease
+     * owner token is superseded WHILE it awaits the coordinator must be dropped
+     * EVEN IF the generation still matches. Generation alone is insufficient: a
+     * rollback re-activates the old call under the same generation, and a stuck
+     * callback from the failed new activation could otherwise still match.
+     */
+    @Test
+    fun `token-gated activation with a stale owner token is dropped even when the generation matches`() {
+        val coordinator = GatedAudioCoordinator()
+        factory = TestSessionFactory(defaultVideoEnabled = false, audioCoordinator = coordinator)
+        factory.advanceToInCallWithTurn()
+        ShadowLooper.idleMainLooper()
+
+        // Hold to fully-held first.
+        val firstHold = mainScope.launch { factory.session.applyHeldRoleInternal() }
+        ShadowLooper.idleMainLooper()
+        assertTrue(firstHold.isCompleted)
+
+        // Mint two DISTINCT lease tokens (only identity matters for the fence).
+        // tokenB is minted then released so tokenA can be the live owner.
+        val tokenB = ForegroundMediaArbiter.acquireForeground("call-b")
+        ForegroundMediaArbiter.releaseLease(tokenB)
+        val tokenA = ForegroundMediaArbiter.acquireForeground("call-a")
+        val gen = ForegroundMediaArbiter.nextOperationGeneration()
+
+        // Arm the gate so the activation suspends inside the coordinator op.
+        coordinator.armActivationGate()
+        val activateJob = mainScope.launch {
+            runCatching { factory.session.activateForeground(tokenA, gen) }
+        }
+        ShadowLooper.idleMainLooper()
+        assertFalse("activation must be awaiting the coordinator", activateJob.isCompleted)
+
+        // While suspended, a superseding op swaps in a DIFFERENT owner token under
+        // the SAME generation (models a rollback re-activation). The generation is
+        // unchanged, so only the token fence can catch this.
+        factory.session.setForegroundOwnerTokenForTest(tokenB)
+
+        // Release the coordinator activation so the (now stale) activation reaches
+        // its post-await fence.
+        coordinator.completeActivation()
+        ShadowLooper.idleMainLooper()
+        coordinator.completeDeactivation()
+        ShadowLooper.idleMainLooper()
+
+        assertTrue("stale activation should settle", activateJob.isCompleted)
+        // The stale-token activation rolled back to held; it did NOT commit foreground.
+        assertEquals(
+            "a stale-token activation must not commit FOREGROUND",
+            CallMediaRole.HELD,
+            factory.session.mediaRoleForTest(),
+        )
+        assertEquals(
+            "a stale-token activation must end INACTIVE",
+            MediaActivationState.INACTIVE,
+            factory.session.mediaActivationStateForTest(),
         )
     }
 }

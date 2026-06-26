@@ -169,6 +169,13 @@ export class FakeMediaEngine {
     lastSuspendedAudioTracks: FakeMediaStreamTrack[] = [];
     lastSuspendedVideoTracks: FakeMediaStreamTrack[] = [];
 
+    // --- Held-initial join (Phase 2): create stable senders, no capture. ---
+    initializeHeldWithoutCaptureCalls = 0;
+    initializeHeldWithoutCapture(): void {
+        this.initializeHeldWithoutCaptureCalls += 1;
+        this.setRemotePlaybackEnabled(false);
+    }
+
     async suspendLocalMediaForHold(): Promise<void> {
         this.suspendLocalMediaForHoldCalls += 1;
         if (this.isScreenSharing) {

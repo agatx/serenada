@@ -591,6 +591,22 @@ export class MediaEngine {
     }
 
     /**
+     * Enter held-without-capture mode for a session joined directly into the
+     * `held` initial role (Core Invariant 3 / contract §5). Latches the
+     * no-capture backstop and silences remote playout BEFORE any peer/transceiver
+     * is created, so the offer-driven `startLocalMedia` reacquire never grabs the
+     * mic/camera and inbound audio is silent. Stable audio + video
+     * transceivers/senders are still created during negotiation (with a `null`
+     * sender track) via the normal `getOrCreatePeer` path; resume attaches fresh
+     * tracks to those existing senders. No-op `getUserMedia` is the whole point:
+     * a held-initial call owns no capture and holds no lease.
+     */
+    initializeHeldWithoutCapture(): void {
+        this.heldNoCapture = true;
+        this.setRemotePlaybackEnabled(false);
+    }
+
+    /**
      * Re-acquire foreground LOCAL media for a resumed call per the call's
      * desired intent: reacquire the microphone (and re-attach to the audio
      * senders) when `desiredAudio`, reacquire the camera when `desiredVideoMode`

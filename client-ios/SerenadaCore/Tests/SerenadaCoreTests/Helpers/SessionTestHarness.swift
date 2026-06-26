@@ -11,13 +11,29 @@ final class SessionTestHarness {
     let fakeMedia: FakeMediaEngine
     let fakeClock: FakeSessionClock
 
+    /// The arbiter this harness's session was wired with — `.shared` by default
+    /// (reset in init), or a caller-supplied dedicated arbiter for multi-session
+    /// tests that must NOT share the singleton.
+    let arbiter: ForegroundMediaArbiter
+
     init(
         roomId: String = "test-room-id",
         handlesReconnection: Bool = false,
         deferInitialAnswer: Bool = false,
         config: SerenadaConfig? = nil,
-        delegate: SerenadaCoreDelegate? = nil
+        delegate: SerenadaCoreDelegate? = nil,
+        initialMediaRole: CallMediaRole = .foreground,
+        isCapabilityGranted: ((MediaCapability) -> Bool)? = nil,
+        arbiter: ForegroundMediaArbiter? = nil
     ) {
+        // The foreground arbiter is a PROCESS singleton: a prior test case may
+        // have left a live lease/mode, which would make this session's direct
+        // join fail to acquire. Reset it so each harness starts from a clean
+        // arbiter. (Mirrors web `arbiter.__resetForTests`.) A caller-supplied
+        // dedicated arbiter is used as-is (it is not the shared singleton).
+        ForegroundMediaArbiter.shared.resetForTests()
+        let resolvedArbiter = arbiter ?? .shared
+        self.arbiter = resolvedArbiter
         self.fakeProvider = FakeSignalingProvider(handlesReconnection: handlesReconnection)
         var resolvedConfig = config ?? SerenadaConfig(signalingProvider: fakeProvider)
         if deferInitialAnswer {
@@ -40,7 +56,10 @@ final class SessionTestHarness {
             apiClient: fakeAPI,
             audioController: fakeAudio,
             mediaEngine: fakeMedia,
-            clock: fakeClock
+            clock: fakeClock,
+            initialMediaRole: initialMediaRole,
+            isCapabilityGranted: isCapabilityGranted,
+            foregroundArbiter: resolvedArbiter
         )
     }
 
@@ -174,6 +193,35 @@ final class SessionTestHarness {
         await waitForInitialOfferIfNeeded(localCid: localCid, remoteCid: remoteCid)
     }
 
+    /// Advance a HELD-initial session to in-call: a held join never calls
+    /// `startLocalMedia` (no capture) so the foreground `waitForLocalMedia` path
+    /// would hang. This drives signaling open + joined + ICE so the peer slot is
+    /// created (stable senders, nil tracks) without ever foregrounding.
+    func advanceToInCallHeld(
+        localCid: String = "local-cid-1",
+        remoteCid: String = "remote-cid-1",
+        localJoinedAt: Int = 1,
+        remoteJoinedAt: Int = 2,
+        hostCid: String? = nil,
+        iceServers: [IceServerConfig] = [IceServerConfig(urls: ["turn:turn.example.com:3478"], username: "user", credential: "pass")]
+    ) async {
+        fakeProvider.iceServerResults = [.success(iceServers)]
+        await yieldToMainActor()
+        openSignaling()
+        simulateJoinedResponse(
+            cid: localCid,
+            participants: [
+                (cid: localCid, joinedAt: localJoinedAt),
+                (cid: remoteCid, joinedAt: remoteJoinedAt)
+            ],
+            hostCid: hostCid ?? localCid
+        )
+        await yieldToMainActor()
+        await fakeClock.advance(byMs: 100)
+        await yieldToMainActor()
+        await waitForIceServers()
+    }
+
     /// Advance to inCall with a remote whose join capabilities/media policy are
     /// supplied verbatim — needed by independent-content per-peer routing tests.
     /// Mirrors ``advanceToInCallWithTurn`` but seeds the `joined` snapshot with
@@ -277,5 +325,9 @@ final class SessionTestHarness {
 
     func tearDown() {
         session.cancelJoin()
+        // Release any lease this session acquired so the next test case starts
+        // clean even if it does not build a harness (and so a leaked lease never
+        // masks a real acquire failure).
+        ForegroundMediaArbiter.shared.resetForTests()
     }
 }

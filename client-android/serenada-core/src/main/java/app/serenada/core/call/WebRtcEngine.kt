@@ -88,6 +88,12 @@ internal class WebRtcEngine(
     // false so a peer that joins/renegotiates during hold inherits the deafen at
     // slot creation (FIX A3). Resume sets it back to true.
     private var remotePlaybackEnabled = true
+    // Multi-call hold: when true, slots create SEND_RECV (send-capable) audio +
+    // legacy-video transceivers even though no local capture track exists, so a
+    // session joined `held` has stable senders ready for a renegotiation-free
+    // resume (contract §5 / Core Invariant 3). Set by [createSendersForHold] and
+    // cleared once capture starts ([startLocalMedia]/[resumeLocalMediaFromHold]).
+    private var heldSendersMode = false
     private val initializedRenderers =
         Collections.newSetFromMap(WeakHashMap<SurfaceViewRenderer, Boolean>())
 
@@ -236,9 +242,24 @@ internal class WebRtcEngine(
         audioPipelinePrimer.collectAudioLevel(onComplete)
     }
 
+    override fun createSendersForHold() {
+        if (released) return
+        // Mark held-senders mode so any slot built while held creates send-capable
+        // (SEND_RECV) transceivers despite carrying no track. Resume later attaches
+        // fresh tracks to these senders via setTrack (no renegotiation). No capture
+        // is acquired here; the OS never reports a held session as capturing.
+        heldSendersMode = true
+        // Apply to any slots that already exist (none on the common held-join path,
+        // where slots are created lazily as peers arrive, but kept idempotent).
+        peerSlots.forEach { it.ensureSendCapableTransceiversForHold() }
+    }
+
     override fun startLocalMedia(startVideoCapture: Boolean) {
         if (released) return
         if (localAudioTrack != null || localVideoTrack != null) return
+        // Foreground capture is starting; leave held-senders mode so new slots
+        // follow the normal (track-driven) transceiver path again.
+        heldSendersMode = false
         cameraController.resetCameraState()
         val audioConstraints = MediaConstraints()
         audioSource = peerConnectionFactory.createAudioSource(audioConstraints)
@@ -396,6 +417,8 @@ internal class WebRtcEngine(
 
     override fun resumeLocalMediaFromHold(audioEnabled: Boolean, videoMode: LocalCameraMode?) {
         if (released) return
+        // Capture is being (re)acquired; leave held-senders mode.
+        heldSendersMode = false
         // Microphone: recreate capture ONLY when audio is desired. A held call
         // that was MUTED must resume muted with NO mic recreate (FIX A1): leaving
         // the audio source/track null keeps the OS mic indicator off and the
@@ -733,6 +756,7 @@ internal class WebRtcEngine(
             applyAudioSenderParameters = ::applyAudioSenderParameters,
             currentVideoSenderPolicy = { policySlot?.let { videoSenderPolicyForSlot(it) } ?: activeVideoSenderPolicy() },
             isRemoteBlackFrameAnalysisEnabled = { isRemoteBlackFrameAnalysisEnabled },
+            heldSendersMode = { heldSendersMode },
             peerConnectionDisposeQueue = peerConnectionDisposeQueue,
             supportsIndependentContentVideo = independentRouted,
             isOfferOwner = isOfferOwner,

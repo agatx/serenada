@@ -79,6 +79,7 @@
 		AFA7404C26B9F90435638F49 /* SessionPostReconnectGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 970E7AEDB3E705CBF2F03E95 /* SessionPostReconnectGateTests.swift */; };
 		AFCDC333087CBBB6BFF4566F /* FakeSignalingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9756E09068C1BAC5AAD3412 /* FakeSignalingTransport.swift */; };
 		B402B3581D8D647DC2D139A7 /* PushKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E0666A6C1733C1FA1856919 /* PushKeyStore.swift */; };
+		B4143EDBEC3D53C962BCAFF9 /* ForegroundMediaArbiterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF787F1A1321E53802E2B939 /* ForegroundMediaArbiterTests.swift */; };
 		B896B31FAF7939AF63947C4C /* FakeSessionSignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC97F9BB82CE31EBF9C084B /* FakeSessionSignaling.swift */; };
 		BC3AE1438258D205BFE66CD2 /* SerenadaiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E456D79CB34E80195B31FCFC /* SerenadaiOSApp.swift */; };
 		BD10E73D0A99AF24A662C4F6 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = E07431915F3AC5DF220F5B3A /* GoogleService-Info.plist */; };
@@ -101,6 +102,7 @@
 		E63D8928F846DF0065D3BD02 /* StatsCounterMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA079DE639FF5E6D908BEE8A /* StatsCounterMergeTests.swift */; };
 		EC4EFE918B3966B82C58E62C /* BroadcastIPCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B247320AC4D8D9CF1BB560F /* BroadcastIPCTests.swift */; };
 		EE8328B7F79EEA681164E7ED /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 018403014C9AEDF89B039618 /* SettingsScreen.swift */; };
+		F15C7A8C9FEAA2E348F6CE5E /* ForegroundSessionContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A47E3D5C44EAFB68209067B6 /* ForegroundSessionContractTests.swift */; };
 		F237C6E7ED0C17810C58C49F /* SavedRoomStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ECD8A5FB8E492716B9681E3 /* SavedRoomStoreTests.swift */; };
 		F550B054F40D9A81D9A612F8 /* FakeAudioCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59CA13885164CF265442E406 /* FakeAudioCoordinator.swift */; };
 		F6138648F1A35A494AF6330E /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9036C71CC2E91FAD8FB5170 /* APIClient.swift */; };
@@ -235,6 +237,7 @@
 		9F052EA0D1D083D292B3CF0E /* CameraModeFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraModeFlowTests.swift; sourceTree = "<group>"; };
 		9FC9E71EE9415390DBBFC4A7 /* BackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackoffTests.swift; sourceTree = "<group>"; };
 		A249E2EA4288C34C4B5FFD48 /* SessionSuspendedSurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSuspendedSurfaceTests.swift; sourceTree = "<group>"; };
+		A47E3D5C44EAFB68209067B6 /* ForegroundSessionContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForegroundSessionContractTests.swift; sourceTree = "<group>"; };
 		A48285CB0CBEE51504B0674B /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
 		B2B27D4928922728BD684878 /* SavedRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedRoom.swift; sourceTree = "<group>"; };
 		B8648687C9C97AD05ABC9AEB /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -265,6 +268,7 @@
 		E9CFF87F710AB38BB7519AFB /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/Localizable.strings; sourceTree = "<group>"; };
 		E9DEA9027FC936DD853C1EC1 /* RemoteVideoTransceiverRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteVideoTransceiverRoutingTests.swift; sourceTree = "<group>"; };
 		ECF59DDD3EB32D08B6F0B913 /* SerenadaCoreProviderModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerenadaCoreProviderModeTests.swift; sourceTree = "<group>"; };
+		EF787F1A1321E53802E2B939 /* ForegroundMediaArbiterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForegroundMediaArbiterTests.swift; sourceTree = "<group>"; };
 		F23DE54D45BE4A11790E34B3 /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		F4BB4F1EC53EF165C9E75A96 /* SerenadaiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SerenadaiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F54D58A452D7949DF145435E /* JoinRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinRecoveryTests.swift; sourceTree = "<group>"; };
@@ -459,6 +463,8 @@
 				D5DEACDD78A7F800281C0FC6 /* CaptureResolutionSelectionTests.swift */,
 				F5BC48440A4DD113050C3E29 /* DeepLinkParserTests.swift */,
 				1A7CC3F22BEA1500363B20A6 /* EndpointHostParserTests.swift */,
+				EF787F1A1321E53802E2B939 /* ForegroundMediaArbiterTests.swift */,
+				A47E3D5C44EAFB68209067B6 /* ForegroundSessionContractTests.swift */,
 				D0F30A2519015E17F85AD93B /* HoldResumeTests.swift */,
 				258D6A80A3E3F6FBE06D77B8 /* IceCandidateSanitizerTests.swift */,
 				D383A2AFA12C3BF599525FAF /* IndependentContentMediaTests.swift */,
@@ -890,6 +896,8 @@
 				B896B31FAF7939AF63947C4C /* FakeSessionSignaling.swift in Sources */,
 				467581ED7FB87064203AA780 /* FakeSignalingProvider.swift in Sources */,
 				AFCDC333087CBBB6BFF4566F /* FakeSignalingTransport.swift in Sources */,
+				B4143EDBEC3D53C962BCAFF9 /* ForegroundMediaArbiterTests.swift in Sources */,
+				F15C7A8C9FEAA2E348F6CE5E /* ForegroundSessionContractTests.swift in Sources */,
 				A7D6649A27EAD9A6EEAE4B8F /* FrontlineContentRenderingTests.swift in Sources */,
 				7F3EC5E7DE4D3A8B91DAB3D6 /* HoldResumeTests.swift in Sources */,
 				6B5F236A91FDD3905C7AFD49 /* IceCandidateSanitizerTests.swift in Sources */,

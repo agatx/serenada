@@ -11,6 +11,19 @@ import org.webrtc.VideoTrack
 
 internal interface SessionMediaEngine {
     fun startLocalMedia(startVideoCapture: Boolean)
+
+    /**
+     * Create stable audio + video transceivers/senders WITHOUT starting capture
+     * (multi-call session, contract §5 / Core Invariant 3). Used by a session
+     * joined in the `held` initial role: the senders exist (send-capable, null
+     * track) so a later resume attaches freshly acquired tracks to them via
+     * `setTrack` with no SDP renegotiation on the common path. Unlike
+     * [startLocalMedia] this acquires NO mic/camera, so the OS never reports the
+     * held session as capturing. Default no-op so fakes/custom engines that do
+     * not implement the held-join path are unaffected.
+     */
+    fun createSendersForHold() {}
+
     fun release()
 
     /**

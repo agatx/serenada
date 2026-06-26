@@ -1,4 +1,4 @@
-import type { SerenadaConfig, CallState, ConnectionEvent, CreateRoomResult, SerenadaSessionHandle } from './types.js';
+import type { CallMediaRole, SerenadaConfig, CallState, ConnectionEvent, CreateRoomResult, SerenadaSessionHandle } from './types.js';
 import { SerenadaSession } from './SerenadaSession.js';
 import { createRoomId } from './api/roomApi.js';
 import { buildRoomUrl } from './serverUrls.js';
@@ -66,11 +66,16 @@ export class SerenadaCore {
             return this.createUnsupportedSession();
         }
         const signalingProvider = this.createSignalingProvider();
+        // Public single-call join always foregrounds and routes through the
+        // process-wide arbiter (mode `direct`): acquiring the lease in the session
+        // constructor makes a second concurrent direct join (or a join while a
+        // registry owns the process) fail fast with `ForegroundLeaseUnavailable`.
         if (typeof urlOrOptions === 'string') {
             const roomId = this.parseRoomIdFromUrl(urlOrOptions);
             return new SerenadaSession(this.config, roomId, urlOrOptions, signalingProvider, {
                 displayName: extraOptions?.displayName,
                 peerId: extraOptions?.peerId,
+                acquireForegroundLease: true,
             });
         }
         const roomUrl = this.resolvedConfig.serverHost
@@ -79,6 +84,45 @@ export class SerenadaCore {
         return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl, signalingProvider, {
             displayName: urlOrOptions.displayName,
             peerId: urlOrOptions.peerId,
+            acquireForegroundLease: true,
+        });
+    }
+
+    /**
+     * @internal Registry-internal join with an explicit initial media role
+     * (multi-call session, Phase 2). NOT a public `join()` parameter: the public
+     * `join()` always foregrounds. The (Phase 3) `SerenadaCallRegistry` calls this
+     * to create a `'held'` call (no capture, no coordinator, no lease — stable
+     * senders are still created during negotiation) or a `'foreground'` call.
+     *
+     * For `'foreground'` the caller is responsible for the arbiter lease (the
+     * registry acquires/releases it). For `'held'` no lease is taken. This method
+     * never acquires the lease itself; the public `join()` is the only path that
+     * self-acquires the `direct`-mode lease.
+     */
+    joinInternal(
+        room: { url: string } | { roomId: string },
+        options: { initialMediaRole: CallMediaRole; displayName?: string; peerId?: string } = { initialMediaRole: 'foreground' },
+    ): SerenadaSession {
+        if (!SerenadaCore.isSupported()) {
+            return this.createUnsupportedSession() as unknown as SerenadaSession;
+        }
+        const signalingProvider = this.createSignalingProvider();
+        if ('url' in room) {
+            const roomId = this.parseRoomIdFromUrl(room.url);
+            return new SerenadaSession(this.config, roomId, room.url, signalingProvider, {
+                displayName: options.displayName,
+                peerId: options.peerId,
+                initialMediaRole: options.initialMediaRole,
+            });
+        }
+        const roomUrl = this.resolvedConfig.serverHost
+            ? buildRoomUrl(this.resolvedConfig.serverHost, room.roomId)
+            : null;
+        return new SerenadaSession(this.config, room.roomId, roomUrl, signalingProvider, {
+            displayName: options.displayName,
+            peerId: options.peerId,
+            initialMediaRole: options.initialMediaRole,
         });
     }
 

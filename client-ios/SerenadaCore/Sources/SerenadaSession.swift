@@ -226,8 +226,40 @@ public final class SerenadaSession: ObservableObject {
     /// superseded it, the stale completion rolls back instead of committing
     /// foreground. This is the second fence beyond `mediaActivationState` — a hold
     /// during `.activating` bumps the generation so the in-flight resume bails.
-    /// Phase 2 feeds this from the arbiter operation generation.
+    /// In Phase 2 a token-gated activation seeds this from the arbiter operation
+    /// generation passed into `activateForeground(_:generation:)`.
     private var mediaOpGeneration: Int = 0
+
+    // MARK: - Multi-call foreground lease (Phase 2: token-gating)
+    //
+    // The role transitions above (`applyHeldRoleInternal`/`applyForegroundRoleInternal`)
+    // are the Phase-1 internals. Phase 2 wraps them as the registry-owned,
+    // token-gated `activateForeground`/`releaseForeground`/`abortForegroundActivation`.
+    // The token is the SECOND fence (beyond the operation generation) for late
+    // async activation callbacks: a completion is honored only if BOTH the
+    // operation generation AND the live lease owner token still match.
+
+    /// The role this session was created with. A `held` join skips coordinator/
+    /// controller activation and local capture but still creates stable senders
+    /// and connects signaling. The public `join()` always uses `.foreground`.
+    private let initialMediaRole: CallMediaRole
+    /// The owner token of the in-flight or live foreground activation. Set by
+    /// `activateForeground`, cleared on hold/abort. The fence for late callbacks.
+    private var foregroundOwnerToken: ForegroundOwnerToken?
+    /// Permission-authorization seam (PURE, no prompt) used by `preflightForeground`.
+    /// Defaults to the live `AVCaptureDevice`/`AVAudioSession` status; tests inject
+    /// a fake. Returns whether the given capability is already granted.
+    private let isCapabilityGranted: (MediaCapability) -> Bool
+    /// Process-wide arbiter. The DIRECT single-call `join()` path acquires the
+    /// lease (mode `direct`) before activating media and releases it in
+    /// `resetResources`; a second concurrent direct join fails fast. Registry-
+    /// created (`held`-initial) sessions do NOT self-acquire — the registry owns
+    /// the lease for them. Injectable so tests share a reset-between-cases arbiter.
+    private let foregroundArbiter: ForegroundMediaArbiter
+    /// The lease token held by the DIRECT single-call path, or `nil`. Distinct
+    /// from `foregroundOwnerToken` (the registry-issued fence token): this is the
+    /// session's OWN lease, released in `resetResources`.
+    private var directLeaseToken: ForegroundOwnerToken?
     // Latched true once the call's media has connected at least once. The network monitor
     // below only restarts ICE for an established call: NWPathMonitor delivers the current
     // path once at start(), and treating that initial callback as a network change would
@@ -397,6 +429,18 @@ public final class SerenadaSession: ObservableObject {
         )
     }
 
+    /// Default permission seam: inspect the live OS authorization status WITHOUT
+    /// prompting. Mirrors `JoinFlowCoordinator.missingPermissions` (camera =
+    /// `AVCaptureDevice.authorizationStatus`, microphone = `recordPermission`).
+    private static func liveCapabilityGranted(_ capability: MediaCapability) -> Bool {
+        switch capability {
+        case .camera:
+            return AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        case .microphone:
+            return AVAudioSession.sharedInstance().recordPermission == .granted
+        }
+    }
+
     init(
         roomId: String,
         roomUrl: URL? = nil,
@@ -411,9 +455,15 @@ public final class SerenadaSession: ObservableObject {
         clock: SessionClock? = nil,
         displayName: String? = nil,
         peerId: String? = nil,
-        recoveryStorage: RecoveryStorage = RecoveryStorage()
+        recoveryStorage: RecoveryStorage = RecoveryStorage(),
+        initialMediaRole: CallMediaRole = .foreground,
+        isCapabilityGranted: ((MediaCapability) -> Bool)? = nil,
+        foregroundArbiter: ForegroundMediaArbiter = .shared
     ) {
         self.recoveryStorage = recoveryStorage
+        self.initialMediaRole = initialMediaRole
+        self.isCapabilityGranted = isCapabilityGranted ?? SerenadaSession.liveCapabilityGranted
+        self.foregroundArbiter = foregroundArbiter
         self.roomId = roomId
         self.roomUrl = roomUrl
         self.config = config
@@ -485,6 +535,14 @@ public final class SerenadaSession: ObservableObject {
         }
 
         internalPhase = .joining
+        // A session created HELD never owns foreground media: it sits at
+        // `.held`/`.inactive` from the start (the join path skips coordinator/
+        // controller activation and local capture). A `.foreground` session keeps
+        // the existing default (`.foreground`/`.active`) — single-call behavior.
+        if initialMediaRole == .held {
+            mediaRole = .held
+            mediaActivationState = .inactive
+        }
         let videoCaptureSupported = !self.availableCameraModes.isEmpty
         let initialCameraMode = self.availableCameraModes.first ?? .selfie
         commitSnapshot { s, _ in
@@ -1201,6 +1259,15 @@ public final class SerenadaSession: ObservableObject {
             d.remoteContentParticipantId = nil; d.remoteContentType = nil; d.realtimeStats = .empty
         }
 
+        // A HELD join owns no capture, so it does NOT request camera/mic
+        // permissions (permission prompts belong to the call being foregrounded —
+        // design "Permissions"). It seeds senders + connects signaling only.
+        if initialMediaRole == .held {
+            callStartedAtMs = Self.nowMs()
+            prepareHeldAndConnect()
+            return
+        }
+
         let needsCamera = videoCaptureSupported && config.defaultVideoEnabled
         let required = JoinFlowCoordinator.missingPermissions(includeCamera: needsCamera)
         if !required.isEmpty {
@@ -1215,8 +1282,76 @@ public final class SerenadaSession: ObservableObject {
         await prepareMediaAndConnect()
     }
 
+    /// Held-initial join (Core Invariant 3): connect signaling and let peer slots
+    /// create stable audio+video transceivers/senders during negotiation, but
+    /// attach NO local capture tracks (senders carry nil) and do NOT activate the
+    /// audio coordinator/controller. Resume (`activateForeground`) reacquires
+    /// tracks onto those existing senders. Mirrors `prepareMediaAndConnect` minus
+    /// activation + `startLocalMedia`.
+    private func prepareHeldAndConnect() {
+        guard state.phase == .joining || internalPhase == .joining else { return }
+
+        startCoordinatorTasks()
+        // `localMediaReadyForNegotiation` gates whether negotiation may proceed.
+        // A held session has no local tracks but still negotiates so its stable
+        // senders bind — the senders carry nil tracks (Invariant 3), not capture.
+        localMediaReadyForNegotiation = true
+        hasEverConnectedPeer = false
+
+        let videoCaptureSupported = !availableCameraModes.isEmpty
+        // Seed DESIRED intent from the join defaults so resume restores it. A
+        // held session publishes nothing now (actual* stay false); the desired
+        // camera mode comes from the current local participant snapshot.
+        desiredAudioEnabled = config.defaultAudioEnabled
+        desiredVideoMode = (videoCaptureSupported && config.defaultVideoEnabled)
+            ? state.localParticipant.cameraMode
+            : nil
+        userMuted = !desiredAudioEnabled
+        userPreferredVideoEnabled = videoCaptureSupported && config.defaultVideoEnabled
+
+        // Held media owns no capture: local audio/video read off, actual* false.
+        // (mediaRole/mediaActivationState were already set to .held/.inactive in
+        // init.) sessionActivated stays false so audio-environment sinks no-op.
+        mediaRole = .held
+        mediaActivationState = .inactive
+        actualAudioPublished = false
+        actualVideoPublished = false
+        commitSnapshot { s, _ in
+            s.localParticipant.audioEnabled = false
+            s.localParticipant.videoEnabled = false
+        }
+
+        // Deafen remote playout up front so a peer that arrives before any resume
+        // is silent on this held session (sticky: slots created later inherit it).
+        webRtcEngine.setRemotePlaybackEnabled(false)
+
+        joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
+        statsPoller?.start()
+        audioLevelPoller?.start()
+        peerNegotiationEngine?.onLocalMediaReady()
+        joinFlowCoordinator?.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
+        ensureSignalingConnection()
+    }
+
     private func prepareMediaAndConnect() async {
         guard state.phase == .joining || state.phase == .awaitingPermissions || internalPhase == .joining else { return }
+
+        // Route the DIRECT single-call foreground join through the process-wide
+        // arbiter (mode `direct`) BEFORE activating any media. A second concurrent
+        // direct join — or a direct join while a registry owns the process — fails
+        // fast with `ForegroundLeaseUnavailable`, preserving the single-foreground
+        // invariant (contract §2). The lease is released in `resetResources`.
+        if directLeaseToken == nil {
+            do {
+                try foregroundArbiter.claimMode(.direct, ownerRef: self)
+                directLeaseToken = try foregroundArbiter.acquireForeground(ownerId: roomId)
+            } catch {
+                foregroundArbiter.releaseMode(ownerRef: self)
+                logger?.log(.error, tag: "Audio", "Foreground media lease unavailable: \(error)")
+                handleError(.unknown("Foreground media unavailable: another call owns it"))
+                return
+            }
+        }
 
         startCoordinatorTasks()
         localMediaReadyForNegotiation = false
@@ -1491,13 +1626,23 @@ public final class SerenadaSession: ObservableObject {
     /// Idempotent.
     ///
     /// Phase 2 wraps this as the token-gated `activateForeground(token, gen)`.
-    func applyForegroundRoleInternal() {
+    ///
+    /// `generation` overrides the bumped op generation when supplied (the Phase-2
+    /// token path threads the arbiter generation in); Phase-1 callers omit it and
+    /// the method bumps its own. `fenceToken` is the SECOND fence checked in
+    /// `completeForegroundActivation` — the late completion is honored only if the
+    /// live lease owner token still matches (in addition to the generation).
+    func applyForegroundRoleInternal(generation: Int? = nil, fenceToken: ForegroundOwnerToken? = nil) {
         guard mediaRole != .foreground else { return }
         // Capture the operation generation BEFORE the await. A hold (or a newer
         // activate) that lands while the coordinator is activating bumps the
         // generation; `completeForegroundActivation` then sees the mismatch and
         // rolls back rather than committing foreground over a requested hold.
-        mediaOpGeneration &+= 1
+        if let generation {
+            mediaOpGeneration = generation
+        } else {
+            mediaOpGeneration &+= 1
+        }
         let activationGeneration = mediaOpGeneration
         mediaActivationState = .activating
 
@@ -1511,7 +1656,7 @@ public final class SerenadaSession: ObservableObject {
             } catch {
                 self.logger?.log(.error, tag: "Audio", "Failed to re-activate audio coordinator on resume: \(error)")
             }
-            self.completeForegroundActivation(generation: activationGeneration)
+            self.completeForegroundActivation(generation: activationGeneration, fenceToken: fenceToken)
         }
     }
 
@@ -1519,18 +1664,25 @@ public final class SerenadaSession: ObservableObject {
     /// coordinator has re-activated. Restarts local media per desired intent and
     /// publishes the resumed state.
     ///
-    /// `generation` is the value captured at activate start. If a hold (or a newer
-    /// activation) superseded this op while the coordinator was activating,
-    /// `mediaOpGeneration` no longer matches: bail without committing foreground or
-    /// broadcasting `held:false`, leaving the session held.
-    private func completeForegroundActivation(generation: Int) {
-        guard mediaOpGeneration == generation, mediaActivationState == .activating else {
-            // Superseded mid-activation. The superseding op owns the coordinator
-            // now: a hold requested during `.activating` already ran
-            // `deactivateAudioCoordinator()` (chained AFTER this activate, so the
-            // coordinator ends deactivated), and a newer activate drives its own
-            // bring-up. Re-deactivating here would either double-tear-down or
-            // clobber the newer op, so this stale completion only bails.
+    /// Two fences (both required, per contract §3): the late completion is honored
+    /// only if BOTH (a) `mediaOpGeneration` still equals the value captured at
+    /// activate start AND (b) the current lease owner token still equals
+    /// `fenceToken`. Generation alone is insufficient: a rollback re-activates the
+    /// old call under a fresh generation, but a stuck callback from the failed new
+    /// activation could otherwise still match the live generation; the owner token
+    /// is the independent second fence. A Phase-1 caller passes `fenceToken == nil`
+    /// (no lease in play) and only the generation fences.
+    private func completeForegroundActivation(generation: Int, fenceToken: ForegroundOwnerToken? = nil) {
+        let tokenStillCurrent = fenceToken == nil || fenceToken == foregroundOwnerToken
+        guard mediaOpGeneration == generation, mediaActivationState == .activating, tokenStillCurrent else {
+            // Superseded mid-activation (generation bumped) OR the lease owner
+            // token changed (a later acquire/release rotated it). The superseding
+            // op owns the coordinator now: a hold requested during `.activating`
+            // already ran `deactivateAudioCoordinator()` (chained AFTER this
+            // activate, so the coordinator ends deactivated), and a newer activate
+            // drives its own bring-up. Re-deactivating here would either
+            // double-tear-down or clobber the newer op, so this stale completion
+            // only bails.
             return
         }
 
@@ -1570,6 +1722,61 @@ public final class SerenadaSession: ObservableObject {
         for (cid, slot) in peerSlots {
             replayRendererRegistrations(to: slot, cid: cid)
         }
+    }
+
+    // MARK: - Multi-call foreground contract (Phase 2: token-gated, registry-owned)
+    //
+    // These wrap the Phase-1 internals as the registry-owned, token-gated entry
+    // points (contract §3). They are `internal`, not public — public single-call
+    // hosts keep using `join()`/`leave()` and the audio/video toggles and never
+    // see these. Lease minting/release stays in the arbiter/registry; the session
+    // uses the token only to fence late callbacks (see `completeForegroundActivation`).
+
+    /// PURE preflight: can this session take the foreground lease with its DESIRED
+    /// media, WITHOUT prompting or starting capture (Core Invariant 4)? Inspects
+    /// the OS authorization status for the mic/camera the desired media requires.
+    ///
+    /// - `.ok` when the desired media needs no ungranted device — in particular a
+    ///   fully muted, camera-off call (`desiredAudioEnabled == false &&
+    ///   desiredVideoMode == nil`) is always `.ok`, regardless of grants.
+    /// - `.needsPermission` when a required grant is missing.
+    /// - `.failed` for non-permission preconditions (none on iOS today).
+    func preflightForeground() -> ForegroundPreflight {
+        var missing: [MediaCapability] = []
+        if desiredAudioEnabled, !isCapabilityGranted(.microphone) {
+            missing.append(.microphone)
+        }
+        if desiredVideoMode != nil, !isCapabilityGranted(.camera) {
+            missing.append(.camera)
+        }
+        return missing.isEmpty ? .ok : .needsPermission
+    }
+
+    /// Drive this session to FOREGROUND under the registry-issued `token` and
+    /// arbiter `generation`. Wraps `applyForegroundRoleInternal`, fencing the late
+    /// async coordinator-activation completion on BOTH the generation and `token`
+    /// (contract §3). Throws when the session cannot begin activation; the async
+    /// outcome is surfaced via `mediaActivationState`.
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws {
+        foregroundOwnerToken = token
+        applyForegroundRoleInternal(generation: generation, fenceToken: token)
+    }
+
+    /// Drive this session to fully HELD. Wraps `applyHeldRoleInternal`. Idempotent
+    /// and MUST NOT throw after a partial release (contract §3). Uses `token` only
+    /// to fence; does NOT call `arbiter.releaseLease` — the registry owns that.
+    func releaseForeground(_ token: ForegroundOwnerToken) {
+        // Clear the fence token first so any in-flight activation completion (a
+        // resume the registry is now superseding) fails the owner-token fence.
+        foregroundOwnerToken = nil
+        applyHeldRoleInternal()
+    }
+
+    /// Undo a partial/failed `activateForeground` (capture/audio may have begun),
+    /// leaving the session fully HELD. Idempotent; never throws.
+    func abortForegroundActivation(_ token: ForegroundOwnerToken) {
+        foregroundOwnerToken = nil
+        applyHeldRoleInternal()
     }
 
     private func seedLocalContentRevision(from roomState: RoomState) {
@@ -2206,6 +2413,22 @@ public final class SerenadaSession: ObservableObject {
         webRtcEngine.release()
         callAudioSessionController.deactivate()
         deactivateAudioCoordinator()
+
+        // Release the DIRECT single-call foreground lease + mode so a subsequent
+        // direct join (or a registry) can claim the process. Idempotent: only the
+        // direct path holds `directLeaseToken`; registry-created sessions never do
+        // (the registry owns and releases their lease). Registry-issued fence
+        // tokens are NOT released here (the session never owns those leases).
+        // Only release when this session is STILL the arbiter's current owner —
+        // guards the (test-only) case where the singleton was reset out from under
+        // a live session, so a stale release never touches another owner's lease.
+        if let token = directLeaseToken {
+            if foregroundArbiter.currentOwnerToken == token {
+                foregroundArbiter.releaseLease(token)
+            }
+            foregroundArbiter.releaseMode(ownerRef: self)
+            directLeaseToken = nil
+        }
 
         currentRoomState = nil; clientId = nil; hostCid = nil
         pendingJoinRoom = nil; pendingMessages.removeAll(); reconnectAttempts = 0; remoteMediaStates.removeAll(); remoteContentStates.removeAll(); localContent = nil

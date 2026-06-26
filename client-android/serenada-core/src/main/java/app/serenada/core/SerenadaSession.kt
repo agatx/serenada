@@ -114,6 +114,25 @@ class SerenadaSession internal constructor(
     private val logger: SerenadaLogger? = null,
     private val displayName: String? = null,
     private val peerId: String? = null,
+    /**
+     * Initial foreground-media role (multi-call session, Phase 2). The public
+     * [SerenadaCore.join] always passes [CallMediaRole.FOREGROUND]; the (Phase 3)
+     * registry passes [CallMediaRole.HELD] to create a held call that owns no
+     * capture and holds no lease. A HELD initial role does NOT activate the audio
+     * coordinator/controller and does NOT start capture — it only creates stable
+     * senders (contract §5) and connects signaling. Defaults to FOREGROUND so
+     * existing construction is unchanged.
+     */
+    private val initialMediaRole: CallMediaRole = CallMediaRole.FOREGROUND,
+    /**
+     * When true, acquire the process-wide foreground lease (mode
+     * [ForegroundArbiterMode.DIRECT]) before activating media — the route for a
+     * public single-call [SerenadaCore.join]. A second concurrent direct join
+     * while one is live throws [ForegroundLeaseUnavailable]. Held-initial joins
+     * never acquire the lease; the (Phase 3) registry manages the lease itself and
+     * leaves this false.
+     */
+    private val acquireForegroundLease: Boolean = false,
 ) {
     private val appContext = context.applicationContext
     private val handler = Handler(Looper.getMainLooper())
@@ -521,8 +540,12 @@ class SerenadaSession internal constructor(
     // FOREGROUND/ACTIVE for its whole life; hold/resume toggle these. desired*
     // are the single source of user intent and survive hold; actual* reflect
     // what peers observe now (a held call always publishes false/false).
-    private var mediaRole: CallMediaRole = CallMediaRole.FOREGROUND
-    private var mediaActivationState: MediaActivationState = MediaActivationState.ACTIVE
+    // Seed from the requested initial role (Phase 2). A FOREGROUND single-call
+    // session is FOREGROUND/ACTIVE for its whole life; a HELD-initial session
+    // (registry, Phase 3) starts HELD/INACTIVE and owns no capture or lease.
+    private var mediaRole: CallMediaRole = initialMediaRole
+    private var mediaActivationState: MediaActivationState =
+        if (initialMediaRole == CallMediaRole.HELD) MediaActivationState.INACTIVE else MediaActivationState.ACTIVE
     private var desiredAudioEnabled: Boolean = config.defaultAudioEnabled
     private var desiredVideoMode: LocalCameraMode? =
         if (videoCaptureSupported && config.defaultVideoEnabled) {
@@ -538,8 +561,22 @@ class SerenadaSession internal constructor(
     // while resume awaits the (async) audio coordinator, the hold bumps this
     // counter so the resume re-check detects it was superseded and rolls back to
     // held instead of committing foreground (stale-activation race fence).
-    // Phase 2 will feed this from the arbiter operation generation.
+    // Phase 2 feeds this from the arbiter operation generation via the token-gated
+    // activateForeground; the un-gated Phase-1 hold/resume primitives keep
+    // self-incrementing it for the local suspend/resume race.
     private var mediaOpGeneration: Long = 0
+
+    /**
+     * The arbiter-minted lease owner token while this call holds (or is
+     * activating) the foreground media lease, else null. It is the SECOND fence
+     * (alongside [mediaOpGeneration]) for a late activation callback: an
+     * [activateForeground] result is honored only if BOTH the current generation
+     * AND this token still match (contract §3 fencing). For a single-call
+     * [SerenadaCore.join] (direct mode) the session acquires + releases its own
+     * lease; for a held-initial join it stays null until the (Phase 3) registry
+     * activates it via [activateForeground].
+     */
+    private var foregroundOwnerToken: ForegroundOwnerToken? = null
 
     // True only during the media-apply phase of a resume (FIX M3). While set,
     // broadcastLocalMediaState() is suppressed so the intermediate updates from
@@ -573,6 +610,20 @@ class SerenadaSession internal constructor(
 
     /** Test-only accessor: actual published video (false while held). */
     internal fun actualVideoPublishedForTest(): Boolean = actualVideoPublished
+
+    /** Test-only accessor: current foreground lease owner token (null = none). */
+    internal fun foregroundOwnerTokenForTest(): ForegroundOwnerToken? = foregroundOwnerToken
+
+    /**
+     * Test-only: overwrite the lease owner token mid-flight to model a
+     * superseding op (e.g. a switch rollback that re-activates the old call under
+     * a fresh token while a stuck activation callback from the failed new call is
+     * still in flight). Lets a test exercise the token fence independently of the
+     * generation fence (contract §3 double-fence).
+     */
+    internal fun setForegroundOwnerTokenForTest(token: ForegroundOwnerToken?) {
+        foregroundOwnerToken = token
+    }
 
     /**
      * Test-only: invoke the video sink the audio-environment callbacks (proximity
@@ -1388,7 +1439,12 @@ class SerenadaSession internal constructor(
 
     internal fun start() {
         assertMainThread()
-        joinFlowCoordinator.start(hasRequiredPermissions())
+        // A held-initial join (registry, Phase 2) owns no capture and must NOT
+        // request camera/mic permissions — permission prompts belong to the call
+        // being foregrounded. Skip the permission gate so it goes straight to the
+        // held join path (createSendersForHold, no capture).
+        val hasPermissions = initialMediaRole == CallMediaRole.HELD || hasRequiredPermissions()
+        joinFlowCoordinator.start(hasPermissions)
     }
 
     private fun startJoinInternal() {
@@ -1431,6 +1487,31 @@ class SerenadaSession internal constructor(
             )
         )
         updateDiagnostics(CallDiagnostics())
+
+        if (initialMediaRole == CallMediaRole.HELD) {
+            startHeldJoinInternal(joinAttemptId)
+            return
+        }
+
+        // Foreground single-call join. Route through the process-wide arbiter
+        // (mode DIRECT) BEFORE activating any media so a second concurrent direct
+        // join fails fast with ForegroundLeaseUnavailable and only one call ever
+        // owns capture/audio (contract §2; Core Invariant 1). Held-initial joins
+        // and the registry leave acquireForegroundLease false (the registry owns
+        // the lease itself in Phase 3). The lease is released in resetResources.
+        if (acquireForegroundLease && foregroundOwnerToken == null) {
+            try {
+                foregroundOwnerToken = ForegroundMediaArbiter.acquireForeground(
+                    ownerId = roomId,
+                    mode = ForegroundArbiterMode.DIRECT,
+                    modeOwnerRef = this,
+                )
+            } catch (e: ForegroundLeaseUnavailable) {
+                logger?.log(SerenadaLogLevel.ERROR, "Media", "Foreground lease unavailable: ${e.message}")
+                handleError(CallError.Unknown(e.message ?: "Foreground media is owned by another call"))
+                return
+            }
+        }
 
         acquirePerformanceLocks()
         providerScope.launch {
@@ -1476,6 +1557,60 @@ class SerenadaSession internal constructor(
                 logger?.log(SerenadaLogLevel.ERROR, "Media", "Failed to start local media: ${e.message}")
                 handleError(CallError.Unknown(e.message ?: "Local media startup failed"))
             }
+        }
+    }
+
+    /**
+     * Held-initial join (multi-call session, Phase 2; registry-internal). Unlike
+     * the foreground path this:
+     * - activates NO audio coordinator and NO audio controller (held calls own no
+     *   audio routing/focus; Core Invariant 2),
+     * - starts NO mic/camera capture (the OS never reports a held session
+     *   capturing),
+     * - creates stable audio + video transceivers/senders with a null track
+     *   ([SessionMediaEngine.createSendersForHold]) so a later resume attaches
+     *   fresh tracks with no SDP renegotiation (contract §5 / Core Invariant 3),
+     * - deafens remote playout, and broadcasts `held=true` after senders exist,
+     * - still connects signaling and preserves peer-connection identity.
+     * The session sits HELD/INACTIVE until the registry foregrounds it via
+     * [activateForeground].
+     */
+    private fun startHeldJoinInternal(joinAttemptId: Long) {
+        joinFlowCoordinator.scheduleJoinTimeout(roomId, joinAttemptId)
+        try {
+            // Create stable senders without capture. A held call publishes
+            // nothing (actual* stay false); desired* survive for resume.
+            webRtcEngine.createSendersForHold()
+            // Remote playout is silenced while held (defense in depth: a peer that
+            // joins/renegotiates during hold inherits the deafen at slot creation).
+            webRtcEngine.setRemotePlaybackEnabled(false)
+            localMediaReadyForNegotiation = true
+            userMuted = !config.defaultAudioEnabled
+            // Held: no capture, no audio session — but signaling/negotiation run.
+            sessionActivated = false
+            mediaRole = CallMediaRole.HELD
+            mediaActivationState = MediaActivationState.INACTIVE
+            actualAudioPublished = false
+            actualVideoPublished = false
+            // Reflect held in published local state so peers and UI converge.
+            updateState(
+                _state.value.copy(
+                    localAudioEnabled = false,
+                    localVideoEnabled = false,
+                    localCameraEnabled = false,
+                )
+            )
+            peerNegotiationEngine.onLocalMediaReady()
+            joinFlowCoordinator.scheduleJoinKickstart(joinAttemptId)
+            joinFlowCoordinator.ensureSignalingConnection()
+            // Broadcast held AFTER senders exist (local-state-then-broadcast). The
+            // builder forces audio=false/video=false so an old peer degrades to
+            // muted/camera-off, never a wrong "live" state.
+            runCatching { broadcastLocalMediaState(held = true) }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            logger?.log(SerenadaLogLevel.ERROR, "Media", "Failed to start held media: ${e.message}")
+            handleError(CallError.Unknown(e.message ?: "Held media startup failed"))
         }
     }
 
@@ -1578,25 +1713,42 @@ class SerenadaSession internal constructor(
      *
      * Idempotent: a second call while already foreground is a no-op.
      */
-    internal suspend fun applyForegroundRoleInternal() {
+    internal suspend fun applyForegroundRoleInternal(
+        // Phase 2 token-gated fence (contract §3). When non-null, the post-await
+        // result is honored only if BOTH the current generation AND this token
+        // still match. Null on the Phase-1 un-gated path, where only the
+        // self-incrementing generation fences a local hold/resume race.
+        expectedToken: ForegroundOwnerToken? = null,
+        expectedGeneration: Long? = null,
+    ) {
         assertMainThread()
         if (mediaRole == CallMediaRole.FOREGROUND) return
         // Capture the op generation for this resume. A concurrent hold that lands
         // while we await the async audio coordinator bumps the generation; the
         // post-await fence below detects it and rolls back to held instead of
-        // committing foreground (FIX N2). Phase 2 feeds this from the arbiter.
-        mediaOpGeneration += 1
-        val gen = mediaOpGeneration
+        // committing foreground (FIX N2). On the token-gated path the caller has
+        // already seeded mediaOpGeneration with the arbiter generation; on the
+        // un-gated path we self-increment.
+        if (expectedGeneration == null) {
+            mediaOpGeneration += 1
+        }
+        val gen = expectedGeneration ?: mediaOpGeneration
         mediaActivationState = MediaActivationState.ACTIVATING
 
         // 1. Activate the coordinator, then the controller (mirror start order).
         //    The coordinator activation is the awaited async boundary; a cancellation
         //    here MUST propagate (FIX N3: do not swallow CancellationException).
         runIgnoringNonCancellation { activateAudioCoordinatorForResume() }
-        // FENCE: if a hold superseded this resume while we awaited the coordinator,
-        // roll back to fully-held and bail — do NOT commit foreground or broadcast
-        // held=false. The hold that superseded us already broadcast held=true.
-        if (gen != mediaOpGeneration) {
+        // FENCE (double-fence; contract §3): if a hold superseded this resume while
+        // we awaited the coordinator, roll back to fully-held and bail — do NOT
+        // commit foreground or broadcast held=false. The hold that superseded us
+        // already broadcast held=true. A late callback is honored only if BOTH the
+        // generation AND (when token-gated) the lease owner token still match;
+        // generation alone is insufficient because a rollback re-activates the old
+        // call under a fresh generation while a stuck callback could match it.
+        val supersededByGeneration = gen != mediaOpGeneration
+        val supersededByToken = expectedToken != null && foregroundOwnerToken !== expectedToken
+        if (supersededByGeneration || supersededByToken) {
             mediaRole = CallMediaRole.HELD
             mediaActivationState = MediaActivationState.INACTIVE
             suspendForegroundMediaResources()
@@ -1684,6 +1836,133 @@ class SerenadaSession internal constructor(
             if (e is kotlinx.coroutines.CancellationException) throw e
             logger?.log(SerenadaLogLevel.WARNING, "Audio", "$opLabel failed: ${e.message}")
         }
+    }
+
+    // --- Internal: Token-gated foreground contract (Phase 2; contract §3) ---
+    //
+    // Registry-owned, token-gated wrappers around the Phase-1 hold/resume
+    // mechanics. The (Phase 3) registry calls these with an arbiter-minted owner
+    // token + operation generation; public single-call integrations never see
+    // them (they keep using join()/leave() + the audio/video toggles).
+
+    /** Result of [preflightForeground]: a pure permission/precondition check. */
+    enum class ForegroundPreflight {
+        /** Desired media can be foregrounded with no prompt. */
+        OK,
+
+        /** A required mic/camera grant for the desired media is missing. */
+        NEEDS_PERMISSION,
+
+        /** A non-permission precondition failed (e.g. session torn down). */
+        FAILED,
+    }
+
+    /**
+     * PURE preflight check (contract §3): can this call activate foreground media
+     * with its DESIRED media WITHOUT prompting or capturing? Opens NO permission
+     * prompt and starts NO capture — the host owns the prompt.
+     *
+     * - [ForegroundPreflight.OK] when the desired media needs no permission: if
+     *   `desiredAudioEnabled == false` AND `desiredVideoMode == off`, a fully
+     *   muted, camera-off call can foreground with no prompt.
+     * - [ForegroundPreflight.NEEDS_PERMISSION] when a required grant (RECORD_AUDIO
+     *   for desired audio, CAMERA for a desired camera mode) is not already
+     *   granted.
+     * - [ForegroundPreflight.FAILED] for non-permission preconditions.
+     */
+    fun preflightForeground(): ForegroundPreflight {
+        assertMainThread()
+        if (isInactiveForForeground()) return ForegroundPreflight.FAILED
+        // A fully muted, camera-off call requires no device permission.
+        val needsMic = desiredAudioEnabled
+        val needsCamera = desiredVideoMode != null &&
+            desiredVideoMode != LocalCameraMode.SCREEN_SHARE &&
+            videoCaptureSupported
+        if (!needsMic && !needsCamera) return ForegroundPreflight.OK
+        val required = buildList {
+            if (needsMic) add(android.Manifest.permission.RECORD_AUDIO)
+            if (needsCamera) add(android.Manifest.permission.CAMERA)
+        }
+        val allGranted = required.all { permission ->
+            appContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        }
+        return if (allGranted) ForegroundPreflight.OK else ForegroundPreflight.NEEDS_PERMISSION
+    }
+
+    private fun isInactiveForForeground(): Boolean = closed || _state.value.phase == CallPhase.Idle
+
+    /**
+     * Token-gated foreground activation (contract §3; wraps the Phase-1
+     * [applyForegroundRoleInternal]). The registry passes the arbiter-minted owner
+     * token it just acquired plus the arbiter operation generation. The awaited
+     * coordinator activation result is honored ONLY if BOTH the current
+     * [mediaOpGeneration] AND the current lease owner token still match (the
+     * double fence; contract §3): generation alone is insufficient because a
+     * rollback re-activates the old call under a fresh generation, and a stuck
+     * callback from the failed new activation could otherwise still match.
+     *
+     * Throws on failure so the registry can run its rollback path.
+     */
+    suspend fun activateForeground(ownerToken: ForegroundOwnerToken, generation: Long) {
+        assertMainThread()
+        // Seed the lease token + generation BEFORE awaiting so the post-await
+        // fences inside applyForegroundRoleInternal see them. The session keeps
+        // mediaOpGeneration wired to the passed generation (the arbiter's
+        // monotonic counter) and uses foregroundOwnerToken as the 2nd fence.
+        foregroundOwnerToken = ownerToken
+        mediaOpGeneration = generation
+        applyForegroundRoleInternal(expectedToken = ownerToken, expectedGeneration = generation)
+        if (mediaRole != CallMediaRole.FOREGROUND) {
+            throw IllegalStateException("activateForeground did not reach FOREGROUND (superseded or failed)")
+        }
+    }
+
+    /**
+     * Token-gated release (contract §3; wraps the Phase-1
+     * [applyHeldRoleInternal]). Idempotent and MUST NOT throw after a partial
+     * release. Uses the token ONLY to fence (it proves the caller is draining the
+     * current owner) and does NOT call [ForegroundMediaArbiter.releaseLease] — the
+     * registry releases the lease after this confirms fully-held.
+     */
+    suspend fun releaseForeground(ownerToken: ForegroundOwnerToken) {
+        assertMainThread()
+        // A release for a token that is not ours is a no-op (already drained / the
+        // lease moved on); never throw.
+        if (foregroundOwnerToken != null && foregroundOwnerToken !== ownerToken) return
+        applyHeldRoleInternal()
+        // The session no longer owns the lease conceptually; the registry frees it.
+        foregroundOwnerToken = null
+    }
+
+    /**
+     * Undo a partial/failed foreground activation, driving the session back to
+     * fully-held (contract §3). Idempotent and must not throw. Like
+     * [releaseForeground] it does NOT touch the arbiter lease (registry-owned).
+     */
+    suspend fun abortForegroundActivation(ownerToken: ForegroundOwnerToken) {
+        assertMainThread()
+        if (foregroundOwnerToken != null && foregroundOwnerToken !== ownerToken) return
+        applyHeldRoleInternal()
+        foregroundOwnerToken = null
+    }
+
+    /**
+     * Release the arbiter lease + DIRECT mode claim this session held (single-call
+     * teardown). Idempotent. The session is the lease owner only on the direct
+     * [SerenadaCore.join] path; the (Phase 3) registry owns release on its path
+     * (the session's foregroundOwnerToken is the registry's there, and the
+     * registry calls releaseLease itself).
+     */
+    private fun releaseForegroundLeaseAndMode() {
+        val token = foregroundOwnerToken
+        if (token != null) {
+            runCatching { ForegroundMediaArbiter.releaseLease(token) }
+            foregroundOwnerToken = null
+        }
+        // Drop the DIRECT mode claim keyed by this session (no-op if never claimed
+        // or already released). This clears process mode when the last direct
+        // session ends so the registry can later claim REGISTRY mode.
+        runCatching { ForegroundMediaArbiter.releaseMode(this) }
     }
 
     // --- Internal: WebRTC Engine ---
@@ -2626,6 +2905,12 @@ class SerenadaSession internal constructor(
         sessionStartTs = null
         sessionActivated = false
         localMediaReadyForNegotiation = false
+        // Release the process-wide foreground lease (and DIRECT mode claim) this
+        // session held, so a subsequent direct join can acquire it (single-call
+        // join/leave round-trips through the arbiter). Idempotent: a null token or
+        // an already-released token is a safe no-op. resetResources runs on the
+        // main thread, so the arbiter's main-thread assert holds.
+        releaseForegroundLeaseAndMode()
         // Reset multi-call role/activation/actual to defaults for a fresh start
         // (desired* survive into the next start as user intent defaults).
         mediaRole = CallMediaRole.FOREGROUND

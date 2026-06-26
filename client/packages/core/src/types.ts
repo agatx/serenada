@@ -41,6 +41,44 @@ export type CallMediaRole = 'foreground' | 'held';
  */
 export type MediaActivationState = 'inactive' | 'activating' | 'active' | 'needsPermission' | 'failed';
 
+/**
+ * Owning mode of the process-wide foreground media arbiter (Core Invariant 6).
+ * The first user claims the mode: a direct `SerenadaCore.join()` claims
+ * `'direct'`; the (Phase 3) registry claims `'registry'`. While one mode has any
+ * live session/call, the other mode's lease acquisition fails with
+ * {@link ForegroundLeaseUnavailable}. Cleared when the owning side has none.
+ */
+export type ForegroundArbiterMode = 'direct' | 'registry';
+
+/**
+ * Opaque, branded token proving ownership of the single process-wide foreground
+ * media lease (multi-call session model, contract §2). Minted only by the
+ * arbiter's `acquireForeground`; the session and registry pass it back to fence
+ * late callbacks and to release the lease. The brand field is never read — it
+ * exists purely to make the type non-forgeable from outside the arbiter.
+ */
+export interface ForegroundOwnerToken {
+    /** Call/owner id this lease was granted for; diagnostic only. */
+    readonly ownerId: string;
+    /** Internal brand so callers cannot fabricate a token literal. */
+    readonly __foregroundOwnerToken: unique symbol;
+}
+
+/**
+ * Thrown by the foreground media arbiter when a foreground lease cannot be
+ * granted: a lease is already live, a prior owner's release is pending/failed,
+ * or there is a cross-mode conflict (Core Invariant 6 — a `direct` join while a
+ * `registry` owns the process, or vice versa). Callers (the registry switch
+ * path, the public single-call join) surface this as a recoverable failure.
+ */
+export class ForegroundLeaseUnavailable extends Error {
+    readonly code = 'foregroundLeaseUnavailable' as const;
+    constructor(message: string) {
+        super(message);
+        this.name = 'ForegroundLeaseUnavailable';
+    }
+}
+
 /** Default preference order for camera modes when {@link SerenadaConfig.cameraModes} is unset. */
 export const DEFAULT_CAMERA_MODES: readonly ConfigurableCameraMode[] = ['selfie', 'world', 'composite'];
 

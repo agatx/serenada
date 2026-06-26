@@ -39,6 +39,12 @@ internal class PeerConnectionSlot(
     private val applyAudioSenderParameters: (PeerConnection) -> Unit,
     private val currentVideoSenderPolicy: () -> WebRtcEngine.VideoSenderPolicy,
     private val isRemoteBlackFrameAnalysisEnabled: () -> Boolean,
+    // Multi-call hold (contract §5 / Core Invariant 3): when this returns true the
+    // slot creates SEND_RECV (send-capable) audio + legacy-video transceivers even
+    // with no local track, so a session joined `held` has stable senders ready for
+    // a renegotiation-free resume. Defaults false ⇒ today's RECV_ONLY receive
+    // transceivers, byte-identical to the single-call path.
+    private val heldSendersMode: () -> Boolean = { false },
     private val peerConnectionDisposeQueue: PeerConnectionDisposeQueue,
     // Independent-content gate for THIS peer (per-peer). False ⇒ legacy
     // single-video path, byte-identical to today. See [attachLocalTracks].
@@ -1153,10 +1159,19 @@ internal class PeerConnectionSlot(
     }
 
     private fun ensureReceiveTransceivers(pc: PeerConnection) {
+        // Held-senders mode (multi-call hold): create SEND_RECV transceivers so the
+        // senders are send-capable up front for a renegotiation-free resume
+        // (contract §5 / Core Invariant 3). Otherwise create RECV_ONLY receive
+        // transceivers exactly as today (single-call path unchanged).
+        val direction = if (heldSendersMode()) {
+            RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+        } else {
+            RtpTransceiver.RtpTransceiverDirection.RECV_ONLY
+        }
         if (localAudioTrack == null) {
             pc.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
-                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+                RtpTransceiver.RtpTransceiverInit(direction)
             )
         }
         // Capable peers manage their own video m-lines: the owner pre-creates the
@@ -1167,9 +1182,27 @@ internal class PeerConnectionSlot(
         if (videoReceiveEnabled && localVideoTrack == null) {
             pc.addTransceiver(
                 MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-                RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+                RtpTransceiver.RtpTransceiverInit(direction)
             )
         }
+    }
+
+    /**
+     * Promote this slot's audio + legacy-video transceivers to SEND_RECV without
+     * attaching a track (multi-call held join, contract §5). Idempotent: an
+     * already send-capable transceiver is left untouched. Used when the engine
+     * enters held-senders mode for a slot whose peer connection already exists.
+     */
+    fun ensureSendCapableTransceiversForHold() {
+        if (isClosing) return
+        val pc = peerConnection ?: return
+        pc.transceivers
+            .filter {
+                (it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO ||
+                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) &&
+                    it.currentDirection != RtpTransceiver.RtpTransceiverDirection.STOPPED
+            }
+            .forEach { ensureRoleSendCapable(it) }
     }
 
     private fun flushPendingIceCandidates() {

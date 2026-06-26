@@ -105,6 +105,18 @@ internal class FakeMediaEngine : SessionMediaEngine {
         micCaptureTrackPresent = true
         cameraCaptureTrackPresent = startVideoCapture
     }
+
+    // Multi-call held join: createSendersForHold creates stable senders WITHOUT
+    // capture (contract §5 / Core Invariant 3). Tracked so a held-join test can
+    // assert senders were created while NO mic/camera capture track exists.
+    var createSendersForHoldCalls = 0
+        private set
+    override fun createSendersForHold() {
+        createSendersForHoldCalls++
+        // Senders exist but carry NO capture track (the held invariant): leave
+        // micCaptureTrackPresent / cameraCaptureTrackPresent false.
+    }
+
     override fun release() { releaseCalls++ }
 
     override fun suspendLocalMediaForHold() {
