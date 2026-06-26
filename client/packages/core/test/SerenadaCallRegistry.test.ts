@@ -475,4 +475,125 @@ describe('SerenadaCallRegistry', () => {
         const sw = await registry.switchTo(bId);
         expect(sw.kind).toBe('active');
     });
+
+    // --- FIX B: published mediaRole/held/activeCallId derive from the lease token ---
+
+    it('published mediaRole/held/activeCallId follow the lease token, not session.currentMediaRole', async () => {
+        const { registry, rigs } = makeRegistry();
+
+        // Active foreground call.
+        const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+        settleNextOnJoin(rigs);
+        const ra = await pa;
+        const callId = (ra as { callId: CallId }).callId;
+        const rig = rigs[0];
+
+        // Sanity: while it holds the lease, it publishes foreground.
+        expect(registry.state.calls.find((c) => c.id === callId)?.mediaRole).toBe('foreground');
+        expect(registry.state.activeCallId).toBe(callId);
+
+        // Simulate the divergence the fix guards against: the session's role field
+        // is NOT authoritative (e.g. it would stay 'foreground' across a teardown
+        // that does not reset it, or lag the registry on a remote-ended drop).
+        // Force currentMediaRole to lie BEFORE holding so any read of it would be
+        // wrong, then re-derive published state from the lease token.
+        vi.spyOn(rig.session, 'currentMediaRole', 'get').mockReturnValue('foreground');
+
+        // Hold the call: the registry releases the lease + clears activeCallId.
+        // (releaseForeground still drains the real media; only the role GETTER lies.)
+        await registry.hold(callId);
+        // Force a re-publish AFTER the spy so toManagedCallState runs against the
+        // lying getter (registry.state is a cached snapshot otherwise).
+        rig.signaling.emitRoomStateUpdated({ participants: [{ peerId: 'cid-0' }] });
+
+        // The published state must reflect the lease token (held), NOT the session
+        // role (which the spy reports as 'foreground').
+        const held = registry.state.calls.find((c) => c.id === callId);
+        expect(rig.session.currentMediaRole).toBe('foreground');   // the getter lies
+        expect(held?.mediaRole).toBe('held');                      // token wins
+        expect(held?.held).toBe(true);
+        expect(registry.state.activeCallId).toBeNull();
+    });
+
+    // --- FIX D: every switchTo is enqueued (no outside-queue fast path) ---
+
+    it('switchTo enqueues behind an in-flight op and re-reads activeCallId (no fast path)', async () => {
+        const { registry, rigs } = makeRegistry();
+
+        // A becomes active.
+        const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+        settleNextOnJoin(rigs);
+        const ra = await pa;
+        const aId = (ra as { callId: CallId }).callId;
+        const first = rigs[0];
+
+        // Gate A's hold (releaseForeground) mid-drain so the hold op stays in the
+        // queue and `activeCallId` is still `aId` when we fire switchTo(aId). This
+        // is exactly the race the removed fast path created: a fast-path read of
+        // `this.activeCallId === aId` would return `active` immediately even though
+        // a queued hold is about to drop A's foreground.
+        let releaseHold: () => void = () => {};
+        const holdGate = new Promise<void>((resolve) => { releaseHold = resolve; });
+        const originalSuspend = first.media.suspendLocalMediaForHold.bind(first.media);
+        let suspendStarted: () => void = () => {};
+        const suspendInFlight = new Promise<void>((resolve) => { suspendStarted = resolve; });
+        vi.spyOn(first.media, 'suspendLocalMediaForHold').mockImplementation(async () => {
+            suspendStarted();
+            await holdGate;
+            return originalSuspend();
+        });
+
+        // Op 1: hold A (blocks mid-drain). activeCallId is still aId at this point.
+        const holdA = registry.hold(aId);
+        await suspendInFlight;   // A's drain is genuinely in flight
+        expect(registry.state.activeCallId).toBe(aId);   // still looks active
+
+        // Op 2: switchTo(aId) while aId === activeCallId. With the removed fast path
+        // this must NOT resolve immediately; it enqueues behind the hold.
+        let switchResolved = false;
+        const switchToA = registry.switchTo(aId).then((r) => { switchResolved = true; return r; });
+        await Promise.resolve();
+        await Promise.resolve();
+        // A fast path would have resolved switchToA already (reading stale activeCallId).
+        expect(switchResolved).toBe(false);
+
+        // Drain the hold: activeCallId becomes null. The queued switchTo then
+        // re-reads activeCallId (null) and performs a REAL re-activation of A.
+        releaseHold();
+        const [, sw] = await Promise.all([holdA, switchToA]);
+
+        expect(sw.kind).toBe('active');
+        // The queued switch re-activated A (it did not no-op on a stale read).
+        expect(registry.state.activeCallId).toBe(aId);
+        expect(registry.state.calls.find((c) => c.id === aId)?.mediaRole).toBe('foreground');
+        // Proof it really re-acquired foreground after the hold drained it: the
+        // session was resumed (a fast-path no-op would have left it held).
+        expect(first.media.resumeLocalMediaFromHoldCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    // --- FIX F: a failed held join releases registry mode ---
+
+    it('a failed held join releases registry mode so a later direct join succeeds', async () => {
+        const restoreRtc = (globalThis as Record<string, unknown>).RTCPeerConnection;
+        (globalThis as Record<string, unknown>).RTCPeerConnection = class {};
+        try {
+            const { registry, rigs } = makeRegistry({ signalingProvider: new FakeSignalingProvider() });
+
+            // Held join FAILS (error before membership).
+            const p = registry.joinHeld({ roomId: 'room-A' });
+            queueMicrotask(() => rigs[rigs.length - 1]?.settleError('boom'));
+            const r = await p;
+            expect(r.kind).toBe('failed');
+
+            // No live call remains -> the registry must have released its mode.
+            expect(foregroundArbiter.currentMode).toBeNull();
+
+            // A direct SerenadaCore.join() must now succeed (mode is free): the
+            // failed join did NOT wedge the process in registry mode.
+            const core = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
+            expect(() => core.join({ roomId: 'OTHER' })).not.toThrow();
+        } finally {
+            (globalThis as Record<string, unknown>).RTCPeerConnection = restoreRtc;
+        }
+    });
 });

@@ -179,6 +179,15 @@ internal class RegistryTestHarness(
         drain(opScope.async { registry.dismissCall(callId) })
     }
 
+    /**
+     * Run an arbitrary suspend [block] on the same main-immediate scope the
+     * registry/sessions use, draining the looper to completion. Lets a test poke a
+     * session's internal hold/resume primitive (e.g.
+     * [SerenadaSession.applyHeldRoleInternal]) to model a session-side partial
+     * release while the registry still holds the lease token.
+     */
+    fun <T> runOnMain(block: suspend () -> T): T = drain(opScope.async { block() })
+
     private fun newlyCreated(before: Set<String>): FakeManagedSession? {
         val newKey = created.keys.firstOrNull { it !in before } ?: return null
         return created[newKey]
@@ -261,10 +270,24 @@ internal class CountingTestCoordinator : SerenadaAudioCoordinator {
     var deactivateCalls = 0
         private set
 
+    /**
+     * When true, the NEXT [activateCallSession] THROWS instead of activating (and
+     * clears itself). Models a real audio-coordinator activation failure so a
+     * registry test can drive the FIX-A rollback path through the actual
+     * coordinator boundary (distinct from
+     * [SerenadaSession.failNextForegroundActivationForTest], which short-circuits
+     * before the coordinator runs).
+     */
+    var failNextActivation = false
+
     /** Append-only log of "activate"/"deactivate" to assert ORDERING across calls. */
     val ops = mutableListOf<String>()
 
     override suspend fun activateCallSession(intent: app.serenada.core.call.AudioIntent) {
+        if (failNextActivation) {
+            failNextActivation = false
+            throw IllegalStateException("test-injected audio coordinator activation failure")
+        }
         activateCalls += 1
         ops += "activate"
     }

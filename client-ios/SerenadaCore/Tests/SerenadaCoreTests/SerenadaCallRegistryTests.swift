@@ -381,4 +381,181 @@ final class SerenadaCallRegistryTests: XCTestCase {
 
         await h.teardown()
     }
+
+    // MARK: - FIX A: coordinator-activation FAILURE rolls back (not silent .active)
+
+    /// When the new call's audio coordinator THROWS during activation, the session
+    /// must surface `.failed` (role stays held) instead of silently committing
+    /// `.active`. The registry then observes a non-`.active` outcome and rolls back
+    /// to the previous call (contract §3/§7, FIX A). Distinct from the existing
+    /// blocked-then-timeout case: this exercises the synchronous throw → `.failed`
+    /// path, with no timeout involved.
+    func testFailedCoordinatorActivationRollsBackToPrevious() async {
+        let h = RegistryTestHarness()
+        let throwingB = ThrowingActivateCoordinator()
+
+        // A foreground (immediate coordinator).
+        let rA = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        guard case let .active(idA) = rA else { return XCTFail("A: \(rA)") }
+        let tokenA = h.arbiter.currentOwnerToken
+        XCTAssertNotNil(tokenA)
+
+        // B held, with a coordinator that THROWS on its next activation.
+        let rB = await h.registry.joinHeld(h.room("bbbbbbbbbbbbbbbbbbbbbbbbbbb", coordinator: throwingB))
+        guard case let .joined(idB) = rB else { return XCTFail("B: \(rB)") }
+
+        throwingB.throwNextActivation = true
+        let result = await h.registry.switchToCall(id: idB)
+
+        guard case .failed = result else {
+            return XCTFail("A throwing coordinator activation must fail the switch, got \(result)")
+        }
+        // B's session surfaced the failure (NOT silently active).
+        XCTAssertNotEqual(h.session(for: idB)?.mediaActivationState, .active,
+                          "A failed coordinator activation must NOT commit .active")
+        XCTAssertEqual(h.session(for: idB)?.mediaRole, .held,
+                       "A failed activation leaves the session HELD")
+        // Foreground rolled back to A (the registry's abort/rollback ran).
+        XCTAssertEqual(h.registry.activeCallId, idA, "Failed activation must roll back to A")
+        XCTAssertEqual(h.session(for: idA)?.mediaRole, .foreground)
+        XCTAssertEqual(h.arbiter.currentOwnerToken?.ownerId, idA,
+                       "After rollback A holds the single lease")
+        // B carries a per-call activation error (contract §11).
+        XCTAssertNotNil(h.registry.calls.first { $0.id == idB }?.activationError)
+
+        await h.teardown()
+    }
+
+    // MARK: - FIX B: published role/activeCallId derive from the lease token
+
+    /// Published `mediaRole`/`held`/`activeCallId` must derive from the
+    /// registry-owned foreground lease TOKEN, NOT `session.mediaRole` — which is an
+    /// unreliable source (it is not flipped back on teardown, and a stale callback
+    /// can leave it wrong). A `LyingRoleSession` stub pins its own `mediaRole` at
+    /// `.held` forever, so the ONLY way the published role can be correct is by
+    /// deriving it from the token (contract FIX B): while the registry holds the
+    /// token the published role must read `.foreground` (the lying session
+    /// notwithstanding), and after the lease is released it must read `.held`.
+    func testPublishedRoleDerivesFromLeaseTokenNotSessionRole() async {
+        let h = RegistryTestHarness()
+        let lyingA = LyingRoleSession(roomId: "aaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        let rA = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa", stub: lyingA))
+        guard case let .active(idA) = rA else { return XCTFail("A: \(rA)") }
+
+        // The stub INSISTS it is `.held`, but the registry holds its token, so the
+        // published role/held/activeCallId derive from the token: `.foreground`.
+        XCTAssertEqual(lyingA.mediaRole, .held, "Precondition: the stub session lies (.held)")
+        let foreState = h.registry.calls.first { $0.id == idA }
+        XCTAssertEqual(foreState?.mediaRole, .foreground,
+                       "Published role must derive from the held token, not the lying session role")
+        XCTAssertEqual(foreState?.held, false, "held must be false while the token is held")
+        XCTAssertEqual(h.registry.activeCallId, idA, "activeCallId is the token holder")
+
+        // Hold A: the registry drains + releases the lease (token cleared). Now the
+        // published role flips to `.held` purely from the token, NOT from any
+        // session-role change (the stub never moved).
+        await h.registry.holdCall(id: idA)
+
+        let heldState = h.registry.calls.first { $0.id == idA }
+        XCTAssertEqual(heldState?.mediaRole, .held,
+                       "Published role must read .held once the token is released")
+        XCTAssertEqual(heldState?.held, true, "held mirrors the token-derived role")
+        XCTAssertNil(h.registry.activeCallId,
+                     "activeCallId is nil once the lease is released (no auto-promote)")
+
+        await h.teardown()
+    }
+
+    // MARK: - FIX C: release + settle bounded by a SINGLE release timeout
+
+    /// `releaseForeground` AND `awaitForegroundReleaseSettled()` must be bounded by
+    /// ONE `FOREGROUND_RELEASE_TIMEOUT` window (contract FIX C). A coordinator whose
+    /// deactivation HANGS leaves the role flipped to held synchronously but never
+    /// lets the settle complete; the switch must time out (not hang the queue),
+    /// keep the old call foreground with its lease (Invariant 1), and never acquire
+    /// the next lease.
+    func testReleaseAndSettleBoundedByReleaseTimeout() async {
+        let h = RegistryTestHarness()
+        let blockingOld = BlockingDeactivateCoordinator()
+
+        // A foreground, with a coordinator whose deactivation can be paused.
+        let rA = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa", coordinator: blockingOld))
+        guard case let .active(idA) = rA else { return XCTFail("A: \(rA)") }
+        let tokenA = h.arbiter.currentOwnerToken
+        XCTAssertNotNil(tokenA)
+
+        let rB = await h.registry.joinHeld(h.room("bbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+        guard case let .joined(idB) = rB else { return XCTFail("B: \(rB)") }
+
+        // Switch to B: draining A flips the role to held immediately, but A's
+        // coordinator deactivation hangs, so the settle never completes. The
+        // single release-timeout window must trip on the fake clock.
+        blockingOld.blockNextDeactivation = true
+        let switchTask = Task { await h.registry.switchToCall(id: idB) }
+        await waitUntil { blockingOld.deactivationInFlight }
+        await waitUntil { h.fakeRegistryClock.pendingSleepCount > 0 }
+        await h.fakeRegistryClock.advance(byMs: Int64(WebRtcResilience.foregroundReleaseTimeoutMs + 500))
+
+        let result = await switchTask.value
+        guard case .failed = result else {
+            return XCTFail("A hung settle must time out the switch, got \(result)")
+        }
+        // Invariant 1: old keeps its lease; the next lease was NEVER acquired.
+        XCTAssertEqual(h.registry.activeCallId, idA, "Old call stays active on settle timeout")
+        XCTAssertEqual(h.arbiter.currentOwnerToken, tokenA,
+                       "Old call retains the SAME lease token; no new lease was granted")
+        XCTAssertNil(h.session(for: idB)?.foregroundOwnerTokenForTest,
+                     "The next call must never have acquired a lease/token")
+        XCTAssertNotNil(h.registry.calls.first { $0.id == idA }?.activationError)
+
+        // Let the blocked deactivation finish so teardown is clean.
+        blockingOld.releaseDeactivation()
+        await h.teardown()
+    }
+
+    // MARK: - FIX F: failed held join releases registry mode (direct join can proceed)
+
+    /// A held join that fails/times out must be marked ENDED and must release the
+    /// registry owning-mode when no live call remains, so a later DIRECT
+    /// `SerenadaCore.join()` on the same process arbiter can proceed instead of
+    /// being wedged out by a stale `registry`-mode claim (contract FIX F /
+    /// Invariant 6).
+    func testFailedHeldJoinReleasesRegistryModeSoDirectJoinSucceeds() async {
+        let arbiter = ForegroundMediaArbiter()
+        let h = RegistryTestHarness(arbiter: arbiter)
+
+        // A held join whose room never connects (autoJoin = false): the held-join
+        // wait times out. The registry claimed `registry` mode in section A.
+        let joinTask = Task {
+            await h.registry.joinHeld(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa", autoJoin: false))
+        }
+        await waitUntil { h.registry.calls.contains { $0.roomId == "aaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
+        XCTAssertEqual(arbiter.owningMode, .registry, "Section A claimed registry mode")
+        await waitUntil { h.fakeRegistryClock.pendingSleepCount > 0 }
+        await h.fakeRegistryClock.advance(byMs: Int64(WebRtcResilience.heldJoinTimeoutMs + 500))
+
+        let result = await joinTask.value
+        guard case let .failed(failedId, _) = result else {
+            return XCTFail("A never-joining held room must fail, got \(result)")
+        }
+        // The failed held join is marked ENDED (dismissable) and freed the mode.
+        XCTAssertEqual(h.registry.calls.first { $0.id == failedId }?.membershipPhase, .idle,
+                       "A failed held join is torn down (dismissable), not left live")
+        XCTAssertNil(arbiter.owningMode,
+                     "No live call remains, so the registry mode is released (FIX F)")
+
+        // A DIRECT single-call join on the SAME arbiter now succeeds (the mode is
+        // free). Before FIX F the stale registry claim would force it to .error.
+        let direct = SessionTestHarness(roomId: "direct-room", arbiter: arbiter)
+        await direct.advanceToInCallWithTurn(localCid: "d-local", remoteCid: "d-remote")
+        XCTAssertEqual(direct.session.state.phase, .inCall,
+                       "A direct join must succeed once the failed held join freed the registry mode")
+        XCTAssertEqual(arbiter.owningMode, .direct,
+                       "The direct join now owns the process in direct mode")
+        XCTAssertNotNil(arbiter.currentOwnerToken,
+                        "The direct join holds the foreground lease")
+
+        direct.tearDown()
+        await h.teardown()
+    }
 }

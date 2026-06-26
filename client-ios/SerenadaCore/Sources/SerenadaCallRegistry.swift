@@ -269,13 +269,27 @@ public final class ManagedCall {
         self.displayName = displayName
     }
 
+    /// The published media role, derived from the REGISTRY-OWNED lease token, NOT
+    /// `managedSession.mediaRole` (contract FIX B). A call is `.foreground` iff the
+    /// registry currently holds a foreground lease for it; otherwise `.held`. The
+    /// session's own `mediaRole` is an unreliable source for published state: on
+    /// `leave`/`end` teardown `resetResources` does not flip it back from
+    /// `.foreground`, so an ended-while-active call would otherwise keep reporting
+    /// `.foreground` and `held == false`. The lease token is the registry's
+    /// authoritative record of foreground ownership and is cleared on every
+    /// drain/teardown, so it never lies.
+    fileprivate var publishedMediaRole: CallMediaRole {
+        foregroundToken != nil ? .foreground : .held
+    }
+
     fileprivate func snapshot() -> ManagedCallState {
-        ManagedCallState(
+        let role = publishedMediaRole
+        return ManagedCallState(
             id: id,
             roomId: roomId,
             roomUrl: roomUrl,
             membershipPhase: managedSession.registryMembershipPhase,
-            mediaRole: managedSession.mediaRole,
+            mediaRole: role,
             mediaActivationState: managedSession.mediaActivationState,
             desiredAudioEnabled: managedSession.registryDesiredAudioEnabled,
             desiredVideoMode: managedSession.registryDesiredVideoMode,
@@ -283,7 +297,7 @@ public final class ManagedCall {
             actualVideoPublished: managedSession.registryActualVideoPublished,
             participantCount: managedSession.registryParticipantCount,
             localCid: managedSession.registryLocalCid,
-            held: managedSession.mediaRole == .held,
+            held: role == .held,
             displayName: displayName,
             activationError: activationError,
             qualitySummary: endedQualitySummary ?? managedSession.registryQualitySummary
@@ -423,7 +437,8 @@ public final class SerenadaCallRegistry: ObservableObject {
         case let .created(id):
             guard let call = call(id: id) else { return .failed(id, .joinFailed("Call vanished")) }
             if let error = await awaitHeldJoin(call) {
-                await runQueued { self.markFailedAndKeepHeld(id: id, error) }
+                await runQueued { self.markFailedHeldJoin(id: id, error) }
+                await publish()
                 return .failed(id, error)
             }
             await publish()
@@ -454,7 +469,8 @@ public final class SerenadaCallRegistry: ObservableObject {
 
         // Section B (outside the queue): the held room join, bounded.
         if let error = await awaitHeldJoin(call) {
-            await runQueued { self.markFailedAndKeepHeld(id: newId, error) }
+            await runQueued { self.markFailedHeldJoin(id: newId, error) }
+            await publish()
             return .failed(newId, error) // old foreground call untouched
         }
 
@@ -554,12 +570,27 @@ public final class SerenadaCallRegistry: ObservableObject {
         return .created(id)
     }
 
-    /// Record a failed/timed-out held join and keep the call HELD (no active
-    /// change). Idempotent.
-    private func markFailedAndKeepHeld(id: CallId, _ error: CallActivationError) {
-        guard let call = managed.first(where: { $0.id == id }) else { return }
+    /// Record a failed/timed-out held join and mark the call ENDED (dismissable),
+    /// then release the registry owning-mode when no live (non-ended) call remains
+    /// (contract FIX F). A failed held join that stayed "live but never connected"
+    /// would otherwise keep the registry's `registry`-mode claim forever, so a
+    /// later direct `SerenadaCore.join()` could never proceed (Core Invariant 6).
+    /// Marking it ended frees the mode and lets the host dismiss the dead chip.
+    /// Idempotent. The call held NO foreground lease (a held join never acquires
+    /// one), so there is no lease to release here.
+    private func markFailedHeldJoin(id: CallId, _ error: CallActivationError) {
+        guard let call = managed.first(where: { $0.id == id }), !call.ended else { return }
         call.activationError = error
         lastError = .callFailed(id, error)
+        // Tear down the dead session (stop signaling/timers); it never connected.
+        call.managedSession.registryLeave()
+        call.ended = true
+        call.endedQualitySummary = call.managedSession.registryQualitySummary
+        // Free the registry owning-mode when nothing live remains, so a subsequent
+        // direct join can claim the process (Core Invariant 6 / contract FIX F).
+        if !managed.contains(where: { !$0.ended }) {
+            arbiter.releaseMode(ownerRef: self)
+        }
     }
 
     /// The switch body (contract §7). Runs entirely inside the serial queue. Both
@@ -595,10 +626,12 @@ public final class SerenadaCallRegistry: ObservableObject {
             // Mark the arbiter release pending so NO new lease is granted while
             // the old may still own it (Core Invariant 2).
             arbiter.markReleasePending()
-            old.managedSession.releaseForeground(oldToken)
-            let drained = await awaitSettle(timeoutMs: WebRtcResilience.foregroundReleaseTimeoutMs) {
-                old.managedSession.mediaRole == .held && old.managedSession.mediaActivationState == .inactive
-            }
+            // Release AND settle inside ONE `FOREGROUND_RELEASE_TIMEOUT` window
+            // (contract FIX C). The role flip is synchronous, but the coordinator
+            // `deactivateCallSession` runs in a fire-and-forget task; a stuck
+            // coordinator must NOT hang the serial op queue. Bounding the settle
+            // separately (after the timeout gate) left it effectively unbounded.
+            let drained = await drainOldForeground(old, token: oldToken)
             if !drained {
                 // Timeout (Core Invariant 1): do NOT release the old lease and do
                 // NOT grant the next one. The old call retains its lease
@@ -606,18 +639,12 @@ public final class SerenadaCallRegistry: ObservableObject {
                 // the still-set `releasePending` flag is cleared by the next switch
                 // retry, which re-drains this same old call and releases its lease.
                 logger?.log(.error, tag: "Registry",
-                            "Switch \(old.id)->\(next.id) aborted: old-release did not confirm fully-held in \(WebRtcResilience.foregroundReleaseTimeoutMs)ms (old keeps the lease)")
+                            "Switch \(old.id)->\(next.id) aborted: old-release did not confirm fully-held + settled in \(WebRtcResilience.foregroundReleaseTimeoutMs)ms (old keeps the lease)")
                 old.activationError = .releaseTimedOut
                 lastError = .callFailed(old.id, .releaseTimedOut)
                 await publish()
                 return .failed(.releaseTimedOut)
             }
-            // Drain confirmed AND audio fully torn down before acquiring the next
-            // lease (contract §6: release old fully before acquiring new). The role
-            // flip is synchronous; this awaits the actual coordinator deactivation
-            // so the new call's activation can't race it onto the shared audio
-            // session.
-            await old.managedSession.awaitForegroundReleaseSettled()
             // Registry frees the lease (lease release is registry-owned).
             try? arbiter.releaseLease(oldToken)
             old.foregroundToken = nil
@@ -721,10 +748,9 @@ public final class SerenadaCallRegistry: ObservableObject {
             return
         }
         arbiter.markReleasePending()
-        call.managedSession.releaseForeground(token)
-        let drained = await awaitSettle(timeoutMs: WebRtcResilience.foregroundReleaseTimeoutMs) {
-            call.managedSession.mediaRole == .held && call.managedSession.mediaActivationState == .inactive
-        }
+        // Release AND settle in ONE timeout window (contract FIX C): a hung
+        // coordinator deactivation must not leave the lease half-released.
+        let drained = await drainOldForeground(call, token: token)
         if drained {
             try? arbiter.releaseLease(token)
             call.foregroundToken = nil
@@ -804,6 +830,47 @@ public final class SerenadaCallRegistry: ObservableObject {
             return .joinFailed("Held room join failed: \(session.registryErrorDescription ?? "unknown")")
         }
         return nil
+    }
+
+    // MARK: - Bounded foreground drain
+
+    /// Drive the OLD foreground call to fully-held AND wait for its audio
+    /// coordinator teardown to settle, ALL inside a SINGLE
+    /// `FOREGROUND_RELEASE_TIMEOUT` window (contract FIX C). Returns `true` only
+    /// when the session reached `.held`/`.inactive` AND
+    /// `awaitForegroundReleaseSettled()` completed before the deadline.
+    ///
+    /// Why one window: the role/activation flip is synchronous, but the actual
+    /// coordinator `deactivateCallSession()` runs in a fire-and-forget lifecycle
+    /// task. Awaiting that AFTER a separate timeout gate left it effectively
+    /// unbounded — a stuck coordinator could hang the serial op queue forever. The
+    /// settle is folded into the same bounded poll: the condition becomes true only
+    /// once both the role is held AND the settle task has finished. On timeout the
+    /// caller keeps the old call foreground (Invariant 1) and never releases the
+    /// lease.
+    ///
+    /// `releaseForeground` is idempotent and must not throw, so it is safe to call
+    /// once here; the settle task is started immediately after so its await runs
+    /// concurrently with the poll.
+    private func drainOldForeground(_ call: ManagedCall, token: ForegroundOwnerToken) async -> Bool {
+        let session = call.managedSession
+        session.releaseForeground(token)
+
+        // Track the coordinator-teardown settle independently: a hung
+        // `awaitForegroundReleaseSettled()` must be bounded by the same deadline,
+        // not awaited unconditionally afterwards.
+        var settled = false
+        let settleTask = Task { @MainActor in
+            await session.awaitForegroundReleaseSettled()
+            settled = true
+        }
+        defer { settleTask.cancel() }
+
+        return await awaitSettle(timeoutMs: WebRtcResilience.foregroundReleaseTimeoutMs) {
+            session.mediaRole == .held
+                && session.mediaActivationState == .inactive
+                && settled
+        }
     }
 
     // MARK: - Serialization + settling

@@ -1712,10 +1712,39 @@ public final class SerenadaSession: ObservableObject {
             do {
                 try await self.activateAudioCoordinator()
             } catch {
+                // The coordinator could not take the audio session. Do NOT fall
+                // through to `completeForegroundActivation`: committing `.active`
+                // here would hide the failure from the registry, which can never
+                // then detect a failed activation and roll back to the previous
+                // call (contract §3/§7). Surface the failure instead so the
+                // registry's bounded activate wait sees `.failed` (not `.active`)
+                // and runs its abort/rollback path. The same two fences as a
+                // successful completion still apply: a superseded op must NOT
+                // clobber the winning op's state.
                 self.logger?.log(.error, tag: "Audio", "Failed to re-activate audio coordinator on resume: \(error)")
+                self.failForegroundActivation(generation: activationGeneration, fenceToken: fenceToken)
+                return
             }
             self.completeForegroundActivation(generation: activationGeneration, fenceToken: fenceToken)
         }
+    }
+
+    /// Mark a foreground activation as FAILED after the audio coordinator threw,
+    /// WITHOUT committing `.foreground`/`.active` (contract §3/§7). Fenced exactly
+    /// like `completeForegroundActivation`: a stale callback (generation bumped, or
+    /// the lease owner token rotated by a later acquire/release/rollback) only
+    /// bails — it must not stamp `.failed` over a superseding op's state. The
+    /// session stays HELD; the registry observes `mediaActivationState == .failed`
+    /// from its bounded activate wait and runs abort + rollback.
+    private func failForegroundActivation(generation: Int, fenceToken: ForegroundOwnerToken? = nil) {
+        let tokenStillCurrent = fenceToken == nil || foregroundArbiter.isCurrentOwner(fenceToken)
+        guard mediaOpGeneration == generation, mediaActivationState == .activating, tokenStillCurrent else {
+            return
+        }
+        // Role stays `.held` (it was never flipped to `.foreground`). Only the
+        // activation state moves to `.failed` so the registry's poll terminates
+        // with a non-`.active` outcome and rolls back.
+        mediaActivationState = .failed
     }
 
     /// Second half of `applyForegroundRoleInternal`, run after the audio

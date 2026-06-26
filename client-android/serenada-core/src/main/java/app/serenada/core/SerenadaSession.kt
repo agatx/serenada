@@ -1753,7 +1753,14 @@ class SerenadaSession internal constructor(
         // 1. Activate the coordinator, then the controller (mirror start order).
         //    The coordinator activation is the awaited async boundary; a cancellation
         //    here MUST propagate (FIX N3: do not swallow CancellationException).
-        runIgnoringNonCancellation { activateAudioCoordinatorForResume() }
+        //    Unlike the (best-effort, no-throw) hold/deactivate op, a resume's
+        //    coordinator activation FAILURE/timeout must NOT be swallowed (FIX A):
+        //    if it failed, this session never took process audio, so committing
+        //    foreground/active would leave an orphaned (silent) call holding the
+        //    lease. Capture the outcome and fail the activation when it didn't
+        //    succeed, so the registry's withTimeout/catch rolls back to the
+        //    previous call.
+        val coordinatorActivated = activateAudioCoordinatorForResume()
         // FENCE (double-fence; contract §3): if a hold superseded this resume while
         // we awaited the coordinator, roll back to fully-held and bail — do NOT
         // commit foreground or broadcast held=false. The hold that superseded us
@@ -1771,6 +1778,17 @@ class SerenadaSession internal constructor(
             mediaRole = CallMediaRole.HELD
             mediaActivationState = MediaActivationState.INACTIVE
             suspendForegroundMediaResources()
+            return
+        }
+        // FIX A: the coordinator activation actually failed/timed out (and we are
+        // still the current op + owner). Do NOT commit foreground. Tear back down
+        // to fully-held, mark the activation FAILED, and surface the failure so the
+        // token-gated activateForeground throws and the registry rolls back to the
+        // previous call (no orphaned lease holder, single-lease invariant kept).
+        if (!coordinatorActivated) {
+            suspendForegroundMediaResources()
+            mediaRole = CallMediaRole.HELD
+            mediaActivationState = MediaActivationState.FAILED
             return
         }
         runCatching { callAudioSessionController.activate() }
@@ -1824,36 +1842,46 @@ class SerenadaSession internal constructor(
         }
     }
 
-    /** Deactivate the audio coordinator for hold (awaited; mirrors [resetResources]). */
+    /**
+     * Deactivate the audio coordinator for hold (awaited; mirrors [resetResources]).
+     * Best-effort/no-throw: hold MUST NOT throw after a partial release, so a
+     * timeout/failure here is logged at WARNING and swallowed (a CancellationException
+     * still propagates so an aborted hold stops cleanly).
+     */
     private suspend fun deactivateAudioCoordinatorForHold() {
-        runAudioCoordinatorOp("Hold: audio coordinator deactivation") {
-            audioCoordinator.deactivateCallSession()
-        }
-    }
-
-    /** Activate the audio coordinator for resume (mirrors [startJoinInternal]). */
-    private suspend fun activateAudioCoordinatorForResume() {
-        runAudioCoordinatorOp("Resume: audio coordinator activation") {
-            audioCoordinator.activateCallSession(config.audioIntent)
+        try {
+            withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
+                audioCoordinatorMutex.withLock { audioCoordinator.deactivateCallSession() }
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: audio coordinator deactivation timed out")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: audio coordinator deactivation failed: ${e.message}")
         }
     }
 
     /**
-     * Run a hold/resume audio-coordinator op under the same mutex + timeout pattern
-     * as [startJoinInternal] / [resetResources]. Unlike join, a timeout/failure here
-     * is logged at WARNING and swallowed: hold must not throw after partial release,
-     * and resume best-effort restores the route.
+     * Activate the audio coordinator for resume (mirrors [startJoinInternal]).
+     * Returns true iff the coordinator activation actually completed; false on
+     * timeout/failure (FIX A). A CancellationException still propagates (FIX N3: an
+     * aborted resume must stop cleanly). Unlike the hold/deactivate path, the
+     * outcome is NOT swallowed: the caller fails the foreground activation when this
+     * returns false so no session commits foreground without owning process audio.
      */
-    private suspend fun runAudioCoordinatorOp(opLabel: String, block: suspend () -> Unit) {
-        try {
+    private suspend fun activateAudioCoordinatorForResume(): Boolean {
+        return try {
             withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
-                audioCoordinatorMutex.withLock { block() }
+                audioCoordinatorMutex.withLock { audioCoordinator.activateCallSession(config.audioIntent) }
             }
+            true
         } catch (e: TimeoutCancellationException) {
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "$opLabel timed out")
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: audio coordinator activation timed out")
+            false
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "$opLabel failed: ${e.message}")
+            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Resume: audio coordinator activation failed: ${e.message}")
+            false
         }
     }
 

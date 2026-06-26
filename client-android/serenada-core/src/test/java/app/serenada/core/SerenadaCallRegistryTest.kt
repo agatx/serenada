@@ -443,4 +443,166 @@ class SerenadaCallRegistryTest {
         assertFalse(h.registry.state.value.calls.any { it.callId == a })
         assertTrue(h.registry.state.value.calls.any { it.callId == b })
     }
+
+    // --- FIX A: a real coordinator-activation failure rolls back to the previous call ---
+
+    @Test
+    fun `coordinator activation failure on switch rolls back to the previous call`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        val b = (h.joinHeld(room("b")) as JoinResult.Joined).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Make b's AUDIO COORDINATOR activation throw (the real coordinator
+        // boundary, not the short-circuit injection). FIX A: activateForeground
+        // must NOT silently commit foreground; it must surface the failure so the
+        // registry rolls a back.
+        h.created["b"]!!.coordinator.failNextActivation = true
+
+        val switch = h.switchToCall(b)
+        ShadowLooper.idleMainLooper()
+
+        assertTrue("switch reports failure on coordinator-activation failure", switch is SwitchResult.Failed)
+        // a was restored to foreground (rollback); b is back to held.
+        assertEquals(a, h.registry.state.value.activeCallId)
+        assertEquals(CallMediaRole.FOREGROUND, h.created["a"]!!.session.mediaRoleForTest())
+        assertEquals(CallMediaRole.HELD, h.created["b"]!!.session.mediaRoleForTest())
+        // b never committed foreground media: role held, no lease, error surfaced.
+        assertNull(h.created["b"]!!.session.foregroundOwnerTokenForTest())
+        val bState = h.registry.state.value.calls.single { it.callId == b }
+        assertNotNull(bState.activationError)
+        // Exactly one foreground owner (a) and the arbiter agrees it owns the lease.
+        assertEquals(
+            1,
+            h.created.values.count { it.session.mediaRoleForTest() == CallMediaRole.FOREGROUND },
+        )
+        assertTrue(
+            ForegroundMediaArbiter.isCurrentOwner(h.created["a"]!!.session.foregroundOwnerTokenForTest()),
+        )
+    }
+
+    // --- FIX E: hold-timeout keeps the lease; leave/end-timeout releases it ---
+
+    @Test
+    fun `hold on a drain timeout keeps the lease and activeCallId and surfaces a failure`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+        val aToken = h.created["a"]!!.session.foregroundOwnerTokenForTest()
+
+        // Make a's foreground drain hang so hold's bounded release times out.
+        h.created["a"]!!.session.hangNextForegroundReleaseForTest = true
+
+        h.holdCall(a)
+        ShadowLooper.idleMainLooper()
+
+        // Invariant 1: the user KEEPS the call they were on. The lease + activeCallId
+        // stay; the call is marked FAILED with a release-failure surfaced. Do NOT
+        // release the lease (two owners must never exist).
+        assertEquals(a, h.registry.state.value.activeCallId)
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(aToken))
+        val aState = h.registry.state.value.calls.single { it.callId == a }
+        assertEquals(MediaActivationState.FAILED, aState.mediaActivationState)
+        assertNotNull(aState.activationError)
+        // A fresh acquire still fails (release pending stays set; lease held).
+        var threw = false
+        try {
+            ForegroundMediaArbiter.acquireForeground(
+                ownerId = "probe",
+                mode = ForegroundArbiterMode.REGISTRY,
+                modeOwnerRef = Any(),
+            )
+        } catch (e: ForegroundLeaseUnavailable) {
+            threw = true
+        }
+        assertTrue("no new lease granted while hold drain failed", threw)
+    }
+
+    @Test
+    fun `leave on a drain timeout releases the lease (call is going away)`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Same hung drain, but on the LEAVE path: the call is going away, so the
+        // lease is released UNCONDITIONALLY after the bounded drain (FIX E).
+        h.created["a"]!!.session.hangNextForegroundReleaseForTest = true
+
+        h.leaveCall(a)
+        ShadowLooper.idleMainLooper()
+
+        assertNull(h.registry.state.value.activeCallId)
+        // The lease was freed despite the drain timeout: a fresh acquire succeeds.
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "probe",
+            mode = ForegroundArbiterMode.REGISTRY,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    // --- FIX B: active teardown keys off the token, not the session role ---
+
+    @Test
+    fun `leave releases the lease even when a partial release reset the session role`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+        val aToken = h.created["a"]!!.session.foregroundOwnerTokenForTest()
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(aToken))
+
+        // Model a session-side partial release: the session drives ITSELF to HELD
+        // (mediaRole no longer FOREGROUND) while the registry still holds the lease
+        // token. The OLD code keyed leave/end off session.mediaRole and would skip
+        // the release, wedging the process. FIX B keys off the token instead.
+        h.runOnMain { h.created["a"]!!.session.applyHeldRoleInternal() }
+        ShadowLooper.idleMainLooper()
+        assertEquals(CallMediaRole.HELD, h.created["a"]!!.session.mediaRoleForTest())
+        // Registry still holds the lease (token not yet released by the registry).
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(aToken))
+
+        h.leaveCall(a)
+        ShadowLooper.idleMainLooper()
+
+        // The lease was released (keyed off the token, not the reset role): a fresh
+        // acquire succeeds. Without FIX B this would throw (lease still held).
+        assertNull(h.registry.state.value.activeCallId)
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "probe",
+            mode = ForegroundArbiterMode.REGISTRY,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    // --- VERIFY F: a failed held join releases registry mode so a direct join succeeds ---
+
+    @Test
+    fun `a failed held join releases registry mode so a subsequent direct join succeeds`() {
+        val h = harness()
+        val result = h.joinHeldFailing(room("a"))
+        ShadowLooper.idleMainLooper()
+        assertTrue(result is JoinResult.Failed)
+
+        // No NON-ENDED managed call remains ⇒ the registry dropped its REGISTRY mode
+        // claim, even though the failed call lingers (ended) until dismissed.
+        assertNull("registry mode released after the only (failed) call ended", ForegroundMediaArbiter.currentMode)
+
+        // A later DIRECT SerenadaCore.join() (mode DIRECT) now succeeds: the process
+        // is free. Web+iOS were flagged for wedging here; android releases the mode.
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "direct",
+            mode = ForegroundArbiterMode.DIRECT,
+            modeOwnerRef = Any(),
+        )
+        assertEquals(ForegroundArbiterMode.DIRECT, ForegroundMediaArbiter.currentMode)
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
 }

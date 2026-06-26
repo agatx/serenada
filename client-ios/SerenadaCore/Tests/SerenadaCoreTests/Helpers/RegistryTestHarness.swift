@@ -88,6 +88,38 @@ final class BlockingDeactivateCoordinator: SerenadaAudioCoordinator, @unchecked 
     var events: AsyncStream<AudioCoordinatorEvent> { AsyncStream { _ in } }
 }
 
+/// Audio coordinator whose `activateCallSession` THROWS, modelling a foreground
+/// activation that fails at the audio-session layer. The session must surface the
+/// failure (`mediaActivationState == .failed`, role stays held) instead of
+/// silently committing `.active`, so the registry can roll back (contract FIX A).
+/// Deactivation is a no-op so the held call settles cleanly afterwards.
+@MainActor
+final class ThrowingActivateCoordinator: SerenadaAudioCoordinator, @unchecked Sendable {
+    struct ActivationFailure: Error {}
+    /// When true, the NEXT `activateCallSession` throws; auto-resets so a later
+    /// rollback/activation of the same coordinator can succeed.
+    var throwNextActivation = false
+    private(set) var activateCalls = 0
+    private(set) var deactivateCalls = 0
+
+    func activateCallSession(intent: AudioIntent) async throws {
+        activateCalls += 1
+        if throwNextActivation {
+            throwNextActivation = false
+            throw ActivationFailure()
+        }
+    }
+
+    func deactivateCallSession() async { deactivateCalls += 1 }
+    func applyRouting(_ device: AudioDevice) async throws {}
+    func setMicMuted(_ muted: Bool) async throws {}
+
+    var availableDevices: AsyncStream<[AudioDevice]> { AsyncStream { _ in } }
+    var effectiveInputDevice: AsyncStream<AudioDevice?> { AsyncStream { _ in } }
+    var effectiveOutputDevice: AsyncStream<AudioDevice?> { AsyncStream { _ in } }
+    var events: AsyncStream<AudioCoordinatorEvent> { AsyncStream { _ in } }
+}
+
 // MARK: - Auto-joining signaling provider
 
 /// Signaling provider that drives a held room join to completion on its own: on
@@ -215,6 +247,58 @@ final class StallReleaseSession: RegistryManagedSession {
         registryMembershipPhase = .idle
     }
 
+    func registryEnd() { registryLeave() }
+}
+
+// MARK: - Lying-role session stub (FIX B)
+
+/// A `RegistryManagedSession` stub whose own `mediaRole` is PINNED at `.held` and
+/// NEVER agrees with the registry's foreground ownership — modelling the fact that
+/// the session role field is an unreliable source for published state (it is not
+/// flipped back on teardown, and a stale async callback can leave it wrong). Used
+/// to prove the registry derives published role/`held`/`activeCallId` from the
+/// registry-owned lease TOKEN, not this field (contract FIX B): while the registry
+/// holds this call's token the published role must read `.foreground` even though
+/// the session insists it is `.held`. Its internal drain still confirms via
+/// `mediaActivationState`, so registry teardown does not hang.
+@MainActor
+final class LyingRoleSession: RegistryManagedSession {
+    let roomId: String
+    let roomUrl: URL?
+    /// Pinned to the OPPOSITE of the registry's lease state, so token-derivation is
+    /// the ONLY way the published role can be correct.
+    let mediaRole: CallMediaRole = .held
+    private(set) var mediaActivationState: MediaActivationState = .inactive
+    var registryMembershipPhase: SerenadaCallPhase = .inCall
+    var registryErrorDescription: String? { nil }
+    var registryLocalCid: String? { "stub-local" }
+    var registryParticipantCount: Int { 2 }
+    var registryDesiredAudioEnabled: Bool = true
+    var registryDesiredVideoMode: LocalCameraMode? = nil
+    var registryActualAudioPublished: Bool { false }
+    var registryActualVideoPublished: Bool { false }
+    var registryQualitySummary: CallQualitySummary? { nil }
+
+    init(roomId: String, roomUrl: URL? = nil) {
+        self.roomId = roomId
+        self.roomUrl = roomUrl
+    }
+
+    func preflightForeground() -> ForegroundPreflight { .ok }
+    func missingDesiredForegroundPermissions() -> [MediaCapability] { [] }
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws {
+        mediaActivationState = .active
+    }
+    func releaseForeground(_ token: ForegroundOwnerToken) {
+        // `mediaRole` is already `.held`; drop activation so the registry's drain
+        // poll (`mediaRole == .held && mediaActivationState == .inactive`) confirms.
+        mediaActivationState = .inactive
+    }
+    func awaitForegroundReleaseSettled() async {}
+    func abortForegroundActivation(_ token: ForegroundOwnerToken) {
+        mediaActivationState = .inactive
+    }
+    func registryLeave() { registryMembershipPhase = .idle }
     func registryEnd() { registryLeave() }
 }
 

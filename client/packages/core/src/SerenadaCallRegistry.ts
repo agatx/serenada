@@ -234,11 +234,18 @@ export class SerenadaCallRegistry {
         return { kind: 'failed', callId: call.id, error: switchResult.error };
     }
 
-    /** Foreground a held call, holding the current active call first. */
+    /**
+     * Foreground a held call, holding the current active call first.
+     *
+     * FIX D: every switch is enqueued (no outside-queue fast path). Per contract
+     * §7 the preflight AND the `next == activeCallId` no-op must run INSIDE the
+     * queued operation, where `runSwitch` re-reads `activeCallId` after the queue
+     * has drained. A fast-path read of `this.activeCallId` here would race a
+     * concurrent switch/leave/hold still in flight: it could see a stale active
+     * id (returning `active` for a call about to lose foreground, or skipping the
+     * enqueue for a call that is no longer active by the time it would run).
+     */
     async switchTo(callId: CallId): Promise<SwitchResult> {
-        if (callId === this.activeCallId) {
-            return { kind: 'active' };
-        }
         return this.enqueue(() => this.runSwitch(callId));
     }
 
@@ -384,6 +391,12 @@ export class SerenadaCallRegistry {
         if (error) {
             this.applyCallError(call, error);
             call.joinFailed = true;
+            // FIX F: a failed held join makes this call non-live. If it was the
+            // only call, the registry must release its `'registry'` owning-mode
+            // claim — otherwise a single failed join wedges the process in
+            // registry mode forever and every later direct `SerenadaCore.join()`
+            // fails with ForegroundLeaseUnavailable.
+            this.releaseModeIfIdle();
             this.publish();
         }
         return error;
@@ -399,6 +412,9 @@ export class SerenadaCallRegistry {
         const error = this.makeError('joinFailed', call.session.state.error?.message ?? message);
         this.applyCallError(call, error);
         call.joinFailed = true;
+        // FIX F: see awaitHeldJoin — release the owning mode if this was the last
+        // live call so a failed join does not wedge the process in registry mode.
+        this.releaseModeIfIdle();
         this.publish();
         return error;
     }
@@ -725,7 +741,16 @@ export class SerenadaCallRegistry {
         const callState: CallState = session.state;
         const participantCount =
             callState.remoteParticipants.length + (callState.localParticipant ? 1 : 0);
-        const mediaRole = session.currentMediaRole;
+        // FIX B: derive role/held from the REGISTRY'S lease token, not
+        // `session.currentMediaRole`. The session's role can diverge from the
+        // registry's authoritative view (e.g. on teardown the session keeps its
+        // last role rather than being reset, and a lost/remote-ended active call
+        // drops the lease before the session's role settles). The registry owns
+        // which call is foreground (it holds the single lease), so a call is
+        // foreground iff it currently holds the lease token AND is the active
+        // call. Everything else is held.
+        const mediaRole: CallMediaRole =
+            call.foregroundToken !== null && call.id === this.activeCallId ? 'foreground' : 'held';
         return {
             id: call.id,
             roomId: call.roomId,
