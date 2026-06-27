@@ -22,6 +22,18 @@ import {
  *  - handle the "no active call but held calls remain" state (after `hold`,
  *    the registry never auto-promotes a held call — the host picks the next one)
  */
+// Preset rooms: real, permanent serenada.app room tokens + labels. The same
+// tokens are hardcoded in every sample (web/iOS/Android), so picking "Room A"
+// on any two devices joins the same room — handy for on-device testing without
+// typing URLs. Free input still works for any other room/server.
+const PRESET_ROOMS: { label: string; roomId: string }[] = [
+    { label: 'Room A', roomId: '5TvGFtcHWvhSVgcy-mOnt5HYXUc' },
+    { label: 'Room B', roomId: 'cB_JcTwAqXlisclO0hrFp1sz0D8' },
+    { label: 'Room C', roomId: 'ditnukbowWr_IQiGbRKfO_Y-XEo' },
+    { label: 'Room D', roomId: '5DGYugsbA1e3FohkkYs7_f9VJnU' },
+    { label: 'Room E', roomId: 'RshEuP_IW8eWOi73pH3bp61nCE0' },
+]
+
 export function MultiCallScreen({ onExit }: { onExit: () => void }) {
     // Signaling host: defaults to the public server. Override with a `?host=`
     // query param (e.g. `?host=localhost`) to point the demo at a local dev
@@ -93,26 +105,32 @@ export function MultiCallScreen({ onExit }: { onExit: () => void }) {
         [switchTo, requestMediaPermission],
     )
 
-    const join = useCallback(
-        async (mode: 'switch' | 'held') => {
-            const url = urlText.trim()
-            if (!url) return
-            setUrlText('')
+    // Join a room ref (URL or roomId) in the given mode, with shared result
+    // handling — foreground may need a device permission grant, so request and
+    // retry via activateCall (joinAndSwitch already joined the room as held).
+    const joinRoom = useCallback(
+        async (room: { url: string } | { roomId: string }, mode: 'switch' | 'held') => {
             const result =
-                mode === 'switch'
-                    ? await joinAndSwitch({ url })
-                    : await joinHeld({ url })
+                mode === 'switch' ? await joinAndSwitch(room) : await joinHeld(room)
             if (result.kind === 'failed') {
                 setLastMessage(`Join failed: ${result.error.message}`)
             } else if (result.kind === 'needsPermission') {
-                // joinAndSwitch joined the room (now held); foregrounding it
-                // needs a device grant. Reuse the request-then-retry flow.
                 await activateCall(result.callId)
             } else {
                 setLastMessage(null)
             }
         },
-        [urlText, joinAndSwitch, joinHeld, activateCall],
+        [joinAndSwitch, joinHeld, activateCall],
+    )
+
+    const join = useCallback(
+        async (mode: 'switch' | 'held') => {
+            const url = urlText.trim()
+            if (!url) return
+            setUrlText('')
+            await joinRoom({ url }, mode)
+        },
+        [urlText, joinRoom],
     )
 
     return (
@@ -146,6 +164,25 @@ export function MultiCallScreen({ onExit }: { onExit: () => void }) {
                     >
                         Join Held
                     </button>
+                </div>
+                <div style={{ marginTop: 16 }}>
+                    <div style={{ color: '#5b6470', fontSize: 13, marginBottom: 8 }}>
+                        Preset rooms (same on every device — tap to join &amp; switch;
+                        pick the same one on two devices to connect):
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {PRESET_ROOMS.map((room) => (
+                            <button
+                                key={room.roomId}
+                                onClick={() =>
+                                    void joinRoom({ roomId: room.roomId }, 'switch')
+                                }
+                                disabled={registryOperationInProgress}
+                            >
+                                {room.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
                 {lastMessage && (
                     <p style={{ color: '#a6431f', marginTop: 12 }}>{lastMessage}</p>

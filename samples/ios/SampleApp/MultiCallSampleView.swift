@@ -128,6 +128,20 @@ struct MultiCallSampleView: View {
             }
             .buttonStyle(.bordered)
             .disabled(trimmedRoom.isEmpty)
+
+            // Preset rooms (same token on every device): tap to join + switch.
+            // Pick the same one on two devices to connect them — no URL typing.
+            Text("Preset rooms")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                ForEach(Self.presetRooms) { preset in
+                    Button(String(preset.label.suffix(1))) {
+                        joinPreset(preset)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
         }
     }
 
@@ -233,6 +247,23 @@ struct MultiCallSampleView: View {
         roomText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A preset room: a real, permanent serenada.app room token plus a label.
+    /// The same tokens are hardcoded in every sample (web/iOS/Android), so
+    /// picking "Room A" on any two devices joins the same room.
+    struct PresetRoom: Identifiable {
+        let label: String
+        let roomId: String
+        var id: String { roomId }
+    }
+
+    static let presetRooms: [PresetRoom] = [
+        .init(label: "Room A", roomId: "5TvGFtcHWvhSVgcy-mOnt5HYXUc"),
+        .init(label: "Room B", roomId: "cB_JcTwAqXlisclO0hrFp1sz0D8"),
+        .init(label: "Room C", roomId: "ditnukbowWr_IQiGbRKfO_Y-XEo"),
+        .init(label: "Room D", roomId: "5DGYugsbA1e3FohkkYs7_f9VJnU"),
+        .init(label: "Room E", roomId: "RshEuP_IW8eWOi73pH3bp61nCE0"),
+    ]
+
     /// Build a ``RoomRef`` from the text field: a full URL when it parses as one,
     /// otherwise a bare room id. The registry canonicalizes either form.
     private func makeRoomRef() -> RoomRef? {
@@ -251,8 +282,18 @@ struct MultiCallSampleView: View {
             statusMessage = "Enter a valid call URL or room id."
             return
         }
-        statusMessage = nil
         roomText = ""
+        performJoinAndSwitch(room)
+    }
+
+    /// Join one of the preset rooms (same token on every device). Pick the same
+    /// preset on two devices to connect them — no URL typing required.
+    private func joinPreset(_ preset: PresetRoom) {
+        performJoinAndSwitch(RoomRef(roomId: preset.roomId, displayName: preset.label))
+    }
+
+    private func performJoinAndSwitch(_ room: RoomRef) {
+        statusMessage = nil
         Task { @MainActor in
             switch await registry.joinAndSwitch(room) {
             case .active:

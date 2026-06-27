@@ -44,6 +44,20 @@ private val multiCallFlowConfig = SerenadaCallFlowConfig(
 )
 
 /**
+ * Preset rooms: real, permanent serenada.app room tokens + labels. The same
+ * tokens are hardcoded in every sample (web/iOS/Android), so picking "Room A"
+ * on any two devices joins the same room — handy for on-device testing without
+ * typing URLs. Free input still works for any other room/server.
+ */
+private val PRESET_ROOMS = listOf(
+    "Room A" to "5TvGFtcHWvhSVgcy-mOnt5HYXUc",
+    "Room B" to "cB_JcTwAqXlisclO0hrFp1sz0D8",
+    "Room C" to "ditnukbowWr_IQiGbRKfO_Y-XEo",
+    "Room D" to "5DGYugsbA1e3FohkkYs7_f9VJnU",
+    "Room E" to "RshEuP_IW8eWOi73pH3bp61nCE0",
+)
+
+/**
  * Minimal multi-call host screen. Demonstrates keeping several Serenada calls
  * joined at once via [SerenadaCallRegistry] and moving the single foreground
  * media owner between them:
@@ -147,6 +161,23 @@ fun MultiCallScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Join Held (background)")
+                }
+                // Preset rooms (same token on every device): tap to join + switch.
+                // Pick the same one on two devices to connect them — no URL typing.
+                Text("Preset rooms", style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PRESET_ROOMS.forEach { (label, roomId) ->
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    lastResult = registry.joinAndSwitch(RoomRef.Id(roomId)).describe()
+                                }
+                            },
+                            enabled = !state.registryOperationInProgress,
+                        ) {
+                            Text(label.removePrefix("Room "))
+                        }
+                    }
                 }
             }
         }
