@@ -380,15 +380,9 @@ internal class DefaultAudioCoordinator(
      *     and the no-token pass-through both land here.
      */
     private fun deactivate(requestGeneration: Long) {
-        // CASE 1 — SUPERSEDED ON THIS COORDINATOR (contract §6): a same-coordinator
-        // re-activation bumped [leaseGeneration] past [requestGeneration] AFTER this
-        // deactivation was requested, so this coordinator is LIVE again under the newer
-        // generation. This stale deactivation is a FULL NO-OP — it must NOT touch ANY
-        // state: not [audioSessionActive], not monitoring/fallback, and not the
-        // process-global mode / route / focus. (The prior bug gated ONLY the OS restore,
-        // so a stale deactivate still cleared [audioSessionActive] and called
-        // [abandonAudioFocus], abandoning the focus the LIVE re-activation holds.) The
-        // entire method short-circuits here. Pass-through (no token) is never superseded.
+        // CASE 1 — SUPERSEDED ON THIS COORDINATOR: a same-coordinator re-activation
+        // made this coordinator live again under a newer generation, so this stale
+        // deactivation is a FULL NO-OP (rationale on [isSupersededDeactivate]).
         if (isSupersededDeactivate(requestGeneration)) {
             logger?.log(
                 SerenadaLogLevel.DEBUG,
@@ -399,11 +393,8 @@ internal class DefaultAudioCoordinator(
             return
         }
 
-        // Not superseded. Whether this instance may touch the PROCESS-GLOBAL AudioManager
-        // depends only on the OWNER axis: case 3 (clean leave, no other owner) restores
-        // the global audio; case 2 (cross-coordinator handoff, a DIFFERENT call owns the
-        // lease) tears down ONLY this instance's per-instance state and skips EVERY global
-        // mutation because the new owner now owns those global resources.
+        // Not superseded. Whether the PROCESS-GLOBAL teardown runs turns only on the
+        // OWNER axis (case 2 vs case 3; rationale on [mayTouchGlobalAudioOnDeactivate]).
         val mayTouchGlobalAudio = mayTouchGlobalAudioOnDeactivate()
 
         if (!audioSessionActive) {
@@ -413,10 +404,9 @@ internal class DefaultAudioCoordinator(
             return
         }
 
-        // PER-INSTANCE teardown — runs in BOTH case 2 and case 3 (always, once we are not
-        // superseded). These mutate only THIS coordinator's own state: its active flag and
-        // its own monitoring/listeners/fallback. They never touch another owner's global
-        // resources.
+        // PER-INSTANCE teardown — runs in BOTH case 2 and case 3. Mutates only THIS
+        // coordinator's own state (active flag, monitoring/listeners/fallback), never
+        // another owner's global resources.
         audioSessionActive = false
         proximityEarpieceEnabled = true
         pinnedOutputDevice = null
@@ -425,12 +415,10 @@ internal class DefaultAudioCoordinator(
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
 
-        // PROCESS-GLOBAL teardown — gated as a single block (contract §6, case 2 vs 3).
-        // All coordinators mutate the SAME process-global AudioManager, so the mode
-        // restore, communication-route reset, and [abandonAudioFocus] must all be skipped
-        // together when a DIFFERENT call now owns the lease (case 2). A clean single-call
-        // end (lease already released, NO newer owner) and the no-token pass-through both
-        // still restore + abandon focus exactly as before (case 3).
+        // PROCESS-GLOBAL teardown — gated as ONE block: the mode restore, route reset,
+        // and [abandonAudioFocus] all mutate the shared AudioManager, so they must be
+        // skipped together when a DIFFERENT call owns the lease (case 2). Case 3 (clean
+        // end / no-token pass-through) restores + abandons focus exactly as before.
         if (mayTouchGlobalAudio) {
             runCatching {
                 setLegacyBluetoothScoRouting(false)

@@ -182,6 +182,16 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         leaseRegistry.isCurrent(lease)
     }
 
+    /// Drop the lease this instance installed: clear the local record and, only if
+    /// it is still the process-current lease, the registry record too.
+    /// `clearIfCurrent` never drops a newer owner's live lease, so this is safe even
+    /// when a later activation has already superseded us.
+    private func clearInstalledLease() {
+        guard let installedLease else { return }
+        leaseRegistry.clearIfCurrent(installedLease)
+        self.installedLease = nil
+    }
+
     func activate() {
         guard !audioSessionActive else { return }
         audioSessionActive = true
@@ -228,27 +238,21 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             // but the session never fully activated — e.g. a canceled or superseded
             // PRE-activation lease. Without clearing it, that never-activated lease
             // lingers as the process-current lease and then DROPS legitimate future
-            // callbacks from the next real owner (contract §6, PI-2). Clear the
-            // installed lease here when the fence lease matches it (the fenced path
-            // already proved the lease is current at the top guard), or
-            // unconditionally on the unfenced (`deactivate()`/reset) path. Clearing
-            // the local record + `clearIfCurrent` on the registry; `clearIfCurrent`
-            // never drops a newer owner's live lease.
-            if let installedLease, lease == nil || lease == installedLease {
-                self.installedLease = nil
-                leaseRegistry.clearIfCurrent(installedLease)
+            // callbacks from the next real owner (contract §6, PI-2). Clear it when
+            // the fence lease matches the installed one (the fenced path already
+            // proved the lease is current at the top guard), or unconditionally on
+            // the unfenced (`deactivate()`/reset) path.
+            if lease == nil || lease == installedLease {
+                clearInstalledLease()
             }
             stopProximityMonitoring()
             return
         }
 
         audioSessionActive = false
-        // Clear the lease this instance held, locally and (if still current)
-        // process-globally, so a later activation by another owner starts clean.
-        if let installedLease {
-            leaseRegistry.clearIfCurrent(installedLease)
-        }
-        installedLease = nil
+        // Clear the lease this instance held so a later activation by another owner
+        // starts clean.
+        clearInstalledLease()
         proximityEarpieceEnabled = true
         pinnedOutputDevice = nil
         pinnedOutputRouteInventory = nil
