@@ -89,8 +89,26 @@ class SerenadaCallRegistry internal constructor(
     // The active call is the one holding the foreground lease — the registry's
     // OWN authoritative signal ([ManagedCall.foregroundToken]), NOT the session's
     // mutable `mediaRole` (which a session-internal teardown resets to FOREGROUND).
-    private val activeCallId: CallId?
-        get() = managedCalls.values.firstOrNull { !it.ended && it.foregroundToken != null }?.callId
+    // STORED (not an O(N) scan on every read): kept in lockstep with the single
+    // foreground lease by [setForeground]/[clearForeground], the ONLY token writers.
+    private var activeCallId: CallId? = null
+
+    // --- Foreground-token writers (the ONLY places a foregroundToken is assigned) ---
+    // All token writes route through these so the stored [activeCallId] can never
+    // drift from [ManagedCall.foregroundToken]. The single foreground lease means at
+    // most one call holds a non-null token, so at most one is the active id.
+
+    /** Take the foreground lease for [call]: store its token and mark it active. */
+    private fun setForeground(call: ManagedCall, token: ForegroundOwnerToken) {
+        call.foregroundToken = token
+        activeCallId = call.callId
+    }
+
+    /** Drop [call]'s foreground lease: clear its token and the active id if it was active. */
+    private fun clearForeground(call: ManagedCall) {
+        call.foregroundToken = null
+        if (activeCallId == call.callId) activeCallId = null
+    }
 
     // --- Internal mutable managed-call holder ---
 
@@ -110,6 +128,15 @@ class SerenadaCallRegistry internal constructor(
 
         /** Collector that refreshes published state when the session's state changes. */
         var stateJob: Job? = null
+
+        /**
+         * Last published [ManagedCallState] snapshot for this call. The per-session
+         * collector compares the freshly-recomputed snapshot against this and skips
+         * [publish] when nothing a published field cares about changed (e.g. the ~1s
+         * stats ticks, none of whose fields appear in [ManagedCallState]). [publish]
+         * refreshes it as it maps each call so op-driven publishes keep caches coherent.
+         */
+        var lastSnapshot: ManagedCallState? = null
     }
 
     // --- Public API (contract §7) ---
@@ -332,6 +359,16 @@ class SerenadaCallRegistry internal constructor(
                     runTerminalCleanup(call)
                     return@collect
                 }
+                // Skip the full snapshot recompute when THIS call's published view did
+                // not change (e.g. the ~1s stats ticks, none of whose fields appear in
+                // ManagedCallState). Recompute only this call's snapshot; if it equals
+                // the cached one, nothing a published field cares about moved, so skip
+                // publish(). StateFlow would dedupe the equal emit anyway — this avoids
+                // the per-tick recompute-all of every managed call. role/activation here
+                // read the registry's authoritative token (correct on this thread).
+                val snapshot = call.toManagedCallState()
+                if (snapshot == call.lastSnapshot) return@collect
+                call.lastSnapshot = snapshot
                 publish()
             }
         }
@@ -402,7 +439,7 @@ class SerenadaCallRegistry internal constructor(
             }
             // Release confirmed fully-held: now the registry frees the lease.
             if (oldToken != null) runCatching { ForegroundMediaArbiter.releaseLease(oldToken) }
-            old.foregroundToken = null
+            clearForeground(old)
         }
 
         // 2. Acquire a FRESH token for next and activate, bounded.
@@ -418,7 +455,7 @@ class SerenadaCallRegistry internal constructor(
             runCatching { next.session.abortForegroundActivation(token) }
             runCatching { ForegroundMediaArbiter.releaseLease(token) }
         }
-        next.foregroundToken = null
+        clearForeground(next)
         next.activationError = activated
 
         if (old != null) {
@@ -434,7 +471,7 @@ class SerenadaCallRegistry internal constructor(
                 runCatching { old.session.abortForegroundActivation(token) }
                 runCatching { ForegroundMediaArbiter.releaseLease(token) }
             }
-            old.foregroundToken = null
+            clearForeground(old)
             old.activationError = rolledBackFailure
             val both = CallRegistryError.ActivationAndRollbackFailed(
                 "Activation of ${next.callId} failed (${activated.message}); rollback to ${old.callId} failed (${rolledBackFailure.message})",
@@ -465,7 +502,7 @@ class SerenadaCallRegistry internal constructor(
                 mode = ForegroundArbiterMode.REGISTRY,
                 modeOwnerRef = modeRef,
             )
-            call.foregroundToken = token
+            setForeground(call, token)
             withTimeout(timeoutMs) {
                 call.session.activateForeground(token, generation)
             }
@@ -473,7 +510,7 @@ class SerenadaCallRegistry internal constructor(
             null
         } catch (e: ForegroundLeaseUnavailable) {
             // Lease never granted: nothing to abort.
-            call.foregroundToken = null
+            clearForeground(call)
             CallRegistryError.LeaseUnavailable(e.message ?: "Foreground lease unavailable")
         } catch (e: TimeoutCancellationException) {
             CallRegistryError.ActivationFailed("Activating ${call.callId} timed out")
@@ -526,7 +563,7 @@ class SerenadaCallRegistry internal constructor(
         // Drained fully-held: now free the lease (clears the pending flag) and drop
         // out of the active slot. No auto-promote (Core Invariant 5).
         runCatching { ForegroundMediaArbiter.releaseLease(token) }
-        call.foregroundToken = null
+        clearForeground(call)
         publish()
     }
 
@@ -549,7 +586,7 @@ class SerenadaCallRegistry internal constructor(
             // not wedged — unlike hold, no live call wants to keep this one.
         }
         runCatching { ForegroundMediaArbiter.releaseLease(token) }
-        call.foregroundToken = null
+        clearForeground(call)
         publish()
     }
 
@@ -630,7 +667,7 @@ class SerenadaCallRegistry internal constructor(
             // auto-promote (Core Invariant 5). A held call has no token: skip both.
             call.foregroundToken?.let { token ->
                 runCatching { ForegroundMediaArbiter.releaseLease(token) }
-                call.foregroundToken = null
+                clearForeground(call)
             }
             // Mark ended/non-live: excluded from "live" counts, dismissable, role view
             // collapses to held. teardownCall also stops the collector and releases
@@ -649,6 +686,10 @@ class SerenadaCallRegistry internal constructor(
      */
     private fun teardownCall(call: ManagedCall) {
         call.ended = true
+        // Defensive: every teardown path clears the token first (clearForeground also
+        // drops the active id), so this is normally a no-op. Keep the stored active id
+        // from ever pointing at an ended call even if some future path forgets to.
+        if (activeCallId == call.callId) activeCallId = null
         call.stateJob?.cancel()
         call.stateJob = null
         runCatching { call.session.close() }
@@ -680,7 +721,11 @@ class SerenadaCallRegistry internal constructor(
 
     /** Recompute and emit the aggregate registry state from the managed sessions. */
     private fun publish() {
-        val calls = managedCalls.values.map { it.toManagedCallState() }
+        // Refresh each call's cached snapshot as we map it so op-driven publishes keep
+        // the per-call caches coherent with what the collector compares against.
+        val calls = managedCalls.values.map { call ->
+            call.toManagedCallState().also { call.lastSnapshot = it }
+        }
         _state.value = _state.value.copy(calls = calls, activeCallId = activeCallId)
     }
 

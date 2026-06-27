@@ -204,6 +204,21 @@ protocol RegistryManagedSession: AnyObject {
     /// terminal phase deterministically. Emits the current phase on subscribe.
     var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> { get }
 
+    /// Coalesced "a snapshot-affecting field changed" stream. Emits whenever ANY
+    /// field projected into `ManagedCallState` changes (participant count,
+    /// membership phase, actual-published flags, quality summary, etc.), so the
+    /// registry can refresh the published `calls` entry for a HELD call between
+    /// ops — not just on the next registry op or a terminal phase. The concrete
+    /// session maps `objectWillChange` (every `@Published` change); stubs fire a
+    /// subject when they mutate a registry* field. Emissions may be redundant
+    /// (e.g. a stats tick that does not alter the snapshot); the registry dedupes
+    /// against the last published snapshot, so redundant emits are cheap no-ops.
+    ///
+    /// NOTE: `objectWillChange` fires in `willSet` (BEFORE the value updates), so
+    /// the registry observer MUST defer reading the snapshot to the next
+    /// main-actor turn (it hops through `Task { @MainActor in ... }`).
+    var registrySnapshotPublisher: AnyPublisher<Void, Never> { get }
+
     func preflightForeground() -> ForegroundPreflight
     func missingDesiredForegroundPermissions() -> [MediaCapability]
     func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws
@@ -231,6 +246,13 @@ extension SerenadaSession: RegistryManagedSession {
         // registry observer sees both the present phase and the eventual terminal
         // transition (`.ending`/`.idle`/`.error`) driven by `cleanupCall`.
         $state.map(\.phase).eraseToAnyPublisher()
+    }
+    var registrySnapshotPublisher: AnyPublisher<Void, Never> {
+        // `objectWillChange` fires for every `@Published` change (state,
+        // qualitySummary, mic/route flags, ...), which covers every field
+        // `snapshot()` reads. It fires in `willSet`, BEFORE the property updates,
+        // so the registry observer reads the snapshot on the NEXT main-actor turn.
+        objectWillChange.map { _ in () }.eraseToAnyPublisher()
     }
     func registryLeave() { leave() }
     func registryEnd() { end() }
@@ -273,6 +295,13 @@ public final class ManagedCall {
     /// session-DRIVEN terminal handling (contract §7); cancelled when the call is
     /// removed (`dismissEndedCall`) or replaced.
     fileprivate var phaseObserver: AnyCancellable?
+    /// Subscription to the session's coalesced snapshot-change stream. Drives live
+    /// republish of a held call's projected state between ops; cancelled when the
+    /// call is removed (`dismissEndedCall`).
+    fileprivate var stateObserver: AnyCancellable?
+    /// Last `ManagedCallState` published for this call, used to dedupe redundant
+    /// snapshot emits (e.g. stats ticks that do not change the projection).
+    fileprivate var lastSnapshot: ManagedCallState?
 
     fileprivate init(
         id: CallId,
@@ -532,9 +561,12 @@ public final class SerenadaCallRegistry: ObservableObject {
     public func dismissEndedCall(id: CallId) async {
         await runQueued {
             guard let call = self.managed.first(where: { $0.id == id }), call.ended else { return }
-            // Stop observing the session's phase; the call is leaving the registry.
+            // Stop observing the session's phase + snapshot stream; the call is
+            // leaving the registry.
             call.phaseObserver?.cancel()
             call.phaseObserver = nil
+            call.stateObserver?.cancel()
+            call.stateObserver = nil
             self.managed.removeAll { $0.id == id }
         }
         await publish()
@@ -590,6 +622,7 @@ public final class SerenadaCallRegistry: ObservableObject {
         )
         managed.append(call)
         observeTerminalPhase(call)
+        observeStateForPublish(call)
         return .created(id)
     }
 
@@ -615,6 +648,40 @@ public final class SerenadaCallRegistry: ObservableObject {
                     await self.runQueued { await self.terminalBody(id: id) }
                 }
             }
+    }
+
+    /// Subscribe to a managed call's coalesced snapshot-change stream so the
+    /// registry refreshes that call's published `ManagedCallState` whenever a
+    /// snapshot-affecting field changes (P3 #7: held-call participantCount /
+    /// membershipPhase / actual-published / qualitySummary changes were invisible
+    /// in `calls` until the next op or terminal phase). This is a STATE REFRESH,
+    /// NOT an operation: it is deliberately NOT routed through `runQueued` (it
+    /// touches no lease/call-map invariant, only re-derives a published value) and
+    /// it dedupes against the call's `lastSnapshot` so a stats tick that does not
+    /// change the projection is a no-op (no `calls` churn).
+    ///
+    /// The emit hops to the NEXT main-actor turn because the concrete session maps
+    /// `objectWillChange`, which fires in `willSet` BEFORE the property updates;
+    /// reading the snapshot synchronously would observe the OLD value.
+    private func observeStateForPublish(_ call: ManagedCall) {
+        call.stateObserver = call.managedSession.registrySnapshotPublisher
+            .sink { [weak self, weak call] in
+                guard let self, let call else { return }
+                Task { @MainActor in
+                    await self.republishIfChanged(call)
+                }
+            }
+    }
+
+    /// Re-derive `call`'s snapshot and republish only if it changed since the last
+    /// publish (dedupe). Keeps `calls` coherent with live held-call state between
+    /// ops without spamming subscribers on no-op emits.
+    @MainActor
+    private func republishIfChanged(_ call: ManagedCall) async {
+        let next = call.snapshot()
+        if call.lastSnapshot == next { return }
+        call.lastSnapshot = next
+        await publish()
     }
 
     /// Record a failed/timed-out held join and mark the call ENDED (dismissable),
@@ -1021,7 +1088,14 @@ public final class SerenadaCallRegistry: ObservableObject {
     // MARK: - Publishing
 
     private func publish() async {
-        calls = managed.map { $0.snapshot() }
+        // Cache each call's snapshot as we map so an op-driven publish keeps the
+        // per-call `lastSnapshot` coherent; a following snapshot-stream emit then
+        // dedupes against it (no redundant republish right after an op).
+        calls = managed.map { c in
+            let s = c.snapshot()
+            c.lastSnapshot = s
+            return s
+        }
     }
 
     private func canonicalRoomId(_ room: RoomRef) -> String? {

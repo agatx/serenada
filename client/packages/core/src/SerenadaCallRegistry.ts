@@ -94,6 +94,13 @@ interface ManagedCall {
     unsubscribe: () => void;
     /** Pending ended-call retention timer, if any. */
     retentionTimer: ReturnType<typeof setTimeout> | null;
+    /**
+     * Last published {@link ManagedCallState} snapshot for this call. Used to
+     * dedupe publishes: a session emission whose recomputed snapshot is unchanged
+     * (e.g. the ~1s stats tick, which touches no `ManagedCallState` field) skips
+     * `publish()`. `null` until the first publish.
+     */
+    lastSnapshot: ManagedCallState | null;
 }
 
 /**
@@ -357,6 +364,7 @@ export class SerenadaCallRegistry {
             displayName: room.displayName ?? null,
             unsubscribe: () => {},
             retentionTimer: null,
+            lastSnapshot: null,
         };
         // Forward session state changes into registry state.
         call.unsubscribe = session.subscribe(() => this.onSessionStateChange(call));
@@ -650,7 +658,47 @@ export class SerenadaCallRegistry {
         if (this.isSessionTerminal(call) && !call.terminated) {
             void this.enqueue(() => this.handleCallTerminated(call));
         }
+        // PERF: skip the full N-call republish when this emission did not change
+        // the call's published snapshot. The ~1s stats tick (CallStatsCollector ->
+        // session.notifyListeners) touches no `ManagedCallState` field, so its
+        // recomputed snapshot is identical and would otherwise drive an O(N^2)
+        // remap + needless listener notify on every held call.
+        const next = this.toManagedCallState(call);
+        if (call.lastSnapshot && this.sameManagedCallState(call.lastSnapshot, next)) {
+            return;
+        }
+        call.lastSnapshot = next;
         this.publish();
+    }
+
+    /**
+     * Structural equality for two {@link ManagedCallState} snapshots of the same
+     * call. The primitive fields are strict-equal compared; the two object-valued
+     * fields (`activationError`, `qualitySummary`) are reference-equal compared —
+     * a stats tick mutates neither identity, while a real change either flips a
+     * primitive or installs a new object, so reference equality is sufficient
+     * (and avoids deep-comparing the quality summary every tick). `id`/`roomId`/
+     * `roomUrl` are constant per call but compared for completeness.
+     */
+    private sameManagedCallState(a: ManagedCallState, b: ManagedCallState): boolean {
+        return (
+            a.id === b.id &&
+            a.roomId === b.roomId &&
+            a.roomUrl === b.roomUrl &&
+            a.membershipPhase === b.membershipPhase &&
+            a.mediaRole === b.mediaRole &&
+            a.mediaActivationState === b.mediaActivationState &&
+            a.desiredAudioEnabled === b.desiredAudioEnabled &&
+            a.desiredVideoMode === b.desiredVideoMode &&
+            a.actualAudioPublished === b.actualAudioPublished &&
+            a.actualVideoPublished === b.actualVideoPublished &&
+            a.participantCount === b.participantCount &&
+            a.localCid === b.localCid &&
+            a.held === b.held &&
+            a.displayName === b.displayName &&
+            a.activationError === b.activationError &&
+            a.qualitySummary === b.qualitySummary
+        );
     }
 
     /**
@@ -848,7 +896,15 @@ export class SerenadaCallRegistry {
     }
 
     private publish(): void {
-        const calls = [...this.calls.values()].map((call) => this.toManagedCallState(call));
+        // Build each call's snapshot once and cache it on the call, so the
+        // dedupe gate in onSessionStateChange has a current baseline regardless of
+        // whether this publish was op-driven or session-driven. A following
+        // no-op stats tick then correctly dedupes against it.
+        const calls = [...this.calls.values()].map((call) => {
+            const snapshot = this.toManagedCallState(call);
+            call.lastSnapshot = snapshot;
+            return snapshot;
+        });
         this._state = {
             calls,
             activeCallId: this.activeCallId,

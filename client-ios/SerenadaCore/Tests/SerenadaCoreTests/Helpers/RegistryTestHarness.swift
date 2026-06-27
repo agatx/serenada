@@ -199,20 +199,27 @@ final class AutoJoinSignalingProvider: SignalingProvider, @unchecked Sendable {
 final class StallReleaseSession: RegistryManagedSession {
     let roomId: String
     let roomUrl: URL?
-    private(set) var mediaRole: CallMediaRole = .held
-    private(set) var mediaActivationState: MediaActivationState = .inactive
-    var registryMembershipPhase: SerenadaCallPhase = .inCall
+    private(set) var mediaRole: CallMediaRole = .held { didSet { snapshotSubject.send(()) } }
+    private(set) var mediaActivationState: MediaActivationState = .inactive { didSet { snapshotSubject.send(()) } }
+    var registryMembershipPhase: SerenadaCallPhase = .inCall { didSet { snapshotSubject.send(()) } }
     var registryErrorDescription: String? { nil }
     var registryLocalCid: String? { "stub-local" }
-    var registryParticipantCount: Int { 2 }
-    var registryDesiredAudioEnabled: Bool = true
-    var registryDesiredVideoMode: LocalCameraMode? = nil
+    var registryParticipantCount: Int = 2 { didSet { snapshotSubject.send(()) } }
+    var registryDesiredAudioEnabled: Bool = true { didSet { snapshotSubject.send(()) } }
+    var registryDesiredVideoMode: LocalCameraMode? = nil { didSet { snapshotSubject.send(()) } }
     var registryActualAudioPublished: Bool { mediaRole == .foreground }
     var registryActualVideoPublished: Bool { false }
     var registryQualitySummary: CallQualitySummary? { nil }
     private let phaseSubject = CurrentValueSubject<SerenadaCallPhase, Never>(.inCall)
     var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> {
         phaseSubject.eraseToAnyPublisher()
+    }
+    /// Fired whenever a snapshot-affecting field mutates so the registry's
+    /// snapshot observer republishes (P3 #7). Backed by a subject because the stub
+    /// is not `ObservableObject`.
+    private let snapshotSubject = PassthroughSubject<Void, Never>()
+    var registrySnapshotPublisher: AnyPublisher<Void, Never> {
+        snapshotSubject.eraseToAnyPublisher()
     }
 
     /// When true, `releaseForeground` does NOT drive the session to fully-held, so
@@ -280,19 +287,24 @@ final class LyingRoleSession: RegistryManagedSession {
     /// Pinned to the OPPOSITE of the registry's lease state, so token-derivation is
     /// the ONLY way the published role can be correct.
     let mediaRole: CallMediaRole = .held
-    private(set) var mediaActivationState: MediaActivationState = .inactive
-    var registryMembershipPhase: SerenadaCallPhase = .inCall
+    private(set) var mediaActivationState: MediaActivationState = .inactive { didSet { snapshotSubject.send(()) } }
+    var registryMembershipPhase: SerenadaCallPhase = .inCall { didSet { snapshotSubject.send(()) } }
     var registryErrorDescription: String? { nil }
     var registryLocalCid: String? { "stub-local" }
-    var registryParticipantCount: Int { 2 }
-    var registryDesiredAudioEnabled: Bool = true
-    var registryDesiredVideoMode: LocalCameraMode? = nil
+    var registryParticipantCount: Int = 2 { didSet { snapshotSubject.send(()) } }
+    var registryDesiredAudioEnabled: Bool = true { didSet { snapshotSubject.send(()) } }
+    var registryDesiredVideoMode: LocalCameraMode? = nil { didSet { snapshotSubject.send(()) } }
     var registryActualAudioPublished: Bool { false }
     var registryActualVideoPublished: Bool { false }
     var registryQualitySummary: CallQualitySummary? { nil }
     private let phaseSubject = CurrentValueSubject<SerenadaCallPhase, Never>(.inCall)
     var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> {
         phaseSubject.eraseToAnyPublisher()
+    }
+    /// Fired on any snapshot-affecting mutation (P3 #7).
+    private let snapshotSubject = PassthroughSubject<Void, Never>()
+    var registrySnapshotPublisher: AnyPublisher<Void, Never> {
+        snapshotSubject.eraseToAnyPublisher()
     }
 
     init(roomId: String, roomUrl: URL? = nil) {
@@ -333,14 +345,14 @@ final class LyingRoleSession: RegistryManagedSession {
 final class TerminalDrivableSession: RegistryManagedSession {
     let roomId: String
     let roomUrl: URL?
-    private(set) var mediaRole: CallMediaRole = .held
-    private(set) var mediaActivationState: MediaActivationState = .inactive
-    private(set) var registryMembershipPhase: SerenadaCallPhase = .inCall
+    private(set) var mediaRole: CallMediaRole = .held { didSet { snapshotSubject.send(()) } }
+    private(set) var mediaActivationState: MediaActivationState = .inactive { didSet { snapshotSubject.send(()) } }
+    private(set) var registryMembershipPhase: SerenadaCallPhase = .inCall { didSet { snapshotSubject.send(()) } }
     var registryErrorDescription: String? { nil }
     var registryLocalCid: String? { "stub-local" }
-    var registryParticipantCount: Int { 2 }
-    var registryDesiredAudioEnabled: Bool = true
-    var registryDesiredVideoMode: LocalCameraMode? = nil
+    var registryParticipantCount: Int = 2 { didSet { snapshotSubject.send(()) } }
+    var registryDesiredAudioEnabled: Bool = true { didSet { snapshotSubject.send(()) } }
+    var registryDesiredVideoMode: LocalCameraMode? = nil { didSet { snapshotSubject.send(()) } }
     var registryActualAudioPublished: Bool { mediaRole == .foreground }
     var registryActualVideoPublished: Bool { false }
     var registryQualitySummary: CallQualitySummary? { nil }
@@ -348,6 +360,11 @@ final class TerminalDrivableSession: RegistryManagedSession {
     private let phaseSubject: CurrentValueSubject<SerenadaCallPhase, Never>
     var registryPhasePublisher: AnyPublisher<SerenadaCallPhase, Never> {
         phaseSubject.eraseToAnyPublisher()
+    }
+    /// Fired on any snapshot-affecting mutation (P3 #7).
+    private let snapshotSubject = PassthroughSubject<Void, Never>()
+    var registrySnapshotPublisher: AnyPublisher<Void, Never> {
+        snapshotSubject.eraseToAnyPublisher()
     }
 
     /// Counts registry-side lease releases the session would NEVER make on its own
