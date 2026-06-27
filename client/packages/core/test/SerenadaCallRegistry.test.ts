@@ -11,6 +11,7 @@ import {
 } from '../src/foregroundArbiter.js';
 import { ForegroundLeaseUnavailable } from '../src/types.js';
 import type { CallId, RoomRef, SerenadaConfig } from '../src/types.js';
+import { HELD_JOIN_TIMEOUT_MS } from '../src/constants.js';
 
 // window/navigator shim (mirrors SerenadaSessionForeground.test.ts). The
 // preflight path reads navigator.permissions; default to "granted" so a
@@ -245,6 +246,26 @@ describe('SerenadaCallRegistry', () => {
         // Old call still foreground, still active.
         expect(first.session.currentMediaRole).toBe('foreground');
         expect(registry.state.activeCallId).toBe(activeBefore);
+    });
+
+    it('a timed-out held join tears down the dead session (no hidden live participant)', async () => {
+        vi.useFakeTimers();
+        try {
+            const { registry, rigs } = makeRegistry();
+            const p = registry.joinHeld({ roomId: 'room-A' });
+            await vi.advanceTimersByTimeAsync(0);   // section A creates + starts the session
+            // The held join never reaches membership; advance past the bounded wait.
+            await vi.advanceTimersByTimeAsync(HELD_JOIN_TIMEOUT_MS + 1);
+            const result = await p;
+
+            expect(result.kind).toBe('failed');
+            // recordJoinFailure must tear down the dead session (leave the room) so
+            // a timed-out join cannot still complete its signaling join and linger
+            // as a hidden live room participant. Mirrors the native registries.
+            expect(rigs[0].signaling.leaveRoomCalls).toBeGreaterThanOrEqual(1);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('switch where target needs permission returns needsPermission and leaves old foreground', async () => {

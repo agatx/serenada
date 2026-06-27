@@ -423,6 +423,20 @@ export class SerenadaCallRegistry {
     private recordJoinFailure(call: ManagedCall, error: CallActivationError): CallActivationError {
         this.applyCallError(call, error);
         call.joinFailed = true;
+        // Tear down the dead session. A held join that timed out can otherwise
+        // still complete its signaling join AFTER we've returned `failed`,
+        // lingering as a hidden live room participant while the arbiter has
+        // already freed registry mode for a later direct join. A held join holds
+        // no foreground lease, so there is nothing to release; setting
+        // `terminated` first makes the resulting terminal session-state callback
+        // a no-op. Mirrors the native registries (iOS `markFailedHeldJoin`,
+        // Android `teardownCall`), which web was missing.
+        call.terminated = true;
+        try {
+            call.session.leave();
+        } catch (err) {
+            this.log('warning', `failed held-join teardown failed: ${formatError(err)}`);
+        }
         this.releaseModeIfIdle();
         this.publish();
         return error;

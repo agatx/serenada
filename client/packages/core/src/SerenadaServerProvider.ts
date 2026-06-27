@@ -364,6 +364,7 @@ function mapParticipant(participant: RoomParticipant): SignalingProviderParticip
         appPeerId: participant.peerId,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
+        held: participant.held,
         connectionStatus: participant.connectionStatus,
         capabilities: participant.capabilities,
         mediaPolicy: participant.mediaPolicy,

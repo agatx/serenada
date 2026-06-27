@@ -139,6 +139,7 @@ function parseParticipants(raw: unknown): RoomParticipant[] | null {
             peerId: typeof rec.peerId === 'string' && rec.peerId.trim() !== '' ? rec.peerId : undefined,
             audioEnabled: typeof rec.audioEnabled === 'boolean' ? rec.audioEnabled : undefined,
             videoEnabled: typeof rec.videoEnabled === 'boolean' ? rec.videoEnabled : undefined,
+            held: typeof rec.held === 'boolean' ? rec.held : undefined,
             // Only the recognized status value is forwarded; absent/unknown
             // is left undefined and treated as active downstream.
             connectionStatus: rec.connectionStatus === 'suspended' ? 'suspended' : undefined,

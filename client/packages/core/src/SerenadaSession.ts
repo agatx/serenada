@@ -159,6 +159,7 @@ function toRoomParticipant(participant: SignalingProviderParticipant): RoomParti
         peerId: participant.appPeerId,
         audioEnabled: participant.audioEnabled,
         videoEnabled: participant.videoEnabled,
+        held: participant.held,
         connectionStatus: participant.connectionStatus,
         capabilities: participant.capabilities,
         mediaPolicy: participant.mediaPolicy,
@@ -1983,9 +1984,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
                     cameraEnabled: videoEnabled,
                     videoEnabled,
                     // `held` surfaces the peer's hold state so call UIs can show
-                    // "on hold" distinctly. Absent for peers we've never heard a
-                    // `held` field from (older clients / never held).
-                    held: peerState?.held,
+                    // "on hold" distinctly. Prefer the live relay value, then fall
+                    // back to the `held` the server now persists in joined/room_state
+                    // snapshots — so a late joiner or a client that reconnected after
+                    // missing the original relay (or sees a suspended peer that can't
+                    // re-broadcast) still renders the peer as on hold. Absent for
+                    // peers we've never heard a `held` field from (older / never held).
+                    held: peerState?.held ?? participant.held,
                     content: trackedContent?.active === true ? trackedContent : undefined,
                     cameraReceiving: roleLiveness.camera,
                     contentReceiving: roleLiveness.content,

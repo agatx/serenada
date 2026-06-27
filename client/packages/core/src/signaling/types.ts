@@ -48,6 +48,13 @@ export type RoomParticipant = {
     peerId?: string;
     audioEnabled?: boolean;
     videoEnabled?: boolean;
+    /**
+     * Multi-call "on hold" flag the server now persists in joined/room_state
+     * snapshots (additive; absent for older clients / never-held peers). Lets
+     * late joiners and reconnecting clients render a held peer correctly even
+     * when they missed the live `participant_media_state` relay.
+     */
+    held?: boolean;
     // Absent = active. 'suspended' means the server is holding the slot
     // open across a signaling drop — peers MUST keep the existing peer
     // connection alive until the participant returns or is fully removed.

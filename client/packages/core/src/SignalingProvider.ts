@@ -28,6 +28,13 @@ export interface SignalingProviderParticipant {
     appPeerId?: string;
     audioEnabled?: boolean;
     videoEnabled?: boolean;
+    /**
+     * Multi-call "on hold" flag from the room snapshot (`joined`/`room_state`).
+     * Lets a late joiner / reconnecting peer render a held participant that
+     * cannot re-broadcast its live `participant_media_state`. Additive; absent
+     * for older clients and never-held participants.
+     */
+    held?: boolean;
     // Wire-reported signaling transport status. Absent = active.
     connectionStatus?: ParticipantConnectionStatus;
     /** Capabilities the participant advertised at join (allowlisted server-side). */
