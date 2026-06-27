@@ -1,0 +1,21 @@
+/*
+ * The packaged Serenada call UI (`<SerenadaCallFlow>`) injects its own styles at
+ * runtime and pins its root to the viewport:
+ *
+ *     [data-serenada-callflow] { position: fixed !important; inset: 0 !important; }
+ *
+ * That makes it fill the screen and cover the surrounding page chrome. The
+ * multi-call sample embeds the call inside a framed card so the registry
+ * controls (Hold / Leave / End) stay visible alongside it, so re-anchor the call
+ * UI to that card (which is `position: relative`) instead of the viewport.
+ *
+ * The base rule uses `!important`, so this override must too — and with higher
+ * specificity (extra `.sample-callflow` class) to win the cascade. Scoped to
+ * `.sample-callflow` (passed via the `className` prop) so it only affects the
+ * embedded sample, never a host app that renders the call fullscreen.
+ */
+[data-serenada-callflow].sample-callflow,
+.sample-callflow .call-container {
+    position: absolute !important;
+    inset: 0 !important;
+}

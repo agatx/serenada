@@ -1,3 +1,4 @@
+import './multicall.css'
 import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import type { ManagedCallState } from '@agatx/serenada-core'
 import {
@@ -176,7 +177,11 @@ export function MultiCallScreen({ onExit }: { onExit: () => void }) {
                         </button>
                     </div>
                     <div style={callFlowFrameStyle}>
-                        <SerenadaCallFlow session={activeCall.session} />
+                        <SerenadaCallFlow
+                            className="sample-callflow"
+                            session={activeCall.session}
+                            onEndCall={() => void leave(activeCall.state.id)}
+                        />
                     </div>
                 </section>
             ) : (
@@ -267,7 +272,10 @@ const rowStyle: CSSProperties = {
 
 const callFlowFrameStyle: CSSProperties = {
     position: 'relative',
-    height: 420,
+    // The packaged call UI is built for full-viewport; give it a tall frame so
+    // the embedded layout (video stage + bottom controls) has room to breathe.
+    // `multicall.css` re-anchors the call UI to this frame (see .sample-callflow).
+    height: 'min(70vh, 560px)',
     borderRadius: 10,
     overflow: 'hidden',
     background: '#0f1720',
