@@ -51,6 +51,47 @@ export function MultiCallScreen({ onExit }: { onExit: () => void }) {
     const [urlText, setUrlText] = useState('')
     const [lastMessage, setLastMessage] = useState<string | null>(null)
 
+    // The registry's preflightForeground() never opens a permission prompt (the
+    // host owns the prompt). So when foregrounding reports needsPermission, the
+    // host requests device access here, then retries the switch.
+    const requestMediaPermission = useCallback(async (): Promise<boolean> => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: true,
+            })
+            // We only needed the grant; the registry acquires its own tracks
+            // when the call activates, so release these throwaway tracks now.
+            stream.getTracks().forEach((track) => track.stop())
+            return true
+        } catch (err) {
+            setLastMessage(`Permission denied: ${(err as Error).message}`)
+            return false
+        }
+    }, [])
+
+    // Foreground a held call. If the registry reports needsPermission, request
+    // device access and retry the switch once.
+    const activateCall = useCallback(
+        async (callId: string) => {
+            let result = await switchTo(callId)
+            if (result.kind === 'needsPermission') {
+                setLastMessage('Requesting microphone and camera access...')
+                if (await requestMediaPermission()) {
+                    result = await switchTo(callId)
+                }
+            }
+            if (result.kind === 'failed') {
+                setLastMessage(`Switch failed: ${result.error.message}`)
+            } else if (result.kind === 'needsPermission') {
+                setLastMessage('Permission still needed to foreground this call.')
+            } else {
+                setLastMessage(null)
+            }
+        },
+        [switchTo, requestMediaPermission],
+    )
+
     const join = useCallback(
         async (mode: 'switch' | 'held') => {
             const url = urlText.trim()
@@ -63,16 +104,14 @@ export function MultiCallScreen({ onExit }: { onExit: () => void }) {
             if (result.kind === 'failed') {
                 setLastMessage(`Join failed: ${result.error.message}`)
             } else if (result.kind === 'needsPermission') {
-                // joinAndSwitch joined the room (now held) but foregrounding it
-                // needs a device grant. Prompt the user, then retry switchTo.
-                setLastMessage(
-                    'Microphone/camera permission needed — grant it, then tap "Resume".',
-                )
+                // joinAndSwitch joined the room (now held); foregrounding it
+                // needs a device grant. Reuse the request-then-retry flow.
+                await activateCall(result.callId)
             } else {
                 setLastMessage(null)
             }
         },
-        [urlText, joinAndSwitch, joinHeld],
+        [urlText, joinAndSwitch, joinHeld, activateCall],
     )
 
     return (
@@ -162,7 +201,7 @@ export function MultiCallScreen({ onExit }: { onExit: () => void }) {
                                 key={call.id}
                                 call={call}
                                 busy={registryOperationInProgress}
-                                onResume={() => void switchTo(call.id)}
+                                onResume={() => void activateCall(call.id)}
                                 onLeave={() => void leave(call.id)}
                             />
                         ))}
