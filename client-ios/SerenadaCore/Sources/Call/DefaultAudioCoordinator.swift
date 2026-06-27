@@ -95,7 +95,7 @@ private final class EventHolder<T>: @unchecked Sendable {
 }
 
 @MainActor
-final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoordinator, SessionAudioController, @unchecked Sendable {
+final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoordinator, SessionAudioController, LeaseAwareAudioCoordinator, @unchecked Sendable {
     private let availableDevicesHolder = ContinuationHolder<[AudioDevice]>(initialValue: [])
     private let effectiveInputDeviceHolder = ContinuationHolder<AudioDevice?>(initialValue: nil)
     private let effectiveOutputDeviceHolder = ContinuationHolder<AudioDevice?>(initialValue: nil)
@@ -110,6 +110,16 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     private let audioSession = AVAudioSession.sharedInstance()
 
     private var audioSessionActive = false
+    /// The foreground lease THIS coordinator instance activated the shared audio
+    /// session under (Phase 4, contract §6). Set by the session via
+    /// ``setForegroundLease(_:)`` before activation; cleared on deactivation. The
+    /// instance keeps this so its own delayed callbacks know which lease they ran
+    /// under; whether that lease is still the live one is decided against the
+    /// process-global ``AudioSessionLeaseRegistry`` (each session owns its own
+    /// coordinator instance, so the stale-callback race is cross-instance).
+    private var installedLease: AudioSessionLease?
+    /// Process-global current-audio-lease tracker. Injectable for tests.
+    private let leaseRegistry: AudioSessionLeaseRegistry
     private var proximityMonitoringActive = false
     private var isProximityNear = false
     private var proximityEarpieceEnabled = true
@@ -122,12 +132,14 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         proximityMonitoringEnabled: Bool,
         onProximityChanged: @escaping (Bool) -> Void,
         onAudioEnvironmentChanged: @escaping () -> Void,
-        logger: SerenadaLogger? = nil
+        logger: SerenadaLogger? = nil,
+        leaseRegistry: AudioSessionLeaseRegistry = .shared
     ) {
         self.proximityMonitoringEnabled = proximityMonitoringEnabled
         self.onProximityChanged = onProximityChanged
         self.onAudioEnvironmentChanged = onAudioEnvironmentChanged
         self.logger = logger
+        self.leaseRegistry = leaseRegistry
         super.init()
     }
 
@@ -137,6 +149,37 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
 
     func setOnAudioEnvironmentChanged(_ handler: @escaping () -> Void) {
         onAudioEnvironmentChanged = handler
+    }
+
+    // MARK: - LeaseAwareAudioCoordinator (Phase 4 lease fencing, contract §6)
+
+    /// Install the foreground lease this coordinator is driving the audio session
+    /// under, both locally and process-globally. A later install (new owner, or
+    /// fresh-generation rollback) supersedes any callback captured under the
+    /// previous lease.
+    func setForegroundLease(_ lease: AudioSessionLease) {
+        installedLease = lease
+        leaseRegistry.install(lease)
+    }
+
+    /// Clear the lease on deactivation. Clears the local record and the
+    /// process-global record only if it still matches — a clear for an
+    /// already-superseded lease must NOT drop a newer owner's live lease.
+    func clearForegroundLease(_ lease: AudioSessionLease) {
+        if installedLease == lease {
+            installedLease = nil
+        }
+        leaseRegistry.clearIfCurrent(lease)
+    }
+
+    /// Whether `lease` is still the process-current audio lease. A delayed
+    /// continuation or OS observer captures the lease it ran under and re-checks it
+    /// here before touching the shared audio session; a stale lease (a newer owner
+    /// took over, possibly on a different coordinator instance) returns `false` and
+    /// the callback drops. `nil` (the single-call/direct path that never had a
+    /// registry lease) is always considered current — there is only one owner.
+    private func isLeaseCurrent(_ lease: AudioSessionLease?) -> Bool {
+        leaseRegistry.isCurrent(lease)
     }
 
     func activate() {
@@ -164,12 +207,34 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     func deactivate() {
+        deactivate(fencedBy: nil)
+    }
+
+    /// Tear down the shared audio session. When `fencedBy` is non-nil, the teardown
+    /// is DROPPED if that lease is no longer current — i.e. a newer foreground owner
+    /// has already activated the session since this deactivation was requested
+    /// (contract §6: an old deactivate must NOT deactivate the session after a new
+    /// activation). The unfenced caller (`reset`/teardown) passes `nil`.
+    private func deactivate(fencedBy lease: AudioSessionLease?) {
+        if let lease, !isLeaseCurrent(lease) {
+            // A later activation superseded this lease. Do NOT touch
+            // `AVAudioSession`/observer registration — the current owner owns them.
+            logger?.log(.info, tag: "Audio", "dropping stale audio deactivation (superseded lease)")
+            return
+        }
+
         guard audioSessionActive else {
             stopProximityMonitoring()
             return
         }
 
         audioSessionActive = false
+        // Clear the lease this instance held, locally and (if still current)
+        // process-globally, so a later activation by another owner starts clean.
+        if let installedLease {
+            leaseRegistry.clearIfCurrent(installedLease)
+        }
+        installedLease = nil
         proximityEarpieceEnabled = true
         pinnedOutputDevice = nil
         pinnedOutputRouteInventory = nil
@@ -187,6 +252,15 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     func shouldPauseVideoForProximity(isScreenSharing: Bool) -> Bool {
         proximityMonitoringActive && isProximityNear && !isScreenSharing && !isBluetoothHeadsetConnected()
     }
+
+    // MARK: - Test support (Phase 4 lease fencing)
+
+    /// Whether this coordinator instance currently holds the audio session active.
+    /// **Test-only** observability for the §6 lease-fence behavior.
+    var audioSessionActiveForTest: Bool { audioSessionActive }
+
+    /// The lease this coordinator instance activated under. **Test-only.**
+    var installedLeaseForTest: AudioSessionLease? { installedLease }
 
     // MARK: - SerenadaAudioCoordinator Conformance
 
@@ -206,7 +280,12 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     func deactivateCallSession() async {
-        deactivate()
+        // Capture the lease this deactivation was requested under. The session
+        // chains deactivation behind any in-flight activation, so by the time this
+        // runs a newer foreground owner may have already re-activated under a fresh
+        // lease — in that case `deactivate(fencedBy:)` drops the teardown so the old
+        // session cannot deactivate the audio session the new owner just activated.
+        deactivate(fencedBy: installedLease)
     }
 
     func applyRouting(_ device: AudioDevice) async throws {
@@ -320,8 +399,9 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     @objc private func handleAudioRouteChange(_ notification: Notification) {
+        let lease = installedLease
         Task { @MainActor [weak self] in
-            guard let self = self, self.audioSessionActive else { return }
+            guard let self = self, self.audioSessionActive, self.isLeaseCurrent(lease) else { return }
             self.updateDevicesAndRoute()
             self.applyCallAudioRouting()
             self.updateDevicesAndRoute()
@@ -336,8 +416,9 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     @objc private func handleProximityStateChange(_ notification: Notification) {
+        let lease = installedLease
         Task { @MainActor [weak self] in
-            guard let self = self, self.proximityMonitoringActive else { return }
+            guard let self = self, self.proximityMonitoringActive, self.isLeaseCurrent(lease) else { return }
             let near = UIDevice.current.proximityState
             guard near != self.isProximityNear else { return }
 
@@ -356,8 +437,9 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             return
         }
 
+        let lease = installedLease
         Task { @MainActor [weak self] in
-            guard let self = self, self.audioSessionActive else { return }
+            guard let self = self, self.audioSessionActive, self.isLeaseCurrent(lease) else { return }
             switch type {
             case .began:
                 self.emitEvent(.externalAudioStarted)
@@ -378,8 +460,9 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     @objc private func handleMediaServicesReset(_ notification: Notification) {
+        let lease = installedLease
         Task { @MainActor [weak self] in
-            guard let self = self, self.audioSessionActive else { return }
+            guard let self = self, self.audioSessionActive, self.isLeaseCurrent(lease) else { return }
             do {
                 try self.audioSession.setCategory(
                     .playAndRecord,
@@ -413,8 +496,9 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
             return
         }
 
+        let lease = installedLease
         Task { @MainActor [weak self] in
-            guard let self = self, self.audioSessionActive else { return }
+            guard let self = self, self.audioSessionActive, self.isLeaseCurrent(lease) else { return }
             switch type {
             case .begin:
                 self.emitEvent(.playbackDuckingStarted)
@@ -501,9 +585,19 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         guard pendingManagedOutputRequest != request else { return }
         guard !isOutputRouteActive(for: device) else { return }
         pendingManagedOutputRequest = request
+        let lease = installedLease
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // Drop the deferred RTCAudioSession reconfiguration if a newer
+            // foreground owner has taken the lease since this route apply was
+            // scheduled (contract §6: held/superseded sessions don't reconfigure).
+            guard self.isLeaseCurrent(lease) else {
+                if self.pendingManagedOutputRequest == request {
+                    self.pendingManagedOutputRequest = nil
+                }
+                return
+            }
             do {
                 try await self.applyUserSelectedOutputRoute(for: device)
             } catch {

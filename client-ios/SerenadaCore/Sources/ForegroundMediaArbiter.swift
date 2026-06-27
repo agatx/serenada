@@ -14,6 +14,12 @@ public struct ForegroundOwnerToken: Equatable, Sendable {
         self.id = id
         self.ownerId = ownerId
     }
+
+    /// The process-unique lease-grant id, exposed to the SDK so the default audio
+    /// coordinator can fence its delayed callbacks against the current lease
+    /// (Phase 4, contract §6). Not part of the public surface beyond the token
+    /// itself being opaque.
+    var leaseId: Int { id }
 }
 
 /// Raised when a foreground lease cannot be acquired: a lease is already live, a

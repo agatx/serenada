@@ -114,16 +114,31 @@ export class FakeMediaEngine {
         this.localStream = null;
     }
 
+    /**
+     * Mirrors MediaEngine.heldNoCapture: latched by the hold/held-init sinks,
+     * cleared on resume. Backs the engine-level capture-sink backstops so the
+     * fake models the real "one capture owner" contract — a held call's
+     * `flipCamera`/`startScreenShare` must be no-ops even if reached directly.
+     */
+    heldNoCapture = false;
+
     // Counts getDisplayMedia-equivalent screen-share starts so the held-guard
     // test can assert a held call never starts capture. Sets isScreenSharing so
     // the session's broadcast branch is exercised on the foreground path.
     startScreenShareCalls = 0;
     async startScreenShare(): Promise<void> {
+        // Core Invariant 2 backstop (parity with MediaEngine.startScreenShare).
+        if (this.heldNoCapture) return;
         this.startScreenShareCalls += 1;
         this.isScreenSharing = true;
     }
     async stopScreenShare(): Promise<void> { this.isScreenSharing = false; }
+    flipCameraCalls = 0;
     async flipCamera(): Promise<void> {
+        // Core Invariant 2 backstop (parity with MediaEngine.flipCamera): a held
+        // call must not acquire a fresh camera track or mutate facing.
+        if (this.heldNoCapture) return;
+        this.flipCameraCalls += 1;
         this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
     }
 
@@ -173,11 +188,13 @@ export class FakeMediaEngine {
     initializeHeldWithoutCaptureCalls = 0;
     initializeHeldWithoutCapture(): void {
         this.initializeHeldWithoutCaptureCalls += 1;
+        this.heldNoCapture = true;
         this.setRemotePlaybackEnabled(false);
     }
 
     async suspendLocalMediaForHold(): Promise<void> {
         this.suspendLocalMediaForHoldCalls += 1;
+        this.heldNoCapture = true;
         if (this.isScreenSharing) {
             await this.stopScreenShare();
         }
@@ -202,6 +219,9 @@ export class FakeMediaEngine {
 
     async resumeLocalMediaFromHold(desiredAudio: boolean, desiredVideoMode: VideoMode): Promise<void> {
         this.resumeLocalMediaFromHoldCalls.push({ desiredAudio, desiredVideoMode });
+        // Clear the held latch BEFORE reacquiring so resume's own capture is not
+        // blocked (parity with MediaEngine.resumeLocalMediaFromHold).
+        this.heldNoCapture = false;
         const stream = this.localStream as unknown as FakeMediaStream | null;
         if (stream) {
             if (desiredAudio && stream.getAudioTracks().length === 0) {

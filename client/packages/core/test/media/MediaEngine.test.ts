@@ -2298,5 +2298,79 @@ describe('MediaEngine', () => {
 
             engine.destroy();
         });
+
+        // Core Invariant 2 / Phase 4 backstop: `flipCamera` acquires a fresh
+        // camera track via getUserMedia. The session gates the toggle on
+        // mediaRole==='held', but the engine must also refuse so a held call can
+        // never grab the camera (defense in depth — parity with the
+        // startLocalMedia / refreshLocal*Track backstops).
+        it('flipCamera is a no-op while held (does NOT call getUserMedia)', async () => {
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ video: true }));
+            const enumerateDevices = vi.fn().mockResolvedValue([
+                createMediaDevice('videoinput', 'cam-front', 'front', 'Front Camera'),
+                createMediaDevice('videoinput', 'cam-back', 'back', 'Back Camera'),
+            ]);
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        enumerateDevices,
+                        addEventListener() {},
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+            const engine = new MediaEngine({}, () => {});
+            await engine.startLocalMedia();
+            // Two cameras detected -> a flip WOULD normally reacquire the camera.
+            expect(engine.hasMultipleCameras).toBe(true);
+            const callsAfterStart = getUserMedia.mock.calls.length;
+            const facingBefore = engine.facingMode;
+
+            await engine.suspendLocalMediaForHold();
+
+            await engine.flipCamera();
+            // No new getUserMedia, and facing intent is untouched at the engine
+            // (the held session tracks desired facing; resume reapplies it).
+            expect(getUserMedia.mock.calls.length).toBe(callsAfterStart);
+            expect(engine.facingMode).toBe(facingBefore);
+            expect(engine.localStream?.getVideoTracks()[0]).toBeUndefined();
+
+            engine.destroy();
+        });
+
+        // Core Invariant 2 / Phase 4 backstop: a held call owns no capture,
+        // including the display surface. `startScreenShare` must not reach
+        // getDisplayMedia while held (the arbiter serializes screen-share
+        // ownership to the foreground call).
+        it('startScreenShare is a no-op while held (does NOT call getDisplayMedia)', async () => {
+            const getUserMedia = vi.fn().mockResolvedValue(createMediaStream());
+            const getDisplayMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: false, video: true }));
+            Object.defineProperty(globalThis, 'navigator', {
+                value: {
+                    mediaDevices: {
+                        getUserMedia,
+                        getDisplayMedia,
+                        enumerateDevices: vi.fn().mockResolvedValue([]),
+                        addEventListener() {},
+                        removeEventListener() {},
+                    },
+                },
+                configurable: true,
+            });
+            const engine = new MediaEngine({}, () => {});
+            await engine.startLocalMedia();
+            // Sanity: a share WOULD be startable when not held.
+            expect(engine.canScreenShare).toBe(true);
+
+            await engine.suspendLocalMediaForHold();
+
+            await engine.startScreenShare();
+            expect(getDisplayMedia).not.toHaveBeenCalled();
+            expect(engine.isScreenSharing).toBe(false);
+
+            engine.destroy();
+        });
     });
 });

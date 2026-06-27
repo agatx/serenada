@@ -757,6 +757,13 @@ export class MediaEngine {
     }
 
     async startScreenShare(): Promise<void> {
+        // Core Invariant 2: held media owns no capture, including the display
+        // surface. Engine-level backstop behind the session's `mediaRole==='held'`
+        // gate so a held call never reaches `getDisplayMedia` (the arbiter
+        // serializes screen-share ownership to the foreground call). Screen share
+        // is foreground-only and is not auto-restored on resume, so there is no
+        // intent to record — just decline.
+        if (this.heldNoCapture) return;
         if (this.isScreenSharing || !this.canScreenShare) return;
         if (!this.videoMediaEnabled) return;
         if (this.enableIndependentContentVideo) {
@@ -1104,6 +1111,16 @@ export class MediaEngine {
     }
 
     async flipCamera(): Promise<void> {
+        // Core Invariant 2: a held call owns NO capture. `flipCamera` acquires a
+        // fresh camera track via `getUserMedia`, so it must be a no-op while held
+        // — engine-level defense in depth behind the session's `mediaRole==='held'`
+        // gate (the other capture sinks `startLocalMedia`/`refreshLocalAudioTrack`/
+        // `refreshLocalVideoTrack` carry the same backstop). Do NOT mutate
+        // `facingMode` either: the held session tracks desired facing as intent
+        // and resume reapplies it; touching capture state here would let a flip
+        // grab the camera on a held call. Resume reacquires via the dedicated
+        // `resumeLocalMediaFromHold` sinks, not this path.
+        if (this.heldNoCapture) return;
         // Independent share: the camera is a separate track, so flipping it
         // during a share is valid and leaves the content track untouched. Only
         // the legacy single-video share (camera == display track) blocks flip.

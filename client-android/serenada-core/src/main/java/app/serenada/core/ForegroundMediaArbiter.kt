@@ -167,6 +167,23 @@ object ForegroundMediaArbiter {
     }
 
     /**
+     * Whether the lease is currently owned by a DIFFERENT token than [token]
+     * (multi-call session, Phase 4; contract §6). Used by the default audio
+     * coordinator's deactivation fence to distinguish two cases that both leave
+     * `isCurrentOwner(token) == false`:
+     *  - our call simply ENDED (the arbiter has no owner, or only our just-released
+     *    token): the coordinator SHOULD restore `MODE_NORMAL` / the previous route.
+     *  - a NEWER call took the foreground (a different live owner): the coordinator
+     *    MUST NOT clobber the newer call's `MODE_IN_COMMUNICATION` / route.
+     * Returns false for a null [token] (single-call / fake pass-through), so an
+     * un-fenced coordinator always restores.
+     */
+    fun hasOtherOwner(token: ForegroundOwnerToken?): Boolean {
+        val live = currentToken ?: return false
+        return live !== token
+    }
+
+    /**
      * Claim the owning [mode] for [ownerRef] (Core Invariant 6). First user wins;
      * subsequent claims of the SAME mode just add the ref. A claim of the OTHER
      * mode while the current mode still has owners throws

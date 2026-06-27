@@ -1533,6 +1533,13 @@ class SerenadaSession internal constructor(
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
+                        // Bind the DIRECT single-call lease (if any) so the default
+                        // coordinator self-fences (Phase 4, contract §6). On the
+                        // single-call path this session is always the lease owner, so
+                        // nothing is ever dropped; binding only matters once a second
+                        // call can supersede it. directLeaseToken is null on the
+                        // no-arbiter / fake path, leaving the fence in pass-through.
+                        bindDefaultCoordinatorLease(directLeaseToken, mediaOpGeneration)
                         audioCoordinator.activateCallSession(config.audioIntent)
                     }
                 }
@@ -1862,6 +1869,20 @@ class SerenadaSession internal constructor(
     }
 
     /**
+     * Thread the foreground-lease [token] + operation [generation] into the
+     * default audio coordinator so its delayed/async callbacks fence against the
+     * arbiter's live owner (Phase 4; contract §6). No-op for a host-supplied custom
+     * coordinator: it owns its own audio policy and the SDK does not reach into it
+     * (this keeps [SerenadaAudioCoordinator]'s public contract intact and the
+     * custom-coordinator adapter working). Called inside [audioCoordinatorMutex],
+     * immediately before each `activateCallSession`, so the binding is in place
+     * before any callback the coordinator could schedule.
+     */
+    private fun bindDefaultCoordinatorLease(token: ForegroundOwnerToken?, generation: Long) {
+        (audioCoordinator as? DefaultAudioCoordinator)?.bindForegroundLease(token, generation)
+    }
+
+    /**
      * Activate the audio coordinator for resume (mirrors [startJoinInternal]).
      * Returns true iff the coordinator activation actually completed; false on
      * timeout/failure (FIX A). A CancellationException still propagates (FIX N3: an
@@ -1872,7 +1893,15 @@ class SerenadaSession internal constructor(
     private suspend fun activateAudioCoordinatorForResume(): Boolean {
         return try {
             withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
-                audioCoordinatorMutex.withLock { audioCoordinator.activateCallSession(config.audioIntent) }
+                audioCoordinatorMutex.withLock {
+                    // Bind the lease this resume is activating under so the default
+                    // coordinator's delayed/async callbacks fence against it (Phase 4,
+                    // contract §6): a switch that hands the foreground to a newer call
+                    // makes this (now-superseded) session's stale route/ducking/route-
+                    // monitor/proximity callbacks no-ops.
+                    bindDefaultCoordinatorLease(foregroundOwnerToken, mediaOpGeneration)
+                    audioCoordinator.activateCallSession(config.audioIntent)
+                }
             }
             true
         } catch (e: TimeoutCancellationException) {

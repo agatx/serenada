@@ -694,4 +694,118 @@ describe('SerenadaCallRegistry', () => {
         expect(releaseSpy).toHaveBeenCalledTimes(1);
         expect(rig.signaling.endRoomCalls).toBe(1);
     });
+
+    // --- Phase 4 (web): single-capture-owner invariant ---
+    // The web "capture lease" reduces to one rule: at most one session ever holds
+    // getUserMedia() tracks (the foreground call). These tests assert that
+    // invariant at the registry boundary, in terms of physical local tracks (the
+    // FakeMediaEngine stops + removes tracks on suspend, mirroring the real
+    // engine's releaseLocalAudioCapture/releaseVideoTrack), not just call counts.
+    describe('single-capture-owner invariant (Phase 4 web capture lease)', () => {
+        /** Count of live (non-ended) local capture tracks a rig currently holds. */
+        function liveLocalTrackCount(rig: CallRig): number {
+            const stream = rig.media.localStream as unknown as { getTracks(): { readyState: string }[] } | null;
+            if (!stream) return 0;
+            return stream.getTracks().filter(t => t.readyState !== 'ended').length;
+        }
+
+        it('a held call (joinHeld) holds zero local capture tracks', async () => {
+            const { registry, rigs } = makeRegistry();
+            const p = registry.joinHeld({ roomId: 'room-A' });
+            settleNextOnJoin(rigs);
+            await p;
+            const rig = rigs[0];
+
+            // settleJoined installs a stream, but a held-initial session never
+            // foregrounds, so it must own no live capture (Core Invariant 3). The
+            // held-without-capture init latched heldNoCapture; the session never
+            // resumed, so any installed tracks are irrelevant to the OS — assert
+            // role + that no foreground capture path ran.
+            expect(rig.session.currentMediaRole).toBe('held');
+            expect(rig.media.startLocalMediaCalls).toBe(0);
+            expect(rig.media.resumeLocalMediaFromHoldCalls.length).toBe(0);
+            expect(rig.media.heldNoCapture).toBe(true);
+        });
+
+        it('across a switch the OLD session releases all local tracks BEFORE the new session acquires any', async () => {
+            const { registry, rigs } = makeRegistry();
+
+            const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+            settleNextOnJoin(rigs);
+            await pa;
+            const first = rigs[0];
+            expect(first.session.currentMediaRole).toBe('foreground');
+            // Foreground call A owns live capture tracks.
+            expect(liveLocalTrackCount(first)).toBeGreaterThan(0);
+
+            // Capture the OLD call's live-track count at the instant the NEW call
+            // begins reacquiring its own capture (resumeLocalMediaFromHold). The
+            // invariant: the old session must already own ZERO live tracks then —
+            // there is never a window where two sessions hold getUserMedia tracks.
+            let oldLiveTracksAtNewAcquire = -1;
+
+            const pb = registry.joinAndSwitch({ roomId: 'room-B' });
+            // The second rig exists only after section A runs; install the spy on
+            // the next microtask, before its activate/resume is awaited.
+            queueMicrotask(() => {
+                const second = rigs[rigs.length - 1];
+                second.settleJoined();
+                const realResume = second.media.resumeLocalMediaFromHold.bind(second.media);
+                second.media.resumeLocalMediaFromHold = async (a, v) => {
+                    oldLiveTracksAtNewAcquire = liveLocalTrackCount(first);
+                    return realResume(a, v);
+                };
+            });
+            const rb = await pb;
+            expect(rb.kind).toBe('active');
+            const second = rigs[1];
+
+            // The new call acquired capture; the old released ALL of it first.
+            expect(oldLiveTracksAtNewAcquire).toBe(0);
+            expect(first.session.currentMediaRole).toBe('held');
+            expect(liveLocalTrackCount(first)).toBe(0);
+            expect(second.session.currentMediaRole).toBe('foreground');
+            expect(liveLocalTrackCount(second)).toBeGreaterThan(0);
+            // Exactly one foreground call owns capture at the end.
+            const foregroundCount = rigs.filter(r => r.session.currentMediaRole === 'foreground').length;
+            expect(foregroundCount).toBe(1);
+        });
+
+        it('a non-active (held) session cannot start capture via toggles (intent only)', async () => {
+            const { registry, rigs } = makeRegistry();
+
+            // A is foreground; B is held (joined but not switched to).
+            const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+            settleNextOnJoin(rigs);
+            await pa;
+            const pb = registry.joinHeld({ roomId: 'room-B' });
+            settleNextOnJoin(rigs);
+            await pb;
+            const held = rigs[1];
+            expect(held.session.currentMediaRole).toBe('held');
+
+            const reacquireAudioBefore = held.media.reacquireLocalAudioCaptureCalls;
+            const reacquireVideoBefore = held.media.reacquireVideoTrackCalls;
+            const flipBefore = held.media.flipCameraCalls;
+            const screenShareBefore = held.media.startScreenShareCalls;
+
+            // Every capture-bearing toggle on the held call must update desired
+            // intent ONLY — no getUserMedia / getDisplayMedia (no capture sink).
+            held.session.setAudioEnabled(true);
+            held.session.setVideoEnabled(true);
+            await held.session.flipCamera();
+            held.session.setCameraMode('world');
+            await held.session.startScreenShare();
+            await Promise.resolve();
+
+            expect(held.media.reacquireLocalAudioCaptureCalls).toBe(reacquireAudioBefore);
+            expect(held.media.reacquireVideoTrackCalls).toBe(reacquireVideoBefore);
+            expect(held.media.flipCameraCalls).toBe(flipBefore);
+            expect(held.media.startScreenShareCalls).toBe(screenShareBefore);
+            // Desired intent was recorded for resume.
+            expect(held.session.currentDesiredAudioEnabled).toBe(true);
+            expect(held.session.currentDesiredVideoMode).not.toBe('off');
+            expect(held.session.currentMediaRole).toBe('held');
+        });
+    });
 });

@@ -12,6 +12,8 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
+import app.serenada.core.ForegroundMediaArbiter
+import app.serenada.core.ForegroundOwnerToken
 import app.serenada.core.SerenadaLogLevel
 import app.serenada.core.SerenadaLogger
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -36,6 +38,34 @@ internal class DefaultAudioCoordinator(
     private val proximitySensor = sensorManager?.getDefaultSensor(Sensor.TYPE_PROXIMITY)
 
     private var audioSessionActive = false
+
+    // --- Foreground-lease fence (multi-call session, Phase 4; contract §6) ---
+    //
+    // DefaultAudioCoordinator is process-global: every instance mutates the SAME
+    // AudioManager (audio focus, MODE_IN_COMMUNICATION, setCommunicationDevice/SCO).
+    // Its DELAYED/ASYNC paths (postDelayed route-refresh + ducking-fallback, the
+    // AudioDeviceCallback route monitor, the proximity SensorEventListener) and its
+    // deactivation can fire AFTER a switch handed the foreground to a newer call,
+    // re-driving the OS audio for the WRONG (old) session. To prevent that, the
+    // session binds the arbiter-minted lease token this coordinator activated under
+    // (and the operation generation). EVERY OS-touching delayed/async/listener path
+    // first checks [isStillLeaseOwner]: it no-ops once a newer call became the lease
+    // owner.
+    //
+    // SINGLE-CALL / FAKE PATH: when [leaseToken] is null no callback is ever
+    // dropped — a single call is always the (implicit) owner, so behavior is
+    // identical to before this fence. The direct single-call join binds its own
+    // DIRECT-mode lease token, so it self-fences correctly too.
+    //
+    // The owner token is the authoritative fence: each session owns its OWN
+    // coordinator instance, and the arbiter is the single source of truth for who
+    // holds the lease, so [ForegroundMediaArbiter.isCurrentOwner] fully captures
+    // "am I still the foreground owner?" (this mirrors how the session fences its
+    // async resume in applyForegroundRoleInternal). The operation generation the
+    // session passes in is recorded for diagnostics/log correlation only.
+    private var leaseToken: ForegroundOwnerToken? = null
+    private var leaseGeneration: Long = 0L
+
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioFocusGranted = false
     private var previousAudioMode = AudioManager.MODE_NORMAL
@@ -65,6 +95,10 @@ internal class DefaultAudioCoordinator(
     private val _events = MutableSharedFlow<AudioCoordinatorEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<AudioCoordinatorEvent> = _events.asSharedFlow()
     private val playbackDuckingFallbackRunnable = Runnable {
+        // Fence the postDelayed (~3000ms) ducking fallback: a superseded session
+        // must not emit a route/ducking event that drives the (now-foreground)
+        // call's playback. Once it is no longer the lease owner, drop it.
+        if (!isStillLeaseOwner()) return@Runnable
         _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
     }
 
@@ -86,7 +120,9 @@ internal class DefaultAudioCoordinator(
                 audioFocusGranted = false
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
                 handler.post {
-                    if (!audioSessionActive) return@post
+                    // A superseded session must not re-grab audio focus from the
+                    // call that now owns the lease (contract §6).
+                    if (!audioSessionActive || !isStillLeaseOwner()) return@post
                     requestAudioFocus(emitRecoveryEventOnGain = true)
                 }
             }
@@ -112,6 +148,10 @@ internal class DefaultAudioCoordinator(
 
     private val proximitySensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
+            // Proximity earpiece behavior is driven by the foreground lease owner
+            // only (contract §6): a superseded session must not flip the shared
+            // route / pause video on a proximity event.
+            if (!isStillLeaseOwner()) return
             val maxRange = proximitySensor?.maximumRange ?: return
             val distance = event.values.firstOrNull() ?: return
             val near = distance < maxRange
@@ -125,6 +165,47 @@ internal class DefaultAudioCoordinator(
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    /**
+     * Bind the arbiter-minted foreground-lease [token] (and operation [generation])
+     * this coordinator is activating under (multi-call session, Phase 4; contract
+     * §6). The session calls this when it activates a registry- or arbiter-owned
+     * foreground call so every delayed/async callback can fence against it. A null
+     * token (single-call without arbiter routing, or a fake coordinator in tests)
+     * leaves the fence in pass-through mode: this coordinator is always treated as
+     * the owner and no callback is dropped.
+     */
+    internal fun bindForegroundLease(token: ForegroundOwnerToken?, generation: Long) {
+        leaseToken = token
+        leaseGeneration = generation
+    }
+
+    /**
+     * True iff this coordinator may still touch the process-global AudioManager:
+     * either no lease was bound (single-call / test pass-through), or the bound
+     * lease token is STILL the arbiter's live foreground owner. Once a newer call
+     * acquires the lease, an old session's coordinator returns false here and its
+     * delayed/async callbacks become no-ops — they must NOT re-drive focus / mode /
+     * route / proximity for the superseded session.
+     */
+    private fun isStillLeaseOwner(): Boolean {
+        val token = leaseToken ?: return true
+        return ForegroundMediaArbiter.isCurrentOwner(token)
+    }
+
+    /**
+     * True iff this coordinator may restore the OS audio (mode / route / focus) on
+     * [deactivate]. Distinct from [isStillLeaseOwner]: a clean single-call END
+     * releases the lease BEFORE the async deactivation runs, so the bound token is
+     * no longer "current" — but there is no NEWER owner, so the restore is correct
+     * and must proceed. The restore is skipped ONLY when a DIFFERENT call now owns
+     * the lease (a switch handed off), to avoid clobbering its
+     * `MODE_IN_COMMUNICATION` / route. Pass-through (no token bound) always
+     * restores.
+     */
+    private fun mayRestoreOnDeactivate(): Boolean {
+        return !ForegroundMediaArbiter.hasOtherOwner(leaseToken)
     }
 
     override fun activate() {
@@ -168,18 +249,35 @@ internal class DefaultAudioCoordinator(
         clearPlaybackDuckingFallback()
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
-        runCatching {
-            setLegacyBluetoothScoRouting(false)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                audioManager.clearCommunicationDevice()
+        // FENCE (contract §6): a deactivation from a SUPERSEDED session must NOT
+        // restore MODE_NORMAL / the previous route after a NEWER call already set
+        // MODE_IN_COMMUNICATION. Each session has its own coordinator instance but
+        // they all mutate the SAME process-global AudioManager, so an old session's
+        // async deactivation Job would otherwise clobber the new foreground call's
+        // mode/route. The restore is skipped ONLY when a DIFFERENT call now owns the
+        // lease; a clean single-call end (lease already released, no newer owner)
+        // and the no-token pass-through both still restore exactly as before.
+        if (mayRestoreOnDeactivate()) {
+            runCatching {
+                setLegacyBluetoothScoRouting(false)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    audioManager.clearCommunicationDevice()
+                }
+                audioManager.isMicrophoneMute = previousMicrophoneMute
+                setSpeakerphoneEnabled(previousSpeakerphoneOn)
+                audioManager.mode = previousAudioMode
+            }.onSuccess {
+                logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio session restored (mode=$previousAudioMode)")
+            }.onFailure { error ->
+                logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to restore audio session: ${error.message}")
             }
-            audioManager.isMicrophoneMute = previousMicrophoneMute
-            setSpeakerphoneEnabled(previousSpeakerphoneOn)
-            audioManager.mode = previousAudioMode
-        }.onSuccess {
-            logger?.log(SerenadaLogLevel.DEBUG, "Audio", "Audio session restored (mode=$previousAudioMode)")
-        }.onFailure { error ->
-            logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to restore audio session: ${error.message}")
+        } else {
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "Audio",
+                "Superseded session deactivating; skipping OS restore " +
+                    "(a newer call owns the lease; supersededGen=$leaseGeneration)",
+            )
         }
         abandonAudioFocus()
     }
@@ -237,7 +335,9 @@ internal class DefaultAudioCoordinator(
     }
 
     private fun refreshDevicesAndRouteFromSystem() {
-        if (!audioSessionActive) return
+        // Fence the postDelayed (~300ms) route refresh: drop it if this session is
+        // no longer the foreground lease owner (a switch handed off in the window).
+        if (!audioSessionActive || !isStillLeaseOwner()) return
         updateDevicesAndRoute()
         onAudioEnvironmentChanged()
         _events.tryEmit(AudioCoordinatorEvent.EffectiveRouteChanged(_effectiveInputDevice.value, _effectiveOutputDevice.value))
@@ -257,13 +357,17 @@ internal class DefaultAudioCoordinator(
     }
 
     private fun onAudioDevicesChanged() {
-        if (!audioSessionActive) return
+        // Route monitoring applies only for the current foreground lease owner
+        // (contract §6): a superseded session must not re-route the shared
+        // AudioManager when devices change.
+        if (!audioSessionActive || !isStillLeaseOwner()) return
         updateDevicesAndRoute()
         applyCallAudioRouting()
         refreshDevicesAndRouteFromSystem()
     }
 
     private fun onCommunicationDeviceChanged() {
+        if (!isStillLeaseOwner()) return
         refreshDevicesAndRouteFromSystem()
     }
 

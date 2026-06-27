@@ -37,6 +37,9 @@ final class SessionTestHarness {
         // arbiter. (Mirrors web `arbiter.__resetForTests`.) A caller-supplied
         // dedicated arbiter is used as-is (it is not the shared singleton).
         ForegroundMediaArbiter.shared.resetForTests()
+        // The process-global audio-lease registry (Phase 4) would likewise leak a
+        // lease across cases if a default coordinator ran; reset it for isolation.
+        AudioSessionLeaseRegistry.shared.resetForTests()
         let resolvedArbiter = arbiter ?? .shared
         self.arbiter = resolvedArbiter
         self.fakeProvider = FakeSignalingProvider(handlesReconnection: handlesReconnection)

@@ -1465,6 +1465,13 @@ public final class SerenadaSession: ObservableObject {
         let previous = audioCoordinatorLifecycleTask
         let coordinator = audioCoordinator
         let intent = config.audioIntent
+        // Install the foreground lease this activation runs under (Phase 4,
+        // contract §6) so the default coordinator's own delayed callbacks /
+        // observers can fence against the CURRENT owner. The owner-token id is the
+        // registry-issued fence token (`nil` on the single-call/direct path — one
+        // owner, nothing to fence); the generation is the live op generation.
+        let lease = AudioSessionLease(ownerTokenId: foregroundOwnerToken?.leaseId, generation: mediaOpGeneration)
+        (coordinator as? LeaseAwareAudioCoordinator)?.setForegroundLease(lease)
         let task = Task<Void, Error> { [weak self] in
             if let previous {
                 do {
