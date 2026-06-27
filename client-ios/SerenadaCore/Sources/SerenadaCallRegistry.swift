@@ -221,11 +221,16 @@ protocol RegistryManagedSession: AnyObject {
 
     func preflightForeground() -> ForegroundPreflight
     func missingDesiredForegroundPermissions() -> [MediaCapability]
-    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws
-    func releaseForeground(_ token: ForegroundOwnerToken)
-    /// Await the OLD session's audio teardown so the registry can sequence
-    /// "release old fully before acquiring new" (contract §6).
-    func awaitForegroundReleaseSettled() async
+    /// Drive the session to foreground, AWAITING the async coordinator bring-up.
+    /// Returns once the activation has committed `.active` or throws when it was
+    /// superseded/failed (so the registry rolls back). The registry bounds this
+    /// with a timeout (`FOREGROUND_ACTIVATE_TIMEOUT`).
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) async throws
+    /// Drive the session to fully-held and AWAIT its audio teardown so that, on
+    /// return, the OLD session is fully settled — this is how the registry
+    /// sequences "release old fully before acquiring new" (contract §6). Idempotent
+    /// / no-throw. The registry bounds this with `FOREGROUND_RELEASE_TIMEOUT`.
+    func releaseForeground(_ token: ForegroundOwnerToken) async
     func abortForegroundActivation(_ token: ForegroundOwnerToken)
     func registryLeave()
     func registryEnd()
@@ -774,11 +779,14 @@ public final class SerenadaCallRegistry: ObservableObject {
                 ownerRef: self
             )
             next.foregroundToken = newToken
-            try next.managedSession.activateForeground(newToken, generation: gen)
-            let activated = await awaitSettle(timeoutMs: WebRtcResilience.foregroundActivateTimeoutMs) {
-                next.managedSession.mediaActivationState != .activating
+            // Activate, bounded by the ACTIVATE timeout. `activateForeground` awaits
+            // the coordinator bring-up and THROWS if it was superseded/failed (the
+            // catch below rolls back); `withTimeout` returns `nil` if it never
+            // settled (treated as activation failure, same as today).
+            let activated = try await withTimeout(WebRtcResilience.foregroundActivateTimeoutMs) {
+                try await next.managedSession.activateForeground(newToken, generation: gen)
             }
-            if !activated || next.managedSession.mediaActivationState != .active {
+            if activated == nil || next.managedSession.mediaActivationState != .active {
                 throw CallActivationError.activationFailed("Foreground activation did not settle")
             }
             // The session flips its own `mediaRole` to `.foreground` inside
@@ -822,11 +830,10 @@ public final class SerenadaCallRegistry: ObservableObject {
                 ownerRef: self
             )
             old.foregroundToken = token
-            try old.managedSession.activateForeground(token, generation: rollbackGen)
-            let ok = await awaitSettle(timeoutMs: WebRtcResilience.foregroundActivateTimeoutMs) {
-                old.managedSession.mediaActivationState != .activating
+            let ok = try await withTimeout(WebRtcResilience.foregroundActivateTimeoutMs) {
+                try await old.managedSession.activateForeground(token, generation: rollbackGen)
             }
-            if !ok || old.managedSession.mediaActivationState != .active {
+            if ok == nil || old.managedSession.mediaActivationState != .active {
                 throw CallActivationError.activationFailed("Rollback activation did not settle")
             }
             activeCallId = old.id
@@ -884,9 +891,11 @@ public final class SerenadaCallRegistry: ObservableObject {
         // Active call: drain foreground + release the registry-owned lease FIRST.
         if call.id == activeCallId, let token = call.foregroundToken {
             arbiter.markReleasePending()
-            call.managedSession.releaseForeground(token)
-            _ = await awaitSettle(timeoutMs: WebRtcResilience.foregroundReleaseTimeoutMs) {
-                call.managedSession.mediaRole == .held && call.managedSession.mediaActivationState == .inactive
+            // Bound the awaited release so a stuck coordinator can't hang teardown;
+            // teardown proceeds regardless of the outcome (the session is going
+            // away). `releaseForeground` is no-throw, so this never rethrows.
+            _ = try? await withTimeout(WebRtcResilience.foregroundReleaseTimeoutMs) {
+                await call.managedSession.releaseForeground(token)
             }
             // leave/end teardown proceeds regardless (the session is going away);
             // free the lease so a future call can claim it.
@@ -990,43 +999,96 @@ public final class SerenadaCallRegistry: ObservableObject {
     /// Drive the OLD foreground call to fully-held AND wait for its audio
     /// coordinator teardown to settle, ALL inside a SINGLE
     /// `FOREGROUND_RELEASE_TIMEOUT` window (contract FIX C). Returns `true` only
-    /// when the session reached `.held`/`.inactive` AND
-    /// `awaitForegroundReleaseSettled()` completed before the deadline.
+    /// when `releaseForeground` returned within the deadline — and it only returns
+    /// once the session reached `.held`/`.inactive` AND the coordinator deactivation
+    /// finished (the session now awaits its own teardown internally, contract §6).
     ///
     /// Why one window: the role/activation flip is synchronous, but the actual
     /// coordinator `deactivateCallSession()` runs in a fire-and-forget lifecycle
-    /// task. Awaiting that AFTER a separate timeout gate left it effectively
-    /// unbounded — a stuck coordinator could hang the serial op queue forever. The
-    /// settle is folded into the same bounded poll: the condition becomes true only
-    /// once both the role is held AND the settle task has finished. On timeout the
-    /// caller keeps the old call foreground (Invariant 1) and never releases the
-    /// lease.
+    /// task that `releaseForeground` awaits before returning. A stuck coordinator
+    /// must not hang the serial op queue forever, so the whole awaited release is
+    /// bounded by `withTimeout`. On timeout the caller keeps the old call foreground
+    /// (Invariant 1) and never releases the lease.
     ///
-    /// `releaseForeground` is idempotent and must not throw, so it is safe to call
-    /// once here; the settle task is started immediately after so its await runs
-    /// concurrently with the poll.
+    /// `releaseForeground` is idempotent and must not throw, so `withTimeout` here
+    /// only ever yields a value (success) or `nil` (timeout) — never a throw.
     private func drainOldForeground(_ call: ManagedCall, token: ForegroundOwnerToken) async -> Bool {
         let session = call.managedSession
-        session.releaseForeground(token)
-
-        // Track the coordinator-teardown settle independently: a hung
-        // `awaitForegroundReleaseSettled()` must be bounded by the same deadline,
-        // not awaited unconditionally afterwards.
-        var settled = false
-        let settleTask = Task { @MainActor in
-            await session.awaitForegroundReleaseSettled()
-            settled = true
-        }
-        defer { settleTask.cancel() }
-
-        return await awaitSettle(timeoutMs: WebRtcResilience.foregroundReleaseTimeoutMs) {
-            session.mediaRole == .held
-                && session.mediaActivationState == .inactive
-                && settled
-        }
+        let completed = (try? await withTimeout(WebRtcResilience.foregroundReleaseTimeoutMs) {
+            await session.releaseForeground(token)
+        }) != nil
+        return completed
     }
 
     // MARK: - Serialization + settling
+
+    /// Race `op` against a `timeoutMs` deadline measured on the INJECTED `clock`
+    /// (so a fake clock's `advance(byMs:)` deterministically trips it, and the test
+    /// can wait for `pendingSleepCount > 0` before advancing). Returns `op`'s result
+    /// when it finishes first, `nil` on timeout. If `op` THROWS before the deadline
+    /// the error propagates out (callers wrapping a throwing op — activation — catch
+    /// it; callers of a no-throw op — release — only ever see a value or `nil`).
+    ///
+    /// `op` and the timeout sleep run as UNSTRUCTURED tasks so the timeout can win
+    /// and this function can RETURN even while `op` is still suspended on something
+    /// that does not respond to cancellation (e.g. a hung coordinator's
+    /// `Task<Void, Never>.value`). The loser is always cancelled: on timeout `op` is
+    /// cancelled; on success the sleep is cancelled. The first arm to finish resumes
+    /// the continuation; the second arm's later completion is dropped (the latch
+    /// ensures resume happens exactly once).
+    private func withTimeout<T: Sendable>(
+        _ timeoutMs: Int,
+        _ op: @escaping @MainActor () async throws -> T
+    ) async throws -> T? {
+        let timeoutNs = UInt64(timeoutMs) * 1_000_000
+        let opTask = Task { @MainActor in try await op() }
+        let timeoutTask = Task { @MainActor [clock] in
+            try await clock.sleep(nanoseconds: timeoutNs)
+        }
+        // `@MainActor` latch so only the FIRST arm to finish resumes the
+        // continuation; the loser's later completion is dropped.
+        let latch = TimeoutLatch()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T?, Error>) in
+                // Arm 1: the operation. On finish (value or throw) it wins the race
+                // and cancels the pending timeout sleep.
+                Task { @MainActor in
+                    let result: Result<T, Error>
+                    do {
+                        result = .success(try await opTask.value)
+                    } catch {
+                        result = .failure(error)
+                    }
+                    guard latch.claim() else { return }
+                    timeoutTask.cancel()
+                    continuation.resume(with: result.map { Optional($0) })
+                }
+                // Arm 2: the timeout. If the sleep completes (was not cancelled by a
+                // winning op) it returns `nil` and cancels the still-running op.
+                Task { @MainActor in
+                    let didTimeOut = (try? await timeoutTask.value) != nil
+                    guard didTimeOut, latch.claim() else { return }
+                    opTask.cancel()
+                    continuation.resume(returning: nil)
+                }
+            }
+        } onCancel: {
+            opTask.cancel()
+            timeoutTask.cancel()
+        }
+    }
+
+    /// One-shot, main-actor-confined latch: `claim()` returns `true` for the FIRST
+    /// caller and `false` thereafter, so the `withTimeout` race resumes exactly once.
+    @MainActor
+    private final class TimeoutLatch {
+        private var claimed = false
+        func claim() -> Bool {
+            if claimed { return false }
+            claimed = true
+            return true
+        }
+    }
 
     /// Run `body` after every previously-queued section completes (contract
     /// "Registry Operation Serialization"). Each section runs to completion

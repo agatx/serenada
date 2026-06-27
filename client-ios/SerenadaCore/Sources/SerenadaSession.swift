@@ -25,6 +25,17 @@ private struct AudioCoordinatorTimeoutError: LocalizedError {
     }
 }
 
+/// Thrown by the token-gated `activateForeground` when the awaited activation did
+/// NOT land on `.active` — either the audio coordinator failed (`.failed`) or a
+/// newer op (a hold / a later activate / a rollback) superseded this one and the
+/// completion was fenced out. Mirrors web (`runResume throwOnFailure`) / android
+/// (`if mediaRole != FOREGROUND throw`): the registry catches this and rolls back.
+private struct ForegroundActivationNotActiveError: LocalizedError {
+    var errorDescription: String? {
+        "Foreground activation did not reach .active (superseded or failed)"
+    }
+}
+
 func resolveJoinRecoveryState(
     currentPhase: CallPhase,
     participantHint: Int?,
@@ -185,6 +196,14 @@ public final class SerenadaSession: ObservableObject {
     private let callAudioSessionController: SessionAudioController
     private let audioCoordinator: SerenadaAudioCoordinator
     private var audioCoordinatorLifecycleTask: Task<Void, Error>?
+    /// The in-flight foreground-activation task spawned by
+    /// `applyForegroundRoleInternal` (the coordinator bring-up that ends in
+    /// `completeForegroundActivation`/`failForegroundActivation`). Captured so the
+    /// token-gated async `activateForeground` can AWAIT the completion (and then
+    /// inspect `mediaActivationState` to decide whether to throw), instead of the
+    /// registry polling. Phase-1 callers (`applyForegroundRoleInternal` directly)
+    /// never await it, so capturing it is a no-op for them.
+    private var foregroundActivationTask: Task<Void, Never>?
     private var joinLifecycleTask: Task<Void, Never>?
     private var coordinatorTasks: [Task<Void, Never>] = []
     private var userMuted = false
@@ -1732,9 +1751,11 @@ public final class SerenadaSession: ObservableObject {
         mediaActivationState = .activating
 
         // 1. Re-activate audio ownership (coordinator then controller), mirroring
-        //    the join order in `prepareMediaAndConnect`.
+        //    the join order in `prepareMediaAndConnect`. The task is captured on
+        //    `foregroundActivationTask` so the token-gated async `activateForeground`
+        //    can await this completion; Phase-1 callers ignore it (fire-and-forget).
         startCoordinatorTasks()
-        Task { @MainActor [weak self] in
+        foregroundActivationTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 try await self.activateAudioCoordinator()
@@ -1882,40 +1903,62 @@ public final class SerenadaSession: ObservableObject {
     }
 
     /// Drive this session to FOREGROUND under the registry-issued `token` and
-    /// arbiter `generation`. Wraps `applyForegroundRoleInternal`, fencing the late
-    /// async coordinator-activation completion on BOTH the generation and `token`
-    /// (contract §3). Throws when the session cannot begin activation; the async
-    /// outcome is surfaced via `mediaActivationState`.
-    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws {
+    /// arbiter `generation`, AWAITING the async coordinator bring-up before it
+    /// returns (parity with web `runResume(throwOnFailure:)` / android). Wraps
+    /// `applyForegroundRoleInternal`, fencing the late completion on BOTH the
+    /// generation and `token` (contract §3). On return the activation has either
+    /// committed `.active` or been superseded/failed; in the latter case it THROWS
+    /// so the registry rolls back. The published `mediaActivationState` transitions
+    /// (`.activating` → `.active`/`.failed`) are unchanged from a consumer's view.
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) async throws {
         foregroundOwnerToken = token
+        // Reset the captured task so an early-return inside the internal (already
+        // foreground) doesn't leave a stale task for us to await below.
+        foregroundActivationTask = nil
         applyForegroundRoleInternal(generation: generation, fenceToken: token)
+        // Await the spawned coordinator bring-up (no-op if the internal short-
+        // circuited because the session was already foreground). The task never
+        // throws (it routes failure into `mediaActivationState == .failed`).
+        await foregroundActivationTask?.value
+        // The two fences inside `completeForegroundActivation`/`failForegroundActivation`
+        // decide the terminal state: anything other than `.active` means this
+        // activation was superseded by a newer op or the coordinator failed, so
+        // throw to drive the registry's abort/rollback (contract §3/§7).
+        guard mediaActivationState == .active else {
+            throw ForegroundActivationNotActiveError()
+        }
     }
 
-    /// Drive this session to fully HELD. Wraps `applyHeldRoleInternal`. Idempotent
+    /// Drive this session to fully HELD and AWAIT the audio-coordinator teardown so
+    /// that, on return, the session is fully settled (`.held`/`.inactive`, the
+    /// coordinator deactivation finished). Wraps `applyHeldRoleInternal`. Idempotent
     /// and MUST NOT throw after a partial release (contract §3). Uses `token` only
     /// to fence; does NOT call `arbiter.releaseLease` — the registry owns that.
-    func releaseForeground(_ token: ForegroundOwnerToken) {
+    /// Awaiting the teardown here is how the registry sequences "release old fully
+    /// before acquiring new" (contract §6) without a separate settle wait.
+    func releaseForeground(_ token: ForegroundOwnerToken) async {
         // A release for a token that is NOT the current owner is a no-op: never
         // drain a live foreground call the caller does not own (a stale/foreign
         // token must not wedge the active call). A nil current token means the
         // session is already drained/never owned the lease — also a no-op, NOT
-        // permission to drain (parity with web/android).
+        // permission to drain (parity with web/android). Nothing to settle either.
         guard foregroundOwnerToken == token else { return }
         // Clear the fence token first so any in-flight activation completion (a
         // resume the registry is now superseding) fails the owner-token fence.
         foregroundOwnerToken = nil
         applyHeldRoleInternal()
+        // Await the deactivation lifecycle task `applyHeldRoleInternal` kicked off
+        // so the coordinator audio is FULLY torn down before we return (contract
+        // §6). The role/activation flip above is synchronous; the actual
+        // `deactivateCallSession` runs in a fire-and-forget task. Never throws (a
+        // timeout/cancel inside the lifecycle task is the coordinator's concern).
+        await awaitForegroundReleaseSettledInternal()
     }
 
     /// Await the in-flight audio-coordinator lifecycle task (the deactivation
-    /// kicked off by `releaseForeground`/`applyHeldRoleInternal`), so the registry
-    /// can confirm the OLD session's audio is FULLY torn down before activating the
-    /// next call (contract §6: "release old fully before acquiring new"). The
-    /// `mediaRole`/`mediaActivationState` flip is synchronous, but the actual
-    /// coordinator `deactivateCallSession` runs in a fire-and-forget task; this
-    /// bridges that gap for the cross-session switch ordering. Never throws (a
-    /// timeout/cancel inside the lifecycle task is the coordinator's concern).
-    func awaitForegroundReleaseSettled() async {
+    /// kicked off by `applyHeldRoleInternal`). Folded out of `releaseForeground` so
+    /// the latter's intent (release THEN settle) reads in one place. Never throws.
+    private func awaitForegroundReleaseSettledInternal() async {
         guard let task = audioCoordinatorLifecycleTask else { return }
         _ = try? await task.value
     }

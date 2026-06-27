@@ -236,24 +236,42 @@ final class StallReleaseSession: RegistryManagedSession {
     func preflightForeground() -> ForegroundPreflight { .ok }
     func missingDesiredForegroundPermissions() -> [MediaCapability] { [] }
 
-    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws {
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) async throws {
         self.token = token
         mediaRole = .foreground
         mediaActivationState = .active
     }
 
-    func releaseForeground(_ token: ForegroundOwnerToken) {
+    func releaseForeground(_ token: ForegroundOwnerToken) async {
         releaseForegroundCalls += 1
         guard !stallRelease else {
-            // Model a release that has begun but not confirmed fully-held.
+            // Model a release that has begun but never confirms fully-held: it
+            // HANGS (so the registry's bounded `withTimeout(RELEASE)` trips on the
+            // fake clock). When the registry cancels the bounded op on timeout, the
+            // hang unblocks via the cancellation handler and the stub settles to
+            // held, so the later `stallRelease = false` + teardown is clean.
             mediaActivationState = .activating
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                    self.stallContinuation = c
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in self?.resumeStall() }
+            }
+            mediaRole = .held
+            mediaActivationState = .inactive
             return
         }
         mediaRole = .held
         mediaActivationState = .inactive
     }
 
-    func awaitForegroundReleaseSettled() async {}
+    private var stallContinuation: CheckedContinuation<Void, Never>?
+    private func resumeStall() {
+        let c = stallContinuation
+        stallContinuation = nil
+        c?.resume()
+    }
 
     func abortForegroundActivation(_ token: ForegroundOwnerToken) {
         mediaRole = .held
@@ -314,15 +332,14 @@ final class LyingRoleSession: RegistryManagedSession {
 
     func preflightForeground() -> ForegroundPreflight { .ok }
     func missingDesiredForegroundPermissions() -> [MediaCapability] { [] }
-    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws {
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) async throws {
         mediaActivationState = .active
     }
-    func releaseForeground(_ token: ForegroundOwnerToken) {
-        // `mediaRole` is already `.held`; drop activation so the registry's drain
-        // poll (`mediaRole == .held && mediaActivationState == .inactive`) confirms.
+    func releaseForeground(_ token: ForegroundOwnerToken) async {
+        // `mediaRole` is already `.held`; drop activation so the registry confirms
+        // fully-held (`mediaRole == .held && mediaActivationState == .inactive`).
         mediaActivationState = .inactive
     }
-    func awaitForegroundReleaseSettled() async {}
     func abortForegroundActivation(_ token: ForegroundOwnerToken) {
         mediaActivationState = .inactive
     }
@@ -381,15 +398,14 @@ final class TerminalDrivableSession: RegistryManagedSession {
 
     func preflightForeground() -> ForegroundPreflight { .ok }
     func missingDesiredForegroundPermissions() -> [MediaCapability] { [] }
-    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) throws {
+    func activateForeground(_ token: ForegroundOwnerToken, generation: Int) async throws {
         mediaRole = .foreground
         mediaActivationState = .active
     }
-    func releaseForeground(_ token: ForegroundOwnerToken) {
+    func releaseForeground(_ token: ForegroundOwnerToken) async {
         mediaRole = .held
         mediaActivationState = .inactive
     }
-    func awaitForegroundReleaseSettled() async {}
     func abortForegroundActivation(_ token: ForegroundOwnerToken) {
         mediaRole = .held
         mediaActivationState = .inactive

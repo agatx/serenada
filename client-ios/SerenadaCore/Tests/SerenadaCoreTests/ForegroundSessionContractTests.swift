@@ -113,7 +113,7 @@ final class ForegroundSessionContractTests: XCTestCase {
         // attach rode the existing senders.
         let token = try! harness.arbiter.acquireForeground(ownerId: "test-room-id")
         let gen = harness.arbiter.nextOperationGeneration()
-        try! harness.session.activateForeground(token, generation: gen)
+        try! await harness.session.activateForeground(token, generation: gen)
         await waitUntil { harness.session.mediaRole == .foreground }
 
         XCTAssertEqual(harness.fakeMedia.resumeLocalMediaFromHoldCalls.count, 1,
@@ -288,7 +288,7 @@ final class ForegroundSessionContractTests: XCTestCase {
         // Foreground the held call under its real token.
         let ownerToken = try! arbiter.acquireForeground(ownerId: "test-room-id")
         let gen = arbiter.nextOperationGeneration()
-        try! harness.session.activateForeground(ownerToken, generation: gen)
+        try! await harness.session.activateForeground(ownerToken, generation: gen)
         await waitUntil { harness.session.mediaRole == .foreground }
         XCTAssertEqual(harness.session.mediaRole, .foreground)
 
@@ -296,7 +296,7 @@ final class ForegroundSessionContractTests: XCTestCase {
         // from the call's owner token) must NOT drain the live foreground call.
         let foreignToken = try! ForegroundMediaArbiter().acquireForeground(ownerId: "foreign-owner")
         XCTAssertNotEqual(foreignToken, ownerToken)
-        harness.session.releaseForeground(foreignToken)
+        await harness.session.releaseForeground(foreignToken)
         await yieldToMainActor()
 
         XCTAssertEqual(harness.session.mediaRole, .foreground,
@@ -304,7 +304,7 @@ final class ForegroundSessionContractTests: XCTestCase {
         XCTAssertEqual(harness.session.mediaActivationState, .active)
 
         // The real owner token still drains it (the call was never wedged).
-        harness.session.releaseForeground(ownerToken)
+        await harness.session.releaseForeground(ownerToken)
         await waitUntil { harness.session.mediaRole == .held }
         XCTAssertEqual(harness.session.mediaRole, .held)
 
@@ -424,7 +424,7 @@ final class ForegroundSessionContractTests: XCTestCase {
 
         let token = try! harness.arbiter.acquireForeground(ownerId: "test-room-id")
         let gen = harness.arbiter.nextOperationGeneration()
-        try! harness.session.activateForeground(token, generation: gen)
+        try! await harness.session.activateForeground(token, generation: gen)
         await waitUntil { harness.session.mediaRole == .foreground }
 
         XCTAssertEqual(harness.session.mediaRole, .foreground)
@@ -442,15 +442,15 @@ final class ForegroundSessionContractTests: XCTestCase {
 
         let token = try! harness.arbiter.acquireForeground(ownerId: "test-room-id")
         let gen = harness.arbiter.nextOperationGeneration()
-        try! harness.session.activateForeground(token, generation: gen)
+        try! await harness.session.activateForeground(token, generation: gen)
         await waitUntil { harness.session.mediaRole == .foreground }
 
         // Release drains the session to held; it must NOT release the arbiter lease
         // (the registry owns that).
-        harness.session.releaseForeground(token)
+        await harness.session.releaseForeground(token)
         await waitUntil { harness.session.mediaRole == .held }
         // A second release is idempotent and must not throw.
-        harness.session.releaseForeground(token)
+        await harness.session.releaseForeground(token)
         await yieldToMainActor()
 
         XCTAssertEqual(harness.session.mediaRole, .held)
@@ -480,23 +480,29 @@ final class ForegroundSessionContractTests: XCTestCase {
         )
         await harness.advanceToInCallHeld(localCid: "local", remoteCid: "remote")
 
-        // Begin a token-gated activation that BLOCKS in the coordinator.
+        // Begin a token-gated activation that BLOCKS in the coordinator. The async
+        // `activateForeground` is launched in a Task so the test can interpose the
+        // superseding release while the activation is still mid-coordinator.
         let token = try! arbiter.acquireForeground(ownerId: "test-room-id")
         let gen = arbiter.nextOperationGeneration()
         gated.blockNextActivation = true
-        try! harness.session.activateForeground(token, generation: gen)
+        let activateTask = Task { try? await harness.session.activateForeground(token, generation: gen) }
         await waitUntil { gated.activationInFlight }
         XCTAssertEqual(harness.session.mediaActivationState, .activating)
 
         // The registry supersedes this activation by releasing foreground (which
         // clears the session's fence token) WITHOUT bumping the generation via a
-        // newer activate — proving the owner-token fence is independent.
-        harness.session.releaseForeground(token)
+        // newer activate — proving the owner-token fence is independent. The release
+        // chains its coordinator teardown AFTER the in-flight (blocked) activation,
+        // so it is launched in a Task too; it settles once the gate releases.
+        let releaseTask = Task { await harness.session.releaseForeground(token) }
         await yieldToMainActor()
 
         // Release the blocked activation; its completion must fail the owner-token
         // fence and NOT commit foreground.
         gated.releaseActivation()
+        await activateTask.value
+        await releaseTask.value
         await yieldToMainActor()
         await yieldToMainActor()
 
@@ -532,7 +538,7 @@ final class ForegroundSessionContractTests: XCTestCase {
         let tokenA = try! arbiter.acquireForeground(ownerId: "test-room-id")
         let gen = arbiter.nextOperationGeneration()
         gated.blockNextActivation = true
-        try! harness.session.activateForeground(tokenA, generation: gen)
+        let activateTask = Task { try? await harness.session.activateForeground(tokenA, generation: gen) }
         await waitUntil { gated.activationInFlight }
         XCTAssertEqual(harness.session.mediaActivationState, .activating)
 
@@ -552,6 +558,7 @@ final class ForegroundSessionContractTests: XCTestCase {
         // activation state where it was; the registry's rollback/abort, not this
         // unit, drives it back to inactive — that path is covered elsewhere.)
         gated.releaseActivation()
+        await activateTask.value
         await yieldToMainActor()
         await yieldToMainActor()
 
