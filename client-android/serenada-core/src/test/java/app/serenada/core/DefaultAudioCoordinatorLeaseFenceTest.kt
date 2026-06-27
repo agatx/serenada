@@ -326,15 +326,24 @@ class DefaultAudioCoordinatorLeaseFenceTest {
     }
 
     /**
-     * PA-1 generation fence (contract §3 two-fence rule): a stale async
-     * deactivation armed under generation N must NOT restore MODE_NORMAL after a
-     * SAME-OWNER re-activation advanced the coordinator's generation to N+1. The
-     * token is IDENTICAL across the rollback (same call re-acquired the lease), so
-     * the token fence alone would let the stale deactivation through; only the
-     * generation comparison drops it.
+     * PA-1 generation fence (contract §3/§6 two-fence rule) — REQUEST-TIME snapshot.
+     * A stale async deactivation REQUESTED under generation N must NOT restore
+     * MODE_NORMAL after a SAME-COORDINATOR re-activation has already advanced the
+     * coordinator's live generation to N+1 (and re-armed `armedGeneration` to N+1).
+     * The token is IDENTICAL across the re-activation (same call re-acquired the
+     * lease), so the token fence alone would let the stale deactivation through; only
+     * the REQUEST-time generation comparison drops it.
+     *
+     * This is the regression test the prior version MISSED: it re-bound the lease but
+     * never re-ran `activateCallSession`, so the mutable `armedGeneration` stayed at N
+     * and a run-time read (the old bug) happened to compare N != N+1. Modeling the
+     * REAL re-activation (which refreshes `armedGeneration` to N+1) is what exposes
+     * the bug: a run-time read would then compare N+1 == N+1 and wrongly restore. The
+     * fix captures the generation at REQUEST time (N) via `leaseGenerationSnapshot()`
+     * and fences against THAT.
      */
     @Test
-    fun `stale deactivation does not reset mode after a same-owner re-activation bumped the generation`() {
+    fun `stale deactivation requested under gen N does not reset mode after a same-coordinator re-activation refreshed the generation`() {
         val am = audioManager()
 
         // Attempt N: the call activates under generation N and owns the lease.
@@ -346,26 +355,69 @@ class DefaultAudioCoordinatorLeaseFenceTest {
         ShadowLooper.idleMainLooper()
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
 
-        // SAME-OWNER rollback: the SAME token is re-bound under a FRESH generation
-        // N+1 (the call re-activates after a failed switch). The coordinator's
-        // current generation advances; the deactivation armed under N is now stale.
+        // The deactivation is REQUESTED now (under generation N): the session captures
+        // the request-time generation synchronously at enqueue.
+        val requestGeneration = coordinator.leaseGenerationSnapshot()
+        assertEquals("the deactivation is requested under generation N", genN, requestGeneration)
+
+        // SAME-COORDINATOR re-activation: the SAME token is re-bound under a FRESH
+        // generation N+1 (e.g. a switch rollback re-activating the same call), and
+        // activateCallSession runs AGAIN — refreshing the mutable `armedGeneration` to
+        // N+1 (the real re-activation the prior test failed to model). The coordinator
+        // is already active, so this is the same-coordinator re-activation branch.
         val genNPlus1 = ForegroundMediaArbiter.nextOperationGeneration()
         coordinator.bindForegroundLease(token, genNPlus1)
-        assertTrue("same-owner rollback keeps the token current", ForegroundMediaArbiter.isCurrentOwner(token))
+        runBlocking { coordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertTrue("same-owner re-activation keeps the token current", ForegroundMediaArbiter.isCurrentOwner(token))
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
 
-        // The stale deactivation from attempt N fires. The token still matches, so
-        // only the generation fence can stop it: it must NOT restore MODE_NORMAL.
-        val deactivationJob = mainScope.launch { coordinator.deactivateCallSession() }
+        // The stale deactivation REQUESTED under N now runs. The token still matches
+        // AND `armedGeneration` is now N+1; only the REQUEST-time generation (N) vs the
+        // current generation (N+1) reveals it is stale. It must NOT restore MODE_NORMAL.
+        val deactivationJob = mainScope.launch { coordinator.deactivateCallSession(requestGeneration) }
         ShadowLooper.idleMainLooper()
         assertTrue(deactivationJob.isCompleted)
 
         assertEquals(
-            "a stale same-owner deactivation (generation N) must not clobber the N+1 re-activation's mode",
+            "a stale deactivation requested under generation N must not clobber the N+1 re-activation's mode",
             AudioManager.MODE_IN_COMMUNICATION,
             am.mode,
         )
 
         ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    /**
+     * Clean leave fenced by a REQUEST-time generation snapshot: a deactivation
+     * requested under the current generation, with NO newer activation between
+     * request and run, STILL restores MODE_NORMAL. Guards that the request-time
+     * fence does not over-suppress the common single-call-leave path.
+     */
+    @Test
+    fun `clean leave fenced by request-time generation restores mode when no newer activation occurs`() {
+        val am = audioManager()
+        val token = ForegroundMediaArbiter.acquireForeground("solo-call")
+        val gen = ForegroundMediaArbiter.nextOperationGeneration()
+        val coordinator = newCoordinator()
+        coordinator.bindForegroundLease(token, gen)
+        runBlocking { coordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
+
+        // Capture the request-time generation, release the lease (clean single-call
+        // leave, no newer owner), then run the deactivation fenced by that snapshot.
+        val requestGeneration = coordinator.leaseGenerationSnapshot()
+        ForegroundMediaArbiter.releaseLease(token)
+        val deactivationJob = mainScope.launch { coordinator.deactivateCallSession(requestGeneration) }
+        ShadowLooper.idleMainLooper()
+        assertTrue(deactivationJob.isCompleted)
+
+        assertEquals(
+            "a clean leave with no newer activation must still restore MODE_NORMAL under the request-time fence",
+            AudioManager.MODE_NORMAL,
+            am.mode,
+        )
     }
 
     /**

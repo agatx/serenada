@@ -215,6 +215,20 @@ internal class DefaultAudioCoordinator(
     }
 
     /**
+     * Snapshot the coordinator's CURRENT operation generation at the moment the
+     * session ENQUEUES/REQUESTS an async deactivation (multi-call session, Phase 4;
+     * contract §6). Passed back into [deactivateCallSession] so the restore decision
+     * fences against the generation in effect when the deactivation was ASKED FOR —
+     * not the mutable [leaseGeneration] the coordinator happens to hold when the
+     * chained Job finally runs. A later same-coordinator re-activation advances
+     * [leaseGeneration] (and re-arms [armedGeneration]); without a request-time
+     * snapshot a stale deactivation would read the refreshed generation and wrongly
+     * restore MODE_NORMAL over the now-live attempt (the §3 generation fence,
+     * mirroring iOS's request-time `installedLeaseSnapshot()`).
+     */
+    internal fun leaseGenerationSnapshot(): Long = leaseGeneration
+
+    /**
      * Token fence: true iff this coordinator may still touch the process-global
      * AudioManager on the OWNER axis — either no lease was bound (single-call / test
      * pass-through), or the bound lease token is STILL the arbiter's live foreground
@@ -258,27 +272,37 @@ internal class DefaultAudioCoordinator(
      *     lease BEFORE the async deactivation runs, so the bound token is no longer
      *     "current", yet there is NO newer owner, so the restore is correct and must
      *     proceed (this is what keeps a clean last-call leave restoring MODE_NORMAL).
-     *  2. GENERATION axis ([deactivationArmedGeneration] vs [leaseGeneration]): a
-     *     SAME-OWNER re-activation bumped this coordinator's generation after the
-     *     deactivation was armed. The token still matches (same owner), so only the
-     *     generation reveals that a newer attempt is now driving the OS audio and the
-     *     stale deactivation must not restore MODE_NORMAL over it.
+     *  2. GENERATION axis ([requestGeneration] vs [leaseGeneration]): a SAME-OWNER
+     *     re-activation bumped this coordinator's generation after the deactivation
+     *     was REQUESTED. The token still matches (same owner), so only the generation
+     *     reveals that a newer attempt is now driving the OS audio and the stale
+     *     deactivation must not restore MODE_NORMAL over it.
+     *
+     * CRITICAL ([requestGeneration] is captured at REQUEST time): the session
+     * snapshots the generation when it ENQUEUES the async deactivation Job (via
+     * [leaseGenerationSnapshot]) and passes it here. It must NOT be the mutable
+     * [armedGeneration], which a same-coordinator re-activation refreshes to the
+     * current generation in [activateCallSession]; reading that at run time would let
+     * a deactivation requested under generation N compare `N+1 == N+1` after an N+1
+     * re-activation and wrongly restore over the live attempt.
      *
      * Pass-through (no token bound) always restores: [hasOtherOwner] is false for a
      * null token and the captured generation equals [leaseGeneration] (both 0L).
      */
-    private fun mayRestoreOnDeactivate(deactivationArmedGeneration: Long): Boolean {
+    private fun mayRestoreOnDeactivate(requestGeneration: Long): Boolean {
         if (ForegroundMediaArbiter.hasOtherOwner(leaseToken)) return false
-        return deactivationArmedGeneration == leaseGeneration
+        return requestGeneration == leaseGeneration
     }
 
     override fun activate() {
         if (audioSessionActive) return
         audioSessionActive = true
-        // Arm the long-lived listeners + the eventual deactivation under the
-        // generation currently in effect (set by the preceding [bindForegroundLease]),
-        // so a stale callback from this attempt drops once a newer activation advances
-        // [leaseGeneration] (contract §3 two-fence rule).
+        // Arm the long-lived listeners (route monitor / proximity / focus re-request)
+        // under the generation currently in effect (set by the preceding
+        // [bindForegroundLease]), so a stale listener callback drops once a newer
+        // activation advances [leaseGeneration] (contract §3 two-fence rule). The
+        // deactivation restore does NOT use [armedGeneration]: it fences against the
+        // generation captured at REQUEST time (see [deactivate]).
         armedGeneration = leaseGeneration
         previousAudioMode = audioManager.mode
         previousSpeakerphoneOn = isSpeakerphoneEnabled()
@@ -306,7 +330,26 @@ internal class DefaultAudioCoordinator(
         }
     }
 
+    /**
+     * Synchronous teardown ([SessionAudioController.deactivate]). Captures the
+     * coordinator's CURRENT generation as the request generation: this entry point
+     * runs inline on the main thread (no chained Job between request and run), so
+     * "now" IS request time. The async [deactivateCallSession] path captures the
+     * generation EARLIER (at enqueue) and routes through [deactivate] below.
+     */
     override fun deactivate() {
+        deactivate(leaseGeneration)
+    }
+
+    /**
+     * Tear down the OS audio, fencing the RESTORE against [requestGeneration] — the
+     * coordinator generation in effect when this deactivation was REQUESTED (contract
+     * §6). The async session path captures it at enqueue (via [leaseGenerationSnapshot])
+     * so a same-coordinator re-activation that advances [leaseGeneration] between
+     * request and run cannot let a stale deactivation restore MODE_NORMAL over the
+     * live attempt.
+     */
+    private fun deactivate(requestGeneration: Long) {
         if (!audioSessionActive) {
             abandonAudioFocus()
             return
@@ -325,11 +368,13 @@ internal class DefaultAudioCoordinator(
         // otherwise clobber the current foreground call's mode/route. Restore is
         // skipped when EITHER a DIFFERENT call now owns the lease (cross-coordinator
         // handoff) OR a same-coordinator re-activation advanced the generation past
-        // the one this deactivation was armed under (a same-owner rollback the token
-        // alone cannot detect). A clean single-call end (lease already released, no
-        // newer owner, generation unchanged) and the no-token pass-through both still
-        // restore exactly as before.
-        if (mayRestoreOnDeactivate(armedGeneration)) {
+        // [requestGeneration] (a same-owner rollback the token alone cannot detect).
+        // [requestGeneration] is the generation captured at REQUEST time — NOT the
+        // mutable armedGeneration, which a re-activation refreshes to the current
+        // value. A clean single-call end (lease already released, no newer owner,
+        // generation unchanged) and the no-token pass-through both still restore
+        // exactly as before.
+        if (mayRestoreOnDeactivate(requestGeneration)) {
             runCatching {
                 setLegacyBluetoothScoRouting(false)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -348,7 +393,7 @@ internal class DefaultAudioCoordinator(
                 SerenadaLogLevel.DEBUG,
                 "Audio",
                 "Superseded attempt deactivating; skipping OS restore (a newer " +
-                    "activation owns the OS audio; armedGen=$armedGeneration, " +
+                    "activation owns the OS audio; requestGen=$requestGeneration, " +
                     "currentGen=$leaseGeneration)",
             )
         }
@@ -368,9 +413,13 @@ internal class DefaultAudioCoordinator(
         proximityEarpieceEnabled = intent.enableProximityEarpiece
         if (audioSessionActive) {
             // Same-coordinator re-activation (e.g. resume / rollback): re-arm the
-            // listeners + deactivation to the now-current generation so the LIVE
-            // call's callbacks keep firing while any callback armed under the prior
-            // generation still drops (contract §3 two-fence rule).
+            // long-lived listeners to the now-current generation so the LIVE call's
+            // callbacks keep firing while any callback armed under the prior
+            // generation still drops (contract §3 two-fence rule). NOTE: this is
+            // exactly why the deactivation restore must NOT read [armedGeneration] —
+            // refreshing it here would let a deactivation requested under the PRIOR
+            // generation see the bumped value and wrongly restore. The deactivation
+            // restore fences against a REQUEST-time snapshot instead (see [deactivate]).
             armedGeneration = leaseGeneration
             updateProximityMonitoringForIntent()
             applyCallAudioRouting()
@@ -383,7 +432,25 @@ internal class DefaultAudioCoordinator(
     }
 
     override suspend fun deactivateCallSession() {
-        deactivate()
+        // Public-protocol entry (custom-coordinator parity / unfenced teardown):
+        // captures the current generation as the request generation. The lease-aware
+        // async session path uses [deactivateCallSession] with an explicit
+        // request-time generation (below) so a fresher re-activation between request
+        // and run cannot mask a stale deactivate.
+        deactivate(leaseGeneration)
+    }
+
+    /**
+     * Deactivate fenced by [requestGeneration] — the coordinator generation captured
+     * at the moment the session ENQUEUED this deactivation (multi-call session, Phase
+     * 4; contract §6). The session snapshots it synchronously via
+     * [leaseGenerationSnapshot] at enqueue time and passes it here so the restore
+     * decision compares the REQUEST-time generation (not the mutable, re-activation-
+     * refreshed [armedGeneration]) against the current [leaseGeneration]. Mirrors
+     * iOS's request-time `deactivateCallSession(fencedBy:)`.
+     */
+    internal suspend fun deactivateCallSession(requestGeneration: Long) {
+        deactivate(requestGeneration)
     }
 
     override suspend fun applyRouting(device: AudioDevice) {

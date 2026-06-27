@@ -1856,9 +1856,14 @@ class SerenadaSession internal constructor(
      * still propagates so an aborted hold stops cleanly).
      */
     private suspend fun deactivateAudioCoordinatorForHold() {
+        // Capture the fence generation at REQUEST time (Phase 4; contract §6) so a
+        // re-activation that runs while this hold awaits the mutex/coordinator cannot
+        // let the restore decision read a refreshed generation and clobber the newer
+        // attempt's OS audio.
+        val fenceGeneration = defaultCoordinatorGenerationSnapshot()
         try {
             withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
-                audioCoordinatorMutex.withLock { audioCoordinator.deactivateCallSession() }
+                audioCoordinatorMutex.withLock { deactivateDefaultCoordinatorFenced(fenceGeneration) }
             }
         } catch (e: TimeoutCancellationException) {
             logger?.log(SerenadaLogLevel.WARNING, "Audio", "Hold: audio coordinator deactivation timed out")
@@ -1880,6 +1885,36 @@ class SerenadaSession internal constructor(
      */
     private fun bindDefaultCoordinatorLease(token: ForegroundOwnerToken?, generation: Long) {
         (audioCoordinator as? DefaultAudioCoordinator)?.bindForegroundLease(token, generation)
+    }
+
+    /**
+     * Snapshot the default coordinator's CURRENT operation generation at REQUEST time
+     * (Phase 4; contract §6). The caller captures this synchronously BEFORE launching
+     * an async deactivation Job (or before awaiting the mutex), then passes it to
+     * [deactivateDefaultCoordinatorFenced] so the restore decision fences against the
+     * generation in effect when the deactivation was ASKED FOR — not the value the
+     * coordinator holds when the Job finally runs, which a same-coordinator
+     * re-activation may have advanced. Returns 0L for a host-supplied custom
+     * coordinator (it owns its own audio policy; the fence is a no-op there). Mirrors
+     * iOS's request-time `installedLeaseSnapshot()`.
+     */
+    private fun defaultCoordinatorGenerationSnapshot(): Long =
+        (audioCoordinator as? DefaultAudioCoordinator)?.leaseGenerationSnapshot() ?: 0L
+
+    /**
+     * Deactivate the audio coordinator, fencing the default coordinator's OS-audio
+     * restore against [requestGeneration] captured at REQUEST time (Phase 4; contract
+     * §6). A host-supplied custom coordinator owns its own policy, so it gets the
+     * plain [SerenadaAudioCoordinator.deactivateCallSession] (the SDK does not reach
+     * into it; parity with [bindDefaultCoordinatorLease]).
+     */
+    private suspend fun deactivateDefaultCoordinatorFenced(requestGeneration: Long) {
+        val defaultCoordinator = audioCoordinator as? DefaultAudioCoordinator
+        if (defaultCoordinator != null) {
+            defaultCoordinator.deactivateCallSession(requestGeneration)
+        } else {
+            audioCoordinator.deactivateCallSession()
+        }
     }
 
     /**
@@ -2986,12 +3021,21 @@ class SerenadaSession internal constructor(
         joinFlowCoordinator.reset()
         peerNegotiationEngine.resetAll()
         iceFetchGeneration += 1
+        // Capture the deactivation's fence generation SYNCHRONOUSLY at REQUEST time
+        // (Phase 4; contract §6), before launching the async Job. A later
+        // same-coordinator re-activation can advance the coordinator's live
+        // generation between this enqueue and when the Job runs; fencing the restore
+        // against the request-time snapshot means a stale deactivation never restores
+        // MODE_NORMAL over the newer attempt. Mirrors iOS's request-time
+        // installedLeaseSnapshot(). The synchronous deactivate() below captures "now"
+        // (inline, no chained Job), which equals request time for that path.
+        val deactivationFenceGeneration = defaultCoordinatorGenerationSnapshot()
         callAudioSessionController.deactivate()
         val deactivationJob = audioCoordinatorScope.launch {
             try {
                 withTimeout(WebRtcResilienceConstants.AUDIO_COORDINATOR_TIMEOUT_MS) {
                     audioCoordinatorMutex.withLock {
-                        audioCoordinator.deactivateCallSession()
+                        deactivateDefaultCoordinatorFenced(deactivationFenceGeneration)
                     }
                 }
             } catch (e: TimeoutCancellationException) {
