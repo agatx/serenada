@@ -39,4 +39,58 @@ final class RootViewRoutingTests: XCTestCase {
         state.connectionState = "CONNECTED"
         XCTAssertFalse(shouldShowActiveCallScreen(sessionPhase: nil, fallbackUiState: state))
     }
+
+    // MARK: rootScreen routing (FIX P5-3)
+
+    func testActiveCallScreenTakesPrecedence() {
+        // Even with held calls and an error phase, an active call screen wins.
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: true, uiPhase: .error, hasLiveHeldCalls: true),
+            .call
+        )
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: true, uiPhase: .inCall, hasLiveHeldCalls: false),
+            .call
+        )
+    }
+
+    func testErrorScreenWhenNoActiveCallAndNoHeldCalls() {
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: false, uiPhase: .error, hasLiveHeldCalls: false),
+            .error
+        )
+    }
+
+    func testHeldSurfaceShownWhenActiveCallEndsWithLiveHeldCalls() {
+        // Active call ended (idle) but live held calls remain: show the held
+        // surface so they stay reachable, NOT Join (Invariant 5: no auto-promote).
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: false, uiPhase: .idle, hasLiveHeldCalls: true),
+            .heldOnly
+        )
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: false, uiPhase: .ending, hasLiveHeldCalls: true),
+            .heldOnly
+        )
+    }
+
+    func testErrorTakesPrecedenceOverHeldSurface() {
+        // A whole-app error still wins over the held surface.
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: false, uiPhase: .error, hasLiveHeldCalls: true),
+            .error
+        )
+    }
+
+    func testJoinWhenNoActiveCallNoHeldCallsNoError() {
+        // Single-call UX preserved: one call ends, no held calls -> Join/idle.
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: false, uiPhase: .idle, hasLiveHeldCalls: false),
+            .join
+        )
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: false, uiPhase: .joining, hasLiveHeldCalls: false),
+            .join
+        )
+    }
 }

@@ -124,6 +124,9 @@
     <string name="call_switcher_connecting">Connecting…</string>
     <string name="call_switcher_room">Room %1$s</string>
 
+    <string name="holding_title">Calls on hold</string>
+    <string name="holding_subtitle">Resume a call to bring it back to the foreground, or leave it.</string>
+
     <string name="call_local_camera_off">Your camera is off</string>
     <string name="call_camera_off">Camera off</string>
     <string name="call_waiting_short">Waiting...</string>

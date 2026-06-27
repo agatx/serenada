@@ -49,6 +49,7 @@ private enum class RootScreen {
     Settings,
     Diagnostics,
     Call,
+    Holding,
     Error
 }
 
@@ -181,6 +182,12 @@ fun SerenadaAppRoot(
             showJoinWithCode -> RootScreen.JoinWithCode
             showActiveCallScreen -> RootScreen.Call
             uiState.phase == CallPhase.Error -> RootScreen.Error
+            // No active call but live held calls remain (active call ended, no
+            // auto-promote per Core Invariant 5): surface the held calls so the user
+            // can resume one. Only fall through to Join when zero live calls remain
+            // (single-call UX: last call ending with no held → Join as before).
+            RootRouting.shouldShowHoldingSurface(callListState, showActiveCallScreen) ->
+                RootScreen.Holding
             else -> RootScreen.Join
         }
 
@@ -210,6 +217,7 @@ fun SerenadaAppRoot(
                 RootScreen.JoinWithCode -> closeJoinWithCode()
                 RootScreen.Error -> callManager.dismissError()
                 RootScreen.Join,
+                RootScreen.Holding,
                 RootScreen.Call -> Unit
             }
         }
@@ -451,6 +459,14 @@ fun SerenadaAppRoot(
                             .statusBarsPadding(),
                     )
                     }
+                }
+                RootScreen.Holding -> {
+                    HoldingScreen(
+                        state = callListState,
+                        roomLabel = { call -> callManager.callLabel(call.roomId) },
+                        onSwitchToCall = { callManager.switchToCall(it) },
+                        onLeaveCall = { callManager.leaveCall(it) },
+                    )
                 }
                 RootScreen.Error -> {
                     ErrorScreen(

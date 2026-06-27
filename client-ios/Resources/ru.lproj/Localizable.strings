@@ -58,6 +58,8 @@
 "call_status_room_ended" = "Комната завершена";
 "call_status_session_expired" = "Сессия истекла. Подключитесь к звонку заново.";
 "call_status_on_hold" = "На удержании";
+"calls_on_hold_title" = "Звонки на удержании";
+"call_switch_failed" = "Не удалось переключить звонок";
 
 "call_local_camera_off" = "Ваша камера выключена";
 "call_camera_off" = "Камера выключена";

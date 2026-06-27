@@ -134,4 +134,33 @@ final class CallManagerRegistryTests: XCTestCase {
             L10n.callStatusConnectionFailed
         )
     }
+
+    // MARK: callSurvivesFailure (FIX P5-2)
+
+    func testSwitchFailureKeepsActiveUiWhenActiveCallSurvives() {
+        // Registry rolled the previous active call back to foreground: a live call
+        // still exists, so the host must KEEP the active UI (banner, not error).
+        XCTAssertTrue(
+            CallManager.callSurvivesFailure(activeCallId: "old", liveHeldCount: 0)
+        )
+        XCTAssertTrue(
+            CallManager.callSurvivesFailure(activeCallId: "old", liveHeldCount: 2)
+        )
+    }
+
+    func testSwitchFailureKeepsUiWhenOnlyHeldCallsSurvive() {
+        // No active call, but live held calls remain (e.g. a join-and-switch that
+        // failed activation with no prior active call but other held calls present):
+        // keep the held surface, do not blow the app to the error screen.
+        XCTAssertTrue(
+            CallManager.callSurvivesFailure(activeCallId: nil, liveHeldCount: 1)
+        )
+    }
+
+    func testSwitchFailureFallsToErrorOnlyWhenNothingSurvives() {
+        // No active call AND no live held calls: a genuine whole-app failure.
+        XCTAssertFalse(
+            CallManager.callSurvivesFailure(activeCallId: nil, liveHeldCount: 0)
+        )
+    }
 }

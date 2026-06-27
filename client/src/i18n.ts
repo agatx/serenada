@@ -96,7 +96,11 @@ const resources = {
             "feedback_success": "Thank you for your feedback!",
             "feedback_rate_limit": "Please wait before sending more feedback.",
             "feedback_error": "Failed to send feedback. Please try again.",
-            "display_name_placeholder": "Your name (optional)"
+            "display_name_placeholder": "Your name (optional)",
+            "joining_call": "Joining call...",
+            "calls_on_hold_title": "Calls on hold",
+            "calls_on_hold_desc": "Tap a call to resume it.",
+            "resume_call": "Resume {{name}}"
         }
     },
     ru: {
@@ -192,7 +196,11 @@ const resources = {
             "feedback_success": "Спасибо за ваш отзыв!",
             "feedback_rate_limit": "Подождите перед отправкой нового отзыва.",
             "feedback_error": "Не удалось отправить отзыв. Попробуйте еще раз.",
-            "display_name_placeholder": "Ваше имя (необязательно)"
+            "display_name_placeholder": "Ваше имя (необязательно)",
+            "joining_call": "Подключение к звонку...",
+            "calls_on_hold_title": "Звонки на удержании",
+            "calls_on_hold_desc": "Нажмите на звонок, чтобы вернуться к нему.",
+            "resume_call": "Вернуться к {{name}}"
         }
     },
     es: {
@@ -288,7 +296,11 @@ const resources = {
             "feedback_success": "¡Gracias por tus comentarios!",
             "feedback_rate_limit": "Espera antes de enviar más comentarios.",
             "feedback_error": "No se pudo enviar. Inténtalo de nuevo.",
-            "display_name_placeholder": "Tu nombre (opcional)"
+            "display_name_placeholder": "Tu nombre (opcional)",
+            "joining_call": "Uniéndose a la llamada...",
+            "calls_on_hold_title": "Llamadas en espera",
+            "calls_on_hold_desc": "Toca una llamada para reanudarla.",
+            "resume_call": "Reanudar {{name}}"
         }
     },
     fr: {
@@ -384,7 +396,11 @@ const resources = {
             "feedback_success": "Merci pour votre retour !",
             "feedback_rate_limit": "Veuillez patienter avant d'envoyer un autre retour.",
             "feedback_error": "Échec de l'envoi. Veuillez réessayer.",
-            "display_name_placeholder": "Votre nom (facultatif)"
+            "display_name_placeholder": "Votre nom (facultatif)",
+            "joining_call": "Connexion à l'appel...",
+            "calls_on_hold_title": "Appels en attente",
+            "calls_on_hold_desc": "Touchez un appel pour le reprendre.",
+            "resume_call": "Reprendre {{name}}"
         }
     }
 };

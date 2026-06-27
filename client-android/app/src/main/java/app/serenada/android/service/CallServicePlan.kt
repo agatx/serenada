@@ -71,3 +71,34 @@ data class CallServicePlan(
         }
     }
 }
+
+/**
+ * The effective `mediaProjection` FGS-type decision for one [CallService] update
+ * (multi-call session, P5-1 fix). The type is driven by the live call list's
+ * screen-share state ([CallServicePlan.includeMediaProjection]) so it is dropped
+ * once no live call is sharing — even when the share stopped IMPLICITLY (switch,
+ * hold, end) without going through the explicit stop path.
+ *
+ * The transient [pending] flag only ARMS the type for the gap between requesting a
+ * share and the registry reporting `isScreenSharing` (the OS needs the FGS type
+ * present before [android.media.projection.MediaProjection] capture can start).
+ * Once the plan confirms a live share, [nextPending] retires the flag so all
+ * subsequent updates derive the type purely from the live call list — the flag can
+ * never go sticky and keep the type after the share is gone.
+ */
+data class MediaProjectionDecision(
+    /** Whether THIS foreground update should carry the `mediaProjection` type. */
+    val include: Boolean,
+    /** The [pending]-flag value to keep after this update (retired once confirmed live). */
+    val nextPending: Boolean,
+) {
+    companion object {
+        fun resolve(plan: CallServicePlan, pending: Boolean): MediaProjectionDecision =
+            MediaProjectionDecision(
+                include = plan.includeMediaProjection || pending,
+                // Once a live call confirms the projection, the plan alone drives the
+                // type; drop the transient arm so it can never linger past the share.
+                nextPending = pending && !plan.includeMediaProjection,
+            )
+    }
+}

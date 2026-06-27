@@ -150,4 +150,54 @@ class CallServicePlanTest {
         assertEquals(2, plan.heldCallCount)
         assertEquals(setOf("held1", "held2"), plan.heldCalls.map { it.callId }.toSet())
     }
+
+    // --- MediaProjection FGS-type derivation (P5-1: must not go sticky) ---
+
+    @Test
+    fun mediaProjectionDecision_armBeforeRegistryConfirms_includesAndStaysArmed() {
+        // Share requested: pending armed, but the registry has not yet reported
+        // isScreenSharing. The type must be included (the OS needs it before capture
+        // starts) and the arm stays until the registry confirms.
+        val plan = CallServicePlan.from(listOf(call("a", foreground = true, screenSharing = false)))
+        val decision = MediaProjectionDecision.resolve(plan, pending = true)
+        assertTrue(decision.include)
+        assertTrue(decision.nextPending)
+    }
+
+    @Test
+    fun mediaProjectionDecision_armRetiredOnceLiveShareConfirmed() {
+        // Registry now reports a live share: the type is included AND the transient
+        // arm is retired so the plan alone drives the type from here on.
+        val plan = CallServicePlan.from(listOf(call("a", foreground = true, screenSharing = true)))
+        val decision = MediaProjectionDecision.resolve(plan, pending = true)
+        assertTrue(decision.include)
+        assertFalse(decision.nextPending)
+    }
+
+    @Test
+    fun mediaProjectionDecision_droppedWhenNoLiveShare_evenIfFlagNeverCleared() {
+        // The sticky-flag regression: after a share started, pending was retired
+        // (false). When the share later stops IMPLICITLY (switch/hold/end) the live
+        // call list reports no sharing, so the type is NOT included — it does not
+        // linger because of a stale OR'd pending flag.
+        val plan = CallServicePlan.from(
+            listOf(
+                call("a", foreground = true, screenSharing = false),
+                call("b", foreground = false),
+            ),
+        )
+        val decision = MediaProjectionDecision.resolve(plan, pending = false)
+        assertFalse(decision.include)
+        assertFalse(decision.nextPending)
+    }
+
+    @Test
+    fun mediaProjectionDecision_planDrivenSharePersistsWithoutArm() {
+        // With pending already retired, an actively-sharing live call still carries
+        // the type purely from the plan.
+        val plan = CallServicePlan.from(listOf(call("a", foreground = true, screenSharing = true)))
+        val decision = MediaProjectionDecision.resolve(plan, pending = false)
+        assertTrue(decision.include)
+        assertFalse(decision.nextPending)
+    }
 }

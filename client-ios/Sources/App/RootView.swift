@@ -2,9 +2,13 @@ import SerenadaCallUI
 import SerenadaCore
 import SwiftUI
 
-private enum RootScreen {
+enum RootScreen: Equatable {
     case join
     case call
+    /// No active (foreground) call, but the registry still has live held calls.
+    /// Render a "calls on hold" surface so those calls stay reachable instead of
+    /// dropping the user to Join (FIX P5-3: Invariant 5, no auto-promote).
+    case heldOnly
     case error
 }
 
@@ -22,6 +26,24 @@ func shouldShowActiveCallScreen(
     }
 
     return fallbackUiState.phase == .waiting || fallbackUiState.phase == .inCall
+}
+
+/// Decide the root screen from the active-call flag, the fallback UI phase, and
+/// whether live held calls remain. Pure + static so the "held surface vs idle"
+/// routing is unit-testable (FIX P5-3). Precedence:
+///   1. active call screen wins
+///   2. whole-app error screen
+///   3. held surface when live held calls remain (no active call) — Invariant 5
+///   4. otherwise Join/idle
+func rootScreen(
+    showActiveCallScreen: Bool,
+    uiPhase: CallPhase,
+    hasLiveHeldCalls: Bool
+) -> RootScreen {
+    if showActiveCallScreen { return .call }
+    if uiPhase == .error { return .error }
+    if hasLiveHeldCalls { return .heldOnly }
+    return .join
 }
 
 struct RootView: View {
@@ -47,11 +69,11 @@ struct RootView: View {
             fallbackUiState: uiState
         )
 
-        let currentScreen: RootScreen = {
-            if showActiveCallScreen { return .call }
-            if uiState.phase == .error { return .error }
-            return .join
-        }()
+        let currentScreen = rootScreen(
+            showActiveCallScreen: showActiveCallScreen,
+            uiPhase: uiState.phase,
+            hasLiveHeldCalls: !callManager.heldCalls.isEmpty
+        )
 
         ZStack(alignment: .top) {
             switch currentScreen {
@@ -145,6 +167,17 @@ struct RootView: View {
                     }
                 }
 
+            case .heldOnly:
+                // Active call ended (or was held) with live held calls remaining.
+                // Render a holding surface so those calls stay reachable instead of
+                // dropping to Join (FIX P5-3, Invariant 5: no auto-promote).
+                HeldCallsHoldingScreen(
+                    heldCalls: callManager.heldCalls,
+                    isBusy: callManager.isCallOperationInProgress,
+                    onSwitch: { callManager.switchToHeldCall(id: $0) },
+                    onLeave: { callManager.leaveHeldCall(id: $0) }
+                )
+
             case .error:
                 ErrorScreen(
                     message: uiState.errorMessage ?? L10n.errorUnknown,
@@ -154,6 +187,9 @@ struct RootView: View {
                 )
             }
 
+            // The horizontal held-call switcher floats over the ACTIVE call screen.
+            // On the `.heldOnly` surface the holding screen renders its own list, so
+            // the floating switcher is not stacked on top of it.
             if currentScreen == .call, !callManager.heldCalls.isEmpty {
                 HeldCallsSwitcher(
                     heldCalls: callManager.heldCalls,
@@ -166,6 +202,13 @@ struct RootView: View {
                 .zIndex(40)
             }
 
+            if let banner = callManager.callErrorBanner {
+                CallErrorBannerView(banner: banner)
+                    .padding(.top, 16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(55)
+            }
+
             if let banner = callManager.snapshotBanner {
                 SnapshotBannerView(banner: banner)
                     .padding(.top, 16)
@@ -175,6 +218,7 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.24), value: callManager.heldCalls)
         .animation(.easeInOut(duration: 0.24), value: callManager.snapshotBanner)
+        .animation(.easeInOut(duration: 0.24), value: callManager.callErrorBanner)
         .animation(.easeInOut(duration: 0.24), value: currentScreen)
         .onAppear {
             hostInput = callManager.serverHost
@@ -410,5 +454,75 @@ private struct SnapshotBannerView: View {
         .foregroundStyle(banner.success ? Color.primary : Color.red)
         .shadow(color: Color.black.opacity(0.25), radius: 8, y: 3)
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+/// Transient banner for a recoverable per-call error (e.g. a failed switch that
+/// left the live call intact) — FIX P5-2. Distinct from `ErrorScreen`, which is
+/// the whole-app terminal error surface.
+private struct CallErrorBannerView: View {
+    let banner: CallManager.CallErrorBanner
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+            Text(banner.message)
+                .font(.subheadline.weight(.medium))
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .foregroundStyle(Color.red)
+        .shadow(color: Color.black.opacity(0.25), radius: 8, y: 3)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, 16)
+    }
+}
+
+/// Full-screen "calls on hold" surface shown when no call is foreground but live
+/// held calls remain (FIX P5-3, Invariant 5: no auto-promote). It keeps the held
+/// calls reachable — the user resumes one with a tap — instead of being dropped
+/// to Join. Reuses ``HeldCallChip`` so it stays visually consistent with the
+/// floating switcher.
+private struct HeldCallsHoldingScreen: View {
+    let heldCalls: [ManagedCallState]
+    let isBusy: Bool
+    let onSwitch: (CallId) -> Void
+    let onLeave: (CallId) -> Void
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer(minLength: 0)
+
+            Image(systemName: "pause.circle.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.secondary)
+
+            Text(L10n.callsOnHoldTitle)
+                .font(.title2.weight(.semibold))
+
+            ScrollView {
+                VStack(spacing: 10) {
+                    ForEach(heldCalls, id: \.id) { call in
+                        HeldCallChip(
+                            call: call,
+                            isBusy: isBusy,
+                            onSwitch: { onSwitch(call.id) },
+                            onLeave: { onLeave(call.id) }
+                        )
+                        .frame(maxWidth: 320)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
     }
 }

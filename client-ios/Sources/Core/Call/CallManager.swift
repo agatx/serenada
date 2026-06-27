@@ -35,6 +35,10 @@ final class CallManager: ObservableObject {
     /// running; the switcher disables its actions while this is set.
     @Published private(set) var isCallOperationInProgress = false
     @Published var snapshotBanner: SnapshotBanner?
+    /// Transient banner for a RECOVERABLE per-call error (e.g. a failed switch that
+    /// left the live call intact). Distinct from `uiState.phase == .error`, which is
+    /// the whole-app terminal error screen reserved for "no call survived".
+    @Published var callErrorBanner: CallErrorBanner?
 
     struct SnapshotBanner: Identifiable, Equatable {
         let id = UUID()
@@ -42,7 +46,27 @@ final class CallManager: ObservableObject {
         let message: String
     }
 
+    struct CallErrorBanner: Identifiable, Equatable {
+        let id = UUID()
+        let message: String
+    }
+
     private var snapshotBannerTask: Task<Void, Never>?
+    private var callErrorBannerTask: Task<Void, Never>?
+
+    /// Surface a recoverable per-call error as a transient banner over the call UI.
+    /// Used when a switch/activation fails but a live call (active or held) remains,
+    /// so we must NOT tear the whole app down to the error screen (FIX P5-2).
+    func presentCallErrorBanner(_ message: String) {
+        callErrorBanner = CallErrorBanner(message: message)
+        callErrorBannerTask?.cancel()
+        callErrorBannerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if !Task.isCancelled {
+                self?.callErrorBanner = nil
+            }
+        }
+    }
 
     func presentSnapshotToast(saved: Bool, reason: String?) {
         let message: String
@@ -158,6 +182,8 @@ final class CallManager: ObservableObject {
 
     deinit {
         activeSessionStateCancellable?.cancel()
+        snapshotBannerTask?.cancel()
+        callErrorBannerTask?.cancel()
         registryCancellables.forEach { $0.cancel() }
         if let pushEndpointObserver {
             NotificationCenter.default.removeObserver(pushEndpointObserver)
@@ -385,12 +411,55 @@ final class CallManager: ObservableObject {
         case let .needsPermission(callId):
             await requestPermissionsAndSwitch(registry: registry, callId: callId)
         case let .failed(callId, error):
-            if let callId { await registry.dismissEndedCall(id: callId) }
-            uiState = CallUiState(
-                phase: .error,
-                errorMessage: callActivationErrorMessage(error)
-            )
+            await handleStartOrSwitchFailure(registry: registry, failedCallId: callId, error: error)
         }
+    }
+
+    /// Handle a `joinAndSwitch`/`switchTo` failure WITHOUT blowing away a surviving
+    /// live call (FIX P5-2). The registry rolls the previous active call back to
+    /// foreground on a switch/activation failure, and leaves the prior active
+    /// untouched on a room-join failure, so after a failure a live call may still
+    /// exist. In that case keep the live-call UI and surface the failed target as a
+    /// transient, recoverable banner. Only fall through to the whole-app `.error`
+    /// screen when there is genuinely no active call AND no live held calls.
+    private func handleStartOrSwitchFailure(
+        registry: SerenadaCallRegistry,
+        failedCallId: CallId?,
+        error: CallActivationError
+    ) async {
+        // Drop the failed target's record (never the surviving active call). On a
+        // room-join failure the registry already marked it ended; on an activation
+        // failure the rolled-back target is still live-but-hidden (filtered out of
+        // the switcher because it carries an `activationError`). `leaveCall` retires
+        // a still-live target and is a safe no-op on an already-ended one, so a
+        // single leave+dismiss pair retires the target in both cases.
+        if let failedCallId, registry.activeCallId != failedCallId {
+            await registry.leaveCall(id: failedCallId)
+            await registry.dismissEndedCall(id: failedCallId)
+        }
+
+        let liveHeldCount = Self.heldCalls(from: registry.calls, activeCallId: registry.activeCallId).count
+        if Self.callSurvivesFailure(activeCallId: registry.activeCallId, liveHeldCount: liveHeldCount) {
+            // A live call survived (active still foreground, or held calls remain):
+            // keep its UI and surface the failure as a recoverable banner.
+            presentCallErrorBanner(callActivationErrorMessage(error))
+            return
+        }
+
+        // Nothing survived: this is a genuine whole-app failure.
+        uiState = CallUiState(
+            phase: .error,
+            errorMessage: callActivationErrorMessage(error)
+        )
+    }
+
+    /// True when a live call (the rolled-back active call, or any live held call)
+    /// survives a switch/activation failure, so the host must keep the call UI and
+    /// surface the failure as a recoverable per-call error instead of tearing the
+    /// whole app down to the error screen (FIX P5-2). Pure + static so the decision
+    /// is unit-testable without a registry.
+    static func callSurvivesFailure(activeCallId: CallId?, liveHeldCount: Int) -> Bool {
+        activeCallId != nil || liveHeldCount > 0
     }
 
     /// The held call exists; prompt for the missing grants, then retry the switch.
@@ -421,10 +490,18 @@ final class CallManager: ObservableObject {
         case let .failed(error):
             await registry.leaveCall(id: callId)
             await registry.dismissEndedCall(id: callId)
-            uiState = CallUiState(
-                phase: .error,
-                errorMessage: callActivationErrorMessage(error)
-            )
+            // The switch failed but a live call may still survive (rolled-back
+            // active, or other held calls). Keep its UI; only fall to the error
+            // screen when nothing survived (FIX P5-2).
+            let liveHeldCount = Self.heldCalls(from: registry.calls, activeCallId: registry.activeCallId).count
+            if Self.callSurvivesFailure(activeCallId: registry.activeCallId, liveHeldCount: liveHeldCount) {
+                presentCallErrorBanner(callActivationErrorMessage(error))
+            } else {
+                uiState = CallUiState(
+                    phase: .error,
+                    errorMessage: callActivationErrorMessage(error)
+                )
+            }
         }
     }
 
@@ -458,7 +535,11 @@ final class CallManager: ObservableObject {
             case .needsPermission:
                 await self.requestPermissionsAndSwitch(registry: registry, callId: id)
             case let .failed(error):
-                self.uiState.errorMessage = self.callActivationErrorMessage(error)
+                // The switch failed but the previously-active call is rolled back to
+                // foreground (or other held calls remain). Keep the call UI and
+                // surface the failure as a recoverable banner (FIX P5-2) rather than
+                // writing an invisible `uiState.errorMessage`.
+                self.presentCallErrorBanner(self.callActivationErrorMessage(error))
             }
         }
     }

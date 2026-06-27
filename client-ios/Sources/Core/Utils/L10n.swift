@@ -127,6 +127,8 @@ enum L10n {
     static var callStatusRoomEnded: String { text("call_status_room_ended") }
     static var callStatusSessionExpired: String { text("call_status_session_expired") }
     static var callStatusOnHold: String { text("call_status_on_hold") }
+    static var callsOnHoldTitle: String { text("calls_on_hold_title") }
+    static var callSwitchFailed: String { text("call_switch_failed") }
 
     static var callLocalCameraOff: String { text("call_local_camera_off") }
     static var callCameraOff: String { text("call_camera_off") }

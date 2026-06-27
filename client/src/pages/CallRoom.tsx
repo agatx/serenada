@@ -13,6 +13,7 @@ import { markRoomJoined, saveRoom } from '../utils/savedRooms';
 import { getConfiguredServerHost } from '../utils/serverHost';
 import { parseTurnsOnly } from '../utils/turnsOnly';
 import { getDisplayName, setDisplayName } from '../utils/displayName';
+import { selectCallView } from '../utils/callView';
 
 const BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED = true;
 
@@ -257,24 +258,28 @@ const CallRoom: React.FC = () => {
         calls: registryCalls,
         activeCall,
         activeCallId,
-        sessionFor,
+        heldCalls,
+        registryOperationInProgress,
         joinAndSwitch,
+        switchTo,
         leave: leaveCall,
     } = useSerenadaCallRegistry({ config: registryConfig });
 
-    // The session to render: the foreground (active) call once activated, else
-    // the single in-flight call while its held join + foreground activation is
-    // still settling, so the "Joining call…" overlay shows immediately on Join
-    // (single-call UX parity). `registryCalls` is the reactive snapshot;
-    // `sessionFor` resolves its live session.
-    const session = useMemo(() => {
-        const active = activeCall?.session;
-        if (active) return active;
-        const firstLive = registryCalls.find(
-            (c) => c.membershipPhase !== 'idle' && c.membershipPhase !== 'error',
-        );
-        return firstLive ? sessionFor(firstLive.id) : null;
-    }, [activeCall, registryCalls, sessionFor]);
+    // Active-call-only rendering (contract §5/§7/§11; design "Remote Playback" /
+    // "React UI"): the audible `SerenadaCallFlow` mounts the FOREGROUND call's
+    // session and nothing else. A held / no-lease session is NEVER mounted as the
+    // active flow — only the foreground call owns audible media elements. When no
+    // call is foregrounded we render a placeholder (joining / on-hold / idle)
+    // chosen by `selectCallView`, not a held session.
+    const activeSession = activeCall?.session ?? null;
+    const callView = useMemo(
+        () => selectCallView({
+            hasActiveSession: activeSession !== null,
+            calls: registryCalls,
+            registryOperationInProgress,
+        }),
+        [activeSession, registryCalls, registryOperationInProgress],
+    );
 
     const stopPreview = useCallback(() => {
         setPreviewStream((current) => {
@@ -385,12 +390,12 @@ const CallRoom: React.FC = () => {
     }, [roomId]);
 
     useEffect(() => {
-        if (!session || !roomId) return;
+        if (!activeSession || !roomId) return;
         pushNotifySentRef.current = false;
 
-        const unsubscribe = session.subscribe((state: CallState) => {
+        const unsubscribe = activeSession.subscribe((state: CallState) => {
             if ((state.phase === 'waiting' || state.phase === 'inCall') && !pushNotifySentRef.current) {
-                const localStream = session.localStream;
+                const localStream = activeSession.localStream;
                 if (!localStream) return; // Media still loading — wait for next state update
                 pushNotifySentRef.current = true;
 
@@ -434,7 +439,7 @@ const CallRoom: React.FC = () => {
         });
 
         return unsubscribe;
-    }, [roomId, session]);
+    }, [roomId, activeSession]);
 
     useEffect(() => {
         return () => {
@@ -622,7 +627,10 @@ const CallRoom: React.FC = () => {
         return null;
     }
 
-    if (!shouldJoin || !session) {
+    // Prejoin card: before the user joins, or when there is no live call to show
+    // (join not started / failed / torn down — `callView === 'idle'`). A held
+    // call does NOT land here — it renders the on-hold switcher below.
+    if (!shouldJoin || callView === 'idle') {
         return (
             <div className="page-container center-content">
                 <div className="card prejoin-card">
@@ -697,6 +705,52 @@ const CallRoom: React.FC = () => {
         );
     }
 
+    // Joining placeholder: a join is settling and no call is foregrounded yet.
+    // Shown instead of mounting the still-held in-flight session as the active
+    // flow (active-call-only rendering).
+    if (callView === 'joining') {
+        return (
+            <div className="page-container center-content">
+                <div className="card prejoin-card">
+                    <h2>{t('joining_call')}</h2>
+                    <div className="video-preview-container">
+                        <div className="video-placeholder">{t('connecting')}</div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // On-hold switcher: the active call ended with no auto-promote (Core
+    // Invariant 5) but live held calls remain. The held sessions are NOT mounted
+    // as the active flow — the user picks one to resume via `switchTo`, which
+    // foregrounds it (and only then does `SerenadaCallFlow` mount it).
+    if (callView === 'held') {
+        return (
+            <div className="page-container center-content">
+                <div className="card prejoin-card">
+                    <h2>{t('calls_on_hold_title')}</h2>
+                    <p className="prejoin-invite-label">{t('calls_on_hold_desc')}</p>
+                    <div className="button-group">
+                        {heldCalls.map((call) => (
+                            <button
+                                key={call.id}
+                                type="button"
+                                className="btn-primary"
+                                onClick={() => { void switchTo(call.id); }}
+                            >
+                                {t('resume_call', { name: call.displayName?.trim() || call.roomId })}
+                            </button>
+                        ))}
+                        <button className="btn-secondary" onClick={handleDismiss}>
+                            {t('home')}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     const waitingActions = (
         <>
             <button
@@ -722,9 +776,13 @@ const CallRoom: React.FC = () => {
         </>
     );
 
+    // Active-call-only: mount the audible flow with the FOREGROUND session alone.
+    // `callView === 'active'` implies `activeSession` is non-null; the guard
+    // narrows the type and is defense in depth (never mount a null/held session).
+    if (!activeSession) return null;
     return (
         <SerenadaCallFlow
-            session={session}
+            session={activeSession}
             config={{
                 screenSharingEnabled: true,
                 inviteControlsEnabled: true,

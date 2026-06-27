@@ -30,10 +30,11 @@ import app.serenada.android.SerenadaApp
  *   reflects "calls on hold" until the host foregrounds one or the last call ends.
  * - Notification primary actions (mute, end) target the ACTIVE call; held calls
  *   are summary text plus optional per-call "switch" actions.
- * - The `mediaProjection` FGS type applies only while some call holds a
- *   projection; switching away from a screen-sharing call (which stops its share
- *   first) drops the type on the next [startForeground]/[ServiceCompat] update
- *   WITHOUT tearing the service down.
+ * - The `mediaProjection` FGS type is driven by the live call list's screen-share
+ *   state ([CallServicePlan.includeMediaProjection]) via [MediaProjectionDecision],
+ *   not a sticky flag: switching away from a screen-sharing call (which stops its
+ *   share first, implicitly or explicitly) drops the type on the next
+ *   [startForeground]/[ServiceCompat] update WITHOUT tearing the service down.
  * - [onTaskRemoved] leaves ALL registry calls, not just the active one.
  */
 class CallService : Service() {
@@ -70,7 +71,14 @@ class CallService : Service() {
             stopSelf()
             return
         }
-        val includeProjection = plan.includeMediaProjection || pendingMediaProjection
+        val decision = MediaProjectionDecision.resolve(plan, pendingMediaProjection)
+        val includeProjection = decision.include
+        // Retire the transient arm once a live call confirms the projection, so the
+        // `mediaProjection` FGS type is driven by the live call list from here on and
+        // is dropped when the share stops implicitly (switch/hold/end). Without this
+        // the OR'd pending flag stays sticky and the OS keeps seeing the type after
+        // no call is sharing (P5-1).
+        pendingMediaProjection = decision.nextPending
         val notification = buildNotification(plan)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             var serviceTypes =
@@ -195,9 +203,12 @@ class CallService : Service() {
         @Volatile
         private var latestCalls: List<CallServiceCall> = emptyList()
 
-        // Set true between requesting a screen share and the service actually
-        // entering the foreground with the mediaProjection type, so an update that
-        // races the registry's isScreenSharing flag still carries the type.
+        // Transient ARM for the `mediaProjection` FGS type, set between requesting a
+        // screen share and the registry reporting isScreenSharing, so the OS sees the
+        // type before MediaProjection capture starts. RETIRED by applyPlan once a live
+        // call confirms the projection (MediaProjectionDecision.nextPending): from
+        // then on the type is plan-derived (live call list), so it can never go sticky
+        // and keep the type after the share stops implicitly on switch/hold/end (P5-1).
         @Volatile
         private var pendingMediaProjection: Boolean = false
 
