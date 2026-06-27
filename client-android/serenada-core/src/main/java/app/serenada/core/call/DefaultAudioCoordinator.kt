@@ -262,36 +262,56 @@ internal class DefaultAudioCoordinator(
     }
 
     /**
-     * True iff this coordinator may restore the OS audio (mode / route / focus) on
-     * [deactivate]. Two independent reasons to SKIP the restore (contract §3
-     * two-fence rule), either of which means a newer activation owns the OS audio:
+     * GENERATION axis (contract §6, case 1 — superseded on THIS coordinator): true iff
+     * a SAME-COORDINATOR re-activation bumped [leaseGeneration] past the generation this
+     * deactivation was REQUESTED under. The token still matches (same owner), so only the
+     * generation reveals that a newer attempt of THIS coordinator is now the live one. A
+     * deactivation that is superseded this way is a FULL NO-OP: the coordinator is live
+     * again under the newer generation, so this stale teardown must not touch ANY state —
+     * not [audioSessionActive], not monitoring, not fallback state, and not the
+     * process-global mode / route / focus. Gating only the OS restore (the prior bug)
+     * still let the stale call clear [audioSessionActive] and abandon the focus the LIVE
+     * re-activation holds.
      *
-     *  1. OWNER axis ([ForegroundMediaArbiter.hasOtherOwner]): a DIFFERENT call now
-     *     owns the lease — a switch handed off to another session/coordinator.
-     *     Distinct from [isStillLeaseOwner]: a clean single-call END releases the
-     *     lease BEFORE the async deactivation runs, so the bound token is no longer
-     *     "current", yet there is NO newer owner, so the restore is correct and must
-     *     proceed (this is what keeps a clean last-call leave restoring MODE_NORMAL).
-     *  2. GENERATION axis ([requestGeneration] vs [leaseGeneration]): a SAME-OWNER
-     *     re-activation bumped this coordinator's generation after the deactivation
-     *     was REQUESTED. The token still matches (same owner), so only the generation
-     *     reveals that a newer attempt is now driving the OS audio and the stale
-     *     deactivation must not restore MODE_NORMAL over it.
-     *
-     * CRITICAL ([requestGeneration] is captured at REQUEST time): the session
-     * snapshots the generation when it ENQUEUES the async deactivation Job (via
+     * CRITICAL ([requestGeneration] is captured at REQUEST time): the session snapshots
+     * the generation when it ENQUEUES the async deactivation Job (via
      * [leaseGenerationSnapshot]) and passes it here. It must NOT be the mutable
-     * [armedGeneration], which a same-coordinator re-activation refreshes to the
-     * current generation in [activateCallSession]; reading that at run time would let
-     * a deactivation requested under generation N compare `N+1 == N+1` after an N+1
-     * re-activation and wrongly restore over the live attempt.
+     * [armedGeneration], which a same-coordinator re-activation refreshes to the current
+     * generation in [activateCallSession]; reading that at run time would let a
+     * deactivation requested under generation N compare `N+1 == N+1` after an N+1
+     * re-activation and wrongly tear down the live attempt.
      *
-     * Pass-through (no token bound) always restores: [hasOtherOwner] is false for a
-     * null token and the captured generation equals [leaseGeneration] (both 0L).
+     * Pass-through (no token bound) is never superseded: [bindForegroundLease] is never
+     * called, so the captured generation equals [leaseGeneration] (both 0L).
      */
-    private fun mayRestoreOnDeactivate(requestGeneration: Long): Boolean {
-        if (ForegroundMediaArbiter.hasOtherOwner(leaseToken)) return false
-        return requestGeneration == leaseGeneration
+    private fun isSupersededDeactivate(requestGeneration: Long): Boolean {
+        return requestGeneration != leaseGeneration
+    }
+
+    /**
+     * OWNER axis (contract §6, distinguishes case 2 from case 3): true iff this
+     * coordinator may still touch the PROCESS-GLOBAL AudioManager (restore MODE_NORMAL,
+     * reset the communication route, abandon audio focus) on [deactivate]. Only reached
+     * once the deactivation is NOT superseded (see [isSupersededDeactivate]); from there
+     * the single question is whether a DIFFERENT call now owns the global lease:
+     *
+     *  - case 2 (cross-coordinator handoff — [ForegroundMediaArbiter.hasOtherOwner] true):
+     *    a NEWER call/coordinator owns the lease and now owns the global audio resources,
+     *    so this instance tears down ONLY its own per-instance state and SKIPS every
+     *    global mutation. Returns false.
+     *  - case 3 (clean leave — no other owner): the normal single/last-call leave. Returns
+     *    true so the full global restore + [abandonAudioFocus] + route reset run.
+     *
+     * Distinct from [isStillLeaseOwner]: a clean single-call END releases the lease BEFORE
+     * the async deactivation runs, so the bound token is no longer "current", yet there is
+     * NO newer owner, so [hasOtherOwner] is false and the global restore correctly proceeds
+     * (this is what keeps a clean last-call leave restoring MODE_NORMAL).
+     *
+     * Pass-through (no token bound) always touches global: [hasOtherOwner] is false for a
+     * null token, so a single-call / fake coordinator restores exactly as before.
+     */
+    private fun mayTouchGlobalAudioOnDeactivate(): Boolean {
+        return !ForegroundMediaArbiter.hasOtherOwner(leaseToken)
     }
 
     override fun activate() {
@@ -342,18 +362,61 @@ internal class DefaultAudioCoordinator(
     }
 
     /**
-     * Tear down the OS audio, fencing the RESTORE against [requestGeneration] — the
-     * coordinator generation in effect when this deactivation was REQUESTED (contract
-     * §6). The async session path captures it at enqueue (via [leaseGenerationSnapshot])
-     * so a same-coordinator re-activation that advances [leaseGeneration] between
-     * request and run cannot let a stale deactivation restore MODE_NORMAL over the
-     * live attempt.
+     * Tear down the audio, fenced against [requestGeneration] — the coordinator
+     * generation in effect when this deactivation was REQUESTED (contract §6). The async
+     * session path captures it at enqueue (via [leaseGenerationSnapshot]) so a
+     * same-coordinator re-activation that advances [leaseGeneration] between request and
+     * run cannot let a stale deactivation disturb the live attempt. Three cases:
+     *
+     *  1. SUPERSEDED on this coordinator ([isSupersededDeactivate]): a newer activation
+     *     made this coordinator live again under a fresh generation — FULL NO-OP. Touch
+     *     nothing (active flag, monitoring, fallback, focus, mode, route).
+     *  2. CROSS-COORDINATOR HANDOFF (not superseded but [mayTouchGlobalAudioOnDeactivate]
+     *     is false — a DIFFERENT call owns the lease): tear down ONLY this instance's
+     *     per-instance state; SKIP every process-global mutation (mode restore,
+     *     [abandonAudioFocus], route reset) — those resources belong to the new owner.
+     *  3. CLEAN LEAVE (not superseded, no other owner): full teardown INCLUDING the
+     *     global MODE_NORMAL restore, [abandonAudioFocus], and route reset. Single-call
+     *     and the no-token pass-through both land here.
      */
     private fun deactivate(requestGeneration: Long) {
-        if (!audioSessionActive) {
-            abandonAudioFocus()
+        // CASE 1 — SUPERSEDED ON THIS COORDINATOR (contract §6): a same-coordinator
+        // re-activation bumped [leaseGeneration] past [requestGeneration] AFTER this
+        // deactivation was requested, so this coordinator is LIVE again under the newer
+        // generation. This stale deactivation is a FULL NO-OP — it must NOT touch ANY
+        // state: not [audioSessionActive], not monitoring/fallback, and not the
+        // process-global mode / route / focus. (The prior bug gated ONLY the OS restore,
+        // so a stale deactivate still cleared [audioSessionActive] and called
+        // [abandonAudioFocus], abandoning the focus the LIVE re-activation holds.) The
+        // entire method short-circuits here. Pass-through (no token) is never superseded.
+        if (isSupersededDeactivate(requestGeneration)) {
+            logger?.log(
+                SerenadaLogLevel.DEBUG,
+                "Audio",
+                "Superseded deactivation (a newer same-coordinator activation is live); " +
+                    "full no-op (requestGen=$requestGeneration, currentGen=$leaseGeneration)",
+            )
             return
         }
+
+        // Not superseded. Whether this instance may touch the PROCESS-GLOBAL AudioManager
+        // depends only on the OWNER axis: case 3 (clean leave, no other owner) restores
+        // the global audio; case 2 (cross-coordinator handoff, a DIFFERENT call owns the
+        // lease) tears down ONLY this instance's per-instance state and skips EVERY global
+        // mutation because the new owner now owns those global resources.
+        val mayTouchGlobalAudio = mayTouchGlobalAudioOnDeactivate()
+
+        if (!audioSessionActive) {
+            // Idempotent already-inactive teardown. [abandonAudioFocus] is process-global,
+            // so it runs only in case 3 — never steal focus a new owner (case 2) holds.
+            if (mayTouchGlobalAudio) abandonAudioFocus()
+            return
+        }
+
+        // PER-INSTANCE teardown — runs in BOTH case 2 and case 3 (always, once we are not
+        // superseded). These mutate only THIS coordinator's own state: its active flag and
+        // its own monitoring/listeners/fallback. They never touch another owner's global
+        // resources.
         audioSessionActive = false
         proximityEarpieceEnabled = true
         pinnedOutputDevice = null
@@ -361,20 +424,14 @@ internal class DefaultAudioCoordinator(
         clearPlaybackDuckingFallback()
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
-        // FENCE (contract §3 two-fence rule): a deactivation from a SUPERSEDED
-        // attempt must NOT restore MODE_NORMAL / the previous route after a NEWER
-        // activation already set MODE_IN_COMMUNICATION. All coordinators mutate the
-        // SAME process-global AudioManager, so a stale async deactivation Job would
-        // otherwise clobber the current foreground call's mode/route. Restore is
-        // skipped when EITHER a DIFFERENT call now owns the lease (cross-coordinator
-        // handoff) OR a same-coordinator re-activation advanced the generation past
-        // [requestGeneration] (a same-owner rollback the token alone cannot detect).
-        // [requestGeneration] is the generation captured at REQUEST time — NOT the
-        // mutable armedGeneration, which a re-activation refreshes to the current
-        // value. A clean single-call end (lease already released, no newer owner,
-        // generation unchanged) and the no-token pass-through both still restore
-        // exactly as before.
-        if (mayRestoreOnDeactivate(requestGeneration)) {
+
+        // PROCESS-GLOBAL teardown — gated as a single block (contract §6, case 2 vs 3).
+        // All coordinators mutate the SAME process-global AudioManager, so the mode
+        // restore, communication-route reset, and [abandonAudioFocus] must all be skipped
+        // together when a DIFFERENT call now owns the lease (case 2). A clean single-call
+        // end (lease already released, NO newer owner) and the no-token pass-through both
+        // still restore + abandon focus exactly as before (case 3).
+        if (mayTouchGlobalAudio) {
             runCatching {
                 setLegacyBluetoothScoRouting(false)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -388,16 +445,15 @@ internal class DefaultAudioCoordinator(
             }.onFailure { error ->
                 logger?.log(SerenadaLogLevel.WARNING, "Audio", "Failed to restore audio session: ${error.message}")
             }
+            abandonAudioFocus()
         } else {
             logger?.log(
                 SerenadaLogLevel.DEBUG,
                 "Audio",
-                "Superseded attempt deactivating; skipping OS restore (a newer " +
-                    "activation owns the OS audio; requestGen=$requestGeneration, " +
-                    "currentGen=$leaseGeneration)",
+                "Cross-coordinator handoff deactivating; tore down per-instance state but " +
+                    "skipped global restore/focus (a different call owns the OS audio)",
             )
         }
-        abandonAudioFocus()
     }
 
     override fun shouldPauseVideoForProximity(isScreenSharing: Boolean): Boolean {

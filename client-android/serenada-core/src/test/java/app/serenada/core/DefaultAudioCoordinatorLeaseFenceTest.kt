@@ -147,6 +147,27 @@ class DefaultAudioCoordinatorLeaseFenceTest {
         listener.onAudioFocusChange(focusChange)
     }
 
+    /** Read a private boolean field of the coordinator (reflection): the shadow
+     * AudioManager does not expose focus/active state, so the coordinator's own flags
+     * are the deterministic signal. `audioFocusGranted` flips false when
+     * `abandonAudioFocus()` runs; `audioSessionActive` flips false on a real teardown. */
+    private fun readBooleanField(coordinator: DefaultAudioCoordinator, name: String): Boolean {
+        val field = DefaultAudioCoordinator::class.java.getDeclaredField(name)
+        field.isAccessible = true
+        return field.getBoolean(coordinator)
+    }
+
+    private fun audioSessionActive(coordinator: DefaultAudioCoordinator): Boolean =
+        readBooleanField(coordinator, "audioSessionActive")
+
+    private fun audioFocusGranted(coordinator: DefaultAudioCoordinator): Boolean =
+        readBooleanField(coordinator, "audioFocusGranted")
+
+    /** Whether this coordinator's proximity/device monitoring listeners are still
+     * registered. A real per-instance teardown clears these; a full no-op leaves them. */
+    private fun audioDeviceMonitoringActive(coordinator: DefaultAudioCoordinator): Boolean =
+        readBooleanField(coordinator, "audioDeviceMonitoringActive")
+
     /**
      * A postDelayed ducking-fallback scheduled by an OLD activation (via a focus
      * loss-can-duck event) does NOT emit PlaybackDuckingEnded after a NEWER
@@ -471,5 +492,178 @@ class DefaultAudioCoordinatorLeaseFenceTest {
 
         collectorJob.cancel()
         ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    /**
+     * Phase 4 round 3 (contract §6, case 1 — SUPERSEDED on THIS coordinator) — codex
+     * P1. A stale deactivation REQUESTED under generation N, running AFTER a
+     * same-coordinator re-activation made generation N+1 live, must be a FULL NO-OP. The
+     * coordinator is live again under N+1, so the stale teardown must touch NOTHING:
+     * `audioSessionActive` stays true, focus is NOT abandoned, the device monitoring
+     * stays registered, and the mode stays MODE_IN_COMMUNICATION.
+     *
+     * This is the exact bug codex found: the prior fix gated ONLY the OS mode restore, so
+     * a stale deactivate still cleared `audioSessionActive`, tore down this instance's
+     * monitoring/fallback, and (after the skipped restore) called `abandonAudioFocus()` —
+     * abandoning the focus the LIVE N+1 re-activation holds. Gating only the restore is
+     * NOT enough; the WHOLE method must short-circuit. (Revert verification: restoring the
+     * single-fence `mayRestoreOnDeactivate` makes the focus/active/monitoring asserts
+     * fail.)
+     */
+    @Test
+    fun `stale same-coordinator deactivate after an N+1 re-activation is a full no-op`() {
+        val am = audioManager()
+
+        // Attempt N: activate under generation N, owning the lease.
+        val token = ForegroundMediaArbiter.acquireForeground("rollback-call")
+        val genN = ForegroundMediaArbiter.nextOperationGeneration()
+        val coordinator = newCoordinator()
+        coordinator.bindForegroundLease(token, genN)
+        runBlocking { coordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
+        assertTrue("active after the first activation", audioSessionActive(coordinator))
+        assertTrue("focus granted after the first activation", audioFocusGranted(coordinator))
+        assertTrue("device monitoring registered after activation", audioDeviceMonitoringActive(coordinator))
+
+        // Deactivation REQUESTED under generation N (snapshot captured synchronously).
+        val requestGeneration = coordinator.leaseGenerationSnapshot()
+        assertEquals("the deactivation is requested under generation N", genN, requestGeneration)
+
+        // SAME-COORDINATOR re-activation under a FRESH generation N+1 (same token), which
+        // makes N+1 the live generation and re-arms the listeners.
+        val genNPlus1 = ForegroundMediaArbiter.nextOperationGeneration()
+        coordinator.bindForegroundLease(token, genNPlus1)
+        runBlocking { coordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertTrue("same-owner re-activation keeps the token current", ForegroundMediaArbiter.isCurrentOwner(token))
+
+        // The stale deactivation REQUESTED under N now runs. It must be a FULL no-op.
+        val deactivationJob = mainScope.launch { coordinator.deactivateCallSession(requestGeneration) }
+        ShadowLooper.idleMainLooper()
+        assertTrue(deactivationJob.isCompleted)
+
+        assertEquals(
+            "a stale same-coordinator deactivate must not reset the N+1 mode",
+            AudioManager.MODE_IN_COMMUNICATION,
+            am.mode,
+        )
+        assertTrue(
+            "a stale same-coordinator deactivate must not clear audioSessionActive (full no-op)",
+            audioSessionActive(coordinator),
+        )
+        assertTrue(
+            "a stale same-coordinator deactivate must not abandon the focus the live N+1 activation holds",
+            audioFocusGranted(coordinator),
+        )
+        assertTrue(
+            "a stale same-coordinator deactivate must not unregister the live activation's monitoring",
+            audioDeviceMonitoringActive(coordinator),
+        )
+
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    /**
+     * Phase 4 round 3 (contract §6, case 2 — CROSS-COORDINATOR handoff). Not superseded
+     * (same generation) but a DIFFERENT call owns the global lease. This instance must
+     * tear down its OWN per-instance state (`audioSessionActive` flips false, monitoring
+     * unregisters) but SKIP every process-global mutation: MODE_NORMAL is NOT restored
+     * (the new owner's MODE_IN_COMMUNICATION stays) and focus is NOT abandoned (the new
+     * owner holds it).
+     */
+    @Test
+    fun `cross-coordinator handoff tears down per-instance state but skips global restore and focus`() {
+        val am = audioManager()
+
+        // OLD coordinator activates and owns the lease under generation N.
+        val oldToken = ForegroundMediaArbiter.acquireForeground("old-call")
+        val oldGen = ForegroundMediaArbiter.nextOperationGeneration()
+        val oldCoordinator = newCoordinator()
+        oldCoordinator.bindForegroundLease(oldToken, oldGen)
+        runBlocking { oldCoordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
+        assertTrue("old coordinator active before handoff", audioSessionActive(oldCoordinator))
+        assertTrue("old coordinator monitoring registered before handoff", audioDeviceMonitoringActive(oldCoordinator))
+
+        // Switch hands off: release the OLD lease, a DIFFERENT call acquires it and
+        // activates its own coordinator (sets MODE_IN_COMMUNICATION again, holds focus).
+        ForegroundMediaArbiter.releaseLease(oldToken)
+        val newToken = ForegroundMediaArbiter.acquireForeground("new-call")
+        val newGen = ForegroundMediaArbiter.nextOperationGeneration()
+        val newCoordinator = newCoordinator()
+        newCoordinator.bindForegroundLease(newToken, newGen)
+        runBlocking { newCoordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
+        assertTrue("new owner holds the lease", ForegroundMediaArbiter.hasOtherOwner(oldToken))
+
+        // The OLD coordinator's deactivation runs at its OWN (unchanged) generation, so it
+        // is NOT superseded — but a DIFFERENT call now owns the global lease (case 2).
+        val deactivationJob = mainScope.launch { oldCoordinator.deactivateCallSession(oldGen) }
+        ShadowLooper.idleMainLooper()
+        assertTrue(deactivationJob.isCompleted)
+
+        // Per-instance teardown happened on the OLD instance.
+        assertTrue(
+            "cross-coordinator handoff must tear down the old instance's audioSessionActive",
+            !audioSessionActive(oldCoordinator),
+        )
+        assertTrue(
+            "cross-coordinator handoff must unregister the old instance's monitoring",
+            !audioDeviceMonitoringActive(oldCoordinator),
+        )
+        // But NO process-global mutation.
+        assertEquals(
+            "cross-coordinator handoff must NOT restore MODE_NORMAL over the new owner",
+            AudioManager.MODE_IN_COMMUNICATION,
+            am.mode,
+        )
+        assertTrue(
+            "cross-coordinator handoff must NOT abandon the focus the new owner holds (new coordinator's focus intact)",
+            audioFocusGranted(newCoordinator),
+        )
+
+        ForegroundMediaArbiter.releaseLease(newToken)
+    }
+
+    /**
+     * Phase 4 round 3 (contract §6, case 3 — CLEAN LEAVE). Not superseded and NO other
+     * owner: the normal single/last-call leave does the FULL teardown — per-instance
+     * state cleared AND the global restore (MODE_NORMAL) AND `abandonAudioFocus()`.
+     */
+    @Test
+    fun `clean leave with no other owner does full teardown including global restore and focus abandon`() {
+        val am = audioManager()
+        val token = ForegroundMediaArbiter.acquireForeground("solo-call")
+        val gen = ForegroundMediaArbiter.nextOperationGeneration()
+        val coordinator = newCoordinator()
+        coordinator.bindForegroundLease(token, gen)
+        runBlocking { coordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
+        assertTrue("focus granted after activation", audioFocusGranted(coordinator))
+
+        // Clean leave: lease released first (no newer owner), then deactivate at the same
+        // generation it was requested under.
+        ForegroundMediaArbiter.releaseLease(token)
+        val deactivationJob = mainScope.launch { coordinator.deactivateCallSession(gen) }
+        ShadowLooper.idleMainLooper()
+        assertTrue(deactivationJob.isCompleted)
+
+        assertEquals(
+            "a clean leave must restore MODE_NORMAL (global restore)",
+            AudioManager.MODE_NORMAL,
+            am.mode,
+        )
+        assertTrue(
+            "a clean leave must clear audioSessionActive",
+            !audioSessionActive(coordinator),
+        )
+        assertTrue(
+            "a clean leave must abandon audio focus",
+            !audioFocusGranted(coordinator),
+        )
     }
 }
