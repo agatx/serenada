@@ -374,7 +374,7 @@ const CallRoom: React.FC = () => {
             // the held surface (or idle) shows; surface the error to the user.
             if (result.kind === 'failed') {
                 console.warn('[CallRoom] joinAndSwitch failed', result.error);
-                if ('callId' in result && result.callId) registry.dismiss(result.callId);
+                if (joinedCallId) registry.dismiss(joinedCallId);
                 setJoinError(result.error.message);
                 // Drop back to prejoin so the failed call can't wedge the view and
                 // so the user can retry (re-arms the join effect on the next join).

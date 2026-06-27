@@ -1,6 +1,5 @@
 package app.serenada.android.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.serenada.android.R
@@ -93,9 +93,7 @@ private fun CallSwitcherChip(
         color = if (isActive) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.12f),
     ) {
         Column(
-            modifier = Modifier
-                .background(Color.Transparent)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Text(
                 text = label,
@@ -104,7 +102,7 @@ private fun CallSwitcherChip(
                 color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else Color.White,
             )
             Text(
-                text = androidx.compose.ui.res.stringResource(statusResId),
+                text = stringResource(statusResId),
                 style = MaterialTheme.typography.labelSmall,
                 color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else Color.White.copy(alpha = 0.7f),
             )
@@ -115,15 +113,15 @@ private fun CallSwitcherChip(
             ) {
                 if (isActive) {
                     OutlinedButton(onClick = { onHoldCall(call.callId) }) {
-                        Text(androidx.compose.ui.res.stringResource(R.string.call_switcher_hold))
+                        Text(stringResource(R.string.call_switcher_hold))
                     }
                 } else {
                     OutlinedButton(onClick = { onSwitchToCall(call.callId) }) {
-                        Text(androidx.compose.ui.res.stringResource(R.string.call_switcher_resume))
+                        Text(stringResource(R.string.call_switcher_resume))
                     }
                 }
                 TextButton(onClick = { onLeaveCall(call.callId) }) {
-                    Text(androidx.compose.ui.res.stringResource(R.string.call_switcher_leave))
+                    Text(stringResource(R.string.call_switcher_leave))
                 }
             }
         }

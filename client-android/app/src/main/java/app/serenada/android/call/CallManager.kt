@@ -26,6 +26,7 @@ import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallId
 import app.serenada.core.CallRegistryState
 import app.serenada.core.CallState
+import app.serenada.core.JoinAndSwitchResult
 import app.serenada.core.RoomOccupancy
 import app.serenada.core.RoomRef
 import app.serenada.core.RoomWatcher
@@ -209,7 +210,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     /** True when the registry has no non-terminal call (safe to recreate). */
     private fun isRegistryIdle(): Boolean =
-        registry.state.value.calls.none { !isTerminalServiceCall(it.membershipPhase) }
+        !RootRouting.hasLiveCalls(registry.state.value)
 
     private fun onRegistryState(state: CallRegistryState) {
         _callListState.value = state
@@ -231,7 +232,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
         // A registry with no live (non-terminal) call means every call has ended:
         // reset the single-call UI to idle (the active-call screen dismisses).
-        if (state.calls.none { !isTerminalServiceCall(it.membershipPhase) }) {
+        if (!RootRouting.hasLiveCalls(state)) {
             if (activeSession == null && _uiState.value.phase != CallPhase.Idle &&
                 _uiState.value.phase != CallPhase.Error
             ) {
@@ -239,14 +240,6 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             }
         }
     }
-
-    /**
-     * Terminal for foreground-service keep-alive: a call that reached [CallPhase.Idle]
-     * or [CallPhase.Error] no longer holds media and does not keep the service up.
-     * [CallPhase.Ending] is still live (teardown in flight).
-     */
-    private fun isTerminalServiceCall(phase: CallPhase): Boolean =
-        phase == CallPhase.Idle || phase == CallPhase.Error
 
     /**
      * Point the unchanged `sessionState`/`uiState` surface at the registry's active
@@ -298,7 +291,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 callId = call.callId,
                 label = call.roomId.let { savedRoomNameForNotification(it) ?: it },
                 isForeground = call.callId == activeCallId,
-                isEnded = isTerminalServiceCall(call.membershipPhase),
+                isEnded = RootRouting.isTerminal(call.membershipPhase),
                 isScreenSharing = call.callId == activeCallId &&
                     session?.diagnostics?.value?.isScreenSharing == true,
             )
@@ -821,16 +814,16 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         }
     }
 
-    private fun handleJoinAndSwitchResult(result: app.serenada.core.JoinAndSwitchResult) {
+    private fun handleJoinAndSwitchResult(result: JoinAndSwitchResult) {
         when (result) {
-            is app.serenada.core.JoinAndSwitchResult.Active -> Unit // onRegistryState binds the active call.
-            is app.serenada.core.JoinAndSwitchResult.NeedsPermission -> {
+            is JoinAndSwitchResult.Active -> Unit // onRegistryState binds the active call.
+            is JoinAndSwitchResult.NeedsPermission -> {
                 // Held call exists; the host already gates the call on runtime
                 // permissions (runWithCallPermissions), so this is unexpected here.
                 // Surface it rather than silently stranding the call held.
                 Log.w("CallManager", "joinAndSwitch needs permission for ${result.callId}")
             }
-            is app.serenada.core.JoinAndSwitchResult.Failed -> {
+            is JoinAndSwitchResult.Failed -> {
                 // Dismiss the failed call first so the whole-app-error decision sees
                 // the post-failure registry (the failed call is no longer live).
                 result.callId?.let { id -> scope.launch { registry.dismissCall(id) } }

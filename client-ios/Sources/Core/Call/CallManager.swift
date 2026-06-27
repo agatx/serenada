@@ -430,27 +430,28 @@ final class CallManager: ObservableObject {
         // Drop the failed target's record (never the surviving active call). On a
         // room-join failure the registry already marked it ended; on an activation
         // failure the rolled-back target is still live-but-hidden (filtered out of
-        // the switcher because it carries an `activationError`). `leaveCall` retires
-        // a still-live target and is a safe no-op on an already-ended one, so a
-        // single leave+dismiss pair retires the target in both cases.
+        // the switcher because it carries an `activationError`). `retireCall` handles
+        // both cases.
         if let failedCallId, registry.activeCallId != failedCallId {
-            await registry.leaveCall(id: failedCallId)
-            await registry.dismissEndedCall(id: failedCallId)
+            await Self.retireCall(registry, id: failedCallId)
         }
 
+        surfaceFailureOrError(registry: registry, error: error)
+    }
+
+    /// After a switch/activation failure, surface the error as a recoverable banner
+    /// if any live call survived (rolled-back active, or held calls remain), else
+    /// fall through to the whole-app `.error` screen (FIX P5-2).
+    private func surfaceFailureOrError(registry: SerenadaCallRegistry, error: CallActivationError) {
         let liveHeldCount = Self.heldCalls(from: registry.calls, activeCallId: registry.activeCallId).count
         if Self.callSurvivesFailure(activeCallId: registry.activeCallId, liveHeldCount: liveHeldCount) {
-            // A live call survived (active still foreground, or held calls remain):
-            // keep its UI and surface the failure as a recoverable banner.
             presentCallErrorBanner(callActivationErrorMessage(error))
-            return
+        } else {
+            uiState = CallUiState(
+                phase: .error,
+                errorMessage: callActivationErrorMessage(error)
+            )
         }
-
-        // Nothing survived: this is a genuine whole-app failure.
-        uiState = CallUiState(
-            phase: .error,
-            errorMessage: callActivationErrorMessage(error)
-        )
     }
 
     /// True when a live call (the rolled-back active call, or any live held call)
@@ -487,8 +488,7 @@ final class CallManager: ObservableObject {
 
         let granted = await SerenadaPermissions.request(permissions)
         guard granted else {
-            await registry.leaveCall(id: callId)
-            await registry.dismissEndedCall(id: callId)
+            await Self.retireCall(registry, id: callId)
             return
         }
 
@@ -497,23 +497,13 @@ final class CallManager: ObservableObject {
             break
         case .needsPermission:
             // Still denied at the OS level after the prompt: give up on this call.
-            await registry.leaveCall(id: callId)
-            await registry.dismissEndedCall(id: callId)
+            await Self.retireCall(registry, id: callId)
         case let .failed(error):
-            await registry.leaveCall(id: callId)
-            await registry.dismissEndedCall(id: callId)
+            await Self.retireCall(registry, id: callId)
             // The switch failed but a live call may still survive (rolled-back
             // active, or other held calls). Keep its UI; only fall to the error
             // screen when nothing survived (FIX P5-2).
-            let liveHeldCount = Self.heldCalls(from: registry.calls, activeCallId: registry.activeCallId).count
-            if Self.callSurvivesFailure(activeCallId: registry.activeCallId, liveHeldCount: liveHeldCount) {
-                presentCallErrorBanner(callActivationErrorMessage(error))
-            } else {
-                uiState = CallUiState(
-                    phase: .error,
-                    errorMessage: callActivationErrorMessage(error)
-                )
-            }
+            surfaceFailureOrError(registry: registry, error: error)
         }
     }
 
@@ -530,8 +520,7 @@ final class CallManager: ObservableObject {
         }
 
         Task { @MainActor [weak self] in
-            await registry.leaveCall(id: callId)
-            await registry.dismissEndedCall(id: callId)
+            await Self.retireCall(registry, id: callId)
             self?.clearActiveSession(resetUiState: true)
         }
     }
@@ -560,9 +549,16 @@ final class CallManager: ObservableObject {
     func leaveHeldCall(id: CallId) {
         guard let registry = callRegistry else { return }
         Task { @MainActor in
-            await registry.leaveCall(id: id)
-            await registry.dismissEndedCall(id: id)
+            await Self.retireCall(registry, id: id)
         }
+    }
+
+    /// Leave a call and dismiss its record. `leaveCall` retires a still-live call
+    /// and is a safe no-op on an already-ended one, so this pair retires a target
+    /// regardless of its current phase.
+    private static func retireCall(_ registry: SerenadaCallRegistry, id: CallId) async {
+        await registry.leaveCall(id: id)
+        await registry.dismissEndedCall(id: id)
     }
 
     func dismissError() {
@@ -679,7 +675,7 @@ final class CallManager: ObservableObject {
     /// single-mode contract.
     private func registry(forHost host: String) -> (SerenadaCallRegistry, SerenadaCore) {
         if let registry = callRegistry, let core = registryCore {
-            let hasLiveCall = registry.calls.contains { !isEndedPhase($0.membershipPhase) && $0.activationError == nil }
+            let hasLiveCall = registry.calls.contains { !Self.isEndedPhase($0.membershipPhase) && $0.activationError == nil }
                 || activeCallId != nil
             if registryHost == host || hasLiveCall {
                 return (registry, core)
@@ -951,11 +947,6 @@ final class CallManager: ObservableObject {
         if resetUiState {
             uiState = CallUiState()
         }
-    }
-
-    /// True for membership phases that mean the call is no longer live.
-    private func isEndedPhase(_ phase: SerenadaCallPhase) -> Bool {
-        Self.isEndedPhase(phase)
     }
 
     /// True for membership phases that mean the call is no longer live. Static +
