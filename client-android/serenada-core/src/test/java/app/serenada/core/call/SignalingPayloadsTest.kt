@@ -281,6 +281,22 @@ class SignalingPayloadsTest {
     }
 
     @Test
+    fun toParticipantList_parsesHeldFromSnapshot() {
+        // The server persists `held` in joined/room_state snapshots so a late
+        // joiner / reconnecting client can render a held peer that cannot
+        // re-broadcast its live media state. Additive; absent stays null.
+        val arr = JSONArray().apply {
+            put(JSONObject().apply { put("cid", "C-1"); put("held", true) })
+            put(JSONObject().apply { put("cid", "C-2"); put("held", false) })
+            put(JSONObject().apply { put("cid", "C-3") })
+        }
+        val result = arr.toParticipantList()
+        assertEquals(true, result[0].held)
+        assertEquals(false, result[1].held)
+        assertNull(result[2].held)
+    }
+
+    @Test
     fun toParticipantList_skipsBlankCid() {
         val arr = JSONArray().apply {
             put(JSONObject().apply { put("cid", "") })

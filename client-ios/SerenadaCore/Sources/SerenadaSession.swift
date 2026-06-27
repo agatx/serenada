@@ -2264,7 +2264,7 @@ public final class SerenadaSession: ObservableObject {
             let peerState = remoteMediaStates[p.cid]
             let audioEnabled = peerState?.audioEnabled ?? p.audioEnabled ?? true
             let videoEnabled = peerState?.videoEnabled ?? p.videoEnabled ?? (slot?.isRemoteVideoTrackEnabled() ?? false)
-            let held = peerState?.held ?? false
+            let held = peerState?.held ?? p.held ?? false
             // Reconcile any server-persisted contentState from the snapshot
             // (joined/room_state) against the cached live state with the same
             // cid-keyed keep-highest rule used for live `content_state`. A

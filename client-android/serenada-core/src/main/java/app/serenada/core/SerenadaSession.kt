@@ -2448,7 +2448,7 @@ class SerenadaSession internal constructor(
                 signalingStatus = signalingStatus,
                 presumedLost = signalingStatus == ParticipantSignalingStatus.SUSPENDED && cid in presumedLostRemoteCids,
                 audioLevel = if (audioEnabled) previousLevels[cid] ?: 0f else 0f,
-                held = peerState?.held ?: false,
+                held = peerState?.held ?: participant?.held ?: false,
             )
         }
         val currentState = _state.value

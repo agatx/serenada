@@ -183,6 +183,7 @@ internal fun JSONArray?.toParticipantList(): List<Participant> {
                 peerId = p.optString("peerId").ifBlank { null },
                 audioEnabled = if (p.has("audioEnabled")) p.optBoolean("audioEnabled") else null,
                 videoEnabled = if (p.has("videoEnabled")) p.optBoolean("videoEnabled") else null,
+                held = if (p.has("held")) p.optBoolean("held") else null,
                 signalingStatus = status,
                 contentState = contentState,
                 capabilities = p.optJSONObject("capabilities")?.toParticipantCapabilities(),

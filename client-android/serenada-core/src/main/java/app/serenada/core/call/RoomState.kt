@@ -22,6 +22,13 @@ internal data class Participant(
     val peerId: String? = null,
     val audioEnabled: Boolean? = null,
     val videoEnabled: Boolean? = null,
+    /**
+     * Multi-call "on hold" flag the server persists in joined/room_state
+     * snapshots (additive; null for older clients / never-held peers). Lets a
+     * late joiner or a client reconnecting after it missed the live
+     * `participant_media_state` relay still render a held peer correctly.
+     */
+    val held: Boolean? = null,
     val signalingStatus: ParticipantSignalingStatus = ParticipantSignalingStatus.ACTIVE,
     /**
      * Latest ephemeral content metadata for this participant (screen share,
