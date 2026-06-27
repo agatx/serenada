@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
-import { SerenadaCallFlow } from '@agatx/serenada-react-ui';
+import { SerenadaCallFlow, useSerenadaCallRegistry } from '@agatx/serenada-react-ui';
 import type { SerenadaString } from '@agatx/serenada-react-ui';
-import { SerenadaCore, ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS, SnapshotError } from '@agatx/serenada-core';
-import type { CallState, SerenadaSessionHandle, SnapshotResult } from '@agatx/serenada-core';
+import { ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS, SnapshotError } from '@agatx/serenada-core';
+import type { CallState, SerenadaConfig, SnapshotResult } from '@agatx/serenada-core';
 import { useToast } from '../contexts/ToastContext';
 import { saveCall } from '../utils/callHistory';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
@@ -15,6 +15,11 @@ import { parseTurnsOnly } from '../utils/turnsOnly';
 import { getDisplayName, setDisplayName } from '../utils/displayName';
 
 const BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED = true;
+
+// One logger instance for the registry config so the memoized config stays
+// referentially stable across renders (the registry reconstructs on config-key
+// changes only).
+const serenadaLogger = new ConsoleSerenadaLogger();
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -219,7 +224,6 @@ const CallRoom: React.FC = () => {
     const turnsOnly = useMemo(() => parseTurnsOnly(location.search), [location.search]);
 
     const [shouldJoin, setShouldJoin] = useState(false);
-    const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
     const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
     const [isSubscribed, setIsSubscribed] = useState(false);
     const [pushSupported, setPushSupported] = useState(false);
@@ -234,6 +238,43 @@ const CallRoom: React.FC = () => {
     displayNameRef.current = displayNameInput;
 
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
+
+    // Multi-call registry: a single call is a registry with one foreground call.
+    // The active call (`registry.activeCall?.session`) is rendered by the
+    // existing single-session SerenadaCallFlow, so the single-call UX is
+    // identical. The registry owns the foreground media lease and teardown.
+    const registryConfig = useMemo<SerenadaConfig>(() => ({
+        serverHost: getConfiguredServerHost(),
+        logger: serenadaLogger,
+        turnsOnly,
+        // Bundled web app opt-in: the headless SDK default remains false for
+        // external integrators, but this app intentionally ships the
+        // independent screen-share media path.
+        enableIndependentContentVideo: BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED,
+    }), [turnsOnly]);
+
+    const {
+        calls: registryCalls,
+        activeCall,
+        activeCallId,
+        sessionFor,
+        joinAndSwitch,
+        leave: leaveCall,
+    } = useSerenadaCallRegistry({ config: registryConfig });
+
+    // The session to render: the foreground (active) call once activated, else
+    // the single in-flight call while its held join + foreground activation is
+    // still settling, so the "Joining call…" overlay shows immediately on Join
+    // (single-call UX parity). `registryCalls` is the reactive snapshot;
+    // `sessionFor` resolves its live session.
+    const session = useMemo(() => {
+        const active = activeCall?.session;
+        if (active) return active;
+        const firstLive = registryCalls.find(
+            (c) => c.membershipPhase !== 'idle' && c.membershipPhase !== 'error',
+        );
+        return firstLive ? sessionFor(firstLive.id) : null;
+    }, [activeCall, registryCalls, sessionFor]);
 
     const stopPreview = useCallback(() => {
         setPreviewStream((current) => {
@@ -284,25 +325,34 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         if (!roomId || !shouldJoin) return;
 
-        const core = new SerenadaCore({
-            serverHost: getConfiguredServerHost(),
-            logger: new ConsoleSerenadaLogger(),
-            turnsOnly,
-            // Bundled web app opt-in: the headless SDK default remains false for
-            // external integrators, but this app intentionally ships the
-            // independent screen-share media path.
-            enableIndependentContentVideo: BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED,
-        });
         const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
-        const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });
         callStartTimeRef.current = Date.now();
-        setSession(nextSession);
+
+        let cancelled = false;
+        let joinedCallId: string | null = null;
+        // Join held then foreground it: for a single call this is a registry with
+        // one foreground call, so `activeCall?.session` renders exactly as before.
+        // joinAndSwitch holds any prior active call first.
+        void joinAndSwitch({
+            url: callUrl,
+            displayName: displayNameRef.current.trim() || undefined,
+        }).then((result) => {
+            if (result.kind === 'failed') {
+                console.warn('[CallRoom] joinAndSwitch failed', result.error);
+            }
+            if ('callId' in result && result.callId) {
+                joinedCallId = result.callId;
+                // The effect was torn down while the join was in flight: leave
+                // the now-orphaned call (cleanup ran before the callId existed).
+                if (cancelled) void leaveCall(joinedCallId);
+            }
+        });
 
         return () => {
-            nextSession.destroy();
-            setSession(null);
+            cancelled = true;
+            if (joinedCallId) void leaveCall(joinedCallId);
         };
-    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, turnsOnly]);
+    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, joinAndSwitch, leaveCall]);
 
     useEffect(() => {
         if (!roomId) return;
@@ -450,9 +500,11 @@ const CallRoom: React.FC = () => {
     }, [navigate, roomId]);
 
     const handleEndCall = useCallback(() => {
-        session?.leave();
+        // Leave through the registry so it releases the foreground lease and the
+        // process owning mode (not just `session.leave()`).
+        if (activeCallId) void leaveCall(activeCallId);
         handleDismiss();
-    }, [handleDismiss, session]);
+    }, [activeCallId, handleDismiss, leaveCall]);
 
     const handleInvite = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();

@@ -16,6 +16,11 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,6 +69,7 @@ fun SerenadaAppRoot(
     val callUiVariant by callManager.callUiVariant
     val roomStatuses by callManager.roomStatuses
     val activeSession by callManager.sessionState
+    val callListState by callManager.callListState
     val context = LocalContext.current
     val showActiveCallScreen =
         uiState.phase == CallPhase.Waiting ||
@@ -345,6 +351,9 @@ fun SerenadaAppRoot(
                     )
                 }
                 RootScreen.Call -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
                     activeSession?.let { session ->
                         val snapshotScope = rememberCoroutineScope()
                         SerenadaCallFlow(
@@ -427,6 +436,20 @@ fun SerenadaAppRoot(
                             onStartScreenShare = { intent -> callManager.startScreenShare(intent) },
                             onStopScreenShare = { callManager.stopScreenShare() },
                         )
+                    }
+                    // Minimal multi-call switcher (Phase 5): rendered only when more
+                    // than one managed call exists, overlaid at the top of the active
+                    // call surface. Single-call UX is untouched.
+                    CallSwitcherBar(
+                        state = callListState,
+                        roomLabel = { call -> callManager.callLabel(call.roomId) },
+                        onSwitchToCall = { callManager.switchToCall(it) },
+                        onHoldCall = { callManager.holdCall(it) },
+                        onLeaveCall = { callManager.leaveCall(it) },
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .statusBarsPadding(),
+                    )
                     }
                 }
                 RootScreen.Error -> {

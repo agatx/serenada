@@ -57,6 +57,7 @@
 "call_status_left_room" = "Left room";
 "call_status_room_ended" = "Room ended";
 "call_status_session_expired" = "Session expired. Please rejoin the call.";
+"call_status_on_hold" = "On hold";
 
 "call_local_camera_off" = "Your camera is off";
 "call_camera_off" = "Camera off";

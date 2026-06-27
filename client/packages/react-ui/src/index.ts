@@ -7,6 +7,12 @@ export { SERENADA_CORE_VERSION as SERENADA_UI_VERSION } from '@agatx/serenada-co
 export { useSerenadaSession } from './hooks/useSerenadaSession.js';
 export type { UseSerenadaSessionOptions, UseSerenadaSessionResult } from './hooks/useSerenadaSession.js';
 export { useCallState } from './hooks/useCallState.js';
+export { useSerenadaCallRegistry } from './hooks/useSerenadaCallRegistry.js';
+export type {
+    UseSerenadaCallRegistryOptions,
+    UseSerenadaCallRegistryResult,
+    RegistryRoomInput,
+} from './hooks/useSerenadaCallRegistry.js';
 
 // Call Flow
 export { SerenadaCallFlow } from './SerenadaCallFlow.js';

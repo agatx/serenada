@@ -154,6 +154,18 @@ struct RootView: View {
                 )
             }
 
+            if currentScreen == .call, !callManager.heldCalls.isEmpty {
+                HeldCallsSwitcher(
+                    heldCalls: callManager.heldCalls,
+                    isBusy: callManager.isCallOperationInProgress,
+                    onSwitch: { callManager.switchToHeldCall(id: $0) },
+                    onLeave: { callManager.leaveHeldCall(id: $0) }
+                )
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(40)
+            }
+
             if let banner = callManager.snapshotBanner {
                 SnapshotBannerView(banner: banner)
                     .padding(.top, 16)
@@ -161,6 +173,7 @@ struct RootView: View {
                     .zIndex(50)
             }
         }
+        .animation(.easeInOut(duration: 0.24), value: callManager.heldCalls)
         .animation(.easeInOut(duration: 0.24), value: callManager.snapshotBanner)
         .animation(.easeInOut(duration: 0.24), value: currentScreen)
         .onAppear {
@@ -305,6 +318,79 @@ struct RootView: View {
                 settingsSaveInProgress = false
             }
         }
+    }
+}
+
+/// Minimal held-calls switcher (Phase 5, design "UI and UX Contract": held call
+/// chips + a switch action). Not a full multi-call UI — a thin affordance driven
+/// entirely by registry state. Hidden when there are no held calls (the common
+/// single-call case).
+private struct HeldCallsSwitcher: View {
+    let heldCalls: [ManagedCallState]
+    let isBusy: Bool
+    let onSwitch: (CallId) -> Void
+    let onLeave: (CallId) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(heldCalls, id: \.id) { call in
+                    HeldCallChip(
+                        call: call,
+                        isBusy: isBusy,
+                        onSwitch: { onSwitch(call.id) },
+                        onLeave: { onLeave(call.id) }
+                    )
+                }
+            }
+            .padding(.horizontal, 14)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+private struct HeldCallChip: View {
+    let call: ManagedCallState
+    let isBusy: Bool
+    let onSwitch: () -> Void
+    let onLeave: () -> Void
+
+    private var title: String {
+        if let name = call.displayName, !name.isEmpty { return name }
+        return call.roomId
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pause.circle.fill")
+                .foregroundStyle(.secondary)
+            Button(action: onSwitch) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(L10n.callStatusOnHold)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+
+            Button(action: onLeave) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 220)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .shadow(color: Color.black.opacity(0.2), radius: 6, y: 2)
     }
 }
 
