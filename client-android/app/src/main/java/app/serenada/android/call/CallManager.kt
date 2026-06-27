@@ -19,19 +19,12 @@ import app.serenada.android.i18n.AppLocaleManager
 import app.serenada.android.network.HostApiClient
 import app.serenada.android.push.PushSubscriptionManager
 import app.serenada.android.service.CallService
-import app.serenada.android.service.CallServiceCall
-import app.serenada.android.ui.RootRouting
 import app.serenada.callui.SerenadaCallUiVariant
 import app.serenada.core.CallDiagnostics
-import app.serenada.core.CallId
-import app.serenada.core.CallRegistryState
 import app.serenada.core.CallState
-import app.serenada.core.JoinAndSwitchResult
 import app.serenada.core.RoomOccupancy
-import app.serenada.core.RoomRef
 import app.serenada.core.RoomWatcher
 import app.serenada.core.RoomWatcherDelegate
-import app.serenada.core.SerenadaCallRegistry
 import app.serenada.core.SerenadaConfig
 import app.serenada.core.AndroidSerenadaLogger
 import app.serenada.core.SerenadaCore
@@ -102,38 +95,12 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     private val _roomStatuses = mutableStateOf<Map<String, RoomOccupancy>>(emptyMap())
     val roomStatuses: State<Map<String, RoomOccupancy>> = _roomStatuses
 
-    // --- Registry-backed call state (multi-call session, Phase 5) ---
-    //
-    // The app migrates from a single `_session` to a [SerenadaCallRegistry]. For
-    // minimal UI churn we keep exposing the SAME `sessionState` (the active call's
-    // session) and `uiState` (the active call's UI state, re-derived from the
-    // registry's active call), and ADD `callListState` for the switcher. The SDK
-    // direct `join()` API stays for third-party consumers; only this bundled app
-    // migrates. Single-call UX is preserved exactly (one call = a registry with one
-    // foreground call).
-
-    // The registry holds ONE SerenadaCore (also kept here for createRoom). The
-    // core's config (host, default mic/cam, HD) is snapshotted at construction, so
-    // when the registry is fully idle (no live calls) we recreate both to pick up
-    // settings changes — matching the pre-migration "fresh core per join" behavior.
-    // While calls are live the registry is stable (it owns the arbiter mode).
-    private var core: SerenadaCore = createSdkCore(settingsStore.host)
-    private var registry: SerenadaCallRegistry = SerenadaCallRegistry(core)
-
     private val _session = mutableStateOf<SerenadaSession?>(null)
-    /** The active (foreground) call's session, or null. Unchanged UI surface. */
     val sessionState: State<SerenadaSession?> = _session
-
-    private val _callListState = mutableStateOf(CallRegistryState())
-    /** Aggregate registry state for the switcher (held call chips + switch action). */
-    val callListState: State<CallRegistryState> = _callListState
 
     val isRemoteVideoFitCover: Boolean
         get() = settingsStore.isRemoteVideoFitCover
 
-    // The session whose state/diagnostics currently drive `sessionState`/`uiState`.
-    // Observers key off THIS (the registry active call); updates from a non-active
-    // session are dropped (design "Host App Migration" / iOS test parity).
     private var activeSession: SerenadaSession?
         get() = _session.value
         set(value) {
@@ -142,7 +109,6 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private var activeSessionStateJob: Job? = null
     private var activeSessionStatsJob: Job? = null
-    private var observedActiveCallId: CallId? = null
     private var currentRoomId: String? = null
     private var activeCallHostOverride: String? = null
     private var callStartTimeMs: Long? = null
@@ -169,149 +135,6 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         roomWatcher.delegate = this
         refreshRecentCalls()
         refreshSavedRooms()
-        observeRegistry()
-    }
-
-    private var registrySettingsSnapshot: CoreSettingsSnapshot = CoreSettingsSnapshot.from(settingsStore)
-    private var registryStateJob: Job? = null
-
-    /**
-     * Observe the registry's aggregate state (multi-call session, Phase 5): keep
-     * `callListState` current, drive the foreground service from the call list, and
-     * re-derive the single active-call `sessionState`/`uiState` whenever the active
-     * (foreground) call changes. This is the one place the registry's view of "who
-     * is active" flows into the unchanged single-call UI surface.
-     */
-    private fun observeRegistry() {
-        registryStateJob?.cancel()
-        registryStateJob = scope.launch {
-            registry.state.collectLatest { state ->
-                handler.post { onRegistryState(state) }
-            }
-        }
-    }
-
-    /**
-     * Recreate the registry (and its [SerenadaCore]) ONLY when fully idle so a new
-     * call picks up the latest settings (host, default mic/cam, HD). While any call
-     * is live the registry must stay put (it owns the process-wide arbiter mode);
-     * recreating it then would orphan live sessions. No-op if settings are unchanged.
-     */
-    private fun ensureFreshRegistryIfIdle() {
-        if (!isRegistryIdle()) return
-        val current = CoreSettingsSnapshot.from(settingsStore)
-        if (current == registrySettingsSnapshot) return
-        runCatching { registry.close() }
-        core = createSdkCore(current.host)
-        registry = SerenadaCallRegistry(core)
-        registrySettingsSnapshot = current
-        observeRegistry()
-    }
-
-    /** True when the registry has no non-terminal call (safe to recreate). */
-    private fun isRegistryIdle(): Boolean =
-        !RootRouting.hasLiveCalls(registry.state.value)
-
-    private fun onRegistryState(state: CallRegistryState) {
-        _callListState.value = state
-
-        // Drive the single-instance foreground service from the whole call list
-        // (design "Foreground Service"): the service stays up while ANY non-ended
-        // call exists and stops only when none remains. Held calls are summary
-        // text; the active call owns the mute/end actions.
-        CallService.update(appContext, state.toServiceCalls())
-
-        // Re-subscribe the active-call observers when the foreground call changes
-        // (or clears). Updates from a non-active session are dropped by the
-        // `activeSession !== session` guards inside the collectors.
-        val newActiveId = state.activeCallId
-        if (newActiveId != observedActiveCallId) {
-            observedActiveCallId = newActiveId
-            bindActiveSession(newActiveId)
-        }
-
-        // A registry with no live (non-terminal) call means every call has ended:
-        // reset the single-call UI to idle (the active-call screen dismisses).
-        if (!RootRouting.hasLiveCalls(state)) {
-            if (activeSession == null && _uiState.value.phase != CallPhase.Idle &&
-                _uiState.value.phase != CallPhase.Error
-            ) {
-                updateState(CallUiState())
-            }
-        }
-    }
-
-    /**
-     * Point the unchanged `sessionState`/`uiState` surface at the registry's active
-     * (foreground) call. Cancels the previous call's collectors and starts fresh
-     * ones for [activeCallId]; a null id means no call is foreground (e.g. the
-     * active call ended while held calls remain — no auto-promote, Core Invariant
-     * 5), and the UI collapses to a holding/idle state.
-     */
-    private fun bindActiveSession(activeCallId: CallId?) {
-        clearActiveSessionObservers()
-        val session = activeCallId?.let { registry.session(it) }
-        activeSession = session
-        if (session == null) {
-            // No foreground call: keep held calls connected (callListState shows
-            // them) but the active-call screen has nothing to render.
-            return
-        }
-        currentRoomId = session.roomId
-        if (callStartTimeMs == null) callStartTimeMs = System.currentTimeMillis()
-        hasNotifiedPushForJoin = false
-        watchRecentRoomsIfNeeded()
-
-        activeSessionStateJob =
-            scope.launch {
-                session.state.collectLatest { state ->
-                    if (activeSession !== session) return@collectLatest
-                    handler.post {
-                        handleSdkSessionState(session, state)
-                    }
-                }
-            }
-        activeSessionStatsJob =
-            scope.launch {
-                session.diagnostics.collectLatest { diagnostics ->
-                    if (activeSession !== session) return@collectLatest
-                    handler.post {
-                        applySdkStateToUi(session.state.value, diagnostics)
-                    }
-                }
-            }
-        applySdkStateToUi(session.state.value, session.diagnostics.value)
-    }
-
-    /** Project the registry call list into the framework-free service snapshot. */
-    private fun CallRegistryState.toServiceCalls(): List<CallServiceCall> =
-        calls.map { call ->
-            val session = registry.session(call.callId)
-            CallServiceCall(
-                callId = call.callId,
-                label = call.roomId.let { savedRoomNameForNotification(it) ?: it },
-                isForeground = call.callId == activeCallId,
-                isEnded = RootRouting.isTerminal(call.membershipPhase),
-                isScreenSharing = call.callId == activeCallId &&
-                    session?.diagnostics?.value?.isScreenSharing == true,
-            )
-        }
-
-    /** Snapshot of the settings that feed a [SerenadaCore]'s config at creation. */
-    private data class CoreSettingsSnapshot(
-        val host: String,
-        val defaultMicEnabled: Boolean,
-        val defaultCameraEnabled: Boolean,
-        val hdVideoEnabled: Boolean,
-    ) {
-        companion object {
-            fun from(settings: SettingsStore) = CoreSettingsSnapshot(
-                host = settings.host,
-                defaultMicEnabled = settings.isDefaultMicrophoneEnabled,
-                defaultCameraEnabled = settings.isDefaultCameraEnabled,
-                hdVideoEnabled = settings.isHdVideoExperimentalEnabled,
-            )
-        }
     }
 
     private fun createSdkCore(host: String): SerenadaCore {
@@ -338,6 +161,42 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         )
         core.logger = AndroidSerenadaLogger()
         return core
+    }
+
+    private fun beginSdkSession(session: SerenadaSession, hostOverride: String? = null) {
+        clearActiveSessionObservers()
+        activeSession = session
+        activeCallHostOverride = normalizeHostValue(hostOverride)
+        currentRoomId = session.roomId
+        callStartTimeMs = System.currentTimeMillis()
+        hasNotifiedPushForJoin = false
+        watchRecentRoomsIfNeeded()
+
+        activeSessionStateJob =
+            scope.launch {
+                session.state.collectLatest { state ->
+                    if (activeSession !== session) return@collectLatest
+                    handler.post {
+                        handleSdkSessionState(session, state)
+                    }
+                }
+            }
+        activeSessionStatsJob =
+            scope.launch {
+                session.diagnostics.collectLatest { diagnostics ->
+                    if (activeSession !== session) return@collectLatest
+                    handler.post {
+                        applySdkStateToUi(session.state.value, diagnostics)
+                    }
+                }
+            }
+
+        applySdkStateToUi(session.state.value, session.diagnostics.value)
+        CallService.start(
+            appContext,
+            session.roomId,
+            roomName = savedRoomNameForNotification(session.roomId),
+        )
     }
 
     private fun handleSdkSessionState(session: SerenadaSession, state: CallState) {
@@ -369,33 +228,21 @@ class CallManager(context: Context) : RoomWatcherDelegate {
             }
         }
 
-        // History/teardown and the foreground service are now driven by the
-        // registry (onRegistryState). When the ACTIVE call reaches a terminal phase
-        // on its own (remote end / fatal error), record history once; the registry
-        // runs its own serialized terminal cleanup (lease release, mode drop). NO
-        // auto-promote of a held call (Core Invariant 5).
-        if (state.phase == CallPhase.Idle) {
-            saveCurrentCallToHistoryIfNeeded()
+        when (state.phase) {
+            CallPhase.Idle -> finishSdkSession(session, saveHistory = true)
+            CallPhase.Error -> CallService.stop(appContext)
+            else -> {
+                roomId?.let { rid ->
+                    CallService.start(appContext, rid, roomName = savedRoomNameForNotification(rid))
+                }
+            }
         }
     }
 
     private fun applySdkStateToUi(state: CallState, diagnostics: CallDiagnostics) {
         val previous = _uiState.value
-        // P5-7: when the ACTIVE call ends in a terminal error but live held calls
-        // remain (Core Invariant 5: no auto-promote), do NOT surface it as a whole-
-        // app error — that would mask the surviving held calls. Demote the mirrored
-        // phase to Idle so routing falls through to the holding surface; the failure
-        // stays per-call (the ended call's `activationError`/quality summary live in
-        // the registry). A lone call that errors with no held leaves nothing live,
-        // so the whole-app error still shows as before.
-        val effectivePhase =
-            if (state.phase == CallPhase.Error && !shouldSetWholeAppError()) {
-                CallPhase.Idle
-            } else {
-                state.phase
-            }
         val statusMessageResId =
-            when (effectivePhase) {
+            when (state.phase) {
                 CallPhase.CreatingRoom -> R.string.call_status_creating_room
                 CallPhase.AwaitingPermissions,
                 CallPhase.Joining -> R.string.call_status_joining_room
@@ -408,16 +255,16 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
         updateState(
             previous.copy(
-                phase = effectivePhase,
+                phase = state.phase,
                 roomId = state.roomId ?: currentRoomId,
                 localCid = state.localCid,
                 statusMessageResId = statusMessageResId,
-                errorMessageResId = if (effectivePhase == CallPhase.Error && state.error == null) {
+                errorMessageResId = if (state.phase == CallPhase.Error && state.error == null) {
                     R.string.error_unknown
                 } else {
                     null
                 },
-                errorMessageText = if (effectivePhase == CallPhase.Error) state.error?.displayMessage else null,
+                errorMessageText = if (state.phase == CallPhase.Error) state.error?.displayMessage else null,
                 isHost = state.isHost,
                 participantCount = state.participantCount,
                 localAudioEnabled = state.localAudioEnabled,
@@ -439,6 +286,24 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 remoteContentType = diagnostics.remoteContentType,
             ),
         )
+    }
+
+    private fun finishSdkSession(session: SerenadaSession, saveHistory: Boolean) {
+        if (activeSession !== session) return
+        if (saveHistory) {
+            saveCurrentCallToHistoryIfNeeded()
+        }
+        clearActiveSessionObservers()
+        session.close()
+        activeSession = null
+        CallService.stop(appContext)
+        currentRoomId = null
+        activeCallHostOverride = null
+        callStartTimeMs = null
+        hasNotifiedPushForJoin = false
+        updateState(CallUiState())
+        refreshRecentCalls()
+        refreshSavedRooms()
     }
 
     private fun clearActiveSessionObservers() {
@@ -752,10 +617,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     private fun isValidRoomId(roomId: String): Boolean = ROOM_ID_REGEX.matches(roomId)
 
     fun startNewCall() {
-        // Single-call guard preserved: when idle the registry has no live call.
         if (_uiState.value.phase != CallPhase.Idle || activeSession != null) return
-        ensureFreshRegistryIfIdle()
-        activeCallHostOverride = null
         updateState(
             _uiState.value.copy(
                 phase = CallPhase.CreatingRoom,
@@ -764,12 +626,10 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         )
         scope.launch {
             try {
+                val core = createSdkCore(serverHost.value)
                 val created = core.createRoom()
-                // joinAndSwitch: held join then foreground. With no prior active call
-                // this is single-call; with one already active it holds the old call
-                // first (Core Invariant 4 preflight) — the multi-call new-call flow.
-                val result = registry.joinAndSwitch(RoomRef.Id(created.roomId))
-                handleJoinAndSwitchResult(result)
+                val session = core.join(roomId = created.roomId, displayName = resolvedDisplayName)
+                beginSdkSession(session)
             } catch (error: Throwable) {
                 val fallback = appContext.getString(R.string.error_failed_create_room)
                 val message = error.message?.ifBlank { null } ?: fallback
@@ -798,138 +658,27 @@ class CallManager(context: Context) : RoomWatcherDelegate {
         if (savedRoomStore.markRoomJoined(roomId)) {
             refreshSavedRooms()
         }
-        ensureFreshRegistryIfIdle()
         val resolvedHost = normalizeHostValue(oneOffHost) ?: serverHost.value
-        activeCallHostOverride = normalizeHostValue(oneOffHost)
-        // Show the joining state immediately (the held room join runs async).
-        updateState(
-            _uiState.value.copy(
-                phase = CallPhase.Joining,
-                statusMessageResId = R.string.call_status_joining_room,
-            ),
-        )
-        scope.launch {
-            val result = registry.joinAndSwitch(RoomRef.Id(roomId, serverHost = resolvedHost))
-            handleJoinAndSwitchResult(result)
-        }
-    }
-
-    private fun handleJoinAndSwitchResult(result: JoinAndSwitchResult) {
-        when (result) {
-            is JoinAndSwitchResult.Active -> Unit // onRegistryState binds the active call.
-            is JoinAndSwitchResult.NeedsPermission -> {
-                // Held call exists; the host already gates the call on runtime
-                // permissions (runWithCallPermissions), so this is unexpected here.
-                // Surface it rather than silently stranding the call held.
-                Log.w("CallManager", "joinAndSwitch needs permission for ${result.callId}")
-            }
-            is JoinAndSwitchResult.Failed -> {
-                // Dismiss the failed call first so the whole-app-error decision sees
-                // the post-failure registry (the failed call is no longer live).
-                result.callId?.let { id -> scope.launch { registry.dismissCall(id) } }
-                // P5-7: only raise a WHOLE-APP error when nothing survives — no active
-                // call AND no live held call. If a live held call remains (Core
-                // Invariant 5: no auto-promote), routing shows the holding surface; the
-                // error is per-call (the failed call's `activationError`) / transient,
-                // never a whole-app screen that masks the surviving held call. The
-                // failed call's dismissCall is async, so exclude it here explicitly.
-                if (shouldSetWholeAppError(result.callId)) {
-                    updateState(
-                        _uiState.value.copy(
-                            phase = CallPhase.Error,
-                            errorMessageResId = null,
-                            errorMessageText = result.error.message,
-                        ),
-                    )
-                } else if (_uiState.value.phase == CallPhase.Joining ||
-                    _uiState.value.phase == CallPhase.CreatingRoom
-                ) {
-                    // Live held calls survive: routing shows the holding surface. Clear
-                    // the lingering "joining/creating" phase set before the async join
-                    // so the single-call busy UI does not stick around behind it.
-                    updateState(CallUiState())
-                }
-            }
-        }
-    }
-
-    /**
-     * P5-7 decision: may we raise a WHOLE-APP [CallPhase.Error] right now? Only when
-     * nothing survives — no active call AND no live (held) call remains. If a live
-     * held call remains (Core Invariant 5: no auto-promote), routing shows the
-     * holding surface instead and the error stays per-call/transient. Delegates to
-     * the single source of truth [RootRouting.allowsWholeAppError].
-     *
-     * @param excludeCallId a call whose async dismissal is already queued (the just-
-     *   failed join). It is filtered out so the decision reflects the post-failure
-     *   registry, not the transient pre-dismiss snapshot.
-     */
-    private fun shouldSetWholeAppError(excludeCallId: CallId? = null): Boolean {
-        val state = registry.state.value
-        val effective =
-            if (excludeCallId == null) {
-                state
-            } else {
-                state.copy(calls = state.calls.filter { it.callId != excludeCallId })
-            }
-        return RootRouting.allowsWholeAppError(effective)
-    }
-
-    /**
-     * Human-friendly label for a managed call (saved-room name when known, else the
-     * room id), used by the switcher UI. Pure read; safe to call from Compose.
-     */
-    fun callLabel(roomId: String): String =
-        savedRoomNameForNotification(roomId) ?: roomId
-
-    /** Switch the foreground lease to [callId] (switcher UI + notification action). */
-    fun switchToCall(callId: CallId) {
-        scope.launch { registry.switchToCall(callId) }
-    }
-
-    /** Hold [callId] (drop it out of foreground without leaving). No auto-promote. */
-    fun holdCall(callId: CallId) {
-        scope.launch { registry.holdCall(callId) }
+        val session = createSdkCore(resolvedHost).join(roomId, resolvedHost, displayName = resolvedDisplayName)
+        beginSdkSession(session, hostOverride = oneOffHost)
     }
 
     fun leaveCall() {
-        val target = activeCallIdOrNull()
-        if (target == null) {
+        activeSession?.leave() ?: run {
             if (_uiState.value.phase != CallPhase.Idle) {
                 updateState(CallUiState())
             }
-            return
         }
-        scope.launch { registry.leaveCall(target) }
-    }
-
-    /** Leave [callId] (switcher per-call leave). */
-    fun leaveCall(callId: CallId) {
-        scope.launch { registry.leaveCall(callId) }
-    }
-
-    /**
-     * Leave EVERY managed call (design "Foreground Service": onTaskRemoved leaves
-     * all registry calls, not just the active one).
-     */
-    fun leaveAllCalls() {
-        val ids = registry.state.value.calls.map { it.callId }
-        scope.launch { ids.forEach { registry.leaveCall(it) } }
     }
 
     fun dismissError() {
         if (_uiState.value.phase == CallPhase.Error) {
-            activeCallIdOrNull()?.let { id -> scope.launch { registry.endCall(id) } }
-            registry.state.value.calls
-                .filter { it.membershipPhase == CallPhase.Error }
-                .forEach { call -> scope.launch { registry.dismissCall(call.callId) } }
+            activeSession?.let { finishSdkSession(it, saveHistory = false) }
             updateState(CallUiState())
             refreshRecentCalls()
             refreshSavedRooms()
         }
     }
-
-    private fun activeCallIdOrNull(): CallId? = registry.state.value.activeCallId
 
     fun removeRecentCall(roomId: String) {
         recentCallStore.removeCall(roomId)
@@ -937,14 +686,7 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     }
 
     fun endCall() {
-        val target = activeCallIdOrNull()
-        if (target == null) {
-            if (_uiState.value.phase != CallPhase.Idle) {
-                updateState(CallUiState())
-            }
-            return
-        }
-        scope.launch { registry.endCall(target) }
+        leaveCall()
     }
 
     fun toggleAudio() {
@@ -968,51 +710,51 @@ class CallManager(context: Context) : RoomWatcherDelegate {
     }
 
     fun startScreenShare(intent: Intent) {
-        // Screen share is foreground-only (design "Screen Share During Switch"): it
-        // belongs to the active call. Arm the mediaProjection FGS type, then start
-        // capture once the service has entered the foreground with that type.
         if (_uiState.value.isScreenSharing) return
-        val session = activeSession
-        if (session == null) {
-            Log.w("CallManager", "Failed to start screen sharing: no active call")
+        val roomId = currentRoomId
+        if (roomId == null) {
+            Log.w("CallManager", "Failed to start screen sharing: roomId is missing")
             return
         }
-        CallService.startScreenShareForeground(appContext)
-        startScreenShareWhenForegroundReady(intent, session, attemptsRemaining = 15)
+        CallService.start(
+            appContext,
+            roomId,
+            roomName = savedRoomNameForNotification(roomId),
+            includeMediaProjection = true,
+        )
+        startScreenShareWhenForegroundReady(intent, roomId, attemptsRemaining = 15)
     }
 
     fun stopScreenShare() {
         if (!_uiState.value.isScreenSharing) return
         activeSession?.stopScreenShare()
-        // Drop the mediaProjection FGS type WITHOUT tearing down the service
-        // (design "Foreground Service"): the next foreground update sheds the type.
-        CallService.clearPendingMediaProjection(appContext)
+        currentRoomId?.let { roomId ->
+            CallService.start(
+                appContext,
+                roomId,
+                roomName = savedRoomNameForNotification(roomId),
+                clearMediaProjection = true,
+            )
+        }
     }
 
-    private fun startScreenShareWhenForegroundReady(
-        intent: Intent,
-        session: SerenadaSession,
-        attemptsRemaining: Int,
-    ) {
-        // Guard against the active call changing/ending while we poll.
-        if (activeSession !== session) {
-            CallService.clearPendingMediaProjection(appContext)
-            return
-        }
+    private fun startScreenShareWhenForegroundReady(intent: Intent, roomId: String, attemptsRemaining: Int) {
         if (CallService.isMediaProjectionForegroundActive()) {
-            session.startScreenShare(intent)
-            // Refresh so the registry-derived snapshot now reports isScreenSharing,
-            // keeping the mediaProjection FGS type after the pending flag clears.
-            CallService.update(appContext, registry.state.value.toServiceCalls())
+            activeSession?.startScreenShare(intent)
             return
         }
         if (attemptsRemaining <= 0) {
-            CallService.clearPendingMediaProjection(appContext)
+            CallService.start(
+                appContext,
+                roomId,
+                roomName = savedRoomNameForNotification(roomId),
+                clearMediaProjection = true,
+            )
             Log.w("CallManager", "Failed to start screen sharing: media projection foreground type not ready")
             return
         }
         handler.postDelayed(
-            { startScreenShareWhenForegroundReady(intent, session, attemptsRemaining - 1) },
+            { startScreenShareWhenForegroundReady(intent, roomId, attemptsRemaining - 1) },
             50,
         )
     }

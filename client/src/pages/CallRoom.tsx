@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BellRing, CheckSquare, Copy, Square } from 'lucide-react';
-import { SerenadaCallFlow, useSerenadaCallRegistry } from '@agatx/serenada-react-ui';
+import { SerenadaCallFlow } from '@agatx/serenada-react-ui';
 import type { SerenadaString } from '@agatx/serenada-react-ui';
-import { ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS, SnapshotError } from '@agatx/serenada-core';
-import type { CallState, SerenadaConfig, SnapshotResult } from '@agatx/serenada-core';
+import { SerenadaCore, ConsoleSerenadaLogger, SNAPSHOT_PREPARE_TIMEOUT_MS, SnapshotError } from '@agatx/serenada-core';
+import type { CallState, SerenadaSessionHandle, SnapshotResult } from '@agatx/serenada-core';
 import { useToast } from '../contexts/ToastContext';
 import { saveCall } from '../utils/callHistory';
 import { getOrCreatePushKeyPair } from '../utils/pushCrypto';
@@ -13,14 +13,8 @@ import { markRoomJoined, saveRoom } from '../utils/savedRooms';
 import { getConfiguredServerHost } from '../utils/serverHost';
 import { parseTurnsOnly } from '../utils/turnsOnly';
 import { getDisplayName, setDisplayName } from '../utils/displayName';
-import { selectActiveCallTerminalError, selectCallView } from '../utils/callView';
 
 const BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED = true;
-
-// One logger instance for the registry config so the memoized config stays
-// referentially stable across renders (the registry reconstructs on config-key
-// changes only).
-const serenadaLogger = new ConsoleSerenadaLogger();
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
     const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -225,16 +219,7 @@ const CallRoom: React.FC = () => {
     const turnsOnly = useMemo(() => parseTurnsOnly(location.search), [location.search]);
 
     const [shouldJoin, setShouldJoin] = useState(false);
-    // A message shown on the prejoin card when a call could not be (or stay) in
-    // the foreground, so the user knows why they landed back on prejoin and can
-    // retry. Two distinct sources funnel here:
-    //   - P5-6: a failed JOIN (`joinAndSwitch` result `failed`); the failed
-    //     managed call is dismissed from the registry.
-    //   - P5-8: an ALREADY-ACTIVE call whose session reaches terminal `error`;
-    //     the registry releases the lease and removes the call, so without this
-    //     the prejoin would render with no error (silent idle, regressing the
-    //     pre-Phase-5 single-call UX that showed the session's error state).
-    const [joinError, setJoinError] = useState<string | null>(null);
+    const [session, setSession] = useState<SerenadaSessionHandle | null>(null);
     const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
     const [isSubscribed, setIsSubscribed] = useState(false);
     const [pushSupported, setPushSupported] = useState(false);
@@ -249,52 +234,6 @@ const CallRoom: React.FC = () => {
     displayNameRef.current = displayNameInput;
 
     const strings = useMemo(() => buildSerenadaCallStrings(t), [t]);
-
-    // Multi-call registry: a single call is a registry with one foreground call.
-    // The active call (`registry.activeCall?.session`) is rendered by the
-    // existing single-session SerenadaCallFlow, so the single-call UX is
-    // identical. The registry owns the foreground media lease and teardown.
-    const registryConfig = useMemo<SerenadaConfig>(() => ({
-        serverHost: getConfiguredServerHost(),
-        logger: serenadaLogger,
-        turnsOnly,
-        // Bundled web app opt-in: the headless SDK default remains false for
-        // external integrators, but this app intentionally ships the
-        // independent screen-share media path.
-        enableIndependentContentVideo: BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED,
-    }), [turnsOnly]);
-
-    const {
-        registry,
-        calls: registryCalls,
-        activeCall,
-        activeCallId,
-        heldCalls,
-        registryOperationInProgress,
-        joinAndSwitch,
-        switchTo,
-        leave: leaveCall,
-    } = useSerenadaCallRegistry({ config: registryConfig });
-
-    // Active-call-only rendering (contract §5/§7/§11; design "Remote Playback" /
-    // "React UI"): the audible `SerenadaCallFlow` mounts the FOREGROUND call's
-    // session and nothing else. A held / no-lease session is NEVER mounted as the
-    // active flow — only the foreground call owns audible media elements. When no
-    // call is foregrounded we render a placeholder (joining / on-hold / idle)
-    // chosen by `selectCallView`, not a held session.
-    const activeSession = activeCall?.session ?? null;
-    const callView = useMemo(
-        () => selectCallView({
-            hasActiveSession: activeSession !== null,
-            calls: registryCalls,
-            registryOperationInProgress,
-        }),
-        [activeSession, registryCalls, registryOperationInProgress],
-    );
-    // Whether any held call would survive the active call's termination. When
-    // true, the held surface wins and the active call's terminal error stays
-    // transient (round-2 behavior); only a lone active error surfaces a message.
-    const hasHeldCalls = heldCalls.length > 0;
 
     const stopPreview = useCallback(() => {
         setPreviewStream((current) => {
@@ -345,48 +284,25 @@ const CallRoom: React.FC = () => {
     useEffect(() => {
         if (!roomId || !shouldJoin) return;
 
-        const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
-        callStartTimeRef.current = Date.now();
-
-        let cancelled = false;
-        let joinedCallId: string | null = null;
-        // Join held then foreground it: for a single call this is a registry with
-        // one foreground call, so `activeCall?.session` renders exactly as before.
-        // joinAndSwitch holds any prior active call first.
-        void joinAndSwitch({
-            url: callUrl,
-            displayName: displayNameRef.current.trim() || undefined,
-        }).then((result) => {
-            if ('callId' in result && result.callId) {
-                joinedCallId = result.callId;
-                // The effect was torn down while the join was in flight: leave
-                // the now-orphaned call (cleanup ran before the callId existed).
-                if (cancelled) {
-                    void leaveCall(joinedCallId);
-                    return;
-                }
-            }
-            // P5-6: a failed join must not linger. The registry still publishes a
-            // failed managed call (its `activationError`/`joinFailed` set), and a
-            // `joinFailed` timeout can leave the session reading `joining`. Left in
-            // place it masks routing — `selectCallView` would otherwise be wedged on
-            // "Joining…" and HIDE a surviving held call. Dismiss the failed call so
-            // the held surface (or idle) shows; surface the error to the user.
-            if (result.kind === 'failed') {
-                console.warn('[CallRoom] joinAndSwitch failed', result.error);
-                if (joinedCallId) registry.dismiss(joinedCallId);
-                setJoinError(result.error.message);
-                // Drop back to prejoin so the failed call can't wedge the view and
-                // so the user can retry (re-arms the join effect on the next join).
-                setShouldJoin(false);
-            }
+        const core = new SerenadaCore({
+            serverHost: getConfiguredServerHost(),
+            logger: new ConsoleSerenadaLogger(),
+            turnsOnly,
+            // Bundled web app opt-in: the headless SDK default remains false for
+            // external integrators, but this app intentionally ships the
+            // independent screen-share media path.
+            enableIndependentContentVideo: BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED,
         });
+        const callUrl = `${window.location.origin}${location.pathname}${location.search}${location.hash}`;
+        const nextSession = core.join(callUrl, { displayName: displayNameRef.current.trim() || undefined });
+        callStartTimeRef.current = Date.now();
+        setSession(nextSession);
 
         return () => {
-            cancelled = true;
-            if (joinedCallId) void leaveCall(joinedCallId);
+            nextSession.destroy();
+            setSession(null);
         };
-    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, joinAndSwitch, leaveCall, registry]);
+    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, turnsOnly]);
 
     useEffect(() => {
         if (!roomId) return;
@@ -419,12 +335,12 @@ const CallRoom: React.FC = () => {
     }, [roomId]);
 
     useEffect(() => {
-        if (!activeSession || !roomId) return;
+        if (!session || !roomId) return;
         pushNotifySentRef.current = false;
 
-        const unsubscribe = activeSession.subscribe((state: CallState) => {
+        const unsubscribe = session.subscribe((state: CallState) => {
             if ((state.phase === 'waiting' || state.phase === 'inCall') && !pushNotifySentRef.current) {
-                const localStream = activeSession.localStream;
+                const localStream = session.localStream;
                 if (!localStream) return; // Media still loading — wait for next state update
                 pushNotifySentRef.current = true;
 
@@ -468,34 +384,7 @@ const CallRoom: React.FC = () => {
         });
 
         return unsubscribe;
-    }, [roomId, activeSession]);
-
-    // P5-8: surface a lone active call's terminal error. When an ALREADY-ACTIVE
-    // call's session reaches the terminal `error` phase, the registry releases
-    // the lease and removes the call (default immediate retention), so the view
-    // drops to `idle` and the prejoin card would render with no error — silently
-    // losing the failure. Observe the active session's error AS it terminates and
-    // capture it into the prejoin error surface, matching the pre-Phase-5
-    // single-call UX. Distinct from the P5-6 failed-JOIN dismissal (that surfaces
-    // a `joinAndSwitch` result failure; this fires only for an already-active
-    // call's terminal error). When held calls survive, the held surface wins and
-    // no error is surfaced (round-2 behavior unchanged) — `hasHeldCalls` is a
-    // dependency so the subscription re-binds when held calls appear/disappear.
-    useEffect(() => {
-        if (!activeSession) return;
-        const unsubscribe = activeSession.subscribe((state: CallState) => {
-            const message = selectActiveCallTerminalError({
-                phase: state.phase,
-                error: state.error,
-                hasOtherLiveCalls: hasHeldCalls,
-            });
-            if (message === null) return;
-            setJoinError(message);
-            // Re-arm the prejoin so the user can retry the join (mirrors P5-6).
-            setShouldJoin(false);
-        });
-        return unsubscribe;
-    }, [activeSession, hasHeldCalls]);
+    }, [roomId, session]);
 
     useEffect(() => {
         return () => {
@@ -532,7 +421,6 @@ const CallRoom: React.FC = () => {
         if (!roomId) return;
         if (saveBeforeJoin && !saveInvitedRoom()) return;
         stopPreview();
-        setJoinError(null);
         setShouldJoin(true);
     }, [roomId, saveInvitedRoom, stopPreview]);
 
@@ -562,11 +450,9 @@ const CallRoom: React.FC = () => {
     }, [navigate, roomId]);
 
     const handleEndCall = useCallback(() => {
-        // Leave through the registry so it releases the foreground lease and the
-        // process owning mode (not just `session.leave()`).
-        if (activeCallId) void leaveCall(activeCallId);
+        session?.leave();
         handleDismiss();
-    }, [activeCallId, handleDismiss, leaveCall]);
+    }, [handleDismiss, session]);
 
     const handleInvite = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
@@ -684,10 +570,7 @@ const CallRoom: React.FC = () => {
         return null;
     }
 
-    // Prejoin card: before the user joins, or when there is no live call to show
-    // (join not started / failed / torn down — `callView === 'idle'`). A held
-    // call does NOT land here — it renders the on-hold switcher below.
-    if (!shouldJoin || callView === 'idle') {
+    if (!shouldJoin || !session) {
         return (
             <div className="page-container center-content">
                 <div className="card prejoin-card">
@@ -700,12 +583,6 @@ const CallRoom: React.FC = () => {
                         </div>
                     ) : (
                         <h2>{t('ready_to_join')}</h2>
-                    )}
-
-                    {joinError && (
-                        <div className="error-message" role="alert">
-                            {joinError}
-                        </div>
                     )}
 
                     <div className="video-preview-container">
@@ -768,52 +645,6 @@ const CallRoom: React.FC = () => {
         );
     }
 
-    // Joining placeholder: a join is settling and no call is foregrounded yet.
-    // Shown instead of mounting the still-held in-flight session as the active
-    // flow (active-call-only rendering).
-    if (callView === 'joining') {
-        return (
-            <div className="page-container center-content">
-                <div className="card prejoin-card">
-                    <h2>{t('joining_call')}</h2>
-                    <div className="video-preview-container">
-                        <div className="video-placeholder">{t('connecting')}</div>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    // On-hold switcher: the active call ended with no auto-promote (Core
-    // Invariant 5) but live held calls remain. The held sessions are NOT mounted
-    // as the active flow — the user picks one to resume via `switchTo`, which
-    // foregrounds it (and only then does `SerenadaCallFlow` mount it).
-    if (callView === 'held') {
-        return (
-            <div className="page-container center-content">
-                <div className="card prejoin-card">
-                    <h2>{t('calls_on_hold_title')}</h2>
-                    <p className="prejoin-invite-label">{t('calls_on_hold_desc')}</p>
-                    <div className="button-group">
-                        {heldCalls.map((call) => (
-                            <button
-                                key={call.id}
-                                type="button"
-                                className="btn-primary"
-                                onClick={() => { void switchTo(call.id); }}
-                            >
-                                {t('resume_call', { name: call.displayName?.trim() || call.roomId })}
-                            </button>
-                        ))}
-                        <button className="btn-secondary" onClick={handleDismiss}>
-                            {t('home')}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
     const waitingActions = (
         <>
             <button
@@ -839,13 +670,9 @@ const CallRoom: React.FC = () => {
         </>
     );
 
-    // Active-call-only: mount the audible flow with the FOREGROUND session alone.
-    // `callView === 'active'` implies `activeSession` is non-null; the guard
-    // narrows the type and is defense in depth (never mount a null/held session).
-    if (!activeSession) return null;
     return (
         <SerenadaCallFlow
-            session={activeSession}
+            session={session}
             config={{
                 screenSharingEnabled: true,
                 inviteControlsEnabled: true,

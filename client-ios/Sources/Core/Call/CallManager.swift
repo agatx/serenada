@@ -22,23 +22,8 @@ final class CallManager: ObservableObject {
     @Published private(set) var recentCalls: [RecentCall] = []
     @Published private(set) var savedRooms: [SavedRoom] = []
     @Published private(set) var roomStatuses: [String: RoomOccupancy] = [:]
-    /// The active (foreground) call's session, mirrored from
-    /// `callRegistry.activeCall?.session`. Kept as a published mirror (rather than
-    /// a stored single session) so the existing `RootView` and call-screen code
-    /// keep working unchanged; the registry is the source of truth.
     @Published private(set) var activeSession: SerenadaSession?
-    /// Held (background) calls, for the minimal switcher UI. Excludes the active
-    /// call and any ended-but-not-yet-dismissed records. Empty for the common
-    /// single-call case.
-    @Published private(set) var heldCalls: [ManagedCallState] = []
-    /// True while a serialized registry operation (join/switch/hold/leave/end) is
-    /// running; the switcher disables its actions while this is set.
-    @Published private(set) var isCallOperationInProgress = false
     @Published var snapshotBanner: SnapshotBanner?
-    /// Transient banner for a RECOVERABLE per-call error (e.g. a failed switch that
-    /// left the live call intact). Distinct from `uiState.phase == .error`, which is
-    /// the whole-app terminal error screen reserved for "no call survived".
-    @Published var callErrorBanner: CallErrorBanner?
 
     struct SnapshotBanner: Identifiable, Equatable {
         let id = UUID()
@@ -46,27 +31,7 @@ final class CallManager: ObservableObject {
         let message: String
     }
 
-    struct CallErrorBanner: Identifiable, Equatable {
-        let id = UUID()
-        let message: String
-    }
-
     private var snapshotBannerTask: Task<Void, Never>?
-    private var callErrorBannerTask: Task<Void, Never>?
-
-    /// Surface a recoverable per-call error as a transient banner over the call UI.
-    /// Used when a switch/activation fails but a live call (active or held) remains,
-    /// so we must NOT tear the whole app down to the error screen (FIX P5-2).
-    func presentCallErrorBanner(_ message: String) {
-        callErrorBanner = CallErrorBanner(message: message)
-        callErrorBannerTask?.cancel()
-        callErrorBannerTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if !Task.isCancelled {
-                self?.callErrorBanner = nil
-            }
-        }
-    }
 
     func presentSnapshotToast(saved: Bool, reason: String?) {
         let message: String
@@ -117,22 +82,6 @@ final class CallManager: ObservableObject {
     private var callStartTimeMs: Int64?
     private var hasNotifiedPushForJoin = false
 
-    /// Process-wide multi-call registry. Created lazily and bound to a
-    /// ``SerenadaCore`` for a specific server host (`registryHost`). Recreated when
-    /// the host changes AND no call is live, so a single-call UX (one registry with
-    /// one foreground call) is preserved and the v1 "one mode per process" arbiter
-    /// invariant is never violated by stale registries.
-    private var callRegistry: SerenadaCallRegistry?
-    /// The ``SerenadaCore`` the current registry is bound to (used for
-    /// `createRoom` / `roomURL`); kept alongside the registry since both are
-    /// host-specific.
-    private var registryCore: SerenadaCore?
-    private var registryHost: String?
-    private var registryCancellables = Set<AnyCancellable>()
-    /// CallId the host most recently asked the registry to foreground, so observer
-    /// re-derivation of the active session keys off the registry's active call.
-    private var activeCallId: CallId?
-
     init(
         apiClient: APIClient = APIClient(),
         settingsStore: SettingsStore = SettingsStore(),
@@ -182,9 +131,6 @@ final class CallManager: ObservableObject {
 
     deinit {
         activeSessionStateCancellable?.cancel()
-        snapshotBannerTask?.cancel()
-        callErrorBannerTask?.cancel()
-        registryCancellables.forEach { $0.cancel() }
         if let pushEndpointObserver {
             NotificationCenter.default.removeObserver(pushEndpointObserver)
         }
@@ -350,12 +296,13 @@ final class CallManager: ObservableObject {
         )
         uiState.statusMessage = L10n.callStatusCreatingRoom
 
-        let (registry, core) = registry(forHost: serverHost)
+        let core = makeSerenadaCore(host: serverHost)
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let created = try await core.createRoom()
-                await self.startOrSwitch(registry: registry, room: RoomRef(url: created.url, displayName: self.resolvedDisplayName))
+                let session = core.join(roomId: created.roomId, displayName: self.resolvedDisplayName)
+                self.activateSession(session)
             } catch {
                 self.uiState = CallUiState(
                     phase: .error,
@@ -377,188 +324,24 @@ final class CallManager: ObservableObject {
         }
 
         let targetHost = DeepLinkParser.normalizeHostValue(oneOffHost) ?? serverHost
-        // The registry's core is bound to `targetHost`, so a bare-roomId RoomRef
-        // resolves against the correct host even when a deep-link one-off host
-        // differs from the persisted server host. The registry canonicalizes the
-        // room token for dedup.
-        let (registry, _) = registry(forHost: targetHost)
-        let room = RoomRef(roomId: trimmed, displayName: resolvedDisplayName)
-
-        // Show a joining placeholder for a fresh single call so the user is not left
-        // on the join screen while the held session connects (it is promoted to
-        // foreground by `joinAndSwitch`). When a call is already active, leave the
-        // active screen untouched — switching happens behind the held chips.
-        if activeCallId == nil {
-            uiState = CallUiState(phase: .joining, roomId: trimmed, errorMessage: nil)
-            uiState.statusMessage = L10n.callStatusJoiningRoom
-        }
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.startOrSwitch(registry: registry, room: room)
-        }
-    }
-
-    /// Route a new outgoing/joined call through the registry (`joinAndSwitch`).
-    /// Handles the `needsPermission` outcome by prompting and retrying the switch
-    /// (registry-managed sessions do not auto-prompt during foreground activation —
-    /// permission is preflighted before the old call is released, design
-    /// "Permissions" / Core Invariant 4).
-    private func startOrSwitch(registry: SerenadaCallRegistry, room: RoomRef) async {
-        switch await registry.joinAndSwitch(room) {
-        case .active:
-            break
-        case let .needsPermission(callId):
-            await requestPermissionsAndSwitch(registry: registry, callId: callId)
-        case let .failed(callId, error):
-            await handleStartOrSwitchFailure(registry: registry, failedCallId: callId, error: error)
-        }
-    }
-
-    /// Handle a `joinAndSwitch`/`switchTo` failure WITHOUT blowing away a surviving
-    /// live call (FIX P5-2). The registry rolls the previous active call back to
-    /// foreground on a switch/activation failure, and leaves the prior active
-    /// untouched on a room-join failure, so after a failure a live call may still
-    /// exist. In that case keep the live-call UI and surface the failed target as a
-    /// transient, recoverable banner. Only fall through to the whole-app `.error`
-    /// screen when there is genuinely no active call AND no live held calls.
-    private func handleStartOrSwitchFailure(
-        registry: SerenadaCallRegistry,
-        failedCallId: CallId?,
-        error: CallActivationError
-    ) async {
-        // Drop the failed target's record (never the surviving active call). On a
-        // room-join failure the registry already marked it ended; on an activation
-        // failure the rolled-back target is still live-but-hidden (filtered out of
-        // the switcher because it carries an `activationError`). `retireCall` handles
-        // both cases.
-        if let failedCallId, registry.activeCallId != failedCallId {
-            await Self.retireCall(registry, id: failedCallId)
-        }
-
-        surfaceFailureOrError(registry: registry, error: error)
-    }
-
-    /// After a switch/activation failure, surface the error as a recoverable banner
-    /// if any live call survived (rolled-back active, or held calls remain), else
-    /// fall through to the whole-app `.error` screen (FIX P5-2).
-    private func surfaceFailureOrError(registry: SerenadaCallRegistry, error: CallActivationError) {
-        let liveHeldCount = Self.heldCalls(from: registry.calls, activeCallId: registry.activeCallId).count
-        if Self.callSurvivesFailure(activeCallId: registry.activeCallId, liveHeldCount: liveHeldCount) {
-            presentCallErrorBanner(callActivationErrorMessage(error))
-        } else {
-            uiState = CallUiState(
-                phase: .error,
-                errorMessage: callActivationErrorMessage(error)
-            )
-        }
-    }
-
-    /// True when a live call (the rolled-back active call, or any live held call)
-    /// survives a switch/activation failure, so the host must keep the call UI and
-    /// surface the failure as a recoverable per-call error instead of tearing the
-    /// whole app down to the error screen (FIX P5-2). Pure + static so the decision
-    /// is unit-testable without a registry.
-    static func callSurvivesFailure(activeCallId: CallId?, liveHeldCount: Int) -> Bool {
-        activeCallId != nil || liveHeldCount > 0
-    }
-
-    /// True when the active call's terminal `.error` must be surfaced as a transient
-    /// per-call banner (with routing falling through to the held surface) instead of
-    /// a whole-app error screen: that is, whenever live held calls remain after the
-    /// active call ends in error. The active call is gone by definition in this path
-    /// (it just hit terminal error), so only the live held set decides — Invariant 5
-    /// (no auto-promote) means those held calls must stay reachable, not be masked by
-    /// a whole-app error screen (FIX P5-7). Pure + static so the decision is
-    /// unit-testable without a registry.
-    static func terminalErrorShowsBanner(liveHeldCount: Int) -> Bool {
-        liveHeldCount > 0
-    }
-
-    /// The held call exists; prompt for the missing grants, then retry the switch.
-    /// If the user declines, the held call is left/dismissed and the UI returns to
-    /// idle (matching the old cancel-on-deny behavior).
-    private func requestPermissionsAndSwitch(registry: SerenadaCallRegistry, callId: CallId) async {
-        let permissions: [MediaCapability]
-        if case let .needsPermission(caps)? = registry.calls.first(where: { $0.id == callId })?.activationError {
-            permissions = caps
-        } else {
-            permissions = [.microphone]
-        }
-
-        let granted = await SerenadaPermissions.request(permissions)
-        guard granted else {
-            await Self.retireCall(registry, id: callId)
-            return
-        }
-
-        switch await registry.switchToCall(id: callId) {
-        case .active:
-            break
-        case .needsPermission:
-            // Still denied at the OS level after the prompt: give up on this call.
-            await Self.retireCall(registry, id: callId)
-        case let .failed(error):
-            await Self.retireCall(registry, id: callId)
-            // The switch failed but a live call may still survive (rolled-back
-            // active, or other held calls). Keep its UI; only fall to the error
-            // screen when nothing survived (FIX P5-2).
-            surfaceFailureOrError(registry: registry, error: error)
-        }
+        let session = makeSerenadaCore(host: targetHost).join(roomId: trimmed, displayName: resolvedDisplayName)
+        activateSession(session)
     }
 
     func dismissActiveCall() {
-        guard let registry = callRegistry, let callId = activeCallId else {
-            // No registry-backed active call; nothing to tear down.
-            clearActiveSession(resetUiState: true)
-            return
+        guard let session = activeSession else { return }
+
+        switch session.state.phase {
+        case .awaitingPermissions:
+            session.cancelJoin()
+        case .joining, .waiting, .inCall:
+            session.leave()
+        case .idle, .ending, .error:
+            break
         }
 
-        // Capture history before the registry tears the session down.
-        if let session = registry.call(id: callId)?.session {
-            saveSessionToHistoryIfNeeded(session)
-        }
-
-        Task { @MainActor [weak self] in
-            await Self.retireCall(registry, id: callId)
-            self?.clearActiveSession(resetUiState: true)
-        }
-    }
-
-    /// Switch the foreground to a held call (switcher action).
-    func switchToHeldCall(id: CallId) {
-        guard let registry = callRegistry else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            switch await registry.switchToCall(id: id) {
-            case .active:
-                break
-            case .needsPermission:
-                await self.requestPermissionsAndSwitch(registry: registry, callId: id)
-            case let .failed(error):
-                // The switch failed but the previously-active call is rolled back to
-                // foreground (or other held calls remain). Keep the call UI and
-                // surface the failure as a recoverable banner (FIX P5-2) rather than
-                // writing an invisible `uiState.errorMessage`.
-                self.presentCallErrorBanner(self.callActivationErrorMessage(error))
-            }
-        }
-    }
-
-    /// Leave a held call without disturbing the active call (switcher action).
-    func leaveHeldCall(id: CallId) {
-        guard let registry = callRegistry else { return }
-        Task { @MainActor in
-            await Self.retireCall(registry, id: id)
-        }
-    }
-
-    /// Leave a call and dismiss its record. `leaveCall` retires a still-live call
-    /// and is a safe no-op on an already-ended one, so this pair retires a target
-    /// regardless of its current phase.
-    private static func retireCall(_ registry: SerenadaCallRegistry, id: CallId) async {
-        await registry.leaveCall(id: id)
-        await registry.dismissEndedCall(id: id)
+        saveSessionToHistoryIfNeeded(session)
+        clearActiveSession(resetUiState: true)
     }
 
     func dismissError() {
@@ -666,88 +449,29 @@ final class CallManager: ObservableObject {
         return core
     }
 
-    /// Get (or lazily create) the registry bound to `host`. A new registry +
-    /// ``SerenadaCore`` is built only when none exists yet OR when the host changed
-    /// AND no call is live (so we never strand a live registry, and never let two
-    /// registries fight over the process arbiter — Core Invariant 6). When a call
-    /// is already live, the existing registry is reused regardless of host (the
-    /// per-call RoomRef carries its own host), preserving the single-process,
-    /// single-mode contract.
-    private func registry(forHost host: String) -> (SerenadaCallRegistry, SerenadaCore) {
-        if let registry = callRegistry, let core = registryCore {
-            let hasLiveCall = registry.calls.contains { !Self.isEndedPhase($0.membershipPhase) && $0.activationError == nil }
-                || activeCallId != nil
-            if registryHost == host || hasLiveCall {
-                return (registry, core)
-            }
-        }
-
-        // Tear down observers for the old (idle) registry before replacing it.
-        registryCancellables.forEach { $0.cancel() }
-        registryCancellables.removeAll()
-
-        let core = makeSerenadaCore(host: host)
-        let registry = SerenadaCallRegistry(core: core)
-        callRegistry = registry
-        registryCore = core
-        registryHost = host
-
-        // Subscribe to the registry's published axes (calls / activeCallId /
-        // op-in-progress). `combineLatest` delivers POST-mutation values, so the app
-        // re-derives the active UI from the registry's active call — never from a
-        // single stored session.
-        registry.$calls
-            .combineLatest(registry.$activeCallId, registry.$registryOperationInProgress)
-            .sink { [weak self, weak registry] _, _, _ in
-                guard let self, let registry else { return }
-                self.onRegistryStateChange(registry)
-            }
-            .store(in: &registryCancellables)
-
-        return (registry, core)
-    }
-
-    /// React to any registry state change: re-derive the active session (keying off
-    /// the registry's active call, NOT a single stored session), refresh the held
-    /// list + busy flag, and handle active-call termination. This is the single
-    /// place app `uiState` is re-derived from the active call.
-    private func onRegistryStateChange(_ registry: SerenadaCallRegistry) {
-        isCallOperationInProgress = registry.registryOperationInProgress
-
-        // Held calls = live, non-active, non-ended calls (switcher source).
-        heldCalls = Self.heldCalls(from: registry.calls, activeCallId: registry.activeCallId)
-
-        // Re-bind only when the active call identity actually changes. The registry
-        // can publish a transient `activeCallId == nil` mid-switch (it clears the
-        // old id before activating the new one); binding off the registry's CURRENT
-        // active session — not a single stored session — means we simply follow it.
-        // Terminal UI (error/idle) is driven by the session observer +
-        // `dismissActiveCall`, NOT by a transient nil here, so a switch never flashes
-        // the join screen.
-        let newActiveId = registry.activeCallId
-        guard newActiveId != activeCallId else { return }
-
-        // Skip a transient nil while an op is still running (mid-switch). The final
-        // publish at op completion delivers the settled active id.
-        if newActiveId == nil, registry.registryOperationInProgress { return }
-
-        activeCallId = newActiveId
-        bindActiveSession(registry.activeCall?.session)
-    }
-
-    /// Swap the per-session Combine observers to the new active session (or detach
-    /// when nil). Mirrors the old single-session wiring; the registry decides which
-    /// session is active, so the app ignores updates from non-active sessions.
-    private func bindActiveSession(_ session: SerenadaSession?) {
+    private func activateSession(_ session: SerenadaSession) {
         activeSessionStateCancellable?.cancel()
-        activeSessionStateCancellable = nil
+
         activeSession = session
         activeSessionJoinCid = nil
-
-        guard let session else { return }
-
         callStartTimeMs = Int64(Date().timeIntervalSince1970 * 1000)
         hasNotifiedPushForJoin = false
+
+        session.onPermissionsRequired = { [weak self, weak session] permissions in
+            Task { @MainActor in
+                guard let self, let session else { return }
+                guard self.activeSession === session else { return }
+
+                let granted = await SerenadaPermissions.request(permissions)
+                guard self.activeSession === session else { return }
+
+                if granted {
+                    session.resumeJoin()
+                } else {
+                    session.cancelJoin()
+                }
+            }
+        }
 
         if settingsStore.isHdVideoExperimentalEnabled {
             session.setHdVideoExperimentalEnabled(true)
@@ -764,9 +488,6 @@ final class CallManager: ObservableObject {
     }
 
     private func handleActiveSessionStateChange(session: SerenadaSession, state: CallState, diagnostics: CallDiagnostics) {
-        // Ignore state updates from any session that is no longer the active call
-        // (design: "app-level CallManager ignores state updates from non-active
-        // sessions"). The registry owns which call is foreground.
         guard activeSession === session else { return }
 
         let cid = state.localParticipant.cid?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -820,50 +541,20 @@ final class CallManager: ObservableObject {
         next.callStartedAtMs = state.callStartedAtMs
         uiState = next
 
-        // Session-driven terminal states (remote-ended, fatal error). The REGISTRY
-        // owns teardown: its phase observer enqueues `terminalBody`, which marks the
-        // call ended and clears `activeCallId` (→ `bindActiveSession(nil)`). Here we
-        // only drive the app UI + history, and detach this observer so a late
-        // duplicate emission can't re-fire. We still dismiss the ended call record
-        // so the switcher does not show a dead chip.
         if state.phase == .error {
-            let endedCallId = activeCallId
-            let errorDetail = errorMessage(for: state.error)
-            detachActiveSessionObserver()
-
-            // The active call ended in error, but the registry does NOT auto-promote
-            // a held call (Invariant 5). If live held calls remain, a whole-app error
-            // screen would mask them and strand the user. Route to the held surface
-            // (the `.heldOnly` screen) and surface this failure as a transient per-call
-            // banner instead — only write the whole-app `.error` when nothing survives
-            // (FIX P5-7). `heldCalls` is already re-derived from the registry by
-            // `onRegistryStateChange`, so reading it here reflects the live held set.
-            if Self.terminalErrorShowsBanner(liveHeldCount: heldCalls.count) {
-                // Reset the active-call UI to idle so routing falls through to the
-                // held surface; the banner carries the failure detail.
-                uiState = CallUiState()
-                presentCallErrorBanner(errorDetail ?? L10n.errorUnknown)
-            } else {
-                uiState = CallUiState(
-                    phase: .error,
-                    roomId: state.roomId,
-                    errorMessage: errorDetail
-                )
-            }
-            if let registry = callRegistry, let endedCallId {
-                Task { @MainActor in await registry.dismissEndedCall(id: endedCallId) }
-            }
+            let errorUiState = CallUiState(
+                phase: .error,
+                roomId: state.roomId,
+                errorMessage: errorMessage(for: state.error)
+            )
+            clearActiveSession(resetUiState: false)
+            uiState = errorUiState
             return
         }
 
         if state.phase == .idle {
             saveSessionToHistoryIfNeeded(session)
-            let endedCallId = activeCallId
-            detachActiveSessionObserver()
-            uiState = CallUiState()
-            if let registry = callRegistry, let endedCallId {
-                Task { @MainActor in await registry.dismissEndedCall(id: endedCallId) }
-            }
+            clearActiveSession(resetUiState: true)
             return
         }
 
@@ -928,62 +619,16 @@ final class CallManager: ObservableObject {
         refreshRecentCalls()
     }
 
-    /// Detach the per-session observers and forget the active session, WITHOUT
-    /// touching the registry (the registry owns call lifecycle). Used by the
-    /// session terminal handlers, which then ask the registry to dismiss the record.
-    private func detachActiveSessionObserver() {
+    private func clearActiveSession(resetUiState: Bool) {
         activeSessionStateCancellable?.cancel()
         activeSessionStateCancellable = nil
         activeSession = nil
         activeSessionJoinCid = nil
         callStartTimeMs = nil
         hasNotifiedPushForJoin = false
-    }
-
-    private func clearActiveSession(resetUiState: Bool) {
-        detachActiveSessionObserver()
-        activeCallId = nil
 
         if resetUiState {
             uiState = CallUiState()
-        }
-    }
-
-    /// True for membership phases that mean the call is no longer live. Static +
-    /// pure so the switcher's held-call selection is unit-testable.
-    static func isEndedPhase(_ phase: SerenadaCallPhase) -> Bool {
-        phase == .idle || phase == .error
-    }
-
-    /// The switcher's chip source: live (non-ended, non-failed) calls that are not
-    /// the active foreground call. Pure + static so the derivation that drives
-    /// `HeldCallsSwitcher` is unit-testable without spinning up a registry.
-    static func heldCalls(from calls: [ManagedCallState], activeCallId: CallId?) -> [ManagedCallState] {
-        calls.filter { call in
-            call.id != activeCallId
-                && !isEndedPhase(call.membershipPhase)
-                && call.activationError == nil
-        }
-    }
-
-    private func callActivationErrorMessage(_ error: CallActivationError) -> String {
-        Self.callActivationErrorMessage(error)
-    }
-
-    /// Map a per-call registry activation error to a user-facing message. Static +
-    /// pure (only reads localized strings) so the mapping is unit-testable.
-    static func callActivationErrorMessage(_ error: CallActivationError) -> String {
-        switch error {
-        case .needsPermission:
-            return L10n.callStatusConnectionFailed
-        case let .activationFailed(message):
-            return message.isEmpty ? L10n.errorUnknown : message
-        case .releaseTimedOut:
-            return L10n.callStatusConnectionFailed
-        case let .joinFailed(message):
-            return message.isEmpty ? L10n.callStatusConnectionFailed : message
-        case .leaseUnavailable:
-            return L10n.callStatusConnectionFailed
         }
     }
 

@@ -16,15 +16,6 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Text
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.Modifier
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,7 +44,6 @@ private enum class RootScreen {
     Settings,
     Diagnostics,
     Call,
-    Holding,
     Error
 }
 
@@ -74,7 +64,6 @@ fun SerenadaAppRoot(
     val callUiVariant by callManager.callUiVariant
     val roomStatuses by callManager.roomStatuses
     val activeSession by callManager.sessionState
-    val callListState by callManager.callListState
     val context = LocalContext.current
     val showActiveCallScreen =
         uiState.phase == CallPhase.Waiting ||
@@ -88,10 +77,6 @@ fun SerenadaAppRoot(
     var settingsSaveInProgress by rememberSaveable { mutableStateOf(false) }
     var showJoinWithCode by rememberSaveable { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
-    // Multi-call: open the dialer as an overlay while a call is active so the user
-    // can place a SECOND call. Every join routes through registry.joinAndSwitch,
-    // which holds the current call first. Reset once a join is initiated or on back.
-    var showAddCall by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(serverHost) {
         hostInput = serverHost
@@ -184,32 +169,13 @@ fun SerenadaAppRoot(
         val statusMessage = uiState.statusMessageResId?.let { stringResource(it) }.orEmpty()
         val errorMessage = uiState.errorMessageResId?.let { stringResource(it) } ?: uiState.errorMessageText
         val hasError = !errorMessage.isNullOrBlank()
-        // P5-7 precedence (active call → Holding → Error → Join). Holding MUST beat
-        // Error: when no call is active but a live held call remains (active call
-        // ended / a join failed, no auto-promote per Core Invariant 5), route to the
-        // holding surface so the surviving call stays reachable — the whole-app error
-        // screen is shown ONLY when nothing survives. Single-call UX is preserved
-        // exactly: a lone call that errors with no held call leaves zero live calls,
-        // so the error screen shows as before.
         val currentScreen = when {
             showDiagnostics -> RootScreen.Diagnostics
             showSettings -> RootScreen.Settings
             showJoinWithCode -> RootScreen.JoinWithCode
-            // Add-call dialer overlays the active call; joining holds it via
-            // joinAndSwitch, then this resets and routing returns to the call.
-            showAddCall -> RootScreen.Join
-            else -> when (
-                RootRouting.resolveFallback(
-                    state = callListState,
-                    hasError = uiState.phase == CallPhase.Error,
-                    showingActiveCall = showActiveCallScreen,
-                )
-            ) {
-                RootRouting.Fallback.CALL -> RootScreen.Call
-                RootRouting.Fallback.HOLDING -> RootScreen.Holding
-                RootRouting.Fallback.ERROR -> RootScreen.Error
-                RootRouting.Fallback.JOIN -> RootScreen.Join
-            }
+            showActiveCallScreen -> RootScreen.Call
+            uiState.phase == CallPhase.Error -> RootScreen.Error
+            else -> RootScreen.Join
         }
 
         fun closeSettings() {
@@ -229,23 +195,15 @@ fun SerenadaAppRoot(
         val handlesBackNavigation = currentScreen == RootScreen.Diagnostics ||
             currentScreen == RootScreen.Settings ||
             currentScreen == RootScreen.JoinWithCode ||
-            currentScreen == RootScreen.Error ||
-            showAddCall
+            currentScreen == RootScreen.Error
 
         BackHandler(enabled = handlesBackNavigation) {
-            // The add-call dialer overlays the active call (currentScreen == Join),
-            // so close it first and fall back to the call rather than per-screen.
-            if (showAddCall) {
-                showAddCall = false
-                return@BackHandler
-            }
             when (currentScreen) {
                 RootScreen.Diagnostics -> showDiagnostics = false
                 RootScreen.Settings -> closeSettings()
                 RootScreen.JoinWithCode -> closeJoinWithCode()
                 RootScreen.Error -> callManager.dismissError()
                 RootScreen.Join,
-                RootScreen.Holding,
                 RootScreen.Call -> Unit
             }
         }
@@ -376,7 +334,6 @@ fun SerenadaAppRoot(
                             if (hasError) callManager.dismissError()
                         },
                         onJoinCall = {
-                            showAddCall = false
                             callManager.updateServerHost(hostInput)
                             runWithCallPermissions {
                                 callManager.joinFromInput(roomInput)
@@ -388,9 +345,6 @@ fun SerenadaAppRoot(
                     )
                 }
                 RootScreen.Call -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
                     activeSession?.let { session ->
                         val snapshotScope = rememberCoroutineScope()
                         SerenadaCallFlow(
@@ -474,41 +428,6 @@ fun SerenadaAppRoot(
                             onStopScreenShare = { callManager.stopScreenShare() },
                         )
                     }
-                    // Minimal multi-call switcher (Phase 5): rendered only when more
-                    // than one managed call exists, overlaid at the top of the active
-                    // call surface. Single-call UX is untouched.
-                    CallSwitcherBar(
-                        state = callListState,
-                        roomLabel = { call -> callManager.callLabel(call.roomId) },
-                        onSwitchToCall = { callManager.switchToCall(it) },
-                        onHoldCall = { callManager.holdCall(it) },
-                        onLeaveCall = { callManager.leaveCall(it) },
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .statusBarsPadding(),
-                    )
-                    // Multi-call: place a SECOND call without ending this one. The
-                    // switcher only appears at 2+ calls, so this is the entry point
-                    // that creates the second. Opens the dialer; joinAndSwitch holds
-                    // this call first.
-                    FilledTonalButton(
-                        onClick = { showAddCall = true },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .statusBarsPadding()
-                            .padding(12.dp),
-                    ) {
-                        Text(stringResource(R.string.call_add_call))
-                    }
-                    }
-                }
-                RootScreen.Holding -> {
-                    HoldingScreen(
-                        state = callListState,
-                        roomLabel = { call -> callManager.callLabel(call.roomId) },
-                        onSwitchToCall = { callManager.switchToCall(it) },
-                        onLeaveCall = { callManager.leaveCall(it) },
-                    )
                 }
                 RootScreen.Error -> {
                     ErrorScreen(
@@ -534,16 +453,13 @@ fun SerenadaAppRoot(
                             showSettings = true
                         },
                         onStartCall = {
-                            showAddCall = false
                             callManager.updateServerHost(hostInput)
                             runWithCallPermissions { callManager.startNewCall() }
                         },
                         onJoinRecentCall = { call ->
-                            showAddCall = false
                             runWithCallPermissions { callManager.joinRecentCall(call) }
                         },
                         onJoinSavedRoom = { room ->
-                            showAddCall = false
                             runWithCallPermissions { callManager.joinSavedRoom(room) }
                         },
                         onRemoveRecentCall = { roomId ->
