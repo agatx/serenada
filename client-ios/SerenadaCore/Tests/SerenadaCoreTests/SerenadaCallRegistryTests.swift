@@ -468,12 +468,12 @@ final class SerenadaCallRegistryTests: XCTestCase {
 
     // MARK: - FIX C: release + settle bounded by a SINGLE release timeout
 
-    /// `releaseForeground` AND `awaitForegroundReleaseSettled()` must be bounded by
-    /// ONE `FOREGROUND_RELEASE_TIMEOUT` window (contract FIX C). A coordinator whose
-    /// deactivation HANGS leaves the role flipped to held synchronously but never
-    /// lets the settle complete; the switch must time out (not hang the queue),
-    /// keep the old call foreground with its lease (Invariant 1), and never acquire
-    /// the next lease.
+    /// The awaited `releaseForeground` (role flip + coordinator-teardown settle)
+    /// must be bounded by ONE `FOREGROUND_RELEASE_TIMEOUT` window (contract FIX C).
+    /// A coordinator whose deactivation HANGS leaves the role flipped to held
+    /// synchronously but never lets `releaseForeground` return; the switch must time
+    /// out (not hang the queue), keep the old call foreground with its lease
+    /// (Invariant 1), and never acquire the next lease.
     func testReleaseAndSettleBoundedByReleaseTimeout() async {
         let h = RegistryTestHarness()
         let blockingOld = BlockingDeactivateCoordinator()
