@@ -1,4 +1,4 @@
-import type { ManagedCallState } from '@agatx/serenada-core';
+import type { CallPhase, ManagedCallState } from '@agatx/serenada-core';
 
 /**
  * What `CallRoom` should render for the current registry snapshot. Pure decision
@@ -114,4 +114,46 @@ export function selectCallView(input: SelectCallViewInput): CallView {
     // held sibling): nothing genuine to show. CallRoom surfaces the error and
     // routes to idle/prejoin.
     return 'idle';
+}
+
+export interface ActiveCallTerminalErrorInput {
+    /** The active (foreground) session's current lifecycle phase. */
+    phase: CallPhase;
+    /** The active session's error, if any (`CallState.error`). */
+    error: { message: string } | null;
+    /**
+     * True when at least one OTHER live call (a held call) survives the active
+     * call's termination — i.e. the held surface would take over the view.
+     */
+    hasOtherLiveCalls: boolean;
+}
+
+/**
+ * Whether (and what) to surface when the ACTIVE call reaches a terminal `error`
+ * (P5-8). When a lone active call errors, the registry releases its lease and
+ * removes the call (default immediate retention), so `selectCallView` drops to
+ * `'idle'` and the prejoin card would otherwise render with NO error — silently
+ * losing the failure and regressing the pre-Phase-5 single-call UX (which showed
+ * the session's error state).
+ *
+ * This pure decision is observed off the active session's state BEFORE the
+ * registry tears the call down: capture the error message into the prejoin
+ * error surface so a lone active call that errors shows the error and a way back
+ * to Join.
+ *
+ * Distinct from the P5-6 failed-JOIN dismissal (which surfaces a `joinAndSwitch`
+ * *result* failure): this fires only when an ALREADY-ACTIVE call's session
+ * transitions to the terminal `error` phase.
+ *
+ * Held surface wins (round-2 behavior unchanged): when other live (held) calls
+ * remain, the active call's error stays transient — `selectCallView` returns
+ * `'held'` and the user resumes a held call. Return `null` so no error card is
+ * shown. Only a lone active error (nothing else survives) surfaces the message.
+ */
+export function selectActiveCallTerminalError(
+    input: ActiveCallTerminalErrorInput,
+): string | null {
+    if (input.phase !== 'error') return null;
+    if (input.hasOtherLiveCalls) return null;
+    return input.error?.message ?? null;
 }

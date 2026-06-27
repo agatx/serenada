@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CallPhase, ManagedCallState } from '@agatx/serenada-core';
-import { selectCallView } from './callView';
+import { selectActiveCallTerminalError, selectCallView } from './callView';
 
 // Minimal ManagedCallState factory. The decision only reads `membershipPhase`,
 // `mediaRole`, `held`, `id`, so the rest are filled with inert defaults.
@@ -193,5 +193,54 @@ describe('selectCallView', () => {
             registryOperationInProgress: false,
         });
         expect(view).toBe('idle');
+    });
+});
+
+describe('selectActiveCallTerminalError (P5-8)', () => {
+    // The core P5-8 assertion: a lone active call reaching terminal `error`
+    // surfaces its error message (so the prejoin shows it instead of silent
+    // idle), matching the pre-Phase-5 single-call UX.
+    it('surfaces the active call error when it terminally errors with no held calls', () => {
+        expect(
+            selectActiveCallTerminalError({
+                phase: 'error',
+                error: { message: 'Connection lost' },
+                hasOtherLiveCalls: false,
+            }),
+        ).toBe('Connection lost');
+    });
+
+    // Held surface wins (round-2 behavior unchanged): when held calls survive the
+    // active call's error, the error stays transient and the held switcher shows.
+    it('does NOT surface an error when held calls remain (held surface wins)', () => {
+        expect(
+            selectActiveCallTerminalError({
+                phase: 'error',
+                error: { message: 'Connection lost' },
+                hasOtherLiveCalls: true,
+            }),
+        ).toBeNull();
+    });
+
+    it('does not surface anything for non-terminal phases', () => {
+        for (const phase of ['idle', 'joining', 'waiting', 'inCall', 'ending'] as CallPhase[]) {
+            expect(
+                selectActiveCallTerminalError({
+                    phase,
+                    error: { message: 'ignored while not terminal' },
+                    hasOtherLiveCalls: false,
+                }),
+            ).toBeNull();
+        }
+    });
+
+    it('returns null when terminal but no error message is present', () => {
+        expect(
+            selectActiveCallTerminalError({
+                phase: 'error',
+                error: null,
+                hasOtherLiveCalls: false,
+            }),
+        ).toBeNull();
     });
 });

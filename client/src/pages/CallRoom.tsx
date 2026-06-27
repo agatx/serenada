@@ -13,7 +13,7 @@ import { markRoomJoined, saveRoom } from '../utils/savedRooms';
 import { getConfiguredServerHost } from '../utils/serverHost';
 import { parseTurnsOnly } from '../utils/turnsOnly';
 import { getDisplayName, setDisplayName } from '../utils/displayName';
-import { selectCallView } from '../utils/callView';
+import { selectActiveCallTerminalError, selectCallView } from '../utils/callView';
 
 const BUNDLED_APP_INDEPENDENT_CONTENT_VIDEO_ENABLED = true;
 
@@ -225,9 +225,15 @@ const CallRoom: React.FC = () => {
     const turnsOnly = useMemo(() => parseTurnsOnly(location.search), [location.search]);
 
     const [shouldJoin, setShouldJoin] = useState(false);
-    // P5-6: a transient message shown on the prejoin card after a failed join
-    // (the failed managed call is dismissed from the registry; this tells the
-    // user why they landed back on prejoin and lets them retry).
+    // A message shown on the prejoin card when a call could not be (or stay) in
+    // the foreground, so the user knows why they landed back on prejoin and can
+    // retry. Two distinct sources funnel here:
+    //   - P5-6: a failed JOIN (`joinAndSwitch` result `failed`); the failed
+    //     managed call is dismissed from the registry.
+    //   - P5-8: an ALREADY-ACTIVE call whose session reaches terminal `error`;
+    //     the registry releases the lease and removes the call, so without this
+    //     the prejoin would render with no error (silent idle, regressing the
+    //     pre-Phase-5 single-call UX that showed the session's error state).
     const [joinError, setJoinError] = useState<string | null>(null);
     const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
     const [isSubscribed, setIsSubscribed] = useState(false);
@@ -285,6 +291,10 @@ const CallRoom: React.FC = () => {
         }),
         [activeSession, registryCalls, registryOperationInProgress],
     );
+    // Whether any held call would survive the active call's termination. When
+    // true, the held surface wins and the active call's terminal error stays
+    // transient (round-2 behavior); only a lone active error surfaces a message.
+    const hasHeldCalls = heldCalls.length > 0;
 
     const stopPreview = useCallback(() => {
         setPreviewStream((current) => {
@@ -459,6 +469,33 @@ const CallRoom: React.FC = () => {
 
         return unsubscribe;
     }, [roomId, activeSession]);
+
+    // P5-8: surface a lone active call's terminal error. When an ALREADY-ACTIVE
+    // call's session reaches the terminal `error` phase, the registry releases
+    // the lease and removes the call (default immediate retention), so the view
+    // drops to `idle` and the prejoin card would render with no error — silently
+    // losing the failure. Observe the active session's error AS it terminates and
+    // capture it into the prejoin error surface, matching the pre-Phase-5
+    // single-call UX. Distinct from the P5-6 failed-JOIN dismissal (that surfaces
+    // a `joinAndSwitch` result failure; this fires only for an already-active
+    // call's terminal error). When held calls survive, the held surface wins and
+    // no error is surfaced (round-2 behavior unchanged) — `hasHeldCalls` is a
+    // dependency so the subscription re-binds when held calls appear/disappear.
+    useEffect(() => {
+        if (!activeSession) return;
+        const unsubscribe = activeSession.subscribe((state: CallState) => {
+            const message = selectActiveCallTerminalError({
+                phase: state.phase,
+                error: state.error,
+                hasOtherLiveCalls: hasHeldCalls,
+            });
+            if (message === null) return;
+            setJoinError(message);
+            // Re-arm the prejoin so the user can retry the join (mirrors P5-6).
+            setShouldJoin(false);
+        });
+        return unsubscribe;
+    }, [activeSession, hasHeldCalls]);
 
     useEffect(() => {
         return () => {
