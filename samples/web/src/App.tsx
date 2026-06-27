@@ -8,6 +8,7 @@ import {
     type SerenadaSessionHandle,
 } from '@agatx/serenada-core'
 import { SerenadaCallFlow } from '@agatx/serenada-react-ui'
+import { MultiCallScreen } from './MultiCallScreen'
 
 const builtInSerenada = createSerenadaCore({ serverHost: 'serenada.app' })
 
@@ -26,7 +27,11 @@ interface ProviderDemoState {
     unsubscribeMessages: () => void
 }
 
-type ActiveScreen = ActiveCall | ProviderDemoState | null
+interface MultiCallScreenState {
+    kind: 'multi-call'
+}
+
+type ActiveScreen = ActiveCall | ProviderDemoState | MultiCallScreenState | null
 
 class SampleMockProvider extends SignalingProviderEmitter {
     readonly events: string[] = []
@@ -218,10 +223,17 @@ export default function App() {
         )
     }
 
+    if (activeScreen?.kind === 'multi-call') {
+        // The registry is owned by useSerenadaCallRegistry inside MultiCallScreen,
+        // so unmounting it (Back) tears down every managed call.
+        return <MultiCallScreen onExit={() => setActiveScreen(null)} />
+    }
+
     return (
         <HomeScreen
             onJoin={startBuiltInCall}
             onStartProviderDemo={startProviderDemo}
+            onStartMultiCall={() => setActiveScreen({ kind: 'multi-call' })}
         />
     )
 }
@@ -229,9 +241,11 @@ export default function App() {
 function HomeScreen({
     onJoin,
     onStartProviderDemo,
+    onStartMultiCall,
 }: {
     onJoin: (url: string) => void
     onStartProviderDemo: () => void
+    onStartMultiCall: () => void
 }) {
     const [urlText, setUrlText] = useState('')
 
@@ -281,6 +295,17 @@ function HomeScreen({
                 </p>
                 <button onClick={onStartProviderDemo}>
                     Start Mock Provider Demo
+                </button>
+            </section>
+
+            <section style={sectionStyle}>
+                <h2>Multi-Call</h2>
+                <p style={{ color: '#5b6470', lineHeight: 1.5 }}>
+                    Hold several calls at once via `useSerenadaCallRegistry`. Join and switch between
+                    calls, hold one in the background, and resume it later.
+                </p>
+                <button onClick={onStartMultiCall}>
+                    Open Multi-Call Demo
                 </button>
             </section>
         </div>

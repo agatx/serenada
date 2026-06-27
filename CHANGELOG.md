@@ -4,6 +4,33 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Web, Android, iOS: **multi-call sessions** via `SerenadaCallRegistry`. A host
+  app can keep several calls joined at once and switch the single foreground
+  media owner between them: one call owns the microphone, camera, screen share,
+  and OS audio routing while the rest stay held and connected. The registry
+  serializes all operations, owns the process-wide foreground lease, and exposes
+  per-call state (`joinHeld`, `joinAndSwitch`, `switch`, `hold`, `leave`, `end`).
+  Single-call `SerenadaCore.join()` integrations are unchanged; mixing direct
+  and registry use in one process is rejected. See
+  [docs/multi-call-session.md](docs/multi-call-session.md).
+- Web, Android, iOS: session hold/resume primitives. Holding a call releases
+  local mic/camera/screen-share capture and mutes remote playout while keeping
+  signaling and reconnect identity; resuming restores the user's desired audio/
+  video intent and re-attaches tracks without an SDP renegotiation on the common
+  path.
+- Protocol: additive `held` field on `participant_media_state`. A held
+  participant also sends `audioEnabled:false`/`videoEnabled:false`, so older
+  peers degrade to muted/camera-off; new peers render "on hold" distinctly. No
+  server change. See [docs/serenada_protocol_v1.md](docs/serenada_protocol_v1.md)
+  section 4.12.
+
+### Notes
+- Recovery is foreground-only in v1: held calls keep in-memory reconnect
+  identity but are not persisted across an app restart.
+
 ## [0.9.0] — 2026-06-25
 
 ### Added

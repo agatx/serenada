@@ -30,6 +30,7 @@ SDK packages must not depend on UI frameworks (no SwiftUI in SerenadaCore, no Re
 ### Web SDK
 - Entry point: `client/packages/core/src/SerenadaCore.ts`
 - Session: `client/packages/core/src/SerenadaSession.ts`
+- Multi-call registry (above sessions): `client/packages/core/src/SerenadaCallRegistry.ts` (see `docs/multi-call-session.md`)
 - Signaling: `client/packages/core/src/signaling/SignalingEngine.ts`
 - Media: `client/packages/core/src/media/MediaEngine.ts`
 - Constants: `client/packages/core/src/constants.ts`
@@ -38,6 +39,7 @@ SDK packages must not depend on UI frameworks (no SwiftUI in SerenadaCore, no Re
 ### Android SDK
 - Entry point: `client-android/serenada-core/src/main/java/app/serenada/core/SerenadaCore.kt`
 - Session: `.../core/SerenadaSession.kt`
+- Multi-call registry (above sessions): `.../core/SerenadaCallRegistry.kt` (see `docs/multi-call-session.md`)
 - WebRTC: `.../core/call/WebRtcEngine.kt`
 - Signaling: `.../core/call/SignalingClient.kt`
 - Constants: `.../core/call/WebRtcResilienceConstants.kt`
@@ -46,6 +48,7 @@ SDK packages must not depend on UI frameworks (no SwiftUI in SerenadaCore, no Re
 ### iOS SDK
 - Entry point: `client-ios/SerenadaCore/Sources/SerenadaCore.swift`
 - Session: `client-ios/SerenadaCore/Sources/SerenadaSession.swift`
+- Multi-call registry (above sessions): `client-ios/SerenadaCore/Sources/SerenadaCallRegistry.swift` (see `docs/multi-call-session.md`)
 - WebRTC: `client-ios/SerenadaCore/Sources/Call/WebRtcEngine.swift`
 - Signaling: `client-ios/SerenadaCore/Sources/Signaling/SignalingClient.swift`
 - Constants: `client-ios/SerenadaCore/Sources/Call/WebRtcResilienceConstants.swift`

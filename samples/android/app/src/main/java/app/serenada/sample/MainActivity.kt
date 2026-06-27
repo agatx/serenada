@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
 private fun SampleApp(serenada: SerenadaCore) {
     var callSession by remember { mutableStateOf<SerenadaSession?>(null) }
     var providerDemo by remember { mutableStateOf<ProviderDemoSession?>(null) }
+    var showMultiCall by remember { mutableStateOf(false) }
     val context = LocalContext.current
     fun dismissCall(leave: Boolean) {
         val session = callSession
@@ -106,6 +107,11 @@ private fun SampleApp(serenada: SerenadaCore) {
             },
         )
 
+        showMultiCall -> MultiCallScreen(
+            serenada = serenada,
+            onDismiss = { showMultiCall = false },
+        )
+
         else -> HomeScreen(
             onJoinUrl = { callSession = serenada.join(it) },
             onStartProviderDemo = {
@@ -121,6 +127,7 @@ private fun SampleApp(serenada: SerenadaCore) {
                     coordinator = coordinator,
                 )
             },
+            onStartMultiCall = { showMultiCall = true },
             serenada = serenada,
         )
     }
@@ -130,6 +137,7 @@ private fun SampleApp(serenada: SerenadaCore) {
 private fun HomeScreen(
     onJoinUrl: (String) -> Unit,
     onStartProviderDemo: () -> Unit,
+    onStartMultiCall: () -> Unit,
     serenada: SerenadaCore,
 ) {
     var urlText by remember { mutableStateOf("") }
@@ -223,6 +231,27 @@ private fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Start Mock Provider Demo")
+                }
+            }
+        }
+
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Multi-Call Registry", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Keep several calls joined at once with SerenadaCallRegistry and switch the foreground media owner between them.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = onStartMultiCall,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Open Multi-Call Demo")
                 }
             }
         }
