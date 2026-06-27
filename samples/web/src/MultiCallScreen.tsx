@@ -1,4 +1,4 @@
-import { useCallback, useState, type CSSProperties } from 'react'
+import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import type { ManagedCallState } from '@agatx/serenada-core'
 import {
     SerenadaCallFlow,
@@ -22,11 +22,19 @@ import {
  *    the registry never auto-promotes a held call — the host picks the next one)
  */
 export function MultiCallScreen({ onExit }: { onExit: () => void }) {
+    // Signaling host: defaults to the public server. Override with a `?host=`
+    // query param (e.g. `?host=localhost`) to point the demo at a local dev
+    // server. Memoized so the config identity is stable across renders — the
+    // hook builds the registry once for a given config.
+    const config = useMemo(() => {
+        const host =
+            new URLSearchParams(window.location.search).get('host')?.trim() ||
+            'serenada.app'
+        return { serverHost: host }
+    }, [])
     // The registry is owned by the hook: constructed once for this config and
     // torn down on unmount (every live call is left).
-    const registry = useSerenadaCallRegistry({
-        config: { serverHost: 'serenada.app' },
-    })
+    const registry = useSerenadaCallRegistry({ config })
 
     const {
         activeCall,

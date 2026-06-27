@@ -111,6 +111,9 @@ session.onPeerMessage((message) => console.log(message.type))
 registry owns which call holds the mic/camera lease). It never auto-promotes a held
 call: after `hold`, the host decides what comes next. See `src/MultiCallScreen.tsx`.
 
+The demo's signaling host defaults to the public server; append `?host=localhost`
+(e.g. `http://localhost:5173/?host=localhost`) to point it at a local dev server.
+
 ```tsx
 import { useSerenadaCallRegistry, SerenadaCallFlow } from '@agatx/serenada-react-ui'
 
