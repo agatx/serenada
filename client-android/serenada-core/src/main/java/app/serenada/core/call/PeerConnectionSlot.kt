@@ -933,9 +933,21 @@ internal class PeerConnectionSlot(
         // trackIdentifier is absent so content stats are not mis-attributed as
         // camera. Null for legacy peers and the flag-off path, so every video
         // stat falls through to the camera bucket.
-        val contentTrackId = contentTransceiver?.receiver?.track()?.id()
-            ?.takeIf { it.isNotEmpty() }
-        val contentMid = contentTransceiver?.mid?.takeIf { it.isNotEmpty() }
+        // A held/switching call (or a peer that just stopped sharing) can dispose
+        // the inbound content track between liveness ticks. `MediaStreamTrack.id()`
+        // — and any access — throws `IllegalStateException` once the track is
+        // disposed, and that disposal races this sample on another thread. Guard
+        // it: a disposed track means "no content track" for this tick, not a
+        // crashed liveness timer. (The liveness timer keeps ticking for held calls,
+        // so this path is reachable during a multi-call hold/switch.)
+        val (contentTrackId, contentMid) = try {
+            Pair(
+                contentTransceiver?.receiver?.track()?.id()?.takeIf { it.isNotEmpty() },
+                contentTransceiver?.mid?.takeIf { it.isNotEmpty() },
+            )
+        } catch (e: IllegalStateException) {
+            Pair(null, null)
+        }
         pc.getStats { report ->
             var bytes = 0L
             var cameraBytes = 0L
