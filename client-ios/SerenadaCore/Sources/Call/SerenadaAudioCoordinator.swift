@@ -244,9 +244,6 @@ protocol LeaseAwareAudioCoordinator: AnyObject {
     /// process-global ``AudioSessionLeaseRegistry`` so a cross-instance stale
     /// callback can be fenced.
     func setForegroundLease(_ lease: AudioSessionLease)
-    /// Clear the lease when the session deactivates. After this, any late callback
-    /// captured under the cleared lease is stale and dropped.
-    func clearForegroundLease(_ lease: AudioSessionLease)
     /// Snapshot the lease currently installed on this coordinator at REQUEST time,
     /// so the session can fence a deactivation against the lease as of when the
     /// deactivation was ENQUEUED — not whatever is installed when it finally runs

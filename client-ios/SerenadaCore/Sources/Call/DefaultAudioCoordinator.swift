@@ -162,16 +162,6 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         leaseRegistry.install(lease)
     }
 
-    /// Clear the lease on deactivation. Clears the local record and the
-    /// process-global record only if it still matches — a clear for an
-    /// already-superseded lease must NOT drop a newer owner's live lease.
-    func clearForegroundLease(_ lease: AudioSessionLease) {
-        if installedLease == lease {
-            installedLease = nil
-        }
-        leaseRegistry.clearIfCurrent(lease)
-    }
-
     /// Whether `lease` is still the process-current audio lease. A delayed
     /// continuation or OS observer captures the lease it ran under and re-checks it
     /// here before touching the shared audio session; a stale lease (a newer owner

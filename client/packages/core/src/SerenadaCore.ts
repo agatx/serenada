@@ -66,26 +66,22 @@ export class SerenadaCore {
         if (!SerenadaCore.isSupported()) {
             return this.createUnsupportedSession();
         }
-        const signalingProvider = this.createSignalingProvider();
         // Public single-call join always foregrounds and routes through the
-        // process-wide arbiter (mode `direct`): acquiring the lease in the session
-        // constructor makes a second concurrent direct join (or a join while a
-        // registry owns the process) fail fast with `ForegroundLeaseUnavailable`.
-        if (typeof urlOrOptions === 'string') {
-            const roomId = this.parseRoomIdFromUrl(urlOrOptions);
-            return new SerenadaSession(this.config, roomId, urlOrOptions, signalingProvider, {
-                displayName: extraOptions?.displayName,
-                peerId: extraOptions?.peerId,
-                acquireForegroundLease: true,
-            });
-        }
-        const roomUrl = this.resolvedConfig.serverHost
-            ? buildRoomUrl(this.resolvedConfig.serverHost, urlOrOptions.roomId)
-            : null;
-        return new SerenadaSession(this.config, urlOrOptions.roomId, roomUrl, signalingProvider, {
-            displayName: urlOrOptions.displayName,
-            peerId: urlOrOptions.peerId,
+        // process-wide arbiter (mode `direct`): `acquireForegroundLease` makes the
+        // session constructor take the lease, so a second concurrent direct join
+        // (or a join while a registry owns the process) fails fast with
+        // `ForegroundLeaseUnavailable`. Delegates to `joinInternal` so the
+        // URL/roomId -> session construction lives in one place.
+        const room = typeof urlOrOptions === 'string'
+            ? { url: urlOrOptions }
+            : { roomId: urlOrOptions.roomId };
+        const displayName = typeof urlOrOptions === 'string' ? extraOptions?.displayName : urlOrOptions.displayName;
+        const peerId = typeof urlOrOptions === 'string' ? extraOptions?.peerId : urlOrOptions.peerId;
+        return this.joinInternal(room, {
+            initialMediaRole: 'foreground',
             acquireForegroundLease: true,
+            displayName,
+            peerId,
         });
     }
 
@@ -97,33 +93,37 @@ export class SerenadaCore {
      * senders are still created during negotiation) or a `'foreground'` call.
      *
      * For `'foreground'` the caller is responsible for the arbiter lease (the
-     * registry acquires/releases it). For `'held'` no lease is taken. This method
-     * never acquires the lease itself; the public `join()` is the only path that
-     * self-acquires the `direct`-mode lease.
+     * registry acquires/releases it). For `'held'` no lease is taken. The session
+     * self-acquires the `direct`-mode lease only when the caller passes
+     * `acquireForegroundLease: true`; the public `join()` is the only path that does.
      */
     joinInternal(
         room: { url: string } | { roomId: string },
-        options: { initialMediaRole: CallMediaRole; displayName?: string; peerId?: string } = { initialMediaRole: 'foreground' },
+        options: {
+            initialMediaRole: CallMediaRole;
+            displayName?: string;
+            peerId?: string;
+            /**
+             * When `true`, the session takes the process-wide foreground lease at
+             * construction. The public `join()` sets this; the registry leaves it
+             * unset and manages the lease itself.
+             */
+            acquireForegroundLease?: boolean;
+        } = { initialMediaRole: 'foreground' },
     ): SerenadaSession {
         if (!SerenadaCore.isSupported()) {
             return this.createUnsupportedSession() as unknown as SerenadaSession;
         }
         const signalingProvider = this.createSignalingProvider();
-        if ('url' in room) {
-            const roomId = this.parseRoomIdFromUrl(room.url);
-            return new SerenadaSession(this.config, roomId, room.url, signalingProvider, {
-                displayName: options.displayName,
-                peerId: options.peerId,
-                initialMediaRole: options.initialMediaRole,
-            });
-        }
-        const roomUrl = this.resolvedConfig.serverHost
-            ? buildRoomUrl(this.resolvedConfig.serverHost, room.roomId)
-            : null;
-        return new SerenadaSession(this.config, room.roomId, roomUrl, signalingProvider, {
+        const roomId = 'url' in room ? this.parseRoomIdFromUrl(room.url) : room.roomId;
+        const roomUrl = 'url' in room
+            ? room.url
+            : (this.resolvedConfig.serverHost ? buildRoomUrl(this.resolvedConfig.serverHost, room.roomId) : null);
+        return new SerenadaSession(this.config, roomId, roomUrl, signalingProvider, {
             displayName: options.displayName,
             peerId: options.peerId,
             initialMediaRole: options.initialMediaRole,
+            acquireForegroundLease: options.acquireForegroundLease,
         });
     }
 

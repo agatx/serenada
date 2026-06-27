@@ -211,6 +211,11 @@ export class MediaEngine {
     private destroyed = false;
     private cameraRecoveryInFlight = false;
     private audioRecoveryInFlight = false;
+    // In-flight `reacquireLocalAudioCapture` worker promise, so a re-entrant call
+    // (e.g. an unmute racing a hold-resume's mic reacquire) AWAITS the running
+    // acquire and returns after the track lands — instead of no-opping and letting
+    // its `.then()` read a still-null track and broadcast `audioEnabled:false`.
+    private audioRecoveryPromise: Promise<void> | null = null;
     // True while the call is HELD (Core Invariant 2: a held call owns NO
     // capture). Set by `suspendLocalMediaForHold`, cleared by
     // `resumeLocalMediaFromHold` BEFORE it reacquires. While set, every
@@ -623,6 +628,15 @@ export class MediaEngine {
             await this.reacquireLocalAudioCapture();
         }
         if (desiredVideoMode !== 'off') {
+            // Reconcile facing to the desired mode BEFORE reacquiring: a
+            // `setCameraMode`/`flipCamera` while held only updates `desiredVideoMode`
+            // (Core Invariant 2 defers the real switch to resume), so resume must
+            // apply it here — otherwise `reacquireVideoTrack` reacquires on the STALE
+            // `facingMode` and the camera comes back on the OLD facing. Mirrors
+            // iOS/Android applying the specific mode on resume. `selfie` -> 'user';
+            // `world`/`composite` -> 'environment' (web drops `composite` from the
+            // available modes, so it only reaches here as a defensive rear mapping).
+            this.facingMode = desiredVideoMode === 'selfie' ? 'user' : 'environment';
             await this.reacquireVideoTrack();
         }
         this.setRemotePlaybackEnabled(true);
@@ -718,13 +732,39 @@ export class MediaEngine {
         // exists, so this is a no-op (single-call behavior unchanged).
         if (!this.localStream) this.localStream = new MediaStream();
         if (this.localStream.getAudioTracks()[0]) return;
-        if (this.audioRecoveryInFlight || this.requestingMedia) return;
+        // Coalesce a re-entrant call onto the running acquire instead of no-opping:
+        // an unmute racing a hold-resume's mic reacquire must AWAIT the in-flight
+        // acquire and return only after the track lands, so the caller's `.then()`
+        // sees the live track and broadcasts `audioEnabled:true` (not a stale
+        // `false`). The `requestingMedia` (initial getUserMedia) case keeps its
+        // early-return — that path is a full media start, not an audio reacquire.
+        if (this.audioRecoveryInFlight) {
+            if (this.audioRecoveryPromise) await this.audioRecoveryPromise;
+            return;
+        }
+        if (this.requestingMedia) return;
         this.audioRecoveryInFlight = true;
+        const work = this.reacquireLocalAudioCaptureInternal();
+        this.audioRecoveryPromise = work;
+        try {
+            await work;
+        } finally {
+            this.audioRecoveryInFlight = false;
+            this.audioRecoveryPromise = null;
+        }
+    }
+
+    /** Worker for {@link reacquireLocalAudioCapture}; assumes the in-flight latch is held. */
+    private async reacquireLocalAudioCaptureInternal(): Promise<void> {
         try {
             const devices = await this.enumerateMediaDevices();
             const preferredInput = this.selectPreferredAudioInput(devices, null);
             const track = await this.acquireAudioTrack(true, preferredInput.device?.deviceId);
-            if (this.destroyed || !this.localStream) {
+            // Re-check `heldNoCapture` after the await: a hold racing this resume
+            // can re-latch it and release capture while getUserMedia was pending.
+            // A held call must never publish live mic to peers (Core Invariant 2 /
+            // privacy), so drop the freshly captured track instead of attaching it.
+            if (this.destroyed || !this.localStream || this.heldNoCapture) {
                 track.stop();
                 return;
             }
@@ -732,8 +772,6 @@ export class MediaEngine {
             await this.replaceAudioTrackOnAllPeers(track, this.localStream);
         } catch (err) {
             this.logger?.log('error', 'WebRTC', `Failed to reacquire microphone from hold: ${formatError(err)}`);
-        } finally {
-            this.audioRecoveryInFlight = false;
         }
     }
 

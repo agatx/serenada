@@ -1511,6 +1511,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
                 // re-suspend capture + remote playout and keep the role held. Do
                 // NOT broadcast held:false / foreground.
                 await this.rollbackSupersededResume();
+                // Token-gated caller (`activateForeground`): a superseded resume is
+                // an activation FAILURE, not a success. Throw (after rollback) so
+                // `activateForeground` rejects and `runSwitch` rolls back —
+                // otherwise the registry would treat this as activated and set it
+                // foreground while the call actually rolled back to held.
+                if (throwOnFailure) {
+                    throw new Error('Foreground activation superseded during resume');
+                }
                 return;
             }
             const stream = this.media.localStream;

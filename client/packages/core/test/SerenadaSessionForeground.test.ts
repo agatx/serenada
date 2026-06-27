@@ -226,7 +226,9 @@ describe('SerenadaSession.activateForeground fencing (Phase 2)', () => {
         const activatePromise = harness.session.activateForeground(token, staleGen);
         // A concurrent un-gated hold bumps the generation past staleGen.
         await harness.session.suspendForHold();
-        await activatePromise;
+        // FIX B: the token-gated activation REJECTS on the superseded path (so the
+        // registry switch rolls back) instead of resolving as a silent success.
+        await expect(activatePromise).rejects.toThrow();
 
         // The stale activation was dropped: the call stayed held, never foreground.
         expect(harness.session.currentMediaRole).toBe('held');
@@ -245,7 +247,9 @@ describe('SerenadaSession.activateForeground fencing (Phase 2)', () => {
         foregroundArbiter.releaseLease(staleToken);
         const gen = foregroundArbiter.nextOperationGeneration();
 
-        await expect(harness.session.activateForeground(staleToken, gen)).resolves.toBeUndefined();
+        // FIX B: the token fence makes the token-gated activation REJECT (so the
+        // registry switch rolls back) rather than resolving as a silent success.
+        await expect(harness.session.activateForeground(staleToken, gen)).rejects.toThrow();
         // Token fence: not the current owner -> rolled back to held, no foreground.
         expect(harness.session.currentMediaRole).toBe('held');
     });

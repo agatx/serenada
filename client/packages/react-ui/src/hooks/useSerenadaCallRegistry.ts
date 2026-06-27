@@ -108,7 +108,13 @@ export function useSerenadaCallRegistry(
         ),
         // Reconstruct only on the same config keys useSerenadaSession keys on,
         // plus the registry-specific retention. A reconstruct tears down the old
-        // registry (cleanup effect below) and builds a fresh one.
+        // registry (cleanup effect below) and builds a fresh one. `config.logger`
+        // is deliberately NOT a dep: a host passing an inline `logger` (the common
+        // React idiom) mints a new function identity every parent re-render, which
+        // would reconstruct the registry and silently `leave()` every live call
+        // mid-session. The logger is still captured by closure above; a stale
+        // logger after a logger swap is the same accepted tradeoff useSerenadaSession
+        // makes (it does not key on `logger` either).
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [
             config.serverHost,
@@ -116,7 +122,6 @@ export function useSerenadaCallRegistry(
             config.defaultVideoEnabled,
             transportsKey,
             config.turnsOnly,
-            config.logger,
             endedCallRetentionMs,
         ],
     );
@@ -138,8 +143,18 @@ export function useSerenadaCallRegistry(
     );
 
     // The active call carries the live session, so it is read off the registry
-    // (not the value snapshot). Re-derive on each state change.
-    const activeCall = registry.activeCall;
+    // (not the value snapshot). The getter mints a fresh `{state, session}`
+    // wrapper on every call, so memoize it on the active call's identity — its
+    // published snapshot, which changes whenever `activeCallId` or that call's
+    // state changes — to keep the object identity stable across unrelated
+    // re-renders (so consumers using it as an effect/memo dep don't churn).
+    const activeState =
+        state.calls.find((call) => call.id === state.activeCallId) ?? null;
+    const activeCall = useMemo(
+        () => registry.activeCall,
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [registry, activeState],
+    );
 
     // Stable operation callbacks bound to the current registry.
     const ops = useMemo(

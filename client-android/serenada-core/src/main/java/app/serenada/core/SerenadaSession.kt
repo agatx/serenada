@@ -2003,17 +2003,6 @@ class SerenadaSession internal constructor(
     private fun isInactiveForForeground(): Boolean = closed || _state.value.phase == CallPhase.Idle
 
     /**
-     * Registry-owned (contract §7) setter for the activation state on the paths
-     * that change it WITHOUT a media transition: a refused switch marks the target
-     * NEEDS_PERMISSION; an old-release timeout marks the old call FAILED (its media
-     * may be partial but it keeps the lease). Not a public single-call API.
-     */
-    internal fun setMediaActivationState(state: MediaActivationState) {
-        assertMainThread()
-        mediaActivationState = state
-    }
-
-    /**
      * Token-gated foreground activation (contract §3; wraps the Phase-1
      * [applyForegroundRoleInternal]). The registry passes the arbiter-minted owner
      * token it just acquired plus the arbiter operation generation. The awaited

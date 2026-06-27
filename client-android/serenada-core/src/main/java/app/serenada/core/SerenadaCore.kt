@@ -224,7 +224,9 @@ class SerenadaCore(
         if (!trimmed.contains("/")) return null
         return try {
             val uri = android.net.Uri.parse(trimmed)
-            val roomId = uri.lastPathSegment?.takeIf { it.isNotBlank() } ?: return null
+            // Shared token extraction (single source of truth with the registry's
+            // canonicalRoomId dedup key) so the two parsers can never drift.
+            val roomId = extractRoomToken(trimmed) ?: return null
             val authority = uri.authority?.takeIf { it.isNotBlank() } ?: return null
             val scheme = uri.scheme?.takeIf { it.isNotBlank() }
                 ?: if (isLocalHost(authority)) "http" else "https"

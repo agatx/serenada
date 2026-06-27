@@ -181,10 +181,11 @@ class SerenadaCallRegistryTest {
         assertEquals(a, h.registry.state.value.activeCallId)
         assertEquals(CallMediaRole.FOREGROUND, h.created["a"]!!.session.mediaRoleForTest())
         assertEquals(CallMediaRole.HELD, h.created["b"]!!.session.mediaRoleForTest())
-        // The target's activation state reflects needsPermission, carried per-call.
+        // The held target stays INACTIVE (cross-platform contract); the needed
+        // permission is surfaced ONLY on the per-call activationError.
         val bState = h.registry.state.value.calls.single { it.callId == b }
-        assertEquals(MediaActivationState.NEEDS_PERMISSION, bState.mediaActivationState)
-        assertNotNull(bState.activationError)
+        assertEquals(MediaActivationState.INACTIVE, bState.mediaActivationState)
+        assertTrue(bState.activationError is CallRegistryError.NeedsPermission)
         // The old call's coordinator was never deactivated (it was never drained).
         assertEquals(0, h.created["a"]!!.coordinator.deactivateCalls)
     }
@@ -251,10 +252,10 @@ class SerenadaCallRegistryTest {
             ForegroundMediaArbiter.isCurrentOwner(h.created["a"]!!.session.foregroundOwnerTokenForTest()),
         )
         assertNull(h.created["b"]!!.session.foregroundOwnerTokenForTest())
-        // The old call's activation state reflects the failure.
+        // The release failure is surfaced ONLY on the per-call activationError
+        // (cross-platform contract); mediaActivationState is NOT forced to FAILED.
         val aState = h.registry.state.value.calls.single { it.callId == a }
-        assertEquals(MediaActivationState.FAILED, aState.mediaActivationState)
-        assertNotNull(aState.activationError)
+        assertTrue(aState.activationError is CallRegistryError.ReleaseFailed)
     }
 
     // --- joinAndSwitch holds prior before activating ---
@@ -499,13 +500,13 @@ class SerenadaCallRegistryTest {
         ShadowLooper.idleMainLooper()
 
         // Invariant 1: the user KEEPS the call they were on. The lease + activeCallId
-        // stay; the call is marked FAILED with a release-failure surfaced. Do NOT
-        // release the lease (two owners must never exist).
+        // stay; the release failure is surfaced ONLY on the per-call activationError
+        // (cross-platform contract — mediaActivationState is NOT forced to FAILED).
+        // Do NOT release the lease (two owners must never exist).
         assertEquals(a, h.registry.state.value.activeCallId)
         assertTrue(ForegroundMediaArbiter.isCurrentOwner(aToken))
         val aState = h.registry.state.value.calls.single { it.callId == a }
-        assertEquals(MediaActivationState.FAILED, aState.mediaActivationState)
-        assertNotNull(aState.activationError)
+        assertTrue(aState.activationError is CallRegistryError.ReleaseFailed)
         // A fresh acquire still fails (release pending stays set; lease held).
         var threw = false
         try {

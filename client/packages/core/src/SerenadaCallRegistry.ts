@@ -626,6 +626,10 @@ export class SerenadaCallRegistry {
             this.log('warning', `${kind} teardown failed: ${formatError(err)}`);
         }
         this.scheduleEndedRemoval(call);
+        // Load-bearing only when retention > 0: on the default path (retentionMs
+        // <= 0) `scheduleEndedRemoval` -> `removeCall` already releases the mode,
+        // but with retention the ended call lingers so this trailing call is what
+        // releases registry mode. Do not delete it.
         this.releaseModeIfIdle();
         this.publish();
     }
@@ -690,7 +694,10 @@ export class SerenadaCallRegistry {
         this.scheduleEndedRemoval(call);
         // Release the `'registry'` owning mode if this was the last live call, so
         // a remote-ended/error HELD call (or the last active call ending) does not
-        // wedge the process in registry mode forever.
+        // wedge the process in registry mode forever. Load-bearing only when
+        // retention > 0: on the default path (retentionMs <= 0) `scheduleEndedRemoval`
+        // -> `removeCall` already released it, but with retention the ended call
+        // lingers so this trailing call is what releases registry mode. Do not delete it.
         this.releaseModeIfIdle();
         this.publish();
     }

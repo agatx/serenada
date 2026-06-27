@@ -46,13 +46,28 @@ internal fun canonicalRoomId(room: RoomRef): String = when (room) {
         if (!trimmed.contains("/")) {
             trimmed
         } else {
-            val token = try {
-                android.net.Uri.parse(trimmed).lastPathSegment?.takeIf { it.isNotBlank() }
-            } catch (_: Exception) {
-                null
-            }
-            token ?: trimmed.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() } ?: trimmed
+            extractRoomToken(trimmed)
+                ?: trimmed.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() }
+                ?: trimmed
         }
+    }
+}
+
+/**
+ * Single source of truth for pulling the room token out of a `/call/<token>` URL
+ * (contract §7 "Call identity policy"). Used by BOTH [canonicalRoomId] (registry
+ * dedup key) and [SerenadaCore.resolveRoomUrl] (the join path), so the dedup key
+ * can never disagree with the room the join connects to. Returns the trimmed
+ * last path segment, or null when the input has no usable last segment (callers
+ * apply their own fallback/null handling). Mirrors iOS `DeepLinkParser` and web
+ * `roomIdentity.canonicalizeRoomId`.
+ */
+internal fun extractRoomToken(input: String): String? {
+    val trimmed = input.trim()
+    return try {
+        android.net.Uri.parse(trimmed).lastPathSegment?.takeIf { it.isNotBlank() }
+    } catch (_: Exception) {
+        null
     }
 }
 

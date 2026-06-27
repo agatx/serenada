@@ -354,7 +354,9 @@ class SerenadaCallRegistry internal constructor(
         // 0. PREFLIGHT before touching the old call (Core Invariant 4).
         when (next.session.preflightForeground()) {
             SerenadaSession.ForegroundPreflight.NEEDS_PERMISSION -> {
-                next.session.setMediaActivationState(MediaActivationState.NEEDS_PERMISSION)
+                // The target stays HELD (it never foregrounds; old is untouched), so
+                // its mediaActivationState stays INACTIVE per the cross-platform
+                // contract. The needed permission is carried ONLY on activationError.
                 next.activationError = CallRegistryError.NeedsPermission(
                     "Call ${next.callId} needs a mic/camera grant for its desired media",
                 )
@@ -387,9 +389,11 @@ class SerenadaCallRegistry internal constructor(
                 false
             }
             if (!released) {
-                // Timeout: the old call KEEPS its lease (release pending stays
-                // set so nothing new is granted). Mark it failed and abort.
-                old.session.setMediaActivationState(MediaActivationState.FAILED)
+                // Timeout: the old call KEEPS its lease (release pending stays set so
+                // nothing new is granted) and stays foreground (Invariant 1). The
+                // release failure is carried ONLY on activationError; its
+                // mediaActivationState stays its live foreground value (cross-platform
+                // contract — web/iOS surface this on activationError alone).
                 old.activationError = CallRegistryError.ReleaseFailed(
                     "Releasing foreground of ${old.callId} timed out; it stays foreground",
                 )
@@ -485,9 +489,10 @@ class SerenadaCallRegistry internal constructor(
      * and on success release the lease and set `activeCallId = null` (FIX E).
      *
      * Core Invariant 1 (the user keeps the call they were on): on a drain TIMEOUT
-     * the lease is KEPT — the [ForegroundOwnerToken] and `activeCallId` stay put,
-     * the call's [MediaActivationState] is marked FAILED, and a [ReleaseFailed]
-     * error is surfaced. Releasing the lease on a half-drained call could leave two
+     * the lease is KEPT — the [ForegroundOwnerToken] and `activeCallId` stay put and
+     * a [ReleaseFailed] error is surfaced on [ManagedCallState.activationError]
+     * (the failure is NOT mirrored onto [MediaActivationState] — cross-platform
+     * contract). Releasing the lease on a half-drained call could leave two
      * owners (the half-drained session still holding capture/audio, plus whoever
      * acquires next), so hold must not. This is distinct from [leaveCall]/[endCall],
      * whose call is going away and so release UNCONDITIONALLY (see
@@ -508,9 +513,10 @@ class SerenadaCallRegistry internal constructor(
         }
         if (!released) {
             // Timeout: KEEP the lease + activeCallId (the user keeps this call).
-            // releasePending stays set so nothing new is granted. Mark FAILED and
-            // surface a release failure; do NOT release the lease or null the token.
-            call.session.setMediaActivationState(MediaActivationState.FAILED)
+            // releasePending stays set so nothing new is granted; do NOT release the
+            // lease or null the token. The release failure is carried ONLY on
+            // activationError; mediaActivationState stays its live foreground value
+            // (cross-platform contract — web/iOS surface this on activationError alone).
             call.activationError = CallRegistryError.ReleaseFailed(
                 "Holding ${call.callId} timed out draining its foreground; it stays foreground",
             )
@@ -684,16 +690,16 @@ class SerenadaCallRegistry internal constructor(
         // session's mutable `mediaRole`: a session-internal teardown resets the
         // latter to FOREGROUND, which would mislabel an ended/held call.
         val role = if (!ended && foregroundToken != null) CallMediaRole.FOREGROUND else CallMediaRole.HELD
-        // Held/ended calls sit at INACTIVE; the live session value is only
-        // meaningful while the call is the foreground one being activated. Keep a
-        // surfaced NEEDS_PERMISSION/FAILED (set on the call without a transition).
-        val activation = when {
-            role == CallMediaRole.FOREGROUND -> session.mediaActivationStateForTest()
-            session.mediaActivationStateForTest() == MediaActivationState.NEEDS_PERMISSION ->
-                MediaActivationState.NEEDS_PERMISSION
-            session.mediaActivationStateForTest() == MediaActivationState.FAILED ->
-                MediaActivationState.FAILED
-            else -> MediaActivationState.INACTIVE
+        // mediaActivationState is a pure function of the call's OWN foreground
+        // lifecycle (cross-platform contract, see MediaActivationState doc): a held
+        // call sits at INACTIVE. needsPermission/failure for a held call is surfaced
+        // ONLY on the orthogonal `activationError` field — NOT re-derived here — so a
+        // host reads the same value across web/iOS/Android (web/iOS keep this a plain
+        // passthrough of the session's own state).
+        val activation = if (role == CallMediaRole.FOREGROUND) {
+            session.mediaActivationStateForTest()
+        } else {
+            MediaActivationState.INACTIVE
         }
         return ManagedCallState(
             callId = callId,
