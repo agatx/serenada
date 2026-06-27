@@ -462,6 +462,18 @@ final class CallManager: ObservableObject {
         activeCallId != nil || liveHeldCount > 0
     }
 
+    /// True when the active call's terminal `.error` must be surfaced as a transient
+    /// per-call banner (with routing falling through to the held surface) instead of
+    /// a whole-app error screen: that is, whenever live held calls remain after the
+    /// active call ends in error. The active call is gone by definition in this path
+    /// (it just hit terminal error), so only the live held set decides — Invariant 5
+    /// (no auto-promote) means those held calls must stay reachable, not be masked by
+    /// a whole-app error screen (FIX P5-7). Pure + static so the decision is
+    /// unit-testable without a registry.
+    static func terminalErrorShowsBanner(liveHeldCount: Int) -> Bool {
+        liveHeldCount > 0
+    }
+
     /// The held call exists; prompt for the missing grants, then retry the switch.
     /// If the user declines, the held call is left/dismissed and the UI returns to
     /// idle (matching the old cancel-on-deny behavior).
@@ -819,14 +831,29 @@ final class CallManager: ObservableObject {
         // duplicate emission can't re-fire. We still dismiss the ended call record
         // so the switcher does not show a dead chip.
         if state.phase == .error {
-            let errorUiState = CallUiState(
-                phase: .error,
-                roomId: state.roomId,
-                errorMessage: errorMessage(for: state.error)
-            )
             let endedCallId = activeCallId
+            let errorDetail = errorMessage(for: state.error)
             detachActiveSessionObserver()
-            uiState = errorUiState
+
+            // The active call ended in error, but the registry does NOT auto-promote
+            // a held call (Invariant 5). If live held calls remain, a whole-app error
+            // screen would mask them and strand the user. Route to the held surface
+            // (the `.heldOnly` screen) and surface this failure as a transient per-call
+            // banner instead — only write the whole-app `.error` when nothing survives
+            // (FIX P5-7). `heldCalls` is already re-derived from the registry by
+            // `onRegistryStateChange`, so reading it here reflects the live held set.
+            if Self.terminalErrorShowsBanner(liveHeldCount: heldCalls.count) {
+                // Reset the active-call UI to idle so routing falls through to the
+                // held surface; the banner carries the failure detail.
+                uiState = CallUiState()
+                presentCallErrorBanner(errorDetail ?? L10n.errorUnknown)
+            } else {
+                uiState = CallUiState(
+                    phase: .error,
+                    roomId: state.roomId,
+                    errorMessage: errorDetail
+                )
+            }
             if let registry = callRegistry, let endedCallId {
                 Task { @MainActor in await registry.dismissEndedCall(id: endedCallId) }
             }

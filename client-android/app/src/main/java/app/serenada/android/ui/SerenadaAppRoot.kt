@@ -176,19 +176,29 @@ fun SerenadaAppRoot(
         val statusMessage = uiState.statusMessageResId?.let { stringResource(it) }.orEmpty()
         val errorMessage = uiState.errorMessageResId?.let { stringResource(it) } ?: uiState.errorMessageText
         val hasError = !errorMessage.isNullOrBlank()
+        // P5-7 precedence (active call → Holding → Error → Join). Holding MUST beat
+        // Error: when no call is active but a live held call remains (active call
+        // ended / a join failed, no auto-promote per Core Invariant 5), route to the
+        // holding surface so the surviving call stays reachable — the whole-app error
+        // screen is shown ONLY when nothing survives. Single-call UX is preserved
+        // exactly: a lone call that errors with no held call leaves zero live calls,
+        // so the error screen shows as before.
         val currentScreen = when {
             showDiagnostics -> RootScreen.Diagnostics
             showSettings -> RootScreen.Settings
             showJoinWithCode -> RootScreen.JoinWithCode
-            showActiveCallScreen -> RootScreen.Call
-            uiState.phase == CallPhase.Error -> RootScreen.Error
-            // No active call but live held calls remain (active call ended, no
-            // auto-promote per Core Invariant 5): surface the held calls so the user
-            // can resume one. Only fall through to Join when zero live calls remain
-            // (single-call UX: last call ending with no held → Join as before).
-            RootRouting.shouldShowHoldingSurface(callListState, showActiveCallScreen) ->
-                RootScreen.Holding
-            else -> RootScreen.Join
+            else -> when (
+                RootRouting.resolveFallback(
+                    state = callListState,
+                    hasError = uiState.phase == CallPhase.Error,
+                    showingActiveCall = showActiveCallScreen,
+                )
+            ) {
+                RootRouting.Fallback.CALL -> RootScreen.Call
+                RootRouting.Fallback.HOLDING -> RootScreen.Holding
+                RootRouting.Fallback.ERROR -> RootScreen.Error
+                RootRouting.Fallback.JOIN -> RootScreen.Join
+            }
         }
 
         fun closeSettings() {

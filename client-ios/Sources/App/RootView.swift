@@ -29,20 +29,26 @@ func shouldShowActiveCallScreen(
 }
 
 /// Decide the root screen from the active-call flag, the fallback UI phase, and
-/// whether live held calls remain. Pure + static so the "held surface vs idle"
-/// routing is unit-testable (FIX P5-3). Precedence:
+/// whether live held calls remain. Pure + static so the "held surface vs error"
+/// routing is unit-testable (FIX P5-7). Precedence:
 ///   1. active call screen wins
-///   2. whole-app error screen
-///   3. held surface when live held calls remain (no active call) — Invariant 5
+///   2. held surface when live held calls remain (no active call) — Invariant 5
+///   3. whole-app error screen (only when nothing survives)
 ///   4. otherwise Join/idle
+///
+/// The held surface MUST beat the whole-app error: if the active call ends/fails
+/// in error but live held calls remain (Invariant 5: no auto-promote), a
+/// whole-app error would mask the surviving held calls and strand the user. The
+/// error is instead surfaced as a transient per-call banner (`callErrorBanner`)
+/// over the held surface (FIX P5-7).
 func rootScreen(
     showActiveCallScreen: Bool,
     uiPhase: CallPhase,
     hasLiveHeldCalls: Bool
 ) -> RootScreen {
     if showActiveCallScreen { return .call }
-    if uiPhase == .error { return .error }
     if hasLiveHeldCalls { return .heldOnly }
+    if uiPhase == .error { return .error }
     return .join
 }
 

@@ -128,4 +128,70 @@ describe('selectCallView', () => {
         });
         expect(view).toBe('joining');
     });
+
+    // P5-6: a failed/errored second join must NOT mask a surviving held call.
+    // A `joinFailed` timeout can leave the failed call's session phase reading
+    // `joining` with an `activationError` set; that must not pose as a live join.
+    it('shows held (not joining) when a FAILED join sibling and a settled held call exist', () => {
+        const view = selectCallView({
+            hasActiveSession: false,
+            calls: [
+                makeCall({ id: 'held', mediaRole: 'held', membershipPhase: 'inCall' }),
+                makeCall({
+                    id: 'failed',
+                    mediaRole: 'held',
+                    membershipPhase: 'joining',
+                    activationError: { kind: 'joinFailed', message: 'Room join timed out' },
+                }),
+            ],
+            registryOperationInProgress: false,
+        });
+        expect(view).toBe('held');
+        expect(view).not.toBe('joining');
+    });
+
+    it('shows held (not joining) when an error-phase sibling and a settled held call exist', () => {
+        const view = selectCallView({
+            hasActiveSession: false,
+            calls: [
+                makeCall({ id: 'held', mediaRole: 'held', membershipPhase: 'inCall' }),
+                makeCall({ id: 'errored', mediaRole: 'held', membershipPhase: 'error' }),
+            ],
+            registryOperationInProgress: false,
+        });
+        expect(view).toBe('held');
+    });
+
+    it('still shows joining for a GENUINE in-flight join alongside a held call', () => {
+        // No failure flagged on the joining call: it is a real in-flight join, so
+        // the joining placeholder still wins (single-call/initial-join parity).
+        const view = selectCallView({
+            hasActiveSession: false,
+            calls: [
+                makeCall({ id: 'held', mediaRole: 'held', membershipPhase: 'inCall' }),
+                makeCall({ id: 'joining', mediaRole: 'held', membershipPhase: 'joining' }),
+            ],
+            registryOperationInProgress: false,
+        });
+        expect(view).toBe('joining');
+    });
+
+    it('shows idle for a lone FAILED join with no held sibling', () => {
+        // A failed/timeout join that is the only live call must not show as
+        // 'joining' (stuck placeholder) nor as 'held' (no real held call): fall
+        // through to idle/prejoin, where CallRoom surfaces the error.
+        const view = selectCallView({
+            hasActiveSession: false,
+            calls: [
+                makeCall({
+                    id: 'failed',
+                    mediaRole: 'held',
+                    membershipPhase: 'joining',
+                    activationError: { kind: 'joinFailed', message: 'Room join timed out' },
+                }),
+            ],
+            registryOperationInProgress: false,
+        });
+        expect(view).toBe('idle');
+    });
 });

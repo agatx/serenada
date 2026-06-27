@@ -225,6 +225,10 @@ const CallRoom: React.FC = () => {
     const turnsOnly = useMemo(() => parseTurnsOnly(location.search), [location.search]);
 
     const [shouldJoin, setShouldJoin] = useState(false);
+    // P5-6: a transient message shown on the prejoin card after a failed join
+    // (the failed managed call is dismissed from the registry; this tells the
+    // user why they landed back on prejoin and lets them retry).
+    const [joinError, setJoinError] = useState<string | null>(null);
     const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
     const [isSubscribed, setIsSubscribed] = useState(false);
     const [pushSupported, setPushSupported] = useState(false);
@@ -255,6 +259,7 @@ const CallRoom: React.FC = () => {
     }), [turnsOnly]);
 
     const {
+        registry,
         calls: registryCalls,
         activeCall,
         activeCallId,
@@ -342,14 +347,28 @@ const CallRoom: React.FC = () => {
             url: callUrl,
             displayName: displayNameRef.current.trim() || undefined,
         }).then((result) => {
-            if (result.kind === 'failed') {
-                console.warn('[CallRoom] joinAndSwitch failed', result.error);
-            }
             if ('callId' in result && result.callId) {
                 joinedCallId = result.callId;
                 // The effect was torn down while the join was in flight: leave
                 // the now-orphaned call (cleanup ran before the callId existed).
-                if (cancelled) void leaveCall(joinedCallId);
+                if (cancelled) {
+                    void leaveCall(joinedCallId);
+                    return;
+                }
+            }
+            // P5-6: a failed join must not linger. The registry still publishes a
+            // failed managed call (its `activationError`/`joinFailed` set), and a
+            // `joinFailed` timeout can leave the session reading `joining`. Left in
+            // place it masks routing — `selectCallView` would otherwise be wedged on
+            // "Joining…" and HIDE a surviving held call. Dismiss the failed call so
+            // the held surface (or idle) shows; surface the error to the user.
+            if (result.kind === 'failed') {
+                console.warn('[CallRoom] joinAndSwitch failed', result.error);
+                if ('callId' in result && result.callId) registry.dismiss(result.callId);
+                setJoinError(result.error.message);
+                // Drop back to prejoin so the failed call can't wedge the view and
+                // so the user can retry (re-arms the join effect on the next join).
+                setShouldJoin(false);
             }
         });
 
@@ -357,7 +376,7 @@ const CallRoom: React.FC = () => {
             cancelled = true;
             if (joinedCallId) void leaveCall(joinedCallId);
         };
-    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, joinAndSwitch, leaveCall]);
+    }, [location.hash, location.pathname, location.search, roomId, shouldJoin, joinAndSwitch, leaveCall, registry]);
 
     useEffect(() => {
         if (!roomId) return;
@@ -476,6 +495,7 @@ const CallRoom: React.FC = () => {
         if (!roomId) return;
         if (saveBeforeJoin && !saveInvitedRoom()) return;
         stopPreview();
+        setJoinError(null);
         setShouldJoin(true);
     }, [roomId, saveInvitedRoom, stopPreview]);
 
@@ -643,6 +663,12 @@ const CallRoom: React.FC = () => {
                         </div>
                     ) : (
                         <h2>{t('ready_to_join')}</h2>
+                    )}
+
+                    {joinError && (
+                        <div className="error-message" role="alert">
+                            {joinError}
+                        </div>
                     )}
 
                     <div className="video-preview-container">

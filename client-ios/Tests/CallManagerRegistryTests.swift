@@ -163,4 +163,20 @@ final class CallManagerRegistryTests: XCTestCase {
             CallManager.callSurvivesFailure(activeCallId: nil, liveHeldCount: 0)
         )
     }
+
+    // MARK: terminalErrorShowsBanner (FIX P5-7)
+
+    func testTerminalErrorShowsBannerWhenLiveHeldCallsRemain() {
+        // The active call hit terminal error but live held calls remain (Invariant 5:
+        // no auto-promote). Surface a transient per-call banner and route to the held
+        // surface instead of masking the held calls with a whole-app error screen.
+        XCTAssertTrue(CallManager.terminalErrorShowsBanner(liveHeldCount: 1))
+        XCTAssertTrue(CallManager.terminalErrorShowsBanner(liveHeldCount: 3))
+    }
+
+    func testTerminalErrorFallsToWholeAppErrorWhenNoHeldCallsSurvive() {
+        // Single-call UX preserved: a lone call that errors with no held calls ->
+        // whole-app error screen, as before.
+        XCTAssertFalse(CallManager.terminalErrorShowsBanner(liveHeldCount: 0))
+    }
 }

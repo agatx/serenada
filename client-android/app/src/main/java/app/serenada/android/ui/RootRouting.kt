@@ -47,4 +47,52 @@ object RootRouting {
         showingActiveCall: Boolean,
     ): Boolean =
         !showingActiveCall && state.activeCallId == null && hasLiveCalls(state)
+
+    /**
+     * The unifying P5-7 rule: a whole-app error screen is shown ONLY when there is
+     * no active call AND no live (held) call survives. If a live held call remains
+     * after a join/switch failure or an active call's terminal error (Core
+     * Invariant 5: no auto-promote), the user must land on the holding surface so
+     * the surviving call stays reachable — the error is surfaced per-call/transient,
+     * never as a whole-app screen that masks the held call.
+     *
+     * This is the single source of truth, shared by [SerenadaAppRoot] routing
+     * (Holding takes precedence over Error) and by `CallManager` (do not set the
+     * whole-app [CallPhase.Error] phase while live held calls remain).
+     *
+     * Single-call UX is preserved exactly: a lone call that errors with no held
+     * call leaves zero live calls, so this returns true and the whole-app error
+     * screen shows as before.
+     */
+    fun allowsWholeAppError(state: CallRegistryState): Boolean =
+        state.activeCallId == null && !hasLiveCalls(state)
+
+    /**
+     * Root routing precedence for the bottom of the stack, below the higher-priority
+     * overlays (settings, diagnostics, join-with-code) and the active-call screen:
+     *
+     *   active call → Holding (live held remain) → Error (only when nothing
+     *   survives) → Join.
+     *
+     * Holding MUST beat Error: when no call is active but a live held call remains,
+     * route to Holding even if an error is pending (the error is transient/per-call,
+     * not a whole-app screen). Error wins only when [allowsWholeAppError] holds.
+     *
+     * @param hasError whether a whole-app error message is currently set.
+     * @param showingActiveCall whether the active-call screen is already being shown.
+     */
+    fun resolveFallback(
+        state: CallRegistryState,
+        hasError: Boolean,
+        showingActiveCall: Boolean,
+    ): Fallback =
+        when {
+            showingActiveCall -> Fallback.CALL
+            shouldShowHoldingSurface(state, showingActiveCall) -> Fallback.HOLDING
+            hasError && allowsWholeAppError(state) -> Fallback.ERROR
+            else -> Fallback.JOIN
+        }
+
+    /** Bottom-of-stack destination chosen by [resolveFallback]. */
+    enum class Fallback { CALL, HOLDING, ERROR, JOIN }
 }

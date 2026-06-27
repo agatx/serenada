@@ -20,6 +20,7 @@ import app.serenada.android.network.HostApiClient
 import app.serenada.android.push.PushSubscriptionManager
 import app.serenada.android.service.CallService
 import app.serenada.android.service.CallServiceCall
+import app.serenada.android.ui.RootRouting
 import app.serenada.callui.SerenadaCallUiVariant
 import app.serenada.core.CallDiagnostics
 import app.serenada.core.CallId
@@ -387,8 +388,21 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
     private fun applySdkStateToUi(state: CallState, diagnostics: CallDiagnostics) {
         val previous = _uiState.value
+        // P5-7: when the ACTIVE call ends in a terminal error but live held calls
+        // remain (Core Invariant 5: no auto-promote), do NOT surface it as a whole-
+        // app error — that would mask the surviving held calls. Demote the mirrored
+        // phase to Idle so routing falls through to the holding surface; the failure
+        // stays per-call (the ended call's `activationError`/quality summary live in
+        // the registry). A lone call that errors with no held leaves nothing live,
+        // so the whole-app error still shows as before.
+        val effectivePhase =
+            if (state.phase == CallPhase.Error && !shouldSetWholeAppError()) {
+                CallPhase.Idle
+            } else {
+                state.phase
+            }
         val statusMessageResId =
-            when (state.phase) {
+            when (effectivePhase) {
                 CallPhase.CreatingRoom -> R.string.call_status_creating_room
                 CallPhase.AwaitingPermissions,
                 CallPhase.Joining -> R.string.call_status_joining_room
@@ -401,16 +415,16 @@ class CallManager(context: Context) : RoomWatcherDelegate {
 
         updateState(
             previous.copy(
-                phase = state.phase,
+                phase = effectivePhase,
                 roomId = state.roomId ?: currentRoomId,
                 localCid = state.localCid,
                 statusMessageResId = statusMessageResId,
-                errorMessageResId = if (state.phase == CallPhase.Error && state.error == null) {
+                errorMessageResId = if (effectivePhase == CallPhase.Error && state.error == null) {
                     R.string.error_unknown
                 } else {
                     null
                 },
-                errorMessageText = if (state.phase == CallPhase.Error) state.error?.displayMessage else null,
+                errorMessageText = if (effectivePhase == CallPhase.Error) state.error?.displayMessage else null,
                 isHost = state.isHost,
                 participantCount = state.participantCount,
                 localAudioEnabled = state.localAudioEnabled,
@@ -817,19 +831,55 @@ class CallManager(context: Context) : RoomWatcherDelegate {
                 Log.w("CallManager", "joinAndSwitch needs permission for ${result.callId}")
             }
             is app.serenada.core.JoinAndSwitchResult.Failed -> {
-                if (activeSession == null) {
-                    val message = result.error.message
+                // Dismiss the failed call first so the whole-app-error decision sees
+                // the post-failure registry (the failed call is no longer live).
+                result.callId?.let { id -> scope.launch { registry.dismissCall(id) } }
+                // P5-7: only raise a WHOLE-APP error when nothing survives — no active
+                // call AND no live held call. If a live held call remains (Core
+                // Invariant 5: no auto-promote), routing shows the holding surface; the
+                // error is per-call (the failed call's `activationError`) / transient,
+                // never a whole-app screen that masks the surviving held call. The
+                // failed call's dismissCall is async, so exclude it here explicitly.
+                if (shouldSetWholeAppError(result.callId)) {
                     updateState(
                         _uiState.value.copy(
                             phase = CallPhase.Error,
                             errorMessageResId = null,
-                            errorMessageText = message,
+                            errorMessageText = result.error.message,
                         ),
                     )
+                } else if (_uiState.value.phase == CallPhase.Joining ||
+                    _uiState.value.phase == CallPhase.CreatingRoom
+                ) {
+                    // Live held calls survive: routing shows the holding surface. Clear
+                    // the lingering "joining/creating" phase set before the async join
+                    // so the single-call busy UI does not stick around behind it.
+                    updateState(CallUiState())
                 }
-                result.callId?.let { id -> scope.launch { registry.dismissCall(id) } }
             }
         }
+    }
+
+    /**
+     * P5-7 decision: may we raise a WHOLE-APP [CallPhase.Error] right now? Only when
+     * nothing survives — no active call AND no live (held) call remains. If a live
+     * held call remains (Core Invariant 5: no auto-promote), routing shows the
+     * holding surface instead and the error stays per-call/transient. Delegates to
+     * the single source of truth [RootRouting.allowsWholeAppError].
+     *
+     * @param excludeCallId a call whose async dismissal is already queued (the just-
+     *   failed join). It is filtered out so the decision reflects the post-failure
+     *   registry, not the transient pre-dismiss snapshot.
+     */
+    private fun shouldSetWholeAppError(excludeCallId: CallId? = null): Boolean {
+        val state = registry.state.value
+        val effective =
+            if (excludeCallId == null) {
+                state
+            } else {
+                state.copy(calls = state.calls.filter { it.callId != excludeCallId })
+            }
+        return RootRouting.allowsWholeAppError(effective)
     }
 
     /**

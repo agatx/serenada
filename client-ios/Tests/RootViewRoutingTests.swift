@@ -74,10 +74,24 @@ final class RootViewRoutingTests: XCTestCase {
         )
     }
 
-    func testErrorTakesPrecedenceOverHeldSurface() {
-        // A whole-app error still wins over the held surface.
+    func testHeldSurfaceTakesPrecedenceOverError() {
+        // FIX P5-7: when the active call ends/fails in error but live held calls
+        // remain (Invariant 5: no auto-promote), the held surface MUST win over the
+        // whole-app error screen so the surviving held calls stay reachable. The
+        // error is surfaced as a transient per-call banner over the held surface,
+        // not a whole-app error screen.
         XCTAssertEqual(
             rootScreen(showActiveCallScreen: false, uiPhase: .error, hasLiveHeldCalls: true),
+            .heldOnly
+        )
+    }
+
+    func testErrorScreenOnlyWhenNothingSurvives() {
+        // The whole-app error screen is reserved for the case where there is no
+        // active call AND no live held calls (single-call UX: a lone call that
+        // errors with no held calls -> whole-app error, as before).
+        XCTAssertEqual(
+            rootScreen(showActiveCallScreen: false, uiPhase: .error, hasLiveHeldCalls: false),
             .error
         )
     }
