@@ -1465,13 +1465,13 @@ public final class SerenadaSession: ObservableObject {
         let previous = audioCoordinatorLifecycleTask
         let coordinator = audioCoordinator
         let intent = config.audioIntent
-        // Install the foreground lease this activation runs under (Phase 4,
-        // contract §6) so the default coordinator's own delayed callbacks /
-        // observers can fence against the CURRENT owner. The owner-token id is the
-        // registry-issued fence token (`nil` on the single-call/direct path — one
-        // owner, nothing to fence); the generation is the live op generation.
+        // The foreground lease this activation runs under (Phase 4, contract §6) so
+        // the default coordinator's own delayed callbacks / observers can fence
+        // against the CURRENT owner. The owner-token id is the registry-issued fence
+        // token (`nil` on the single-call/direct path — one owner, nothing to
+        // fence); the generation is the live op generation.
         let lease = AudioSessionLease(ownerTokenId: foregroundOwnerToken?.leaseId, generation: mediaOpGeneration)
-        (coordinator as? LeaseAwareAudioCoordinator)?.setForegroundLease(lease)
+        let leaseAware = coordinator as? LeaseAwareAudioCoordinator
         let task = Task<Void, Error> { [weak self] in
             if let previous {
                 do {
@@ -1483,6 +1483,14 @@ public final class SerenadaSession: ObservableObject {
                 }
             }
             try Task.checkCancellation()
+            // Install the lease INSIDE the task, AFTER `previous` settled and
+            // IMMEDIATELY before `activateCallSession` (PI-1). Installing it before
+            // awaiting `previous` lets a still-pending OLD `deactivateCallSession`
+            // (running as the previous task drains) consume/clear the NEWLY-installed
+            // lease before this activate runs — desyncing the registry. The old
+            // deactivate captured its OWN lease at request time, so it no longer
+            // matches this freshly-installed lease and is dropped.
+            await MainActor.run { leaseAware?.setForegroundLease(lease) }
             try await coordinator.activateCallSession(intent: intent)
         }
         audioCoordinatorLifecycleTask = task
@@ -1492,6 +1500,14 @@ public final class SerenadaSession: ObservableObject {
     private func deactivateAudioCoordinator() {
         let previous = audioCoordinatorLifecycleTask
         let coordinator = audioCoordinator
+        // Capture the lease this deactivation is requested under, at REQUEST time
+        // (PI-1). A later activation may install a fresher lease between this
+        // enqueue and when the chained task finally runs `deactivateCallSession`;
+        // fencing against the request-time lease means this deactivate tears down
+        // only the session it was asked to, never the new owner's freshly activated
+        // audio session.
+        let leaseAware = coordinator as? LeaseAwareAudioCoordinator
+        let fenceLease = leaseAware?.installedLeaseSnapshot()
         let task = Task<Void, Error> { [weak self] in
             if let previous {
                 do {
@@ -1502,7 +1518,11 @@ public final class SerenadaSession: ObservableObject {
                     }
                 }
             }
-            await coordinator.deactivateCallSession()
+            if let leaseAware {
+                await leaseAware.deactivateCallSession(fencedBy: fenceLease)
+            } else {
+                await coordinator.deactivateCallSession()
+            }
         }
         audioCoordinatorLifecycleTask = task
         Task { @MainActor [weak self] in

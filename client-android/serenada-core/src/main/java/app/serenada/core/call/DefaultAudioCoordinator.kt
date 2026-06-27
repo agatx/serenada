@@ -44,27 +44,52 @@ internal class DefaultAudioCoordinator(
     // DefaultAudioCoordinator is process-global: every instance mutates the SAME
     // AudioManager (audio focus, MODE_IN_COMMUNICATION, setCommunicationDevice/SCO).
     // Its DELAYED/ASYNC paths (postDelayed route-refresh + ducking-fallback, the
-    // AudioDeviceCallback route monitor, the proximity SensorEventListener) and its
-    // deactivation can fire AFTER a switch handed the foreground to a newer call,
-    // re-driving the OS audio for the WRONG (old) session. To prevent that, the
+    // AudioDeviceCallback route monitor, the proximity SensorEventListener, the
+    // focus re-request) and its deactivation can fire AFTER the foreground moved on,
+    // re-driving the OS audio for the WRONG (stale) activation. To prevent that the
     // session binds the arbiter-minted lease token this coordinator activated under
-    // (and the operation generation). EVERY OS-touching delayed/async/listener path
-    // first checks [isStillLeaseOwner]: it no-ops once a newer call became the lease
-    // owner.
+    // PLUS the operation generation, and EVERY OS-touching delayed/async/listener
+    // path fences on BOTH (contract §3 two-fence rule):
+    //
+    //  1. OWNER TOKEN ([isStillLeaseOwner]): no-op once a DIFFERENT call became the
+    //     arbiter's lease owner (a switch handed off to another session/coordinator).
+    //  2. OPERATION GENERATION (this token's value vs [leaseGeneration]): no-op once
+    //     a NEWER activation advanced the coordinator's current generation. This is
+    //     the independent second fence the token alone cannot provide: a SAME-OWNER
+    //     rollback re-acquires the lease for the SAME call under a FRESH generation,
+    //     so a stale callback left over from the PRIOR activation attempt of that
+    //     same owner still has the matching token. Without the generation check it
+    //     would survive the token fence and drive the OS for a superseded attempt.
+    //
+    // [bindForegroundLease] advances [leaseGeneration] on EVERY activation (initial,
+    // resume, rollback re-activation). A delayed callback / armed listener / pending
+    // deactivation captures the generation in effect when it was scheduled/armed and
+    // drops itself once [leaseGeneration] has advanced past it.
     //
     // SINGLE-CALL / FAKE PATH: when [leaseToken] is null no callback is ever
-    // dropped — a single call is always the (implicit) owner, so behavior is
-    // identical to before this fence. The direct single-call join binds its own
-    // DIRECT-mode lease token, so it self-fences correctly too.
-    //
-    // The owner token is the authoritative fence: each session owns its OWN
-    // coordinator instance, and the arbiter is the single source of truth for who
-    // holds the lease, so [ForegroundMediaArbiter.isCurrentOwner] fully captures
-    // "am I still the foreground owner?" (this mirrors how the session fences its
-    // async resume in applyForegroundRoleInternal). The operation generation the
-    // session passes in is recorded for diagnostics/log correlation only.
+    // dropped — [isStillLeaseOwner] short-circuits to true and [bindForegroundLease]
+    // is never called, so a captured generation always equals [leaseGeneration] (both
+    // stay 0L). Behavior is identical to before this fence. The direct single-call
+    // join binds its own DIRECT-mode lease token, so it self-fences correctly too.
     private var leaseToken: ForegroundOwnerToken? = null
+
+    // The coordinator's CURRENT operation generation: the value of the most recent
+    // [bindForegroundLease]. The authoritative "generation in effect" that scheduled
+    // callbacks / armed listeners compare against (the second fence). Advances on
+    // every (re-)activation; a callback captured under an older value is stale.
     private var leaseGeneration: Long = 0L
+
+    // Generation captured when the long-lived listeners (route monitor, proximity,
+    // focus re-request) were armed at activation. Re-armed on a same-coordinator
+    // re-activation so the LIVE call's listeners keep firing; a listener whose armed
+    // generation is older than [leaseGeneration] belongs to a superseded attempt and
+    // no-ops.
+    private var armedGeneration: Long = 0L
+
+    // Generation captured when the postDelayed ducking-fallback runnable was last
+    // scheduled. The runnable is a single shared instance, so it cannot close over a
+    // per-schedule generation; this field carries it instead.
+    private var duckingFallbackGeneration: Long = 0L
 
     private var audioFocusRequest: AudioFocusRequest? = null
     private var audioFocusGranted = false
@@ -95,10 +120,12 @@ internal class DefaultAudioCoordinator(
     private val _events = MutableSharedFlow<AudioCoordinatorEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<AudioCoordinatorEvent> = _events.asSharedFlow()
     private val playbackDuckingFallbackRunnable = Runnable {
-        // Fence the postDelayed (~3000ms) ducking fallback: a superseded session
-        // must not emit a route/ducking event that drives the (now-foreground)
-        // call's playback. Once it is no longer the lease owner, drop it.
-        if (!isStillLeaseOwner()) return@Runnable
+        // Fence the postDelayed (~3000ms) ducking fallback on BOTH the owner token
+        // AND the generation it was scheduled under (contract §3 two-fence rule): a
+        // superseded session — including a SAME-OWNER prior attempt whose token still
+        // matches after a fresh-generation re-activation — must not emit a
+        // route/ducking event that drives the (now-current) call's playback.
+        if (!isStillLeaseOwner(duckingFallbackGeneration)) return@Runnable
         _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
     }
 
@@ -119,10 +146,13 @@ internal class DefaultAudioCoordinator(
                 _events.tryEmit(AudioCoordinatorEvent.PlaybackDuckingEnded)
                 audioFocusGranted = false
                 _events.tryEmit(AudioCoordinatorEvent.ExternalAudioStarted)
+                val focusReRequestGeneration = leaseGeneration
                 handler.post {
                     // A superseded session must not re-grab audio focus from the
-                    // call that now owns the lease (contract §6).
-                    if (!audioSessionActive || !isStillLeaseOwner()) return@post
+                    // call that now owns the lease (contract §3 two-fence rule):
+                    // fence on the owner token AND the generation captured when this
+                    // re-request was posted, so a same-owner prior attempt drops too.
+                    if (!audioSessionActive || !isStillLeaseOwner(focusReRequestGeneration)) return@post
                     requestAudioFocus(emitRecoveryEventOnGain = true)
                 }
             }
@@ -148,10 +178,11 @@ internal class DefaultAudioCoordinator(
 
     private val proximitySensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            // Proximity earpiece behavior is driven by the foreground lease owner
-            // only (contract §6): a superseded session must not flip the shared
-            // route / pause video on a proximity event.
-            if (!isStillLeaseOwner()) return
+            // Proximity earpiece behavior is driven by the CURRENT foreground lease
+            // owner only (contract §3 two-fence rule): a superseded session — by a
+            // different owner OR a stale same-owner attempt under the armed
+            // generation — must not flip the shared route / pause video.
+            if (!isStillLeaseOwner(armedGeneration)) return
             val maxRange = proximitySensor?.maximumRange ?: return
             val distance = event.values.firstOrNull() ?: return
             val near = distance < maxRange
@@ -168,13 +199,15 @@ internal class DefaultAudioCoordinator(
     }
 
     /**
-     * Bind the arbiter-minted foreground-lease [token] (and operation [generation])
+     * Bind the arbiter-minted foreground-lease [token] and operation [generation]
      * this coordinator is activating under (multi-call session, Phase 4; contract
-     * §6). The session calls this when it activates a registry- or arbiter-owned
-     * foreground call so every delayed/async callback can fence against it. A null
-     * token (single-call without arbiter routing, or a fake coordinator in tests)
-     * leaves the fence in pass-through mode: this coordinator is always treated as
-     * the owner and no callback is dropped.
+     * §3/§6). The session calls this immediately before EVERY `activateCallSession`
+     * — initial join, resume, and a rollback re-activation — so [leaseGeneration]
+     * advances on each, becoming the coordinator's authoritative "current
+     * generation". Every delayed/async/listener path fences against both this token
+     * and this generation. A null token (single-call without arbiter routing, or a
+     * fake coordinator in tests) leaves the fence in pass-through mode: this
+     * coordinator is always treated as the owner and no callback is dropped.
      */
     internal fun bindForegroundLease(token: ForegroundOwnerToken?, generation: Long) {
         leaseToken = token
@@ -182,12 +215,16 @@ internal class DefaultAudioCoordinator(
     }
 
     /**
-     * True iff this coordinator may still touch the process-global AudioManager:
-     * either no lease was bound (single-call / test pass-through), or the bound
-     * lease token is STILL the arbiter's live foreground owner. Once a newer call
-     * acquires the lease, an old session's coordinator returns false here and its
-     * delayed/async callbacks become no-ops — they must NOT re-drive focus / mode /
-     * route / proximity for the superseded session.
+     * Token fence: true iff this coordinator may still touch the process-global
+     * AudioManager on the OWNER axis — either no lease was bound (single-call / test
+     * pass-through), or the bound lease token is STILL the arbiter's live foreground
+     * owner. Once a DIFFERENT call acquires the lease, an old session's coordinator
+     * returns false here.
+     *
+     * NOTE: this is necessary but NOT sufficient — a SAME-OWNER rollback keeps the
+     * token current while bumping the generation, so callers that can race a
+     * re-activation MUST use the [isStillLeaseOwner] generation overload below. This
+     * no-arg form exists only as the shared token check it composes.
      */
     private fun isStillLeaseOwner(): Boolean {
         val token = leaseToken ?: return true
@@ -195,22 +232,54 @@ internal class DefaultAudioCoordinator(
     }
 
     /**
-     * True iff this coordinator may restore the OS audio (mode / route / focus) on
-     * [deactivate]. Distinct from [isStillLeaseOwner]: a clean single-call END
-     * releases the lease BEFORE the async deactivation runs, so the bound token is
-     * no longer "current" — but there is no NEWER owner, so the restore is correct
-     * and must proceed. The restore is skipped ONLY when a DIFFERENT call now owns
-     * the lease (a switch handed off), to avoid clobbering its
-     * `MODE_IN_COMMUNICATION` / route. Pass-through (no token bound) always
-     * restores.
+     * Two-fence check (contract §3): true iff this coordinator is STILL the live
+     * foreground owner AND no newer activation has advanced the generation past
+     * [scheduledGeneration] — the value [leaseGeneration] held when this callback was
+     * scheduled / this listener was armed. A delayed callback or listener from a
+     * superseded attempt (a different owner, OR a same-owner attempt re-activated
+     * under a fresh generation) fails one of the two fences and no-ops, so it never
+     * re-drives focus / mode / route / proximity for a stale activation.
+     *
+     * Pass-through (no token bound) keeps returning true: [bindForegroundLease] is
+     * never called, so both values stay 0L and the generation fence always passes.
      */
-    private fun mayRestoreOnDeactivate(): Boolean {
-        return !ForegroundMediaArbiter.hasOtherOwner(leaseToken)
+    private fun isStillLeaseOwner(scheduledGeneration: Long): Boolean {
+        return scheduledGeneration == leaseGeneration && isStillLeaseOwner()
+    }
+
+    /**
+     * True iff this coordinator may restore the OS audio (mode / route / focus) on
+     * [deactivate]. Two independent reasons to SKIP the restore (contract §3
+     * two-fence rule), either of which means a newer activation owns the OS audio:
+     *
+     *  1. OWNER axis ([ForegroundMediaArbiter.hasOtherOwner]): a DIFFERENT call now
+     *     owns the lease — a switch handed off to another session/coordinator.
+     *     Distinct from [isStillLeaseOwner]: a clean single-call END releases the
+     *     lease BEFORE the async deactivation runs, so the bound token is no longer
+     *     "current", yet there is NO newer owner, so the restore is correct and must
+     *     proceed (this is what keeps a clean last-call leave restoring MODE_NORMAL).
+     *  2. GENERATION axis ([deactivationArmedGeneration] vs [leaseGeneration]): a
+     *     SAME-OWNER re-activation bumped this coordinator's generation after the
+     *     deactivation was armed. The token still matches (same owner), so only the
+     *     generation reveals that a newer attempt is now driving the OS audio and the
+     *     stale deactivation must not restore MODE_NORMAL over it.
+     *
+     * Pass-through (no token bound) always restores: [hasOtherOwner] is false for a
+     * null token and the captured generation equals [leaseGeneration] (both 0L).
+     */
+    private fun mayRestoreOnDeactivate(deactivationArmedGeneration: Long): Boolean {
+        if (ForegroundMediaArbiter.hasOtherOwner(leaseToken)) return false
+        return deactivationArmedGeneration == leaseGeneration
     }
 
     override fun activate() {
         if (audioSessionActive) return
         audioSessionActive = true
+        // Arm the long-lived listeners + the eventual deactivation under the
+        // generation currently in effect (set by the preceding [bindForegroundLease]),
+        // so a stale callback from this attempt drops once a newer activation advances
+        // [leaseGeneration] (contract §3 two-fence rule).
+        armedGeneration = leaseGeneration
         previousAudioMode = audioManager.mode
         previousSpeakerphoneOn = isSpeakerphoneEnabled()
         previousMicrophoneMute = audioManager.isMicrophoneMute
@@ -249,15 +318,18 @@ internal class DefaultAudioCoordinator(
         clearPlaybackDuckingFallback()
         stopProximityMonitoring()
         stopAudioDeviceMonitoring()
-        // FENCE (contract §6): a deactivation from a SUPERSEDED session must NOT
-        // restore MODE_NORMAL / the previous route after a NEWER call already set
-        // MODE_IN_COMMUNICATION. Each session has its own coordinator instance but
-        // they all mutate the SAME process-global AudioManager, so an old session's
-        // async deactivation Job would otherwise clobber the new foreground call's
-        // mode/route. The restore is skipped ONLY when a DIFFERENT call now owns the
-        // lease; a clean single-call end (lease already released, no newer owner)
-        // and the no-token pass-through both still restore exactly as before.
-        if (mayRestoreOnDeactivate()) {
+        // FENCE (contract §3 two-fence rule): a deactivation from a SUPERSEDED
+        // attempt must NOT restore MODE_NORMAL / the previous route after a NEWER
+        // activation already set MODE_IN_COMMUNICATION. All coordinators mutate the
+        // SAME process-global AudioManager, so a stale async deactivation Job would
+        // otherwise clobber the current foreground call's mode/route. Restore is
+        // skipped when EITHER a DIFFERENT call now owns the lease (cross-coordinator
+        // handoff) OR a same-coordinator re-activation advanced the generation past
+        // the one this deactivation was armed under (a same-owner rollback the token
+        // alone cannot detect). A clean single-call end (lease already released, no
+        // newer owner, generation unchanged) and the no-token pass-through both still
+        // restore exactly as before.
+        if (mayRestoreOnDeactivate(armedGeneration)) {
             runCatching {
                 setLegacyBluetoothScoRouting(false)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -275,8 +347,9 @@ internal class DefaultAudioCoordinator(
             logger?.log(
                 SerenadaLogLevel.DEBUG,
                 "Audio",
-                "Superseded session deactivating; skipping OS restore " +
-                    "(a newer call owns the lease; supersededGen=$leaseGeneration)",
+                "Superseded attempt deactivating; skipping OS restore (a newer " +
+                    "activation owns the OS audio; armedGen=$armedGeneration, " +
+                    "currentGen=$leaseGeneration)",
             )
         }
         abandonAudioFocus()
@@ -294,6 +367,11 @@ internal class DefaultAudioCoordinator(
     override suspend fun activateCallSession(intent: AudioIntent) {
         proximityEarpieceEnabled = intent.enableProximityEarpiece
         if (audioSessionActive) {
+            // Same-coordinator re-activation (e.g. resume / rollback): re-arm the
+            // listeners + deactivation to the now-current generation so the LIVE
+            // call's callbacks keep firing while any callback armed under the prior
+            // generation still drops (contract §3 two-fence rule).
+            armedGeneration = leaseGeneration
             updateProximityMonitoringForIntent()
             applyCallAudioRouting()
             updateDevicesAndRoute()
@@ -313,7 +391,9 @@ internal class DefaultAudioCoordinator(
         pinnedOutputDevice = device
         pinnedOutputRouteInventory = currentOutputRouteInventory()
         applyOutputRoute(device)
-        refreshDevicesAndRouteFromSystem()
+        // This runs synchronously under the current foreground; fence the immediate
+        // refresh on the current generation (contract §3 two-fence rule).
+        refreshDevicesAndRouteFromSystem(leaseGeneration)
     }
 
     private fun applyOutputRoute(device: AudioDevice) {
@@ -328,16 +408,22 @@ internal class DefaultAudioCoordinator(
 
     private fun scheduleRouteRefreshFromSystem() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        // Capture the generation in effect at schedule time so the delayed refresh
+        // fences on BOTH token and generation when it fires (contract §3).
+        val scheduledGeneration = leaseGeneration
         handler.postDelayed(
-            { refreshDevicesAndRouteFromSystem() },
+            { refreshDevicesAndRouteFromSystem(scheduledGeneration) },
             COMMUNICATION_ROUTE_REFRESH_DELAY_MS
         )
     }
 
-    private fun refreshDevicesAndRouteFromSystem() {
-        // Fence the postDelayed (~300ms) route refresh: drop it if this session is
-        // no longer the foreground lease owner (a switch handed off in the window).
-        if (!audioSessionActive || !isStillLeaseOwner()) return
+    private fun refreshDevicesAndRouteFromSystem(scheduledGeneration: Long) {
+        // Fence the postDelayed (~300ms) route refresh on BOTH token and generation
+        // (contract §3 two-fence rule): drop it if this coordinator is no longer the
+        // lease owner (a different call took over) OR a newer activation advanced the
+        // generation past [scheduledGeneration] (a same-owner rollback the token
+        // alone cannot detect).
+        if (!audioSessionActive || !isStillLeaseOwner(scheduledGeneration)) return
         updateDevicesAndRoute()
         onAudioEnvironmentChanged()
         _events.tryEmit(AudioCoordinatorEvent.EffectiveRouteChanged(_effectiveInputDevice.value, _effectiveOutputDevice.value))
@@ -357,18 +443,19 @@ internal class DefaultAudioCoordinator(
     }
 
     private fun onAudioDevicesChanged() {
-        // Route monitoring applies only for the current foreground lease owner
-        // (contract §6): a superseded session must not re-route the shared
-        // AudioManager when devices change.
-        if (!audioSessionActive || !isStillLeaseOwner()) return
+        // Route monitoring applies only for the CURRENT foreground lease owner
+        // (contract §3 two-fence rule): a superseded attempt — a different owner OR a
+        // stale same-owner attempt under the armed generation — must not re-route the
+        // shared AudioManager when devices change.
+        if (!audioSessionActive || !isStillLeaseOwner(armedGeneration)) return
         updateDevicesAndRoute()
         applyCallAudioRouting()
-        refreshDevicesAndRouteFromSystem()
+        refreshDevicesAndRouteFromSystem(armedGeneration)
     }
 
     private fun onCommunicationDeviceChanged() {
-        if (!isStillLeaseOwner()) return
-        refreshDevicesAndRouteFromSystem()
+        if (!isStillLeaseOwner(armedGeneration)) return
+        refreshDevicesAndRouteFromSystem(armedGeneration)
     }
 
     private fun startProximityMonitoring() {
@@ -544,6 +631,9 @@ internal class DefaultAudioCoordinator(
 
     private fun schedulePlaybackDuckingFallback() {
         clearPlaybackDuckingFallback()
+        // Capture the generation in effect for the shared fallback runnable to fence
+        // against when it fires (contract §3 two-fence rule).
+        duckingFallbackGeneration = leaseGeneration
         handler.postDelayed(playbackDuckingFallbackRunnable, PLAYBACK_DUCKING_FALLBACK_MS)
     }
 

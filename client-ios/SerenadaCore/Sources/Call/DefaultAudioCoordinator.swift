@@ -224,6 +224,20 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
         }
 
         guard audioSessionActive else {
+            // Inactive early return: a lease was installed (via `setForegroundLease`)
+            // but the session never fully activated — e.g. a canceled or superseded
+            // PRE-activation lease. Without clearing it, that never-activated lease
+            // lingers as the process-current lease and then DROPS legitimate future
+            // callbacks from the next real owner (contract §6, PI-2). Clear the
+            // installed lease here when the fence lease matches it (the fenced path
+            // already proved the lease is current at the top guard), or
+            // unconditionally on the unfenced (`deactivate()`/reset) path. Clearing
+            // the local record + `clearIfCurrent` on the registry; `clearIfCurrent`
+            // never drops a newer owner's live lease.
+            if let installedLease, lease == nil || lease == installedLease {
+                self.installedLease = nil
+                leaseRegistry.clearIfCurrent(installedLease)
+            }
             stopProximityMonitoring()
             return
         }
@@ -280,12 +294,30 @@ final class DefaultAudioCoordinator: NSObject, @preconcurrency SerenadaAudioCoor
     }
 
     func deactivateCallSession() async {
-        // Capture the lease this deactivation was requested under. The session
-        // chains deactivation behind any in-flight activation, so by the time this
-        // runs a newer foreground owner may have already re-activated under a fresh
-        // lease — in that case `deactivate(fencedBy:)` drops the teardown so the old
-        // session cannot deactivate the audio session the new owner just activated.
+        // Public-protocol entry (custom-coordinator parity / unfenced teardown):
+        // fence against whatever lease is installed when this runs. The lease-aware
+        // session path uses `deactivateCallSession(fencedBy:)` instead, capturing
+        // the lease at REQUEST time (see below) so a fresher lease installed by a
+        // later activation cannot mask a stale deactivate.
         deactivate(fencedBy: installedLease)
+    }
+
+    // MARK: - LeaseAwareAudioCoordinator (request-time fencing, contract §6)
+
+    /// Snapshot the installed lease at the moment the session ENQUEUES a
+    /// deactivation, so the teardown fences against that lease rather than whatever
+    /// is installed when the chained task finally runs. The session chains
+    /// deactivation behind any in-flight activation; if a NEW foreground owner
+    /// installs a fresh lease between request and run, a run-time read would fence
+    /// the old deactivate against the new lease and wrongly tear it down.
+    func installedLeaseSnapshot() -> AudioSessionLease? {
+        installedLease
+    }
+
+    /// Deactivate fenced by the lease captured at request time. Dropped if `lease`
+    /// is no longer the process-current lease (a later activation superseded it).
+    func deactivateCallSession(fencedBy lease: AudioSessionLease?) async {
+        deactivate(fencedBy: lease)
     }
 
     func applyRouting(_ device: AudioDevice) async throws {

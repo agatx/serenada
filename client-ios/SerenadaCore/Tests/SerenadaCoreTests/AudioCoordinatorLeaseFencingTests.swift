@@ -285,4 +285,134 @@ final class AudioCoordinatorLeaseFencingTests: XCTestCase {
         XCTAssertEqual(registry.activeLease, newLease,
                        "A superseded owner's interruption recovery must not touch the live lease")
     }
+
+    // MARK: - PI-1: request-time deactivate fencing vs. a concurrent new activation
+
+    /// PI-1: a pending OLD deactivate that captures its lease at REQUEST time and
+    /// then settles AROUND the time a NEW activation installs its lease must NOT
+    /// clear/desync the new owner's lease. The new owner's callbacks still apply;
+    /// the OLD owner's stale callback is still dropped.
+    ///
+    /// This models the session's lifecycle-task chain: `deactivateAudioCoordinator`
+    /// snapshots the OLD coordinator's installed lease at enqueue (request time);
+    /// the chained `activateAudioCoordinator` installs the NEW lease only after the
+    /// previous task settles. The OLD deactivate runs fenced by the request-time
+    /// (old) lease and finds it stale once the NEW lease is live, so it is dropped.
+    func testRequestTimeDeactivateDoesNotDesyncConcurrentNewActivation() async {
+        let registry = AudioSessionLeaseRegistry()
+        let old = makeCoordinator(registry)
+        var newEnvChanges = 0
+        let newWithCounter = DefaultAudioCoordinator(
+            proximityMonitoringEnabled: false,
+            onProximityChanged: { _ in },
+            onAudioEnvironmentChanged: { newEnvChanges += 1 },
+            logger: nil,
+            leaseRegistry: registry
+        )
+
+        let oldLease = AudioSessionLease(ownerTokenId: 1, generation: 1)
+        let newLease = AudioSessionLease(ownerTokenId: 2, generation: 2)
+
+        // OLD is the live foreground owner.
+        old.setForegroundLease(oldLease)
+        try? await old.activateCallSession(intent: AudioIntent())
+        XCTAssertTrue(old.audioSessionActiveForTest)
+        XCTAssertEqual(old.installedLeaseSnapshot(), oldLease)
+
+        // The session enqueues OLD's deactivate: capture its lease at REQUEST time
+        // (this is what `deactivateAudioCoordinator` does synchronously at enqueue),
+        // BEFORE the new activation installs the new lease.
+        let requestTimeLease = old.installedLeaseSnapshot()
+        XCTAssertEqual(requestTimeLease, oldLease)
+
+        // NEW activation installs its lease (the chained activate task does this
+        // immediately before `activateCallSession`, after the previous task drains).
+        newWithCounter.setForegroundLease(newLease)
+        try? await newWithCounter.activateCallSession(intent: AudioIntent())
+        XCTAssertTrue(newWithCounter.audioSessionActiveForTest)
+        XCTAssertEqual(registry.activeLease, newLease)
+        let baselineNewEnv = newEnvChanges
+
+        // OLD's deactivate now settles, fenced by the lease captured at request
+        // time. Because the new lease superseded it, the teardown is DROPPED.
+        await old.deactivateCallSession(fencedBy: requestTimeLease)
+        await yieldToMainActor()
+
+        XCTAssertEqual(registry.activeLease, newLease,
+                       "Request-time-fenced old deactivate must not clear the new owner's lease")
+        XCTAssertTrue(newWithCounter.audioSessionActiveForTest,
+                      "New owner's audio activation must survive the old deactivate")
+
+        // The new owner's callbacks still apply (lease is current).
+        NotificationCenter.default.post(
+            name: AVAudioSession.routeChangeNotification,
+            object: nil,
+            userInfo: [:]
+        )
+        await yieldToMainActor()
+        XCTAssertGreaterThan(newEnvChanges, baselineNewEnv,
+                             "The new owner's callbacks must be honored after the stale deactivate")
+
+        // A stale OLD callback (on the old, now-superseded coordinator) is still
+        // dropped — it does not touch the live lease.
+        await old.deactivateCallSession(fencedBy: oldLease)
+        await yieldToMainActor()
+        XCTAssertEqual(registry.activeLease, newLease,
+                       "A stale old callback must remain a no-op against the live lease")
+    }
+
+    // MARK: - PI-2: never-activated lease cleared on the inactive early-return
+
+    /// PI-2: installing a lease then deactivating while `!audioSessionActive`
+    /// (a canceled/superseded PRE-activation lease — the session never fully
+    /// activated) must CLEAR the lease from the registry, so a SUBSEQUENT real
+    /// owner's callbacks are honored and not dropped by a leaked stale lease.
+    func testNeverActivatedLeaseClearedSoNextOwnerIsHonored() async {
+        let registry = AudioSessionLeaseRegistry()
+        let aborted = makeCoordinator(registry)
+
+        // A lease is installed (pre-activation) but the coordinator never activates.
+        let abortedLease = AudioSessionLease(ownerTokenId: 1, generation: 1)
+        aborted.setForegroundLease(abortedLease)
+        XCTAssertFalse(aborted.audioSessionActiveForTest,
+                       "Precondition: the session never activated the audio session")
+        XCTAssertEqual(registry.activeLease, abortedLease,
+                       "Installing a lease records it as process-current")
+
+        // Deactivate while inactive (the abort/teardown of a never-activated owner).
+        await aborted.deactivateCallSession(fencedBy: abortedLease)
+        await yieldToMainActor()
+
+        XCTAssertNil(registry.activeLease,
+                     "A never-activated lease must be cleared on the inactive early-return")
+        XCTAssertNil(aborted.installedLeaseSnapshot(),
+                     "The coordinator's local lease record must also be cleared")
+
+        // A SUBSEQUENT real owner activates: its callbacks must be honored (the
+        // leaked stale lease would otherwise have made `isCurrent(newLease)` false).
+        var nextEnvChanges = 0
+        let next = DefaultAudioCoordinator(
+            proximityMonitoringEnabled: false,
+            onProximityChanged: { _ in },
+            onAudioEnvironmentChanged: { nextEnvChanges += 1 },
+            logger: nil,
+            leaseRegistry: registry
+        )
+        let nextLease = AudioSessionLease(ownerTokenId: 2, generation: 2)
+        next.setForegroundLease(nextLease)
+        try? await next.activateCallSession(intent: AudioIntent())
+        await yieldToMainActor()
+        XCTAssertTrue(registry.isCurrent(nextLease),
+                      "The next real owner must hold the live lease")
+        let baseline = nextEnvChanges
+
+        NotificationCenter.default.post(
+            name: AVAudioSession.routeChangeNotification,
+            object: nil,
+            userInfo: [:]
+        )
+        await yieldToMainActor()
+        XCTAssertGreaterThan(nextEnvChanges, baseline,
+                             "The next owner's callbacks must be honored, not dropped by a leaked lease")
+    }
 }

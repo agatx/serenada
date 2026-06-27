@@ -235,13 +235,29 @@ final class AudioSessionLeaseRegistry {
 @MainActor
 protocol LeaseAwareAudioCoordinator: AnyObject {
     /// Install the lease this coordinator is now driving the audio session under.
-    /// Called by the session immediately before `activateCallSession`. Records it
-    /// both locally and in the process-global ``AudioSessionLeaseRegistry`` so a
-    /// cross-instance stale callback can be fenced.
+    /// Called by the session from INSIDE the audio lifecycle task, AFTER the
+    /// previous lifecycle op (a possibly-pending old deactivate) has settled and
+    /// IMMEDIATELY before `activateCallSession` (Phase 4, contract §6). Installing
+    /// it any earlier lets a still-pending old `deactivateCallSession` (running as
+    /// the previous task drains) consume/clear the newly-installed lease before the
+    /// matching activate runs. Records the lease both locally and in the
+    /// process-global ``AudioSessionLeaseRegistry`` so a cross-instance stale
+    /// callback can be fenced.
     func setForegroundLease(_ lease: AudioSessionLease)
     /// Clear the lease when the session deactivates. After this, any late callback
     /// captured under the cleared lease is stale and dropped.
     func clearForegroundLease(_ lease: AudioSessionLease)
+    /// Snapshot the lease currently installed on this coordinator at REQUEST time,
+    /// so the session can fence a deactivation against the lease as of when the
+    /// deactivation was ENQUEUED — not whatever is installed when it finally runs
+    /// (a later activation may have installed a fresher lease in between). `nil`
+    /// when no lease is installed (the single-call/direct path).
+    func installedLeaseSnapshot() -> AudioSessionLease?
+    /// Tear down the audio session, fenced by the lease captured at request time.
+    /// The teardown is dropped if `lease` is no longer the process-current lease (a
+    /// newer foreground owner has since activated), so an old deactivate cannot
+    /// deactivate the audio session a new owner just activated (contract §6).
+    func deactivateCallSession(fencedBy lease: AudioSessionLease?) async
 }
 
 /// Host-provided audio coordination contract for Serenada call sessions.

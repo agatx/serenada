@@ -324,4 +324,100 @@ class DefaultAudioCoordinatorLeaseFenceTest {
             am.mode,
         )
     }
+
+    /**
+     * PA-1 generation fence (contract §3 two-fence rule): a stale async
+     * deactivation armed under generation N must NOT restore MODE_NORMAL after a
+     * SAME-OWNER re-activation advanced the coordinator's generation to N+1. The
+     * token is IDENTICAL across the rollback (same call re-acquired the lease), so
+     * the token fence alone would let the stale deactivation through; only the
+     * generation comparison drops it.
+     */
+    @Test
+    fun `stale deactivation does not reset mode after a same-owner re-activation bumped the generation`() {
+        val am = audioManager()
+
+        // Attempt N: the call activates under generation N and owns the lease.
+        val token = ForegroundMediaArbiter.acquireForeground("rollback-call")
+        val genN = ForegroundMediaArbiter.nextOperationGeneration()
+        val coordinator = newCoordinator()
+        coordinator.bindForegroundLease(token, genN)
+        runBlocking { coordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, am.mode)
+
+        // SAME-OWNER rollback: the SAME token is re-bound under a FRESH generation
+        // N+1 (the call re-activates after a failed switch). The coordinator's
+        // current generation advances; the deactivation armed under N is now stale.
+        val genNPlus1 = ForegroundMediaArbiter.nextOperationGeneration()
+        coordinator.bindForegroundLease(token, genNPlus1)
+        assertTrue("same-owner rollback keeps the token current", ForegroundMediaArbiter.isCurrentOwner(token))
+
+        // The stale deactivation from attempt N fires. The token still matches, so
+        // only the generation fence can stop it: it must NOT restore MODE_NORMAL.
+        val deactivationJob = mainScope.launch { coordinator.deactivateCallSession() }
+        ShadowLooper.idleMainLooper()
+        assertTrue(deactivationJob.isCompleted)
+
+        assertEquals(
+            "a stale same-owner deactivation (generation N) must not clobber the N+1 re-activation's mode",
+            AudioManager.MODE_IN_COMMUNICATION,
+            am.mode,
+        )
+
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    /**
+     * PA-1 generation fence — delayed route-refresh path. A postDelayed route
+     * refresh scheduled under generation N is dropped after a SAME-OWNER
+     * re-activation bumped the generation to N+1 (token identical). A
+     * current-generation refresh (scheduled under N+1) still runs — the fence drops
+     * only the stale attempt, never the live one.
+     */
+    @Test
+    fun `stale route-refresh is dropped but a current-generation one runs after a same-owner re-activation`() {
+        val token = ForegroundMediaArbiter.acquireForeground("rollback-call")
+        val genN = ForegroundMediaArbiter.nextOperationGeneration()
+        val coordinator = newCoordinator()
+        coordinator.bindForegroundLease(token, genN)
+        runBlocking { coordinator.activateCallSession(AudioIntent()) }
+        ShadowLooper.idleMainLooper()
+
+        val (events, collectorJob) = collectEvents(coordinator)
+
+        // Schedule a route refresh under generation N (postDelayed ~300ms).
+        runBlocking { coordinator.applyRouting(bluetoothOutput()) }
+        val baselineRouteEvents = events.count { it is AudioCoordinatorEvent.EffectiveRouteChanged }
+
+        // SAME-OWNER re-activation under a FRESH generation N+1 (token identical).
+        // The previously-scheduled refresh is now stale.
+        val genNPlus1 = ForegroundMediaArbiter.nextOperationGeneration()
+        coordinator.bindForegroundLease(token, genNPlus1)
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+
+        // Advance past the route-refresh delay: the stale (generation N) runnable
+        // fires but must drop — no route event emitted.
+        ShadowLooper.idleMainLooper()
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(1, java.util.concurrent.TimeUnit.SECONDS)
+        val afterStaleRouteEvents = events.count { it is AudioCoordinatorEvent.EffectiveRouteChanged }
+        assertEquals(
+            "a route refresh scheduled under the OLD generation must drop after a same-owner re-activation",
+            baselineRouteEvents,
+            afterStaleRouteEvents,
+        )
+
+        // A refresh scheduled under the CURRENT generation N+1 still runs.
+        runBlocking { coordinator.applyRouting(bluetoothOutput()) }
+        ShadowLooper.idleMainLooper()
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(1, java.util.concurrent.TimeUnit.SECONDS)
+        val afterCurrentRouteEvents = events.count { it is AudioCoordinatorEvent.EffectiveRouteChanged }
+        assertTrue(
+            "a route refresh scheduled under the current generation must still run",
+            afterCurrentRouteEvents > afterStaleRouteEvents,
+        )
+
+        collectorJob.cancel()
+        ForegroundMediaArbiter.releaseLease(token)
+    }
 }
