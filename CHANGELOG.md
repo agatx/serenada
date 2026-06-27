@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   media owner between them: one call owns the microphone, camera, screen share,
   and OS audio routing while the rest stay held and connected. The registry
   serializes all operations, owns the process-wide foreground lease, and exposes
-  per-call state (`joinHeld`, `joinAndSwitch`, `switch`, `hold`, `leave`, `end`).
+  per-call state (`joinHeld`, `joinAndSwitch`, `switch` (`switchTo` / `switchToCall`), `hold`, `leave`, `end`).
   Single-call `SerenadaCore.join()` integrations are unchanged; mixing direct
   and registry use in one process is rejected. See
   [docs/multi-call-session.md](docs/multi-call-session.md).

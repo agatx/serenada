@@ -211,7 +211,7 @@ Acknowledges join success and provides room state.
 **Fields in payload**
 - `hostCid` *(string)*: client ID of the current host.
 - `maxParticipants` *(number)*: current effective room capacity. For a newly created group-requested room, this is `2` until the second distinct participant joins and locks the final room capacity.
-- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `peerId` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, `connectionStatus` *(string, optional)*, `contentState` *(object, optional)*, `capabilities` *(object, optional)*, and `mediaPolicy` *(object, optional)*. See section 4.3 for the meaning of `connectionStatus`, `contentState`, `capabilities`, and `mediaPolicy`.
+- `participants` *(array)*: list of current participants. Each entry has `cid` *(string)*, `joinedAt` *(number, optional)*, `displayName` *(string, optional)*, `peerId` *(string, optional)*, `audioEnabled` *(boolean, optional)*, `videoEnabled` *(boolean, optional)*, `held` *(boolean, optional)*, `connectionStatus` *(string, optional)*, `contentState` *(object, optional)*, `capabilities` *(object, optional)*, and `mediaPolicy` *(object, optional)*. `held` carries the participant's latest hold state (see section 4.12); it is omitted for participants that never advertised it. See section 4.3 for the meaning of `connectionStatus`, `contentState`, `capabilities`, and `mediaPolicy`.
 - `turnToken` *(string, optional)*: temporary token for fetching TURN credentials from `/api/turn-credentials`. Only present on successful join.
 - `turnTokenExpiresAt` *(number, optional)*: unix timestamp (seconds) when the token expires.
 - `reconnectToken` *(string, optional)*: opaque proof bound to `(cid, rid, expiresAt)` that the SDK persists and presents on a future `join` to reattach or recover the same CID. Format is implementation-defined; clients should treat it as opaque.
@@ -842,9 +842,9 @@ Clients should broadcast this message after joining, when a new peer joins, and 
 - `held` *(boolean, optional)*: whether the sender has put this call **on hold** (the multi-call session model — see [docs/multi-call-session.md](multi-call-session.md)). A held participant has released local capture and owns no audible playout, so it always also sends `audioEnabled:false` and `videoEnabled:false`. Absent or `false` means not held. This field is **additive**: it was introduced after the first `participant_media_state` clients shipped, so older clients never send it and never read it.
 
 **Server behavior**
-- Stores the audio/video state in the room per-CID so late joiners receive the latest values via the participant list in `joined`/`room_state`.
+- Stores the audio/video/held state in the room per-CID so late joiners receive the latest values via the participant list in `joined`/`room_state`.
 - Relays the message to other room participants as a peer message (with a `from` field) instead of broadcasting `room_state`. This avoids participant reordering and full UI rebuilds on every toggle.
-- The server requires no change for `held`: it relays the payload verbatim (subject to the section 1.4 "ignore unknown fields" rule), so `held` rides through on the existing peer-relay path.
+- The relay is **not a verbatim pass-through**: the server allowlists media-state fields and re-emits the message from the parsed `audioEnabled`/`videoEnabled`/`held` values (plus the `from` field). `held` is one of those explicitly carried fields — it is parsed, stored on the participant record, and re-emitted on the relay and in the `joined`/`room_state` snapshot. Adding `held` required a small additive server change for this reason; fields the server does not parse are dropped, not forwarded.
 
 **Client behavior**
 - On receiving a relayed `participant_media_state`, update the cached audio/video state for the sender. Only fields present in the payload should be updated; missing fields leave the previous value intact (this includes `held`: an absent `held` leaves the previously tracked value).

@@ -158,7 +158,7 @@ Read the held calls off the published state:
 
 Each `ManagedCallState` carries a per-call `activationError` (failed activation, failed/timed-out release, failed/timed-out join, or the needed permission), plus `desired*` intent, `actual*` published state, participant count, local cid, display name, and a `qualitySummary` after the call ends. Use the per-call error, not just the registry-level `lastError`, once more than one call exists.
 
-A remote peer who is on hold surfaces through the existing participant model: the remote participant carries a `held` flag (web `Participant.held`, iOS `RemoteParticipant.held`, Android `RemoteParticipant.held`). Render that as "on hold" distinct from plain muted. Older peers never send `held`, so they appear muted/camera-off.
+A remote peer who is on hold surfaces through the existing participant model: the remote participant carries a `held` flag (web `Participant.held`, iOS `SerenadaRemoteParticipant.held`, Android `RemoteParticipant.held`). Render that as "on hold" distinct from plain muted. Older peers never send `held`, so they appear muted/camera-off.
 
 ## Switching, holding, and teardown semantics
 

@@ -286,8 +286,8 @@ struct MultiCallSampleView: View {
 
     private func switchTo(_ id: CallId) {
         run {
-            // `switchToCall` returns `.active`, `.needsPermission` (old call left
-            // foreground — prompt then retry), or `.failed`.
+            // `switchToCall` returns `.active`, `.needsPermission` (old call is
+            // untouched; prompt for permission, then retry switchToCall), or `.failed`.
             switch await registry.switchToCall(id: id) {
             case .active:
                 statusMessage = nil

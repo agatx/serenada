@@ -119,7 +119,7 @@ function MultiCall() {
   const { activeCall, heldCalls, joinAndSwitch, switchTo, hold, leave, end } = registry
 
   // Join a room and bring it to the foreground (the current call is held first).
-  // joinAndSwitch -> { kind: 'active' | 'needsPermission' | 'failed', callId, error }
+  // joinAndSwitch -> { kind: 'active', callId } | { kind: 'needsPermission', callId } | { kind: 'failed', callId?, error }
   const join = (url: string) => void joinAndSwitch({ url })
 
   return (

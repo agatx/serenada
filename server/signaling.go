@@ -199,6 +199,7 @@ type Participant struct {
 	PeerID           string                   `json:"peerId,omitempty"` // host-supplied stable identity, distinct from CID; opaque to server
 	AudioEnabled     *bool                    `json:"audioEnabled,omitempty"`
 	VideoEnabled     *bool                    `json:"videoEnabled,omitempty"`
+	Held             *bool                    `json:"held,omitempty"` // multi-call "on hold" flag; additive, omitted when never advertised
 	ConnectionStatus string                   `json:"connectionStatus,omitempty"` // "suspended" when transport detached; omitted (= "active") otherwise
 	ContentState     *ParticipantContentState `json:"contentState,omitempty"`
 	// Capabilities and MediaPolicy are the allowlisted values advertised at join,
@@ -257,6 +258,11 @@ type roomParticipant struct {
 	PeerID       string
 	AudioEnabled *bool
 	VideoEnabled *bool
+	// Held is the latest multi-call "on hold" flag the participant advertised via
+	// participant_media_state. Stored so a late joiner / reattaching peer sees a
+	// held participant the same way it sees mute state. Additive; nil when the
+	// participant never advertised it (older clients).
+	Held *bool
 	// Client is the currently attached transport. Nil when suspended.
 	Client *Client
 	// SuspendedAt is the unix-nano timestamp at which Client was last detached.
@@ -626,6 +632,7 @@ func (r *Room) snapshotParticipants() []Participant {
 			PeerID:       p.PeerID,
 			AudioEnabled: p.AudioEnabled,
 			VideoEnabled: p.VideoEnabled,
+			Held:         p.Held,
 			ContentState: p.ContentState,
 			Capabilities: p.Capabilities,
 			MediaPolicy:  p.MediaPolicy,
@@ -1762,6 +1769,11 @@ func (h *Hub) handleMediaState(c *Client, msg Message) {
 	var payload struct {
 		AudioEnabled *bool `json:"audioEnabled"`
 		VideoEnabled *bool `json:"videoEnabled"`
+		// Held is the multi-call "on hold" flag. It is additive: older clients
+		// never send it. The server allowlists media-state fields (it does not
+		// relay the payload verbatim), so held must be parsed, stored, and
+		// re-emitted explicitly to reach the other peer and late joiners.
+		Held *bool `json:"held"`
 	}
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		return
@@ -1779,6 +1791,9 @@ func (h *Hub) handleMediaState(c *Client, msg Message) {
 	if payload.VideoEnabled != nil {
 		p.VideoEnabled = payload.VideoEnabled
 	}
+	if payload.Held != nil {
+		p.Held = payload.Held
+	}
 
 	// Relay as peer message (like offer/answer/ice) instead of broadcasting
 	// room_state, which causes participant reordering and full UI rebuilds.
@@ -1791,6 +1806,9 @@ func (h *Hub) handleMediaState(c *Client, msg Message) {
 	}
 	if payload.VideoEnabled != nil {
 		relayPayload["videoEnabled"] = *payload.VideoEnabled
+	}
+	if payload.Held != nil {
+		relayPayload["held"] = *payload.Held
 	}
 	newPayload, _ := json.Marshal(relayPayload)
 	relayMsg := Message{

@@ -229,7 +229,9 @@ routing, and proximity behavior.
 4. Preserve existing single-call APIs and behavior by default.
 5. Keep SDK packages headless; optional UI packages consume manager state but
    core SDKs do not depend on UI frameworks.
-6. Keep server changes optional for v1.
+6. Keep server changes minimal and additive for v1 (one small change was needed:
+   the server allowlists `participant_media_state` fields, so `held` had to be
+   added to the relay and snapshot; see Server and Protocol).
 7. Make held-call state compatible with older peers: old clients should at
    worst see audio/video disabled.
 
@@ -726,8 +728,11 @@ sequenceDiagram
 
 ### Held State Signaling
 
-For v1, no server change is required. Use existing peer message relay for an
-additive state, carried as an extension of `participant_media_state`:
+`held` is an additive state carried as an extension of
+`participant_media_state`. It rides the existing peer-message relay path, but
+the server change is **additive, not zero**: the server allowlists media-state
+fields rather than relaying the payload verbatim, so it had to be taught to
+parse, store, and re-emit `held` (see Server and Protocol).
 
 ```json
 {
@@ -1381,9 +1386,20 @@ and add a separate `callListState` for switcher UI.
 
 ## Server and Protocol
 
-No server changes are required for v1 if `held` is carried as an additive field
-inside existing peer messages, subject to the ordering and replay rules in Held
-State Signaling.
+A **small additive server change was required for v1.** The original assumption
+("no server changes are required if `held` rides through on the existing peer
+relay") was wrong: the server does **not** relay `participant_media_state`
+verbatim — it allowlists the media-state fields and rebuilds the relay payload
+(and the `joined`/`room_state` snapshot) from the parsed values. An unparsed
+`held` field was therefore silently dropped before reaching the other peer.
+
+The change is minimal and backward-compatible: parse `held` in
+`handleMediaState`, re-emit it on the peer relay, and store it on the
+participant record so it is included in the `joined`/`room_state` snapshot the
+same way audio/video mute state is. `held` is `*bool` with `omitempty`, so older
+clients that omit it produce nil → an omitted field, and nothing else changes.
+This is carried subject to the ordering and replay rules in Held State
+Signaling.
 
 Optional future server support:
 
