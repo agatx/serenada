@@ -81,7 +81,12 @@ struct MultiCallSampleView: View {
             .navigationTitle("Multi-Call")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Back") { onDismiss() }
+                    // close() leaves every managed call and frees the process for a
+                    // fresh registry or a direct join (parity with the web/Android samples).
+                    Button("Back") {
+                        Task { await registry.close() }
+                        onDismiss()
+                    }
                 }
             }
             // The registry serializes every op; reflect that in the UI so the

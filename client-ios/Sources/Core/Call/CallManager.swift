@@ -452,6 +452,23 @@ final class CallManager: ObservableObject {
     private func activateSession(_ session: SerenadaSession) {
         activeSessionStateCancellable?.cancel()
 
+        // Switching rooms (e.g. a deep link to a DIFFERENT room while already in a
+        // call): tear the previous session down FIRST so it releases the process
+        // foreground lease before the new session's (async) acquire runs. Without
+        // this the old lease stays held and the new join fails. The new session's
+        // lease is taken in prepareMediaAndConnect (a `Task { @MainActor }`), which
+        // runs after this synchronous leave, so the lease is free by then.
+        if let previous = activeSession, previous !== session {
+            switch previous.state.phase {
+            case .awaitingPermissions:
+                previous.cancelJoin()
+            case .joining, .waiting, .inCall:
+                previous.leave()
+            default:
+                break
+            }
+        }
+
         activeSession = session
         activeSessionJoinCid = nil
         callStartTimeMs = Int64(Date().timeIntervalSince1970 * 1000)

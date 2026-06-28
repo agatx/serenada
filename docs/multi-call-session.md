@@ -67,6 +67,7 @@ func holdCall(id: CallId) async
 func leaveCall(id: CallId) async          // releases foreground first if active
 func endCall(id: CallId) async
 func dismissEndedCall(id: CallId) async   // drop an ended call from the list
+func close() async                        // dispose: leave every call, refuse new ones (call on teardown)
 
 // Published state (ObservableObject):
 @Published var calls: [ManagedCallState]

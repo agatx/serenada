@@ -411,6 +411,11 @@ public final class SerenadaCallRegistry: ObservableObject {
     /// critical sections only — slow held joins run outside it.
     private var operationTail: Task<Void, Never> = Task {}
     private var nextCallSerial = 0
+    /// Set by ``close()``. Once closed, a queued create that lands after teardown
+    /// (an in-flight `joinHeld`/`joinAndSwitch` whose section A runs post-dismiss)
+    /// no-ops instead of resurrecting a call/session nothing would leave. Mirrors
+    /// the web/Android registry `close()`.
+    private var closed = false
 
     // MARK: Init
 
@@ -577,6 +582,19 @@ public final class SerenadaCallRegistry: ObservableObject {
         await publish()
     }
 
+    /// Tear down the registry: refuse new creates and leave EVERY managed call
+    /// (releasing the foreground lease + owning mode), iterating the authoritative
+    /// `managed` list. Hosts call this on teardown (e.g. the screen is dismissed).
+    /// `closed` is set synchronously first so an in-flight queued create no-ops
+    /// instead of leaking a session nothing would leave. Mirrors web/Android.
+    public func close() async {
+        closed = true
+        for id in managed.map(\.id) {
+            await runQueued { await self.teardownBody(id: id, end: false) }
+        }
+        await publish()
+    }
+
     // MARK: - Queued sections (run one-at-a-time)
 
     /// Outcome of the short create+register critical section (composite part A).
@@ -597,6 +615,12 @@ public final class SerenadaCallRegistry: ObservableObject {
     /// outside the queue). Reserves the registry owning mode so a concurrent
     /// direct join fails fast even before any foreground lease exists.
     private func createAndRegister(_ room: RoomRef) -> PreparedJoin {
+        // Registry was closed while this create sat in the serial queue (host
+        // dismissed between joinHeld() and this section running). Do not create a
+        // session that close() already iterated past and nothing will leave.
+        if closed {
+            return .failure(.joinFailed("Registry is closed"))
+        }
         guard let canonical = canonicalRoomId(room) else {
             return .failure(.joinFailed("Could not resolve a room id from RoomRef"))
         }

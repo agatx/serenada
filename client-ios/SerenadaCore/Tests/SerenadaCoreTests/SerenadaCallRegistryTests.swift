@@ -679,4 +679,38 @@ final class SerenadaCallRegistryTests: XCTestCase {
 
         await h.teardown()
     }
+
+    // MARK: - close() teardown
+
+    func testCloseLeavesAllCallsAndReleasesProcess() async {
+        let h = RegistryTestHarness()
+        let r1 = await h.registry.joinAndSwitch(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        guard case .active = r1 else { return XCTFail("joinAndSwitch: \(r1)") }
+        let r2 = await h.registry.joinHeld(h.room("bbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+        guard case .joined = r2 else { return XCTFail("joinHeld: \(r2)") }
+        XCTAssertEqual(h.registry.calls.count, 2)
+        XCTAssertEqual(h.arbiter.owningMode, .registry)
+
+        await h.registry.close()
+
+        // Every call left -> lease, active id, and owning mode all released.
+        XCTAssertNil(h.arbiter.currentOwnerToken, "close() releases the foreground lease")
+        XCTAssertNil(h.registry.activeCallId, "close() clears the active call")
+        XCTAssertNil(h.arbiter.owningMode, "close() releases the owning mode")
+
+        await h.teardown()
+    }
+
+    func testClosedRegistryRejectsNewJoin() async {
+        let h = RegistryTestHarness()
+        await h.registry.close()
+
+        let result = await h.registry.joinHeld(h.room("aaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        guard case .failed = result else {
+            return XCTFail("a closed registry must reject joinHeld, got \(result)")
+        }
+        XCTAssertNil(h.arbiter.owningMode, "a rejected create must not claim the owning mode")
+
+        await h.teardown()
+    }
 }
