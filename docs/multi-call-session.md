@@ -45,6 +45,7 @@ registry.hold(callId): Promise<void>;
 registry.leave(callId): Promise<void>;   // releases foreground first if active
 registry.end(callId): Promise<void>;     // ends for all participants
 registry.dismiss(callId): void;          // drop an ended call from the published list
+registry.close(): Promise<void>;         // dispose: leave every call, refuse new ones (call on teardown)
 
 // Observable state (useSyncExternalStore-compatible):
 registry.state;                          // CallRegistryState

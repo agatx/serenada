@@ -1,7 +1,7 @@
 # Multi-Call Session Design
 
 Status: Draft
-Last updated: 2026-06-26
+Last updated: 2026-06-28
 
 ## Summary
 
@@ -1530,9 +1530,11 @@ recovery is a fast-follow once the registry/arbiter model is proven.
 
 ### Phase 5: Bundled App Integration
 
-- migrate iOS and Android app managers to registry-backed state
-- keep existing call screen as the active-call renderer
-- add minimal switcher UI
+**Productized (2026-06-27):** multi-call shipped as an **SDK + sample-app** capability, not a bundled-app feature. The bundled apps (`client-ios/Sources`, `client-android/app`, `client/src`) were kept single-call (their multi-call integration reverted to `main`); the registry-backed switcher UX lives in the purpose-built sample apps (`samples/web`, `samples/ios`, `samples/android`) instead. The bullets below were the original plan; the realized outcome is the sample integrations.
+
+- ~~migrate iOS and Android app managers to registry-backed state~~ (reverted — bundled apps stay single-call references)
+- keep existing call screen as the active-call renderer (samples render the active call via `SerenadaCallFlow`)
+- add minimal switcher UI (built in the sample apps, not the bundled apps)
 - update foreground service invariants and push snapshot paths
 
 ### Phase 6: Documentation and Samples
