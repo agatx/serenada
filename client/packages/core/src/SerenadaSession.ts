@@ -419,6 +419,14 @@ export class SerenadaSession implements SerenadaSessionHandle {
      * on teardown (parity with iOS's separate `directLeaseToken`).
      */
     private directLeaseToken: ForegroundOwnerToken | null = null;
+    /**
+     * Whether this session must self-acquire the `direct` foreground lease when it
+     * starts (the public single-call `SerenadaCore.join()` path). The acquire is
+     * deferred to {@link start} so a lease-unavailable failure surfaces as an error
+     * `CallState` rather than throwing out of the non-throwing public `join()` —
+     * parity with iOS/Android, which fail the join instead of throwing.
+     */
+    private shouldAcquireForegroundLease = false;
 
     // Wall-clock ms when the local transport last dropped while a roomState
     // was present (i.e. mid-call). Cleared on reconnect.
@@ -535,18 +543,13 @@ export class SerenadaSession implements SerenadaSessionHandle {
             // check done so `rebuildState` never auto-fires `startLocalMedia`.
             this.permissionCheckDone = true;
             this.media.initializeHeldWithoutCapture();
-        } else if (deps.acquireForegroundLease) {
-            // Public single-call `SerenadaCore.join()` routes through the arbiter:
-            // acquire the foreground lease (mode `direct`) BEFORE activating media.
-            // A second concurrent direct join while one is live throws
-            // ForegroundLeaseUnavailable (propagated to the join caller). This is a
-            // SELF-owned lease: record it as `directLeaseToken` so teardown
-            // self-releases it (the registry path never sets this). Also seed the
-            // fence token from the same lease.
-            const token = foregroundArbiter.acquireForeground(this.roomId, 'direct', this);
-            this.directLeaseToken = token;
-            this.foregroundOwnerToken = token;
         }
+        // Public single-call `SerenadaCore.join()` takes the `direct` foreground
+        // lease. The acquire itself is deferred to start() so a lease-unavailable
+        // failure surfaces as an error CallState (parity with iOS/Android) rather
+        // than throwing out of the non-throwing public join(). Held-initial and
+        // registry-managed sessions never self-acquire.
+        this.shouldAcquireForegroundLease = !heldInitial && deps.acquireForegroundLease === true;
 
         if (deps.autoStart !== false) {
             this.start();
@@ -846,6 +849,27 @@ export class SerenadaSession implements SerenadaSessionHandle {
             return;
         }
         this.started = true;
+
+        // Acquire the `direct` foreground lease BEFORE connecting so only one call
+        // owns capture/audio (contract §2). A second concurrent direct join — or a
+        // direct join while a registry owns the process — fails fast. Surface it as
+        // an error CallState here (parity with iOS/Android) instead of throwing, so
+        // the non-throwing public join() always returns a usable handle. This is a
+        // SELF-owned lease (directLeaseToken); teardown self-releases it.
+        if (this.shouldAcquireForegroundLease && this.directLeaseToken === null) {
+            try {
+                const token = foregroundArbiter.acquireForeground(this.roomId, 'direct', this);
+                this.directLeaseToken = token;
+                this.foregroundOwnerToken = token;
+            } catch {
+                this.failWithError({
+                    code: 'FOREGROUND_LEASE_UNAVAILABLE',
+                    message: 'Foreground media unavailable: another call owns it',
+                });
+                return;
+            }
+        }
+
         this.pendingJoinOptions = {
             displayName: this.displayName,
             appPeerId: this.appPeerId,

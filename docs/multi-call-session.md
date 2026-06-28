@@ -24,6 +24,8 @@ A process integrates **either** through direct single-call `SerenadaCore.join()`
 - While a direct session is live, constructing or operating a registry that needs the lease fails the same way.
 - The mode clears once the owning side has zero live calls, after which the other mode may claim the process.
 
+A failed direct `join()` does NOT throw: it returns a session whose `CallState` is `error` (code `unknown`, message describing the lease conflict), so hosts read the failure off `state` like any other call error — consistent across web/iOS/Android.
+
 Pick one integration style per app and stick with it.
 
 ## Public API

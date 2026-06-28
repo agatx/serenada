@@ -111,8 +111,10 @@ releaseMode(ownerRef)                                           // clears mode w
 
 **Existing single-call path must route through the arbiter** (Phase 2): `SerenadaCore.join()`
 acquires the lease (mode `direct`) before activating media; a second concurrent direct join
-fails fast with `ForegroundLeaseUnavailable`. This preserves single-call behavior for one
-call and makes the invariant real.
+fails fast. The arbiter's `acquireForeground` throws `ForegroundLeaseUnavailable`, but the
+session **catches it and surfaces an error `CallState`** (it does NOT propagate the throw out
+of the non-throwing public `join()`) — parity across web/iOS/Android. This preserves
+single-call behavior for one call and makes the invariant real.
 
 ---
 

@@ -268,12 +268,21 @@ describe('SerenadaCore.join routes through the arbiter (Phase 2)', () => {
         __resetForegroundArbiterForTests();
     });
 
-    it('a second concurrent direct join while one is live fails with ForegroundLeaseUnavailable', () => {
+    it('a second concurrent direct join while one is live fails gracefully (error state, no throw)', () => {
         const coreA = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
         const sessionA = coreA.join({ roomId: 'ROOM_A' });
         try {
             const coreB = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
-            expect(() => coreB.join({ roomId: 'ROOM_B' })).toThrow(ForegroundLeaseUnavailable);
+            // join() must NOT throw synchronously (it is typed to return a handle).
+            // It returns a session that has transitioned to an error CallState —
+            // parity with iOS/Android, which fail the join instead of throwing.
+            const sessionB = coreB.join({ roomId: 'ROOM_B' });
+            expect(sessionB.state.phase).toBe('error');
+            expect(sessionB.state.error?.code).toBe('unknown');
+            expect(sessionB.state.error?.message).toContain('another call owns it');
+            // A still owns the lease — the failed B neither stole nor released it.
+            expect(() => foregroundArbiter.acquireForeground('probe', 'direct', {})).toThrow(ForegroundLeaseUnavailable);
+            sessionB.destroy();
         } finally {
             sessionA.destroy();
         }

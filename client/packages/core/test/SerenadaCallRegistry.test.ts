@@ -403,7 +403,7 @@ describe('SerenadaCallRegistry', () => {
         expect(() => foregroundArbiter.acquireForeground('probe', 'direct', {})).toThrow(ForegroundLeaseUnavailable);
     });
 
-    it('direct SerenadaCore.join() while a registry has a live call fails ForegroundLeaseUnavailable', async () => {
+    it('direct SerenadaCore.join() while a registry has a live call fails gracefully (error state)', async () => {
         const restoreRtc = (globalThis as Record<string, unknown>).RTCPeerConnection;
         (globalThis as Record<string, unknown>).RTCPeerConnection = class {};
         try {
@@ -412,9 +412,13 @@ describe('SerenadaCallRegistry', () => {
             settleNextOnJoin(rigs);
             await p;
 
-            // The registry holds `registry` mode -> a direct join must fail.
+            // The registry holds `registry` mode -> a direct join must fail, surfaced
+            // as an error CallState rather than a synchronous throw out of join().
             const core = new SerenadaCore({ signalingProvider: new FakeSignalingProvider() });
-            expect(() => core.join({ roomId: 'OTHER' })).toThrow(ForegroundLeaseUnavailable);
+            const session = core.join({ roomId: 'OTHER' });
+            expect(session.state.phase).toBe('error');
+            expect(session.state.error?.code).toBe('unknown');
+            session.destroy();
         } finally {
             (globalThis as Record<string, unknown>).RTCPeerConnection = restoreRtc;
         }
