@@ -90,13 +90,16 @@ fun MultiCallScreen(
     val activeSession = if (state.activeCallId != null) registry.activeSession else null
 
     if (activeSession != null) {
-        // A call holds the foreground lease: render it. Hold (keep joined, drop
-        // foreground) returns to the multi-call list; leave tears the call down.
+        // A call holds the foreground lease: render it full-screen. Both the call
+        // UI's hang-up (onEndCall) and its back/dismiss gesture (onDismiss) hold
+        // the call (keep it joined, drop foreground) and return to the multi-call
+        // list — matching the iOS sample. Tearing a call down is an explicit
+        // "Leave"/"End" action from the call list, not hang-up.
         SerenadaCallFlow(
             session = activeSession,
             config = multiCallFlowConfig,
             onEndCall = {
-                state.activeCallId?.let { id -> scope.launch { registry.leaveCall(id) } }
+                state.activeCallId?.let { id -> scope.launch { registry.holdCall(id) } }
             },
             onDismiss = {
                 state.activeCallId?.let { id -> scope.launch { registry.holdCall(id) } }
