@@ -112,7 +112,13 @@ export class SerenadaCore {
         } = { initialMediaRole: 'foreground' },
     ): SerenadaSession {
         if (!SerenadaCore.isSupported()) {
-            return this.createUnsupportedSession() as unknown as SerenadaSession;
+            // Registry path only (public join() returns the stand-in handle above).
+            // Never launder the unsupported stand-in (a SerenadaSessionHandle) as a
+            // SerenadaSession — it implements none of the registry-only methods
+            // (preflight/activate/release/abortForeground) or getters the registry
+            // calls. Throw so the registry's createOrReuseCall catch surfaces it as
+            // a normal joinFailed instead of publishing a broken managed call.
+            throw new Error('WebRTC is not supported in this browser');
         }
         const signalingProvider = this.createSignalingProvider();
         const roomId = 'url' in room ? this.parseRoomIdFromUrl(room.url) : room.roomId;

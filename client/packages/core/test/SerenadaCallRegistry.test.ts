@@ -829,4 +829,61 @@ describe('SerenadaCallRegistry', () => {
             expect(held.session.currentMediaRole).toBe('held');
         });
     });
+
+    describe('teardown + session-factory failure', () => {
+        it('surfaces a session-factory throw as joinFailed and leaves no call (e.g. unsupported browser)', async () => {
+            // joinInternal throws on an unsupported browser; the registry must
+            // catch it (not launder a broken handle) and release the mode claim.
+            const core = new SerenadaCore({ serverHost: 'localhost:8080' });
+            const registry = new SerenadaCallRegistry(core, {
+                createSession: () => {
+                    throw new Error('WebRTC is not supported in this browser');
+                },
+            });
+            const result = await registry.joinHeld({ roomId: 'room-x' });
+            expect(result.kind).toBe('failed');
+            expect(registry.state.calls).toHaveLength(0);
+            // Mode claim released so a later direct join is not blocked.
+            expect(foregroundArbiter.currentMode).toBeNull();
+        });
+
+        it('close() leaves every managed call and releases the lease + owning mode', async () => {
+            const { registry, rigs } = makeRegistry();
+            const pa = registry.joinAndSwitch({ roomId: 'room-a' });   // foreground
+            settleNextOnJoin(rigs);
+            await pa;
+            const pb = registry.joinHeld({ roomId: 'room-b' });          // held
+            settleNextOnJoin(rigs);
+            await pb;
+            expect(registry.state.calls.length).toBe(2);
+            expect(foregroundArbiter.currentMode).toBe('registry');
+
+            await registry.close();
+
+            expect(registry.state.calls).toHaveLength(0);
+            expect(registry.state.activeCallId).toBeNull();
+            expect(foregroundArbiter.currentMode).toBeNull();
+        });
+
+        it('a create enqueued before close() no-ops after close (no leaked call/session)', async () => {
+            const { registry, rigs } = makeRegistry();
+            // Start a join but do NOT await it, then close immediately. The queued
+            // create must observe `closed` and never construct a session.
+            const pending = registry.joinHeld({ roomId: 'room-late' });
+            await registry.close();
+            const result = await pending;
+            expect(result.kind).toBe('failed');
+            expect(registry.state.calls).toHaveLength(0);
+            expect(rigs).toHaveLength(0);   // factory never ran
+            expect(foregroundArbiter.currentMode).toBeNull();
+        });
+
+        it('a closed registry rejects new joinHeld', async () => {
+            const { registry } = makeRegistry();
+            await registry.close();
+            const result = await registry.joinHeld({ roomId: 'room-y' });
+            expect(result.kind).toBe('failed');
+            expect(registry.state.calls).toHaveLength(0);
+        });
+    });
 });

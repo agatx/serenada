@@ -150,6 +150,12 @@ export class SerenadaCallRegistry {
      */
     private readonly modeRef = { registry: true };
     private modeClaimed = false;
+    /**
+     * Set by {@link close}. Once closed, queued creates that land after teardown
+     * (an in-flight `joinHeld`/`joinAndSwitch` whose create runs post-unmount)
+     * no-op instead of resurrecting a call/session that nothing would ever leave.
+     */
+    private closed = false;
 
     constructor(core: SerenadaCore, options: SerenadaCallRegistryOptions = {}) {
         this.createSession = options.createSession ?? ((room, opts) =>
@@ -195,6 +201,25 @@ export class SerenadaCallRegistry {
         return () => {
             this.listeners.delete(callback);
         };
+    }
+
+    /**
+     * Tear down the registry: refuse new creates and leave EVERY managed call
+     * (iterating the authoritative `calls` map, not the last published snapshot),
+     * which releases the foreground lease and the owning mode. Hosts call this on
+     * unmount. Setting `closed` synchronously first means an in-flight queued
+     * create (a `joinHeld`/`joinAndSwitch` whose body runs after teardown) no-ops
+     * rather than leaking a session the snapshot-based cleanup would have missed.
+     */
+    async close(): Promise<void> {
+        this.closed = true;
+        for (const id of [...this.calls.keys()]) {
+            try {
+                await this.leave(id);
+            } catch (err) {
+                this.log('warning', `close: leave ${id} failed: ${formatError(err)}`);
+            }
+        }
     }
 
     // --- Public API (all async; all serialized) ---
@@ -324,6 +349,12 @@ export class SerenadaCallRegistry {
         | { kind: 'reused'; call: ManagedCall }
         | { kind: 'created'; call: ManagedCall }
         | { kind: 'rejected'; error: CallActivationError } {
+        // The registry was torn down while this create sat in the queue (e.g. the
+        // host unmounted between joinHeld() and this enqueued body running). Do not
+        // create a session that close() already iterated past and nothing will leave.
+        if (this.closed) {
+            return { kind: 'rejected', error: this.makeError('joinFailed', 'Registry is closed') };
+        }
         const roomId = this.canonicalRoomId(room);
         // Call-identity policy (contract §7): one live call per canonical roomId.
         const existing = this.findLiveCallByRoomId(roomId);
@@ -921,11 +952,18 @@ export class SerenadaCallRegistry {
     }
 }
 
+/** Monotonic suffix so the non-crypto fallback can't collide within a JS context. */
+let callIdFallbackCounter = 0;
+
 /** Registry-generated stable CallId. Prefers crypto.randomUUID, falls back. */
 function generateCallId(): CallId {
     const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
     if (c?.randomUUID) return c.randomUUID();
-    return `call-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    // Fallback for older/non-secure-context WebViews lacking crypto.randomUUID.
+    // The counter guarantees uniqueness even for two ids minted in the same ms
+    // (the Map key collision the random suffix alone can't fully rule out).
+    callIdFallbackCounter += 1;
+    return `call-${Date.now().toString(36)}-${callIdFallbackCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**

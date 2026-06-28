@@ -3,8 +3,10 @@ import {
     SerenadaCallRegistry,
     SerenadaCore,
     SerenadaSession,
-    __resetForegroundArbiterForTests,
 } from '../../../core/src/index.js';
+// Reset the process-singleton arbiter from its own module, not the public barrel
+// (the singleton + reset are intentionally not re-exported from the package entry).
+import { __resetForegroundArbiterForTests } from '../../../core/src/foregroundArbiter.js';
 import type {
     CallRegistryState,
     RoomRef,

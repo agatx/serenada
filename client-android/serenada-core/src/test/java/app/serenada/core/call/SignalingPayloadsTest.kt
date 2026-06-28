@@ -240,6 +240,18 @@ class SignalingPayloadsTest {
     }
 
     @Test
+    fun toMediaStatePayload_nonBooleanHeldIsUnknown() {
+        // Parity with web (`typeof === 'boolean'`) / iOS (`boolValue`): a present-
+        // but-non-boolean `held` stays unknown (null), not coerced to false the way
+        // optBoolean would.
+        val json = JSONObject().apply {
+            put("from", "C-peer")
+            put("held", "true") // string, not a JSON boolean
+        }
+        assertNull(json.toMediaStatePayload()!!.held)
+    }
+
+    @Test
     fun toMediaStatePayload_ignoresUnknownFields() {
         // Mirrors the trickleIce unknown-field tolerance test: an inbound
         // participant_media_state carrying held alongside an unknown key must
@@ -294,6 +306,16 @@ class SignalingPayloadsTest {
         assertEquals(true, result[0].held)
         assertEquals(false, result[1].held)
         assertNull(result[2].held)
+    }
+
+    @Test
+    fun toParticipantList_nonBooleanHeldIsUnknown() {
+        // Same strict-boolean parity as the media-state path: a non-boolean held
+        // on a participant is unknown (null), not false.
+        val arr = JSONArray().apply {
+            put(JSONObject().apply { put("cid", "C-1"); put("held", 1) }) // number, not boolean
+        }
+        assertNull(arr.toParticipantList().single().held)
     }
 
     @Test

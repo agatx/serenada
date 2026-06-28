@@ -92,8 +92,10 @@ export type {
     ForegroundOwnerToken,
 } from './types.js';
 export { ForegroundLeaseUnavailable } from './types.js';
-/** @internal Process-wide foreground media arbiter (one per JS context) */
-export { foregroundArbiter, __resetForegroundArbiterForTests } from './foregroundArbiter.js';
+// The process-wide foreground media arbiter singleton and its test-reset are
+// intentionally NOT re-exported from the public entry point: they are internal
+// (no `stripInternal` is configured, so a re-export would land in the published
+// .d.ts AND the JS bundle). Tests import them directly from './foregroundArbiter.js'.
 
 /** Multi-call session registry (Phase 3) */
 export { SerenadaCallRegistry } from './SerenadaCallRegistry.js';

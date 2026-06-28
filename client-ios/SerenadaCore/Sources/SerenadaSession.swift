@@ -1487,9 +1487,11 @@ public final class SerenadaSession: ObservableObject {
         // The foreground lease this activation runs under (Phase 4, contract §6) so
         // the default coordinator's own delayed callbacks / observers can fence
         // against the CURRENT owner. The owner-token id is the registry-issued fence
-        // token (`nil` on the single-call/direct path — one owner, nothing to
-        // fence); the generation is the live op generation.
-        let lease = AudioSessionLease(ownerTokenId: foregroundOwnerToken?.leaseId, generation: mediaOpGeneration)
+        // token when present, else the direct path's own unique `directLeaseToken`
+        // id — never a shared `nil`, so two distinct direct sessions install distinct
+        // leases (parity with Android binding `directLeaseToken`) instead of a
+        // colliding `(nil, 0)`; the generation is the live op generation.
+        let lease = AudioSessionLease(ownerTokenId: foregroundOwnerToken?.leaseId ?? directLeaseToken?.leaseId, generation: mediaOpGeneration)
         let leaseAware = coordinator as? LeaseAwareAudioCoordinator
         let task = Task<Void, Error> { [weak self] in
             if let previous {

@@ -126,13 +126,14 @@ export function useSerenadaCallRegistry(
         ],
     );
 
-    // Tear down the registry on unmount (or when it is reconstructed): leave
-    // every live call so the foreground lease and owning mode are released.
+    // Tear down the registry on unmount (or when it is reconstructed): close()
+    // leaves every live call (releasing the foreground lease and owning mode) by
+    // iterating the registry's authoritative call map, and refuses any in-flight
+    // queued create that would otherwise land after unmount — which the previous
+    // published-snapshot loop could miss, leaking a session nothing would leave.
     useEffect(() => {
         return () => {
-            for (const call of registry.state.calls) {
-                void registry.leave(call.id);
-            }
+            void registry.close();
         };
     }, [registry]);
 
