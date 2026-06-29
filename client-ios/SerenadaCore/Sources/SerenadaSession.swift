@@ -1698,6 +1698,17 @@ public final class SerenadaSession: ObservableObject {
         //    sync (clears the local sharing flag and notifies peers).
         if diagnostics.isScreenSharing {
             stopScreenShare()
+        } else {
+            // A screen-share start can be PENDING here: the ReplayKit/broadcast
+            // picker is up but unconfirmed, so `isScreenShareStartPending` is true
+            // while `diagnostics.isScreenSharing` is still false. The engine's
+            // `suspendLocalMediaForHold` below tears the pending capturer down via
+            // `stopAllCapturers()` WITHOUT firing the start completion, so the pending
+            // latch would never clear — and a post-resume `startScreenShare()` would
+            // then early-return forever on its `!isScreenShareStartPending` guard.
+            // Cancel the pending start so the latch is released. No `content_state`
+            // was ever sent for an unconfirmed start, so there is nothing to signal.
+            cancelPendingScreenShareStartRequest()
         }
 
         // 2. Release local capture and replace sender tracks with nil (the engine

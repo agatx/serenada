@@ -30,6 +30,7 @@ class FakeStream {
     private tracks: MediaStreamTrack[];
     constructor(tracks: MediaStreamTrack[] = []) { this.tracks = [...tracks]; }
     addTrack(t: MediaStreamTrack): void { this.tracks.push(t); }
+    removeTrack(t: MediaStreamTrack): void { this.tracks = this.tracks.filter(x => x !== t); }
     getAudioTracks(): MediaStreamTrack[] { return this.tracks.filter(t => t.kind === 'audio'); }
     getVideoTracks(): MediaStreamTrack[] { return this.tracks.filter(t => t.kind === 'video'); }
     getTracks(): MediaStreamTrack[] { return [...this.tracks]; }
@@ -501,6 +502,35 @@ describe('MediaEngine independent content', () => {
         const states = h.sent.filter(m => m.type === 'content_state');
         expect(states).toHaveLength(0);
         expect(h.engine.isScreenSharing).toBe(false);
+    });
+
+    it('drops an independent screen share whose picker resolves after the call goes held', async () => {
+        // Race regression (independent path): getDisplayMedia resolves only AFTER a
+        // hold latches mid-picker. A held call must not attach the content track or
+        // broadcast content_state {active:true} (Core Invariant 2).
+        const sent: Sent[] = [];
+        let resolveDisplay!: (stream: MediaStream) => void;
+        const displayTrack = makeTrack('video', 'display');
+        const getDisplayMedia = vi.fn().mockReturnValue(
+            new Promise<MediaStream>((resolve) => { resolveDisplay = resolve; }),
+        );
+        setupNavigator({ getDisplayMedia });
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        engine.updateSignalingConnected(true);
+        await engine.startLocalMedia();
+
+        const share = engine.startScreenShare();   // picker pending
+        await engine.suspendLocalMediaForHold();    // hold latches mid-picker
+        resolveDisplay(new FakeStream([displayTrack]) as unknown as MediaStream);
+        await share;
+
+        expect(getDisplayMedia).toHaveBeenCalledTimes(1);
+        expect(displayTrack.readyState).toBe('ended');   // freshly captured surface released
+        expect(engine.isScreenSharing).toBe(false);
+        expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
     });
 
     it('replaceTrack rejection falls back to renegotiation instead of failing the share', async () => {

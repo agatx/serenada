@@ -559,6 +559,19 @@ export class MediaEngine {
         this.cameraRecoveryInFlight = true;
         try {
             const track = await this.acquireCameraTrack(this.facingMode, true);
+            // Re-check `heldNoCapture` after the `getUserMedia` await: a hold racing
+            // this reacquire (e.g. a switch-back-to-hold while a resume is in flight)
+            // can re-latch held and release capture while getUserMedia was pending. A
+            // held call must never publish a live camera track to peers (Core
+            // Invariant 2 / privacy), so drop the freshly captured track instead of
+            // attaching it — mirrors the audio path in `reacquireLocalAudioCaptureInternal`.
+            // (`localStream` may legitimately be null here for a held-initial,
+            // video-only resume, where `swapLocalVideoTrack` creates it; so it is NOT
+            // an abort condition, unlike the audio path.)
+            if (this.destroyed || this.heldNoCapture) {
+                track.stop();
+                return;
+            }
             await this.swapLocalVideoTrack(track, null);
         } catch (err) {
             this.logger?.log('error', 'Camera', `Failed to reacquire camera: ${formatError(err)}`);
@@ -830,6 +843,17 @@ export class MediaEngine {
                 displayStream.getTracks().forEach(track => track.stop());
                 throw new Error('No display track returned');
             }
+            // Re-check after the `getDisplayMedia` picker await: a hold/switch racing
+            // the pending picker latches `heldNoCapture` and releases capture, but
+            // cannot see this share (the top-level guard already passed and
+            // `isScreenSharing` is not set until below). A held call owns no display
+            // surface (Core Invariant 2), so drop the freshly captured surface
+            // instead of attaching it and broadcasting `content_state active:true`
+            // from a held call. Mirrors the audio reacquire re-check.
+            if (this.destroyed || this.heldNoCapture) {
+                displayStream.getTracks().forEach(track => track.stop());
+                return;
+            }
 
             const previousVideoTrack = this.localStream.getVideoTracks()[0];
             this.screenShareRestoreVideoEnabled = previousVideoTrack ? previousVideoTrack.enabled : null;
@@ -907,6 +931,16 @@ export class MediaEngine {
             if (!displayTrack) {
                 displayStream.getTracks().forEach(track => track.stop());
                 throw new Error('No display track returned');
+            }
+            // Re-check after the `getDisplayMedia` picker await: a hold/switch racing
+            // the pending picker latches `heldNoCapture` and releases capture, but
+            // cannot see this share (the top-level guard already passed and the
+            // `isScreenSharing` flag + per-peer attach happen below). A held call owns
+            // no display surface (Core Invariant 2), so drop the surface instead of
+            // attaching it and broadcasting `content_state active:true` from a held call.
+            if (this.destroyed || this.heldNoCapture) {
+                displayStream.getTracks().forEach(track => track.stop());
+                return;
             }
         } catch (err) {
             // Permission/capture denied: whole-operation failure, untouched camera.

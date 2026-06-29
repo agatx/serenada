@@ -1021,6 +1021,98 @@ describe('MediaEngine', () => {
         expect(engine.localStream).toBeNull();
     });
 
+    it('drops a legacy screen share whose picker resolves after the call goes held', async () => {
+        // Race regression: getDisplayMedia resolves only AFTER a hold latches
+        // mid-picker. A held call must not attach the display surface or broadcast
+        // content_state {active:true} (Core Invariant 2).
+        let resolveDisplay!: (stream: MediaStream) => void;
+        const displayTrack = createMediaTrack('video');
+        const displayStop = vi.spyOn(displayTrack, 'stop');
+        const getDisplayMedia = vi.fn().mockReturnValue(
+            new Promise<MediaStream>((resolve) => { resolveDisplay = resolve; }),
+        );
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    getDisplayMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+        const engine = new MediaEngine({}, (type, payload) => { sentMessages.push({ type, payload }); });
+
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await engine.startLocalMedia();
+        const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+        const share = engine.startScreenShare();   // picker pending
+        await engine.suspendLocalMediaForHold();    // hold latches mid-picker
+        resolveDisplay(new FakeMediaStream([displayTrack]) as unknown as MediaStream);
+        await share;
+
+        expect(getDisplayMedia).toHaveBeenCalledTimes(1);
+        expect(displayStop).toHaveBeenCalled();   // freshly captured surface released
+        expect(engine.isScreenSharing).toBe(false);
+        expect(sentMessages.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+        // The held call's senders never receive the display track.
+        expect(peer?.senders.some(sender => sender.track === displayTrack)).toBe(false);
+    });
+
+    it('drops a reacquired camera track when a hold latches during getUserMedia', async () => {
+        // Race regression: a hold racing a resume re-latches held while the
+        // reacquire's getUserMedia is pending. The freshly captured camera track
+        // must be dropped, never attached to peer senders (Core Invariant 2).
+        const cameraTrack = createMediaTrack('video');
+        const cameraStop = vi.spyOn(cameraTrack, 'stop');
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const engine = new MediaEngine({}, () => {});
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await engine.startLocalMedia();
+        const peer = engine.getPeerConnectionsMap().get('zeta') as FakeRtcPeerConnection | undefined;
+
+        // Drop the camera track so reacquireVideoTrack runs a fresh getUserMedia.
+        await engine.releaseVideoTrack();
+        expect(engine.localStream?.getVideoTracks()).toHaveLength(0);
+
+        // Arm a deferred getUserMedia for the reacquire's acquireCameraTrack call.
+        let resolveCamera!: (stream: MediaStream) => void;
+        getUserMedia.mockReturnValueOnce(new Promise<MediaStream>((resolve) => { resolveCamera = resolve; }));
+
+        const reacquire = engine.reacquireVideoTrack();   // getUserMedia pending
+        await engine.suspendLocalMediaForHold();           // hold latches mid-acquire
+        resolveCamera(new FakeMediaStream([cameraTrack]) as unknown as MediaStream);
+        await reacquire;
+
+        expect(cameraStop).toHaveBeenCalled();                        // fresh track released
+        expect(engine.localStream?.getVideoTracks()).toHaveLength(0); // not attached locally
+        expect(peer?.senders.some(sender => sender.track === cameraTrack)).toBe(false);
+    });
+
     it('does not let the non-offerer create fallback offers', async () => {
         vi.useFakeTimers();
 

@@ -23,8 +23,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   path.
 - Protocol: additive `held` field on `participant_media_state`. A held
   participant also sends `audioEnabled:false`/`videoEnabled:false`, so older
-  peers degrade to muted/camera-off; new peers render "on hold" distinctly. No
-  server change. See [docs/serenada_protocol_v1.md](docs/serenada_protocol_v1.md)
+  peers degrade to muted/camera-off; new peers render "on hold" distinctly.
+  Because the server allowlists media-state fields (it does not relay the
+  payload verbatim), `held` required a small additive server change to parse,
+  store, and re-emit it on the peer relay and in the `joined`/`room_state`
+  snapshot. See [docs/serenada_protocol_v1.md](docs/serenada_protocol_v1.md)
   section 4.12.
 
 ### Notes

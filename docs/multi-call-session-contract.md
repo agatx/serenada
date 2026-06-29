@@ -382,7 +382,11 @@ default (Invariant 5 applies to *call-end*, not switch-failure — switch failur
 
 ## 8. Held-state signaling (Phase 1)
 
-Additive field on the existing `participant_media_state` peer message. **No server change.**
+Additive `held` field on the existing `participant_media_state` peer message.
+**Requires a small additive server change:** the server allowlists media-state
+fields (it does not relay the payload verbatim), so `held` must be parsed, stored
+on the participant record, and re-emitted on the peer relay and in the
+`joined`/`room_state` snapshot. See `docs/serenada_protocol_v1.md` §4.12.
 
 On hold (after local capture stopped):
 ```json
