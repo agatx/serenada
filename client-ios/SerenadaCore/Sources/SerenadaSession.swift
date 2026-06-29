@@ -178,6 +178,12 @@ public final class SerenadaSession: ObservableObject {
     /// Callback invoked when camera/microphone permissions are needed before joining.
     public var onPermissionsRequired: (([MediaCapability]) -> Void)?
 
+    /// Callback invoked when a user-initiated in-call media toggle (camera or microphone) cannot
+    /// proceed because the corresponding system permission is denied or restricted. The host
+    /// should surface a prompt steering the user to Settings. It is NOT fired for the
+    /// `.notDetermined` state — the session prompts for access in that case.
+    public var onMediaPermissionBlocked: ((MediaCapability) -> Void)?
+
     // Core dependencies
     private let signalingProvider: SignalingProvider
     private let providerDelegateProxy: SignalingProviderDelegateProxy
@@ -543,7 +549,24 @@ public final class SerenadaSession: ObservableObject {
 
     /// Toggle local audio on or off.
     public func toggleAudio() {
+        guard ensureMicrophonePermissionForAudioToggle() else { return }
         setMicMuted(!userMuted)
+    }
+
+    /// Returns `true` when the microphone permission allows toggling audio. When the permission is
+    /// denied or restricted, fires `onMediaPermissionBlocked(.microphone)` so the host can steer
+    /// the user to Settings and returns `false` — the toggle is a no-op because audio can't be
+    /// captured without permission. `.notDetermined` is allowed through (the audio session prompts).
+    private func ensureMicrophonePermissionForAudioToggle() -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .denied, .restricted:
+            onMediaPermissionBlocked?(.microphone)
+            return false
+        case .authorized, .notDetermined:
+            return true
+        @unknown default:
+            return true
+        }
     }
 
     /// Toggle local video on or off.
@@ -1995,6 +2018,7 @@ public final class SerenadaSession: ObservableObject {
             requestCameraPermissionForVideoEnable(broadcastMediaStateOnGrant: broadcastMediaStateOnGrant)
             return false
         case .denied, .restricted:
+            onMediaPermissionBlocked?(.camera)
             return false
         @unknown default:
             return false
