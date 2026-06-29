@@ -1068,6 +1068,59 @@ describe('MediaEngine', () => {
         expect(peer?.senders.some(sender => sender.track === displayTrack)).toBe(false);
     });
 
+    it('does not mark/broadcast a legacy screen share active when a hold latches during the attach await', async () => {
+        // Residual race regression: the picker resolves (post-picker guard passes),
+        // but a hold latches WHILE swapLocalVideoTrack is attaching to peers. The
+        // start path must not mark isScreenSharing or broadcast content_state
+        // active:true from the now-held call (Core Invariant 2).
+        const displayTrack = createMediaTrack('video');
+        const displayStop = vi.spyOn(displayTrack, 'stop');
+        const getDisplayMedia = vi.fn().mockResolvedValue(new FakeMediaStream([displayTrack]) as unknown as MediaStream);
+        const getUserMedia = vi.fn().mockResolvedValue(createMediaStream({ audio: true, video: true }));
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                mediaDevices: {
+                    getUserMedia,
+                    getDisplayMedia,
+                    enumerateDevices: vi.fn().mockResolvedValue([]),
+                    addEventListener() {},
+                    removeEventListener() {},
+                },
+            },
+            configurable: true,
+        });
+        const sentMessages: Array<{ type: string; payload?: Record<string, unknown> }> = [];
+        const engine = new MediaEngine({}, (type, payload) => { sentMessages.push({ type, payload }); });
+        engine.updateSignalingConnected(true);
+        engine.updateRoomState({
+            hostCid: 'alpha',
+            participants: [{ cid: 'alpha' }, { cid: 'zeta' }],
+        }, 'alpha');
+        await engine.startLocalMedia();
+
+        // Interpose a full hold DURING the display-track attach await — after the
+        // post-picker guard passes, before the share is marked active.
+        const internals = engine as unknown as {
+            swapLocalVideoTrack: (next: MediaStreamTrack | null, prev: MediaStreamTrack | null) => Promise<void>;
+        };
+        const originalSwap = internals.swapLocalVideoTrack.bind(engine);
+        let raced = false;
+        internals.swapLocalVideoTrack = async (next, prev) => {
+            await originalSwap(next, prev);
+            if (next === displayTrack && !raced) {
+                raced = true;
+                await engine.suspendLocalMediaForHold();
+            }
+        };
+
+        await engine.startScreenShare();
+
+        expect(raced).toBe(true);                  // the attach-await race was exercised
+        expect(engine.isScreenSharing).toBe(false);
+        expect(displayStop).toHaveBeenCalled();    // display surface released
+        expect(sentMessages.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+    });
+
     it('drops a reacquired camera track when a hold latches during getUserMedia', async () => {
         // Race regression: a hold racing a resume re-latches held while the
         // reacquire's getUserMedia is pending. The freshly captured camera track

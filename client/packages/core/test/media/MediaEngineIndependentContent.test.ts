@@ -533,6 +533,48 @@ describe('MediaEngine independent content', () => {
         expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
     });
 
+    it('does not re-broadcast active:true when a hold latches during the content attach await', async () => {
+        // Residual race regression (independent path): the picker resolves (post-picker
+        // guard passes) and isScreenSharing is set, but a hold latches WHILE the content
+        // track is attaching to peers. The racing suspendLocalMediaForHold stops the
+        // share (broadcasting active:false); the start path must NOT then re-broadcast
+        // active:true (a higher revision) from the held call (Core Invariant 2).
+        const displayTrack = makeTrack('video', 'display');
+        const getDisplayMedia = vi.fn().mockResolvedValue(new FakeStream([displayTrack]) as unknown as MediaStream);
+        const sent: Sent[] = [];
+        setupNavigator({ getDisplayMedia });
+        const engine = new MediaEngine(
+            { enableIndependentContentVideo: true },
+            (type, payload, to) => sent.push({ type, payload, to }),
+        );
+        const h: Harness = { engine, sent, getDisplayMedia, pcOptions };
+        await joinAsOwnerCapable(h);
+
+        // Interpose a full hold DURING the content-track attach await — isScreenSharing
+        // is already set, so the racing hold stops the share; the start path must not
+        // then send active:true.
+        const internals = engine as unknown as {
+            replaceRoleTrack: (peer: unknown, role: string, track: MediaStreamTrack | null) => Promise<boolean>;
+        };
+        const originalReplaceRole = internals.replaceRoleTrack.bind(engine);
+        let raced = false;
+        internals.replaceRoleTrack = async (peer, role, track) => {
+            const ok = await originalReplaceRole(peer, role, track);
+            if (role === 'content' && track === displayTrack && !raced) {
+                raced = true;
+                await engine.suspendLocalMediaForHold();
+            }
+            return ok;
+        };
+
+        sent.length = 0;
+        await engine.startScreenShare();
+
+        expect(raced).toBe(true);                  // the attach-await race was exercised
+        expect(engine.isScreenSharing).toBe(false);
+        expect(sent.some(m => m.type === 'content_state' && m.payload?.active === true)).toBe(false);
+    });
+
     it('replaceTrack rejection falls back to renegotiation instead of failing the share', async () => {
         const h = makeEngine({ enableIndependentContentVideo: true });
         const peer = await joinAsOwnerCapable(h);

@@ -868,6 +868,23 @@ export class MediaEngine {
             displayTrack.onended = () => { void this.stopScreenShare(); };
 
             await this.swapLocalVideoTrack(displayTrack, previousVideoTrack);
+            // Re-check after the attach await too: `swapLocalVideoTrack` yields (it
+            // awaits `replaceTrack` on every peer), so a hold can latch `heldNoCapture`
+            // HERE, after the post-picker guard above already passed. `isScreenSharing`
+            // is still false at this point, so the racing `suspendLocalMediaForHold`
+            // did not route through `stopScreenShare` — the start path must not mark the
+            // share active or broadcast `content_state active:true` from a held call.
+            // Stop the display surface and bail; the concurrent hold's `releaseVideoTrack`
+            // owns the sender/`localStream` teardown (it sees this track and removes it).
+            if (this.destroyed || this.heldNoCapture) {
+                if (this.screenShareTrack === displayTrack) {
+                    this.screenShareTrack.onended = null;
+                    this.screenShareTrack = null;
+                }
+                this.screenShareRestoreVideoEnabled = null;
+                try { displayTrack.stop(); } catch { /* ignore */ }
+                return;
+            }
             this.isScreenSharing = true;
             this.sendContentState({ active: true, contentType: 'screenShare' });
             this.notifyChange();
@@ -990,6 +1007,20 @@ export class MediaEngine {
                 }
             }
         }));
+
+        // Re-check after the attach await too: it yields (per-peer `replaceTrack`), so
+        // a hold can latch `heldNoCapture` HERE, after the post-picker guard passed.
+        // Independent set `isScreenSharing = true` BEFORE the await, so a racing
+        // `suspendLocalMediaForHold` already routed through `stopScreenShare` (content
+        // track torn down, `active:false` broadcast). The start path must NOT then
+        // re-broadcast `active:true` (a higher revision) from a held call: release the
+        // surface (idempotent with the stop) and bail without sending.
+        if (this.destroyed || this.heldNoCapture) {
+            this.releaseLocalContentTrack();
+            this.isScreenSharing = false;
+            this.notifyChange();
+            return;
+        }
 
         // Roll back only if the share can never flow anywhere. Because the
         // active:true signal is delayed until after this check, peers do not see
