@@ -160,7 +160,11 @@ public final class SerenadaSession: ObservableObject {
         #endif
     }
 
-    /// Callback invoked when camera/microphone permissions are needed before joining.
+    /// Callback invoked when camera/microphone permissions are needed — either before joining, or
+    /// when a user-initiated in-call toggle (enabling video, unmuting) requires a permission that
+    /// isn't currently usable. Hosts disambiguate join vs. in-call via `state.phase`
+    /// (`.awaitingPermissions` signals join) and should request access or steer the user to
+    /// Settings as appropriate.
     public var onPermissionsRequired: (([MediaCapability]) -> Void)?
 
     // Core dependencies
@@ -502,7 +506,25 @@ public final class SerenadaSession: ObservableObject {
 
     /// Toggle local audio on or off.
     public func toggleAudio() {
+        guard ensureMicrophonePermissionForAudioToggle() else { return }
         setMicMuted(!userMuted)
+    }
+
+    /// Returns `true` when the microphone permission allows toggling audio. When the permission is
+    /// denied or restricted, routes through `onPermissionsRequired([.microphone])` so the host can
+    /// request access or steer the user to Settings, and returns `false` — the toggle is a no-op
+    /// because audio can't be captured without permission. `.notDetermined` is allowed through
+    /// (the audio session prompts).
+    private func ensureMicrophonePermissionForAudioToggle() -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .denied, .restricted:
+            onPermissionsRequired?([.microphone])
+            return false
+        case .authorized, .notDetermined:
+            return true
+        @unknown default:
+            return true
+        }
     }
 
     /// Toggle local video on or off.
@@ -1549,6 +1571,7 @@ public final class SerenadaSession: ObservableObject {
             requestCameraPermissionForVideoEnable(broadcastMediaStateOnGrant: broadcastMediaStateOnGrant)
             return false
         case .denied, .restricted:
+            onPermissionsRequired?([.camera])
             return false
         @unknown default:
             return false
