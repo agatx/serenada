@@ -31,7 +31,7 @@ fun sha256Of(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-val sdkVersion = "0.8.7"
+val sdkVersion = "0.8.8"
 val webRtcArtifactId = "libwebrtc-7827-universal"
 val localWebRtcAarPath = "../serenada-core/libs/$webRtcArtifactId.aar"
 val localWebRtcAarFile = file(localWebRtcAarPath)

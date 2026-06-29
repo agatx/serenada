@@ -4,6 +4,16 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.8] — 2026-06-29
+
+### Fixed
+- iOS: denied in-call camera/microphone toggles now surface through
+  `onPermissionsRequired` (with `.camera` or `.microphone`) instead of failing
+  silently, so host apps can prompt or steer the user to Settings.
+  `SerenadaCallFlow` disambiguates a join-time permission request from an in-call
+  one via `state.phase` (re-applies the toggle on grant; leaves the call running
+  on denial). (IOS-4409)
+
 ## [0.8.7] — 2026-06-21
 
 ### Added
