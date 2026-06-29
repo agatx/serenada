@@ -225,9 +225,9 @@ private struct URLFirstCallFlow: View {
             core = newCore
             let newSession = newCore.join(url: url)
             newSession.onPermissionsRequired = { permissions in
-                // Mirror the Android SDK: this callback covers both the join gate and in-call
-                // toggles. Disambiguate by phase so an in-call permission request never tears the
-                // live call down via cancelJoin().
+                // This callback covers both the join gate and in-call toggles. Disambiguate by
+                // phase so an in-call permission request never tears the live call down via
+                // cancelJoin().
                 let isJoin = newSession.state.phase == .awaitingPermissions
                 Task {
                     let granted = await SerenadaPermissions.request(permissions)

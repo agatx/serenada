@@ -177,9 +177,9 @@ public final class SerenadaSession: ObservableObject {
 
     /// Callback invoked when camera/microphone permissions are needed — either before joining, or
     /// when a user-initiated in-call toggle (enabling video, unmuting) requires a permission that
-    /// isn't currently usable. Mirrors the Android SDK, which routes both cases through this same
-    /// callback. Hosts disambiguate join vs. in-call via `state.phase` (`.awaitingPermissions`
-    /// signals join) and should request access or steer the user to Settings as appropriate.
+    /// isn't currently usable. Hosts disambiguate join vs. in-call via `state.phase`
+    /// (`.awaitingPermissions` signals join) and should request access or steer the user to
+    /// Settings as appropriate.
     public var onPermissionsRequired: (([MediaCapability]) -> Void)?
 
     // Core dependencies
