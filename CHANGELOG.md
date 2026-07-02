@@ -13,9 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and OS audio routing while the rest stay held and connected. The registry
   serializes all operations, owns the process-wide foreground lease, and exposes
   per-call state (`joinHeld`, `joinAndSwitch`, `switch` (`switchTo` / `switchToCall`), `hold`, `leave`, `end`).
-  Single-call `SerenadaCore.join()` integrations are unchanged; mixing direct
-  and registry use in one process is rejected. See
-  [docs/multi-call-session.md](docs/multi-call-session.md).
+  Single-call `SerenadaCore.join()` integrations are unchanged for sequential
+  call flows (see *Changed* for the one behavioral exception: overlapping
+  direct joins); mixing direct and registry use in one process is rejected.
+  See [docs/multi-call-session.md](docs/multi-call-session.md).
 - Web, Android, iOS: session hold/resume primitives. Holding a call releases
   local mic/camera/screen-share capture and mutes remote playout while keeping
   signaling and reconnect identity; resuming restores the user's desired audio/
@@ -29,6 +30,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   store, and re-emit it on the peer relay and in the `joined`/`room_state`
   snapshot. See [docs/serenada_protocol_v1.md](docs/serenada_protocol_v1.md)
   section 4.12.
+
+### Changed
+- Direct (single-call) `SerenadaCore.join()` now acquires a process-wide
+  foreground media lease before activating media. Sequential flows (leave/end,
+  then join) are unchanged, but a second direct `join()` while another direct
+  session is still live now fails into an error `CallState` (code `unknown`,
+  "Foreground media unavailable") instead of starting a second capture owner.
+  Hosts that switch rooms by joining the new room first must leave/cancel the
+  old session before the new `join()` — see "Mode exclusivity" in
+  [docs/multi-call-session.md](docs/multi-call-session.md).
 
 ### Notes
 - Recovery is foreground-only in v1: held calls keep in-memory reconnect

@@ -26,6 +26,8 @@ A process integrates **either** through direct single-call `SerenadaCore.join()`
 
 A failed direct `join()` does NOT throw: it returns a session whose `CallState` is `error` (code `unknown`, message describing the lease conflict), so hosts read the failure off `state` like any other call error — consistent across web/iOS/Android.
 
+The same rule applies **between two direct joins** (migration note for existing single-call hosts): because every public `join()` now acquires the process-wide lease, a second direct `join()` while another direct session is still live fails into the same error state. Sequential flows (leave/end, then join) are unchanged, but a host that switches rooms by joining the new room first must leave/cancel the old session before the new `join()`.
+
 Pick one integration style per app and stick with it.
 
 ## Public API
@@ -93,7 +95,7 @@ suspend fun holdCall(callId: CallId)
 suspend fun leaveCall(callId: CallId)        // releases foreground first if active
 suspend fun endCall(callId: CallId)
 suspend fun dismissCall(callId: CallId)      // drop an ended call from the list
-fun close()                                  // dispose: leave all calls, free the process
+suspend fun close()                          // dispose: leave all calls (releasing the lease), free the process
 
 // Observable state (StateFlow), main-thread only:
 val state: StateFlow<CallRegistryState>

@@ -470,6 +470,9 @@ simplify → codex review → reconcile cross-platform → build + unit tests gr
 - **Phase 5 — bundled app integration:** migrate iOS/Android app managers to registry-backed
   state; keep existing call screen as active-call renderer; minimal switcher; foreground
   service invariants (Android); push snapshot paths.
+  *Productized (2026-06-27) as sample-app integrations instead: the bundled apps stay
+  single-call and the registry-backed switcher UX lives in the purpose-built multi-call
+  samples — see the design doc's Phase 5 productization note.*
 - **Phase 6 — docs + samples:** API reference, integration docs, the foreground-only recovery
   limitation, simple multi-call samples per platform.
 
