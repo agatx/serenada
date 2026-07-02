@@ -379,6 +379,16 @@ class SerenadaSession internal constructor(
             if (roomState != null) {
                 currentRoomState = roomState
                 hostCid = roomState.hostCid
+                // Drop the live-relay media-state cache: this `joined` snapshot
+                // carries the server's LATEST per-participant audio/video/held
+                // (stored by the same handler that relays them), so it is at least
+                // as fresh as any relay seen before a disconnect. Without this, a
+                // stale cached `held:true` from before a reconnect outranks the
+                // snapshot in the `peerState?.held ?: participant?.held` merge and
+                // a peer that resumed while this client was detached stays rendered
+                // "on hold" until its next broadcast. Fresh joins have an empty
+                // cache (reattach-only in effect).
+                remoteMediaStates.clear()
                 updateParticipants(roomState)
             }
             persistRecoveryRecord()
@@ -1799,6 +1809,13 @@ class SerenadaSession internal constructor(
             return
         }
         runCatching { callAudioSessionController.activate() }
+        // Re-acquire the CPU partial wake lock that suspendForegroundMediaResources
+        // released (step 6). The only other acquire site is startJoinInternal's
+        // foreground join path, which registry-managed (held-initial) sessions never
+        // run — without this, a call foregrounded via the registry (or any call
+        // after its first hold/resume cycle) runs unlocked and screen-off audio can
+        // die when the CPU dozes. acquirePerformanceLocks is idempotent (isHeld).
+        runCatching { acquirePerformanceLocks() }
         // 2. Resume local capture per desired intent (no renegotiation).
         runCatching { webRtcEngine.resumeLocalMediaFromHold(desiredAudioEnabled, desiredVideoMode) }
         // 3. Re-enable remote playout.

@@ -148,6 +148,25 @@ final class HoldResumeTests: XCTestCase {
         harness.tearDown()
     }
 
+    func testHoldStopsForegroundPollersAndResumeRestartsThem() async {
+        let harness = await makeInCallHarness()
+        let inCallTimers = harness.fakeClock.repeatingTimerCount
+        // A foreground in-call session runs the stats + audio-level pollers.
+        XCTAssertGreaterThanOrEqual(inCallTimers, 2,
+                                    "Expected at least the stats + audio-level poller timers while foreground")
+
+        harness.session.applyHeldRoleInternal()
+        await waitUntil { harness.session.mediaRole == .held }
+        XCTAssertEqual(harness.fakeClock.repeatingTimerCount, inCallTimers - 2,
+                       "Hold must stop the stats + audio-level pollers — a held call renders nothing, so their 10Hz/2Hz getStats ticks are pure battery cost (Android parity)")
+
+        harness.session.applyForegroundRoleInternal()
+        await waitUntil { harness.session.mediaRole == .foreground }
+        XCTAssertEqual(harness.fakeClock.repeatingTimerCount, inCallTimers,
+                       "Resume must restart the foreground-only pollers")
+        harness.tearDown()
+    }
+
     func testResumeBroadcastsHeldFalseAfterMediaFlows() async {
         let harness = await makeInCallHarness()
         harness.session.applyHeldRoleInternal()

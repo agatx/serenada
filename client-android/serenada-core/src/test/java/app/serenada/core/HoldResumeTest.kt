@@ -87,6 +87,28 @@ class HoldResumeTest {
     }
 
     @Test
+    fun `resume re-acquires the CPU wake lock that hold released`() {
+        startInCall()
+        // The foreground join acquired the partial wake lock (startJoinInternal).
+        val lock = org.robolectric.shadows.ShadowPowerManager.getLatestWakeLock()
+        assertNotNull(lock)
+        assertTrue(lock.isHeld)
+
+        hold()
+        // Hold released it (suspendForegroundMediaResources step 6).
+        assertFalse(lock.isHeld)
+
+        resume()
+        // Resume must re-acquire it: the only other acquire site is the foreground
+        // join path, which a resumed (or registry-activated) call never re-runs —
+        // without this, screen-off audio dies when the CPU dozes.
+        assertTrue(
+            "resume must re-acquire the CPU wake lock hold released",
+            org.robolectric.shadows.ShadowPowerManager.getLatestWakeLock().isHeld,
+        )
+    }
+
+    @Test
     fun `hold suspends local media`() {
         startInCall()
         val suspendsBefore = factory.fakeMedia.suspendLocalMediaForHoldCalls

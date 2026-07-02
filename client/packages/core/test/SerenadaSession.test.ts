@@ -558,6 +558,45 @@ describe('SerenadaSession', () => {
             expect(peer?.held).toBe(true);
         });
 
+        it('a fresh joined snapshot overrides a stale cached held relay (reconnect)', async () => {
+            harness = new TestSessionHarness();
+            harness.signaling.emitConnected('ws');
+            harness.signaling.emitJoined({
+                peerId: 'me',
+                participants: [
+                    { peerId: 'me', joinedAt: 1 },
+                    { peerId: 'peer-1', joinedAt: 2 },
+                ],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            await harness.session.resumeJoin();
+
+            // Live relay: the peer holds. The relay cache now says held:true.
+            harness.signaling.emitMessage({
+                from: 'peer-1',
+                type: 'participant_media_state',
+                payload: { audioEnabled: false, videoEnabled: false, held: true },
+            });
+            expect(harness.state.remoteParticipants.find((p) => p.cid === 'peer-1')?.held).toBe(true);
+
+            // Reconnect: the peer RESUMED while this client was detached (the
+            // held:false relay was missed — the server relays only to attached
+            // transports). The fresh `joined` snapshot carries the server's latest
+            // held:false and must beat the stale cached relay; before the cache
+            // reseed, `peerState?.held ?? participant.held` kept the peer rendered
+            // "on hold" indefinitely.
+            harness.signaling.emitJoined({
+                peerId: 'me',
+                participants: [
+                    { peerId: 'me', joinedAt: 1 },
+                    { peerId: 'peer-1', joinedAt: 2, held: false },
+                ],
+            });
+            await vi.advanceTimersByTimeAsync(0);
+            const peer = harness.state.remoteParticipants.find((p) => p.cid === 'peer-1');
+            expect(peer?.held).toBe(false);
+        });
+
         it('transitions from inCall to waiting when remote participant leaves', async () => {
             harness = new TestSessionHarness();
             harness.simulateJoined({

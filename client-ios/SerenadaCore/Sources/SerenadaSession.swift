@@ -1390,8 +1390,10 @@ public final class SerenadaSession: ObservableObject {
         webRtcEngine.setRemotePlaybackEnabled(false)
 
         joinFlowCoordinator?.scheduleJoinTimeout(roomId: roomId, joinAttempt: joinAttemptSerial)
-        statsPoller?.start()
-        audioLevelPoller?.start()
+        // Foreground-only pollers are NOT started for a held join (Android
+        // parity): a held call renders no UI and publishes no media, so the 10Hz
+        // audio-level getStats + 2Hz stats ticks would be pure battery/CPU cost
+        // per held call. completeForegroundActivation starts them on activation.
         peerNegotiationEngine?.onLocalMediaReady()
         joinFlowCoordinator?.scheduleJoinConnectKickstart(roomId: roomId, joinAttempt: joinAttemptSerial)
         ensureSignalingConnection()
@@ -1619,6 +1621,15 @@ public final class SerenadaSession: ObservableObject {
 
         if let roomState {
             hostCid = roomState.hostCid
+            // Drop the live-relay media-state cache: this `joined` snapshot carries
+            // the server's LATEST per-participant audio/video/held (stored by the
+            // same handler that relays them), so it is at least as fresh as any
+            // relay seen before a disconnect. Without this, a stale cached
+            // `held:true` from before a reconnect outranks the snapshot in the
+            // `peerState?.held ?? p.held` merge and a peer that resumed while this
+            // client was detached stays rendered "on hold" until its next
+            // broadcast. Fresh joins have an empty cache (reattach-only in effect).
+            remoteMediaStates.removeAll()
             updateParticipants(roomState)
         } else {
             recoverFromJoiningIfNeeded(participantHint: participantCountHint)
@@ -1715,6 +1726,14 @@ public final class SerenadaSession: ObservableObject {
         //    also deafens remote playout). detachRenderers pauses held preview.
         webRtcEngine.suspendLocalMediaForHold()
         webRtcEngine.detachRenderersForHold()
+
+        // 2.5 Pause the foreground-only pollers (Android parity: its suspend stops
+        //     remote-video-state polling on hold). A held call keeps signaling and
+        //     peer connections but renders nothing — leaving the 10Hz audio-level
+        //     getStats + 2Hz stats ticks running per held call is sustained
+        //     battery/CPU cost for invisible calls. Restarted on activation.
+        statsPoller?.stop()
+        audioLevelPoller?.stop()
 
         // 3. Tear down foreground audio ownership. Order: controller then
         //    coordinator (reverse of the foreground activate order), matching
@@ -1856,6 +1875,12 @@ public final class SerenadaSession: ObservableObject {
         userMuted = !desiredAudioEnabled
         userPreferredVideoEnabled = desiredVideoMode != nil
         replayAllRendererRegistrations()
+
+        // 3.5 Restart the foreground-only pollers that hold stopped (a
+        //     held-initial join never started them at all). start() resets any
+        //     stale timer, so this is safe on every activation.
+        statsPoller?.start()
+        audioLevelPoller?.start()
 
         // 4. Flip role to foreground BEFORE recomputing effective state so the
         //    actual* / broadcast paths treat this as a foreground call.

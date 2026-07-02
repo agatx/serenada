@@ -963,6 +963,16 @@ export class SerenadaSession implements SerenadaSessionHandle {
         this.clearJoinTimeout();
         this.error = null;
         this.clientId = event.peerId;
+        // Drop the live-relay media-state cache: this `joined` snapshot carries the
+        // server's LATEST per-participant audioEnabled/videoEnabled/held (stored by
+        // the same handler that relays them), so it is at least as fresh as any
+        // relay seen before a disconnect. Without this, a stale cached `held:true`
+        // (or mute state) from before a reconnect outranks the snapshot in the
+        // `peerState?.held ?? participant.held` merge and a peer that resumed while
+        // this client was detached stays rendered "on hold" until its next
+        // broadcast. Fresh joins have an empty cache, so this is reattach-only in
+        // effect.
+        this.remoteMediaStates.clear();
         this.roomState = buildRoomState(event, null, event.peerId);
         this.seedLocalContentRevisionFromSnapshot();
         this.media.updateRoomState(this.roomState, this.clientId);
