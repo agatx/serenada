@@ -232,13 +232,14 @@ export class SerenadaCallRegistry {
      */
     async joinHeld(room: RoomInput): Promise<JoinResult> {
         const created = await this.enqueue(() => this.createOrReuseCall(room));
-        if (created.kind === 'reused') {
-            return { kind: 'joined', callId: created.call.id };
-        }
         if (created.kind === 'rejected') {
             return { kind: 'failed', error: created.error };
         }
         const call = created.call;
+        // Await settlement for CREATED and REUSED alike: dedup can return a call
+        // whose held join is still in flight (a second join racing the first), and
+        // `'joined'` must mean membership actually exists. awaitHeldJoin
+        // short-circuits once settled, so the common reused case stays immediate.
         const joinError = await this.awaitHeldJoin(call);
         if (joinError) {
             return { kind: 'failed', callId: call.id, error: joinError };
@@ -258,12 +259,16 @@ export class SerenadaCallRegistry {
             return { kind: 'failed', error: created.error };
         }
         const call = created.call;
-        // For a reused live call, skip the join wait and go straight to the switch.
-        if (created.kind === 'created') {
-            const joinError = await this.awaitHeldJoin(call);
-            if (joinError) {
-                return { kind: 'failed', callId: call.id, error: joinError };
-            }
+        // Await settlement for CREATED and REUSED alike: a reused call can still be
+        // mid-join (a second joinAndSwitch double-tapping the first), and switching
+        // to a session with no room membership activates capture for a room that
+        // may never join — if that join then times out, the failure handler would
+        // strand the acquired lease and wedge the process (Core Invariant 1).
+        // awaitHeldJoin short-circuits once settled, so a genuinely-live reused
+        // call still goes straight to the switch.
+        const joinError = await this.awaitHeldJoin(call);
+        if (joinError) {
+            return { kind: 'failed', callId: call.id, error: joinError };
         }
         // Section C: run the switch body inside the queue. It re-reads activeCallId.
         const switchResult = await this.enqueue(() => this.runSwitch(call.id));
@@ -288,6 +293,19 @@ export class SerenadaCallRegistry {
      * enqueue for a call that is no longer active by the time it would run).
      */
     async switchTo(callId: CallId): Promise<SwitchResult> {
+        // Gate on held-join settlement BEFORE entering the queue (outside it, like
+        // part B of the composite joins): switching to a still-joining call would
+        // activate capture on a session with no room membership. This is a wait,
+        // not a decision — runSwitch still re-reads `activeCallId` inside the
+        // queued section (FIX D). Unknown and ended targets skip the gate and fail
+        // inside runSwitch as before.
+        const call = this.calls.get(callId);
+        if (call && !this.isEnded(call)) {
+            const joinError = await this.awaitHeldJoin(call);
+            if (joinError) {
+                return { kind: 'failed', error: joinError };
+            }
+        }
         return this.enqueue(() => this.runSwitch(callId));
     }
 
@@ -460,6 +478,11 @@ export class SerenadaCallRegistry {
      * `SerenadaCore.join()` fails with ForegroundLeaseUnavailable.
      */
     private recordJoinFailure(call: ManagedCall, error: CallActivationError): CallActivationError {
+        // Two callers can await the same failed join (a reused still-joining call);
+        // only the first runs teardown — later callers get the recorded outcome.
+        if (call.joinFailed || call.terminated) {
+            return call.activationError ?? error;
+        }
         this.applyCallError(call, error);
         call.joinFailed = true;
         // Tear down the dead session. A held join that timed out can otherwise
@@ -476,9 +499,34 @@ export class SerenadaCallRegistry {
         } catch (err) {
             this.log('warning', `failed held-join teardown failed: ${formatError(err)}`);
         }
+        // DEFENSE IN DEPTH: with settlement gating on every switch entry point a
+        // failed join can never hold the foreground lease, but if a future path
+        // regresses that invariant, release it instead of stranding it —
+        // `terminated` above makes handleCallTerminated (the usual releaser for
+        // self-ended calls) a no-op for this call. Queued, because token writes
+        // must not interleave a switch in flight.
+        if (call.foregroundToken) {
+            void this.enqueue(() => this.releaseLeaseForFailedJoin(call));
+        }
         this.releaseModeIfIdle();
         this.publish();
         return error;
+    }
+
+    /** Release a lease stranded on a call whose held join failed (see recordJoinFailure). */
+    private releaseLeaseForFailedJoin(call: ManagedCall): void {
+        const token = call.foregroundToken;
+        if (!token) return;
+        call.foregroundToken = null;
+        try {
+            this.arbiter.releaseLease(token);
+        } catch (err) {
+            this.log('warning', `releaseLease for failed held join failed: ${formatError(err)}`);
+        }
+        if (this.activeCallId === call.id) {
+            this.activeCallId = null;
+        }
+        this.publish();
     }
 
     // --- Section C: the switch body (contract §7 pseudocode, EXACT) ---

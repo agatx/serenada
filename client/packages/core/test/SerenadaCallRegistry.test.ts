@@ -268,6 +268,94 @@ describe('SerenadaCallRegistry', () => {
         }
     });
 
+    it('joinAndSwitch reusing a still-joining call waits for settlement before switching', async () => {
+        const { registry, rigs } = makeRegistry();
+        const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+        settleNextOnJoin(rigs);
+        await pa;
+        const first = rigs[0];
+        expect(first.session.currentMediaRole).toBe('foreground');
+
+        // First join of room-B: held join stays PENDING (never settled here).
+        const pHeld = registry.joinHeld({ roomId: 'room-B' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(rigs).toHaveLength(2);
+        // Double-tap: a second op dedups onto the still-joining call. It must NOT
+        // hold room-A or activate room-B before the join settles.
+        const pSwitch = registry.joinAndSwitch({ roomId: 'room-B' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(first.session.currentMediaRole).toBe('foreground');
+        expect(first.media.suspendLocalMediaForHoldCalls).toBe(0);
+        expect(rigs).toHaveLength(2);   // deduped, no extra session
+
+        // Settle the join: the held join reports joined and the switch proceeds.
+        rigs[1].settleJoined();
+        const held = await pHeld;
+        const switched = await pSwitch;
+        expect(held.kind).toBe('joined');
+        expect(switched.kind).toBe('active');
+        expect(first.session.currentMediaRole).toBe('held');
+        expect(rigs[1].session.currentMediaRole).toBe('foreground');
+    });
+
+    it('switchTo a still-joining call waits for join settlement instead of activating early', async () => {
+        const { registry, rigs } = makeRegistry();
+        const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+        settleNextOnJoin(rigs);
+        await pa;
+        const first = rigs[0];
+
+        const pHeld = registry.joinHeld({ roomId: 'room-B' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const callB = registry.state.calls.find((c) => c.roomId === 'room-B');
+        expect(callB).toBeDefined();
+
+        const pSwitch = registry.switchTo(callB!.id);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        // room-B is still joining: room-A must remain untouched foreground.
+        expect(first.session.currentMediaRole).toBe('foreground');
+        expect(first.media.suspendLocalMediaForHoldCalls).toBe(0);
+
+        rigs[1].settleJoined();
+        expect((await pSwitch).kind).toBe('active');
+        await pHeld;
+        expect(rigs[1].session.currentMediaRole).toBe('foreground');
+        expect(first.session.currentMediaRole).toBe('held');
+    });
+
+    it('a double joinAndSwitch to a room that never joins fails both without touching the active call or the lease', async () => {
+        vi.useFakeTimers();
+        try {
+            const { registry, rigs } = makeRegistry();
+            const pa = registry.joinAndSwitch({ roomId: 'room-A' });
+            settleNextOnJoin(rigs);
+            await vi.advanceTimersByTimeAsync(0);
+            expect((await pa).kind).toBe('active');
+            const first = rigs[0];
+            const activeBefore = registry.state.activeCallId;
+
+            // Two racing joinAndSwitch ops on the same unreachable room. Before the
+            // settlement gate, the second (reused) op switched immediately: it held
+            // room-A and foregrounded a session whose join then timed out — and the
+            // join-failure handler stranded the acquired lease forever.
+            const p1 = registry.joinAndSwitch({ roomId: 'room-B' });
+            await vi.advanceTimersByTimeAsync(0);
+            const p2 = registry.joinAndSwitch({ roomId: 'room-B' });
+            await vi.advanceTimersByTimeAsync(HELD_JOIN_TIMEOUT_MS + 1);
+            const [r1, r2] = await Promise.all([p1, p2]);
+            expect(r1.kind).toBe('failed');
+            expect(r2.kind).toBe('failed');
+
+            // The active call was never disturbed and still owns the lease/slot.
+            expect(first.session.currentMediaRole).toBe('foreground');
+            expect(first.media.suspendLocalMediaForHoldCalls).toBe(0);
+            expect(registry.state.activeCallId).toBe(activeBefore);
+            expect(rigs).toHaveLength(2);   // the retry deduped onto one dead call
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('switch where target needs permission returns needsPermission and leaves old foreground', async () => {
         const { registry, rigs } = makeRegistry();
         const pa = registry.joinAndSwitch({ roomId: 'room-A' });

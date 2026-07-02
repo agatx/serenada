@@ -489,6 +489,16 @@ public final class SerenadaCallRegistry: ObservableObject {
         let prepared = await runQueued { self.createAndRegister(room) }
         switch prepared {
         case let .existing(id):
+            // Await settlement for the REUSED call too: dedup can return a call
+            // whose held join is still in flight (a second join racing the
+            // first), and `.joined` must mean membership actually exists.
+            // awaitHeldJoin short-circuits once settled.
+            guard let existing = call(id: id) else { return .failed(id, .joinFailed("Call vanished")) }
+            if let error = await awaitHeldJoin(existing) {
+                await runQueued { self.markFailedHeldJoin(id: id, error) }
+                await publish()
+                return .failed(id, error)
+            }
             return .joined(id)
         case let .failure(error):
             return .failed(nil, error)
@@ -511,7 +521,19 @@ public final class SerenadaCallRegistry: ObservableObject {
         let newId: CallId
         switch prepared {
         case let .existing(id):
-            // Already live: just switch to it (idempotent join by room).
+            // Already registered for this room — but its held join may still be
+            // in flight (a second joinAndSwitch double-tapping the first). Await
+            // settlement before switching: activating a session with no room
+            // membership captures media for a room that may never join, and a
+            // later join timeout would strand the acquired lease (Core
+            // Invariant 1). awaitHeldJoin short-circuits once settled, so a
+            // genuinely-live reused call switches immediately.
+            guard let existing = call(id: id) else { return .failed(id, .joinFailed("Call vanished")) }
+            if let error = await awaitHeldJoin(existing) {
+                await runQueued { self.markFailedHeldJoin(id: id, error) }
+                await publish()
+                return .failed(id, error)
+            }
             switch await switchToCall(id: id) {
             case .active: return .active(id)
             case .needsPermission: return .needsPermission(id)
@@ -543,8 +565,19 @@ public final class SerenadaCallRegistry: ObservableObject {
 
     /// Switch foreground to `id`. Fully serialized; preflight runs INSIDE the
     /// queued op before the old call is touched (contract §7 pseudocode).
+    /// Gated on held-join settlement first (OUTSIDE the queue, like composite
+    /// part B): switching to a still-joining call would activate capture on a
+    /// session with no room membership. Unknown/ended targets skip the gate and
+    /// fail inside `switchBody` as before.
     public func switchToCall(id: CallId) async -> SwitchResult {
-        await runQueued { await self.switchBody(nextId: id) }
+        if let call = call(id: id), !call.ended {
+            if let error = await awaitHeldJoin(call) {
+                await runQueued { self.markFailedHeldJoin(id: id, error) }
+                await publish()
+                return .failed(error)
+            }
+        }
+        return await runQueued { await self.switchBody(nextId: id) }
     }
 
     /// Hold a call: drain its foreground resources, release the lease, set
@@ -719,12 +752,20 @@ public final class SerenadaCallRegistry: ObservableObject {
     /// would otherwise keep the registry's `registry`-mode claim forever, so a
     /// later direct `SerenadaCore.join()` could never proceed (Core Invariant 6).
     /// Marking it ended frees the mode and lets the host dismiss the dead chip.
-    /// Idempotent. The call held NO foreground lease (a held join never acquires
-    /// one), so there is no lease to release here.
+    /// Idempotent. With settlement gating on every switch entry point a failed
+    /// held join can never hold the foreground lease — but release one
+    /// defensively if a future path regresses that invariant: `ended` below
+    /// makes the terminal observer skip this call, which would otherwise strand
+    /// the process-wide lease forever.
     private func markFailedHeldJoin(id: CallId, _ error: CallActivationError) {
         guard let call = managed.first(where: { $0.id == id }), !call.ended else { return }
         call.activationError = error
         lastError = .callFailed(id, error)
+        if let token = call.foregroundToken {
+            call.foregroundToken = nil
+            try? arbiter.releaseLease(token)
+            if activeCallId == id { activeCallId = nil }
+        }
         // Tear down the dead session (stop signaling/timers); it never connected.
         call.managedSession.registryLeave()
         call.ended = true

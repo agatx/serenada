@@ -198,6 +198,18 @@ internal class RegistryTestHarness(
      */
     fun <T> runOnMain(block: suspend () -> T): T = drain(opScope.async { block() })
 
+    /**
+     * Launch [block] WITHOUT draining, for tests that interleave concurrent
+     * registry ops (e.g. a switch racing a still-pending held join). Idle the
+     * looper manually between steps; finish with [await]. Unlike [drain], plain
+     * [ShadowLooper.idleMainLooper] does not advance virtual time, so a pending
+     * held join does NOT hit its timeout while the test interleaves.
+     */
+    fun <T> launchOp(block: suspend () -> T): Deferred<T> = opScope.async { block() }
+
+    /** Drain [deferred] to completion (advancing virtual time past timeouts if needed). */
+    fun <T> await(deferred: Deferred<T>): T = drain(deferred)
+
     private fun newlyCreated(before: Set<String>): FakeManagedSession? {
         val newKey = created.keys.firstOrNull { it !in before } ?: return null
         return created[newKey]
@@ -266,8 +278,12 @@ internal class RegistryTestHarness(
         return session
     }
 
+    fun close() {
+        drain(opScope.async { runCatching { registry.close() } })
+    }
+
     fun tearDown() {
-        runCatching { registry.close() }
+        runCatching { close() }
         ShadowLooper.idleMainLooper()
         ForegroundMediaArbiter.resetForTests()
     }

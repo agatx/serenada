@@ -66,6 +66,12 @@ class SerenadaCallRegistry internal constructor(
     private val modeRef = Any()
     private var modeClaimed = false
 
+    // Set by [close]. Once closed, a queued create (a joinHeld/joinAndSwitch
+    // suspended at the op mutex when close() ran) no-ops instead of re-claiming
+    // REGISTRY mode and creating a session nothing will ever leave (parity with
+    // the web/iOS `closed` guards).
+    private var closed = false
+
     private val managedCalls = LinkedHashMap<CallId, ManagedCall>()
 
     private val _state = MutableStateFlow(CallRegistryState())
@@ -153,13 +159,24 @@ class SerenadaCallRegistry internal constructor(
             registerOrDedup(room)
         }
         when (created) {
-            is RegisterOutcome.Existing -> return JoinResult.Joined(created.call.callId)
+            is RegisterOutcome.Existing -> {
+                // Await settlement for the REUSED call too: dedup can return a call
+                // whose held join is still in flight (a second join racing the
+                // first), and Joined must mean membership actually exists.
+                // awaitHeldJoin returns immediately once the phase settled.
+                val joinError = awaitHeldJoin(created.call)
+                if (joinError != null) {
+                    withOp { failHeldJoin(created.call, joinError) }
+                    return JoinResult.Failed(created.call.callId, joinError)
+                }
+                return JoinResult.Joined(created.call.callId)
+            }
             is RegisterOutcome.Failed -> return JoinResult.Failed(null, created.error)
             is RegisterOutcome.Created -> {
                 // Part B (OUTSIDE the lock): held room join, bounded + cancellable.
                 val joinError = awaitHeldJoin(created.call)
                 if (joinError != null) {
-                    withOp { markCallFailed(created.call, joinError); teardownCall(created.call) }
+                    withOp { failHeldJoin(created.call, joinError) }
                     return JoinResult.Failed(created.call.callId, joinError)
                 }
                 publish()
@@ -180,14 +197,27 @@ class SerenadaCallRegistry internal constructor(
             registerOrDedup(room)
         }
         val call = when (created) {
-            is RegisterOutcome.Existing -> created.call
+            is RegisterOutcome.Existing -> {
+                // The reused call's held join may still be in flight (a second
+                // joinAndSwitch double-tapping the first). Await settlement before
+                // switching: activating a session with no room membership captures
+                // media for a room that may never join, and a later join timeout
+                // would strand the acquired lease (Core Invariant 1). No-op once
+                // settled, so a genuinely-live reused call switches immediately.
+                val joinError = awaitHeldJoin(created.call)
+                if (joinError != null) {
+                    withOp { failHeldJoin(created.call, joinError) }
+                    return JoinAndSwitchResult.Failed(created.call.callId, joinError)
+                }
+                created.call
+            }
             is RegisterOutcome.Failed -> return JoinAndSwitchResult.Failed(null, created.error)
             is RegisterOutcome.Created -> {
                 // Part B (OUTSIDE the lock): held room join, bounded + cancellable.
                 val joinError = awaitHeldJoin(created.call)
                 if (joinError != null) {
                     // Old active call untouched; clean up the failed new call.
-                    withOp { markCallFailed(created.call, joinError); teardownCall(created.call) }
+                    withOp { failHeldJoin(created.call, joinError) }
                     return JoinAndSwitchResult.Failed(created.call.callId, joinError)
                 }
                 created.call
@@ -202,9 +232,22 @@ class SerenadaCallRegistry internal constructor(
         }
     }
 
-    /** Move the foreground lease to [callId] (contract §7 switch algorithm). */
+    /**
+     * Move the foreground lease to [callId] (contract §7 switch algorithm).
+     * Gated on held-join settlement first (OUTSIDE the lock, like composite part
+     * B): switching to a still-joining call would activate capture on a session
+     * with no room membership. Unknown/ended targets skip the gate and fail
+     * inside [switchBody] as before.
+     */
     suspend fun switchToCall(callId: CallId): SwitchResult {
         assertMainThread()
+        managedCalls[callId]?.takeIf { !it.ended }?.let { call ->
+            val joinError = awaitHeldJoin(call)
+            if (joinError != null) {
+                withOp { failHeldJoin(call, joinError) }
+                return SwitchResult.Failed(joinError)
+            }
+        }
         return withOp {
             val next = managedCalls[callId]
                 ?: return@withOp SwitchResult.Failed(
@@ -288,20 +331,40 @@ class SerenadaCallRegistry internal constructor(
     }
 
     /**
-     * Permanently dispose the registry: leave/close every managed call and clear
-     * the arbiter mode claim. After this the process is free for a fresh registry
-     * or direct join.
+     * Permanently dispose the registry: leave every managed call through the same
+     * drain path as [leaveCall] (releasing the active call's foreground lease),
+     * clear the arbiter mode claim, and refuse new joins. After this the process
+     * is free for a fresh registry or direct join. Suspends for the bounded
+     * foreground drain — parity with web `close()` (which runs `leave()` per call)
+     * and iOS `close()` (which runs `teardownBody` per call); a plain
+     * `session.close()` would strand the REGISTRY-owned lease token, since
+     * sessions self-release only a DIRECT lease.
      */
-    fun close() {
+    suspend fun close() {
         assertMainThread()
+        // Set BEFORE taking the op mutex so an in-flight joinHeld/joinAndSwitch
+        // suspended at the lock re-checks it in registerOrDedup and no-ops.
+        closed = true
         managedCalls.values.toList().forEach { call ->
-            call.stateJob?.cancel()
-            runCatching { call.session.close() }
+            withOp {
+                val live = managedCalls[call.callId]?.takeIf { !it.ended } ?: return@withOp
+                // Same lease-token keying + unconditional release on the going-away
+                // path as [leaveCall] (FIX B / FIX E).
+                if (live.foregroundToken != null) {
+                    drainAndReleaseForegroundForTeardown(live)
+                }
+                runCatching { live.session.leave() }
+                teardownCall(live)
+            }
         }
-        managedCalls.clear()
-        if (modeClaimed) {
-            runCatching { ForegroundMediaArbiter.releaseMode(modeRef) }
-            modeClaimed = false
+        withOp {
+            managedCalls.clear()
+            // teardownCall released the mode once no live call remained; this is a
+            // backstop for a registry closed with only ended calls in the map.
+            if (modeClaimed) {
+                runCatching { ForegroundMediaArbiter.releaseMode(modeRef) }
+                modeClaimed = false
+            }
         }
         scope.coroutineContext[Job]?.cancel()
         publish()
@@ -321,6 +384,14 @@ class SerenadaCallRegistry internal constructor(
      * room id, then constructs the HELD session and starts its state collector.
      */
     private fun registerOrDedup(room: RoomRef): RegisterOutcome {
+        // The registry was closed while this create sat at the op mutex (host
+        // disposed it between joinHeld() and this locked section running). Do not
+        // re-claim REGISTRY mode or create a session that close() already iterated
+        // past and nothing will ever leave (parity with web createOrReuseCall and
+        // iOS createAndRegister).
+        if (closed) {
+            return RegisterOutcome.Failed(CallRegistryError.JoinFailed("Registry is closed"))
+        }
         val canonical = canonicalRoomId(room)
         managedCalls.values.firstOrNull { !it.ended && it.canonicalRoomId == canonical }?.let {
             return RegisterOutcome.Existing(it)
@@ -630,6 +701,25 @@ class SerenadaCallRegistry internal constructor(
 
     private fun markCallFailed(call: ManagedCall, error: CallRegistryError) {
         call.activationError = error
+    }
+
+    /**
+     * Locked teardown for a held join that failed or timed out. IDEMPOTENT: two
+     * callers can await the same reused failing join (settlement gating), and only
+     * the first runs teardown. DEFENSE: with settlement gating on every switch
+     * entry point a failed join can never hold the foreground lease, but release
+     * one if a future path regresses that invariant — [teardownCall] alone would
+     * strand it (the collector is cancelled and [runTerminalCleanup] skips ended
+     * calls), wedging the process arbiter forever.
+     */
+    private fun failHeldJoin(call: ManagedCall, error: CallRegistryError) {
+        if (call.ended) return
+        markCallFailed(call, error)
+        call.foregroundToken?.let { token ->
+            runCatching { ForegroundMediaArbiter.releaseLease(token) }
+            clearForeground(call)
+        }
+        teardownCall(call)
     }
 
     /**

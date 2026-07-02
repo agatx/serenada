@@ -230,12 +230,14 @@ fun MultiCallScreen(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-        // close() leaves every managed call and frees the process for a fresh
-        // registry or a direct join.
+        // close() leaves every managed call (draining + releasing the foreground
+        // lease) and frees the process for a fresh registry or a direct join.
         OutlinedButton(
             onClick = {
-                registry.close()
-                onDismiss()
+                scope.launch {
+                    registry.close()
+                    onDismiss()
+                }
             },
             modifier = Modifier.fillMaxWidth(),
         ) {

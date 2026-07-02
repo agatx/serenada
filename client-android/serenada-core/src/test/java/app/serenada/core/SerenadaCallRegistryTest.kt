@@ -582,6 +582,113 @@ class SerenadaCallRegistryTest {
         ForegroundMediaArbiter.releaseLease(token)
     }
 
+    // --- settlement gating: no switch to a still-joining call (contract §7) ---
+
+    @Test
+    fun `joinAndSwitch reusing a still-joining call waits for settlement before switching`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+        val first = h.created["a"]!!
+        assertEquals(CallMediaRole.FOREGROUND, first.session.mediaRoleForTest())
+
+        // First join of room-b: held join stays PENDING (not settled here).
+        val pHeld = h.launchOp { h.registry.joinHeld(room("b")) }
+        ShadowLooper.idleMainLooper()
+        // Double-tap: a second op dedups onto the still-joining call. It must NOT
+        // hold room-a or activate room-b before the join settles.
+        val pSwitch = h.launchOp { h.registry.joinAndSwitch(room("b")) }
+        ShadowLooper.idleMainLooper()
+        assertEquals(CallMediaRole.FOREGROUND, first.session.mediaRoleForTest())
+        assertEquals(0, first.fakeMedia.suspendLocalMediaForHoldCalls)
+        assertEquals(a, h.registry.state.value.activeCallId)
+
+        // Settle the join: the held join reports Joined and the switch proceeds.
+        h.created["b"]!!.settle()
+        val held = h.await(pHeld)
+        val switched = h.await(pSwitch)
+        assertTrue(held is JoinResult.Joined)
+        assertTrue(switched is JoinAndSwitchResult.Active)
+        assertEquals(CallMediaRole.HELD, first.session.mediaRoleForTest())
+        assertEquals(CallMediaRole.FOREGROUND, h.created["b"]!!.session.mediaRoleForTest())
+    }
+
+    @Test
+    fun `a double joinAndSwitch to a room that never joins fails both without touching the active call`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        ShadowLooper.idleMainLooper()
+        val first = h.created["a"]!!
+
+        // Two racing joinAndSwitch ops on the same never-joining room. Before the
+        // settlement gate, the second (reused) op switched immediately: it held
+        // room-a and foregrounded a session whose join then timed out — and the
+        // join-failure teardown stranded the acquired lease forever.
+        val p1 = h.launchOp { h.registry.joinAndSwitch(room("b")) }
+        ShadowLooper.idleMainLooper()
+        val p2 = h.launchOp { h.registry.joinAndSwitch(room("b")) }
+        ShadowLooper.idleMainLooper()
+        val r1 = h.await(p1)
+        val r2 = h.await(p2)
+        assertTrue(r1 is JoinAndSwitchResult.Failed)
+        assertTrue(r2 is JoinAndSwitchResult.Failed)
+
+        // The active call was never disturbed and still owns the lease/slot.
+        assertEquals(CallMediaRole.FOREGROUND, first.session.mediaRoleForTest())
+        assertEquals(0, first.fakeMedia.suspendLocalMediaForHoldCalls)
+        assertEquals(a, h.registry.state.value.activeCallId)
+        // The failed join deduped onto ONE dead call (no extra session).
+        assertEquals(2, h.created.size)
+    }
+
+    // --- close(): release the lease + refuse new joins (web/iOS parity) ---
+
+    @Test
+    fun `close with an active call releases the foreground lease and frees the process`() {
+        val h = harness()
+        val a = (h.joinAndSwitch(room("a")) as JoinAndSwitchResult.Active).callId
+        assertTrue(h.joinHeld(room("b")) is JoinResult.Joined)
+        ShadowLooper.idleMainLooper()
+        assertEquals(a, h.registry.state.value.activeCallId)
+        assertEquals(2, h.registry.state.value.calls.size)
+
+        h.close()
+        ShadowLooper.idleMainLooper()
+
+        assertNull(h.registry.state.value.activeCallId)
+        assertTrue(h.registry.state.value.calls.isEmpty())
+        assertNull("registry mode released on close", ForegroundMediaArbiter.currentMode)
+        // The ACTIVE call's registry-owned lease was released (close routes through
+        // the leaveCall drain path, not a bare session.close()): a fresh DIRECT
+        // acquire succeeds, per close()'s contract that the process is free again.
+        val token = ForegroundMediaArbiter.acquireForeground(
+            ownerId = "probe",
+            mode = ForegroundArbiterMode.DIRECT,
+            modeOwnerRef = Any(),
+        )
+        assertTrue(ForegroundMediaArbiter.isCurrentOwner(token))
+        ForegroundMediaArbiter.releaseLease(token)
+    }
+
+    @Test
+    fun `a closed registry rejects new joins without re-claiming registry mode`() {
+        val h = harness()
+        assertTrue(h.joinAndSwitch(room("a")) is JoinAndSwitchResult.Active)
+        ShadowLooper.idleMainLooper()
+
+        h.close()
+        ShadowLooper.idleMainLooper()
+
+        // A join after close() (same code path as one suspended at the op mutex
+        // when close() ran) is rejected in registerOrDedup by the `closed` guard:
+        // no session is created, and REGISTRY mode is not re-claimed.
+        val result = h.joinHeld(room("b"))
+        assertTrue(result is JoinResult.Failed)
+        assertTrue((result as JoinResult.Failed).error is CallRegistryError.JoinFailed)
+        assertFalse(h.created.containsKey("b"))
+        assertNull(ForegroundMediaArbiter.currentMode)
+    }
+
     // --- VERIFY F: a failed held join releases registry mode so a direct join succeeds ---
 
     @Test
