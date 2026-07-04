@@ -145,6 +145,21 @@ private val FrontlineStageLocalAccentWidth = 2.5.dp
 private val FrontlineWearableMaxEdge = 260.dp
 private val FrontlineWearableButtonSize = 44.dp
 private val FrontlineWearableEndButtonSize = 48.dp
+private val FrontlineWearableControlsHorizontalPadding = 8.dp
+private val FrontlineWearableControlsCompactHorizontalPadding = 4.dp
+private val FrontlineWearableControlsMinimumHorizontalPadding = 2.dp
+private val FrontlineWearableControlsSpacing = 6.dp
+private val FrontlineWearableControlsCompactSpacing = 4.dp
+private val FrontlineWearableControlsBottomPadding = 8.dp
+private val FrontlineWearableControlsContentClearance = 8.dp
+private val FrontlineWearableContentBottomPadding =
+    FrontlineWearableEndButtonSize +
+        FrontlineWearableControlsBottomPadding +
+        FrontlineWearableControlsContentClearance
+private val FrontlineWearableCompactButtonSize = 40.dp
+private val FrontlineWearableCompactEndButtonSize = 44.dp
+private val FrontlineWearableMinimumButtonSize = 36.dp
+private val FrontlineWearableMinimumEndButtonSize = 40.dp
 private const val FRONTLINE_ZOOM_CHANGE_THRESHOLD = 0.01f
 private const val FRONTLINE_CONTENT_SPOTLIGHT_PREFIX = "content:"
 private const val FRONTLINE_MORE_BUTTON_HEIGHT_TO_WIDTH_RATIO = 1.62f
@@ -640,6 +655,46 @@ internal fun FrontlineCallScreen(
                         )
                     }
                 }
+                val showWearableRemoteScreenShareFullscreen =
+                    usesWearableLayout &&
+                        isCallSurfacePhase &&
+                        spotlightedRemoteScreenShareSource != null
+                val showWearableFlipCamera =
+                    usesWearableLayout &&
+                        isCallSurfacePhase &&
+                        uiState.localVideoEnabled &&
+                        uiState.availableCameraModes.size > 1
+                val showWearableSnapshot =
+                    usesWearableLayout &&
+                        isCallSurfacePhase &&
+                        uiState.localVideoEnabled &&
+                        snapshotSource != null &&
+                        onSnapshotRequested != null
+                val showWearableFlashlight =
+                    usesWearableLayout &&
+                        isCallSurfacePhase &&
+                        uiState.localVideoEnabled &&
+                        uiState.isFlashAvailable
+                val wearableMoreActionsAvailable =
+                    usesWearableLayout &&
+                        isCallSurfacePhase &&
+                        frontlineWearableMoreActionsAvailable(
+                            localVideoEnabled = uiState.localVideoEnabled,
+                            availableCameraModeCount = uiState.availableCameraModes.size,
+                            snapshotAvailable = snapshotSource != null && onSnapshotRequested != null,
+                            flashAvailable = uiState.isFlashAvailable,
+                            remoteScreenShareFullscreenAvailable = spotlightedRemoteScreenShareSource != null,
+                        )
+                val showMoreButtonForWearable = showMoreButton || wearableMoreActionsAvailable
+                val moreOpensAudioRouteDirectlyForLayout =
+                    moreOpensAudioRouteDirectly && !wearableMoreActionsAvailable
+                val openMoreOrAudioRouteForLayout = {
+                    if (moreOpensAudioRouteDirectlyForLayout) {
+                        isAudioRouteSheetVisible = true
+                    } else {
+                        isMoreSheetVisible = true
+                    }
+                }
 
                 if (isSystemPictureInPicture) {
                     val remoteCids = uiState.remoteParticipants.map { it.cid }.toSet()
@@ -734,7 +789,7 @@ internal fun FrontlineCallScreen(
                             uiState = uiState,
                             callControlsEnabled = isCallSurfacePhase,
                             videoControlsEnabled = isCallSurfacePhase && config.videoEnabled && uiState.availableCameraModes.isNotEmpty(),
-                            showMoreButton = showMoreButton,
+                            showMoreButton = showMoreButtonForWearable,
                             onVideoTap = {
                                 if (uiState.localVideoEnabled) {
                                     pipSwapped = false
@@ -742,7 +797,7 @@ internal fun FrontlineCallScreen(
                                 onToggleVideo()
                             },
                             onToggleAudio = onToggleAudio,
-                            onMore = openMoreOrAudioRoute,
+                            onMore = openMoreOrAudioRouteForLayout,
                             onEndCall = onEndCall,
                             strings = strings,
                             modifier = Modifier
@@ -982,15 +1037,45 @@ internal fun FrontlineCallScreen(
                 }
 
                 FrontlineMoreSheet(
-                    visible = isMoreSheetVisible && !moreOpensAudioRouteDirectly && !remoteScreenShareFullscreenActive,
+                    visible = isMoreSheetVisible &&
+                        !moreOpensAudioRouteDirectlyForLayout &&
+                        !remoteScreenShareFullscreenActive,
                     audioRouteDevice = currentAudioRoute,
                     audioRouteOptions = audioRouteOptions,
                     screenSharingEnabled = config.screenSharingEnabled,
                     inviteEnabled = config.inviteControlsEnabled,
                     shareEnabled = config.inviteControlsEnabled && shareLinkAction != null,
                     isScreenSharing = uiState.isScreenSharing,
+                    showRemoteScreenShareFullscreen = showWearableRemoteScreenShareFullscreen,
+                    showFlipCamera = showWearableFlipCamera,
+                    showFlashlight = showWearableFlashlight,
+                    flashlightEnabled = uiState.isFlashEnabled,
+                    showSnapshot = showWearableSnapshot,
                     strings = strings,
                     onDismiss = { isMoreSheetVisible = false },
+                    onEnterRemoteScreenShareFullscreen = {
+                        spotlightedRemoteScreenShareSource?.let { source ->
+                            isMoreSheetVisible = false
+                            enterRemoteScreenShareFullscreen(source)
+                        }
+                    },
+                    onFlipCamera = {
+                        isMoreSheetVisible = false
+                        onFlipCamera()
+                    },
+                    onToggleFlashlight = {
+                        isMoreSheetVisible = false
+                        onToggleFlashlight()
+                    },
+                    onSnapshot = {
+                        val source = snapshotSource
+                        val handler = onSnapshotRequested
+                        if (source != null && handler != null) {
+                            isMoreSheetVisible = false
+                            showSnapshotFlash = true
+                            handler(source)
+                        }
+                    },
                     onAudioRoute = {
                         isMoreSheetVisible = false
                         isAudioRouteSheetVisible = true
@@ -2488,7 +2573,7 @@ private fun FrontlineAudioLarge(
 ) {
     val name = remoteDisplayName(remote)
     val horizontalPadding = if (wearableLayout) 12.dp else 24.dp
-    val bottomPadding = if (wearableLayout) 64.dp else 0.dp
+    val bottomPadding = if (wearableLayout) FrontlineWearableContentBottomPadding else 0.dp
     val avatarSize = if (wearableLayout) 88.dp else 140.dp
     val avatarFontSize = if (wearableLayout) 34.sp else 58.sp
     val avatarSpacerHeight = if (wearableLayout) 6.dp else 18.dp
@@ -2918,52 +3003,71 @@ private fun FrontlineWearableControls(
     strings: Map<SerenadaString, String>?,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier
-            .navigationBarsPadding()
-            .padding(start = 8.dp, end = 8.dp, bottom = 8.dp)
-            .height(FrontlineWearableEndButtonSize),
-        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (callControlsEnabled && videoControlsEnabled) {
-            FrontlineWearableButton(
-                icon = if (uiState.localVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                contentDescription = if (uiState.localVideoEnabled) {
-                    resolveString(SerenadaString.FrontlineVideoOn, strings)
-                } else {
-                    resolveString(SerenadaString.FrontlineVideo, strings)
-                },
-                active = uiState.localVideoEnabled,
-                onClick = onVideoTap,
-                modifier = Modifier.testTag("call.frontline.wearable.video"),
-            )
-        }
-        if (callControlsEnabled) {
-            FrontlineWearableButton(
-                icon = if (uiState.localAudioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
-                contentDescription = resolveString(SerenadaString.FrontlineMute, strings),
-                danger = !uiState.localAudioEnabled,
-                onClick = onToggleAudio,
-                modifier = Modifier.testTag("call.frontline.wearable.audio"),
-            )
-            if (showMoreButton) {
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val regularButtonCount =
+            (if (callControlsEnabled && videoControlsEnabled) 1 else 0) +
+                (if (callControlsEnabled) 1 else 0) +
+                (if (callControlsEnabled && showMoreButton) 1 else 0)
+        val metrics = frontlineWearableControlsMetrics(maxWidth, regularButtonCount)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(
+                    start = metrics.horizontalPadding,
+                    end = metrics.horizontalPadding,
+                    bottom = metrics.bottomPadding,
+                )
+                .height(metrics.endButtonSize),
+            horizontalArrangement = if (metrics.useEvenSpacing) {
+                Arrangement.SpaceEvenly
+            } else {
+                Arrangement.spacedBy(metrics.spacing, Alignment.CenterHorizontally)
+            },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (callControlsEnabled && videoControlsEnabled) {
                 FrontlineWearableButton(
-                    icon = Icons.Default.MoreVert,
-                    contentDescription = resolveString(SerenadaString.FrontlineMore, strings),
-                    onClick = onMore,
-                    modifier = Modifier.testTag("call.frontline.wearable.more"),
+                    icon = if (uiState.localVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                    contentDescription = if (uiState.localVideoEnabled) {
+                        resolveString(SerenadaString.FrontlineVideoOn, strings)
+                    } else {
+                        resolveString(SerenadaString.FrontlineVideo, strings)
+                    },
+                    active = uiState.localVideoEnabled,
+                    size = metrics.buttonSize,
+                    onClick = onVideoTap,
+                    modifier = Modifier.testTag("call.frontline.wearable.video"),
                 )
             }
+            if (callControlsEnabled) {
+                FrontlineWearableButton(
+                    icon = if (uiState.localAudioEnabled) Icons.Default.Mic else Icons.Default.MicOff,
+                    contentDescription = resolveString(SerenadaString.FrontlineMute, strings),
+                    danger = !uiState.localAudioEnabled,
+                    size = metrics.buttonSize,
+                    onClick = onToggleAudio,
+                    modifier = Modifier.testTag("call.frontline.wearable.audio"),
+                )
+                if (showMoreButton) {
+                    FrontlineWearableButton(
+                        icon = Icons.Default.MoreVert,
+                        contentDescription = resolveString(SerenadaString.FrontlineMore, strings),
+                        size = metrics.buttonSize,
+                        onClick = onMore,
+                        modifier = Modifier.testTag("call.frontline.wearable.more"),
+                    )
+                }
+            }
+            FrontlineWearableButton(
+                icon = Icons.Default.CallEnd,
+                contentDescription = resolveString(SerenadaString.FrontlineEnd, strings),
+                danger = true,
+                size = metrics.endButtonSize,
+                onClick = onEndCall,
+                modifier = Modifier.testTag("call.frontline.endCall"),
+            )
         }
-        FrontlineWearableButton(
-            icon = Icons.Default.CallEnd,
-            contentDescription = resolveString(SerenadaString.FrontlineEnd, strings),
-            danger = true,
-            size = FrontlineWearableEndButtonSize,
-            onClick = onEndCall,
-            modifier = Modifier.testTag("call.frontline.endCall"),
-        )
     }
 }
 
@@ -3107,8 +3211,17 @@ private fun FrontlineMoreSheet(
     inviteEnabled: Boolean,
     shareEnabled: Boolean,
     isScreenSharing: Boolean,
+    showRemoteScreenShareFullscreen: Boolean,
+    showFlipCamera: Boolean,
+    showFlashlight: Boolean,
+    flashlightEnabled: Boolean,
+    showSnapshot: Boolean,
     strings: Map<SerenadaString, String>?,
     onDismiss: () -> Unit,
+    onEnterRemoteScreenShareFullscreen: () -> Unit,
+    onFlipCamera: () -> Unit,
+    onToggleFlashlight: () -> Unit,
+    onSnapshot: () -> Unit,
     onAudioRoute: () -> Unit,
     onToggleScreenShare: () -> Unit,
     onInvite: () -> Unit,
@@ -3158,6 +3271,34 @@ private fun FrontlineMoreSheet(
                             title = audioRouteDevice?.callAudioRouteLabel(strings)
                                 ?: resolveString(SerenadaString.CallAudioRoute, strings),
                             onClick = onAudioRoute,
+                        )
+                    }
+                    if (showRemoteScreenShareFullscreen) {
+                        FrontlineSheetItem(
+                            icon = Icons.Default.Fullscreen,
+                            title = resolveString(SerenadaString.FrontlineOpenScreenShare, strings),
+                            onClick = onEnterRemoteScreenShareFullscreen,
+                        )
+                    }
+                    if (showFlipCamera) {
+                        FrontlineSheetItem(
+                            icon = Icons.Default.FlipCameraIos,
+                            title = resolveString(SerenadaString.FrontlineFlipCamera, strings),
+                            onClick = onFlipCamera,
+                        )
+                    }
+                    if (showFlashlight) {
+                        FrontlineSheetItem(
+                            icon = if (flashlightEnabled) Icons.Default.FlashlightOn else Icons.Default.FlashlightOff,
+                            title = resolveString(SerenadaString.CallToggleFlashlight, strings),
+                            onClick = onToggleFlashlight,
+                        )
+                    }
+                    if (showSnapshot) {
+                        FrontlineSheetItem(
+                            icon = Icons.Default.PhotoCamera,
+                            title = resolveString(SerenadaString.CallTakeSnapshot, strings),
+                            onClick = onSnapshot,
                         )
                     }
                     if (screenSharingEnabled) {
@@ -3430,6 +3571,86 @@ private fun frontlineMoreMenuOpensAudioRouteDirectly(
     screenSharingEnabled: Boolean,
     inviteEnabled: Boolean,
 ): Boolean = showAudioRouteControl && !screenSharingEnabled && !inviteEnabled
+
+internal data class FrontlineWearableControlMetrics(
+    val buttonSize: Dp,
+    val endButtonSize: Dp,
+    val horizontalPadding: Dp,
+    val bottomPadding: Dp,
+    val spacing: Dp,
+    val useEvenSpacing: Boolean,
+)
+
+internal fun frontlineWearableControlsMetrics(
+    width: Dp,
+    regularButtonCount: Int,
+): FrontlineWearableControlMetrics {
+    val regularCount = regularButtonCount.coerceAtLeast(0)
+    val defaultMetrics = FrontlineWearableControlMetrics(
+        buttonSize = FrontlineWearableButtonSize,
+        endButtonSize = FrontlineWearableEndButtonSize,
+        horizontalPadding = FrontlineWearableControlsHorizontalPadding,
+        bottomPadding = FrontlineWearableControlsBottomPadding,
+        spacing = FrontlineWearableControlsSpacing,
+        useEvenSpacing = false,
+    )
+    if (frontlineWearableControlsRequiredWidth(defaultMetrics, regularCount) <= width) {
+        return defaultMetrics
+    }
+
+    val compactEvenMetrics = defaultMetrics.copy(
+        horizontalPadding = FrontlineWearableControlsCompactHorizontalPadding,
+        spacing = FrontlineWearableControlsCompactSpacing,
+        useEvenSpacing = true,
+    )
+    if (frontlineWearableControlsRequiredWidth(compactEvenMetrics, regularCount) <= width) {
+        return compactEvenMetrics
+    }
+
+    val compactButtonMetrics = compactEvenMetrics.copy(
+        buttonSize = FrontlineWearableCompactButtonSize,
+        endButtonSize = FrontlineWearableCompactEndButtonSize,
+    )
+    if (frontlineWearableControlsRequiredWidth(compactButtonMetrics, regularCount) <= width) {
+        return compactButtonMetrics
+    }
+
+    return compactButtonMetrics.copy(
+        buttonSize = FrontlineWearableMinimumButtonSize,
+        endButtonSize = FrontlineWearableMinimumEndButtonSize,
+        horizontalPadding = FrontlineWearableControlsMinimumHorizontalPadding,
+    )
+}
+
+internal fun frontlineWearableControlsRequiredWidth(
+    metrics: FrontlineWearableControlMetrics,
+    regularButtonCount: Int,
+): Dp {
+    val regularCount = regularButtonCount.coerceAtLeast(0)
+    val fixedControlsWidth =
+        metrics.buttonSize * regularCount.toFloat() +
+            metrics.endButtonSize +
+            metrics.horizontalPadding * 2f
+    val gapsWidth = if (metrics.useEvenSpacing) {
+        0.dp
+    } else {
+        metrics.spacing * regularCount.toFloat()
+    }
+    return fixedControlsWidth + gapsWidth
+}
+
+internal fun frontlineWearableMoreActionsAvailable(
+    localVideoEnabled: Boolean,
+    availableCameraModeCount: Int,
+    snapshotAvailable: Boolean,
+    flashAvailable: Boolean,
+    remoteScreenShareFullscreenAvailable: Boolean,
+): Boolean =
+    remoteScreenShareFullscreenAvailable ||
+        (
+            localVideoEnabled &&
+                (availableCameraModeCount > 1 || snapshotAvailable || flashAvailable)
+            )
 
 private fun frontlineShowsRemoteFitButton(
     isCallSurfacePhase: Boolean,

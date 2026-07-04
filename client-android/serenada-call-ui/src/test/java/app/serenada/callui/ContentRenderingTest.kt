@@ -1129,4 +1129,43 @@ class ContentRenderingTest {
         assertFalse(frontlineUsesWearableLayout(width = 360.dp, height = 640.dp))
         assertFalse(frontlineUsesWearableLayout(width = 230.dp, height = 360.dp))
     }
+
+    @Test
+    fun frontlineWearableControlsFitCommonNarrowScreens() {
+        val metrics = frontlineWearableControlsMetrics(width = 192.dp, regularButtonCount = 3)
+
+        assertTrue(frontlineWearableControlsRequiredWidth(metrics, regularButtonCount = 3) <= 192.dp)
+        assertTrue(metrics.useEvenSpacing)
+    }
+
+    @Test
+    fun frontlineWearableMoreActionsExposeHiddenWearableTools() {
+        assertTrue(
+            frontlineWearableMoreActionsAvailable(
+                localVideoEnabled = true,
+                availableCameraModeCount = 2,
+                snapshotAvailable = false,
+                flashAvailable = false,
+                remoteScreenShareFullscreenAvailable = false,
+            ),
+        )
+        assertTrue(
+            frontlineWearableMoreActionsAvailable(
+                localVideoEnabled = false,
+                availableCameraModeCount = 1,
+                snapshotAvailable = false,
+                flashAvailable = false,
+                remoteScreenShareFullscreenAvailable = true,
+            ),
+        )
+        assertFalse(
+            frontlineWearableMoreActionsAvailable(
+                localVideoEnabled = false,
+                availableCameraModeCount = 2,
+                snapshotAvailable = true,
+                flashAvailable = true,
+                remoteScreenShareFullscreenAvailable = false,
+            ),
+        )
+    }
 }
