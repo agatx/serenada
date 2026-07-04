@@ -4,6 +4,18 @@ All notable changes to the Serenada SDK are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.1] — 2026-07-04
+
+### Added
+- Android: Frontline call UI now has a tiny-screen layout for wearable-sized
+  displays, including compact controls, scrollable option sheets, and reachable
+  camera, snapshot, flashlight, and remote screen-share fullscreen actions.
+
+### Fixed
+- iOS: denied in-call camera and microphone toggles now surface through
+  `onPermissionsRequired`, so hosts can re-prompt instead of leaving the toggle
+  request silently blocked.
+
 ## [0.9.0] — 2026-06-25
 
 ### Added
